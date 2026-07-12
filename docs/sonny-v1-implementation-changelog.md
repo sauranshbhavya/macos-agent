@@ -34,24 +34,26 @@ Dependency-ordered. Do not start a branch before the ones above it are merged, u
 | 6 | `feature/followup-usage-transparency` | §4A.8, §4A.9 | Complete (pending review) |
 | 7 | `feature/local-storage-privacy-foundation` | §15.4 | Complete (pending review) |
 | 8 | `feature/product-shell-shared-state` | §4A.1 (shell only), §6.2, §6.3, §17.3 | Not started |
-| 9 | `feature/hosted-agent-runtime-backend` | §6.1, §8, §9, §16, §21.2, §21.3, §6.19 | Not started |
-| 10 | `feature/billing-command-center-memory` | §6.14, §16.3, §16.4, §6.3A (full), §6.10 | Not started |
-| 11 | `feature/screen-intelligence` | §6.4, §12, §20.3, §21.5, §6.13, §14.4A, §14.5 | Not started |
-| 12 | `feature/privacy-security-hardening` | remaining §6.12, §14, §15, §20.5, §20.6, §21.7 | Not started |
-| 13 | `feature/workflow-library-polish` | §18.1, §18.2, §18.5, §18.6 | Not started |
-| 14 | `feature/power-mode` | §6.5, §13, §20.4, §21.6, §20.9 | Not started |
-| 15 | `feature/enterprise-foundations` | §6.15, §15.6, §21.9 | Not started |
-| 16 | `feature/release-ops-evals-hardening` | §19, remaining §20, §21.10, §22, §23, §24, §26 | Not started |
+| 9 | `feature/floating-command-widget` | §17.3 (cockpit surface, visual form only); user wireframes (2026-07-08), not spec-mandated | Not started |
+| 10 | `feature/hosted-agent-runtime-backend` | §6.1, §8, §9, §16, §21.2, §21.3, §6.19 | Not started |
+| 11 | `feature/billing-command-center-memory` | §6.14, §16.3, §16.4, §6.3A (full), §6.10 | Not started |
+| 12 | `feature/screen-intelligence` | §6.4, §12, §20.3, §21.5, §6.13, §14.4A, §14.5 | Not started |
+| 13 | `feature/privacy-security-hardening` | remaining §6.12, §14, §15, §20.5, §20.6, §21.7 | Not started |
+| 14 | `feature/workflow-library-polish` | §18.1, §18.2, §18.5, §18.6 | Not started |
+| 15 | `feature/power-mode` | §6.5, §13, §20.4, §21.6, §20.9 | Not started |
+| 16 | `feature/enterprise-foundations` | §6.15, §15.6, §21.9 | Not started |
+| 17 | `feature/release-ops-evals-hardening` | §19, remaining §20, §21.10, §22, §23, §24, §26 | Not started |
 
 Notes on sequencing decisions behind this table:
 
 - Branches 1-2 are split (adapter contract alone, then risk/approval on top of it) so each proves one thing in isolation: "existing tools run through adapters without regression," then "risk/approval works on top of adapters."
 - Branches 3-6 split the §4A.2-§4A.9 generalization pass into four smaller reviewable branches rather than one large one, per user decision on 2026-07-04.
 - Branch 7 (local storage/Keychain hardening) is pulled out as its own branch, done before backend/auth work per §21.0A step 4.
-- Branch 8 is scoped to the shared-state shell only (§4A.1) — the full Command Center UI (account/subscription/stats screens) is deferred to branch 10, once billing exists to gate it.
-- Memory (§6.10) is bundled into branch 10 rather than given its own branch, since it needs the full Command Center UI to be viewable/editable.
+- Branch 8 is scoped to the shared-state shell only (§4A.1) — the full Command Center UI (account/subscription/stats screens) is deferred to branch 11, once billing exists to gate it.
+- Branch 9 (floating-command-widget) was inserted into the roadmap on 2026-07-11, during branch 8's checkpoint 2 review. It redesigns the menu-bar cockpit's visual/interaction form (Spotlight-style floating command bar + live progress/result overlay, per the user's own wireframes shared 2026-07-08) rather than the plain `NSPopover` shell every branch through 8 has built inside. No spec section mandates this specific visual form — §17.3 only requires the cockpit's *functional* surfaces (command input, voice state, timeline, approvals, etc.), which remain unchanged; this branch changes presentation, not requirements. Placed immediately after branch 8 rather than appended at the end because: (a) it depends on branch 8's shared-state foundation and the `SonnyTheme`/`SonnyType` design-system tokens established during branch 8's rebrand work, best done while that context is fresh; (b) branch 15 (Power Mode) needs a new "Power Mode HUD" surface (§17.3) that should build on the new cockpit shell rather than the old popover, to avoid a second rework cycle. Every branch from 5 through 8 explicitly deferred this same redesign rather than attempting it piecemeal (see branch 5's changelog entry: "do not build launcher palette UI until quick-results-list wireframes are provided"). **Before starting branch 9, read `docs/sonny-design-system-reference.md` in full** — it documents the widget's complete lifecycle (idle/working/permission/success/error/failure), exact shadow/glass recipe, and a separate token set (SF Pro, not Inter; its own accent colors, not `SonnyTheme.accent`) extracted from the wireframes on 2026-07-12. Do not reuse `SonnyTheme`/`SonnyType` for this branch without reading that doc first.
+- Memory (§6.10) is bundled into branch 11 rather than given its own branch, since it needs the full Command Center UI to be viewable/editable.
 - §6.16-§6.18 and §18.7-§18.8 are not separate branches — they are explicitly cross-references to §4A.6-§4A.8 ("formal v1 requirement version of...", "listed here for completeness") with no independent scope, fully covered by branches 3-6.
-- The kill switch (§20.9) is folded into branch 14 (Power Mode) rather than given its own branch, since it's tightly coupled to Power Mode's emergency-stop work (§13.5).
+- The kill switch (§20.9) is folded into branch 15 (Power Mode) rather than given its own branch, since it's tightly coupled to Power Mode's emergency-stop work (§13.5).
 
 ## Entry Template
 
@@ -434,7 +436,7 @@ Architectural decisions / pitfalls discovered (required, write "none" if true):
 - The web synthesis prompt uses strict `WebResearchNote` structured output, not executable `AgentPlan` JSON. The trusted instruction is wrapped with `TRUSTED_USER_INSTRUCTION_BEGIN/END`; each fetched page is sent as a separate observed-content message wrapped with `UNTRUSTED_OBSERVED_CONTENT_BEGIN id=... source_url=... retrieved_at=...` and `UNTRUSTED_OBSERVED_CONTENT_END id=...`.
 - The permanent red-team fixture in `WebResearchSynthesizerTests` includes observed HTML text that says to ignore prior instructions and emit fake plan/tool directives. Tests assert the trusted plan/instruction remain unchanged, the malicious text appears only inside the delimited untrusted segment, and execution writes only the expected Markdown artifact with fixed suggestions.
 - The app/website action foundation now uses `LocalActionDescriptor` / `AppWebsiteActionDescriptors` for supported actions, required permissions, default risk tier, and fallback behavior. This keeps app/URL/workspace/draft/open-artifact metadata declarative without loosening app bundle allowlists or website URL validation.
-- `open_app_search_url` intentionally uses fixed URL templates instead of arbitrary user-provided URL templates, AppleScript, Accessibility, or app UI control. Provider media playback remains branch #4; Power Mode remains branch #14.
+- `open_app_search_url` intentionally uses fixed URL templates instead of arbitrary user-provided URL templates, AppleScript, Accessibility, or app UI control. Provider media playback remains branch #4; Power Mode remains branch #15 (renumbered 2026-07-11, see roadmap notes).
 - `open_generated_artifact` extends the existing chained null-output artifact resolution used by `reveal_in_finder`; future artifact-opening actions should share this runtime helper rather than reimplement previous-step path lookup.
 - `WebSearchProviding` was added as a protocol seam so a real provider can be wired into the existing `web_to_markdown` adapter later without changing risk tiering, output escalation, Markdown writing, or synthesis boundaries.
 
@@ -461,7 +463,7 @@ Primary target: §4A.4
 
 Just completed: feature/web-research-app-foundation — Sonny now has a generic web-to-Markdown capability with SwiftSoup-backed extraction, strict untrusted-content separation, Markdown save/open/reveal behavior, HN as a preset inside the generic adapter, a protocol-only search seam, and descriptor-backed app/website actions including app search URLs, generated-artifact opening, and local draft creation.
 Must preserve: web-to-Markdown direct URL tier 2 behavior with robots/login/CAPTCHA/paywall refusal, source links, timestamps, open/reveal suggestions, and tier 3 output-collision escalation; comparison-note support from multiple resolved sources; production topic/search must continue to fail clearly with `Web search provider not configured.` until a real provider is explicitly selected; Hacker News must keep the fixed HN URL, `HackerNewsFetching`, exact Markdown output structure, dry-run behavior, open/reveal suggestions, tier 2 gating, and exact tier 3 collision reason; `open_app_search_url` must remain fixed-template tier 1 URL opening only; `open_generated_artifact` must remain tier 1 whitelisted file opening with chained null-output resolution; `create_local_draft` must remain tier 2 local Markdown only with tier 3 overwrite escalation; app bundle allowlists and safe URL validation must not loosen; `AgentRunner` must continue to own approval gating and `AgentActionExecutor.execute()` must remain already-approved execution.
-Known pitfalls to avoid repeating: fetched or observed external content must not enter executable `AgentPlan` generation; use the separate strict-schema untrusted-content prompt path for summarization; new capability-specific escalation belongs in adapter `assessRisk(plan:context:)`; do not add a parallel confirmation path; use the shared previous-artifact chain resolver for generated artifact follow-ups; do not introduce app UI clicking/typing/scrolling for media playback because Power Mode is branch #14; production web search remains intentionally unavailable until a provider is chosen.
+Known pitfalls to avoid repeating: fetched or observed external content must not enter executable `AgentPlan` generation; use the separate strict-schema untrusted-content prompt path for summarization; new capability-specific escalation belongs in adapter `assessRisk(plan:context:)`; do not add a parallel confirmation path; use the shared previous-artifact chain resolver for generated artifact follow-ups; do not introduce app UI clicking/typing/scrolling for media playback because Power Mode is branch #15 (renumbered 2026-07-11, see roadmap notes); production web search remains intentionally unavailable until a provider is chosen.
 
 Start in plan mode. Confirm git status is clean on main, confirm the changelog's account of the prior branch still matches the current code, then produce an implementation plan before editing anything. Do not commit, push, merge, or open a PR without explicit approval.
 
