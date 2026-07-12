@@ -82,7 +82,7 @@ struct ProductShellTests {
 
         coordinator.showCommandCenter()
         let commandCenterWindow = try #require(coordinator.commandCenterWindow)
-        #expect(commandCenterWindow.title == "Sonny Command Center")
+        #expect(commandCenterWindow.title == "Sonny")
         #expect(commandCenterWindow.minSize == NSSize(width: 900, height: 620))
         #expect(commandCenterWindow.styleMask.contains(.resizable))
         #expect(commandCenterWindow.isVisible)
@@ -174,6 +174,84 @@ struct ProductShellTests {
         #expect(AgentActivityPresentation.eventMessage(riskEvent) == "Safety check complete. Waiting for your approval.")
         #expect(AgentActivityPresentation.previewSideEffect("Write: /tmp/report.md") == "Creates /tmp/report.md")
     }
+
+    @Test
+    func savedCollectionPresentationsUseOnlyRealRoutineAndWorkspaceData() {
+        let routine = StoredRoutine(
+            name: "Morning planning",
+            steps: [
+                AgentStep(id: "browser", operation: .openApp, description: "", appName: "Safari"),
+                AgentStep(id: "draft", operation: .createLocalDraft, description: ""),
+                AgentStep(id: "reveal", operation: .revealInFinder, description: "")
+            ]
+        )
+        let workspace = StoredWorkspace(
+            name: "Research",
+            apps: ["Safari", "Notes"],
+            urls: ["https://www.example.com/reference"]
+        )
+
+        let routinePresentation = RoutineRowPresentation(routine: routine)
+        #expect(routinePresentation.name == "Morning planning")
+        #expect(routinePresentation.stepCount == 3)
+        #expect(routinePresentation.stepCountText == "3")
+        #expect(routinePresentation.detailText == "Open Safari · Create draft · +1 more")
+
+        let workspacePresentation = WorkspaceCardPresentation(workspace: workspace)
+        #expect(workspacePresentation.name == "Research")
+        #expect(workspacePresentation.initial == "R")
+        #expect(workspacePresentation.savedItemCount == 3)
+        #expect(workspacePresentation.savedItemCountText == "3 saved items")
+        #expect(workspacePresentation.appsText == "Safari, Notes")
+        #expect(workspacePresentation.urlsText == "example.com")
+    }
+
+    @Test
+    func savedItemRefreshImmediatelyPublishesCreatesAndUpdatesToTheSharedViewModel() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let popover = ContentView(viewModel: fixture.viewModel)
+        let commandCenter = CommandCenterView(viewModel: fixture.viewModel)
+
+        try fixture.routineStore.save(
+            StoredRoutine(
+                name: "Morning planning",
+                steps: [AgentStep(id: "browser", operation: .openApp, description: "", appName: "Safari")]
+            )
+        )
+        try fixture.workspaceStore.save(
+            StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://example.com"])
+        )
+        fixture.viewModel.refreshSavedItems()
+
+        #expect(popover.viewModel === commandCenter.viewModel)
+        #expect(popover.viewModel.savedRoutines.map(\.name) == ["Morning planning"])
+        #expect(commandCenter.viewModel.savedWorkspaces.map(\.name) == ["Research"])
+
+        try fixture.routineStore.save(
+            StoredRoutine(
+                name: "Morning planning",
+                steps: [
+                    AgentStep(id: "browser", operation: .openApp, description: "", appName: "Safari"),
+                    AgentStep(id: "notes", operation: .openApp, description: "", appName: "Notes")
+                ]
+            )
+        )
+        try fixture.workspaceStore.save(
+            StoredWorkspace(
+                name: "Research",
+                apps: ["Safari", "Notes"],
+                urls: ["https://example.com"]
+            )
+        )
+        fixture.viewModel.refreshSavedItems()
+
+        #expect(popover.viewModel.savedRoutines.count == 1)
+        #expect(popover.viewModel.savedRoutines.first?.steps.count == 2)
+        #expect(commandCenter.viewModel.savedWorkspaces.count == 1)
+        #expect(commandCenter.viewModel.savedWorkspaces.first?.apps == ["Safari", "Notes"])
+    }
+
 }
 
 @MainActor
@@ -224,7 +302,12 @@ private final class ProductShellActivationRecorder: ApplicationActivationApplyin
 }
 
 @MainActor
-private func makeProductShellFixture() throws -> (viewModel: AgentViewModel, root: URL) {
+private func makeProductShellFixture() throws -> (
+    viewModel: AgentViewModel,
+    root: URL,
+    routineStore: RoutineStore,
+    workspaceStore: WorkspaceStore
+) {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("ProductShellTests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -236,15 +319,17 @@ private func makeProductShellFixture() throws -> (viewModel: AgentViewModel, roo
         encryption: encryption
     )
 
+    let routineStore = RoutineStore(
+        fileURL: root.appendingPathComponent("routines.json"),
+        encryption: encryption
+    )
+    let workspaceStore = WorkspaceStore(
+        fileURL: root.appendingPathComponent("workspaces.json"),
+        encryption: encryption
+    )
     let viewModel = AgentViewModel(
-        routineStore: RoutineStore(
-            fileURL: root.appendingPathComponent("routines.json"),
-            encryption: encryption
-        ),
-        workspaceStore: WorkspaceStore(
-            fileURL: root.appendingPathComponent("workspaces.json"),
-            encryption: encryption
-        ),
+        routineStore: routineStore,
+        workspaceStore: workspaceStore,
         snippetStore: SnippetStore(
             fileURL: root.appendingPathComponent("snippets.json"),
             encryption: encryption
@@ -271,7 +356,7 @@ private func makeProductShellFixture() throws -> (viewModel: AgentViewModel, roo
         priorTaskContextStore: PriorTaskContextStore(),
         taskUsageRecorder: TaskUsageRecorder()
     )
-    return (viewModel, root)
+    return (viewModel, root, routineStore, workspaceStore)
 }
 
 private struct ProductShellFixedKeyManager: LocalStorageKeyManaging {

@@ -72,10 +72,10 @@ struct ContentView: View {
             }
             Spacer()
             Button(action: openCommandCenter) {
-                Label("Command Center", systemImage: "rectangle.split.2x1")
+                Label("Open Sonny", systemImage: "rectangle.split.2x1")
             }
             .buttonStyle(SonnyButtonStyle(tone: .secondary))
-            .help("Open the Sonny Command Center")
+            .help("Open Sonny in a window")
 
             Button {
                 viewModel.togglePermissionPanel()
@@ -99,11 +99,13 @@ struct ContentView: View {
 struct AgentCommandComposerView: View {
     @ObservedObject var viewModel: AgentViewModel
     let autoFocus: Bool
+    let focusRequest: Int
     @FocusState private var commandFocused: Bool
 
-    init(viewModel: AgentViewModel, autoFocus: Bool = false) {
+    init(viewModel: AgentViewModel, autoFocus: Bool = false, focusRequest: Int = 0) {
         self.viewModel = viewModel
         self.autoFocus = autoFocus
+        self.focusRequest = focusRequest
     }
 
     var body: some View {
@@ -201,6 +203,9 @@ struct AgentCommandComposerView: View {
             if autoFocus {
                 commandFocused = true
             }
+        }
+        .onChange(of: focusRequest) { _, _ in
+            commandFocused = true
         }
     }
 }
@@ -1277,43 +1282,52 @@ private struct PanelHeader: View {
 }
 
 enum SonnyType {
-    static let brand = Font.custom("InstrumentSerif-Regular", size: 42)
-    static let hero = Font.custom("InstrumentSerif-Regular", size: 28)
-    static let panelTitle = Font.custom("InstrumentSerif-Regular", size: 23)
-    static let tagline = Font.custom("GolosText-Regular", size: 12)
-    static let eyebrow = Font.custom("GolosText-Regular", size: 11)
-    static let command = Font.custom("GolosText-Regular", size: 15)
-    static let body = Font.custom("GolosText-Regular", size: 13)
-    static let bodyEmphasis = Font.custom("GolosText-Regular", size: 13)
-    static let itemTitle = Font.custom("GolosText-Regular", size: 12)
-    static let caption = Font.custom("GolosText-Regular", size: 12)
-    static let micro = Font.custom("GolosText-Regular", size: 11)
-    static let code = Font.custom("GolosText-Regular", size: 11)
+    static let brand = inter(42, weight: .semibold)
+    static let hero = inter(28, weight: .semibold)
+    static let panelTitle = inter(23, weight: .semibold)
+    static let tagline = inter(12)
+    static let eyebrow = inter(11, weight: .medium)
+    static let command = inter(15)
+    static let body = inter(13)
+    static let bodyEmphasis = inter(13, weight: .medium)
+    static let itemTitle = inter(12, weight: .medium)
+    static let caption = inter(12)
+    static let micro = inter(11)
+    static let microEmphasis = inter(11, weight: .medium)
+    static let avatar = inter(14, weight: .medium)
+    static let code = inter(11)
     static let panelIcon = Font.system(size: 14)
 
     static func icon(_ size: CGFloat) -> Font {
         .system(size: size)
     }
+
+    private static func inter(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        Font.custom("Inter", size: size).weight(weight)
+    }
 }
 
 enum SonnyTheme {
-    static let ink = Color(red: 0.118, green: 0.110, blue: 0.110)
-    static let cream = Color(red: 1.000, green: 0.996, blue: 0.988)
-    static let paper = Color(red: 0.922, green: 0.914, blue: 0.886)
-    static let bronze = Color(red: 0.663, green: 0.561, blue: 0.439)
-    static let stone = Color(red: 0.639, green: 0.627, blue: 0.604)
+    static let ink = Color(red: 9 / 255, green: 9 / 255, blue: 9 / 255)
+    static let collectionSurface = Color(red: 15 / 255, green: 16 / 255, blue: 17 / 255)
+    static let surfaceRaised = Color(red: 22 / 255, green: 23 / 255, blue: 26 / 255)
+    static let border = Color(red: 37 / 255, green: 38 / 255, blue: 43 / 255)
+    static let text = Color(red: 1, green: 1, blue: 1)
+    static let muted = text.opacity(0.58)
+    static let accent = Color(red: 92 / 255, green: 132 / 255, blue: 254 / 255)
 
-    static let glassShade = ink.opacity(0.68)
-    static let panelTint = ink.opacity(0.58)
-    static let surfaceRaised = Color(red: 0.224, green: 0.216, blue: 0.216).opacity(0.74)
-    static let input = Color(red: 0.150, green: 0.140, blue: 0.134).opacity(0.76)
-    static let border = cream.opacity(0.13)
-    static let text = cream
-    static let muted = stone
-    static let accent = bronze
+    // Compatibility aliases keep established surfaces on the same rebranded tokens.
+    static let cream = text
+    static let paper = text.opacity(0.92)
+    static let bronze = accent
+    static let stone = muted
+
+    static let glassShade = ink.opacity(0.88)
+    static let panelTint = collectionSurface.opacity(0.88)
+    static let input = collectionSurface
     static let warning = Color(red: 0.988, green: 0.706, blue: 0.000)
     static let danger = Color(red: 0.973, green: 0.169, blue: 0.376)
-    static let info = paper
+    static let info = text.opacity(0.92)
 }
 
 extension View {

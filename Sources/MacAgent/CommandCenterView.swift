@@ -1,3 +1,4 @@
+import MacAgentCore
 import SwiftUI
 
 enum CommandCenterDestination: String, CaseIterable, Identifiable {
@@ -31,7 +32,15 @@ enum CommandCenterDestination: String, CaseIterable, Identifiable {
 
 struct CommandCenterView: View {
     @ObservedObject var viewModel: AgentViewModel
-    @State private var selection: CommandCenterDestination = .tasks
+    @State private var selection: CommandCenterDestination
+
+    init(
+        viewModel: AgentViewModel,
+        initialSelection: CommandCenterDestination = .tasks
+    ) {
+        self.viewModel = viewModel
+        _selection = State(initialValue: initialSelection)
+    }
 
     var body: some View {
         HStack(spacing: 0) {
@@ -69,14 +78,9 @@ struct CommandCenterView: View {
                 }
                 .frame(width: 36, height: 36)
 
-                VStack(alignment: .leading, spacing: 1) {
-                    Text("Sonny")
-                        .font(SonnyType.panelTitle)
-                        .foregroundStyle(SonnyTheme.text)
-                    Text("Command Center")
-                        .font(SonnyType.micro)
-                        .foregroundStyle(SonnyTheme.muted)
-                }
+                Text("Sonny")
+                    .font(SonnyType.panelTitle)
+                    .foregroundStyle(SonnyTheme.text)
             }
 
             VStack(spacing: 5) {
@@ -86,18 +90,13 @@ struct CommandCenterView: View {
             }
 
             Spacer()
-
-            Text("Local-first shell")
-                .font(SonnyType.micro)
-                .foregroundStyle(SonnyTheme.muted)
-                .padding(.horizontal, 10)
         }
         .padding(.horizontal, 14)
         .padding(.top, 20)
         .padding(.bottom, 18)
         .frame(width: 226)
         .frame(maxHeight: .infinity, alignment: .topLeading)
-        .background(Color(red: 0.090, green: 0.084, blue: 0.084))
+        .background(SonnyTheme.ink)
     }
 
     private func sidebarButton(_ destination: CommandCenterDestination) -> some View {
@@ -154,17 +153,9 @@ struct CommandCenterView: View {
                 message: "Current-task usage will be wired here in Checkpoint 4."
             )
         case .routines:
-            CommandCenterPlaceholderView(
-                title: "Routines",
-                systemImage: CommandCenterDestination.routines.systemImage,
-                message: "Saved routines will be wired here in Checkpoint 2."
-            )
+            RoutinesView(viewModel: viewModel)
         case .workspaces:
-            CommandCenterPlaceholderView(
-                title: "Workspaces",
-                systemImage: CommandCenterDestination.workspaces.systemImage,
-                message: "Saved workspaces will be wired here in Checkpoint 2."
-            )
+            WorkspacesView(viewModel: viewModel)
         case .settings:
             SettingsFoundationView()
         }
@@ -214,17 +205,439 @@ private struct TasksFoundationView: View {
             .padding(.bottom, 18)
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
+            CommandCenterComposerFooter(viewModel: viewModel)
+        }
+        .background(SonnyTheme.ink)
+    }
+}
+
+struct RoutineRowPresentation: Equatable {
+    let name: String
+    let stepCount: Int
+    let stepCountText: String
+    let detailText: String
+
+    init(routine: StoredRoutine) {
+        name = routine.name
+        stepCount = routine.steps.count
+        stepCountText = "\(routine.steps.count)"
+
+        let visibleLabels = routine.steps.prefix(2).map(AgentActivityPresentation.operationTitle)
+        let remainingCount = routine.steps.count - visibleLabels.count
+        let visibleText = visibleLabels.joined(separator: " · ")
+        if remainingCount > 0 {
+            detailText = "\(visibleText) · +\(remainingCount) more"
+        } else if visibleText.isEmpty {
+            detailText = "No saved steps"
+        } else {
+            detailText = visibleText
+        }
+    }
+}
+
+struct WorkspaceCardPresentation: Equatable {
+    let name: String
+    let initial: String
+    let savedItemCount: Int
+    let savedItemCountText: String
+    let appsText: String?
+    let urlsText: String?
+
+    init(workspace: StoredWorkspace) {
+        name = workspace.name
+        initial = workspace.name.trimmingCharacters(in: .whitespacesAndNewlines)
+            .first.map { String($0).uppercased() } ?? "W"
+        savedItemCount = workspace.apps.count + workspace.urls.count
+        savedItemCountText = "\(savedItemCount) saved item\(savedItemCount == 1 ? "" : "s")"
+        appsText = workspace.apps.isEmpty ? nil : workspace.apps.joined(separator: ", ")
+        urlsText = workspace.urls.isEmpty ? nil : workspace.urls.map(Self.shortURL).joined(separator: ", ")
+    }
+
+    private static func shortURL(_ rawValue: String) -> String {
+        guard let url = URL(string: rawValue), let host = url.host else {
+            return rawValue
+        }
+        return host.replacingOccurrences(of: "www.", with: "", options: .anchored)
+    }
+}
+
+private struct RoutinesView: View {
+    @ObservedObject var viewModel: AgentViewModel
+    @State private var composerFocusRequest = 0
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 18) {
+                CommandCenterPageHeader(title: "Routines")
+
+                VStack(spacing: 0) {
+                    CollectionHeader(
+                        title: "All routines",
+                        actionTitle: "New routine",
+                        action: beginNewRoutine
+                    )
+
+                    Rectangle()
+                        .fill(SonnyTheme.border)
+                        .frame(height: 1)
+
+                    if viewModel.savedRoutines.isEmpty {
+                        CollectionEmptyState(
+                            systemImage: "repeat",
+                            title: "No routines yet",
+                            message: "Ask Sonny to save a repeatable sequence, then it will appear here."
+                        )
+                    } else {
+                        ScrollView {
+                            LazyVStack(spacing: 0) {
+                                ForEach(Array(viewModel.savedRoutines.enumerated()), id: \.element.name) { index, routine in
+                                    RoutineRow(
+                                        presentation: RoutineRowPresentation(routine: routine),
+                                        isLast: index == viewModel.savedRoutines.count - 1,
+                                        isRunning: viewModel.isRunning || viewModel.isAwaitingApproval,
+                                        run: { viewModel.runRoutineWidget(routine) }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .background(CommandCenterPalette.collectionSurface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(SonnyTheme.border, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+            }
+            .padding(.horizontal, 28)
+            .padding(.top, 24)
+            .padding(.bottom, 18)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+            CommandCenterComposerFooter(
+                viewModel: viewModel,
+                focusRequest: composerFocusRequest
+            )
+        }
+        .background(SonnyTheme.ink)
+    }
+
+    private func beginNewRoutine() {
+        viewModel.command = "Create a routine called "
+        composerFocusRequest += 1
+    }
+}
+
+private struct RoutineRow: View {
+    let presentation: RoutineRowPresentation
+    let isLast: Bool
+    let isRunning: Bool
+    let run: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: 5)
+                        .fill(CommandCenterPalette.routineIconBackground)
+                    RoundedRectangle(cornerRadius: 2)
+                        .fill(CommandCenterPalette.routineIconForeground)
+                        .frame(width: 10, height: 10)
+                }
+                .frame(width: 28, height: 28)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(presentation.name)
+                        .font(SonnyType.bodyEmphasis)
+                        .foregroundStyle(SonnyTheme.text)
+                        .lineLimit(1)
+                    Text(presentation.detailText)
+                        .font(SonnyType.micro)
+                        .foregroundStyle(SonnyTheme.muted)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 14)
+
+                HStack(spacing: 6) {
+                    Circle()
+                        .fill(SonnyTheme.warning)
+                        .frame(width: 8, height: 8)
+                    Text(presentation.stepCountText)
+                        .font(SonnyType.micro)
+                        .foregroundStyle(SonnyTheme.warning)
+                }
+                .accessibilityElement(children: .combine)
+                .accessibilityLabel("\(presentation.stepCount) saved steps")
+
+                Button(action: run) {
+                    Text("Run")
+                }
+                .buttonStyle(CommandCenterRowActionStyle())
+                .disabled(isRunning)
+                .accessibilityLabel("Run \(presentation.name)")
+            }
+            .padding(.horizontal, 18)
+            .frame(height: 56)
+
+            if !isLast {
+                Rectangle()
+                    .fill(SonnyTheme.border)
+                    .frame(height: 1)
+            }
+        }
+        .background(CommandCenterPalette.cardSurface)
+    }
+}
+
+private struct WorkspacesView: View {
+    @ObservedObject var viewModel: AgentViewModel
+    @State private var composerFocusRequest = 0
+
+    private let columns = [
+        GridItem(.adaptive(minimum: 356, maximum: 356), spacing: 12, alignment: .top)
+    ]
+
+    var body: some View {
+        VStack(spacing: 0) {
+            VStack(alignment: .leading, spacing: 18) {
+                CommandCenterPageHeader(title: "Workspaces")
+
+                VStack(spacing: 0) {
+                    CollectionHeader(
+                        title: "All workspaces",
+                        actionTitle: "Create workspace",
+                        action: beginNewWorkspace
+                    )
+
+                    Rectangle()
+                        .fill(SonnyTheme.border)
+                        .frame(height: 1)
+
+                    if viewModel.savedWorkspaces.isEmpty {
+                        CollectionEmptyState(
+                            systemImage: "rectangle.3.group",
+                            title: "No workspaces yet",
+                            message: "Ask Sonny to group apps and safe URLs for one-click opening."
+                        )
+                    } else {
+                        ScrollView {
+                            LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
+                                ForEach(viewModel.savedWorkspaces, id: \.name) { workspace in
+                                    WorkspaceCard(
+                                        presentation: WorkspaceCardPresentation(workspace: workspace),
+                                        accent: SonnyTheme.accent,
+                                        isRunning: viewModel.isRunning || viewModel.isAwaitingApproval,
+                                        open: { viewModel.openWorkspaceWidget(workspace) }
+                                    )
+                                }
+                            }
+                            .padding(18)
+                        }
+                    }
+                }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .background(CommandCenterPalette.collectionSurface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: 4)
+                        .stroke(SonnyTheme.border, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: 4))
+            }
+            .padding(.horizontal, 28)
+            .padding(.top, 24)
+            .padding(.bottom, 18)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+
+            CommandCenterComposerFooter(
+                viewModel: viewModel,
+                focusRequest: composerFocusRequest
+            )
+        }
+        .background(SonnyTheme.ink)
+    }
+
+    private func beginNewWorkspace() {
+        viewModel.command = "Create a workspace called "
+        composerFocusRequest += 1
+    }
+}
+
+private struct WorkspaceCard: View {
+    let presentation: WorkspaceCardPresentation
+    let accent: Color
+    let isRunning: Bool
+    let open: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            Text(presentation.initial)
+                .font(SonnyType.avatar)
+                .foregroundStyle(accent)
+                .frame(width: 36, height: 36)
+                .background(accent.opacity(0.18))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+
+            Text(presentation.name)
+                .font(SonnyType.bodyEmphasis)
+                .foregroundStyle(SonnyTheme.text)
+                .lineLimit(1)
+                .padding(.top, 14)
+
+            Text(presentation.savedItemCountText)
+                .font(SonnyType.micro)
+                .foregroundStyle(SonnyTheme.muted)
+                .padding(.top, 3)
+
+            VStack(alignment: .leading, spacing: 4) {
+                if let appsText = presentation.appsText {
+                    Label(appsText, systemImage: "app.dashed")
+                }
+                if let urlsText = presentation.urlsText {
+                    Label(urlsText, systemImage: "link")
+                }
+            }
+            .font(SonnyType.micro)
+            .foregroundStyle(SonnyTheme.muted)
+            .lineLimit(1)
+            .padding(.top, 12)
+
+            Spacer(minLength: 12)
+
+            HStack {
+                Spacer()
+                Button(action: open) {
+                    Text("Open")
+                }
+                .buttonStyle(CommandCenterRowActionStyle())
+                .disabled(isRunning)
+                .accessibilityLabel("Open \(presentation.name)")
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: 356, minHeight: 190, maxHeight: 190, alignment: .topLeading)
+        .background(CommandCenterPalette.cardSurface)
+        .overlay(
+            RoundedRectangle(cornerRadius: 8)
+                .stroke(SonnyTheme.border, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: 8))
+    }
+}
+
+private struct CollectionHeader: View {
+    let title: String
+    let actionTitle: String
+    let action: () -> Void
+
+    var body: some View {
+        HStack(spacing: 12) {
+            Text(title)
+                .font(SonnyType.bodyEmphasis)
+                .foregroundStyle(SonnyTheme.text)
+            Spacer()
+            Button(action: action) {
+                Label(actionTitle, systemImage: "plus")
+            }
+            .buttonStyle(CommandCenterHeaderActionStyle())
+        }
+        .padding(.horizontal, 18)
+        .frame(height: 42)
+    }
+}
+
+private struct CollectionEmptyState: View {
+    let systemImage: String
+    let title: String
+    let message: String
+
+    var body: some View {
+        VStack(spacing: 8) {
+            Image(systemName: systemImage)
+                .font(.system(size: 20, weight: .regular))
+                .foregroundStyle(SonnyTheme.muted)
+            Text(title)
+                .font(SonnyType.bodyEmphasis)
+                .foregroundStyle(SonnyTheme.text)
+            Text(message)
+                .font(SonnyType.micro)
+                .foregroundStyle(SonnyTheme.muted)
+                .multilineTextAlignment(.center)
+                .frame(maxWidth: 340)
+        }
+        .frame(maxWidth: .infinity, minHeight: 180)
+        .padding(24)
+    }
+}
+
+private struct CommandCenterComposerFooter: View {
+    @ObservedObject var viewModel: AgentViewModel
+    var focusRequest = 0
+
+    var body: some View {
+        VStack(spacing: 0) {
             Rectangle()
                 .fill(SonnyTheme.border)
                 .frame(height: 1)
 
-            AgentCommandComposerView(viewModel: viewModel, autoFocus: false)
-                .padding(.horizontal, 28)
-                .padding(.vertical, 18)
-                .background(Color(red: 0.102, green: 0.095, blue: 0.092))
+            AgentCommandComposerView(
+                viewModel: viewModel,
+                autoFocus: false,
+                focusRequest: focusRequest
+            )
+            .padding(.horizontal, 28)
+            .padding(.vertical, 18)
         }
-        .background(SonnyTheme.ink)
+        .background(CommandCenterPalette.composerSurface)
     }
+}
+
+private struct CommandCenterHeaderActionStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(SonnyType.microEmphasis)
+            .foregroundStyle(SonnyTheme.text.opacity(configuration.isPressed ? 0.7 : 0.92))
+            .padding(.horizontal, 10)
+            .frame(height: 28)
+            .background(CommandCenterPalette.buttonSurface)
+            .overlay(
+                RoundedRectangle(cornerRadius: 5)
+                    .stroke(SonnyTheme.border, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .opacity(isEnabled ? 1 : 0.46)
+    }
+}
+
+private struct CommandCenterRowActionStyle: ButtonStyle {
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(SonnyType.microEmphasis)
+            .foregroundStyle(SonnyTheme.text.opacity(configuration.isPressed ? 0.68 : 0.92))
+            .padding(.horizontal, 11)
+            .frame(height: 28)
+            .background(CommandCenterPalette.buttonSurface)
+            .overlay(
+                RoundedRectangle(cornerRadius: 5)
+                    .stroke(SonnyTheme.border, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .opacity(isEnabled ? 1 : 0.46)
+    }
+}
+
+private enum CommandCenterPalette {
+    static let collectionSurface = SonnyTheme.collectionSurface
+    static let cardSurface = SonnyTheme.surfaceRaised
+    static let buttonSurface = SonnyTheme.surfaceRaised
+    static let composerSurface = SonnyTheme.collectionSurface
+    static let routineIconBackground = SonnyTheme.accent.opacity(0.18)
+    static let routineIconForeground = SonnyTheme.accent
 }
 
 private struct CommandCenterPlaceholderView: View {
@@ -265,16 +678,18 @@ private struct CommandCenterPlaceholderView: View {
 
 private struct CommandCenterPageHeader: View {
     let title: String
-    let subtitle: String
+    var subtitle: String? = nil
 
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(title)
-                .font(SonnyType.brand)
+                .font(SonnyType.hero)
                 .foregroundStyle(SonnyTheme.text)
-            Text(subtitle)
-                .font(SonnyType.body)
-                .foregroundStyle(SonnyTheme.muted)
+            if let subtitle {
+                Text(subtitle)
+                    .font(SonnyType.body)
+                    .foregroundStyle(SonnyTheme.muted)
+            }
         }
     }
 }

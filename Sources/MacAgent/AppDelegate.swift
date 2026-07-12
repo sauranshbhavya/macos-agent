@@ -54,7 +54,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func registerBundledFonts() {
-        for fontName in ["InstrumentSerif-Regular", "GolosText-Regular"] {
+        for fontName in [
+            "InstrumentSerif-Regular",
+            "GolosText-Regular",
+            "Inter-VariableFont_opsz,wght"
+        ] {
             guard let url = Bundle.module.url(forResource: fontName, withExtension: "ttf")
                 ?? Bundle.module.url(forResource: fontName, withExtension: "ttf", subdirectory: "Fonts")
             else {

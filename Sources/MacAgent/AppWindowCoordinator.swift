@@ -80,7 +80,7 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
             rootView: CommandCenterView(viewModel: viewModel)
         )
         let window = makeWindow(
-            title: "Sonny Command Center",
+            title: "Sonny",
             contentSize: NSSize(width: 1_180, height: 780),
             minimumSize: NSSize(width: 900, height: 620),
             autosaveName: "SonnyCommandCenterWindow",
