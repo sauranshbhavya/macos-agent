@@ -10,7 +10,7 @@ struct AgentViewModelLocalStorageTests {
     func missingLocalStoreFilesRemainSilentFirstRunState() throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let viewModel = makeViewModel(root: root, encryption: testEncryption(byte: 0x42))
+        let viewModel = try makeViewModel(root: root, encryption: testEncryption(byte: 0x42))
 
         viewModel.refreshSavedItems()
         viewModel.refreshClipboardHistoryNotice()
@@ -44,7 +44,7 @@ struct AgentViewModelLocalStorageTests {
         try WorkspaceStore(fileURL: workspaceURL, encryption: testEncryption(byte: 0x42)).save(
             StoredWorkspace(name: "Encrypted Research", apps: ["Safari"], urls: ["https://example.com"])
         )
-        let viewModel = makeViewModel(root: root, encryption: testEncryption(byte: 0x99))
+        let viewModel = try makeViewModel(root: root, encryption: testEncryption(byte: 0x99))
 
         viewModel.refreshSavedItems()
 
@@ -64,7 +64,7 @@ struct AgentViewModelLocalStorageTests {
         let settingsURL = root.appendingPathComponent("clipboard-history-settings.json")
         try ClipboardHistorySettingsStore(fileURL: settingsURL, encryption: testEncryption(byte: 0x42))
             .save(ClipboardHistorySettings(noticeDismissed: true, isEnabled: true))
-        let viewModel = makeViewModel(root: root, encryption: testEncryption(byte: 0x99))
+        let viewModel = try makeViewModel(root: root, encryption: testEncryption(byte: 0x99))
 
         viewModel.refreshClipboardHistoryNotice()
 
@@ -76,8 +76,11 @@ struct AgentViewModelLocalStorageTests {
 }
 
 @MainActor
-private func makeViewModel(root: URL, encryption: LocalStorageEncryption) -> AgentViewModel {
-    AgentViewModel(
+private func makeViewModel(root: URL, encryption: LocalStorageEncryption) throws -> AgentViewModel {
+    let suiteName = "AgentViewModelLocalStorageTests-\(UUID().uuidString)"
+    let userDefaults = try #require(UserDefaults(suiteName: suiteName))
+    userDefaults.removePersistentDomain(forName: suiteName)
+    return AgentViewModel(
         routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json"), encryption: encryption),
         workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"), encryption: encryption),
         snippetStore: SnippetStore(fileURL: root.appendingPathComponent("snippets.json"), encryption: encryption),
@@ -107,7 +110,8 @@ private func makeViewModel(root: URL, encryption: LocalStorageEncryption) -> Age
         ),
         localDataDeletionService: LocalDataDeletionService(fileURLs: []),
         priorTaskContextStore: PriorTaskContextStore(),
-        taskUsageRecorder: TaskUsageRecorder()
+        taskUsageRecorder: TaskUsageRecorder(),
+        userDefaults: userDefaults
     )
 }
 

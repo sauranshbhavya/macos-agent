@@ -52,6 +52,58 @@ struct ProductShellTests {
     }
 
     @Test
+    func pointerCursorPreferenceIsSharedInProcessAcrossSurfaces() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        defer { fixture.userDefaults.removePersistentDomain(forName: fixture.userDefaultsSuiteName) }
+        let viewModel = fixture.viewModel
+        let popover = ContentView(viewModel: viewModel)
+        let commandCenter = CommandCenterView(viewModel: viewModel)
+
+        #expect(viewModel.usePointerCursors)
+
+        viewModel.usePointerCursors = false
+        #expect(popover.viewModel.usePointerCursors == false)
+        #expect(commandCenter.viewModel.usePointerCursors == false)
+
+        viewModel.usePointerCursors = true
+        #expect(popover.viewModel.usePointerCursors)
+        #expect(commandCenter.viewModel.usePointerCursors)
+    }
+
+    @Test
+    func pointerCursorPreferencePersistsThroughInjectedUserDefaults() throws {
+        let suiteName = "ProductShellPointerCursors-\(UUID().uuidString)"
+        let userDefaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { userDefaults.removePersistentDomain(forName: suiteName) }
+
+        let firstLaunch = try makeProductShellFixture(
+            userDefaults: userDefaults,
+            userDefaultsSuiteName: suiteName
+        )
+        defer { try? FileManager.default.removeItem(at: firstLaunch.root) }
+        #expect(firstLaunch.viewModel.usePointerCursors)
+
+        firstLaunch.viewModel.usePointerCursors = false
+
+        let secondLaunch = try makeProductShellFixture(
+            userDefaults: userDefaults,
+            userDefaultsSuiteName: suiteName
+        )
+        defer { try? FileManager.default.removeItem(at: secondLaunch.root) }
+        #expect(secondLaunch.viewModel.usePointerCursors == false)
+
+        secondLaunch.viewModel.usePointerCursors = true
+
+        let thirdLaunch = try makeProductShellFixture(
+            userDefaults: userDefaults,
+            userDefaultsSuiteName: suiteName
+        )
+        defer { try? FileManager.default.removeItem(at: thirdLaunch.root) }
+        #expect(thirdLaunch.viewModel.usePointerCursors)
+    }
+
+    @Test
     func primaryWindowActivationReturnsToAccessoryOnlyAfterTheLastWindowCloses() {
         let application = ProductShellActivationRecorder()
         let manager = PrimaryWindowActivationManager(application: application)
@@ -306,7 +358,26 @@ private func makeProductShellFixture() throws -> (
     viewModel: AgentViewModel,
     root: URL,
     routineStore: RoutineStore,
-    workspaceStore: WorkspaceStore
+    workspaceStore: WorkspaceStore,
+    userDefaults: UserDefaults,
+    userDefaultsSuiteName: String
+) {
+    let userDefaultsSuiteName = "ProductShellTests-\(UUID().uuidString)"
+    let userDefaults = try #require(UserDefaults(suiteName: userDefaultsSuiteName))
+    return try makeProductShellFixture(userDefaults: userDefaults, userDefaultsSuiteName: userDefaultsSuiteName)
+}
+
+@MainActor
+private func makeProductShellFixture(
+    userDefaults: UserDefaults,
+    userDefaultsSuiteName: String? = nil
+) throws -> (
+    viewModel: AgentViewModel,
+    root: URL,
+    routineStore: RoutineStore,
+    workspaceStore: WorkspaceStore,
+    userDefaults: UserDefaults,
+    userDefaultsSuiteName: String
 ) {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("ProductShellTests-\(UUID().uuidString)", isDirectory: true)
@@ -354,9 +425,11 @@ private func makeProductShellFixture() throws -> (
         ),
         localDataDeletionService: LocalDataDeletionService(fileURLs: []),
         priorTaskContextStore: PriorTaskContextStore(),
-        taskUsageRecorder: TaskUsageRecorder()
+        taskUsageRecorder: TaskUsageRecorder(),
+        userDefaults: userDefaults
     )
-    return (viewModel, root, routineStore, workspaceStore)
+    let suiteName = userDefaultsSuiteName ?? "ProductShellInjected-\(UUID().uuidString)"
+    return (viewModel, root, routineStore, workspaceStore, userDefaults, suiteName)
 }
 
 private struct ProductShellFixedKeyManager: LocalStorageKeyManaging {

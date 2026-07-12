@@ -57,6 +57,7 @@ struct CommandCenterView: View {
         .background(SonnyTheme.ink)
         .foregroundStyle(SonnyTheme.text)
         .tint(SonnyTheme.accent)
+        .environment(\.sonnyPointerCursorsEnabled, viewModel.usePointerCursors)
         .onAppear {
             viewModel.refreshPermissions()
             viewModel.refreshSavedItems()
@@ -134,6 +135,7 @@ struct CommandCenterView: View {
             .contentShape(Rectangle())
         }
         .buttonStyle(.plain)
+        .sonnyPointerCursor()
         .accessibilityLabel(destination.title)
     }
 
@@ -157,7 +159,7 @@ struct CommandCenterView: View {
         case .workspaces:
             WorkspacesView(viewModel: viewModel)
         case .settings:
-            SettingsFoundationView()
+            SettingsFoundationView(viewModel: viewModel)
         }
     }
 }
@@ -551,6 +553,7 @@ private struct CreateWorkspaceGhostCard: View {
                 )
         )
         .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.workspaceCard))
+        .sonnyPointerCursor()
         .accessibilityLabel("Create workspace")
         .accessibilityHint("Start a new team or personal space")
     }
@@ -638,6 +641,7 @@ private struct CommandCenterHeaderActionStyle: ButtonStyle {
                     .stroke(SonnyTheme.cardBorder, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+            .sonnyPointerCursor()
             .opacity(isEnabled ? 1 : 0.46)
     }
 }
@@ -657,6 +661,7 @@ private struct CommandCenterRowActionStyle: ButtonStyle {
                     .stroke(SonnyTheme.cardBorder, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+            .sonnyPointerCursor()
             .opacity(isEnabled ? 1 : 0.46)
     }
 }
@@ -724,42 +729,76 @@ private struct CommandCenterPageHeader: View {
     }
 }
 
-private struct SettingsFoundationView: View {
-    var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            CommandCenterPageHeader(
-                title: "Settings",
-                subtitle: "Preferences, privacy, and permissions will live here."
-            )
+private enum SettingsSection: String, CaseIterable, Identifiable {
+    case preferences
+    case privacy
 
-            VStack(spacing: 0) {
-                deferredRow(
-                    title: "Preferences",
-                    detail: "Clipboard history and command preferences",
-                    systemImage: "switch.2"
-                )
+    var id: Self { self }
+
+    var title: String {
+        switch self {
+        case .preferences:
+            return "Preferences"
+        case .privacy:
+            return "Privacy & Permissions"
+        }
+    }
+
+    var detail: String {
+        switch self {
+        case .preferences:
+            return "Interface behavior"
+        case .privacy:
+            return "Readiness and local data"
+        }
+    }
+
+    var systemImage: String {
+        switch self {
+        case .preferences:
+            return "switch.2"
+        case .privacy:
+            return "hand.raised"
+        }
+    }
+}
+
+private struct SettingsFoundationView: View {
+    @ObservedObject var viewModel: AgentViewModel
+    @State private var selection: SettingsSection = .preferences
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            CommandCenterPageHeader(title: "Settings")
+
+            HStack(spacing: 0) {
+                settingsSidebar
+
                 Rectangle()
                     .fill(SonnyTheme.border)
-                    .frame(height: 1)
-                deferredRow(
-                    title: "Privacy & Permissions",
-                    detail: "Permission readiness and local-data controls",
-                    systemImage: "hand.raised"
-                )
+                    .frame(width: 1)
+
+                ScrollView {
+                    Group {
+                        switch selection {
+                        case .preferences:
+                            SettingsPreferencesPage(viewModel: viewModel)
+                        case .privacy:
+                            SettingsPrivacyPage(viewModel: viewModel)
+                        }
+                    }
+                    .padding(.horizontal, 30)
+                    .padding(.vertical, 28)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
+                }
             }
-            .frame(maxWidth: 620)
-            .background(SonnyTheme.surfaceRaised.opacity(0.34))
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+            .background(SonnyTheme.collectionSurface)
             .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
+                RoundedRectangle(cornerRadius: SonnyRadius.container)
                     .stroke(SonnyTheme.border, lineWidth: 1)
             )
-            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
-
-            Text("Real preferences and privacy controls will be wired in Checkpoint 3.")
-                .font(SonnyType.micro)
-                .foregroundStyle(SonnyTheme.muted)
-
-            Spacer()
+            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
         }
         .padding(.horizontal, 28)
         .padding(.top, 24)
@@ -768,34 +807,337 @@ private struct SettingsFoundationView: View {
         .background(SonnyTheme.ink)
     }
 
-    private func deferredRow(title: String, detail: String, systemImage: String) -> some View {
-        HStack(spacing: 12) {
-            Image(systemName: systemImage)
-                .font(.system(size: 15, weight: .medium))
+    private var settingsSidebar: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            ForEach(SettingsSection.allCases) { section in
+                Button {
+                    selection = section
+                } label: {
+                    HStack(spacing: 10) {
+                        Image(systemName: section.systemImage)
+                            .font(.system(size: 13, weight: .medium))
+                            .frame(width: 18)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(section.title)
+                                .font(SonnyType.body)
+                                .lineLimit(1)
+                            Text(section.detail)
+                                .font(SonnyType.micro)
+                                .foregroundStyle(SonnyTheme.muted)
+                                .lineLimit(1)
+                        }
+                        Spacer(minLength: 0)
+                    }
+                    .foregroundStyle(selection == section ? SonnyTheme.text : SonnyTheme.muted)
+                    .padding(.horizontal, 11)
+                    .frame(height: 48)
+                    .background(
+                        RoundedRectangle(cornerRadius: SonnyRadius.container)
+                            .fill(selection == section ? SonnyTheme.surfaceRaised : Color.clear)
+                    )
+                    .contentShape(Rectangle())
+                }
+                .buttonStyle(.plain)
+                .sonnyPointerCursor()
+                .accessibilityLabel(section.title)
+            }
+
+            Spacer()
+        }
+        .padding(14)
+        .frame(width: 226, alignment: .topLeading)
+        .frame(maxHeight: .infinity, alignment: .topLeading)
+    }
+}
+
+private struct SettingsPreferencesPage: View {
+    @ObservedObject var viewModel: AgentViewModel
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            SettingsPageTitle(title: "Preferences", subtitle: "Manage your preferences")
+
+            SettingsSectionBlock(title: "Display") {
+                SettingsToggleRow(
+                    title: "Use pointer cursors",
+                    detail: "Change the cursor to a pointer when hovering over any interactive element.",
+                    isOn: $viewModel.usePointerCursors
+                )
+            }
+
+            SettingsSectionBlock(title: "Theme") {
+                SettingsAdaptiveControlRow {
+                    SettingsControlLabel(
+                        title: "Interface theme",
+                        detail: "Select or customize your interface color scheme."
+                    )
+                } trailing: {
+                    HStack(spacing: 8) {
+                        SettingsThemeOption(title: "Dark", isSelected: true, isDisabled: false)
+                        SettingsThemeOption(title: "Light", isSelected: false, isDisabled: true)
+                        SettingsThemeOption(title: "System", isSelected: false, isDisabled: true)
+                    }
+                    .fixedSize(horizontal: true, vertical: false)
+                }
+            }
+        }
+        .frame(maxWidth: 700, alignment: .topLeading)
+    }
+}
+
+private struct SettingsPrivacyPage: View {
+    @ObservedObject var viewModel: AgentViewModel
+    @State private var showDeleteLocalDataConfirmation = false
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 24) {
+            SettingsPageTitle(title: "Privacy & Permissions", subtitle: "Review local readiness and data controls")
+
+            SettingsSectionBlock(title: "Permission readiness") {
+                VStack(alignment: .leading, spacing: 14) {
+                    PermissionReadinessRows(items: viewModel.permissionItems)
+
+                    Button {
+                        viewModel.refreshPermissions()
+                    } label: {
+                        Label("Refresh", systemImage: "arrow.clockwise")
+                    }
+                    .buttonStyle(CommandCenterRowActionStyle())
+                    .accessibilityLabel("Refresh permission readiness")
+                }
+                .padding(.vertical, 16)
+            }
+
+            SettingsSectionBlock(title: "Local data") {
+                VStack(alignment: .leading, spacing: 12) {
+                    SettingsAdaptiveControlRow {
+                        HStack(alignment: .top, spacing: 12) {
+                            Image(systemName: "trash")
+                                .font(SonnyType.icon(15))
+                                .foregroundStyle(SonnyTheme.danger)
+                                .frame(width: 20)
+
+                            SettingsControlLabel(
+                                title: "Delete Sonny local data",
+                                detail: "Saved routines, workspaces, clipboard history, snippets, recent artifacts, Shortcut run history, and clipboard settings."
+                            )
+                        }
+                    } trailing: {
+                        Button {
+                            showDeleteLocalDataConfirmation = true
+                        } label: {
+                            Label("Delete", systemImage: "trash")
+                        }
+                        .buttonStyle(SonnyButtonStyle(tone: .danger, width: 96))
+                        .disabled(viewModel.isRunning)
+                        .help("Delete local Sonny data")
+                    }
+
+                    if let message = viewModel.localDataDeletionStatusMessage {
+                        Label(message, systemImage: message.hasPrefix("Deleted") ? "checkmark.circle" : "exclamationmark.triangle")
+                            .font(SonnyType.micro)
+                            .foregroundStyle(message.hasPrefix("Deleted") ? SonnyTheme.accent : SonnyTheme.warning)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .padding(.vertical, 16)
+            }
+        }
+        .frame(maxWidth: 760, alignment: .topLeading)
+        .onAppear {
+            viewModel.refreshPermissions()
+        }
+        .confirmationDialog(
+            "Delete Sonny Local Data?",
+            isPresented: $showDeleteLocalDataConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Local Data", role: .destructive) {
+                viewModel.deleteLocalData()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This deletes saved routines, workspaces, clipboard history, snippets, recent artifacts, Shortcut run history, and clipboard settings. Generated files and API keys are not deleted.")
+        }
+    }
+}
+
+private struct SettingsAdaptiveControlRow<Leading: View, Trailing: View>: View {
+    let leading: Leading
+    let trailing: Trailing
+
+    init(
+        @ViewBuilder leading: () -> Leading,
+        @ViewBuilder trailing: () -> Trailing
+    ) {
+        self.leading = leading()
+        self.trailing = trailing()
+    }
+
+    var body: some View {
+        ViewThatFits(in: .horizontal) {
+            HStack(alignment: .center, spacing: 18) {
+                leading
+                    .frame(minWidth: 220, maxWidth: .infinity, alignment: .leading)
+
+                trailing
+                    .fixedSize(horizontal: true, vertical: false)
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+
+            VStack(alignment: .leading, spacing: 12) {
+                leading
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                trailing
+            }
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+        .padding(.vertical, 16)
+    }
+}
+
+private struct SettingsControlLabel: View {
+    let title: String
+    let detail: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 3) {
+            Text(title)
+                .font(SonnyType.body)
+                .foregroundStyle(SonnyTheme.text)
+                .lineLimit(1)
+                .fixedSize(horizontal: false, vertical: true)
+            Text(detail)
+                .font(SonnyType.micro)
                 .foregroundStyle(SonnyTheme.muted)
-                .frame(width: 20)
-            VStack(alignment: .leading, spacing: 3) {
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+private struct SettingsPageTitle: View {
+    let title: String
+    let subtitle: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text(title)
+                .font(SonnyType.hero)
+                .foregroundStyle(SonnyTheme.text)
+            Text(subtitle)
+                .font(SonnyType.body)
+                .foregroundStyle(SonnyTheme.muted)
+        }
+        .padding(.bottom, 2)
+    }
+}
+
+private struct SettingsSectionBlock<Content: View>: View {
+    let title: String
+    let content: Content
+
+    init(title: String, @ViewBuilder content: () -> Content) {
+        self.title = title
+        self.content = content()
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(title)
+                .font(SonnyType.bodyEmphasis)
+                .foregroundStyle(SonnyTheme.text)
+
+            VStack(spacing: 0) {
+                content
+            }
+            .padding(.horizontal, 18)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(SonnyTheme.collectionSurface)
+            .overlay(
+                RoundedRectangle(cornerRadius: SonnyRadius.container)
+                    .stroke(SonnyTheme.border, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+        }
+    }
+}
+
+private struct SettingsToggleRow: View {
+    let title: String
+    let detail: String
+    @Binding var isOn: Bool
+
+    var body: some View {
+        SettingsAdaptiveControlRow {
+            SettingsControlLabel(title: title, detail: detail)
+        } trailing: {
+            SonnySettingsToggle(isOn: $isOn)
+                .accessibilityLabel(title)
+        }
+    }
+}
+
+private struct SonnySettingsToggle: View {
+    @Binding var isOn: Bool
+
+    var body: some View {
+        Button {
+            isOn.toggle()
+        } label: {
+            ZStack(alignment: isOn ? .trailing : .leading) {
+                RoundedRectangle(cornerRadius: SonnyRadius.pill)
+                    .fill(isOn ? SonnyTheme.accent : SonnyTheme.surfaceRaised)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: SonnyRadius.pill)
+                            .stroke(isOn ? SonnyTheme.accent : SonnyTheme.cardBorder, lineWidth: 1)
+                    )
+
+                Circle()
+                    .fill(SonnyTheme.text)
+                    .frame(width: 14, height: 14)
+                    .shadow(color: Color.black.opacity(0.25), radius: 4, x: 0, y: 0)
+                    .padding(3)
+            }
+            .frame(width: 34, height: 20)
+        }
+        .buttonStyle(.plain)
+        .sonnyPointerCursor()
+        .accessibilityValue(isOn ? "On" : "Off")
+    }
+}
+
+private struct SettingsThemeOption: View {
+    let title: String
+    let isSelected: Bool
+    let isDisabled: Bool
+
+    var body: some View {
+        VStack(spacing: 5) {
+            HStack(spacing: 6) {
+                Circle()
+                    .fill(isSelected ? SonnyTheme.accent : SonnyTheme.muted)
+                    .frame(width: 6, height: 6)
                 Text(title)
-                    .font(SonnyType.bodyEmphasis)
-                    .foregroundStyle(SonnyTheme.text.opacity(0.74))
-                Text(detail)
+                    .font(SonnyType.microEmphasis)
+                    .foregroundStyle(isDisabled ? SonnyTheme.muted : SonnyTheme.text)
+            }
+            if isDisabled {
+                Text("Soon")
                     .font(SonnyType.micro)
                     .foregroundStyle(SonnyTheme.muted)
             }
-            Spacer()
-            Text("Checkpoint 3")
-                .font(SonnyType.micro)
-                .foregroundStyle(SonnyTheme.muted)
-                .padding(.horizontal, 8)
-                .padding(.vertical, 4)
-                .overlay(
-                    Capsule()
-                        .stroke(SonnyTheme.border, lineWidth: 1)
-                )
         }
-        .padding(.horizontal, 16)
-        .frame(height: 64)
+        .padding(.horizontal, 10)
+        .frame(minWidth: 72, minHeight: 42)
+        .background(isSelected ? SonnyTheme.surfaceRaised : Color.clear)
+        .overlay(
+            RoundedRectangle(cornerRadius: SonnyRadius.themeSwatch)
+                .stroke(isSelected ? SonnyTheme.accent.opacity(0.72) : SonnyTheme.cardBorder, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.themeSwatch))
+        .opacity(isDisabled ? 0.58 : 1)
         .accessibilityElement(children: .combine)
-        .accessibilityHint("Available in a later checkpoint")
+        .accessibilityLabel(isDisabled ? "\(title) theme, coming soon" : "\(title) theme, selected")
     }
 }

@@ -31,6 +31,11 @@ final class AgentViewModel: ObservableObject {
     @Published var priorTaskContext: PriorTaskContext?
     @Published var taskUsageSummary: TaskUsageSummary = .empty
     @Published var localDataDeletionStatusMessage: String?
+    @Published var usePointerCursors: Bool = true {
+        didSet {
+            userDefaults.set(usePointerCursors, forKey: UserDefaultsKeys.usePointerCursors)
+        }
+    }
 
     let logStore = AgentLogStore()
 
@@ -50,6 +55,7 @@ final class AgentViewModel: ObservableObject {
     private let localDataDeletionService: LocalDataDeletionService
     private let priorTaskContextStore: PriorTaskContextStore
     private let taskUsageRecorder: TaskUsageRecorder
+    private let userDefaults: UserDefaults
     private var clipboardHistoryTimer: Timer?
     private var clarificationAutoExecute = false
     private var isPushToTalkHotKeyDown = false
@@ -80,6 +86,10 @@ final class AgentViewModel: ObservableObject {
         case hotKey
     }
 
+    private enum UserDefaultsKeys {
+        static let usePointerCursors = "com.sonny.preferences.usePointerCursors"
+    }
+
     init(
         audioRecorder: AudioCommandRecorder = AudioCommandRecorder(),
         permissionReadinessService: PermissionReadinessService = PermissionReadinessService(),
@@ -93,8 +103,11 @@ final class AgentViewModel: ObservableObject {
         clipboardHistoryMonitor: ClipboardHistoryMonitor? = nil,
         localDataDeletionService: LocalDataDeletionService = LocalDataDeletionService(),
         priorTaskContextStore: PriorTaskContextStore = PriorTaskContextStore(),
-        taskUsageRecorder: TaskUsageRecorder = TaskUsageRecorder()
+        taskUsageRecorder: TaskUsageRecorder = TaskUsageRecorder(),
+        userDefaults: UserDefaults = .standard
     ) {
+        self.userDefaults = userDefaults
+        usePointerCursors = userDefaults.object(forKey: UserDefaultsKeys.usePointerCursors) as? Bool ?? true
         self.audioRecorder = audioRecorder
         self.permissionReadinessService = permissionReadinessService
         self.routineStore = routineStore

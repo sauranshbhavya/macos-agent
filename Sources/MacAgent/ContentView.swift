@@ -1,3 +1,4 @@
+import AppKit
 import MacAgentCore
 import SwiftUI
 
@@ -50,6 +51,7 @@ struct ContentView: View {
         .background(.clear)
         .foregroundStyle(SonnyTheme.text)
         .tint(SonnyTheme.accent)
+        .environment(\.sonnyPointerCursorsEnabled, viewModel.usePointerCursors)
         .onAppear {
             viewModel.refreshPermissions()
             viewModel.refreshSavedItems()
@@ -450,7 +452,7 @@ private struct SystemStatusPanel: View {
     }
 }
 
-private struct PermissionReadinessRows: View {
+struct PermissionReadinessRows: View {
     let items: [PermissionReadinessItem]
 
     var body: some View {
@@ -1333,6 +1335,7 @@ enum SonnyTheme {
 
 enum SonnyRadius {
     static let container: CGFloat = 4
+    static let themeSwatch: CGFloat = 5
     static let routineIcon: CGFloat = 6
     static let panelCard: CGFloat = 6
     static let workspaceCard: CGFloat = 8
@@ -1342,7 +1345,59 @@ enum SonnyRadius {
     static let tagPill: CGFloat = 48
 }
 
+private struct SonnyPointerCursorsEnabledKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    var sonnyPointerCursorsEnabled: Bool {
+        get { self[SonnyPointerCursorsEnabledKey.self] }
+        set { self[SonnyPointerCursorsEnabledKey.self] = newValue }
+    }
+}
+
+private struct SonnyPointerCursorModifier: ViewModifier {
+    @Environment(\.sonnyPointerCursorsEnabled) private var isEnabled
+    @Environment(\.isEnabled) private var isControlEnabled
+    @State private var didPushCursor = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { isHovering in
+                if isEnabled, isControlEnabled, isHovering, !didPushCursor {
+                    NSCursor.pointingHand.push()
+                    didPushCursor = true
+                } else if didPushCursor, (!isHovering || !isEnabled || !isControlEnabled) {
+                    NSCursor.pop()
+                    didPushCursor = false
+                }
+            }
+            .onChange(of: isEnabled) { _, newValue in
+                if !newValue, didPushCursor {
+                    NSCursor.pop()
+                    didPushCursor = false
+                }
+            }
+            .onChange(of: isControlEnabled) { _, newValue in
+                if !newValue, didPushCursor {
+                    NSCursor.pop()
+                    didPushCursor = false
+                }
+            }
+            .onDisappear {
+                if didPushCursor {
+                    NSCursor.pop()
+                    didPushCursor = false
+                }
+            }
+    }
+}
+
 extension View {
+    func sonnyPointerCursor() -> some View {
+        modifier(SonnyPointerCursorModifier())
+    }
+
     func glassPanel(cornerRadius: CGFloat) -> some View {
         background(
             RoundedRectangle(cornerRadius: cornerRadius)
@@ -1385,6 +1440,7 @@ struct SonnyButtonStyle: ButtonStyle {
                         .stroke(border, lineWidth: 1)
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+                .sonnyPointerCursor()
         } else {
             label(configuration)
                 .padding(.horizontal, 12)
@@ -1395,6 +1451,7 @@ struct SonnyButtonStyle: ButtonStyle {
                         .stroke(border, lineWidth: 1)
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+                .sonnyPointerCursor()
         }
     }
 
@@ -1449,6 +1506,7 @@ private struct SonnyIconButtonStyle: ButtonStyle {
             .frame(width: 30, height: 30)
             .background(configuration.isPressed ? SonnyTheme.surfaceRaised : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 8))
+            .sonnyPointerCursor()
     }
 }
 
@@ -1465,5 +1523,6 @@ private struct SonnyMiniButtonStyle: ButtonStyle {
                     .stroke(SonnyTheme.border, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 7))
+            .sonnyPointerCursor()
     }
 }
