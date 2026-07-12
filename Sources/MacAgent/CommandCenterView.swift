@@ -68,9 +68,9 @@ struct CommandCenterView: View {
         VStack(alignment: .leading, spacing: 22) {
             HStack(spacing: 11) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 10)
+                    RoundedRectangle(cornerRadius: SonnyRadius.sidebarIcon)
                         .fill(SonnyTheme.accent.opacity(0.16))
-                    RoundedRectangle(cornerRadius: 10)
+                    RoundedRectangle(cornerRadius: SonnyRadius.sidebarIcon)
                         .stroke(SonnyTheme.accent.opacity(0.42), lineWidth: 1)
                     Image(systemName: "wand.and.stars")
                         .font(.system(size: 16, weight: .medium))
@@ -124,11 +124,11 @@ struct CommandCenterView: View {
             .padding(.horizontal, 11)
             .frame(height: 40)
             .background(
-                RoundedRectangle(cornerRadius: 9)
+                RoundedRectangle(cornerRadius: SonnyRadius.container)
                     .fill(isSelected(destination) ? SonnyTheme.surfaceRaised : Color.clear)
             )
             .overlay(
-                RoundedRectangle(cornerRadius: 9)
+                RoundedRectangle(cornerRadius: SonnyRadius.container)
                     .stroke(isSelected(destination) ? SonnyTheme.border : Color.clear, lineWidth: 1)
             )
             .contentShape(Rectangle())
@@ -192,10 +192,10 @@ private struct TasksFoundationView: View {
                     .frame(maxWidth: .infinity, alignment: .leading)
                     .background(SonnyTheme.surfaceRaised.opacity(0.46))
                     .overlay(
-                        RoundedRectangle(cornerRadius: 12)
+                        RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
                             .stroke(SonnyTheme.border, lineWidth: 1)
                     )
-                    .clipShape(RoundedRectangle(cornerRadius: 12))
+                    .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
 
                     Spacer(minLength: 0)
                 }
@@ -305,10 +305,10 @@ private struct RoutinesView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .background(CommandCenterPalette.collectionSurface)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 4)
+                    RoundedRectangle(cornerRadius: SonnyRadius.container)
                         .stroke(SonnyTheme.border, lineWidth: 1)
                 )
-                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
             }
             .padding(.horizontal, 28)
             .padding(.top, 24)
@@ -339,7 +339,7 @@ private struct RoutineRow: View {
         VStack(spacing: 0) {
             HStack(spacing: 14) {
                 ZStack {
-                    RoundedRectangle(cornerRadius: 5)
+                    RoundedRectangle(cornerRadius: SonnyRadius.routineIcon)
                         .fill(CommandCenterPalette.routineIconBackground)
                     RoundedRectangle(cornerRadius: 2)
                         .fill(CommandCenterPalette.routineIconForeground)
@@ -387,7 +387,6 @@ private struct RoutineRow: View {
                     .frame(height: 1)
             }
         }
-        .background(CommandCenterPalette.cardSurface)
     }
 }
 
@@ -396,7 +395,7 @@ private struct WorkspacesView: View {
     @State private var composerFocusRequest = 0
 
     private let columns = [
-        GridItem(.adaptive(minimum: 356, maximum: 356), spacing: 12, alignment: .top)
+        GridItem(.adaptive(minimum: 356, maximum: 356), spacing: 14, alignment: .top)
     ]
 
     var body: some View {
@@ -423,7 +422,7 @@ private struct WorkspacesView: View {
                         )
                     } else {
                         ScrollView {
-                            LazyVGrid(columns: columns, alignment: .leading, spacing: 12) {
+                            LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
                                 ForEach(viewModel.savedWorkspaces, id: \.name) { workspace in
                                     WorkspaceCard(
                                         presentation: WorkspaceCardPresentation(workspace: workspace),
@@ -432,6 +431,7 @@ private struct WorkspacesView: View {
                                         open: { viewModel.openWorkspaceWidget(workspace) }
                                     )
                                 }
+                                CreateWorkspaceGhostCard(action: beginNewWorkspace)
                             }
                             .padding(18)
                         }
@@ -440,10 +440,10 @@ private struct WorkspacesView: View {
                 .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
                 .background(CommandCenterPalette.collectionSurface)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 4)
+                    RoundedRectangle(cornerRadius: SonnyRadius.container)
                         .stroke(SonnyTheme.border, lineWidth: 1)
                 )
-                .clipShape(RoundedRectangle(cornerRadius: 4))
+                .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
             }
             .padding(.horizontal, 28)
             .padding(.top, 24)
@@ -477,7 +477,7 @@ private struct WorkspaceCard: View {
                 .foregroundStyle(accent)
                 .frame(width: 36, height: 36)
                 .background(accent.opacity(0.18))
-                .clipShape(RoundedRectangle(cornerRadius: 8))
+                .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.workspaceCard))
 
             Text(presentation.name)
                 .font(SonnyType.bodyEmphasis)
@@ -519,10 +519,40 @@ private struct WorkspaceCard: View {
         .frame(maxWidth: 356, minHeight: 190, maxHeight: 190, alignment: .topLeading)
         .background(CommandCenterPalette.cardSurface)
         .overlay(
-            RoundedRectangle(cornerRadius: 8)
-                .stroke(SonnyTheme.border, lineWidth: 1)
+            RoundedRectangle(cornerRadius: SonnyRadius.workspaceCard)
+                .stroke(SonnyTheme.cardBorder, lineWidth: 1)
         )
-        .clipShape(RoundedRectangle(cornerRadius: 8))
+        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.workspaceCard))
+    }
+}
+
+private struct CreateWorkspaceGhostCard: View {
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            VStack(spacing: 6) {
+                Text("+ Create workspace")
+                    .font(SonnyType.bodyEmphasis)
+                    .foregroundStyle(SonnyTheme.text)
+                Text("Start a new team or personal space")
+                    .font(SonnyType.micro)
+                    .foregroundStyle(SonnyTheme.muted)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity)
+        }
+        .buttonStyle(.plain)
+        .frame(maxWidth: 356, minHeight: 190, maxHeight: 190)
+        .overlay(
+            RoundedRectangle(cornerRadius: SonnyRadius.workspaceCard)
+                .stroke(
+                    SonnyTheme.border,
+                    style: StrokeStyle(lineWidth: 1, dash: [5, 5])
+                )
+        )
+        .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.workspaceCard))
+        .accessibilityLabel("Create workspace")
+        .accessibilityHint("Start a new team or personal space")
     }
 }
 
@@ -604,10 +634,10 @@ private struct CommandCenterHeaderActionStyle: ButtonStyle {
             .frame(height: 28)
             .background(CommandCenterPalette.buttonSurface)
             .overlay(
-                RoundedRectangle(cornerRadius: 5)
-                    .stroke(SonnyTheme.border, lineWidth: 1)
+                RoundedRectangle(cornerRadius: SonnyRadius.container)
+                    .stroke(SonnyTheme.cardBorder, lineWidth: 1)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
             .opacity(isEnabled ? 1 : 0.46)
     }
 }
@@ -623,10 +653,10 @@ private struct CommandCenterRowActionStyle: ButtonStyle {
             .frame(height: 28)
             .background(CommandCenterPalette.buttonSurface)
             .overlay(
-                RoundedRectangle(cornerRadius: 5)
-                    .stroke(SonnyTheme.border, lineWidth: 1)
+                RoundedRectangle(cornerRadius: SonnyRadius.container)
+                    .stroke(SonnyTheme.cardBorder, lineWidth: 1)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 5))
+            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
             .opacity(isEnabled ? 1 : 0.46)
     }
 }
@@ -661,10 +691,10 @@ private struct CommandCenterPlaceholderView: View {
             .frame(maxWidth: 520, alignment: .leading)
             .background(SonnyTheme.surfaceRaised.opacity(0.42))
             .overlay(
-                RoundedRectangle(cornerRadius: 12)
+                RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
                     .stroke(SonnyTheme.border, lineWidth: 1)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
 
             Spacer()
         }
@@ -720,10 +750,10 @@ private struct SettingsFoundationView: View {
             .frame(maxWidth: 620)
             .background(SonnyTheme.surfaceRaised.opacity(0.34))
             .overlay(
-                RoundedRectangle(cornerRadius: 12)
+                RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
                     .stroke(SonnyTheme.border, lineWidth: 1)
             )
-            .clipShape(RoundedRectangle(cornerRadius: 12))
+            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
 
             Text("Real preferences and privacy controls will be wired in Checkpoint 3.")
                 .font(SonnyType.micro)

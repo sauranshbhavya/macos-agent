@@ -1312,8 +1312,9 @@ enum SonnyTheme {
     static let collectionSurface = Color(red: 15 / 255, green: 16 / 255, blue: 17 / 255)
     static let surfaceRaised = Color(red: 22 / 255, green: 23 / 255, blue: 26 / 255)
     static let border = Color(red: 37 / 255, green: 38 / 255, blue: 43 / 255)
+    static let cardBorder = Color(red: 26 / 255, green: 27 / 255, blue: 32 / 255)
     static let text = Color(red: 1, green: 1, blue: 1)
-    static let muted = text.opacity(0.58)
+    static let muted = Color(red: 149 / 255, green: 150 / 255, blue: 153 / 255)
     static let accent = Color(red: 92 / 255, green: 132 / 255, blue: 254 / 255)
 
     // Compatibility aliases keep established surfaces on the same rebranded tokens.
@@ -1325,9 +1326,20 @@ enum SonnyTheme {
     static let glassShade = ink.opacity(0.88)
     static let panelTint = collectionSurface.opacity(0.88)
     static let input = collectionSurface
-    static let warning = Color(red: 0.988, green: 0.706, blue: 0.000)
+    static let warning = Color(red: 242 / 255, green: 190 / 255, blue: 0 / 255)
     static let danger = Color(red: 0.973, green: 0.169, blue: 0.376)
     static let info = text.opacity(0.92)
+}
+
+enum SonnyRadius {
+    static let container: CGFloat = 4
+    static let routineIcon: CGFloat = 6
+    static let panelCard: CGFloat = 6
+    static let workspaceCard: CGFloat = 8
+    static let sidebarIcon: CGFloat = 10
+    static let window: CGFloat = 16
+    static let pill: CGFloat = 20
+    static let tagPill: CGFloat = 48
 }
 
 extension View {
