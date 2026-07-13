@@ -93,6 +93,10 @@ private func makeViewModel(root: URL, encryption: LocalStorageEncryption) throws
             fileURL: root.appendingPathComponent("shortcuts-run-history.json"),
             encryption: encryption
         ),
+        taskHistoryStore: TaskHistoryStore(
+            fileURL: root.appendingPathComponent("task-history.json"),
+            encryption: encryption
+        ),
         clipboardHistorySettingsStore: ClipboardHistorySettingsStore(
             fileURL: root.appendingPathComponent("clipboard-history-settings.json"),
             encryption: encryption

@@ -407,7 +407,7 @@ private struct SystemStatusPanel: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This deletes saved routines, workspaces, clipboard history, snippets, recent artifacts, Shortcut run history, and clipboard settings. Generated files and API keys are not deleted.")
+            Text("This deletes saved routines, workspaces, clipboard history, snippets, recent artifacts, Shortcut run history, task history, and clipboard settings. Generated files and API keys are not deleted.")
         }
     }
 
@@ -423,7 +423,7 @@ private struct SystemStatusPanel: View {
                     Text("Local data")
                         .font(SonnyType.caption)
                         .foregroundStyle(SonnyTheme.text)
-                    Text("Saved routines, workspaces, clipboard history, snippets, recent artifacts, Shortcut run history, and clipboard settings.")
+                    Text("Saved routines, workspaces, clipboard history, snippets, recent artifacts, Shortcut run history, task history, and clipboard settings.")
                         .font(SonnyType.micro)
                         .foregroundStyle(SonnyTheme.muted)
                         .lineSpacing(1)

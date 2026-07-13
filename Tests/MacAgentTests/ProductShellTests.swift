@@ -179,6 +179,68 @@ struct ProductShellTests {
         }
     }
 
+    @Test
+    func completedTaskIsRecordedInPersistentHistory() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        viewModel.command = "= 1 + 1"
+        viewModel.dryRun = false
+
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        let records = try fixture.taskHistoryStore.loadAll()
+        let record = try #require(records.last)
+        #expect(records.count == 1)
+        #expect(record.command == "= 1 + 1")
+        #expect(record.outcomeStatus == .completed)
+        #expect(record.completedAt >= record.startedAt)
+    }
+
+    @Test
+    func failedTaskIsRecordedInPersistentHistory() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        viewModel.command = "calc apples"
+        viewModel.dryRun = false
+
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        let records = try fixture.taskHistoryStore.loadAll()
+        let record = try #require(records.last)
+        #expect(records.count == 1)
+        #expect(record.command == "calc apples")
+        #expect(record.outcomeStatus == .failed)
+        #expect(record.completedAt >= record.startedAt)
+        #expect(viewModel.errorMessage?.contains("Could not calculate that expression") == true)
+    }
+
+    @Test
+    func canceledApprovalTaskIsRecordedInPersistentHistory() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        viewModel.command = "snippet save ;history-test = Hello"
+        viewModel.dryRun = false
+
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+        #expect(viewModel.approvalRequest != nil)
+
+        viewModel.cancelCurrentRun()
+
+        let records = try fixture.taskHistoryStore.loadAll()
+        let record = try #require(records.last)
+        #expect(records.count == 1)
+        #expect(record.command == "snippet save ;history-test = Hello")
+        #expect(record.outcomeStatus == .canceled)
+        #expect(record.completedAt >= record.startedAt)
+        #expect(viewModel.finalSummary == "Approval canceled. No action was taken.")
+    }
+
     @Test(.enabled(if: ProductShellSmokeConfiguration.isEnabled))
     func popoverContentKeepsItsExistingRootSizeAfterSharedViewExtraction() throws {
         let fixture = try makeProductShellFixture()
@@ -359,6 +421,7 @@ private func makeProductShellFixture() throws -> (
     root: URL,
     routineStore: RoutineStore,
     workspaceStore: WorkspaceStore,
+    taskHistoryStore: TaskHistoryStore,
     userDefaults: UserDefaults,
     userDefaultsSuiteName: String
 ) {
@@ -376,6 +439,7 @@ private func makeProductShellFixture(
     root: URL,
     routineStore: RoutineStore,
     workspaceStore: WorkspaceStore,
+    taskHistoryStore: TaskHistoryStore,
     userDefaults: UserDefaults,
     userDefaultsSuiteName: String
 ) {
@@ -398,6 +462,10 @@ private func makeProductShellFixture(
         fileURL: root.appendingPathComponent("workspaces.json"),
         encryption: encryption
     )
+    let taskHistoryStore = TaskHistoryStore(
+        fileURL: root.appendingPathComponent("task-history.json"),
+        encryption: encryption
+    )
     let viewModel = AgentViewModel(
         routineStore: routineStore,
         workspaceStore: workspaceStore,
@@ -414,6 +482,7 @@ private func makeProductShellFixture(
             fileURL: root.appendingPathComponent("shortcuts-run-history.json"),
             encryption: encryption
         ),
+        taskHistoryStore: taskHistoryStore,
         clipboardHistorySettingsStore: clipboardSettingsStore,
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
             reader: ProductShellPasteboardReader(),
@@ -429,7 +498,22 @@ private func makeProductShellFixture(
         userDefaults: userDefaults
     )
     let suiteName = userDefaultsSuiteName ?? "ProductShellInjected-\(UUID().uuidString)"
-    return (viewModel, root, routineStore, workspaceStore, userDefaults, suiteName)
+    return (viewModel, root, routineStore, workspaceStore, taskHistoryStore, userDefaults, suiteName)
+}
+
+@MainActor
+private func waitForViewModelToBecomeIdle(
+    _ viewModel: AgentViewModel,
+    timeout: TimeInterval = 2
+) async throws {
+    let deadline = Date(timeIntervalSinceNow: timeout)
+    while viewModel.isRunning {
+        if Date() > deadline {
+            Issue.record("View model did not become idle before timeout.")
+            return
+        }
+        try await Task.sleep(for: .milliseconds(10))
+    }
 }
 
 private struct ProductShellFixedKeyManager: LocalStorageKeyManaging {

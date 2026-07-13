@@ -125,6 +125,28 @@ struct LocalStorageSecurityTests {
     }
 
     @Test
+    func taskHistoryStoreEncryptsRawFileBytesAndRoundTrips() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let marker = "sensitive task \(UUID().uuidString)"
+        let store = TaskHistoryStore(
+            fileURL: root.appendingPathComponent("task-history.json"),
+            encryption: testEncryption()
+        )
+        let record = CompletedTaskRecord(
+            command: marker,
+            startedAt: .fixture,
+            completedAt: Date(timeInterval: 14, since: .fixture),
+            outcomeStatus: .completed
+        )
+
+        try store.record(record)
+
+        try expectEncryptedFile(store.fileURL, hiding: marker)
+        #expect(try store.loadAll() == [record])
+    }
+
+    @Test
     func legacyPlaintextFilesMigrateToEncryptedFilesAfterSuccessfulLoad() throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -137,6 +159,7 @@ struct LocalStorageSecurityTests {
         try assertSnippetMigration(root: root, encryption: encryption)
         try assertRecentArtifactMigration(root: root, encryption: encryption)
         try assertShortcutHistoryMigration(root: root, encryption: encryption)
+        try assertTaskHistoryMigration(root: root, encryption: encryption)
     }
 
     @Test
@@ -210,13 +233,13 @@ struct LocalStorageSecurityTests {
 
         let result = try service.deleteAllLocalData()
 
-        #expect(result == LocalDataDeletionResult(deletedFileCount: 7, missingFileCount: 0))
+        #expect(result == LocalDataDeletionResult(deletedFileCount: 8, missingFileCount: 0))
         for fileURL in fileURLs {
             #expect(!FileManager.default.fileExists(atPath: fileURL.path))
         }
 
         let secondResult = try service.deleteAllLocalData()
-        #expect(secondResult == LocalDataDeletionResult(deletedFileCount: 0, missingFileCount: 7))
+        #expect(secondResult == LocalDataDeletionResult(deletedFileCount: 0, missingFileCount: 8))
     }
 }
 
@@ -237,6 +260,10 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
         fileURL: root.appendingPathComponent("shortcuts-run-history.json"),
         encryption: encryption
     )
+    let taskHistoryStore = TaskHistoryStore(
+        fileURL: root.appendingPathComponent("task-history.json"),
+        encryption: encryption
+    )
 
     try routineStore.save(
         StoredRoutine(
@@ -253,6 +280,14 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
     try Data("artifact".utf8).write(to: artifact, options: .atomic)
     try recentArtifactStore.record(path: artifact.path, recordedAt: .fixture)
     try shortcutRunHistoryStore.recordSuccess(shortcutName: "Delete Shortcut", at: .fixture)
+    try taskHistoryStore.record(
+        CompletedTaskRecord(
+            command: "delete task",
+            startedAt: .fixture,
+            completedAt: Date(timeInterval: 3, since: .fixture),
+            outcomeStatus: .completed
+        )
+    )
 
     return [
         routineStore.fileURL,
@@ -261,7 +296,8 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
         clipboardSettingsStore.fileURL,
         snippetStore.fileURL,
         recentArtifactStore.fileURL,
-        shortcutRunHistoryStore.fileURL
+        shortcutRunHistoryStore.fileURL,
+        taskHistoryStore.fileURL
     ]
 }
 
@@ -358,6 +394,24 @@ private func assertShortcutHistoryMigration(root: URL, encryption: LocalStorageE
     let store = ShortcutRunHistoryStore(fileURL: url, encryption: encryption)
 
     #expect(try store.hasCleanObservedSuccess(for: marker))
+    try expectEncryptedFile(url, hiding: marker)
+}
+
+private func assertTaskHistoryMigration(root: URL, encryption: LocalStorageEncryption) throws {
+    let marker = "legacy task \(UUID().uuidString)"
+    let url = root.appendingPathComponent("legacy-task-history.json")
+    let legacy = [
+        CompletedTaskRecord(
+            command: marker,
+            startedAt: .fixture,
+            completedAt: Date(timeInterval: 9, since: .fixture),
+            outcomeStatus: .failed
+        )
+    ]
+    try JSONEncoder.iso8601PrettySortedForTest.encode(legacy).write(to: url, options: .atomic)
+    let store = TaskHistoryStore(fileURL: url, encryption: encryption)
+
+    #expect(try store.loadAll() == legacy)
     try expectEncryptedFile(url, hiding: marker)
 }
 

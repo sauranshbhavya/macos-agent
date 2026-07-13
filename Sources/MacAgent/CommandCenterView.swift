@@ -919,7 +919,7 @@ private struct SettingsPrivacyPage: View {
 
                             SettingsControlLabel(
                                 title: "Delete Sonny local data",
-                                detail: "Saved routines, workspaces, clipboard history, snippets, recent artifacts, Shortcut run history, and clipboard settings."
+                                detail: "Saved routines, workspaces, clipboard history, snippets, recent artifacts, Shortcut run history, task history, and clipboard settings."
                             )
                         }
                     } trailing: {
@@ -957,7 +957,7 @@ private struct SettingsPrivacyPage: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This deletes saved routines, workspaces, clipboard history, snippets, recent artifacts, Shortcut run history, and clipboard settings. Generated files and API keys are not deleted.")
+            Text("This deletes saved routines, workspaces, clipboard history, snippets, recent artifacts, Shortcut run history, task history, and clipboard settings. Generated files and API keys are not deleted.")
         }
     }
 }

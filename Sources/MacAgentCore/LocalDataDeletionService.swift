@@ -46,7 +46,8 @@ public struct LocalDataDeletionService: @unchecked Sendable {
             ClipboardHistorySettingsStore(fileManager: fileManager).fileURL,
             SnippetStore(fileManager: fileManager).fileURL,
             RecentArtifactStore(fileManager: fileManager).fileURL,
-            ShortcutRunHistoryStore(fileManager: fileManager).fileURL
+            ShortcutRunHistoryStore(fileManager: fileManager).fileURL,
+            TaskHistoryStore(fileManager: fileManager).fileURL
         ]
     }
 

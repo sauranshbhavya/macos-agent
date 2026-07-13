@@ -50,6 +50,7 @@ final class AgentViewModel: ObservableObject {
     private let recentArtifactStore: RecentArtifactStore
     private let shortcutCatalog: any ShortcutCatalogProviding
     private let shortcutRunHistoryStore: ShortcutRunHistoryStore
+    private let taskHistoryStore: TaskHistoryStore
     private let clipboardHistorySettingsStore: ClipboardHistorySettingsStore
     private let clipboardHistoryMonitor: ClipboardHistoryMonitor
     private let localDataDeletionService: LocalDataDeletionService
@@ -60,6 +61,7 @@ final class AgentViewModel: ObservableObject {
     private var clarificationAutoExecute = false
     private var isPushToTalkHotKeyDown = false
     private var pendingCommandForPriorTaskContext: String?
+    private var pendingTaskHistoryStartedAt: Date?
     private var preserveUsageForNextStart = false
     private var localStorageLoadFailures: [LocalStorageLoadFailureSource: String] = [:]
     private var localStorageLoadErrorMessage: String?
@@ -99,6 +101,7 @@ final class AgentViewModel: ObservableObject {
         recentArtifactStore: RecentArtifactStore = RecentArtifactStore(),
         shortcutCatalog: any ShortcutCatalogProviding = ProcessShortcutCatalog(),
         shortcutRunHistoryStore: ShortcutRunHistoryStore = ShortcutRunHistoryStore(),
+        taskHistoryStore: TaskHistoryStore = TaskHistoryStore(),
         clipboardHistorySettingsStore: ClipboardHistorySettingsStore = ClipboardHistorySettingsStore(),
         clipboardHistoryMonitor: ClipboardHistoryMonitor? = nil,
         localDataDeletionService: LocalDataDeletionService = LocalDataDeletionService(),
@@ -116,6 +119,7 @@ final class AgentViewModel: ObservableObject {
         self.recentArtifactStore = recentArtifactStore
         self.shortcutCatalog = shortcutCatalog
         self.shortcutRunHistoryStore = shortcutRunHistoryStore
+        self.taskHistoryStore = taskHistoryStore
         self.clipboardHistorySettingsStore = clipboardHistorySettingsStore
         self.clipboardHistoryMonitor = clipboardHistoryMonitor
             ?? ClipboardHistoryMonitor(settingsStore: clipboardHistorySettingsStore)
@@ -243,6 +247,7 @@ final class AgentViewModel: ObservableObject {
         preparedRun = nil
         approvalRequest = nil
         stepStatuses = [:]
+        pendingTaskHistoryStartedAt = nil
 
         if preserveUsageForNextStart {
             preserveUsageForNextStart = false
@@ -259,6 +264,7 @@ final class AgentViewModel: ObservableObject {
         }
 
         let submittedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        let taskHistoryStartedAt = Date()
         let priorContextForPlanner = priorTaskContextStore.currentContext()
         priorTaskContext = priorContextForPlanner
 
@@ -330,6 +336,7 @@ final class AgentViewModel: ObservableObject {
                 case .lightweightConfirmation, .explicitApproval:
                     approvalRequest = request
                     pendingCommandForPriorTaskContext = submittedCommand
+                    pendingTaskHistoryStartedAt = taskHistoryStartedAt
                     finalSummary = "Approval needed before Sonny can act."
                     logStore.append(.confirm, "Approval required for \(request.assessment.effectiveTier.displayName)")
                     recordPriorTaskContext(
@@ -358,7 +365,8 @@ final class AgentViewModel: ObservableObject {
                         command: submittedCommand,
                         preparedRun: prepared,
                         status: .failed,
-                        summary: errorMessage ?? "Refused by approval policy"
+                        summary: errorMessage ?? "Refused by approval policy",
+                        startedAt: taskHistoryStartedAt
                     )
                     return
                 }
@@ -376,7 +384,8 @@ final class AgentViewModel: ObservableObject {
                     command: submittedCommand,
                     preparedRun: prepared,
                     status: .completed,
-                    summary: result.summary
+                    summary: result.summary,
+                    startedAt: taskHistoryStartedAt
                 )
                 refreshSavedItems()
             }
@@ -389,7 +398,15 @@ final class AgentViewModel: ObservableObject {
                     command: submittedCommand,
                     preparedRun: preparedRun,
                     status: .canceled,
-                    summary: finalSummary
+                    summary: finalSummary,
+                    startedAt: taskHistoryStartedAt
+                )
+            } else {
+                recordPriorTaskContext(
+                    command: submittedCommand,
+                    status: .canceled,
+                    summary: finalSummary,
+                    startedAt: taskHistoryStartedAt
                 )
             }
         } catch {
@@ -401,13 +418,15 @@ final class AgentViewModel: ObservableObject {
                     command: submittedCommand,
                     preparedRun: preparedRun,
                     status: .failed,
-                    summary: error.localizedDescription
+                    summary: error.localizedDescription,
+                    startedAt: taskHistoryStartedAt
                 )
             } else {
                 recordPriorTaskContext(
                     command: submittedCommand,
                     status: .failed,
-                    summary: error.localizedDescription
+                    summary: error.localizedDescription,
+                    startedAt: taskHistoryStartedAt
                 )
             }
         }
@@ -420,13 +439,15 @@ final class AgentViewModel: ObservableObject {
                     command: pendingCommandForPriorTaskContext,
                     preparedRun: preparedRun,
                     status: .canceled,
-                    summary: "Approval canceled. No action was taken."
+                    summary: "Approval canceled. No action was taken.",
+                    startedAt: pendingTaskHistoryStartedAt
                 )
             }
             approvalRequest = nil
             preparedRun = nil
             runner = nil
             pendingCommandForPriorTaskContext = nil
+            pendingTaskHistoryStartedAt = nil
             markAllSteps(.canceled)
             finalSummary = "Approval canceled. No action was taken."
             logStore.append(.summarize, "Approval canceled by user")
@@ -654,6 +675,7 @@ final class AgentViewModel: ObservableObject {
         preparedRun = nil
         runner = nil
         pendingCommandForPriorTaskContext = nil
+        pendingTaskHistoryStartedAt = nil
         preserveUsageForNextStart = false
         priorTaskContextStore.clear()
         taskUsageRecorder.reset()
@@ -674,6 +696,7 @@ final class AgentViewModel: ObservableObject {
         preparedRun = nil
         runner = nil
         pendingCommandForPriorTaskContext = nil
+        pendingTaskHistoryStartedAt = nil
         preserveUsageForNextStart = false
         priorTaskContextStore.clear()
         taskUsageRecorder.reset()
@@ -904,10 +927,12 @@ final class AgentViewModel: ObservableObject {
                     command: pendingCommandForPriorTaskContext,
                     preparedRun: preparedRun,
                     status: .completed,
-                    summary: result.summary
+                    summary: result.summary,
+                    startedAt: pendingTaskHistoryStartedAt
                 )
             }
             pendingCommandForPriorTaskContext = nil
+            pendingTaskHistoryStartedAt = nil
             refreshSavedItems()
         } catch is CancellationError {
             markAllSteps(.canceled)
@@ -918,10 +943,12 @@ final class AgentViewModel: ObservableObject {
                     command: pendingCommandForPriorTaskContext,
                     preparedRun: preparedRun,
                     status: .canceled,
-                    summary: finalSummary
+                    summary: finalSummary,
+                    startedAt: pendingTaskHistoryStartedAt
                 )
             }
             pendingCommandForPriorTaskContext = nil
+            pendingTaskHistoryStartedAt = nil
         } catch RiskApprovalError.approvalRequired(let request) {
             markAllSteps(.pending)
             self.approvalRequest = request
@@ -944,10 +971,12 @@ final class AgentViewModel: ObservableObject {
                     command: pendingCommandForPriorTaskContext,
                     preparedRun: preparedRun,
                     status: .failed,
-                    summary: error.localizedDescription
+                    summary: error.localizedDescription,
+                    startedAt: pendingTaskHistoryStartedAt
                 )
             }
             pendingCommandForPriorTaskContext = nil
+            pendingTaskHistoryStartedAt = nil
         }
     }
 
@@ -955,7 +984,8 @@ final class AgentViewModel: ObservableObject {
         command: String,
         preparedRun: PreparedAgentRun,
         status: PriorTaskOutcomeStatus,
-        summary: String
+        summary: String,
+        startedAt: Date? = nil
     ) {
         priorTaskContextStore.record(
             command: command,
@@ -963,18 +993,45 @@ final class AgentViewModel: ObservableObject {
             outcome: PriorTaskOutcome(status: status, summary: summary)
         )
         priorTaskContext = priorTaskContextStore.currentContext()
+        recordTaskHistoryIfTerminal(command: command, status: status, startedAt: startedAt)
     }
 
     private func recordPriorTaskContext(
         command: String,
         status: PriorTaskOutcomeStatus,
-        summary: String
+        summary: String,
+        startedAt: Date? = nil
     ) {
         priorTaskContextStore.record(
             command: command,
             outcome: PriorTaskOutcome(status: status, summary: summary)
         )
         priorTaskContext = priorTaskContextStore.currentContext()
+        recordTaskHistoryIfTerminal(command: command, status: status, startedAt: startedAt)
+    }
+
+    private func recordTaskHistoryIfTerminal(
+        command: String,
+        status: PriorTaskOutcomeStatus,
+        startedAt: Date?
+    ) {
+        guard [.completed, .failed, .canceled].contains(status),
+              let startedAt else {
+            return
+        }
+
+        do {
+            try taskHistoryStore.record(
+                CompletedTaskRecord(
+                    command: command,
+                    startedAt: startedAt,
+                    completedAt: Date(),
+                    outcomeStatus: status
+                )
+            )
+        } catch {
+            logStore.append(.observe, "Could not record task history: \(error.localizedDescription)")
+        }
     }
 
     private func publishTaskUsageSummary() {
