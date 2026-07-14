@@ -33,7 +33,7 @@ Dependency-ordered. Do not start a branch before the ones above it are merged, u
 | 5 | `feature/instant-utilities-shortcuts` | §4A.6, §4A.7 | Complete (pending review) |
 | 6 | `feature/followup-usage-transparency` | §4A.8, §4A.9 | Complete (pending review) |
 | 7 | `feature/local-storage-privacy-foundation` | §15.4 | Complete (pending review) |
-| 8 | `feature/product-shell-shared-state` | §4A.1 (shell only), §6.2, §6.3, §17.3 | Not started |
+| 8 | `feature/product-shell-shared-state` | §4A.1 (shell only), §6.2, §6.3, §17.3 | Complete (pending review) |
 | 9 | `feature/floating-command-widget` | §17.3 (cockpit surface, visual form only); user wireframes (2026-07-08), not spec-mandated | Not started |
 | 10 | `feature/hosted-agent-runtime-backend` | §6.1, §8, §9, §16, §21.2, §21.3, §6.19 | Not started |
 | 11 | `feature/billing-command-center-memory` | §6.14, §16.3, §16.4, §6.3A (full), §6.10 | Not started |
@@ -97,92 +97,6 @@ Must preserve: <the specific existing flows this branch must not break, pulled f
 Known pitfalls to avoid repeating: <from "Architectural decisions / pitfalls discovered" above, or "none">
 
 Start in plan mode. Confirm git status is clean on main, confirm the changelog's account of the prior branch still matches the current code, then produce an implementation plan before editing anything. Do not commit, push, merge, or open a PR without explicit approval.
-
-### Branch: feature/local-storage-privacy-foundation
-Status: complete
-Date: 2026-07-09
-Implementing agent: Codex
-Reviewing agent: Claude
-
-Spec sections covered: §15.4 complete for encrypted local storage, Keychain-backed local encryption key management, no-plain-file credential invariant preservation, and local data deletion for the persisted stores that exist today. Exclusions, cached entitlement state, persistent recent task history, backend secrets management, and enterprise security remain out of scope because those features are not real local stores yet or belong to later roadmap branches.
-Files changed:
-- `Package.swift`
-- `Sources/MacAgent/AgentViewModel.swift`
-- `Sources/MacAgent/ContentView.swift`
-- `Sources/MacAgentCore/AutomationStores.swift`
-- `Sources/MacAgentCore/ClipboardHistoryService.swift`
-- `Sources/MacAgentCore/KeychainSecretStore.swift`
-- `Sources/MacAgentCore/LocalDataDeletionService.swift`
-- `Sources/MacAgentCore/LocalStorageEncryption.swift`
-- `Sources/MacAgentCore/RecentArtifactStore.swift`
-- `Sources/MacAgentCore/ShortcutsBridgeService.swift`
-- `Sources/MacAgentCore/SnippetStore.swift`
-- `Tests/MacAgentTests/AgentViewModelLocalStorageTests.swift`
-- `Tests/MacAgentCoreTests/LocalStorageSecurityTests.swift`
-- `docs/sonny-v1-implementation-changelog.md`
-
-Tests: `env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disable-sandbox -Xswiftc -F -Xswiftc /Library/Developer/CommandLineTools/Library/Developer/Frameworks -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/Frameworks -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/usr/lib` -> pass, 182 tests in 22 suites.
-
-Behavior added:
-- Added `KeychainSecretStore`, a reusable generic-password Keychain helper for data read/save/delete by service/account.
-- Added `LocalStorageEncryptionKeyManager`, which loads a 32-byte local data encryption key from Keychain or generates and stores one on first app launch.
-- Added `LocalStorageEncryption`, using CryptoKit `AES.GCM` authenticated encryption with the `SONNYENC1\n` file header plus combined nonce/ciphertext/tag bytes.
-- Encrypted all seven existing local JSON stores at rest: routines, workspaces, clipboard history, clipboard history settings, snippets, recent artifacts, and Shortcut run history.
-- Added transparent legacy plaintext JSON migration: files without the encrypted header decode as old JSON once, then rewrite encrypted after successful load.
-- Added raw-byte tests proving known plaintext markers written through public store APIs are absent from the on-disk bytes for all seven stores.
-- Added `LocalDataDeletionService`, deleting only the seven Sonny local store files and tolerating already-missing files.
-- Added a direct `AgentViewModel.deleteLocalData()` settings/privacy action that stops clipboard monitoring, deletes local store files, clears relevant in-memory UI state, and refreshes saved routine/workspace and clipboard-setting surfaces.
-- Added a destructive native confirmation dialog in the existing Status panel for local data deletion, explicitly naming the deleted local data and noting generated files/API keys are not deleted.
-- Added app-level regression coverage for encrypted local-load failures. `AgentViewModel.refreshSavedItems()` and `refreshClipboardHistoryNotice()` now surface a visible error banner when an existing local data file cannot be decrypted or decoded, while missing first-run files still stay silent/empty.
-- Added an in-memory, `NSLock`-guarded encryption-key cache inside `LocalStorageEncryption`, so the underlying Keychain-backed key manager is queried once after first successful retrieval instead of on every encrypt/decrypt call.
-
-Behavior preserved (required, no blanket claims):
-- Routine save/load/run behavior remains transparent to existing callers; quick routine dispatch and nested routine risk folding still use `RoutineStore` through the same public API.
-- Workspace save/load/open behavior remains transparent to existing callers; quick workspace dispatch and app-before-URL launch behavior still use `WorkspaceStore` through the same public API.
-- Clipboard history still skips ConcealedType/TransientType pasteboard items before reading content, still applies item/age/text caps, and still respects the existing notice/settings toggle.
-- Snippet save and exact-trigger expansion still use the same public `SnippetStore` calls, with snippet saving tier 2 and expansion tier 0.
-- Recent artifact recording still happens only after successful non-dry-run execution through `AgentRunner`, and recent artifact opening still routes through `open_generated_artifact`.
-- Shortcut run-history demotion still uses the same process-level Sonny-observed success/failure semantics; encryption does not reinterpret `shortcuts` exit status.
-- `OPENAI_API_KEY` remains environment-variable-only for planner, web synthesis, and transcription; no raw API credentials are written to plain files, and no new OAuth/provider token persistence was added.
-- Prior-task context remains 10-minute, last-task-only, and in-memory only; this branch did not add persistent chat memory or recent-task-history storage.
-
-Architectural decisions / pitfalls discovered (required, write "none" if true):
-- Bulk local JSON data is encrypted in files with AES-GCM; Keychain stores only the symmetric key, not the JSON store contents.
-- Store APIs stayed source-compatible and DI-friendly by adding defaulted `encryption:` constructor parameters and changing only the private read/write serialization paths.
-- Legacy plaintext migration was implemented instead of clean-slate unreadability, because it was low-cost and avoids losing developer test data accumulated across branches #1-6.
-- Local data deletion intentionally does not delete the Keychain encryption key. This is data deletion, not a cryptographic reset/re-key flow; if a future branch needs "reset encryption identity," it should be a separate explicit action with its own warning.
-- Local data deletion is intentionally not an `AgentOperation`, capability adapter, planner tool, or `AgentRunner` risk-gated action. It is a direct settings/privacy action on `AgentViewModel` with a native destructive confirmation dialog.
-- Encrypted local-load failures must not be collapsed with `try?` into empty/default UI. Store APIs still return empty/default for missing files, but an existing file that throws during read/decrypt/decode is now treated as a user-visible local-storage problem; clipboard monitoring is stopped if clipboard settings cannot be loaded.
-- `LocalStorageEncryption` must cache successfully retrieved key material in memory for the process lifetime. Re-reading Keychain on a timer path, especially clipboard-history polling every second in an unsigned development build, can create a repeating macOS Keychain prompt loop even when the user enters the correct password.
-- `LocalStorageEncryption.shared` uses a test-process heuristic (`processName`/bundle path containing test markers or `XCTestConfigurationFilePath`) to supply a deterministic ephemeral test key under SwiftPM/XCTest. Production app/runtime defaults still use `LocalStorageEncryptionKeyManager` and Keychain. Future tests should prefer injected key managers rather than hitting the user's real login Keychain.
-- The encrypted file format is versioned with the `SONNYENC1\n` prefix so a future file-format/key-rotation migration can distinguish encrypted-v1 bytes from legacy plaintext JSON.
-- Persistent recent task history was not introduced. Branch #6's `PriorTaskContextStore` is deliberately memory-only, and creating a new persistent feature just to encrypt it would have been scope creep.
-
-Known limitations / deferred scope:
-- Exclusions and cached entitlement state are not implemented yet, so there is no local data to encrypt or delete for them on this branch.
-- Persistent recent task history still does not exist; future memory/history branches should add their own encrypted store intentionally if they introduce one.
-- Local data deletion removes Sonny's seven local store files only; it does not delete generated user artifacts in Desktop/Documents, the Keychain encryption key, `OPENAI_API_KEY` environment variables, or any future hosted account data.
-- Backend security (§15.5), hosted secrets manager work, hosted auth/entitlements, billing, enterprise security (§15.6), SSO/SCIM, and admin policies remain later-branch work.
-- No real OAuth tokens for Spotify/Apple Music and no entitlement credentials were persisted; this branch only creates the reusable Keychain pattern those future credentials should use.
-Open questions for the next chat (required, write "none" if true): none.
-
-Next branch: `feature/product-shell-shared-state` (§4A.1 shell only, §6.2, §6.3, §17.3), adding the shared-state product shell foundation so the menu-bar cockpit and future Command Center read/write one state layer instead of separate UI stacks.
-
---- Kickoff prompt for next chat (paste verbatim as the first message) ---
-Repo: /Users/sauranshbhardwaj/Desktop/macos-agent
-Spec: docs/sonny-major-release-spec.md
-Changelog: docs/sonny-v1-implementation-changelog.md — read the latest entry before anything else. Do not trust memory or assumptions over it; verify against current git state.
-
-Branch: feature/product-shell-shared-state
-Implementing agent: Codex  Reviewing agent: Claude
-Primary target: §4A.1 shell only, §6.2, §6.3, §17.3
-
-Just completed: feature/local-storage-privacy-foundation — Sonny now encrypts the seven existing local JSON stores at rest with AES-GCM, stores the symmetric local encryption key in Keychain, migrates legacy plaintext JSON on successful load, and exposes direct confirmed local data deletion in the existing Status panel.
-Must preserve: encryption remains transparent to RoutineStore/WorkspaceStore/ClipboardHistoryStore/ClipboardHistorySettingsStore/SnippetStore/RecentArtifactStore/ShortcutRunHistoryStore callers; legacy plaintext JSON migration must still rewrite encrypted after successful load; existing encrypted files that cannot be decrypted/decoded must surface visible local-storage errors instead of presenting as empty/default state, while missing first-run files remain silent; the local encryption key must be cached in memory after first successful retrieval so polling paths do not repeatedly hit Keychain; local data deletion remains a direct settings/privacy action, not a planner/capability/AgentRunner-routed action; deletion removes local store files but not generated artifacts or the Keychain encryption key; `OPENAI_API_KEY` remains env-var-only; prior-task context remains short-lived, last-task-only, and non-persistent; instant commands still bypass only planner calls and continue through normal runner/risk behavior.
-Known pitfalls to avoid repeating: Keychain stores only secrets/keys, not bulk JSON; do not add cryptographic key reset unless explicitly scoped as a separate destructive action; use injected key managers or the existing test-process fallback for storage tests rather than touching the user's real login Keychain; do not introduce a persistent recent-task-history store on branch #8 unless the product-shell scope explicitly requires it; branch #8 is the shared-state shell/Command Center foundation only, not billing/account/subscription/entitlement implementation.
-
-Start in plan mode. Confirm git status is clean on main, confirm the changelog's account of the prior branch still matches the current code, then produce an implementation plan before editing anything. Do not commit, push, merge, or open a PR without explicit approval.
-
 ```
 
 ## Entries
@@ -722,5 +636,178 @@ Primary target: §15.4
 Just completed: feature/followup-usage-transparency — Sonny now has short-lived task-scoped follow-up correction, planner-visible prior-task context, local per-task AI usage recording for planner/web synthesis/transcription, and minimal existing-popover affordances for recent task and usage.
 Must preserve: corrected follow-up plans use the exact normal `AgentRunner`/`AgentActionExecutor` prepare, risk, approval, and execute pipeline; tier 2+ corrected plans still pause for approval; prepare-time failures still record command-only prior context for immediate correction; non-instant typed commands still fall back to strict-schema `OpenAIPlanner`; instant commands still bypass only planner calls and can show zero AI requests; prior-task context remains 10-minute, last-task-only, and non-persistent; planner context stays typed via `Planning.plan(command:priorTaskContext:)`; reported and estimated usage tokens stay separate; transcription duration remains seconds, not invented tokens; usage UI remains local-only and non-billing.
 Known pitfalls to avoid repeating: do not concatenate prior-task context into raw command text; do not drop prior context when preparation fails before `preparedRun` is assigned; keep `OpenAIPlanner.defaultSystemPrompt` and `PlannerBoundaryTests` golden text in sync after prompt edits; update all `Planning` conformances when changing planner signatures; thread `TaskUsageRecording` through new OpenAI-backed features instead of adding parallel counters; do not build Command Center UI before branch #8 creates the shared-state product shell; do not add account/subscription/entitlement/billing logic on local-only branches.
+
+Start in plan mode. Confirm git status is clean on main, confirm the changelog's account of the prior branch still matches the current code, then produce an implementation plan before editing anything. Do not commit, push, merge, or open a PR without explicit approval.
+
+### Branch: feature/local-storage-privacy-foundation
+Status: complete
+Date: 2026-07-09
+Implementing agent: Codex
+Reviewing agent: Claude
+
+Spec sections covered: §15.4 complete for encrypted local storage, Keychain-backed local encryption key management, no-plain-file credential invariant preservation, and local data deletion for the persisted stores that exist today. Exclusions, cached entitlement state, persistent recent task history, backend secrets management, and enterprise security remain out of scope because those features are not real local stores yet or belong to later roadmap branches.
+Files changed:
+- `Package.swift`
+- `Sources/MacAgent/AgentViewModel.swift`
+- `Sources/MacAgent/ContentView.swift`
+- `Sources/MacAgentCore/AutomationStores.swift`
+- `Sources/MacAgentCore/ClipboardHistoryService.swift`
+- `Sources/MacAgentCore/KeychainSecretStore.swift`
+- `Sources/MacAgentCore/LocalDataDeletionService.swift`
+- `Sources/MacAgentCore/LocalStorageEncryption.swift`
+- `Sources/MacAgentCore/RecentArtifactStore.swift`
+- `Sources/MacAgentCore/ShortcutsBridgeService.swift`
+- `Sources/MacAgentCore/SnippetStore.swift`
+- `Tests/MacAgentTests/AgentViewModelLocalStorageTests.swift`
+- `Tests/MacAgentCoreTests/LocalStorageSecurityTests.swift`
+- `docs/sonny-v1-implementation-changelog.md`
+
+Tests: `env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disable-sandbox -Xswiftc -F -Xswiftc /Library/Developer/CommandLineTools/Library/Developer/Frameworks -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/Frameworks -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/usr/lib` -> pass, 182 tests in 22 suites.
+
+Behavior added:
+- Added `KeychainSecretStore`, a reusable generic-password Keychain helper for data read/save/delete by service/account.
+- Added `LocalStorageEncryptionKeyManager`, which loads a 32-byte local data encryption key from Keychain or generates and stores one on first app launch.
+- Added `LocalStorageEncryption`, using CryptoKit `AES.GCM` authenticated encryption with the `SONNYENC1\n` file header plus combined nonce/ciphertext/tag bytes.
+- Encrypted all seven existing local JSON stores at rest: routines, workspaces, clipboard history, clipboard history settings, snippets, recent artifacts, and Shortcut run history.
+- Added transparent legacy plaintext JSON migration: files without the encrypted header decode as old JSON once, then rewrite encrypted after successful load.
+- Added raw-byte tests proving known plaintext markers written through public store APIs are absent from the on-disk bytes for all seven stores.
+- Added `LocalDataDeletionService`, deleting only the seven Sonny local store files and tolerating already-missing files.
+- Added a direct `AgentViewModel.deleteLocalData()` settings/privacy action that stops clipboard monitoring, deletes local store files, clears relevant in-memory UI state, and refreshes saved routine/workspace and clipboard-setting surfaces.
+- Added a destructive native confirmation dialog in the existing Status panel for local data deletion, explicitly naming the deleted local data and noting generated files/API keys are not deleted.
+- Added app-level regression coverage for encrypted local-load failures. `AgentViewModel.refreshSavedItems()` and `refreshClipboardHistoryNotice()` now surface a visible error banner when an existing local data file cannot be decrypted or decoded, while missing first-run files still stay silent/empty.
+- Added an in-memory, `NSLock`-guarded encryption-key cache inside `LocalStorageEncryption`, so the underlying Keychain-backed key manager is queried once after first successful retrieval instead of on every encrypt/decrypt call.
+
+Behavior preserved (required, no blanket claims):
+- Routine save/load/run behavior remains transparent to existing callers; quick routine dispatch and nested routine risk folding still use `RoutineStore` through the same public API.
+- Workspace save/load/open behavior remains transparent to existing callers; quick workspace dispatch and app-before-URL launch behavior still use `WorkspaceStore` through the same public API.
+- Clipboard history still skips ConcealedType/TransientType pasteboard items before reading content, still applies item/age/text caps, and still respects the existing notice/settings toggle.
+- Snippet save and exact-trigger expansion still use the same public `SnippetStore` calls, with snippet saving tier 2 and expansion tier 0.
+- Recent artifact recording still happens only after successful non-dry-run execution through `AgentRunner`, and recent artifact opening still routes through `open_generated_artifact`.
+- Shortcut run-history demotion still uses the same process-level Sonny-observed success/failure semantics; encryption does not reinterpret `shortcuts` exit status.
+- `OPENAI_API_KEY` remains environment-variable-only for planner, web synthesis, and transcription; no raw API credentials are written to plain files, and no new OAuth/provider token persistence was added.
+- Prior-task context remains 10-minute, last-task-only, and in-memory only; this branch did not add persistent chat memory or recent-task-history storage.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+- Bulk local JSON data is encrypted in files with AES-GCM; Keychain stores only the symmetric key, not the JSON store contents.
+- Store APIs stayed source-compatible and DI-friendly by adding defaulted `encryption:` constructor parameters and changing only the private read/write serialization paths.
+- Legacy plaintext migration was implemented instead of clean-slate unreadability, because it was low-cost and avoids losing developer test data accumulated across branches #1-6.
+- Local data deletion intentionally does not delete the Keychain encryption key. This is data deletion, not a cryptographic reset/re-key flow; if a future branch needs "reset encryption identity," it should be a separate explicit action with its own warning.
+- Local data deletion is intentionally not an `AgentOperation`, capability adapter, planner tool, or `AgentRunner` risk-gated action. It is a direct settings/privacy action on `AgentViewModel` with a native destructive confirmation dialog.
+- Encrypted local-load failures must not be collapsed with `try?` into empty/default UI. Store APIs still return empty/default for missing files, but an existing file that throws during read/decrypt/decode is now treated as a user-visible local-storage problem; clipboard monitoring is stopped if clipboard settings cannot be loaded.
+- `LocalStorageEncryption` must cache successfully retrieved key material in memory for the process lifetime. Re-reading Keychain on a timer path, especially clipboard-history polling every second in an unsigned development build, can create a repeating macOS Keychain prompt loop even when the user enters the correct password.
+- `LocalStorageEncryption.shared` uses a test-process heuristic (`processName`/bundle path containing test markers or `XCTestConfigurationFilePath`) to supply a deterministic ephemeral test key under SwiftPM/XCTest. Production app/runtime defaults still use `LocalStorageEncryptionKeyManager` and Keychain. Future tests should prefer injected key managers rather than hitting the user's real login Keychain.
+- The encrypted file format is versioned with the `SONNYENC1\n` prefix so a future file-format/key-rotation migration can distinguish encrypted-v1 bytes from legacy plaintext JSON.
+- Persistent recent task history was not introduced. Branch #6's `PriorTaskContextStore` is deliberately memory-only, and creating a new persistent feature just to encrypt it would have been scope creep.
+
+Known limitations / deferred scope:
+- Exclusions and cached entitlement state are not implemented yet, so there is no local data to encrypt or delete for them on this branch.
+- Persistent recent task history still does not exist; future memory/history branches should add their own encrypted store intentionally if they introduce one.
+- Local data deletion removes Sonny's seven local store files only; it does not delete generated user artifacts in Desktop/Documents, the Keychain encryption key, `OPENAI_API_KEY` environment variables, or any future hosted account data.
+- Backend security (§15.5), hosted secrets manager work, hosted auth/entitlements, billing, enterprise security (§15.6), SSO/SCIM, and admin policies remain later-branch work.
+- No real OAuth tokens for Spotify/Apple Music and no entitlement credentials were persisted; this branch only creates the reusable Keychain pattern those future credentials should use.
+Open questions for the next chat (required, write "none" if true): none.
+
+Next branch: `feature/product-shell-shared-state` (§4A.1 shell only, §6.2, §6.3, §17.3), adding the shared-state product shell foundation so the menu-bar cockpit and future Command Center read/write one state layer instead of separate UI stacks.
+
+--- Kickoff prompt for next chat (paste verbatim as the first message) ---
+Repo: /Users/sauranshbhardwaj/Desktop/macos-agent
+Spec: docs/sonny-major-release-spec.md
+Changelog: docs/sonny-v1-implementation-changelog.md — read the latest entry before anything else. Do not trust memory or assumptions over it; verify against current git state.
+
+Branch: feature/product-shell-shared-state
+Implementing agent: Codex  Reviewing agent: Claude
+Primary target: §4A.1 shell only, §6.2, §6.3, §17.3
+
+Just completed: feature/local-storage-privacy-foundation — Sonny now encrypts the seven existing local JSON stores at rest with AES-GCM, stores the symmetric local encryption key in Keychain, migrates legacy plaintext JSON on successful load, and exposes direct confirmed local data deletion in the existing Status panel.
+Must preserve: encryption remains transparent to RoutineStore/WorkspaceStore/ClipboardHistoryStore/ClipboardHistorySettingsStore/SnippetStore/RecentArtifactStore/ShortcutRunHistoryStore callers; legacy plaintext JSON migration must still rewrite encrypted after successful load; existing encrypted files that cannot be decrypted/decoded must surface visible local-storage errors instead of presenting as empty/default state, while missing first-run files remain silent; the local encryption key must be cached in memory after first successful retrieval so polling paths do not repeatedly hit Keychain; local data deletion remains a direct settings/privacy action, not a planner/capability/AgentRunner-routed action; deletion removes local store files but not generated artifacts or the Keychain encryption key; `OPENAI_API_KEY` remains env-var-only; prior-task context remains short-lived, last-task-only, and non-persistent; instant commands still bypass only planner calls and continue through normal runner/risk behavior.
+Known pitfalls to avoid repeating: Keychain stores only secrets/keys, not bulk JSON; do not add cryptographic key reset unless explicitly scoped as a separate destructive action; use injected key managers or the existing test-process fallback for storage tests rather than touching the user's real login Keychain; do not introduce a persistent recent-task-history store on branch #8 unless the product-shell scope explicitly requires it; branch #8 is the shared-state shell/Command Center foundation only, not billing/account/subscription/entitlement implementation.
+
+Start in plan mode. Confirm git status is clean on main, confirm the changelog's account of the prior branch still matches the current code, then produce an implementation plan before editing anything. Do not commit, push, merge, or open a PR without explicit approval.
+
+### Branch: feature/product-shell-shared-state
+Status: complete
+Date: 2026-07-13
+Implementing agent: Codex
+Reviewing agent: Claude
+
+Spec sections covered: §4A.1 continued (both surfaces still observe one shared `AgentViewModel`; task history is now part of that shared state, not a second independently-coded path). §6.2 complete for the subset the roadmap scoped to this branch: real, non-placeholder settings, privacy, stats, history, routines, and workspaces surfaces in the Command Center; account and Power Mode controls remain later-branch scope. §6.3A (Command Center): real Routines/Workspaces/Settings surfaces, and the "usage and impact stats" requirement fulfilled by the Insights dashboard, satisfying the "stats and activity principles" (track outcomes not surveillance, aggregate locally, let users delete history) through local-only computation over the encrypted store plus existing deletion coverage. §6.8 (Routines) and §6.9 (Workspaces): real list/run/open wiring with depth, spacing, and radius matched to the actual Figma wireframes. §6.12 (Permission Center): real, non-placeholder Settings > Privacy & Permissions readiness controls. §14.7 and §15.4: recent task history now exists as a real, encrypted, user-deletable local store, closing a gap explicitly deferred by branch #7. §17.3 partial: this branch covers the routines/workspaces, settings, and permission-center rows of that UI-surfaces checklist only; screen capture picker, Power Mode HUD, data inspector, account/billing, and the instant-utility surface remain explicitly out of scope for later branches. §6.3 (typed/voice/hotkey/selection input), listed for this branch in the original roadmap table, was not actually touched — input handling is unchanged from before this branch; noting this so the roadmap's original per-branch section guess and this entry do not silently disagree. Left partial: theme switching only implements Dark; Light and System are present in the UI as "Soon" placeholders, not functional — this is a deliberate v1 scope cut, not a spec requirement (the spec does not mandate multiple themes).
+
+Files changed:
+- `Sources/MacAgent/AgentActivityPresentation.swift`
+- `Sources/MacAgent/AgentViewModel.swift`
+- `Sources/MacAgent/AppDelegate.swift`
+- `Sources/MacAgent/AppWindowCoordinator.swift`
+- `Sources/MacAgent/CommandCenterView.swift`
+- `Sources/MacAgent/ContentView.swift`
+- `Sources/MacAgent/Resources/Fonts/Inter-VariableFont_opsz,wght.ttf`
+- `Sources/MacAgent/Resources/Fonts/OFL-Inter.txt`
+- `Sources/MacAgentCore/LocalDataDeletionService.swift`
+- `Sources/MacAgentCore/TaskHistoryInsights.swift`
+- `Sources/MacAgentCore/TaskHistoryStore.swift`
+- `Tests/MacAgentCoreTests/LocalStorageSecurityTests.swift`
+- `Tests/MacAgentCoreTests/TaskHistoryInsightsTests.swift`
+- `Tests/MacAgentTests/AgentViewModelLocalStorageTests.swift`
+- `Tests/MacAgentTests/ProductShellTests.swift`
+- `docs/sonny-design-system-reference.md`
+- `docs/sonny-v1-implementation-changelog.md`
+
+Tests: `env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disable-sandbox -Xswiftc -F -Xswiftc /Library/Developer/CommandLineTools/Library/Developer/Frameworks -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/Frameworks -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/usr/lib` -> pass, 204 tests in 24 suites.
+
+Behavior added:
+- Rebranded the entire main-app design system from a placeholder warm/cream/serif palette to the actual Figma-matched palette (near-black backgrounds, `#5C84FE` accent, Inter typography), replacing every `SonnyTheme`/`SonnyType` token used across Tasks, Insights, Routines, Workspaces, and Settings.
+- Wired Routines and Workspaces to real saved-item data in the Command Center (previously static placeholders), including run/open dispatch through the existing `RoutineStore`/`WorkspaceStore` APIs, plus depth/spacing/radius fidelity matched to the wireframes and a "Create workspace" ghost card in the wireframe's specified position.
+- Authored `docs/sonny-design-system-reference.md`, documenting two distinct design systems: System A (main app — flat, opaque, Inter, zero shadows) and System B (floating widget + system notifications, not yet built — translucent "Liquid Glass" material, SF Pro, real multi-pass shadows, distinct per-action accent colors), built from direct Figma wireframe SVG and CSS exports rather than inference.
+- Wired real Settings controls: a functional "Use pointer cursors" preference applied via `NSCursor.push()/.pop()` across all shared button styles, persisted through plain injected `UserDefaults` (deliberately not the encrypted store — see pitfalls below), and an Interface theme selector (Dark functional; Light/System marked "Soon").
+- Added `TaskHistoryStore`, an eighth encrypted local store recording real task completions (command, start/completion timestamps, outcome status), following the same DI, encryption, and legacy-plaintext-migration pattern as the other seven stores, and wired into the existing `LocalDataDeletionService` file list.
+- Added `TaskHistoryInsights`, pure/stateless aggregation logic (no internal `Date()` calls, fully deterministic) computing a Monday-start week-scoped completion count, completion rate, average completed cycle time, a 7-day per-day completion count array, a current-streak day count with a one-day grace period, and full previous-week stats for delta presentation.
+- Replaced the Insights placeholder with a real dashboard: four stat cards (completed this week, completion rate, avg cycle time, current streak), a 7-day completion bar chart, and a recent-activity list, all reading `viewModel.taskHistoryRecords`. Added a matching "Recent task history" list to the Tasks page below the live task area.
+- Fixed a real approval-visibility bug: commands started from Routines or Workspaces that required approval showed no visible prompt anywhere on those pages, forcing the user to guess to switch to Tasks. A shared `CommandCenterTaskActivitySurface` wrapper around the existing `AgentTaskActivityView` now renders on all three pages behind the existing `viewModel.hasTaskActivity` check.
+- Fixed a real UX bug found in this branch's own testing: current streak reset to 0 the instant a new calendar day began, even after a real consecutive-day streak, before the user had any chance to act that day. Added a one-day grace period (streak only breaks after a full day passes with zero completions, matching Duolingo/GitHub-style streak conventions) and a `hasCompletedToday` field so the UI can distinguish "Active today" from "Keep it going today" instead of collapsing both into one binary state.
+- Fixed a real error-messaging bug found in this branch's own review: a task-history *write* failure was surfacing the encrypted-local-data *load*-failure banner ("Sonny could not load encrypted local data... could not be decrypted or decoded"), which would misleadingly tell the user their existing history was corrupted when actually one new record just failed to save. Now sets an accurate, dedicated `errorMessage`, matching the existing save-failure precedent in `applyClipboardHistoryNoticeChoice`.
+- Fixed a real narrow-window layout bug: Settings control rows (e.g. "Interface theme") wrapped character-by-character vertically below a certain window width. Added `SettingsAdaptiveControlRow`, a `ViewThatFits`-based row that falls back to a vertical stack instead of wrapping, applied to the pointer-cursor, theme, and delete-data rows.
+
+Behavior preserved (required, no blanket claims):
+- Routine save/load/run and workspace save/load/open still route through the same `RoutineStore`/`WorkspaceStore` public APIs used before this branch; only presentation changed, not dispatch logic.
+- All seven pre-existing encrypted local stores (routines, workspaces, clipboard history, clipboard history settings, snippets, recent artifacts, Shortcut run history) remain encrypted at rest and unaffected by the new eighth task-history store; the full local-storage security suite, including raw-byte plaintext-absence checks, still passes.
+- Local data deletion still deletes exactly the local store files (now eight, including task history) and still tolerates already-missing files.
+- Clipboard history monitoring/filtering, snippet save and expansion, prior-task follow-up context (10-minute, last-task-only, non-persistent), and Shortcut run-history demotion are untouched by this branch and remain covered by their existing tests.
+- The popover and Command Center continue to observe the same shared `AgentViewModel` instance per §4A.1; this branch added new published state (`taskHistoryRecords`, `usePointerCursors`) to that same shared instance rather than introducing a second state path for either surface.
+- Dry-run mode continues to bypass the real execution/approval pipeline exactly as before; this branch changed where the approval surface renders, not dry-run semantics or the approval pipeline itself.
+- Instant vs. planner-routed command handling, risk tiers, and the approval gate itself are unchanged; only their visibility on Routines/Workspaces pages was added.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+- The Figma MCP connector on the Starter plan is capped at 6 tool calls per month *total*, shared across every connection to the same Figma account (both the Claude and Codex connections draw from one pool). It was exhausted early in this branch and does not reset within any realistic session. Manual SVG export plus Figma's "Copy as CSS" proved more precise than the MCP anyway (exact shadow recipes, exact hex values) and should be the default data-gathering method for future wireframe-fidelity work, not a fallback.
+- When exporting Figma frames manually: uncheck "Outline text" (checked, text exports as unreadable vector paths) and check "Include 'id' attribute" (preserves layer names). Select the specific component layer, not the outer desktop-mockup wrapper — a wrongly-scoped export produced a 39MB file (embedded wallpaper bitmap) versus 40KB for the correctly-scoped one.
+- There are two genuinely different design systems, not one with variants: System A (this branch's territory: main app surfaces, flat/opaque, Inter, zero shadows anywhere) and System B (branch #9's territory: floating widget + system notifications, translucent "Liquid Glass" material with real multi-pass shadows, SF Pro/SF Pro Display, distinct per-action accent colors, radius 34px for the widget vs. 20px for notifications — not the same value). Branch #9 must read `docs/sonny-design-system-reference.md` before writing any UI code; System A tokens (`SonnyTheme`/`SonnyType`/`SonnyRadius` in `ContentView.swift`) do not apply there.
+- Streak/week-boundary date math is easy to get subtly wrong; it was hand-traced against every test fixture in this branch, not just left to pass/fail on the test suite. Week boundaries are `[Monday 00:00, next Monday 00:00)`, half-open, via a `(weekday + 5) % 7` days-since-Monday formula. Current streak requires either today or yesterday to have a completed record to stay alive (one-day grace period), and breaks only once both are empty — do not regress this back to "today only" without deliberately re-deciding the UX tradeoff documented above.
+- `recordLocalStorageLoadFailure` is reserved specifically for load/decrypt failures on an existing file; its banner text is hardcoded to say a local data file "could not be decrypted or decoded." Any *write*-path failure on any of the eight local stores must use a distinct, accurately worded `errorMessage` instead (see `applyClipboardHistoryNoticeChoice` for the established pattern). Reusing the load-failure banner for a write failure was a real bug introduced and caught within this same branch.
+- Any new Command Center page that includes the command composer/dispatch surface must explicitly render `CommandCenterTaskActivitySurface` behind `viewModel.hasTaskActivity`, or approval prompts for commands started from that page will be invisible with no error and no indication anything is wrong. This is not automatic from adding a composer; it must be added per page.
+- The pointer-cursor preference is intentionally plain `UserDefaults`, not routed through `LocalStorageEncryption`. It is a cosmetic preference with no privacy sensitivity, and the encrypted-store system has already caused two real bugs this project; do not add unnecessary stores to it. Its read must use `object(forKey:) as? Bool ?? true`, not `.bool(forKey:)`, or new users would incorrectly default to the preference being off.
+- `ViewThatFits` (horizontal candidate first, with a `minWidth` floor on the label, falling back to vertical) is the established fix for label+control settings rows that need to survive a narrow, non-fullscreen window. Reuse `SettingsAdaptiveControlRow` for any future settings row rather than a fixed `HStack`.
+
+Known limitations / deferred scope:
+- The floating widget and system-notification surfaces (System B) do not exist in code at all yet; this branch only documents their design tokens. That is entirely branch #9's scope.
+- Theme switching only implements Dark; Light and System are visible but inert ("Soon").
+- The instant-utility quick-results-list wireframe still does not exist (missing since branch #5), and the Claude-style-vs-ChatGPT-style trimmed-menu-bar product decision is still unresolved. Both block branch #9 from being properly planned, not just built.
+- No account/subscription/billing/entitlement work was touched; out of scope for this branch as before.
+
+Open questions for the next chat (required, write "none" if true):
+- Who/how will the instant-utility quick-results-list wireframe get created before branch #9 needs it?
+- Is the floating widget's trimmed menu-bar treatment Claude-style or ChatGPT-style? This should be decided before branch #9 UI work starts, not mid-branch.
+
+Next branch: `feature/floating-command-widget` (per roadmap; inserted as branch #9 during this branch's work once the wireframe review revealed the floating widget had never been scheduled). Primary target §6.3A (menu-bar cockpit responsibilities) and §4A.1 (this surface must also read/write the same shared `AgentViewModel`, not a third independently-coded state path), plus `docs/sonny-design-system-reference.md` System B section for all visual specification — that doc, not the prose spec, is the source of truth for colors, materials, radii, and shadows on this branch.
+
+--- Kickoff prompt for next chat (paste verbatim as the first message) ---
+Repo: /Users/sauranshbhardwaj/Desktop/macos-agent
+Spec: docs/sonny-major-release-spec.md
+Changelog: docs/sonny-v1-implementation-changelog.md — read the latest entry before anything else. Do not trust memory or assumptions over it; verify against current git state.
+
+Branch: feature/floating-command-widget
+Implementing agent: Codex  Reviewing agent: Claude
+Primary target: §6.3A (menu-bar cockpit), §4A.1 (shared state layer); visual spec authority is `docs/sonny-design-system-reference.md` System B, not the prose spec.
+
+Just completed: feature/product-shell-shared-state — the main Command Center app (Tasks, Insights, Routines, Workspaces, Settings) now matches the real Figma wireframes' System A design (flat/opaque/Inter/zero-shadow), reads real persistent task history for a working Insights dashboard, and shares one `AgentViewModel` across both surfaces including the new task-history state.
+Must preserve: shared-state architecture (both surfaces observe one `AgentViewModel`, no independently-coded second state path); all eight encrypted local stores and their deletion coverage; the one-day streak grace period and its exact break condition; `CommandCenterTaskActivitySurface` on every page with a composer; System A tokens must not leak into System B surfaces or vice versa.
+Known pitfalls to avoid repeating: do not assume Figma MCP tool calls are available — check quota first, default to manual SVG/CSS export; System A and System B are not variants of one system, don't reuse System A tokens for the widget; do not reuse `recordLocalStorageLoadFailure` for write-path failures on any store; any new page with a composer needs its own explicit `CommandCenterTaskActivitySurface`; do not start UI work until the instant-utility quick-results-list wireframe exists and the menu-bar-trim style decision is made.
 
 Start in plan mode. Confirm git status is clean on main, confirm the changelog's account of the prior branch still matches the current code, then produce an implementation plan before editing anything. Do not commit, push, merge, or open a PR without explicit approval.
