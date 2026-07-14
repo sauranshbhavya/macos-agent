@@ -55,6 +55,7 @@ struct ContentView: View {
         .onAppear {
             viewModel.refreshPermissions()
             viewModel.refreshSavedItems()
+            viewModel.refreshTaskHistory()
             viewModel.refreshClipboardHistoryNotice()
         }
     }
@@ -1287,6 +1288,7 @@ enum SonnyType {
     static let brand = inter(42, weight: .semibold)
     static let hero = inter(28, weight: .semibold)
     static let panelTitle = inter(23, weight: .semibold)
+    static let heroStat = inter(22, weight: .medium)
     static let tagline = inter(12)
     static let eyebrow = inter(11, weight: .medium)
     static let command = inter(15)
@@ -1329,6 +1331,8 @@ enum SonnyTheme {
     static let panelTint = collectionSurface.opacity(0.88)
     static let input = collectionSurface
     static let warning = Color(red: 242 / 255, green: 190 / 255, blue: 0 / 255)
+    static let success = Color(red: 63 / 255, green: 185 / 255, blue: 80 / 255)
+    static let chartBarMuted = Color(red: 36 / 255, green: 46 / 255, blue: 82 / 255)
     static let danger = Color(red: 0.973, green: 0.169, blue: 0.376)
     static let info = text.opacity(0.92)
 }

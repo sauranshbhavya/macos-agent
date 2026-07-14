@@ -196,6 +196,7 @@ struct ProductShellTests {
         #expect(record.command == "= 1 + 1")
         #expect(record.outcomeStatus == .completed)
         #expect(record.completedAt >= record.startedAt)
+        #expect(viewModel.taskHistoryRecords.map(\.command) == ["= 1 + 1"])
     }
 
     @Test
@@ -215,6 +216,7 @@ struct ProductShellTests {
         #expect(record.command == "calc apples")
         #expect(record.outcomeStatus == .failed)
         #expect(record.completedAt >= record.startedAt)
+        #expect(viewModel.taskHistoryRecords.map(\.command) == ["calc apples"])
         #expect(viewModel.errorMessage?.contains("Could not calculate that expression") == true)
     }
 
@@ -238,6 +240,7 @@ struct ProductShellTests {
         #expect(record.command == "snippet save ;history-test = Hello")
         #expect(record.outcomeStatus == .canceled)
         #expect(record.completedAt >= record.startedAt)
+        #expect(viewModel.taskHistoryRecords.map(\.command) == ["snippet save ;history-test = Hello"])
         #expect(viewModel.finalSummary == "Approval canceled. No action was taken.")
     }
 

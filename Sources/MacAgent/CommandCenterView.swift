@@ -1,3 +1,4 @@
+import Foundation
 import MacAgentCore
 import SwiftUI
 
@@ -61,6 +62,7 @@ struct CommandCenterView: View {
         .onAppear {
             viewModel.refreshPermissions()
             viewModel.refreshSavedItems()
+            viewModel.refreshTaskHistory()
             viewModel.refreshClipboardHistoryNotice()
         }
     }
@@ -149,11 +151,7 @@ struct CommandCenterView: View {
         case .tasks:
             TasksFoundationView(viewModel: viewModel)
         case .insights:
-            CommandCenterPlaceholderView(
-                title: "Insights",
-                systemImage: CommandCenterDestination.insights.systemImage,
-                message: "Current-task usage will be wired here in Checkpoint 4."
-            )
+            InsightsView(viewModel: viewModel)
         case .routines:
             RoutinesView(viewModel: viewModel)
         case .workspaces:
@@ -169,47 +167,493 @@ private struct TasksFoundationView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 18) {
-                CommandCenterPageHeader(
-                    title: "Tasks",
-                    subtitle: "Your current Sonny task, live across both surfaces."
-                )
-
-                if viewModel.hasTaskActivity {
-                    AgentTaskActivityView(viewModel: viewModel, showsStartupWhenEmpty: false)
-                } else {
-                    VStack(alignment: .leading, spacing: 10) {
-                        Label("No active task", systemImage: "checkmark.circle")
-                            .font(SonnyType.bodyEmphasis)
-                            .foregroundStyle(SonnyTheme.text)
-                        Text("Start a command below or from the menu-bar cockpit. The same task will appear here immediately.")
-                            .font(SonnyType.body)
-                            .foregroundStyle(SonnyTheme.muted)
-                            .fixedSize(horizontal: false, vertical: true)
-                        Text("Persistent task history is planned for a future update.")
-                            .font(SonnyType.micro)
-                            .foregroundStyle(SonnyTheme.muted)
-                    }
-                    .padding(18)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .background(SonnyTheme.surfaceRaised.opacity(0.46))
-                    .overlay(
-                        RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
-                            .stroke(SonnyTheme.border, lineWidth: 1)
+            ScrollView {
+                VStack(alignment: .leading, spacing: 18) {
+                    CommandCenterPageHeader(
+                        title: "Tasks",
+                        subtitle: "Your current Sonny task, live across both surfaces."
                     )
-                    .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
 
-                    Spacer(minLength: 0)
+                    if viewModel.hasTaskActivity {
+                        CommandCenterTaskActivitySurface(viewModel: viewModel)
+                    } else {
+                        VStack(alignment: .leading, spacing: 10) {
+                            Label("No active task", systemImage: "checkmark.circle")
+                                .font(SonnyType.bodyEmphasis)
+                                .foregroundStyle(SonnyTheme.text)
+                            Text("Start a command below or from the menu-bar cockpit. The same task will appear here immediately.")
+                                .font(SonnyType.body)
+                                .foregroundStyle(SonnyTheme.muted)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
+                        .padding(18)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .background(SonnyTheme.surfaceRaised.opacity(0.46))
+                        .overlay(
+                            RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
+                                .stroke(SonnyTheme.border, lineWidth: 1)
+                        )
+                        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
+                    }
+
+                    TaskHistoryListPanel(
+                        records: Array(viewModel.taskHistoryRecords.prefix(10)),
+                        title: "Recent task history",
+                        emptyTitle: "No completed tasks yet",
+                        emptyMessage: "Run or cancel a Sonny task and it will appear here."
+                    )
                 }
+                .padding(.horizontal, 28)
+                .padding(.top, 24)
+                .padding(.bottom, 18)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
             }
-            .padding(.horizontal, 28)
-            .padding(.top, 24)
-            .padding(.bottom, 18)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
             CommandCenterComposerFooter(viewModel: viewModel)
         }
         .background(SonnyTheme.ink)
+        .onAppear {
+            viewModel.refreshTaskHistory()
+        }
+    }
+}
+
+private struct CommandCenterTaskActivitySurface: View {
+    @ObservedObject var viewModel: AgentViewModel
+
+    var body: some View {
+        AgentTaskActivityView(viewModel: viewModel, showsStartupWhenEmpty: false)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .transition(.opacity)
+    }
+}
+
+private struct InsightsView: View {
+    @ObservedObject var viewModel: AgentViewModel
+
+    private var summary: TaskHistoryInsightsSummary {
+        TaskHistoryInsights.summarize(records: viewModel.taskHistoryRecords, now: Date())
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            CommandCenterPageHeader(title: "Insights")
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 16) {
+                    InsightsStatRow(summary: summary)
+                    WeeklyCompletionChart(counts: summary.weeklyCompletedCounts)
+                    TaskHistoryListPanel(
+                        records: Array(viewModel.taskHistoryRecords.prefix(6)),
+                        title: "Recent activity",
+                        emptyTitle: "No activity yet",
+                        emptyMessage: "Completed, failed, and canceled Sonny tasks will appear here."
+                    )
+                }
+                .padding(.horizontal, 30)
+                .padding(.vertical, 24)
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(CommandCenterPalette.collectionSurface)
+            .overlay(
+                RoundedRectangle(cornerRadius: SonnyRadius.container)
+                    .stroke(SonnyTheme.border, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+        }
+        .padding(.horizontal, 28)
+        .padding(.top, 24)
+        .padding(.bottom, 28)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(SonnyTheme.ink)
+        .onAppear {
+            viewModel.refreshTaskHistory()
+        }
+    }
+}
+
+private struct InsightsStatRow: View {
+    let summary: TaskHistoryInsightsSummary
+
+    private var stats: [InsightStatPresentation] {
+        [
+            .completedThisWeek(summary),
+            .completionRate(summary),
+            .averageCycleTime(summary),
+            .currentStreak(summary)
+        ]
+    }
+
+    var body: some View {
+        HStack(spacing: 12) {
+            ForEach(stats) { stat in
+                InsightStatCard(stat: stat)
+            }
+        }
+    }
+}
+
+private struct InsightStatCard: View {
+    let stat: InsightStatPresentation
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 7) {
+            Text(stat.label)
+                .font(SonnyType.caption)
+                .foregroundStyle(SonnyTheme.muted)
+                .lineLimit(1)
+
+            Text(stat.value)
+                .font(SonnyType.heroStat)
+                .foregroundStyle(SonnyTheme.text)
+                .lineLimit(1)
+                .minimumScaleFactor(0.72)
+
+            Text(stat.delta)
+                .font(SonnyType.micro)
+                .foregroundStyle(stat.isPositiveDelta ? SonnyTheme.success : SonnyTheme.muted)
+                .lineLimit(1)
+                .minimumScaleFactor(0.74)
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 14)
+        .frame(maxWidth: .infinity, minHeight: 104, alignment: .leading)
+        .background(CommandCenterPalette.cardSurface)
+        .overlay(
+            RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
+                .stroke(SonnyTheme.cardBorder, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
+    }
+}
+
+private struct WeeklyCompletionChart: View {
+    let counts: [Int]
+
+    private let days = ["Mon", "Tue", "Wed", "Thu", "Fri", "Sat", "Sun"]
+    private var maxCount: Int { counts.max() ?? 0 }
+    private var peakIndex: Int? {
+        guard maxCount > 0 else {
+            return nil
+        }
+        return counts.firstIndex(of: maxCount)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            Text("Tasks completed this week")
+                .font(SonnyType.bodyEmphasis)
+                .foregroundStyle(SonnyTheme.text)
+
+            HStack(alignment: .bottom, spacing: 0) {
+                ForEach(Array(days.enumerated()), id: \.offset) { index, day in
+                    VStack(spacing: 9) {
+                        GeometryReader { proxy in
+                            VStack {
+                                Spacer(minLength: 0)
+                                RoundedRectangle(cornerRadius: 3)
+                                    .fill(index == peakIndex ? SonnyTheme.accent : SonnyTheme.chartBarMuted)
+                                    .frame(
+                                        width: 24,
+                                        height: barHeight(for: counts[safe: index] ?? 0, availableHeight: proxy.size.height)
+                                    )
+                                    .opacity((counts[safe: index] ?? 0) == 0 ? 0 : 1)
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: .infinity)
+                        }
+                        .frame(height: 112)
+
+                        Text(day)
+                            .font(SonnyType.micro)
+                            .foregroundStyle(SonnyTheme.muted)
+                    }
+                    .frame(maxWidth: .infinity)
+                    .accessibilityElement(children: .ignore)
+                    .accessibilityLabel("\(day): \(counts[safe: index] ?? 0) completed task\(counts[safe: index] == 1 ? "" : "s")")
+                }
+            }
+            .frame(maxWidth: .infinity)
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(CommandCenterPalette.cardSurface)
+        .overlay(
+            RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
+                .stroke(SonnyTheme.cardBorder, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
+    }
+
+    private func barHeight(for count: Int, availableHeight: CGFloat) -> CGFloat {
+        guard maxCount > 0, count > 0 else {
+            return 0
+        }
+        return max(12, CGFloat(count) / CGFloat(maxCount) * availableHeight)
+    }
+}
+
+private struct TaskHistoryListPanel: View {
+    let records: [CompletedTaskRecord]
+    let title: String
+    let emptyTitle: String
+    let emptyMessage: String
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text(title)
+                .font(SonnyType.bodyEmphasis)
+                .foregroundStyle(SonnyTheme.text)
+
+            if records.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text(emptyTitle)
+                        .font(SonnyType.bodyEmphasis)
+                        .foregroundStyle(SonnyTheme.text)
+                    Text(emptyMessage)
+                        .font(SonnyType.micro)
+                        .foregroundStyle(SonnyTheme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.vertical, 6)
+            } else {
+                VStack(spacing: 0) {
+                    ForEach(Array(records.enumerated()), id: \.offset) { _, record in
+                        TaskHistoryRow(record: record)
+                    }
+                }
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(CommandCenterPalette.cardSurface)
+        .overlay(
+            RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
+                .stroke(SonnyTheme.cardBorder, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
+    }
+}
+
+private struct TaskHistoryRow: View {
+    let record: CompletedTaskRecord
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(statusColor)
+                .frame(width: 10, height: 10)
+                .accessibilityHidden(true)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(record.command.isEmpty ? "Untitled task" : record.command)
+                    .font(SonnyType.body)
+                    .foregroundStyle(SonnyTheme.text)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
+
+                Text(statusText)
+                    .font(SonnyType.micro)
+                    .foregroundStyle(SonnyTheme.muted)
+                    .lineLimit(1)
+            }
+
+            Spacer(minLength: 12)
+
+            Text(TaskHistoryDateFormatter.relativeTimestamp(for: record.completedAt, now: Date()))
+                .font(SonnyType.micro)
+                .foregroundStyle(SonnyTheme.muted)
+                .lineLimit(1)
+                .fixedSize(horizontal: true, vertical: false)
+        }
+        .padding(.vertical, 8)
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(record.command), \(statusText), \(TaskHistoryDateFormatter.relativeTimestamp(for: record.completedAt, now: Date()))")
+    }
+
+    private var statusColor: Color {
+        switch record.outcomeStatus {
+        case .completed:
+            return SonnyTheme.success
+        case .failed:
+            return SonnyTheme.danger
+        case .canceled:
+            return SonnyTheme.muted
+        default:
+            return SonnyTheme.muted
+        }
+    }
+
+    private var statusText: String {
+        let duration = TaskHistoryDurationFormatter.short(record.completedAt.timeIntervalSince(record.startedAt))
+        switch record.outcomeStatus {
+        case .completed:
+            return "Completed in \(duration)"
+        case .failed:
+            return "Failed after \(duration)"
+        case .canceled:
+            return "Canceled after \(duration)"
+        default:
+            return record.outcomeStatus.rawValue.replacingOccurrences(of: "_", with: " ")
+        }
+    }
+}
+
+private struct InsightStatPresentation: Identifiable, Equatable {
+    let id: String
+    let label: String
+    let value: String
+    let delta: String
+    let isPositiveDelta: Bool
+
+    static func completedThisWeek(_ summary: TaskHistoryInsightsSummary) -> Self {
+        let difference = summary.completedThisWeek - summary.previousWeekCompleted
+        return Self(
+            id: "completed-this-week",
+            label: "Completed this week",
+            value: "\(summary.completedThisWeek)",
+            delta: deltaCountText(difference),
+            isPositiveDelta: difference > 0
+        )
+    }
+
+    static func completionRate(_ summary: TaskHistoryInsightsSummary) -> Self {
+        let currentPercent = Int((summary.completionRate * 100).rounded())
+        let previousPercent = Int((summary.previousWeekCompletionRate * 100).rounded())
+        let difference = currentPercent - previousPercent
+        return Self(
+            id: "completion-rate",
+            label: "Completion rate",
+            value: "\(currentPercent)%",
+            delta: deltaPercentText(difference),
+            isPositiveDelta: difference > 0
+        )
+    }
+
+    static func averageCycleTime(_ summary: TaskHistoryInsightsSummary) -> Self {
+        let value = summary.averageCompletedCycleTime.map(TaskHistoryDurationFormatter.short) ?? "—"
+        let delta: String
+        let isPositive: Bool
+        if let current = summary.averageCompletedCycleTime,
+           let previous = summary.previousWeekAverageCompletedCycleTime {
+            let difference = previous - current
+            delta = difference == 0
+                ? "No change"
+                : "\(TaskHistoryDurationFormatter.short(abs(difference))) \(difference > 0 ? "faster" : "slower")"
+            isPositive = difference > 0
+        } else {
+            delta = "No comparison available yet"
+            isPositive = false
+        }
+        return Self(
+            id: "average-cycle-time",
+            label: "Avg cycle time",
+            value: value,
+            delta: delta,
+            isPositiveDelta: isPositive
+        )
+    }
+
+    static func currentStreak(_ summary: TaskHistoryInsightsSummary) -> Self {
+        let days = summary.currentStreakDays
+        let delta: String
+        if days == 0 {
+            delta = "No active streak"
+        } else if summary.hasCompletedToday {
+            delta = "Active today"
+        } else {
+            delta = "Keep it going today"
+        }
+        return Self(
+            id: "current-streak",
+            label: "Current streak",
+            value: "\(days) day\(days == 1 ? "" : "s")",
+            delta: delta,
+            isPositiveDelta: days > 0
+        )
+    }
+
+    private static func deltaCountText(_ difference: Int) -> String {
+        if difference > 0 {
+            return "+\(difference) vs last week"
+        }
+        if difference < 0 {
+            return "\(difference) vs last week"
+        }
+        return "No change"
+    }
+
+    private static func deltaPercentText(_ difference: Int) -> String {
+        if difference > 0 {
+            return "+\(difference)%"
+        }
+        if difference < 0 {
+            return "\(difference)%"
+        }
+        return "No change"
+    }
+}
+
+private enum TaskHistoryDurationFormatter {
+    static func short(_ rawDuration: TimeInterval) -> String {
+        let duration = max(0, rawDuration)
+        if duration < 60 {
+            return "\(Int(duration.rounded()))s"
+        }
+        if duration < 60 * 60 {
+            return "\(Int((duration / 60).rounded()))m"
+        }
+        if duration < 24 * 60 * 60 {
+            let hours = duration / (60 * 60)
+            return formatted(hours) + "h"
+        }
+        let days = duration / (24 * 60 * 60)
+        return formatted(days) + "d"
+    }
+
+    private static func formatted(_ value: Double) -> String {
+        if value >= 10 || value.rounded() == value {
+            return "\(Int(value.rounded()))"
+        }
+        return String(format: "%.1f", value)
+    }
+}
+
+private enum TaskHistoryDateFormatter {
+    static func relativeTimestamp(
+        for date: Date,
+        now: Date,
+        calendar: Calendar = .current
+    ) -> String {
+        let time = timeFormatter.string(from: date)
+        if calendar.isDate(date, inSameDayAs: now) {
+            return "Today, \(time)"
+        }
+        if let yesterday = calendar.date(byAdding: .day, value: -1, to: now),
+           calendar.isDate(date, inSameDayAs: yesterday) {
+            return "Yesterday, \(time)"
+        }
+        return dateFormatter.string(from: date)
+    }
+
+    private static let timeFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "h:mm a"
+        return formatter
+    }()
+
+    private static let dateFormatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.dateFormat = "MMM d"
+        return formatter
+    }()
+}
+
+private extension Array {
+    subscript(safe index: Int) -> Element? {
+        indices.contains(index) ? self[index] : nil
     }
 }
 
@@ -311,6 +755,10 @@ private struct RoutinesView: View {
                         .stroke(SonnyTheme.border, lineWidth: 1)
                 )
                 .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+
+                if viewModel.hasTaskActivity {
+                    CommandCenterTaskActivitySurface(viewModel: viewModel)
+                }
             }
             .padding(.horizontal, 28)
             .padding(.top, 24)
@@ -446,6 +894,10 @@ private struct WorkspacesView: View {
                         .stroke(SonnyTheme.border, lineWidth: 1)
                 )
                 .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+
+                if viewModel.hasTaskActivity {
+                    CommandCenterTaskActivitySurface(viewModel: viewModel)
+                }
             }
             .padding(.horizontal, 28)
             .padding(.top, 24)

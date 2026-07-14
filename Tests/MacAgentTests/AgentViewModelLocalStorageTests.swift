@@ -13,10 +13,12 @@ struct AgentViewModelLocalStorageTests {
         let viewModel = try makeViewModel(root: root, encryption: testEncryption(byte: 0x42))
 
         viewModel.refreshSavedItems()
+        viewModel.refreshTaskHistory()
         viewModel.refreshClipboardHistoryNotice()
 
         #expect(viewModel.savedRoutines.isEmpty)
         #expect(viewModel.savedWorkspaces.isEmpty)
+        #expect(viewModel.taskHistoryRecords.isEmpty)
         #expect(viewModel.clipboardHistoryEnabled)
         #expect(viewModel.showClipboardHistoryNotice)
         #expect(viewModel.errorMessage == nil)
@@ -72,6 +74,30 @@ struct AgentViewModelLocalStorageTests {
         #expect(message.contains("Sonny could not load encrypted local data"))
         #expect(message.contains("clipboard history settings"))
         #expect(!viewModel.showClipboardHistoryNotice)
+    }
+
+    @Test
+    func taskHistoryDecryptFailureSurfacesVisibleErrorInsteadOfSilentEmptyState() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let taskHistoryURL = root.appendingPathComponent("task-history.json")
+        try TaskHistoryStore(fileURL: taskHistoryURL, encryption: testEncryption(byte: 0x42))
+            .record(
+                CompletedTaskRecord(
+                    command: "Encrypted task",
+                    startedAt: .fixture,
+                    completedAt: Date(timeInterval: 5, since: .fixture),
+                    outcomeStatus: .completed
+                )
+            )
+        let viewModel = try makeViewModel(root: root, encryption: testEncryption(byte: 0x99))
+
+        viewModel.refreshTaskHistory()
+
+        let message = try #require(viewModel.errorMessage)
+        #expect(message.contains("Sonny could not load encrypted local data"))
+        #expect(message.contains("task history"))
+        #expect(viewModel.taskHistoryRecords.isEmpty)
     }
 }
 
@@ -157,4 +183,8 @@ private func makeDirectory() throws -> URL {
         .appendingPathComponent("MacAgentTests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
+}
+
+private extension Date {
+    static let fixture = Date(timeIntervalSince1970: 1_700_000_000)
 }

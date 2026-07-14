@@ -30,6 +30,7 @@ final class AgentViewModel: ObservableObject {
     @Published var clipboardHistoryEnabled: Bool = true
     @Published var priorTaskContext: PriorTaskContext?
     @Published var taskUsageSummary: TaskUsageSummary = .empty
+    @Published var taskHistoryRecords: [CompletedTaskRecord] = []
     @Published var localDataDeletionStatusMessage: String?
     @Published var usePointerCursors: Bool = true {
         didSet {
@@ -70,6 +71,7 @@ final class AgentViewModel: ObservableObject {
         case savedRoutines
         case savedWorkspaces
         case clipboardHistorySettings
+        case taskHistory
 
         var label: String {
             switch self {
@@ -79,6 +81,8 @@ final class AgentViewModel: ObservableObject {
                 return "saved workspaces"
             case .clipboardHistorySettings:
                 return "clipboard history settings"
+            case .taskHistory:
+                return "task history"
             }
         }
     }
@@ -554,6 +558,17 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
+    func refreshTaskHistory() {
+        do {
+            taskHistoryRecords = try taskHistoryStore.loadAll()
+                .sorted { $0.completedAt > $1.completedAt }
+            clearLocalStorageLoadFailure(.taskHistory)
+        } catch {
+            taskHistoryRecords = []
+            recordLocalStorageLoadFailure(.taskHistory, error: error)
+        }
+    }
+
     func refreshClipboardHistoryNotice() {
         let settings: ClipboardHistorySettings
         do {
@@ -671,6 +686,7 @@ final class AgentViewModel: ObservableObject {
         showPermissionPanel = false
         refreshPermissions()
         refreshSavedItems()
+        refreshTaskHistory()
         refreshClipboardHistoryNotice()
         preparedRun = nil
         runner = nil
@@ -690,6 +706,7 @@ final class AgentViewModel: ObservableObject {
         stepStatuses = [:]
         priorTaskContext = nil
         taskUsageSummary = .empty
+        taskHistoryRecords = []
         clarificationQuestion = nil
         clarificationAnswer = ""
         clarificationAutoExecute = false
@@ -702,6 +719,7 @@ final class AgentViewModel: ObservableObject {
         taskUsageRecorder.reset()
         logStore.reset()
         refreshSavedItems()
+        refreshTaskHistory()
         refreshClipboardHistoryNotice()
     }
 
@@ -1029,7 +1047,9 @@ final class AgentViewModel: ObservableObject {
                     outcomeStatus: status
                 )
             )
+            refreshTaskHistory()
         } catch {
+            errorMessage = "Could not save task history: \(error.localizedDescription)"
             logStore.append(.observe, "Could not record task history: \(error.localizedDescription)")
         }
     }
