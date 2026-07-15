@@ -20,6 +20,14 @@ public struct CompletedTaskRecord: Codable, Equatable, Sendable {
 }
 
 public struct TaskHistoryStore: @unchecked Sendable {
+    // Bounded by record count (eviction drops oldest-first via completedAt), not by a fixed
+    // duration — this is still a recency-based cutoff, just parameterized by count rather than
+    // age. Today every TaskHistoryInsights stat (current streak, hasCompletedToday, this-week/
+    // previous-week) only reads a recent window, so eviction never touches data those stats need.
+    // Any future all-time/lifetime stat (total tasks ever, longest streak on record) would need
+    // to revisit this cap before shipping.
+    public static let maxItems = 10_000
+
     public let fileURL: URL
     private let fileManager: FileManager
     private let encryption: LocalStorageEncryption
@@ -34,7 +42,7 @@ public struct TaskHistoryStore: @unchecked Sendable {
         if let fileURL {
             self.fileURL = fileURL
         } else {
-            self.fileURL = Self.defaultDirectory(fileManager: fileManager)
+            self.fileURL = ClipboardHistoryStore.defaultDirectory(fileManager: fileManager)
                 .appendingPathComponent("task-history.json")
         }
     }
@@ -42,7 +50,7 @@ public struct TaskHistoryStore: @unchecked Sendable {
     public func record(_ record: CompletedTaskRecord) throws {
         var records = try loadAll()
         records.append(record)
-        try write(records)
+        try write(capped(records))
     }
 
     public func loadAll() throws -> [CompletedTaskRecord] {
@@ -61,6 +69,17 @@ public struct TaskHistoryStore: @unchecked Sendable {
         return decoded.value
     }
 
+    private func capped(_ records: [CompletedTaskRecord]) -> [CompletedTaskRecord] {
+        guard records.count > Self.maxItems else {
+            return records
+        }
+        return Array(
+            records
+                .sorted { $0.completedAt < $1.completedAt }
+                .suffix(Self.maxItems)
+        )
+    }
+
     private func write(_ records: [CompletedTaskRecord]) throws {
         try fileManager.createDirectory(
             at: fileURL.deletingLastPathComponent(),
@@ -68,14 +87,6 @@ public struct TaskHistoryStore: @unchecked Sendable {
         )
         let data = try encryption.encode(records, encoder: .taskHistoryPrettySorted)
         try data.write(to: fileURL, options: .atomic)
-    }
-}
-
-private extension TaskHistoryStore {
-    static func defaultDirectory(fileManager: FileManager) -> URL {
-        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ??
-            fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent("Sonny", isDirectory: true)
     }
 }
 

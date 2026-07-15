@@ -71,7 +71,7 @@ public struct RoutineStore: @unchecked Sendable {
         if let fileURL {
             self.fileURL = fileURL
         } else {
-            self.fileURL = Self.defaultDirectory(fileManager: fileManager)
+            self.fileURL = ClipboardHistoryStore.defaultDirectory(fileManager: fileManager)
                 .appendingPathComponent("routines.json")
         }
     }
@@ -127,7 +127,7 @@ public struct WorkspaceStore: @unchecked Sendable {
         if let fileURL {
             self.fileURL = fileURL
         } else {
-            self.fileURL = Self.defaultDirectory(fileManager: fileManager)
+            self.fileURL = ClipboardHistoryStore.defaultDirectory(fileManager: fileManager)
                 .appendingPathComponent("workspaces.json")
         }
     }
@@ -165,22 +165,6 @@ public struct WorkspaceStore: @unchecked Sendable {
         )
         let data = try encryption.encode(workspaces, encoder: .prettySorted)
         try data.write(to: fileURL, options: .atomic)
-    }
-}
-
-private extension RoutineStore {
-    static func defaultDirectory(fileManager: FileManager) -> URL {
-        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ??
-            fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent("Sonny", isDirectory: true)
-    }
-}
-
-private extension WorkspaceStore {
-    static func defaultDirectory(fileManager: FileManager) -> URL {
-        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ??
-            fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent("Sonny", isDirectory: true)
     }
 }
 

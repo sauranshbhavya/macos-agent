@@ -34,7 +34,7 @@ public enum ClipboardHistoryError: Error, Equatable, LocalizedError {
     }
 }
 
-public struct ClipboardHistoryStore {
+public struct ClipboardHistoryStore: @unchecked Sendable {
     public static let maxItems = 100
     public static let maxAge: TimeInterval = 7 * 24 * 60 * 60
     public static let maxTextCharacters = 10_000
@@ -137,7 +137,7 @@ public struct ClipboardHistoryStore {
     }
 }
 
-public struct ClipboardHistorySettingsStore {
+public struct ClipboardHistorySettingsStore: @unchecked Sendable {
     public let fileURL: URL
     private let fileManager: FileManager
     private let encryption: LocalStorageEncryption
