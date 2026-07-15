@@ -2062,12 +2062,12 @@ Requirements:
 
 Requirements:
 
-- Subscription plan.
-- Trial if chosen.
-- Paid-only Power Mode entitlement.
-- Usage metering by task/model/context size, **surfaced to the user in-task** (clarified v1.2, see §4A.9/§6.14) — a visible usage/budget indicator, not just an aggregate backend stat used for billing math the user never sees until they hit a wall.
+- Subscription plan (Pro and Max, see §23 for the resolved structure).
+- **No trial (resolved 2026-07-15, replaces the earlier "trial if chosen"):** a permanent, non-expiring free tier instead — the mid-task-lapse principle below applies to a free user's credits running out the same way it applies to a paid lapse, which a time-boxed trial cannot honor (a countdown that cuts off mid-task is exactly the surprise this section exists to prevent).
+- Power Mode entitlement is gated to the Max tier specifically, not "paid" generally (resolved 2026-07-15) — Pro does not include it.
+- Usage metering by task/model/context size, **surfaced to the user in-task** (clarified v1.2, see §4A.9/§6.14) — a visible usage/budget indicator, not just an aggregate backend stat used for billing math the user never sees until they hit a wall. Implemented as a credit pool per tier (§23), weighted by real cost per task type, not a flat per-task count.
 - Billing portal.
-- Grace period handling. **Mid-task lapse behavior (clarified v1.2):** never interrupt a single atomic action in progress (e.g. between a click and its observation) — finish the current step, then block the next one with a clear message. Same graceful-halt shape as the permission-revocation path in §13.5, not a hard yank that could leave an app mid-form or mid-edit.
+- Grace period handling. **Mid-task lapse behavior (clarified v1.2):** never interrupt a single atomic action in progress (e.g. between a click and its observation) — finish the current step, then block the next one with a clear message. Same graceful-halt shape as the permission-revocation path in §13.5, not a hard yank that could leave an app mid-form or mid-edit. **Auto top-up (resolved 2026-07-15)** is the mechanism that serves this principle for Pro/Max: a user running low mid-task tops up rather than hitting a wall.
 
 ### 16.5 Model Provider Proxy
 
@@ -2859,14 +2859,15 @@ Resolved:
 - Whether to support BYOK: no, skipped for v1 (§7.9, resolved v1.2).
 - Which apps make the first Power Mode app list: all 8 as originally specced — Safari, Chrome, Finder, Notes, Calendar, Mail, Slack, VS Code — sequenced last in the build order but not reduced in scope (§13.7, §21.0A, resolved v1.2).
 - Resourcing: solo builder with heavy AI leverage, full spec scope, sequenced to make that realistic rather than reducing scope (§5.4, resolved v1.2).
+- Business model and subscription pricing (§16.4, resolved 2026-07-15 during `feature/v1-strategy-replan`, supersedes the earlier "trial model" framing — a trial was considered and rejected, not just left undecided): **Free** ($0/mo, 50 credits/mo, `gpt-5.4-mini`, no Power Mode) — **Pro** ($20/mo, 350 credits/mo, `gpt-5.5`, no Power Mode) — **Max** ($100/mo, 2,500 credits/mo, choice of `gpt-5.5` or Claude Sonnet 5, the only tier with Power Mode). Voice/dictation and instant utilities are uncapped on every tier. 1 credit = one standard planner-routed command; web-research tasks cost 3 credits, reflecting the real cost of the resolved web-search provider (Tavily, see §4A.2). Full credit-weighting rationale and cost model live in `docs/sonny-v1-implementation-changelog.md`'s branch 13 note, not duplicated here. **Not fully validated:** Max's price is directionally set (matches real comparables' pricing shape) but not cost-confirmed until Power Mode's own per-action cost is researched — that hasn't happened yet, Power Mode is unbuilt. Do not treat $100 as final without revisiting this once Power Mode has a real cost model.
+- Web-search provider (§4A.2's `WebSearchProviding` seam, unconfigured since the branch that built it): Tavily, resolved 2026-07-15, $0.008/search pay-as-you-go.
 
 Still to decide:
 
-- Trial model and trial limits.
-- Exact subscription pricing.
 - Initial enterprise plan packaging.
 - Which backend stack to use.
 - Whether to open-source any privacy/redaction components.
+- Positioning/headline copy — the public tagline stays as-is, no change proposed. The in-product first-run copy embodying the continuous-trust-model thesis gets written as part of designing that UI surface (branch `command-center-depth-and-data-model`'s first-run moment), not decided abstractly ahead of the design.
 
 ## 24. Future-Chat Operating Procedure
 
