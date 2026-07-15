@@ -106,6 +106,30 @@ public struct PathWhitelist: Sendable {
         return folder.appendingPathComponent("\(name).\(ext)")
     }
 
+    /// Resolves a user-supplied output path, falling back to a generated default file.
+    /// If `rawPath` names an existing directory, `defaultName`/`ext` are appended inside it.
+    public func resolveOutputPath(
+        rawPath: String?,
+        defaultName: String,
+        extension ext: String,
+        fileManager: FileManager
+    ) throws -> URL {
+        if let rawPath, !rawPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
+            let expanded = (rawPath as NSString).expandingTildeInPath
+            if fileManager.fileExists(atPath: expanded) {
+                let url = try validateInsideWhitelist(rawPath)
+                let values = try url.resourceValues(forKeys: [.isDirectoryKey])
+                if values.isDirectory == true {
+                    return url.appendingPathComponent("\(defaultName).\(ext)")
+                }
+                return try validateOutputPath(rawPath)
+            }
+            return try validateOutputPath(rawPath)
+        }
+
+        return try defaultOutputFile(name: defaultName, extension: ext)
+    }
+
     private static func expandPath(_ rawPath: String) -> URL {
         let expanded = (rawPath as NSString).expandingTildeInPath
         if expanded.hasPrefix("/") {

@@ -118,21 +118,12 @@ public struct CreateLocalDraftCapabilityAdapter: CapabilityAdapter {
     }
 
     private func outputURL(for rawOutput: String?, title: String, context: CapabilityExecutionContext) throws -> URL {
-        let fileName = "draft-\(slug(title))-\(Timestamp.fileSafe(context.now()))"
-        if let rawOutput, !rawOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let expanded = (rawOutput as NSString).expandingTildeInPath
-            if context.fileManager.fileExists(atPath: expanded) {
-                let url = try context.whitelist.validateInsideWhitelist(rawOutput)
-                let values = try url.resourceValues(forKeys: [.isDirectoryKey])
-                if values.isDirectory == true {
-                    return url.appendingPathComponent("\(fileName).md")
-                }
-                return try context.whitelist.validateOutputPath(rawOutput)
-            }
-            return try context.whitelist.validateOutputPath(rawOutput)
-        }
-
-        return try context.whitelist.defaultOutputFile(name: fileName, extension: "md")
+        try context.whitelist.resolveOutputPath(
+            rawPath: rawOutput,
+            defaultName: "draft-\(slug(title))-\(Timestamp.fileSafe(context.now()))",
+            extension: "md",
+            fileManager: context.fileManager
+        )
     }
 
     private func markdown(for spec: DraftSpec) -> String {
