@@ -76,7 +76,7 @@ struct CommandCenterView: View {
                     RoundedRectangle(cornerRadius: SonnyRadius.sidebarIcon)
                         .stroke(SonnyTheme.accent.opacity(0.42), lineWidth: 1)
                     Image(systemName: "wand.and.stars")
-                        .font(.system(size: 16, weight: .medium))
+                        .font(SonnyType.icon(16, weight: .medium))
                         .foregroundStyle(SonnyTheme.accent)
                 }
                 .frame(width: 36, height: 36)
@@ -108,7 +108,7 @@ struct CommandCenterView: View {
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: destination.systemImage)
-                    .font(.system(size: 14, weight: .medium))
+                    .font(SonnyType.icon(14, weight: .medium))
                     .frame(width: 18)
                 Text(destination.title)
                     .font(SonnyType.body)
@@ -1040,7 +1040,7 @@ private struct CollectionEmptyState: View {
     var body: some View {
         VStack(spacing: 8) {
             Image(systemName: systemImage)
-                .font(.system(size: 20, weight: .regular))
+                .font(SonnyType.icon(20))
                 .foregroundStyle(SonnyTheme.muted)
             Text(title)
                 .font(SonnyType.bodyEmphasis)
@@ -1125,42 +1125,6 @@ private enum CommandCenterPalette {
     static let composerSurface = SonnyTheme.collectionSurface
     static let routineIconBackground = SonnyTheme.accent.opacity(0.18)
     static let routineIconForeground = SonnyTheme.accent
-}
-
-private struct CommandCenterPlaceholderView: View {
-    let title: String
-    let systemImage: String
-    let message: String
-
-    var body: some View {
-        VStack(alignment: .leading, spacing: 22) {
-            CommandCenterPageHeader(title: title, subtitle: "The shared product shell is ready for this section.")
-
-            VStack(alignment: .leading, spacing: 10) {
-                Image(systemName: systemImage)
-                    .font(.system(size: 24, weight: .regular))
-                    .foregroundStyle(SonnyTheme.accent)
-                Text(message)
-                    .font(SonnyType.body)
-                    .foregroundStyle(SonnyTheme.muted)
-            }
-            .padding(18)
-            .frame(maxWidth: 520, alignment: .leading)
-            .background(SonnyTheme.surfaceRaised.opacity(0.42))
-            .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
-                    .stroke(SonnyTheme.border, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
-
-            Spacer()
-        }
-        .padding(.horizontal, 28)
-        .padding(.top, 24)
-        .padding(.bottom, 28)
-        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-        .background(SonnyTheme.ink)
-    }
 }
 
 private struct CommandCenterPageHeader: View {
@@ -1267,7 +1231,7 @@ private struct SettingsFoundationView: View {
                 } label: {
                     HStack(spacing: 10) {
                         Image(systemName: section.systemImage)
-                            .font(.system(size: 13, weight: .medium))
+                            .font(SonnyType.icon(13, weight: .medium))
                             .frame(width: 18)
                         VStack(alignment: .leading, spacing: 2) {
                             Text(section.title)
@@ -1385,12 +1349,7 @@ private struct SettingsPrivacyPage: View {
                         .help("Delete local Sonny data")
                     }
 
-                    if let message = viewModel.localDataDeletionStatusMessage {
-                        Label(message, systemImage: message.hasPrefix("Deleted") ? "checkmark.circle" : "exclamationmark.triangle")
-                            .font(SonnyType.micro)
-                            .foregroundStyle(message.hasPrefix("Deleted") ? SonnyTheme.accent : SonnyTheme.warning)
-                            .fixedSize(horizontal: false, vertical: true)
-                    }
+                    LocalDataDeletionStatusMessage(message: viewModel.localDataDeletionStatusMessage)
                 }
                 .padding(.vertical, 16)
             }
@@ -1399,18 +1358,7 @@ private struct SettingsPrivacyPage: View {
         .onAppear {
             viewModel.refreshPermissions()
         }
-        .confirmationDialog(
-            "Delete Sonny Local Data?",
-            isPresented: $showDeleteLocalDataConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("Delete Local Data", role: .destructive) {
-                viewModel.deleteLocalData()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This deletes saved routines, workspaces, clipboard history, snippets, recent artifacts, Shortcut run history, task history, and clipboard settings. Generated files and API keys are not deleted.")
-        }
+        .localDataDeletionConfirmationDialog(isPresented: $showDeleteLocalDataConfirmation, viewModel: viewModel)
     }
 }
 

@@ -398,18 +398,7 @@ private struct SystemStatusPanel: View {
                 localDataDeletionControl
             }
         }
-        .confirmationDialog(
-            "Delete Sonny Local Data?",
-            isPresented: $showDeleteLocalDataConfirmation,
-            titleVisibility: .visible
-        ) {
-            Button("Delete Local Data", role: .destructive) {
-                viewModel.deleteLocalData()
-            }
-            Button("Cancel", role: .cancel) {}
-        } message: {
-            Text("This deletes saved routines, workspaces, clipboard history, snippets, recent artifacts, Shortcut run history, task history, and clipboard settings. Generated files and API keys are not deleted.")
-        }
+        .localDataDeletionConfirmationDialog(isPresented: $showDeleteLocalDataConfirmation, viewModel: viewModel)
     }
 
     private var localDataDeletionControl: some View {
@@ -443,12 +432,40 @@ private struct SystemStatusPanel: View {
                 .help("Delete local Sonny data")
             }
 
-            if let message = viewModel.localDataDeletionStatusMessage {
-                Label(message, systemImage: message.hasPrefix("Deleted") ? "checkmark.circle" : "exclamationmark.triangle")
-                    .font(SonnyType.micro)
-                    .foregroundStyle(message.hasPrefix("Deleted") ? SonnyTheme.accent : SonnyTheme.warning)
-                    .fixedSize(horizontal: false, vertical: true)
+            LocalDataDeletionStatusMessage(message: viewModel.localDataDeletionStatusMessage)
+        }
+    }
+}
+
+/// Shared between the popover's `SystemStatusPanel` and the Command Center's `SettingsPrivacyPage` —
+/// both surfaces call the same `viewModel.deleteLocalData()` action with identical copy, only the
+/// surrounding row layout differs per surface.
+struct LocalDataDeletionStatusMessage: View {
+    let message: String?
+
+    var body: some View {
+        if let message {
+            Label(message, systemImage: message.hasPrefix("Deleted") ? "checkmark.circle" : "exclamationmark.triangle")
+                .font(SonnyType.micro)
+                .foregroundStyle(message.hasPrefix("Deleted") ? SonnyTheme.accent : SonnyTheme.warning)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+}
+
+extension View {
+    func localDataDeletionConfirmationDialog(isPresented: Binding<Bool>, viewModel: AgentViewModel) -> some View {
+        confirmationDialog(
+            "Delete Sonny Local Data?",
+            isPresented: isPresented,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Local Data", role: .destructive) {
+                viewModel.deleteLocalData()
             }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This deletes saved routines, workspaces, clipboard history, snippets, recent artifacts, Shortcut run history, task history, and clipboard settings. Generated files and API keys are not deleted.")
         }
     }
 }
@@ -1299,11 +1316,10 @@ enum SonnyType {
     static let micro = inter(11)
     static let microEmphasis = inter(11, weight: .medium)
     static let avatar = inter(14, weight: .medium)
-    static let code = inter(11)
     static let panelIcon = Font.system(size: 14)
 
-    static func icon(_ size: CGFloat) -> Font {
-        .system(size: size)
+    static func icon(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        .system(size: size, weight: weight)
     }
 
     private static func inter(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
@@ -1321,11 +1337,8 @@ enum SonnyTheme {
     static let muted = Color(red: 149 / 255, green: 150 / 255, blue: 153 / 255)
     static let accent = Color(red: 92 / 255, green: 132 / 255, blue: 254 / 255)
 
-    // Compatibility aliases keep established surfaces on the same rebranded tokens.
+    // Compatibility alias keeps established surfaces on the same rebranded token.
     static let cream = text
-    static let paper = text.opacity(0.92)
-    static let bronze = accent
-    static let stone = muted
 
     static let glassShade = ink.opacity(0.88)
     static let panelTint = collectionSurface.opacity(0.88)
@@ -1344,9 +1357,7 @@ enum SonnyRadius {
     static let panelCard: CGFloat = 6
     static let workspaceCard: CGFloat = 8
     static let sidebarIcon: CGFloat = 10
-    static let window: CGFloat = 16
     static let pill: CGFloat = 20
-    static let tagPill: CGFloat = 48
 }
 
 private struct SonnyPointerCursorsEnabledKey: EnvironmentKey {
