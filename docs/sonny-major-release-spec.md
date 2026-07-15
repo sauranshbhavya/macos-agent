@@ -1361,6 +1361,7 @@ Recommended event types:
 - `observation.received`
 - `recovery.started`
 - `artifact.created`
+- `task.stalled` (added 2026-07-15, see §9.5A) — the task's loop is still active but a syntactic non-convergence pattern fired (repeated action, repeated error, or oscillation) or a step/time ceiling was hit; carries the trigger reason and the repeated tuple/state pair. Distinct from `task.failed` (gave up) and `approval.requested` (needs permission, otherwise progressing normally) — the task is paused pending user input, not ended.
 - `task.completed`
 - `task.failed`
 - `task.canceled` — carries a reason code (`user_stopped`, `permission_revoked`, `subscription_lapsed`, etc.) as of v1.2; see §13.5.
@@ -1392,8 +1393,28 @@ Requirements:
 - User can cancel.
 - User can inspect trace.
 - User can retry failed step.
-- Tasks time out safely.
+- Tasks time out safely, with an explicit stall-detection layer ahead of raw timeout, not just a bare timer — see §9.5A (added 2026-07-15).
 - Power Mode tasks require active local session, and auto-pause (never silently continue) on lock/sleep/idle (§13.1, added v1.2).
+
+### 9.5A Stall Detection And Ceilings (added 2026-07-15)
+
+Long-running tasks need a state between "still working" and "failed" for the case where the loop keeps producing actions without converging on the goal. This is a real failure mode for OS-level agents specifically — Power Mode can retry a dead UI element through a menu, then a right-click, then a keyboard shortcut, each one superficially a new attempt at the same wall — and a raw timeout only catches it after the fact, not while it's happening.
+
+**v1 approach: syntactic stall detection, not semantic.** Detect stalls by hashing the resolved capability call (capability ID plus validated params) and its observation over the task's own step history — no embeddings, no external model call. Fire `task.stalled` (§9.3) on any of:
+
+- **Repeated action:** the same (capability, params, observation) tuple recurs 3 or more times.
+- **Repeated error:** the same capability call fails with the same error 3 or more times.
+- **Oscillation:** the task's state alternates between two distinct states (A→B→A→B) across 3 or more full cycles — the direct analog of bouncing between two app states or two UI paths to the same dead end.
+
+This reuses the existing trace spine (§9.3) rather than adding new infrastructure, and is deliberately the cheap, deterministic version: it catches literal and near-literal repetition but not paraphrased stagnation, where the agent keeps trying meaningfully different-looking actions that are all still failing to make progress. That gap is real and explicitly not being closed in v1 — see "Deferred" below.
+
+**Numeric ceilings, independent of stall detection.** Every task also carries a hard step-count ceiling and wall-clock ceiling as the backstop of last resort, tier-dependent (§11): tier 3 actions inside Power Mode get a tighter ceiling than a tier 0/1 background fetch, since an unattended-looking tier-3 loop is the higher-consequence failure. Hitting a ceiling behaves like a stall, not a crash — same pause-and-ask path below, with its own distinct trigger reason.
+
+**Provisional, not locked:** the specific numbers above (repeat count of 3, oscillation cycle count of 3, and the step/time ceilings per tier) are a reasoned starting point, not validated thresholds — there is no production telemetry yet to tune them against, and Power Mode itself is unbuilt. Instrument these and revisit once Power Mode is actually being built and generating real trajectories, the same way §11.1A's escalation rules were validated against real capabilities before being trusted. Do not treat the exact counts as final.
+
+**Intervention: pause and ask, never silent auto-kill.** A `task.stalled` event pauses the task and surfaces a specific summary to the user — what was tried, what kept happening, and explicit options (keep going / try differently / stop) — never a silent retry loop and never an automatic kill. This is the same "visible, stoppable, never covert" principle already governing Power Mode (§13.1) and Emergency Stop (§13.5), applied to a failure mode neither of those sections currently covers on its own — both are reactive to an explicit user or permission event, where stall detection is the loop noticing its own non-convergence.
+
+**Deferred: semantic/embedding-based stall detection.** A sentence-encoder-based diversity monitor — embed each action/observation, flag sustained low rolling diversity — could in principle catch paraphrased stagnation that the syntactic detector misses. This is a real technique from recent agent-reliability research, evaluated so far only as a small feasibility study on code-editing agents, with no reported false-positive rate and no evaluation on GUI/OS-level action spaces. Not building it for v1: ship the syntactic detector, instrument how often it fires versus how often users report a stall it didn't catch, and only invest in a semantic layer if that gap actually shows up in production data. If revisited, prefer embedding the accessibility-tree text of each observed state over raw screenshots — vision-embedding similarity is known to collapse structurally different but visually similar screens (e.g. an email compose window before and after send) onto near-identical embeddings, which would defeat the purpose; accessibility-tree text is already captured per §12.2/§12.4 and is the more discriminating signal.
 
 ## 10. Capability Runtime
 
