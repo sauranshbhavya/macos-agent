@@ -89,7 +89,7 @@ public struct InvokeShortcutCapabilityAdapter: CapabilityAdapter {
             throw ShortcutsBridgeError.invocationFailed(spec.name, result.terminationStatus, result.output)
         }
 
-        try context.shortcutRunHistoryStore.recordSuccess(shortcutName: spec.name, at: context.now())
+        try? context.shortcutRunHistoryStore.recordSuccess(shortcutName: spec.name, at: context.now())
         if !result.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             log(.observe, result.output.trimmingCharacters(in: .whitespacesAndNewlines))
         }
