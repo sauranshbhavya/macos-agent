@@ -5,3 +5,6 @@ DerivedData/
 *.xcworkspace/
 *.xcodeproj/
 *.log
+
+# Founder-only reference doc, not part of the repo's tracked history
+docs/sonny-v1-product-overview.md
