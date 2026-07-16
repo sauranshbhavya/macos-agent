@@ -635,13 +635,13 @@ final class AgentViewModel: ObservableObject {
     }
 
     func runRoutineWidget(_ routine: StoredRoutine) {
-        command = "Run my \(routine.name) routine."
+        command = "Run my \(routine.name) routine"
         dryRun = false
         start(autoExecute: true)
     }
 
     func openWorkspaceWidget(_ workspace: StoredWorkspace) {
-        command = "Open my \(workspace.name) workspace."
+        command = "Open my \(workspace.name) workspace"
         dryRun = false
         start(autoExecute: true)
     }
@@ -1025,7 +1025,13 @@ final class AgentViewModel: ObservableObject {
             outcome: PriorTaskOutcome(status: status, summary: summary)
         )
         priorTaskContext = priorTaskContextStore.currentContext()
-        recordTaskHistoryIfTerminal(command: command, status: status, startedAt: startedAt)
+        let workspaceName = WorkspaceTaskTagging.resolvedWorkspaceName(
+            command: command,
+            plan: preparedRun.plan,
+            routineStore: routineStore,
+            workspaceStore: workspaceStore
+        )
+        recordTaskHistoryIfTerminal(command: command, status: status, startedAt: startedAt, workspaceName: workspaceName)
     }
 
     private func recordPriorTaskContext(
@@ -1039,13 +1045,20 @@ final class AgentViewModel: ObservableObject {
             outcome: PriorTaskOutcome(status: status, summary: summary)
         )
         priorTaskContext = priorTaskContextStore.currentContext()
-        recordTaskHistoryIfTerminal(command: command, status: status, startedAt: startedAt)
+        let workspaceName = WorkspaceTaskTagging.resolvedWorkspaceName(
+            command: command,
+            plan: nil,
+            routineStore: routineStore,
+            workspaceStore: workspaceStore
+        )
+        recordTaskHistoryIfTerminal(command: command, status: status, startedAt: startedAt, workspaceName: workspaceName)
     }
 
     private func recordTaskHistoryIfTerminal(
         command: String,
         status: PriorTaskOutcomeStatus,
-        startedAt: Date?
+        startedAt: Date?,
+        workspaceName: String?
     ) {
         guard [.completed, .failed, .canceled].contains(status),
               let startedAt else {
@@ -1058,7 +1071,8 @@ final class AgentViewModel: ObservableObject {
                     command: command,
                     startedAt: startedAt,
                     completedAt: Date(),
-                    outcomeStatus: status
+                    outcomeStatus: status,
+                    workspaceName: workspaceName
                 )
             )
             refreshTaskHistory()

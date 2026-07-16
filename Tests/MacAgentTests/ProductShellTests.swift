@@ -248,6 +248,7 @@ struct ProductShellTests {
         #expect(record.command == "= 1 + 1")
         #expect(record.outcomeStatus == .completed)
         #expect(record.completedAt >= record.startedAt)
+        #expect(record.workspaceName == nil)
         #expect(viewModel.taskHistoryRecords.map(\.command) == ["= 1 + 1"])
     }
 
@@ -268,6 +269,7 @@ struct ProductShellTests {
         #expect(record.command == "calc apples")
         #expect(record.outcomeStatus == .failed)
         #expect(record.completedAt >= record.startedAt)
+        #expect(record.workspaceName == nil)
         #expect(viewModel.taskHistoryRecords.map(\.command) == ["calc apples"])
         #expect(viewModel.errorMessage?.contains("Could not calculate that expression") == true)
     }
@@ -292,8 +294,117 @@ struct ProductShellTests {
         #expect(record.command == "snippet save ;history-test = Hello")
         #expect(record.outcomeStatus == .canceled)
         #expect(record.completedAt >= record.startedAt)
+        #expect(record.workspaceName == nil)
         #expect(viewModel.taskHistoryRecords.map(\.command) == ["snippet save ;history-test = Hello"])
         #expect(viewModel.finalSummary == "Approval canceled. No action was taken.")
+    }
+
+    @Test
+    func directWorkspaceDispatchTagsTheCompletedTaskRecord() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Research", apps: [], urls: []))
+        viewModel.refreshSavedItems()
+
+        // Deliberately not `viewModel.openWorkspaceWidget(_:)` — that convenience method appends a
+        // trailing period to the generated command, which defeats InstantCommandResolver's exact
+        // suffix-stripping match and falls through to the real (unconfigured-in-tests) planner, a
+        // pre-existing quirk unrelated to this checkpoint. Using the same plain command string
+        // QuickDispatchTests already proves resolves instantly avoids relying on that code path.
+        viewModel.command = "open research workspace"
+        viewModel.dryRun = false
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        let records = try fixture.taskHistoryStore.loadAll()
+        let record = try #require(records.last)
+        #expect(record.outcomeStatus == .completed)
+        #expect(record.workspaceName == "Research")
+    }
+
+    @Test
+    func routineThatOpensAWorkspaceTagsTheRecordEvenThoughTheCommandNeverMentionsIt() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Research", apps: [], urls: []))
+        let routine = StoredRoutine(
+            name: "Morning Setup",
+            steps: [
+                AgentStep(
+                    id: "open-workspace",
+                    operation: .openWorkspace,
+                    description: "Open workspace",
+                    workspaceName: "Research"
+                )
+            ]
+        )
+        try fixture.routineStore.save(routine)
+        viewModel.refreshSavedItems()
+
+        viewModel.command = "run morning setup"
+        viewModel.dryRun = false
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+        #expect(viewModel.approvalRequest != nil)
+
+        viewModel.cancelCurrentRun()
+
+        let records = try fixture.taskHistoryStore.loadAll()
+        let record = try #require(records.last)
+        #expect(record.outcomeStatus == .canceled)
+        // The command text never mentions "Research" — this can only be tagged via the
+        // routine-nested resolution reading the routine's own saved steps, not free-text matching.
+        #expect(record.workspaceName == "Research")
+    }
+
+    // MARK: - Regression coverage for a separate, pre-existing bug surfaced while testing the
+    // above (unrelated to task-to-workspace tagging itself): runRoutineWidget/openWorkspaceWidget
+    // built commands ending in a trailing period, which defeated InstantCommandResolver's exact
+    // suffix-stripping match and silently fell through to the real network planner instead of
+    // resolving instantly and locally.
+
+    @Test
+    func runRoutineWidgetCommandInstantResolvesWithoutTrailingPunctuationBreakingTheMatch() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let routine = StoredRoutine(
+            name: "Morning Setup",
+            steps: [AgentStep(id: "open", operation: .openApp, description: "", appName: "Safari")]
+        )
+        try fixture.routineStore.save(routine)
+        viewModel.refreshSavedItems()
+
+        viewModel.runRoutineWidget(routine)
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        // run_routine's default tier (2) requires approval — reaching that state, rather than a
+        // planner-missing-key failure, proves the command resolved instantly and locally, with no
+        // network call attempted.
+        #expect(viewModel.approvalRequest != nil)
+        #expect(viewModel.errorMessage == nil)
+    }
+
+    @Test
+    func openWorkspaceWidgetCommandInstantResolvesWithoutTrailingPunctuationBreakingTheMatch() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let workspace = StoredWorkspace(name: "Research", apps: [], urls: [])
+        try fixture.workspaceStore.save(workspace)
+        viewModel.refreshSavedItems()
+
+        viewModel.openWorkspaceWidget(workspace)
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        let records = try fixture.taskHistoryStore.loadAll()
+        let record = try #require(records.last)
+        // open_workspace's default tier (1) auto-runs — completing successfully, rather than a
+        // planner-missing-key failure, proves the command resolved instantly and locally.
+        #expect(record.outcomeStatus == .completed)
+        #expect(viewModel.errorMessage == nil)
     }
 
     @Test(.enabled(if: ProductShellSmokeConfiguration.isEnabled))

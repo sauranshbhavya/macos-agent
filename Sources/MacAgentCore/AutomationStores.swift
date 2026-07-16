@@ -194,7 +194,7 @@ private func normalizedName(_ rawName: String?, kind: String) throws -> String {
     return normalized(trimmed)
 }
 
-private func normalized(_ value: String) -> String {
+func normalized(_ value: String) -> String {
     value
         .trimmingCharacters(in: .whitespacesAndNewlines)
         .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
