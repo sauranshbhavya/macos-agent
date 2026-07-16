@@ -157,7 +157,7 @@ public struct WebResearchMarkdownCapabilityAdapter: CapabilityAdapter {
             plan: resolvedPlan,
             previews: previews,
             summary: summary,
-            suggestions: suggestions(for: spec)
+            suggestions: suggestions(for: spec.outputURL)
         )
     }
 
@@ -211,7 +211,7 @@ public struct WebResearchMarkdownCapabilityAdapter: CapabilityAdapter {
         log(.summarize, "Saved Markdown")
 
         let summary = "Saved \(headlines.count) Hacker News headlines to \(spec.outputURL.path)."
-        return AgentRunResult(plan: plan, previews: previews, summary: summary, suggestions: suggestions(for: spec))
+        return AgentRunResult(plan: plan, previews: previews, summary: summary, suggestions: suggestions(for: spec.outputURL))
     }
 
     private func webResearchSpec(in plan: AgentPlan, context: CapabilityExecutionContext) throws -> WebResearchSpec {
@@ -233,26 +233,12 @@ public struct WebResearchMarkdownCapabilityAdapter: CapabilityAdapter {
         let fetchStep = plan.steps.first { $0.operation == .fetchHNHeadlines }
         let count = max(fetchStep?.count ?? writeStep?.count ?? 5, 1)
 
-        let outputURL: URL
-        if let rawOutput = writeStep?.outputPath, !rawOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let expanded = (rawOutput as NSString).expandingTildeInPath
-            if context.fileManager.fileExists(atPath: expanded) {
-                let url = try context.whitelist.validateInsideWhitelist(rawOutput)
-                let values = try url.resourceValues(forKeys: [.isDirectoryKey])
-                if values.isDirectory == true {
-                    outputURL = url.appendingPathComponent("hacker-news-\(Timestamp.fileSafe(context.now())).md")
-                } else {
-                    outputURL = try context.whitelist.validateOutputPath(rawOutput)
-                }
-            } else {
-                outputURL = try context.whitelist.validateOutputPath(rawOutput)
-            }
-        } else {
-            outputURL = try context.whitelist.defaultOutputFile(
-                name: "hacker-news-\(Timestamp.fileSafe(context.now()))",
-                extension: "md"
-            )
-        }
+        let outputURL = try context.whitelist.resolveOutputPath(
+            rawPath: writeStep?.outputPath,
+            defaultName: "hacker-news-\(Timestamp.fileSafe(context.now()))",
+            extension: "md",
+            fileManager: context.fileManager
+        )
 
         return HackerNewsSpec(count: count, outputURL: outputURL)
     }
@@ -343,51 +329,25 @@ public struct WebResearchMarkdownCapabilityAdapter: CapabilityAdapter {
     }
 
     private func outputURL(for rawOutput: String?, context: CapabilityExecutionContext) throws -> URL {
-        if let rawOutput, !rawOutput.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let expanded = (rawOutput as NSString).expandingTildeInPath
-            if context.fileManager.fileExists(atPath: expanded) {
-                let url = try context.whitelist.validateInsideWhitelist(rawOutput)
-                let values = try url.resourceValues(forKeys: [.isDirectoryKey])
-                if values.isDirectory == true {
-                    return url.appendingPathComponent("web-research-\(Timestamp.fileSafe(context.now())).md")
-                }
-                return try context.whitelist.validateOutputPath(rawOutput)
-            }
-            return try context.whitelist.validateOutputPath(rawOutput)
-        }
-
-        return try context.whitelist.defaultOutputFile(
-            name: "web-research-\(Timestamp.fileSafe(context.now()))",
-            extension: "md"
+        try context.whitelist.resolveOutputPath(
+            rawPath: rawOutput,
+            defaultName: "web-research-\(Timestamp.fileSafe(context.now()))",
+            extension: "md",
+            fileManager: context.fileManager
         )
     }
 
-    private func suggestions(for spec: WebResearchSpec) -> [RunSuggestion] {
+    private func suggestions(for outputURL: URL) -> [RunSuggestion] {
         [
             RunSuggestion(
                 title: "Open Markdown",
                 kind: .openFile,
-                value: spec.outputURL.path
+                value: outputURL.path
             ),
             RunSuggestion(
                 title: "Reveal Markdown in Finder",
                 kind: .revealInFinder,
-                value: spec.outputURL.path
-            )
-        ]
-    }
-
-    private func suggestions(for spec: HackerNewsSpec) -> [RunSuggestion] {
-        [
-            RunSuggestion(
-                title: "Open Markdown",
-                kind: .openFile,
-                value: spec.outputURL.path
-            ),
-            RunSuggestion(
-                title: "Reveal Markdown in Finder",
-                kind: .revealInFinder,
-                value: spec.outputURL.path
+                value: outputURL.path
             )
         ]
     }

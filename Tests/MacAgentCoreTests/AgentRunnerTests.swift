@@ -710,6 +710,51 @@ struct AgentRunnerTests {
     }
 
     @Test
+    func saveRoutineRiskAssessmentFoldsNestedEscalations() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("small", to: root.appendingPathComponent("small.txt"))
+        try write(String(repeating: "x", count: 2048), to: root.appendingPathComponent("large.txt"))
+        let output = root.appendingPathComponent("routine-largest.zip")
+        try write("existing zip", to: output)
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        let zipArchiver = RecordingZipArchiver()
+        let runner = AgentRunner(
+            planner: StaticPlanner(plan: saveRoutinePlanWithNestedZip(name: "Archive Big Files", root: root, output: output)),
+            executor: makeExecutor(root: root, zipArchiver: zipArchiver, routineStore: routineStore)
+        )
+
+        let prepared = try await runner.prepare(command: "Teach Sonny a routine that zips the largest files")
+        let request = try runner.approvalRequest(for: prepared, logAssessment: true)
+
+        #expect(request.assessment.defaultTier == .tier2)
+        #expect(request.assessment.effectiveTier == .tier3)
+        #expect(request.requirement == .explicitApproval)
+        #expect(request.assessment.escalations.contains(
+            CapabilityRiskEscalation(
+                fromTier: .tier2,
+                toTier: .tier3,
+                reason: "Zip output already exists at \(output.path)."
+            )
+        ))
+
+        do {
+            _ = try await runner.execute(
+                prepared,
+                approvalDecision: .approved(.tier2),
+                confirmationMessage: "Stale approval"
+            )
+            Issue.record("Expected nested save-routine escalation to require explicit approval.")
+        } catch RiskApprovalError.approvalRequired(let approvalRequest) {
+            #expect(approvalRequest.assessment.effectiveTier == .tier3)
+        } catch {
+            Issue.record("Expected approvalRequired, got \(error).")
+        }
+
+        #expect(try routineStore.loadAll().isEmpty)
+    }
+
+    @Test
     func zipThenRevealChainIsRiskAssessedAndGatedAsOneUnit() async throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -958,6 +1003,22 @@ struct AgentRunnerTests {
                     description: "Save routine.",
                     routineName: name,
                     routineSteps: [openAppStep(id: "open-safari")]
+                )
+            ]
+        )
+    }
+
+    private func saveRoutinePlanWithNestedZip(name: String, root: URL, output: URL) -> AgentPlan {
+        AgentPlan(
+            summary: "Teach routine.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "save-routine",
+                    operation: .saveRoutine,
+                    description: "Save routine.",
+                    routineName: name,
+                    routineSteps: largestPlan(root: root, output: output).steps
                 )
             ]
         )

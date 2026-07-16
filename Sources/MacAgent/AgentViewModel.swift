@@ -146,10 +146,6 @@ final class AgentViewModel: ObservableObject {
         ProcessInfo.processInfo.environment["OPENAI_TRANSCRIBE_MODEL"] ?? "gpt-4o-mini-transcribe"
     }
 
-    var setupStatus: String {
-        hasAPIKey ? "Ready - \(modelName); voice - \(transcriptionModelName)" : "Missing OPENAI_API_KEY"
-    }
-
     var canSubmit: Bool {
         if isAwaitingApproval {
             return !isRunning && preparedRun != nil && runner != nil

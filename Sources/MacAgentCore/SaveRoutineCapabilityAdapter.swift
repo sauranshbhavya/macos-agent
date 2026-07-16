@@ -41,16 +41,31 @@ public struct SaveRoutineCapabilityAdapter: CapabilityAdapter {
 
     public func assessRisk(plan: AgentPlan, context: CapabilityExecutionContext) throws -> CapabilityRiskAssessment {
         let spec = try routineSaveSpec(plan, context: context)
-        let escalations = (try? context.routineStore.routine(named: spec.routine.name)) != nil
-            ? [
+        let nested = try context.assessNestedPlan(spec.routine.plan)
+        let defaultTier = highestTier(metadata.defaultRiskTier, nested.defaultTier)
+
+        var escalations = nested.escalations
+        var effectiveTier = highestTier(defaultTier, nested.effectiveTier)
+        if (try? context.routineStore.routine(named: spec.routine.name)) != nil {
+            escalations.append(
                 CapabilityRiskEscalation(
                     fromTier: metadata.defaultRiskTier,
                     toTier: .tier3,
                     reason: "Routine named \(spec.routine.name) already exists and would be replaced."
                 )
-            ]
-            : []
-        return CapabilityRiskAssessment(defaultTier: metadata.defaultRiskTier, escalations: escalations)
+            )
+            effectiveTier = highestTier(effectiveTier, .tier3)
+        }
+
+        return CapabilityRiskAssessment(
+            defaultTier: defaultTier,
+            effectiveTier: effectiveTier,
+            escalations: escalations
+        )
+    }
+
+    private func highestTier(_ first: CapabilityRiskTier, _ second: CapabilityRiskTier) -> CapabilityRiskTier {
+        first.rawValue >= second.rawValue ? first : second
     }
 
     public func execute(

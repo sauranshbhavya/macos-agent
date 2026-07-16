@@ -41,7 +41,7 @@ public struct ShortcutRunHistoryStore: @unchecked Sendable {
         if let fileURL {
             self.fileURL = fileURL
         } else {
-            self.fileURL = Self.defaultDirectory(fileManager: fileManager)
+            self.fileURL = ClipboardHistoryStore.defaultDirectory(fileManager: fileManager)
                 .appendingPathComponent("shortcuts-run-history.json")
         }
     }
@@ -232,14 +232,6 @@ public func normalizedShortcutName(_ value: String) -> String {
         .trimmingCharacters(in: .whitespacesAndNewlines)
         .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
         .lowercased()
-}
-
-private extension ShortcutRunHistoryStore {
-    static func defaultDirectory(fileManager: FileManager) -> URL {
-        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ??
-            fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent("Sonny", isDirectory: true)
-    }
 }
 
 private extension JSONEncoder {

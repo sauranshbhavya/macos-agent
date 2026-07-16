@@ -1361,6 +1361,7 @@ Recommended event types:
 - `observation.received`
 - `recovery.started`
 - `artifact.created`
+- `task.stalled` (added 2026-07-15, see §9.5A) — the task's loop is still active but a syntactic non-convergence pattern fired (repeated action, repeated error, or oscillation) or a step/time ceiling was hit; carries the trigger reason and the repeated tuple/state pair. Distinct from `task.failed` (gave up) and `approval.requested` (needs permission, otherwise progressing normally) — the task is paused pending user input, not ended.
 - `task.completed`
 - `task.failed`
 - `task.canceled` — carries a reason code (`user_stopped`, `permission_revoked`, `subscription_lapsed`, etc.) as of v1.2; see §13.5.
@@ -1392,8 +1393,28 @@ Requirements:
 - User can cancel.
 - User can inspect trace.
 - User can retry failed step.
-- Tasks time out safely.
+- Tasks time out safely, with an explicit stall-detection layer ahead of raw timeout, not just a bare timer — see §9.5A (added 2026-07-15).
 - Power Mode tasks require active local session, and auto-pause (never silently continue) on lock/sleep/idle (§13.1, added v1.2).
+
+### 9.5A Stall Detection And Ceilings (added 2026-07-15)
+
+Long-running tasks need a state between "still working" and "failed" for the case where the loop keeps producing actions without converging on the goal. This is a real failure mode for OS-level agents specifically — Power Mode can retry a dead UI element through a menu, then a right-click, then a keyboard shortcut, each one superficially a new attempt at the same wall — and a raw timeout only catches it after the fact, not while it's happening.
+
+**v1 approach: syntactic stall detection, not semantic.** Detect stalls by hashing the resolved capability call (capability ID plus validated params) and its observation over the task's own step history — no embeddings, no external model call. Fire `task.stalled` (§9.3) on any of:
+
+- **Repeated action:** the same (capability, params, observation) tuple recurs 3 or more times.
+- **Repeated error:** the same capability call fails with the same error 3 or more times.
+- **Oscillation:** the task's state alternates between two distinct states (A→B→A→B) across 3 or more full cycles — the direct analog of bouncing between two app states or two UI paths to the same dead end.
+
+This reuses the existing trace spine (§9.3) rather than adding new infrastructure, and is deliberately the cheap, deterministic version: it catches literal and near-literal repetition but not paraphrased stagnation, where the agent keeps trying meaningfully different-looking actions that are all still failing to make progress. That gap is real and explicitly not being closed in v1 — see "Deferred" below.
+
+**Numeric ceilings, independent of stall detection.** Every task also carries a hard step-count ceiling and wall-clock ceiling as the backstop of last resort, tier-dependent (§11): tier 3 actions inside Power Mode get a tighter ceiling than a tier 0/1 background fetch, since an unattended-looking tier-3 loop is the higher-consequence failure. Hitting a ceiling behaves like a stall, not a crash — same pause-and-ask path below, with its own distinct trigger reason.
+
+**Provisional, not locked:** the specific numbers above (repeat count of 3, oscillation cycle count of 3, and the step/time ceilings per tier) are a reasoned starting point, not validated thresholds — there is no production telemetry yet to tune them against, and Power Mode itself is unbuilt. Instrument these and revisit once Power Mode is actually being built and generating real trajectories, the same way §11.1A's escalation rules were validated against real capabilities before being trusted. Do not treat the exact counts as final.
+
+**Intervention: pause and ask, never silent auto-kill.** A `task.stalled` event pauses the task and surfaces a specific summary to the user — what was tried, what kept happening, and explicit options (keep going / try differently / stop) — never a silent retry loop and never an automatic kill. This is the same "visible, stoppable, never covert" principle already governing Power Mode (§13.1) and Emergency Stop (§13.5), applied to a failure mode neither of those sections currently covers on its own — both are reactive to an explicit user or permission event, where stall detection is the loop noticing its own non-convergence.
+
+**Deferred: semantic/embedding-based stall detection.** A sentence-encoder-based diversity monitor — embed each action/observation, flag sustained low rolling diversity — could in principle catch paraphrased stagnation that the syntactic detector misses. This is a real technique from recent agent-reliability research, evaluated so far only as a small feasibility study on code-editing agents, with no reported false-positive rate and no evaluation on GUI/OS-level action spaces. Not building it for v1: ship the syntactic detector, instrument how often it fires versus how often users report a stall it didn't catch, and only invest in a semantic layer if that gap actually shows up in production data. If revisited, prefer embedding the accessibility-tree text of each observed state over raw screenshots — vision-embedding similarity is known to collapse structurally different but visually similar screens (e.g. an email compose window before and after send) onto near-identical embeddings, which would defeat the purpose; accessibility-tree text is already captured per §12.2/§12.4 and is the more discriminating signal.
 
 ## 10. Capability Runtime
 
@@ -2062,12 +2083,12 @@ Requirements:
 
 Requirements:
 
-- Subscription plan.
-- Trial if chosen.
-- Paid-only Power Mode entitlement.
-- Usage metering by task/model/context size, **surfaced to the user in-task** (clarified v1.2, see §4A.9/§6.14) — a visible usage/budget indicator, not just an aggregate backend stat used for billing math the user never sees until they hit a wall.
+- Subscription plan (Pro and Max, see §23 for the resolved structure).
+- **No trial (resolved 2026-07-15, replaces the earlier "trial if chosen"):** a permanent, non-expiring free tier instead — the mid-task-lapse principle below applies to a free user's credits running out the same way it applies to a paid lapse, which a time-boxed trial cannot honor (a countdown that cuts off mid-task is exactly the surprise this section exists to prevent).
+- Power Mode entitlement is gated to the Max tier specifically, not "paid" generally (resolved 2026-07-15) — Pro does not include it.
+- Usage metering by task/model/context size, **surfaced to the user in-task** (clarified v1.2, see §4A.9/§6.14) — a visible usage/budget indicator, not just an aggregate backend stat used for billing math the user never sees until they hit a wall. Implemented as a credit pool per tier (§23), weighted by real cost per task type, not a flat per-task count.
 - Billing portal.
-- Grace period handling. **Mid-task lapse behavior (clarified v1.2):** never interrupt a single atomic action in progress (e.g. between a click and its observation) — finish the current step, then block the next one with a clear message. Same graceful-halt shape as the permission-revocation path in §13.5, not a hard yank that could leave an app mid-form or mid-edit.
+- Grace period handling. **Mid-task lapse behavior (clarified v1.2):** never interrupt a single atomic action in progress (e.g. between a click and its observation) — finish the current step, then block the next one with a clear message. Same graceful-halt shape as the permission-revocation path in §13.5, not a hard yank that could leave an app mid-form or mid-edit. **Auto top-up (resolved 2026-07-15)** is the mechanism that serves this principle for Pro/Max: a user running low mid-task tops up rather than hitting a wall.
 
 ### 16.5 Model Provider Proxy
 
@@ -2859,14 +2880,15 @@ Resolved:
 - Whether to support BYOK: no, skipped for v1 (§7.9, resolved v1.2).
 - Which apps make the first Power Mode app list: all 8 as originally specced — Safari, Chrome, Finder, Notes, Calendar, Mail, Slack, VS Code — sequenced last in the build order but not reduced in scope (§13.7, §21.0A, resolved v1.2).
 - Resourcing: solo builder with heavy AI leverage, full spec scope, sequenced to make that realistic rather than reducing scope (§5.4, resolved v1.2).
+- Business model and subscription pricing (§16.4, resolved 2026-07-15 during `feature/v1-strategy-replan`, supersedes the earlier "trial model" framing — a trial was considered and rejected, not just left undecided): **Free** ($0/mo, 50 credits/mo, `gpt-5.4-mini`, no Power Mode) — **Pro** ($20/mo, 350 credits/mo, `gpt-5.5`, no Power Mode) — **Max** ($100/mo, 2,500 credits/mo, choice of `gpt-5.5` or Claude Sonnet 5, the only tier with Power Mode). Voice/dictation and instant utilities are uncapped on every tier. 1 credit = one standard planner-routed command; web-research tasks cost 3 credits, reflecting the real cost of the resolved web-search provider (Tavily, see §4A.2). Full credit-weighting rationale and cost model live in `docs/sonny-v1-implementation-changelog.md`'s branch 13 note, not duplicated here. **Not fully validated:** Max's price is directionally set (matches real comparables' pricing shape) but not cost-confirmed until Power Mode's own per-action cost is researched — that hasn't happened yet, Power Mode is unbuilt. Do not treat $100 as final without revisiting this once Power Mode has a real cost model.
+- Web-search provider (§4A.2's `WebSearchProviding` seam, unconfigured since the branch that built it): Tavily, resolved 2026-07-15, $0.008/search pay-as-you-go.
 
 Still to decide:
 
-- Trial model and trial limits.
-- Exact subscription pricing.
 - Initial enterprise plan packaging.
 - Which backend stack to use.
 - Whether to open-source any privacy/redaction components.
+- Positioning/headline copy — the public tagline stays as-is, no change proposed. The in-product first-run copy embodying the continuous-trust-model thesis gets written as part of designing that UI surface (branch `command-center-depth-and-data-model`'s first-run moment), not decided abstractly ahead of the design.
 
 ## 24. Future-Chat Operating Procedure
 

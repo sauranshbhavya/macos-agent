@@ -37,7 +37,7 @@ public struct RecentArtifactStore: @unchecked Sendable {
         if let fileURL {
             self.fileURL = fileURL
         } else {
-            self.fileURL = Self.defaultDirectory(fileManager: fileManager)
+            self.fileURL = ClipboardHistoryStore.defaultDirectory(fileManager: fileManager)
                 .appendingPathComponent("recent-artifacts.json")
         }
     }
@@ -175,14 +175,6 @@ public struct RecentArtifactStore: @unchecked Sendable {
         )
         let data = try encryption.encode(artifacts, encoder: .recentArtifactPrettySorted)
         try data.write(to: fileURL, options: .atomic)
-    }
-}
-
-private extension RecentArtifactStore {
-    static func defaultDirectory(fileManager: FileManager) -> URL {
-        let base = fileManager.urls(for: .applicationSupportDirectory, in: .userDomainMask).first ??
-            fileManager.homeDirectoryForCurrentUser.appendingPathComponent("Library/Application Support")
-        return base.appendingPathComponent("Sonny", isDirectory: true)
     }
 }
 
