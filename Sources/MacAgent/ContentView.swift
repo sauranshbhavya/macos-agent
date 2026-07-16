@@ -1,9 +1,15 @@
+import AppKit
 import MacAgentCore
 import SwiftUI
 
 struct ContentView: View {
     @ObservedObject var viewModel: AgentViewModel
-    @FocusState private var commandFocused: Bool
+    let openCommandCenter: () -> Void
+
+    init(viewModel: AgentViewModel, openCommandCenter: @escaping () -> Void = {}) {
+        self.viewModel = viewModel
+        self.openCommandCenter = openCommandCenter
+    }
 
     var body: some View {
         ZStack {
@@ -22,30 +28,12 @@ struct ContentView: View {
 
             VStack(alignment: .leading, spacing: 14) {
                 header
-                commandInput
-                controls
+                AgentCommandComposerView(viewModel: viewModel, autoFocus: true)
                 if viewModel.showClipboardHistoryNotice {
                     ClipboardHistoryNotice(viewModel: viewModel)
                 }
                 SavedItemsPanel(viewModel: viewModel)
-
-                if viewModel.isPreparingVoiceRecording || viewModel.isRecordingVoice || viewModel.isTranscribingVoice {
-                    VoiceStatusPanel(viewModel: viewModel)
-                }
-
-                if viewModel.isRunning {
-                    BusyPanel(logStore: viewModel.logStore)
-                }
-
-                if let error = viewModel.errorMessage {
-                    ErrorBanner(message: error)
-                }
-
-                if let question = viewModel.clarificationQuestion {
-                    ClarificationPanel(viewModel: viewModel, question: question)
-                }
-
-                RunDetailsView(viewModel: viewModel, logStore: viewModel.logStore)
+                AgentTaskActivityView(viewModel: viewModel, showsStartupWhenEmpty: true)
             }
             .padding(20)
 
@@ -63,10 +51,11 @@ struct ContentView: View {
         .background(.clear)
         .foregroundStyle(SonnyTheme.text)
         .tint(SonnyTheme.accent)
+        .environment(\.sonnyPointerCursorsEnabled, viewModel.usePointerCursors)
         .onAppear {
-            commandFocused = true
             viewModel.refreshPermissions()
             viewModel.refreshSavedItems()
+            viewModel.refreshTaskHistory()
             viewModel.refreshClipboardHistoryNotice()
         }
     }
@@ -85,6 +74,12 @@ struct ContentView: View {
                     .foregroundStyle(SonnyTheme.muted)
             }
             Spacer()
+            Button(action: openCommandCenter) {
+                Label("Open Sonny", systemImage: "rectangle.split.2x1")
+            }
+            .buttonStyle(SonnyButtonStyle(tone: .secondary))
+            .help("Open Sonny in a window")
+
             Button {
                 viewModel.togglePermissionPanel()
             } label: {
@@ -102,90 +97,119 @@ struct ContentView: View {
             .help("Quit")
         }
     }
+}
 
-    private var commandInput: some View {
-        VStack(alignment: .leading, spacing: 8) {
-            Text("Ask Sonny")
-                .font(SonnyType.eyebrow)
-                .foregroundStyle(SonnyTheme.muted)
-            TextField("Open Safari, zip files, convert docs...", text: $viewModel.command)
-                .textFieldStyle(.plain)
-                .font(SonnyType.command)
-                .padding(.horizontal, 12)
-                .padding(.vertical, 11)
-                .background(SonnyTheme.input)
-                .overlay(
-                    RoundedRectangle(cornerRadius: 8)
-                        .stroke(commandFocused ? SonnyTheme.accent.opacity(0.72) : SonnyTheme.border, lineWidth: 1)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: 8))
-                .disabled(viewModel.isRunning)
-                .focused($commandFocused)
-                .submitLabel(.go)
-                .onSubmit {
-                    viewModel.start()
-                }
+struct AgentCommandComposerView: View {
+    @ObservedObject var viewModel: AgentViewModel
+    let autoFocus: Bool
+    let focusRequest: Int
+    @FocusState private var commandFocused: Bool
 
-            if let recentTask = viewModel.recentTaskAffordanceText {
-                RecentTaskAffordance(text: recentTask)
-            }
-
-            if !viewModel.voiceTranscript.isEmpty {
-                Label("Voice command received", systemImage: "waveform")
-                    .font(SonnyType.caption)
-                    .foregroundStyle(SonnyTheme.muted)
-            }
-        }
+    init(viewModel: AgentViewModel, autoFocus: Bool = false, focusRequest: Int = 0) {
+        self.viewModel = viewModel
+        self.autoFocus = autoFocus
+        self.focusRequest = focusRequest
     }
 
-    private var controls: some View {
-        HStack(spacing: 8) {
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            VStack(alignment: .leading, spacing: 8) {
+                Text("Ask Sonny")
+                    .font(SonnyType.eyebrow)
+                    .foregroundStyle(SonnyTheme.muted)
+                TextField("Open Safari, zip files, convert docs...", text: $viewModel.command)
+                    .textFieldStyle(.plain)
+                    .font(SonnyType.command)
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 11)
+                    .background(SonnyTheme.input)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8)
+                            .stroke(
+                                commandFocused ? SonnyTheme.accent.opacity(0.72) : SonnyTheme.border,
+                                lineWidth: 1
+                            )
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 8))
+                    .disabled(viewModel.isRunning)
+                    .focused($commandFocused)
+                    .submitLabel(.go)
+                    .onSubmit {
+                        viewModel.start()
+                    }
+
+                if let recentTask = viewModel.recentTaskAffordanceText {
+                    RecentTaskAffordance(text: recentTask)
+                }
+
+                if !viewModel.voiceTranscript.isEmpty {
+                    Label("Voice command received", systemImage: "waveform")
+                        .font(SonnyType.caption)
+                        .foregroundStyle(SonnyTheme.muted)
+                }
+            }
+
             HStack(spacing: 8) {
-                DryRunToggle(isOn: $viewModel.dryRun)
-                    .disabled(viewModel.isRunning || viewModel.isAwaitingApproval)
+                HStack(spacing: 8) {
+                    DryRunToggle(isOn: $viewModel.dryRun)
+                        .disabled(viewModel.isRunning || viewModel.isAwaitingApproval)
+
+                    Button {
+                        viewModel.toggleVoiceRecording()
+                    } label: {
+                        Label(viewModel.voiceButtonTitle, systemImage: viewModel.voiceButtonIcon)
+                    }
+                    .disabled(!viewModel.canUseVoice && !viewModel.isRecordingVoice)
+                    .buttonStyle(
+                        SonnyButtonStyle(
+                            tone: viewModel.isRecordingVoice ? .danger : .secondary,
+                            width: 86
+                        )
+                    )
+                    .help("Click to speak, or hold Control-Option-Space")
+
+                    HotKeyHint(title: viewModel.voiceHotKeyReady ? "Ctrl-Opt-Space" : "Unavailable")
+                }
+                .frame(width: 320, alignment: .leading)
+
+                Spacer(minLength: 12)
+
+                if viewModel.canCancel {
+                    Button {
+                        viewModel.cancelCurrentRun()
+                    } label: {
+                        Label("Cancel", systemImage: "xmark.circle")
+                    }
+                    .buttonStyle(SonnyButtonStyle(tone: .secondary, width: 86))
+                } else {
+                    Button {
+                        viewModel.reset()
+                    } label: {
+                        Label("Reset", systemImage: "arrow.counterclockwise")
+                    }
+                    .disabled(viewModel.isRunning)
+                    .buttonStyle(SonnyButtonStyle(tone: .secondary, width: 80))
+                }
 
                 Button {
-                    viewModel.toggleVoiceRecording()
+                    viewModel.start()
                 } label: {
-                    Label(viewModel.voiceButtonTitle, systemImage: viewModel.voiceButtonIcon)
+                    Label(viewModel.primaryButtonTitle, systemImage: viewModel.primaryButtonIcon)
                 }
-                .disabled(!viewModel.canUseVoice && !viewModel.isRecordingVoice)
-                .buttonStyle(SonnyButtonStyle(tone: viewModel.isRecordingVoice ? .danger : .secondary, width: 86))
-                .help("Click to speak, or hold Control-Option-Space")
-
-                HotKeyHint(title: viewModel.voiceHotKeyReady ? "Ctrl-Opt-Space" : "Unavailable")
+                .keyboardShortcut(.return, modifiers: [])
+                .disabled(!viewModel.canSubmit)
+                .buttonStyle(SonnyButtonStyle(tone: .primary, width: 92))
             }
-            .frame(width: 320, alignment: .leading)
-
-            Spacer(minLength: 12)
-
-            if viewModel.canCancel {
-                Button {
-                    viewModel.cancelCurrentRun()
-                } label: {
-                    Label("Cancel", systemImage: "xmark.circle")
-                }
-                .buttonStyle(SonnyButtonStyle(tone: .secondary, width: 86))
-            } else {
-                Button {
-                    viewModel.reset()
-                } label: {
-                    Label("Reset", systemImage: "arrow.counterclockwise")
-                }
-                .disabled(viewModel.isRunning)
-                .buttonStyle(SonnyButtonStyle(tone: .secondary, width: 80))
-            }
-
-            Button {
-                viewModel.start()
-            } label: {
-                Label(viewModel.primaryButtonTitle, systemImage: viewModel.primaryButtonIcon)
-            }
-            .keyboardShortcut(.return, modifiers: [])
-            .disabled(!viewModel.canSubmit)
-            .buttonStyle(SonnyButtonStyle(tone: .primary, width: 92))
+            .frame(maxWidth: .infinity)
         }
-        .frame(maxWidth: .infinity)
+        .onAppear {
+            if autoFocus {
+                commandFocused = true
+            }
+        }
+        .onChange(of: focusRequest) { _, _ in
+            commandFocused = true
+        }
     }
 }
 
@@ -384,7 +408,7 @@ private struct SystemStatusPanel: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This deletes saved routines, workspaces, clipboard history, snippets, recent artifacts, Shortcut run history, and clipboard settings. Generated files and API keys are not deleted.")
+            Text("This deletes saved routines, workspaces, clipboard history, snippets, recent artifacts, Shortcut run history, task history, and clipboard settings. Generated files and API keys are not deleted.")
         }
     }
 
@@ -400,7 +424,7 @@ private struct SystemStatusPanel: View {
                     Text("Local data")
                         .font(SonnyType.caption)
                         .foregroundStyle(SonnyTheme.text)
-                    Text("Saved routines, workspaces, clipboard history, snippets, recent artifacts, Shortcut run history, and clipboard settings.")
+                    Text("Saved routines, workspaces, clipboard history, snippets, recent artifacts, Shortcut run history, task history, and clipboard settings.")
                         .font(SonnyType.micro)
                         .foregroundStyle(SonnyTheme.muted)
                         .lineSpacing(1)
@@ -429,7 +453,7 @@ private struct SystemStatusPanel: View {
     }
 }
 
-private struct PermissionReadinessRows: View {
+struct PermissionReadinessRows: View {
     let items: [PermissionReadinessItem]
 
     var body: some View {
@@ -539,7 +563,7 @@ private struct SavedItemsPanel: View {
                         SavedItem(
                             title: routine.name,
                             subtitle: "\(routine.steps.count) step\(routine.steps.count == 1 ? "" : "s")",
-                            details: routine.steps.prefix(4).map(routineStepLabel),
+                            details: routine.steps.prefix(4).map(AgentActivityPresentation.operationTitle),
                             actionTitle: "Run",
                             actionIcon: "play",
                             action: { viewModel.runRoutineWidget(routine) }
@@ -565,71 +589,6 @@ private struct SavedItemsPanel: View {
                     }
                 )
             }
-        }
-    }
-
-    private func routineStepLabel(_ step: AgentStep) -> String {
-        switch step.operation {
-        case .openApp:
-            return "Open \(step.appName ?? "app")"
-        case .openAppSearchURL:
-            return "Open search"
-        case .openURL:
-            return "Open \(step.targetURL ?? "URL")"
-        case .openGeneratedArtifact:
-            return "Open artifact"
-        case .createLocalDraft:
-            return "Create draft"
-        case .calculateUtility:
-            return "Calculate"
-        case .lookupClipboardHistory:
-            return "Clipboard history"
-        case .saveSnippet:
-            return "Save snippet"
-        case .expandSnippet:
-            return "Expand snippet"
-        case .switchRunningApp:
-            return "Switch to \(step.appName ?? "app")"
-        case .lookupRecentArtifacts:
-            return "Recent artifacts"
-        case .invokeShortcut:
-            return "Run \(step.shortcutName ?? "Shortcut")"
-        case .playMedia:
-            return "Open \(step.mediaTitle ?? "music")"
-        case .scanSelectLargestFiles:
-            return "Find largest files"
-        case .createZip:
-            return "Create zip"
-        case .scanDocx:
-            return "Find DOCX files"
-        case .convertDocxToPDF:
-            return "Convert DOCX to PDF"
-        case .openHackerNews:
-            return "Open Hacker News"
-        case .fetchHNHeadlines:
-            return "Fetch HN headlines"
-        case .writeMarkdown:
-            return "Write Markdown"
-        case .webToMarkdown:
-            return "Web to Markdown"
-        case .getFinderSelection:
-            return "Read Finder selection"
-        case .revealInFinder:
-            return "Reveal in Finder"
-        case .showPermissionReadiness:
-            return "Check status"
-        case .saveRoutine:
-            return "Save routine"
-        case .runRoutine:
-            return "Run routine"
-        case .createWorkspace:
-            return "Create workspace"
-        case .openWorkspace:
-            return "Open workspace"
-        case .clarify:
-            return "Ask clarification"
-        case .unsupported:
-            return "Unsupported step"
         }
     }
 
@@ -706,9 +665,41 @@ private struct SavedColumn: View {
     }
 }
 
+struct AgentTaskActivityView: View {
+    @ObservedObject var viewModel: AgentViewModel
+    let showsStartupWhenEmpty: Bool
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            if viewModel.isPreparingVoiceRecording || viewModel.isRecordingVoice || viewModel.isTranscribingVoice {
+                VoiceStatusPanel(viewModel: viewModel)
+            }
+
+            if viewModel.isRunning {
+                BusyPanel(logStore: viewModel.logStore)
+            }
+
+            if let error = viewModel.errorMessage {
+                ErrorBanner(message: error)
+            }
+
+            if let question = viewModel.clarificationQuestion {
+                ClarificationPanel(viewModel: viewModel, question: question)
+            }
+
+            RunDetailsView(
+                viewModel: viewModel,
+                logStore: viewModel.logStore,
+                showsStartupWhenEmpty: showsStartupWhenEmpty
+            )
+        }
+    }
+}
+
 private struct RunDetailsView: View {
     @ObservedObject var viewModel: AgentViewModel
     @ObservedObject var logStore: AgentLogStore
+    let showsStartupWhenEmpty: Bool
 
     var body: some View {
         ScrollViewReader { proxy in
@@ -726,10 +717,16 @@ private struct RunDetailsView: View {
                         ApprovalPanel(request: approvalRequest)
                     }
 
-                    if logStore.events.isEmpty && viewModel.plan == nil && viewModel.previews.isEmpty && viewModel.finalSummary.isEmpty {
+                    if showsStartupWhenEmpty
+                        && logStore.events.isEmpty
+                        && viewModel.plan == nil
+                        && viewModel.previews.isEmpty
+                        && viewModel.finalSummary.isEmpty {
                         StartupPanel()
                     } else {
-                        LogPanel(logStore: logStore)
+                        if !logStore.events.isEmpty {
+                            LogPanel(logStore: logStore)
+                        }
                     }
 
                     if shouldShowUsageSummary {
@@ -790,17 +787,19 @@ private struct PlanPanel: View {
                     .lineSpacing(2)
 
                 ForEach(plan.steps) { step in
+                    let status = stepStatuses[step.id] ?? .pending
                     HStack(alignment: .top, spacing: 8) {
-                        StepStatusIcon(status: stepStatuses[step.id] ?? .pending)
-                        Text(step.operation.rawValue)
-                            .font(SonnyType.code)
-                            .foregroundStyle(SonnyTheme.muted)
-                            .frame(width: 140, alignment: .leading)
-                        Text(step.description)
-                            .font(SonnyType.caption)
-                            .foregroundStyle(SonnyTheme.text.opacity(0.9))
-                            .lineSpacing(1)
-                            .fixedSize(horizontal: false, vertical: true)
+                        StepStatusIcon(status: status)
+                        VStack(alignment: .leading, spacing: 3) {
+                            Text(AgentActivityPresentation.planStepTitle(step))
+                                .font(SonnyType.caption)
+                                .foregroundStyle(SonnyTheme.text.opacity(0.9))
+                                .lineSpacing(1)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Text(AgentActivityPresentation.statusTitle(status))
+                                .font(SonnyType.micro)
+                                .foregroundStyle(SonnyTheme.muted)
+                        }
                     }
                 }
             }
@@ -816,7 +815,7 @@ private struct StepStatusIcon: View {
             .font(SonnyType.caption)
             .foregroundStyle(color)
             .frame(width: 16)
-            .help(status.rawValue)
+            .help(AgentActivityPresentation.statusTitle(status))
     }
 
     private var icon: String {
@@ -872,7 +871,10 @@ private struct PreviewPanel: View {
                         }
 
                         ForEach(preview.sideEffects, id: \.self) { sideEffect in
-                            Label(sideEffect, systemImage: "exclamationmark.triangle")
+                            Label(
+                                AgentActivityPresentation.previewSideEffect(sideEffect),
+                                systemImage: "exclamationmark.triangle"
+                            )
                                 .font(SonnyType.caption)
                                 .foregroundStyle(SonnyTheme.warning)
                                 .lineSpacing(1)
@@ -916,20 +918,27 @@ private struct LogPanel: View {
     @ObservedObject var logStore: AgentLogStore
 
     var body: some View {
-        Panel(title: "Log", systemImage: "waveform.path.ecg") {
-            VStack(alignment: .leading, spacing: 7) {
+        Panel(title: "Activity", systemImage: "waveform.path.ecg") {
+            VStack(alignment: .leading, spacing: 10) {
                 ForEach(logStore.events) { event in
-                    HStack(alignment: .top, spacing: 8) {
-                        Text(event.phase.rawValue)
-                            .font(SonnyType.code)
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: AgentActivityPresentation.eventIcon(event.phase))
+                            .font(SonnyType.icon(12))
                             .foregroundStyle(phaseColor(event.phase))
-                            .frame(width: 74, alignment: .leading)
-                        Text(event.message)
-                            .font(SonnyType.caption)
-                            .foregroundStyle(SonnyTheme.text.opacity(0.88))
-                            .lineSpacing(1)
-                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(width: 16, alignment: .center)
+                            .padding(.top, 2)
+                        VStack(alignment: .leading, spacing: 2) {
+                            Text(AgentActivityPresentation.eventTitle(event))
+                                .font(SonnyType.micro)
+                                .foregroundStyle(phaseColor(event.phase))
+                            Text(AgentActivityPresentation.eventMessage(event))
+                                .font(SonnyType.caption)
+                                .foregroundStyle(SonnyTheme.text.opacity(0.88))
+                                .lineSpacing(1)
+                                .fixedSize(horizontal: false, vertical: true)
+                        }
                     }
+                    .accessibilityElement(children: .combine)
                 }
             }
         }
@@ -1275,47 +1284,124 @@ private struct PanelHeader: View {
     }
 }
 
-private enum SonnyType {
-    static let brand = Font.custom("InstrumentSerif-Regular", size: 42)
-    static let hero = Font.custom("InstrumentSerif-Regular", size: 28)
-    static let panelTitle = Font.custom("InstrumentSerif-Regular", size: 23)
-    static let tagline = Font.custom("GolosText-Regular", size: 12)
-    static let eyebrow = Font.custom("GolosText-Regular", size: 11)
-    static let command = Font.custom("GolosText-Regular", size: 15)
-    static let body = Font.custom("GolosText-Regular", size: 13)
-    static let bodyEmphasis = Font.custom("GolosText-Regular", size: 13)
-    static let itemTitle = Font.custom("GolosText-Regular", size: 12)
-    static let caption = Font.custom("GolosText-Regular", size: 12)
-    static let micro = Font.custom("GolosText-Regular", size: 11)
-    static let code = Font.custom("GolosText-Regular", size: 11)
+enum SonnyType {
+    static let brand = inter(42, weight: .semibold)
+    static let hero = inter(28, weight: .semibold)
+    static let panelTitle = inter(23, weight: .semibold)
+    static let heroStat = inter(22, weight: .medium)
+    static let tagline = inter(12)
+    static let eyebrow = inter(11, weight: .medium)
+    static let command = inter(15)
+    static let body = inter(13)
+    static let bodyEmphasis = inter(13, weight: .medium)
+    static let itemTitle = inter(12, weight: .medium)
+    static let caption = inter(12)
+    static let micro = inter(11)
+    static let microEmphasis = inter(11, weight: .medium)
+    static let avatar = inter(14, weight: .medium)
+    static let code = inter(11)
     static let panelIcon = Font.system(size: 14)
 
     static func icon(_ size: CGFloat) -> Font {
         .system(size: size)
     }
+
+    private static func inter(_ size: CGFloat, weight: Font.Weight = .regular) -> Font {
+        Font.custom("Inter", size: size).weight(weight)
+    }
 }
 
-private enum SonnyTheme {
-    static let ink = Color(red: 0.118, green: 0.110, blue: 0.110)
-    static let cream = Color(red: 1.000, green: 0.996, blue: 0.988)
-    static let paper = Color(red: 0.922, green: 0.914, blue: 0.886)
-    static let bronze = Color(red: 0.663, green: 0.561, blue: 0.439)
-    static let stone = Color(red: 0.639, green: 0.627, blue: 0.604)
+enum SonnyTheme {
+    static let ink = Color(red: 9 / 255, green: 9 / 255, blue: 9 / 255)
+    static let collectionSurface = Color(red: 15 / 255, green: 16 / 255, blue: 17 / 255)
+    static let surfaceRaised = Color(red: 22 / 255, green: 23 / 255, blue: 26 / 255)
+    static let border = Color(red: 37 / 255, green: 38 / 255, blue: 43 / 255)
+    static let cardBorder = Color(red: 26 / 255, green: 27 / 255, blue: 32 / 255)
+    static let text = Color(red: 1, green: 1, blue: 1)
+    static let muted = Color(red: 149 / 255, green: 150 / 255, blue: 153 / 255)
+    static let accent = Color(red: 92 / 255, green: 132 / 255, blue: 254 / 255)
 
-    static let glassShade = ink.opacity(0.68)
-    static let panelTint = ink.opacity(0.58)
-    static let surfaceRaised = Color(red: 0.224, green: 0.216, blue: 0.216).opacity(0.74)
-    static let input = Color(red: 0.150, green: 0.140, blue: 0.134).opacity(0.76)
-    static let border = cream.opacity(0.13)
-    static let text = cream
-    static let muted = stone
-    static let accent = bronze
-    static let warning = Color(red: 0.988, green: 0.706, blue: 0.000)
+    // Compatibility aliases keep established surfaces on the same rebranded tokens.
+    static let cream = text
+    static let paper = text.opacity(0.92)
+    static let bronze = accent
+    static let stone = muted
+
+    static let glassShade = ink.opacity(0.88)
+    static let panelTint = collectionSurface.opacity(0.88)
+    static let input = collectionSurface
+    static let warning = Color(red: 242 / 255, green: 190 / 255, blue: 0 / 255)
+    static let success = Color(red: 63 / 255, green: 185 / 255, blue: 80 / 255)
+    static let chartBarMuted = Color(red: 36 / 255, green: 46 / 255, blue: 82 / 255)
     static let danger = Color(red: 0.973, green: 0.169, blue: 0.376)
-    static let info = paper
+    static let info = text.opacity(0.92)
 }
 
-private extension View {
+enum SonnyRadius {
+    static let container: CGFloat = 4
+    static let themeSwatch: CGFloat = 5
+    static let routineIcon: CGFloat = 6
+    static let panelCard: CGFloat = 6
+    static let workspaceCard: CGFloat = 8
+    static let sidebarIcon: CGFloat = 10
+    static let window: CGFloat = 16
+    static let pill: CGFloat = 20
+    static let tagPill: CGFloat = 48
+}
+
+private struct SonnyPointerCursorsEnabledKey: EnvironmentKey {
+    static let defaultValue = true
+}
+
+extension EnvironmentValues {
+    var sonnyPointerCursorsEnabled: Bool {
+        get { self[SonnyPointerCursorsEnabledKey.self] }
+        set { self[SonnyPointerCursorsEnabledKey.self] = newValue }
+    }
+}
+
+private struct SonnyPointerCursorModifier: ViewModifier {
+    @Environment(\.sonnyPointerCursorsEnabled) private var isEnabled
+    @Environment(\.isEnabled) private var isControlEnabled
+    @State private var didPushCursor = false
+
+    func body(content: Content) -> some View {
+        content
+            .onHover { isHovering in
+                if isEnabled, isControlEnabled, isHovering, !didPushCursor {
+                    NSCursor.pointingHand.push()
+                    didPushCursor = true
+                } else if didPushCursor, (!isHovering || !isEnabled || !isControlEnabled) {
+                    NSCursor.pop()
+                    didPushCursor = false
+                }
+            }
+            .onChange(of: isEnabled) { _, newValue in
+                if !newValue, didPushCursor {
+                    NSCursor.pop()
+                    didPushCursor = false
+                }
+            }
+            .onChange(of: isControlEnabled) { _, newValue in
+                if !newValue, didPushCursor {
+                    NSCursor.pop()
+                    didPushCursor = false
+                }
+            }
+            .onDisappear {
+                if didPushCursor {
+                    NSCursor.pop()
+                    didPushCursor = false
+                }
+            }
+    }
+}
+
+extension View {
+    func sonnyPointerCursor() -> some View {
+        modifier(SonnyPointerCursorModifier())
+    }
+
     func glassPanel(cornerRadius: CGFloat) -> some View {
         background(
             RoundedRectangle(cornerRadius: cornerRadius)
@@ -1333,7 +1419,7 @@ private extension View {
     }
 }
 
-private struct SonnyButtonStyle: ButtonStyle {
+struct SonnyButtonStyle: ButtonStyle {
     let tone: Tone
     var width: CGFloat? = nil
 
@@ -1358,6 +1444,7 @@ private struct SonnyButtonStyle: ButtonStyle {
                         .stroke(border, lineWidth: 1)
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+                .sonnyPointerCursor()
         } else {
             label(configuration)
                 .padding(.horizontal, 12)
@@ -1368,6 +1455,7 @@ private struct SonnyButtonStyle: ButtonStyle {
                         .stroke(border, lineWidth: 1)
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 8))
+                .sonnyPointerCursor()
         }
     }
 
@@ -1422,6 +1510,7 @@ private struct SonnyIconButtonStyle: ButtonStyle {
             .frame(width: 30, height: 30)
             .background(configuration.isPressed ? SonnyTheme.surfaceRaised : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 8))
+            .sonnyPointerCursor()
     }
 }
 
@@ -1438,5 +1527,6 @@ private struct SonnyMiniButtonStyle: ButtonStyle {
                     .stroke(SonnyTheme.border, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: 7))
+            .sonnyPointerCursor()
     }
 }

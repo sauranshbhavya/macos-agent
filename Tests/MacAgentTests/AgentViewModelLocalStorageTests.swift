@@ -10,13 +10,15 @@ struct AgentViewModelLocalStorageTests {
     func missingLocalStoreFilesRemainSilentFirstRunState() throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        let viewModel = makeViewModel(root: root, encryption: testEncryption(byte: 0x42))
+        let viewModel = try makeViewModel(root: root, encryption: testEncryption(byte: 0x42))
 
         viewModel.refreshSavedItems()
+        viewModel.refreshTaskHistory()
         viewModel.refreshClipboardHistoryNotice()
 
         #expect(viewModel.savedRoutines.isEmpty)
         #expect(viewModel.savedWorkspaces.isEmpty)
+        #expect(viewModel.taskHistoryRecords.isEmpty)
         #expect(viewModel.clipboardHistoryEnabled)
         #expect(viewModel.showClipboardHistoryNotice)
         #expect(viewModel.errorMessage == nil)
@@ -44,7 +46,7 @@ struct AgentViewModelLocalStorageTests {
         try WorkspaceStore(fileURL: workspaceURL, encryption: testEncryption(byte: 0x42)).save(
             StoredWorkspace(name: "Encrypted Research", apps: ["Safari"], urls: ["https://example.com"])
         )
-        let viewModel = makeViewModel(root: root, encryption: testEncryption(byte: 0x99))
+        let viewModel = try makeViewModel(root: root, encryption: testEncryption(byte: 0x99))
 
         viewModel.refreshSavedItems()
 
@@ -64,7 +66,7 @@ struct AgentViewModelLocalStorageTests {
         let settingsURL = root.appendingPathComponent("clipboard-history-settings.json")
         try ClipboardHistorySettingsStore(fileURL: settingsURL, encryption: testEncryption(byte: 0x42))
             .save(ClipboardHistorySettings(noticeDismissed: true, isEnabled: true))
-        let viewModel = makeViewModel(root: root, encryption: testEncryption(byte: 0x99))
+        let viewModel = try makeViewModel(root: root, encryption: testEncryption(byte: 0x99))
 
         viewModel.refreshClipboardHistoryNotice()
 
@@ -73,11 +75,38 @@ struct AgentViewModelLocalStorageTests {
         #expect(message.contains("clipboard history settings"))
         #expect(!viewModel.showClipboardHistoryNotice)
     }
+
+    @Test
+    func taskHistoryDecryptFailureSurfacesVisibleErrorInsteadOfSilentEmptyState() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let taskHistoryURL = root.appendingPathComponent("task-history.json")
+        try TaskHistoryStore(fileURL: taskHistoryURL, encryption: testEncryption(byte: 0x42))
+            .record(
+                CompletedTaskRecord(
+                    command: "Encrypted task",
+                    startedAt: .fixture,
+                    completedAt: Date(timeInterval: 5, since: .fixture),
+                    outcomeStatus: .completed
+                )
+            )
+        let viewModel = try makeViewModel(root: root, encryption: testEncryption(byte: 0x99))
+
+        viewModel.refreshTaskHistory()
+
+        let message = try #require(viewModel.errorMessage)
+        #expect(message.contains("Sonny could not load encrypted local data"))
+        #expect(message.contains("task history"))
+        #expect(viewModel.taskHistoryRecords.isEmpty)
+    }
 }
 
 @MainActor
-private func makeViewModel(root: URL, encryption: LocalStorageEncryption) -> AgentViewModel {
-    AgentViewModel(
+private func makeViewModel(root: URL, encryption: LocalStorageEncryption) throws -> AgentViewModel {
+    let suiteName = "AgentViewModelLocalStorageTests-\(UUID().uuidString)"
+    let userDefaults = try #require(UserDefaults(suiteName: suiteName))
+    userDefaults.removePersistentDomain(forName: suiteName)
+    return AgentViewModel(
         routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json"), encryption: encryption),
         workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"), encryption: encryption),
         snippetStore: SnippetStore(fileURL: root.appendingPathComponent("snippets.json"), encryption: encryption),
@@ -88,6 +117,10 @@ private func makeViewModel(root: URL, encryption: LocalStorageEncryption) -> Age
         shortcutCatalog: EmptyShortcutCatalog(),
         shortcutRunHistoryStore: ShortcutRunHistoryStore(
             fileURL: root.appendingPathComponent("shortcuts-run-history.json"),
+            encryption: encryption
+        ),
+        taskHistoryStore: TaskHistoryStore(
+            fileURL: root.appendingPathComponent("task-history.json"),
             encryption: encryption
         ),
         clipboardHistorySettingsStore: ClipboardHistorySettingsStore(
@@ -107,7 +140,8 @@ private func makeViewModel(root: URL, encryption: LocalStorageEncryption) -> Age
         ),
         localDataDeletionService: LocalDataDeletionService(fileURLs: []),
         priorTaskContextStore: PriorTaskContextStore(),
-        taskUsageRecorder: TaskUsageRecorder()
+        taskUsageRecorder: TaskUsageRecorder(),
+        userDefaults: userDefaults
     )
 }
 
@@ -149,4 +183,8 @@ private func makeDirectory() throws -> URL {
         .appendingPathComponent("MacAgentTests-\(UUID().uuidString)", isDirectory: true)
     try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
     return url
+}
+
+private extension Date {
+    static let fixture = Date(timeIntervalSince1970: 1_700_000_000)
 }

@@ -7,6 +7,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private let popover = NSPopover()
     private let viewModel = AgentViewModel()
+    private lazy var windowCoordinator = AppWindowCoordinator(viewModel: viewModel)
     private var pushToTalkHotKey: PushToTalkHotKey?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
@@ -22,7 +23,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         popover.behavior = .transient
         popover.contentSize = NSSize(width: 600, height: 740)
-        let hostingController = NSHostingController(rootView: ContentView(viewModel: viewModel))
+        let hostingController = NSHostingController(
+            rootView: ContentView(
+                viewModel: viewModel,
+                openCommandCenter: { [weak self] in
+                    self?.windowCoordinator.showCommandCenter()
+                }
+            )
+        )
         hostingController.view.wantsLayer = true
         hostingController.view.layer?.backgroundColor = NSColor.clear.cgColor
         popover.contentViewController = hostingController
@@ -46,7 +54,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     private func registerBundledFonts() {
-        for fontName in ["InstrumentSerif-Regular", "GolosText-Regular"] {
+        for fontName in [
+            "InstrumentSerif-Regular",
+            "GolosText-Regular",
+            "Inter-VariableFont_opsz,wght"
+        ] {
             guard let url = Bundle.module.url(forResource: fontName, withExtension: "ttf")
                 ?? Bundle.module.url(forResource: fontName, withExtension: "ttf", subdirectory: "Fonts")
             else {
