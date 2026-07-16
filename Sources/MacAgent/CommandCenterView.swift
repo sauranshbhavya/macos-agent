@@ -231,6 +231,10 @@ private struct InsightsView: View {
         TaskHistoryInsights.summarize(records: viewModel.taskHistoryRecords, now: Date())
     }
 
+    private var workspaceBreakdown: [WorkspaceTaskBreakdownEntry] {
+        WorkspaceTaskBreakdown.summarize(records: viewModel.taskHistoryRecords, now: Date())
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             CommandCenterPageHeader(title: "Insights")
@@ -241,6 +245,8 @@ private struct InsightsView: View {
                     InsightsOverviewBento(summary: summary)
 
                     WeeklyCompletionChart(counts: summary.weeklyCompletedCounts)
+
+                    WorkspaceBreakdownPanel(entries: workspaceBreakdown)
 
                     TaskHistoryListPanel(
                         records: Array(viewModel.taskHistoryRecords.prefix(6)),
@@ -428,6 +434,97 @@ private struct WeeklyCompletionChart: View {
             return 0
         }
         return max(12, CGFloat(count) / CGFloat(maxCount) * availableHeight)
+    }
+}
+
+private struct WorkspaceBreakdownPanel: View {
+    let entries: [WorkspaceTaskBreakdownEntry]
+
+    private static let swatchColors: [Color] = [
+        SonnyTheme.accent,
+        SonnyTheme.success,
+        SonnyTheme.warning,
+        SonnyTheme.danger,
+        SonnyTheme.muted
+    ]
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Breakdown by workspace")
+                .font(SonnyType.bodyEmphasis)
+                .foregroundStyle(SonnyTheme.text)
+
+            if entries.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("No workspace activity yet")
+                        .font(SonnyType.bodyEmphasis)
+                        .foregroundStyle(SonnyTheme.text)
+                    Text("Tasks completed in a saved workspace over the last 30 days will appear here.")
+                        .font(SonnyType.micro)
+                        .foregroundStyle(SonnyTheme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.vertical, 6)
+            } else {
+                VStack(spacing: 10) {
+                    ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                        WorkspaceBreakdownRow(
+                            entry: entry,
+                            swatchColor: Self.swatchColors[index % Self.swatchColors.count]
+                        )
+                    }
+                }
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(CommandCenterPalette.cardSurface)
+        .overlay(
+            RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
+                .stroke(SonnyTheme.cardBorder, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
+    }
+}
+
+private struct WorkspaceBreakdownRow: View {
+    let entry: WorkspaceTaskBreakdownEntry
+    let swatchColor: Color
+
+    var body: some View {
+        HStack(spacing: 10) {
+            Circle()
+                .fill(swatchColor)
+                .frame(width: 8, height: 8)
+
+            Text(entry.workspaceName)
+                .font(SonnyType.body)
+                .foregroundStyle(SonnyTheme.text)
+                .lineLimit(1)
+                .frame(width: 120, alignment: .leading)
+
+            GeometryReader { proxy in
+                ZStack(alignment: .leading) {
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(SonnyTheme.chartBarMuted)
+                    RoundedRectangle(cornerRadius: 3)
+                        .fill(swatchColor)
+                        .frame(width: proxy.size.width * entry.fractionOfTotal)
+                }
+            }
+            .frame(height: 6)
+
+            Text(percentageText)
+                .font(SonnyType.micro)
+                .foregroundStyle(SonnyTheme.muted)
+                .frame(width: 40, alignment: .trailing)
+        }
+        .accessibilityElement(children: .combine)
+        .accessibilityLabel("\(entry.workspaceName): \(percentageText)")
+    }
+
+    private var percentageText: String {
+        "\(Int((entry.fractionOfTotal * 100).rounded()))%"
     }
 }
 
@@ -802,18 +899,26 @@ struct WorkspaceCardPresentation: Equatable {
     let name: String
     let effectiveTeamType: WorkspaceTeamType
     let isDefaultTeamType: Bool
-    let savedItemCount: Int
-    let savedItemCountText: String
+    let taskCount: Int
+    let taskCountText: String
     let appIcons: [WorkspaceAppIconPresentation]
     let urlsText: String?
 
     @MainActor
-    init(workspace: StoredWorkspace, iconResolver: any WorkspaceAppIconResolving = WorkspaceAppIconResolver.shared) {
+    init(
+        workspace: StoredWorkspace,
+        taskHistoryRecords: [CompletedTaskRecord],
+        iconResolver: any WorkspaceAppIconResolving = WorkspaceAppIconResolver.shared
+    ) {
         name = workspace.name
         effectiveTeamType = workspace.effectiveTeamType
         isDefaultTeamType = workspace.teamType == nil
-        savedItemCount = workspace.apps.count + workspace.urls.count
-        savedItemCountText = "\(savedItemCount) saved item\(savedItemCount == 1 ? "" : "s")"
+        // All-time, `.completed`-only (matching the Insights breakdown's own definition of "a real
+        // task happened here") — not windowed to the breakdown's trailing 30 days, since this is a
+        // simple running count, not a recent-trend chart, and the store's 10,000-record cap is
+        // already generously large for this to matter at v1 scale.
+        taskCount = taskHistoryRecords.filter { $0.outcomeStatus == .completed && $0.workspaceName == workspace.name }.count
+        taskCountText = "\(taskCount) task\(taskCount == 1 ? "" : "s")"
         appIcons = workspace.apps.map { WorkspaceAppIconPresentation(appName: $0, resolver: iconResolver) }
         urlsText = workspace.urls.isEmpty ? nil : workspace.urls.map(Self.shortURL).joined(separator: ", ")
     }
@@ -994,7 +1099,10 @@ private struct WorkspacesView: View {
                             LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
                                 ForEach(viewModel.savedWorkspaces, id: \.name) { workspace in
                                     WorkspaceCard(
-                                        presentation: WorkspaceCardPresentation(workspace: workspace),
+                                        presentation: WorkspaceCardPresentation(
+                                            workspace: workspace,
+                                            taskHistoryRecords: viewModel.taskHistoryRecords
+                                        ),
                                         accent: SonnyTheme.accent,
                                         isRunning: viewModel.isRunning || viewModel.isAwaitingApproval,
                                         open: { viewModel.openWorkspaceWidget(workspace) },
@@ -1030,6 +1138,9 @@ private struct WorkspacesView: View {
             )
         }
         .background(SonnyTheme.ink)
+        .onAppear {
+            viewModel.refreshTaskHistory()
+        }
     }
 
     private func beginNewWorkspace() {
@@ -1058,7 +1169,7 @@ private struct WorkspaceCard: View {
             teamTypeRow
                 .padding(.top, 2)
 
-            Text(presentation.savedItemCountText)
+            Text(presentation.taskCountText)
                 .font(SonnyType.micro)
                 .foregroundStyle(SonnyTheme.muted)
                 .padding(.top, 3)

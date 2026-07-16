@@ -477,20 +477,39 @@ struct ProductShellTests {
         #expect(routinePresentation.stepCountText == "3")
         #expect(routinePresentation.detailText == "Open Safari · Create draft · +1 more")
 
-        let workspacePresentation = WorkspaceCardPresentation(workspace: workspace, iconResolver: NeverResolvingWorkspaceAppIconResolver())
+        let taskHistoryRecords = [
+            CompletedTaskRecord(command: "a", startedAt: .distantPast, completedAt: Date(), outcomeStatus: .completed, workspaceName: "Research"),
+            CompletedTaskRecord(command: "b", startedAt: .distantPast, completedAt: Date(), outcomeStatus: .completed, workspaceName: "Research"),
+            CompletedTaskRecord(command: "c", startedAt: .distantPast, completedAt: Date(), outcomeStatus: .failed, workspaceName: "Research"),
+            CompletedTaskRecord(command: "d", startedAt: .distantPast, completedAt: Date(), outcomeStatus: .completed, workspaceName: "Other")
+        ]
+
+        let workspacePresentation = WorkspaceCardPresentation(
+            workspace: workspace,
+            taskHistoryRecords: taskHistoryRecords,
+            iconResolver: NeverResolvingWorkspaceAppIconResolver()
+        )
         #expect(workspacePresentation.name == "Research")
         #expect(workspacePresentation.effectiveTeamType == .solo)
         #expect(workspacePresentation.isDefaultTeamType == true)
-        #expect(workspacePresentation.savedItemCount == 3)
-        #expect(workspacePresentation.savedItemCountText == "3 saved items")
+        // Only the 2 .completed records tagged "Research" count — the .failed one and the one
+        // tagged "Other" are both excluded.
+        #expect(workspacePresentation.taskCount == 2)
+        #expect(workspacePresentation.taskCountText == "2 tasks")
         #expect(workspacePresentation.appIcons.map(\.appName) == ["Safari", "Notes"])
         #expect(workspacePresentation.urlsText == "example.com")
 
         let teamWorkspace = StoredWorkspace(name: "Client Work", apps: [], urls: [], teamType: .team)
-        let teamPresentation = WorkspaceCardPresentation(workspace: teamWorkspace, iconResolver: NeverResolvingWorkspaceAppIconResolver())
+        let teamPresentation = WorkspaceCardPresentation(
+            workspace: teamWorkspace,
+            taskHistoryRecords: taskHistoryRecords,
+            iconResolver: NeverResolvingWorkspaceAppIconResolver()
+        )
         #expect(teamPresentation.effectiveTeamType == .team)
         #expect(teamPresentation.isDefaultTeamType == false)
         #expect(teamPresentation.appIcons.isEmpty)
+        #expect(teamPresentation.taskCount == 0)
+        #expect(teamPresentation.taskCountText == "0 tasks")
     }
 
     @Test
