@@ -314,13 +314,20 @@ struct ProductShellTests {
         #expect(routinePresentation.stepCountText == "3")
         #expect(routinePresentation.detailText == "Open Safari · Create draft · +1 more")
 
-        let workspacePresentation = WorkspaceCardPresentation(workspace: workspace)
+        let workspacePresentation = WorkspaceCardPresentation(workspace: workspace, iconResolver: NeverResolvingWorkspaceAppIconResolver())
         #expect(workspacePresentation.name == "Research")
-        #expect(workspacePresentation.initial == "R")
+        #expect(workspacePresentation.effectiveTeamType == .solo)
+        #expect(workspacePresentation.isDefaultTeamType == true)
         #expect(workspacePresentation.savedItemCount == 3)
         #expect(workspacePresentation.savedItemCountText == "3 saved items")
-        #expect(workspacePresentation.appsText == "Safari, Notes")
+        #expect(workspacePresentation.appIcons.map(\.appName) == ["Safari", "Notes"])
         #expect(workspacePresentation.urlsText == "example.com")
+
+        let teamWorkspace = StoredWorkspace(name: "Client Work", apps: [], urls: [], teamType: .team)
+        let teamPresentation = WorkspaceCardPresentation(workspace: teamWorkspace, iconResolver: NeverResolvingWorkspaceAppIconResolver())
+        #expect(teamPresentation.effectiveTeamType == .team)
+        #expect(teamPresentation.isDefaultTeamType == false)
+        #expect(teamPresentation.appIcons.isEmpty)
     }
 
     @Test
@@ -530,6 +537,15 @@ private struct ProductShellFixedKeyManager: LocalStorageKeyManaging {
 private struct ProductShellEmptyShortcutCatalog: ShortcutCatalogProviding {
     func shortcutNames() throws -> [String] {
         []
+    }
+}
+
+/// Always returns `nil`, so tests never depend on real installed apps or live `NSWorkspace`/
+/// LaunchServices calls — deterministic across every machine and CI runner.
+@MainActor
+private struct NeverResolvingWorkspaceAppIconResolver: WorkspaceAppIconResolving {
+    func icon(forAppName appName: String) -> NSImage? {
+        nil
     }
 }
 

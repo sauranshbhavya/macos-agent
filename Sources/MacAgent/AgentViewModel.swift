@@ -639,6 +639,17 @@ final class AgentViewModel: ObservableObject {
         start(autoExecute: true)
     }
 
+    func markWorkspaceAsTeam(_ workspace: StoredWorkspace) {
+        var updated = workspace
+        updated.teamType = .team
+        do {
+            try workspaceStore.save(updated)
+            refreshSavedItems()
+        } catch {
+            errorMessage = "Could not update workspace: \(error.localizedDescription)"
+        }
+    }
+
     func runSuggestion(_ suggestion: RunSuggestion) {
         let url = URL(fileURLWithPath: suggestion.value)
         switch suggestion.kind {

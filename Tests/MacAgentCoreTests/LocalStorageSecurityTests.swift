@@ -42,6 +42,33 @@ struct LocalStorageSecurityTests {
     }
 
     @Test
+    func legacyWorkspaceJSONMissingTheTeamTypeKeyDecodesWithASoloDefault() throws {
+        // Hand-written, not encoded from the current StoredWorkspace struct — a fixture built by
+        // encoding the current struct would already include "teamType" and couldn't catch a
+        // missing-key regression on real pre-existing user files.
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("legacy-workspaces-no-team-type.json")
+        let legacyJSON = """
+        {
+            "research": {
+                "name": "Research",
+                "apps": ["Safari"],
+                "urls": ["https://example.com/reference"]
+            }
+        }
+        """
+        try Data(legacyJSON.utf8).write(to: url, options: .atomic)
+        let store = WorkspaceStore(fileURL: url, encryption: testEncryption())
+
+        let workspace = try store.workspace(named: "Research")
+
+        #expect(workspace.teamType == nil)
+        #expect(workspace.effectiveTeamType == .solo)
+        try expectEncryptedFile(url, hiding: "Research")
+    }
+
+    @Test
     func clipboardHistoryStoreEncryptsRawFileBytesAndRoundTrips() throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

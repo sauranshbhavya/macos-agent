@@ -18,15 +18,30 @@ public struct StoredRoutine: Codable, Equatable, Sendable {
     }
 }
 
+public enum WorkspaceTeamType: String, Codable, Equatable, Sendable {
+    case solo
+    case team
+}
+
 public struct StoredWorkspace: Codable, Equatable, Sendable {
     public var name: String
     public var apps: [String]
     public var urls: [String]
+    public var teamType: WorkspaceTeamType?
 
-    public init(name: String, apps: [String], urls: [String]) {
+    public init(name: String, apps: [String], urls: [String], teamType: WorkspaceTeamType? = nil) {
         self.name = name
         self.apps = apps
         self.urls = urls
+        self.teamType = teamType
+    }
+
+    /// `teamType` is Optional so legacy on-disk JSON missing the key still decodes (synthesized
+    /// `Decodable` calls `decodeIfPresent` for Optional properties) — a non-optional property with
+    /// a Swift-side default would NOT protect existing files, since synthesized decoding still
+    /// calls `decode(_:forKey:)` and throws `keyNotFound` regardless of any default literal.
+    public var effectiveTeamType: WorkspaceTeamType {
+        teamType ?? .solo
     }
 }
 

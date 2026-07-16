@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import MacAgentCore
 import SwiftUI
@@ -736,21 +737,42 @@ struct RoutineRowPresentation: Equatable {
     }
 }
 
+struct WorkspaceAppIconPresentation: Equatable {
+    let appName: String
+    let icon: NSImage?
+
+    @MainActor
+    init(appName: String, resolver: any WorkspaceAppIconResolving) {
+        self.appName = appName
+        self.icon = resolver.icon(forAppName: appName)
+    }
+
+    /// Icon content isn't part of this presentation's logical identity — whether an icon resolves
+    /// depends on what's installed on the machine rendering it, and two presentations for the same
+    /// app name should compare equal regardless (this also keeps tests deterministic without
+    /// depending on real installed apps).
+    static func == (lhs: Self, rhs: Self) -> Bool {
+        lhs.appName == rhs.appName
+    }
+}
+
 struct WorkspaceCardPresentation: Equatable {
     let name: String
-    let initial: String
+    let effectiveTeamType: WorkspaceTeamType
+    let isDefaultTeamType: Bool
     let savedItemCount: Int
     let savedItemCountText: String
-    let appsText: String?
+    let appIcons: [WorkspaceAppIconPresentation]
     let urlsText: String?
 
-    init(workspace: StoredWorkspace) {
+    @MainActor
+    init(workspace: StoredWorkspace, iconResolver: any WorkspaceAppIconResolving = WorkspaceAppIconResolver.shared) {
         name = workspace.name
-        initial = workspace.name.trimmingCharacters(in: .whitespacesAndNewlines)
-            .first.map { String($0).uppercased() } ?? "W"
+        effectiveTeamType = workspace.effectiveTeamType
+        isDefaultTeamType = workspace.teamType == nil
         savedItemCount = workspace.apps.count + workspace.urls.count
         savedItemCountText = "\(savedItemCount) saved item\(savedItemCount == 1 ? "" : "s")"
-        appsText = workspace.apps.isEmpty ? nil : workspace.apps.joined(separator: ", ")
+        appIcons = workspace.apps.map { WorkspaceAppIconPresentation(appName: $0, resolver: iconResolver) }
         urlsText = workspace.urls.isEmpty ? nil : workspace.urls.map(Self.shortURL).joined(separator: ", ")
     }
 
@@ -933,7 +955,8 @@ private struct WorkspacesView: View {
                                         presentation: WorkspaceCardPresentation(workspace: workspace),
                                         accent: SonnyTheme.accent,
                                         isRunning: viewModel.isRunning || viewModel.isAwaitingApproval,
-                                        open: { viewModel.openWorkspaceWidget(workspace) }
+                                        open: { viewModel.openWorkspaceWidget(workspace) },
+                                        markAsTeam: { viewModel.markWorkspaceAsTeam(workspace) }
                                     )
                                 }
                                 CreateWorkspaceGhostCard(action: beginNewWorkspace)
@@ -978,15 +1001,11 @@ private struct WorkspaceCard: View {
     let accent: Color
     let isRunning: Bool
     let open: () -> Void
+    let markAsTeam: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            Text(presentation.initial)
-                .font(SonnyType.avatar)
-                .foregroundStyle(accent)
-                .frame(width: 36, height: 36)
-                .background(accent.opacity(0.18))
-                .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.workspaceCard))
+            WorkspaceAppIconStack(icons: presentation.appIcons, accent: accent)
 
             Text(presentation.name)
                 .font(SonnyType.bodyEmphasis)
@@ -994,23 +1013,21 @@ private struct WorkspaceCard: View {
                 .lineLimit(1)
                 .padding(.top, 14)
 
+            teamTypeRow
+                .padding(.top, 2)
+
             Text(presentation.savedItemCountText)
                 .font(SonnyType.micro)
                 .foregroundStyle(SonnyTheme.muted)
                 .padding(.top, 3)
 
-            VStack(alignment: .leading, spacing: 4) {
-                if let appsText = presentation.appsText {
-                    Label(appsText, systemImage: "app.dashed")
-                }
-                if let urlsText = presentation.urlsText {
-                    Label(urlsText, systemImage: "link")
-                }
+            if let urlsText = presentation.urlsText {
+                Label(urlsText, systemImage: "link")
+                    .font(SonnyType.micro)
+                    .foregroundStyle(SonnyTheme.muted)
+                    .lineLimit(1)
+                    .padding(.top, 12)
             }
-            .font(SonnyType.micro)
-            .foregroundStyle(SonnyTheme.muted)
-            .lineLimit(1)
-            .padding(.top, 12)
 
             Spacer(minLength: 12)
 
@@ -1032,6 +1049,94 @@ private struct WorkspaceCard: View {
                 .stroke(SonnyTheme.cardBorder, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.workspaceCard))
+    }
+
+    @ViewBuilder
+    private var teamTypeRow: some View {
+        switch presentation.effectiveTeamType {
+        case .team:
+            Text("Team workspace")
+                .font(SonnyType.micro)
+                .foregroundStyle(SonnyTheme.muted)
+        case .solo:
+            HStack(spacing: 4) {
+                Text("Just you")
+                    .font(SonnyType.micro)
+                    .foregroundStyle(SonnyTheme.muted)
+
+                if presentation.isDefaultTeamType {
+                    Text("·")
+                        .font(SonnyType.micro)
+                        .foregroundStyle(SonnyTheme.muted)
+
+                    Button(action: markAsTeam) {
+                        Text("Mark as team")
+                            .font(SonnyType.micro)
+                            .foregroundStyle(SonnyTheme.accent)
+                    }
+                    .buttonStyle(.plain)
+                    .sonnyPointerCursor()
+                    .accessibilityLabel("Mark \(presentation.name) as a team workspace")
+                }
+            }
+        }
+    }
+}
+
+private struct WorkspaceAppIconStack: View {
+    let icons: [WorkspaceAppIconPresentation]
+    let accent: Color
+
+    private let iconSize: CGFloat = 18
+    private let overlap: CGFloat = 10
+    private let maxVisible = 2
+
+    var body: some View {
+        if icons.isEmpty {
+            RoundedRectangle(cornerRadius: SonnyRadius.workspaceCard)
+                .fill(accent.opacity(0.18))
+                .overlay(
+                    Image(systemName: "rectangle.3.group")
+                        .foregroundStyle(accent)
+                )
+                .frame(width: 36, height: 36)
+        } else {
+            let visible = Array(icons.prefix(maxVisible))
+            ZStack(alignment: .leading) {
+                ForEach(Array(visible.enumerated()), id: \.offset) { index, icon in
+                    iconTile(for: icon)
+                        .offset(x: CGFloat(index) * overlap)
+                }
+            }
+            .frame(
+                width: iconSize + CGFloat(max(visible.count - 1, 0)) * overlap,
+                height: iconSize,
+                alignment: .leading
+            )
+        }
+    }
+
+    @ViewBuilder
+    private func iconTile(for icon: WorkspaceAppIconPresentation) -> some View {
+        Group {
+            if let nsImage = icon.icon {
+                Image(nsImage: nsImage)
+                    .resizable()
+                    .scaledToFit()
+                    .padding(3)
+            } else {
+                Image(systemName: "app.dashed")
+                    .foregroundStyle(SonnyTheme.muted)
+            }
+        }
+        .frame(width: iconSize, height: iconSize)
+        .background(SonnyTheme.surfaceRaised)
+        .clipShape(RoundedRectangle(cornerRadius: 6))
+        .overlay(
+            RoundedRectangle(cornerRadius: 6)
+                .stroke(SonnyTheme.cardBorder, lineWidth: 1)
+        )
+        .accessibilityHidden(true)
     }
 }
 

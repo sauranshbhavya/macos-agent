@@ -119,3 +119,39 @@ public struct WorkspaceAppOpener: AppOpening {
         }
     }
 }
+
+@MainActor
+public protocol WorkspaceAppIconResolving {
+    /// Returns the app's real icon, or `nil` if it can't be resolved — either because `appName`
+    /// isn't in the allowlisted `MacAppCatalog`, or because the app isn't installed on this
+    /// machine (a distinct failure mode from an unrecognized name, but the same graceful-fallback
+    /// contract for callers: render a generic glyph, don't treat either case as an error).
+    func icon(forAppName appName: String) -> NSImage?
+}
+
+@MainActor
+public final class WorkspaceAppIconResolver: WorkspaceAppIconResolving {
+    public static let shared = WorkspaceAppIconResolver()
+
+    private let catalog: MacAppCatalog
+    private var cache: [String: NSImage] = [:]
+
+    public init(catalog: MacAppCatalog = .default) {
+        self.catalog = catalog
+    }
+
+    public func icon(forAppName appName: String) -> NSImage? {
+        guard let app = try? catalog.resolve(appName) else {
+            return nil
+        }
+        if let cached = cache[app.bundleIdentifier] {
+            return cached
+        }
+        guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: app.bundleIdentifier) else {
+            return nil
+        }
+        let icon = NSWorkspace.shared.icon(forFile: appURL.path)
+        cache[app.bundleIdentifier] = icon
+        return icon
+    }
+}
