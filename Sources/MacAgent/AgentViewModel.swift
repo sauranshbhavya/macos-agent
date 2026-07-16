@@ -37,6 +37,11 @@ final class AgentViewModel: ObservableObject {
             userDefaults.set(usePointerCursors, forKey: UserDefaultsKeys.usePointerCursors)
         }
     }
+    @Published var displayFullNames: Bool = false {
+        didSet {
+            userDefaults.set(displayFullNames, forKey: UserDefaultsKeys.displayFullNames)
+        }
+    }
 
     let logStore = AgentLogStore()
 
@@ -94,6 +99,7 @@ final class AgentViewModel: ObservableObject {
 
     private enum UserDefaultsKeys {
         static let usePointerCursors = "com.sonny.preferences.usePointerCursors"
+        static let displayFullNames = "com.sonny.preferences.displayFullNames"
     }
 
     init(
@@ -115,6 +121,7 @@ final class AgentViewModel: ObservableObject {
     ) {
         self.userDefaults = userDefaults
         usePointerCursors = userDefaults.object(forKey: UserDefaultsKeys.usePointerCursors) as? Bool ?? true
+        displayFullNames = userDefaults.object(forKey: UserDefaultsKeys.displayFullNames) as? Bool ?? false
         self.audioRecorder = audioRecorder
         self.permissionReadinessService = permissionReadinessService
         self.routineStore = routineStore

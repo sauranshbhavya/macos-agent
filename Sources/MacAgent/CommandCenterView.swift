@@ -1427,6 +1427,13 @@ private struct SettingsFoundationView: View {
 
     private var settingsSidebar: some View {
         VStack(alignment: .leading, spacing: 6) {
+            Text("My Account")
+                .font(SonnyType.eyebrow)
+                .foregroundStyle(SonnyTheme.muted)
+                .textCase(.uppercase)
+                .padding(.horizontal, 11)
+                .padding(.bottom, 2)
+
             ForEach(SettingsSection.allCases) { section in
                 Button {
                     selection = section
@@ -1480,6 +1487,12 @@ private struct SettingsPreferencesPage: View {
                     title: "Use pointer cursors",
                     detail: "Change the cursor to a pointer when hovering over any interactive element.",
                     isOn: $viewModel.usePointerCursors
+                )
+
+                SettingsToggleRow(
+                    title: "Display full names",
+                    detail: "Show full names of users instead of shorter display names.",
+                    isOn: $viewModel.displayFullNames
                 )
             }
 

@@ -104,6 +104,58 @@ struct ProductShellTests {
     }
 
     @Test
+    func displayFullNamesPreferenceIsSharedInProcessAcrossSurfaces() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        defer { fixture.userDefaults.removePersistentDomain(forName: fixture.userDefaultsSuiteName) }
+        let viewModel = fixture.viewModel
+        let popover = ContentView(viewModel: viewModel)
+        let commandCenter = CommandCenterView(viewModel: viewModel)
+
+        #expect(viewModel.displayFullNames == false)
+
+        viewModel.displayFullNames = true
+        #expect(popover.viewModel.displayFullNames)
+        #expect(commandCenter.viewModel.displayFullNames)
+
+        viewModel.displayFullNames = false
+        #expect(popover.viewModel.displayFullNames == false)
+        #expect(commandCenter.viewModel.displayFullNames == false)
+    }
+
+    @Test
+    func displayFullNamesPreferencePersistsThroughInjectedUserDefaults() throws {
+        let suiteName = "ProductShellDisplayFullNames-\(UUID().uuidString)"
+        let userDefaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { userDefaults.removePersistentDomain(forName: suiteName) }
+
+        let firstLaunch = try makeProductShellFixture(
+            userDefaults: userDefaults,
+            userDefaultsSuiteName: suiteName
+        )
+        defer { try? FileManager.default.removeItem(at: firstLaunch.root) }
+        #expect(firstLaunch.viewModel.displayFullNames == false)
+
+        firstLaunch.viewModel.displayFullNames = true
+
+        let secondLaunch = try makeProductShellFixture(
+            userDefaults: userDefaults,
+            userDefaultsSuiteName: suiteName
+        )
+        defer { try? FileManager.default.removeItem(at: secondLaunch.root) }
+        #expect(secondLaunch.viewModel.displayFullNames)
+
+        secondLaunch.viewModel.displayFullNames = false
+
+        let thirdLaunch = try makeProductShellFixture(
+            userDefaults: userDefaults,
+            userDefaultsSuiteName: suiteName
+        )
+        defer { try? FileManager.default.removeItem(at: thirdLaunch.root) }
+        #expect(thirdLaunch.viewModel.displayFullNames == false)
+    }
+
+    @Test
     func primaryWindowActivationReturnsToAccessoryOnlyAfterTheLastWindowCloses() {
         let application = ProductShellActivationRecorder()
         let manager = PrimaryWindowActivationManager(application: application)
