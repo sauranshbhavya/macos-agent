@@ -196,12 +196,7 @@ private struct TasksFoundationView: View {
                         .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
                     }
 
-                    TaskHistoryListPanel(
-                        records: Array(viewModel.taskHistoryRecords.prefix(10)),
-                        title: "Recent task history",
-                        emptyTitle: "No completed tasks yet",
-                        emptyMessage: "Run or cancel a Sonny task and it will appear here."
-                    )
+                    TaskHistoryGroupedPanel(records: viewModel.taskHistoryRecords)
                 }
                 .padding(.horizontal, 28)
                 .padding(.top, 24)
@@ -435,13 +430,66 @@ private struct TaskHistoryListPanel: View {
     }
 }
 
+private struct TaskHistoryGroupedPanel: View {
+    let records: [CompletedTaskRecord]
+
+    private var sections: [TaskHistorySection] {
+        TaskHistoryGrouping.groupedByOutcome(records: records)
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 14) {
+            Text("Recent task history")
+                .font(SonnyType.bodyEmphasis)
+                .foregroundStyle(SonnyTheme.text)
+
+            if records.isEmpty {
+                VStack(alignment: .leading, spacing: 6) {
+                    Text("No completed tasks yet")
+                        .font(SonnyType.bodyEmphasis)
+                        .foregroundStyle(SonnyTheme.text)
+                    Text("Run or cancel a Sonny task and it will appear here.")
+                        .font(SonnyType.micro)
+                        .foregroundStyle(SonnyTheme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.vertical, 6)
+            } else {
+                VStack(alignment: .leading, spacing: 18) {
+                    ForEach(sections) { section in
+                        VStack(alignment: .leading, spacing: 0) {
+                            Text("\(section.title) (\(section.records.count))")
+                                .font(SonnyType.caption)
+                                .foregroundStyle(SonnyTheme.muted)
+                                .padding(.bottom, 6)
+
+                            VStack(spacing: 0) {
+                                ForEach(section.records, id: \.startedAt) { record in
+                                    TaskHistoryRow(record: record)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+        .padding(18)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(CommandCenterPalette.cardSurface)
+        .overlay(
+            RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
+                .stroke(SonnyTheme.cardBorder, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
+    }
+}
+
 private struct TaskHistoryRow: View {
     let record: CompletedTaskRecord
 
     var body: some View {
         HStack(spacing: 10) {
-            Circle()
-                .fill(statusColor)
+            statusIcon
                 .frame(width: 10, height: 10)
                 .accessibilityHidden(true)
 
@@ -471,16 +519,23 @@ private struct TaskHistoryRow: View {
         .accessibilityLabel("\(record.command), \(statusText), \(TaskHistoryDateFormatter.relativeTimestamp(for: record.completedAt, now: Date()))")
     }
 
-    private var statusColor: Color {
+    @ViewBuilder
+    private var statusIcon: some View {
         switch record.outcomeStatus {
         case .completed:
-            return SonnyTheme.success
-        case .failed:
-            return SonnyTheme.danger
+            Image(systemName: "checkmark.circle.fill")
+                .resizable()
+                .foregroundStyle(SonnyTheme.success)
         case .canceled:
-            return SonnyTheme.muted
+            Image(systemName: "checkmark.circle.fill")
+                .resizable()
+                .foregroundStyle(SonnyTheme.muted)
+        case .failed:
+            Circle()
+                .strokeBorder(SonnyTheme.danger, lineWidth: 1.5)
         default:
-            return SonnyTheme.muted
+            Circle()
+                .fill(SonnyTheme.muted)
         }
     }
 
