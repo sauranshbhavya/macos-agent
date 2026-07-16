@@ -236,9 +236,12 @@ private struct InsightsView: View {
             CommandCenterPageHeader(title: "Insights")
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 16) {
-                    InsightsStatRow(summary: summary)
+                VStack(alignment: .leading, spacing: 24) {
+                    InsightsSectionHeader(title: "Overview")
+                    InsightsOverviewBento(summary: summary)
+
                     WeeklyCompletionChart(counts: summary.weeklyCompletedCounts)
+
                     TaskHistoryListPanel(
                         records: Array(viewModel.taskHistoryRecords.prefix(6)),
                         title: "Recent activity",
@@ -269,29 +272,68 @@ private struct InsightsView: View {
     }
 }
 
-private struct InsightsStatRow: View {
-    let summary: TaskHistoryInsightsSummary
-
-    private var stats: [InsightStatPresentation] {
-        [
-            .completedThisWeek(summary),
-            .completionRate(summary),
-            .averageCycleTime(summary),
-            .currentStreak(summary)
-        ]
-    }
+private struct InsightsSectionHeader: View {
+    let title: String
 
     var body: some View {
-        HStack(spacing: 12) {
-            ForEach(stats) { stat in
-                InsightStatCard(stat: stat)
+        Text(title)
+            .font(SonnyType.eyebrow)
+            .foregroundStyle(SonnyTheme.muted)
+            .textCase(.uppercase)
+    }
+}
+
+/// Deliberately asymmetric, per `docs/sonny-founder-design-decisions.md`'s explicit verbal
+/// direction — the wireframe export's own layout is uniform/symmetric and is NOT authoritative
+/// here (unlike checkpoints 1-2, where the wireframe measurements were). A large flexible hero
+/// tile, a stacked pair of medium tiles, and one tall narrow tile give three genuinely different
+/// tile footprints from the same 4 stats, Apple-keynote/bento style rather than a uniform grid.
+private struct InsightsOverviewBento: View {
+    let summary: TaskHistoryInsightsSummary
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 12) {
+            InsightStatCard(stat: .completedThisWeek(summary), size: .hero)
+                .frame(maxWidth: .infinity, alignment: .leading)
+
+            VStack(spacing: 12) {
+                InsightStatCard(stat: .completionRate(summary), size: .compact)
+                InsightStatCard(stat: .averageCycleTime(summary), size: .compact)
             }
+            .frame(width: 200)
+
+            InsightStatCard(stat: .currentStreak(summary), size: .tall)
+                .frame(width: 160)
         }
+    }
+}
+
+private enum InsightStatCardSize: Equatable {
+    case hero
+    case compact
+    case tall
+
+    var minHeight: CGFloat {
+        switch self {
+        case .hero, .tall:
+            return 196
+        case .compact:
+            return 92
+        }
+    }
+
+    var horizontalPadding: CGFloat {
+        self == .hero ? 20 : 16
+    }
+
+    var verticalPadding: CGFloat {
+        self == .hero ? 20 : 14
     }
 }
 
 private struct InsightStatCard: View {
     let stat: InsightStatPresentation
+    var size: InsightStatCardSize = .compact
 
     var body: some View {
         VStack(alignment: .leading, spacing: 7) {
@@ -312,9 +354,9 @@ private struct InsightStatCard: View {
                 .lineLimit(1)
                 .minimumScaleFactor(0.74)
         }
-        .padding(.horizontal, 16)
-        .padding(.vertical, 14)
-        .frame(maxWidth: .infinity, minHeight: 104, alignment: .leading)
+        .padding(.horizontal, size.horizontalPadding)
+        .padding(.vertical, size.verticalPadding)
+        .frame(maxWidth: .infinity, minHeight: size.minHeight, alignment: .leading)
         .background(CommandCenterPalette.cardSurface)
         .overlay(
             RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
