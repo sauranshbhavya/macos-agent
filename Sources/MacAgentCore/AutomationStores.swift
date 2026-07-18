@@ -1,6 +1,6 @@
 import Foundation
 
-public struct StoredRoutine: Codable, Equatable, Sendable {
+public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
     public var name: String
     public var steps: [AgentStep]
 
@@ -16,6 +16,10 @@ public struct StoredRoutine: Codable, Equatable, Sendable {
             steps: steps
         )
     }
+
+    /// Matches `RoutineStore`'s existing name-keyed dictionary and `RoutinesView`'s
+    /// `ForEach(..., id: \.element.name)` — routine names are already the real identity here.
+    public var id: String { name }
 }
 
 public enum WorkspaceTeamType: String, Codable, Equatable, Sendable {

@@ -70,21 +70,45 @@ struct CommandCenterView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 22) {
-            HStack(spacing: 11) {
-                ZStack {
-                    RoundedRectangle(cornerRadius: SonnyRadius.sidebarIcon)
-                        .fill(SonnyTheme.accent.opacity(0.16))
-                    RoundedRectangle(cornerRadius: SonnyRadius.sidebarIcon)
-                        .stroke(SonnyTheme.accent.opacity(0.42), lineWidth: 1)
-                    Image(systemName: "wand.and.stars")
-                        .font(SonnyType.icon(16, weight: .medium))
-                        .foregroundStyle(SonnyTheme.accent)
-                }
-                .frame(width: 36, height: 36)
+            HStack(spacing: 0) {
+                HStack(spacing: 11) {
+                    ZStack {
+                        RoundedRectangle(cornerRadius: SonnyRadius.sidebarIcon)
+                            .fill(SonnyTheme.accent.opacity(0.16))
+                        RoundedRectangle(cornerRadius: SonnyRadius.sidebarIcon)
+                            .stroke(SonnyTheme.accent.opacity(0.42), lineWidth: 1)
+                        Image(systemName: "wand.and.stars")
+                            .font(SonnyType.icon(16, weight: .medium))
+                            .foregroundStyle(SonnyTheme.accent)
+                    }
+                    .frame(width: 36, height: 36)
 
-                Text("Sonny")
-                    .font(SonnyType.panelTitle)
-                    .foregroundStyle(SonnyTheme.text)
+                    HStack(spacing: 6) {
+                        Text("Sonny")
+                            .font(SonnyType.panelTitle)
+                            .foregroundStyle(SonnyTheme.text)
+                        // Wireframe shows a dropdown affordance next to the wordmark
+                        // (`9-MainAppHomeScreen.svg:33`). Built as static chrome matching the
+                        // wireframe's visual — no menu exists behind it; nothing in Sonny's
+                        // current scope defines what it would open.
+                        Image(systemName: "chevron.down")
+                            .font(SonnyType.icon(9, weight: .semibold))
+                            .foregroundStyle(SonnyTheme.muted)
+                    }
+                }
+
+                Spacer(minLength: 8)
+
+                // Wireframe search affordance (`9-MainAppHomeScreen.svg:38`). Same treatment as
+                // the chevron above — static, no search feature exists behind it yet.
+                Image(systemName: "magnifyingglass")
+                    .font(SonnyType.icon(13, weight: .medium))
+                    .foregroundStyle(SonnyTheme.muted)
+                    .frame(width: 28, height: 28)
+                    .background(
+                        RoundedRectangle(cornerRadius: SonnyRadius.container)
+                            .fill(SonnyTheme.surfaceRaised)
+                    )
             }
 
             VStack(spacing: 5) {
@@ -98,7 +122,7 @@ struct CommandCenterView: View {
         .padding(.horizontal, 14)
         .padding(.top, 20)
         .padding(.bottom, 18)
-        .frame(width: 226)
+        .frame(width: 275)
         .frame(maxHeight: .infinity, alignment: .topLeading)
         .background(SonnyTheme.ink)
     }
@@ -115,12 +139,15 @@ struct CommandCenterView: View {
                     .font(SonnyType.body)
                 Spacer(minLength: 8)
                 if destination == .tasks, viewModel.activeTaskCount > 0 {
+                    // Shape/fill match the wireframe's rounded-rect badge (`rx=4`, `#151619`) —
+                    // its "22" count itself doesn't map to anything Sonny has (likely a Linear
+                    // inbox-unread placeholder), so the conditional active-task display stays.
                     Text("\(viewModel.activeTaskCount)")
                         .font(SonnyType.micro)
-                        .foregroundStyle(SonnyTheme.ink)
+                        .foregroundStyle(SonnyTheme.text)
                         .frame(minWidth: 20, minHeight: 20)
-                        .background(SonnyTheme.accent)
-                        .clipShape(Capsule())
+                        .background(SonnyTheme.surfaceRaised)
+                        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
                         .accessibilityLabel("One active task")
                 }
             }
@@ -168,42 +195,51 @@ private struct TasksFoundationView: View {
 
     var body: some View {
         VStack(spacing: 0) {
-            ScrollView {
-                VStack(alignment: .leading, spacing: 18) {
-                    CommandCenterPageHeader(
-                        title: "Tasks",
-                        subtitle: "Your current Sonny task, live across both surfaces."
-                    )
+            VStack(alignment: .leading, spacing: 18) {
+                CommandCenterPageHeader(title: greeting)
 
-                    if viewModel.hasTaskActivity {
-                        CommandCenterTaskActivitySurface(viewModel: viewModel)
-                    } else {
-                        VStack(alignment: .leading, spacing: 10) {
-                            Label("No active task", systemImage: "checkmark.circle")
-                                .font(SonnyType.bodyEmphasis)
-                                .foregroundStyle(SonnyTheme.text)
-                            Text("Start a command below or from the menu-bar cockpit. The same task will appear here immediately.")
-                                .font(SonnyType.body)
-                                .foregroundStyle(SonnyTheme.muted)
-                                .fixedSize(horizontal: false, vertical: true)
+                ScrollView {
+                    VStack(alignment: .leading, spacing: 18) {
+                        if viewModel.hasTaskActivity {
+                            CommandCenterTaskActivitySurface(viewModel: viewModel)
+                        } else {
+                            VStack(alignment: .leading, spacing: 10) {
+                                Label("No active task", systemImage: "checkmark.circle")
+                                    .font(SonnyType.bodyEmphasis)
+                                    .foregroundStyle(SonnyTheme.text)
+                                Text("Start a command below or from the menu-bar cockpit. The same task will appear here immediately.")
+                                    .font(SonnyType.body)
+                                    .foregroundStyle(SonnyTheme.muted)
+                                    .fixedSize(horizontal: false, vertical: true)
+                            }
+                            .padding(18)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .background(SonnyTheme.surfaceRaised.opacity(0.46))
+                            .overlay(
+                                RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
+                                    .stroke(SonnyTheme.border, lineWidth: 1)
+                            )
+                            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
                         }
-                        .padding(18)
-                        .frame(maxWidth: .infinity, alignment: .leading)
-                        .background(SonnyTheme.surfaceRaised.opacity(0.46))
-                        .overlay(
-                            RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
-                                .stroke(SonnyTheme.border, lineWidth: 1)
-                        )
-                        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
-                    }
 
-                    TaskHistoryGroupedPanel(records: viewModel.taskHistoryRecords)
+                        TaskHistoryGroupedPanel(records: viewModel.taskHistoryRecords)
+                    }
+                    .padding(.horizontal, 30)
+                    .padding(.vertical, 24)
+                    .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
-                .padding(.horizontal, 28)
-                .padding(.top, 24)
-                .padding(.bottom, 18)
-                .frame(maxWidth: .infinity, alignment: .topLeading)
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                .background(CommandCenterPalette.collectionSurface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: SonnyRadius.container)
+                        .stroke(SonnyTheme.border, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
             }
+            .padding(.horizontal, 28)
+            .padding(.top, 24)
+            .padding(.bottom, 18)
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
             CommandCenterComposerFooter(viewModel: viewModel)
         }
@@ -211,6 +247,19 @@ private struct TasksFoundationView: View {
         .onAppear {
             viewModel.refreshTaskHistory()
         }
+    }
+
+    /// Wireframe shows a time-of-day greeting ("Good Afternoon, User") in this exact slot
+    /// (`9-MainAppHomeScreen.svg`) rather than a static page title. `NSFullUserName()` is the
+    /// same macOS-account name source `DocumentConverter` already uses elsewhere in this codebase;
+    /// `displayFullNames` (Settings) governs full vs. first-name-only, matching that toggle's
+    /// existing meaning rather than inventing a second name-formatting rule.
+    private var greeting: String {
+        TaskGreetingFormatter.greeting(
+            hour: Calendar.current.component(.hour, from: Date()),
+            fullName: NSFullUserName(),
+            displayFullNames: viewModel.displayFullNames
+        )
     }
 }
 
@@ -240,8 +289,10 @@ private struct InsightsView: View {
             CommandCenterPageHeader(title: "Insights")
 
             ScrollView {
-                VStack(alignment: .leading, spacing: 24) {
-                    InsightsSectionHeader(title: "Overview")
+                // No "Overview" (or other) section-group label — neither the wireframe nor
+                // founder-decisions doc calls for one, and it was previously applied to only
+                // one of these four sections rather than consistently to all of them.
+                VStack(alignment: .leading, spacing: 16) {
                     InsightsOverviewBento(summary: summary)
 
                     WeeklyCompletionChart(counts: summary.weeklyCompletedCounts)
@@ -249,10 +300,10 @@ private struct InsightsView: View {
                     WorkspaceBreakdownPanel(entries: workspaceBreakdown)
 
                     TaskHistoryListPanel(
-                        records: Array(viewModel.taskHistoryRecords.prefix(6)),
-                        title: "Recent activity",
+                        records: RecentCompletedTasks.recent(from: viewModel.taskHistoryRecords, limit: 6),
+                        title: "Recently completed",
                         emptyTitle: "No activity yet",
-                        emptyMessage: "Completed, failed, and canceled Sonny tasks will appear here."
+                        emptyMessage: "Completed Sonny tasks will appear here."
                     )
                 }
                 .padding(.horizontal, 30)
@@ -275,17 +326,6 @@ private struct InsightsView: View {
         .onAppear {
             viewModel.refreshTaskHistory()
         }
-    }
-}
-
-private struct InsightsSectionHeader: View {
-    let title: String
-
-    var body: some View {
-        Text(title)
-            .font(SonnyType.eyebrow)
-            .foregroundStyle(SonnyTheme.muted)
-            .textCase(.uppercase)
     }
 }
 
@@ -385,7 +425,7 @@ private struct WeeklyCompletionChart: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 18) {
+        VStack(alignment: .leading, spacing: 16) {
             Text("Tasks completed this week")
                 .font(SonnyType.bodyEmphasis)
                 .foregroundStyle(SonnyTheme.text)
@@ -419,7 +459,8 @@ private struct WeeklyCompletionChart: View {
             }
             .frame(maxWidth: .infinity)
         }
-        .padding(18)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(CommandCenterPalette.cardSurface)
         .overlay(
@@ -449,8 +490,8 @@ private struct WorkspaceBreakdownPanel: View {
     ]
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
-            Text("Breakdown by workspace")
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Breakdown by Workspace")
                 .font(SonnyType.bodyEmphasis)
                 .foregroundStyle(SonnyTheme.text)
 
@@ -476,7 +517,8 @@ private struct WorkspaceBreakdownPanel: View {
                 }
             }
         }
-        .padding(18)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(CommandCenterPalette.cardSurface)
         .overlay(
@@ -493,12 +535,12 @@ private struct WorkspaceBreakdownRow: View {
 
     var body: some View {
         HStack(spacing: 10) {
-            Circle()
+            RoundedRectangle(cornerRadius: 2)
                 .fill(swatchColor)
                 .frame(width: 8, height: 8)
 
             Text(entry.workspaceName)
-                .font(SonnyType.body)
+                .font(SonnyType.caption)
                 .foregroundStyle(SonnyTheme.text)
                 .lineLimit(1)
                 .frame(width: 120, alignment: .leading)
@@ -506,7 +548,7 @@ private struct WorkspaceBreakdownRow: View {
             GeometryReader { proxy in
                 ZStack(alignment: .leading) {
                     RoundedRectangle(cornerRadius: 3)
-                        .fill(SonnyTheme.chartBarMuted)
+                        .fill(SonnyTheme.cardBorder)
                     RoundedRectangle(cornerRadius: 3)
                         .fill(swatchColor)
                         .frame(width: proxy.size.width * entry.fractionOfTotal)
@@ -515,7 +557,7 @@ private struct WorkspaceBreakdownRow: View {
             .frame(height: 6)
 
             Text(percentageText)
-                .font(SonnyType.micro)
+                .font(SonnyType.caption)
                 .foregroundStyle(SonnyTheme.muted)
                 .frame(width: 40, alignment: .trailing)
         }
@@ -535,7 +577,7 @@ private struct TaskHistoryListPanel: View {
     let emptyMessage: String
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 14) {
+        VStack(alignment: .leading, spacing: 2) {
             Text(title)
                 .font(SonnyType.bodyEmphasis)
                 .foregroundStyle(SonnyTheme.text)
@@ -559,7 +601,8 @@ private struct TaskHistoryListPanel: View {
                 }
             }
         }
-        .padding(18)
+        .padding(.horizontal, 20)
+        .padding(.vertical, 18)
         .frame(maxWidth: .infinity, alignment: .leading)
         .background(CommandCenterPalette.cardSurface)
         .overlay(
@@ -601,7 +644,15 @@ private struct TaskHistoryGroupedPanel: View {
                             Text("\(section.title) (\(section.records.count))")
                                 .font(SonnyType.caption)
                                 .foregroundStyle(SonnyTheme.muted)
-                                .padding(.bottom, 6)
+                                .padding(.horizontal, 10)
+                                .padding(.vertical, 7)
+                                .frame(maxWidth: .infinity, alignment: .leading)
+                                // `.ink`, not `.surfaceRaised` — this band sits inside the
+                                // "Recent task history" card, whose own background *is*
+                                // `.surfaceRaised`. Using the same token made the band invisible;
+                                // `.ink` is the one token that actually contrasts against it.
+                                .background(SonnyTheme.ink)
+                                .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
 
                             VStack(spacing: 0) {
                                 ForEach(section.records, id: \.startedAt) { record in
@@ -630,7 +681,7 @@ private struct TaskHistoryRow: View {
     var body: some View {
         HStack(spacing: 10) {
             statusIcon
-                .frame(width: 10, height: 10)
+                .frame(width: 14, height: 14)
                 .accessibilityHidden(true)
 
             VStack(alignment: .leading, spacing: 3) {
@@ -648,6 +699,18 @@ private struct TaskHistoryRow: View {
 
             Spacer(minLength: 12)
 
+            if let workspaceName = record.workspaceName {
+                Text(workspaceName)
+                    .font(SonnyType.micro)
+                    .foregroundStyle(SonnyTheme.muted)
+                    .lineLimit(1)
+                    .padding(.horizontal, 8)
+                    .padding(.vertical, 3)
+                    .overlay(
+                        Capsule().stroke(SonnyTheme.border, lineWidth: 1)
+                    )
+            }
+
             Text(TaskHistoryDateFormatter.relativeTimestamp(for: record.completedAt, now: Date()))
                 .font(SonnyType.micro)
                 .foregroundStyle(SonnyTheme.muted)
@@ -656,21 +719,35 @@ private struct TaskHistoryRow: View {
         }
         .padding(.vertical, 8)
         .accessibilityElement(children: .combine)
-        .accessibilityLabel("\(record.command), \(statusText), \(TaskHistoryDateFormatter.relativeTimestamp(for: record.completedAt, now: Date()))")
+        .accessibilityLabel(
+            "\(record.command), \(statusText)\(record.workspaceName.map { ", \($0)" } ?? ""), " +
+            "\(TaskHistoryDateFormatter.relativeTimestamp(for: record.completedAt, now: Date()))"
+        )
     }
 
     @ViewBuilder
     private var statusIcon: some View {
         switch record.outcomeStatus {
         case .completed:
-            Image(systemName: "checkmark.circle.fill")
-                .resizable()
-                .foregroundStyle(SonnyTheme.success)
+            // Wireframe "Done": filled indigo circle with a dark checkmark cutout.
+            ZStack {
+                Circle().fill(SonnyTheme.taskDone)
+                Image(systemName: "checkmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(SonnyTheme.ink)
+            }
         case .canceled:
-            Image(systemName: "checkmark.circle.fill")
-                .resizable()
-                .foregroundStyle(SonnyTheme.muted)
+            // Wireframe "Canceled": filled blue-gray circle with a dark X cutout.
+            ZStack {
+                Circle().fill(SonnyTheme.taskCanceled)
+                Image(systemName: "xmark")
+                    .font(.system(size: 8, weight: .bold))
+                    .foregroundStyle(SonnyTheme.ink)
+            }
         case .failed:
+            // No wireframe evidence for a failure treatment — this screen only shows
+            // In Progress/Done/Canceled. Reusing In Progress's stroked-ring shape, recolored to
+            // the established danger token, as the most defensible reading absent a direct source.
             Circle()
                 .strokeBorder(SonnyTheme.danger, lineWidth: 1.5)
         default:
@@ -742,7 +819,7 @@ private struct InsightStatPresentation: Identifiable, Equatable {
         }
         return Self(
             id: "average-cycle-time",
-            label: "Avg cycle time",
+            label: "Avg. cycle time",
             value: value,
             delta: delta,
             isPositiveDelta: isPositive
@@ -764,7 +841,9 @@ private struct InsightStatPresentation: Identifiable, Equatable {
             label: "Current streak",
             value: "\(days) day\(days == 1 ? "" : "s")",
             delta: delta,
-            isPositiveDelta: days > 0
+            // Always neutral, never green — unlike the other 3 cards, this delta isn't a
+            // vs.-last-week comparison, so it doesn't get the "improved" color treatment.
+            isPositiveDelta: false
         )
     }
 
@@ -786,6 +865,25 @@ private struct InsightStatPresentation: Identifiable, Equatable {
             return "\(difference)%"
         }
         return "No change"
+    }
+}
+
+/// Not `private` — unlike its neighbors below, this has real branching (hour boundaries, name
+/// splitting, empty-name fallback) worth covering directly rather than only through the view.
+enum TaskGreetingFormatter {
+    static func greeting(hour: Int, fullName: String, displayFullNames: Bool) -> String {
+        let period: String
+        switch hour {
+        case 5..<12: period = "morning"
+        case 12..<17: period = "afternoon"
+        case 17..<22: period = "evening"
+        default: period = "night"
+        }
+        guard !fullName.isEmpty else { return "Good \(period)" }
+        let name = displayFullNames
+            ? fullName
+            : (fullName.components(separatedBy: .whitespaces).first ?? fullName)
+        return "Good \(period), \(name)"
     }
 }
 
@@ -854,14 +952,10 @@ private extension Array {
 
 struct RoutineRowPresentation: Equatable {
     let name: String
-    let stepCount: Int
-    let stepCountText: String
     let detailText: String
 
     init(routine: StoredRoutine) {
         name = routine.name
-        stepCount = routine.steps.count
-        stepCountText = "\(routine.steps.count)"
 
         let visibleLabels = routine.steps.prefix(2).map(AgentActivityPresentation.operationTitle)
         let remainingCount = routine.steps.count - visibleLabels.count
@@ -934,6 +1028,7 @@ struct WorkspaceCardPresentation: Equatable {
 private struct RoutinesView: View {
     @ObservedObject var viewModel: AgentViewModel
     @State private var composerFocusRequest = 0
+    @State private var selectedRoutine: StoredRoutine?
 
     var body: some View {
         VStack(spacing: 0) {
@@ -965,7 +1060,8 @@ private struct RoutinesView: View {
                                         presentation: RoutineRowPresentation(routine: routine),
                                         isLast: index == viewModel.savedRoutines.count - 1,
                                         isRunning: viewModel.isRunning || viewModel.isAwaitingApproval,
-                                        run: { viewModel.runRoutineWidget(routine) }
+                                        run: { viewModel.runRoutineWidget(routine) },
+                                        openDetail: { selectedRoutine = routine }
                                     )
                                 }
                             }
@@ -995,6 +1091,9 @@ private struct RoutinesView: View {
             )
         }
         .background(SonnyTheme.ink)
+        .sheet(item: $selectedRoutine) { routine in
+            RoutineDetailView(routine: routine)
+        }
     }
 
     private func beginNewRoutine() {
@@ -1008,6 +1107,7 @@ private struct RoutineRow: View {
     let isLast: Bool
     let isRunning: Bool
     let run: () -> Void
+    let openDetail: () -> Void
 
     var body: some View {
         VStack(spacing: 0) {
@@ -1015,11 +1115,11 @@ private struct RoutineRow: View {
                 ZStack {
                     RoundedRectangle(cornerRadius: SonnyRadius.routineIcon)
                         .fill(CommandCenterPalette.routineIconBackground)
-                    RoundedRectangle(cornerRadius: 2)
+                    RoundedRectangle(cornerRadius: 3)
                         .fill(CommandCenterPalette.routineIconForeground)
-                        .frame(width: 10, height: 10)
+                        .frame(width: 12, height: 12)
                 }
-                .frame(width: 28, height: 28)
+                .frame(width: 30, height: 30)
 
                 VStack(alignment: .leading, spacing: 3) {
                     Text(presentation.name)
@@ -1034,17 +1134,6 @@ private struct RoutineRow: View {
 
                 Spacer(minLength: 14)
 
-                HStack(spacing: 6) {
-                    Circle()
-                        .fill(SonnyTheme.warning)
-                        .frame(width: 8, height: 8)
-                    Text(presentation.stepCountText)
-                        .font(SonnyType.micro)
-                        .foregroundStyle(SonnyTheme.warning)
-                }
-                .accessibilityElement(children: .combine)
-                .accessibilityLabel("\(presentation.stepCount) saved steps")
-
                 Button(action: run) {
                     Text("Run")
                 }
@@ -1054,6 +1143,10 @@ private struct RoutineRow: View {
             }
             .padding(.horizontal, 18)
             .frame(height: 56)
+            .contentShape(Rectangle())
+            .onTapGesture(perform: openDetail)
+            .accessibilityAddTraits(.isButton)
+            .accessibilityHint("Opens routine details")
 
             if !isLast {
                 Rectangle()
@@ -1097,13 +1190,15 @@ private struct WorkspacesView: View {
                     } else {
                         ScrollView {
                             LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
-                                ForEach(viewModel.savedWorkspaces, id: \.name) { workspace in
+                                ForEach(Array(viewModel.savedWorkspaces.enumerated()), id: \.element.name) { index, workspace in
                                     WorkspaceCard(
                                         presentation: WorkspaceCardPresentation(
                                             workspace: workspace,
                                             taskHistoryRecords: viewModel.taskHistoryRecords
                                         ),
-                                        accent: SonnyTheme.accent,
+                                        accent: CommandCenterPalette.workspaceAvatarColors[
+                                            index % CommandCenterPalette.workspaceAvatarColors.count
+                                        ],
                                         isRunning: viewModel.isRunning || viewModel.isAwaitingApproval,
                                         open: { viewModel.openWorkspaceWidget(workspace) },
                                         markAsTeam: { viewModel.markWorkspaceAsTeam(workspace) }
@@ -1158,10 +1253,10 @@ private struct WorkspaceCard: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            WorkspaceAppIconStack(icons: presentation.appIcons, accent: accent)
+            WorkspaceAvatar(name: presentation.name, color: accent)
 
             Text(presentation.name)
-                .font(SonnyType.bodyEmphasis)
+                .font(SonnyType.avatar)
                 .foregroundStyle(SonnyTheme.text)
                 .lineLimit(1)
                 .padding(.top, 14)
@@ -1185,6 +1280,7 @@ private struct WorkspaceCard: View {
             Spacer(minLength: 12)
 
             HStack {
+                WorkspaceAppIconStack(icons: presentation.appIcons, accent: accent)
                 Spacer()
                 Button(action: open) {
                     Text("Open")
@@ -1195,7 +1291,12 @@ private struct WorkspaceCard: View {
             }
         }
         .padding(18)
-        .frame(maxWidth: 356, minHeight: 190, maxHeight: 190, alignment: .topLeading)
+        // Wireframe's measured 190pt fits the no-saved-URL case; the 36pt avatar (replacing an
+        // 18pt icon stack in this slot) plus a populated `urlsText` row together exceed that
+        // budget, which `.clipShape` below would silently cut off the footer instead of growing
+        // the card. Worst case (empty icon-stack fallback + urlsText + full teamTypeRow) measures
+        // ~209pt via actual Inter line-height metrics — 216 leaves real margin, not a ~1pt one.
+        .frame(maxWidth: 356, minHeight: 190, maxHeight: 216, alignment: .topLeading)
         .background(CommandCenterPalette.cardSurface)
         .overlay(
             RoundedRectangle(cornerRadius: SonnyRadius.workspaceCard)
@@ -1209,22 +1310,25 @@ private struct WorkspaceCard: View {
         switch presentation.effectiveTeamType {
         case .team:
             Text("Team workspace")
-                .font(SonnyType.micro)
+                .font(SonnyType.caption)
                 .foregroundStyle(SonnyTheme.muted)
         case .solo:
             HStack(spacing: 4) {
+                // Wireframe specifies 12px for this label (`13-MainAppWorkspaces.svg:225`);
+                // `.caption` applied uniformly across the row rather than leaving the "Mark as
+                // team" affordance (a real Sonny feature, no wireframe equivalent) at the old 11px.
                 Text("Just you")
-                    .font(SonnyType.micro)
+                    .font(SonnyType.caption)
                     .foregroundStyle(SonnyTheme.muted)
 
                 if presentation.isDefaultTeamType {
                     Text("·")
-                        .font(SonnyType.micro)
+                        .font(SonnyType.caption)
                         .foregroundStyle(SonnyTheme.muted)
 
                     Button(action: markAsTeam) {
                         Text("Mark as team")
-                            .font(SonnyType.micro)
+                            .font(SonnyType.caption)
                             .foregroundStyle(SonnyTheme.accent)
                     }
                     .buttonStyle(.plain)
@@ -1233,6 +1337,32 @@ private struct WorkspaceCard: View {
                 }
             }
         }
+    }
+}
+
+enum WorkspaceAvatarInitial {
+    static func from(name: String) -> String {
+        guard let firstCharacter = name.trimmingCharacters(in: .whitespaces).first else {
+            return "?"
+        }
+        return String(firstCharacter).uppercased()
+    }
+}
+
+private struct WorkspaceAvatar: View {
+    let name: String
+    let color: Color
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: SonnyRadius.workspaceCard)
+                .fill(color.opacity(0.18))
+            Text(WorkspaceAvatarInitial.from(name: name))
+                .font(SonnyType.avatar)
+                .foregroundStyle(color)
+        }
+        .frame(width: 36, height: 36)
+        .accessibilityHidden(true)
     }
 }
 
@@ -1256,7 +1386,10 @@ private struct WorkspaceAppIconStack: View {
         } else {
             let visible = Array(icons.prefix(maxVisible))
             ZStack(alignment: .leading) {
-                ForEach(Array(visible.enumerated()), id: \.offset) { index, icon in
+                // Reversed paint order: the wireframe draws the leftmost icon last (on top) —
+                // ZStack paints later ForEach elements on top, so iterate index 1 before index 0
+                // while keeping each icon's own offset tied to its original (unreversed) index.
+                ForEach(Array(visible.enumerated().reversed()), id: \.offset) { index, icon in
                     iconTile(for: icon)
                         .offset(x: CGFloat(index) * overlap)
                 }
@@ -1396,7 +1529,7 @@ private struct CommandCenterHeaderActionStyle: ButtonStyle {
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
-            .font(SonnyType.microEmphasis)
+            .font(SonnyType.itemTitle)
             .foregroundStyle(SonnyTheme.text.opacity(configuration.isPressed ? 0.7 : 0.92))
             .padding(.horizontal, 10)
             .frame(height: 28)
@@ -1436,8 +1569,14 @@ private enum CommandCenterPalette {
     static let cardSurface = SonnyTheme.surfaceRaised
     static let buttonSurface = SonnyTheme.surfaceRaised
     static let composerSurface = SonnyTheme.collectionSurface
-    static let routineIconBackground = SonnyTheme.accent.opacity(0.18)
+    // Flat #242E52 per the wireframe (not a translucent accent tint) — SonnyTheme.chartBarMuted
+    // is already exactly this hex, just previously unused here.
+    static let routineIconBackground = SonnyTheme.chartBarMuted
     static let routineIconForeground = SonnyTheme.accent
+    // Wireframe assigns each workspace card a distinct avatar color (`13-MainAppWorkspaces.svg`:
+    // Personal=accent, Build in Public=warning, Client Work=success) rather than one fixed color
+    // for every card — cycled by grid position, same pattern as Insights' workspace-breakdown swatches.
+    static let workspaceAvatarColors: [Color] = [SonnyTheme.accent, SonnyTheme.warning, SonnyTheme.success]
 }
 
 private struct CommandCenterPageHeader: View {
@@ -1447,7 +1586,7 @@ private struct CommandCenterPageHeader: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 5) {
             Text(title)
-                .font(SonnyType.hero)
+                .font(SonnyType.pageTitle)
                 .foregroundStyle(SonnyTheme.text)
             if let subtitle {
                 Text(subtitle)
@@ -1498,14 +1637,20 @@ private struct SettingsFoundationView: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
-            CommandCenterPageHeader(title: "Settings")
+            // Not `CommandCenterPageHeader` — this page's wireframe is the only one with a
+            // two-tier title (a compact nav-level label here, a larger content-pane title inside
+            // the bordered panel below). Every other page's title IS the shared header at 23px;
+            // Settings' own "Settings" label is smaller (15px) because it's the parent of that
+            // hierarchy, not a standalone page title.
+            Text("Settings")
+                .font(SonnyType.pageTitleCompact)
+                .foregroundStyle(SonnyTheme.text)
 
-            HStack(spacing: 0) {
+            HStack(alignment: .top, spacing: 18) {
+                // Flush/unbordered per the wireframe — only the content pane to the right has its
+                // own border. A shared box around sidebar+content (the prior structure) put a
+                // border around the sidebar the wireframe never gives it.
                 settingsSidebar
-
-                Rectangle()
-                    .fill(SonnyTheme.border)
-                    .frame(width: 1)
 
                 ScrollView {
                     Group {
@@ -1516,18 +1661,27 @@ private struct SettingsFoundationView: View {
                             SettingsPrivacyPage(viewModel: viewModel)
                         }
                     }
-                    .padding(.horizontal, 30)
-                    .padding(.vertical, 28)
+                    // Wireframe's own static canvas measures 84pt here, but that number assumes
+                    // a fixed 1093pt-wide frame that never has to survive this app's actual
+                    // resizable window. At the app's declared 900pt minWidth, the content pane
+                    // narrows to ~324pt; 84pt padding on both sides would leave only ~156pt for
+                    // the Theme row's three swatch buttons, which have a fixedSize floor of
+                    // 232pt (3×72 + 2×8 gaps) — a real, arithmetic overflow, not a hypothetical
+                    // one. 40pt is still meaningfully more generous than the pre-fix 30pt while
+                    // leaving safety margin at the floor width (324 - 80 = 244 > 232).
+                    .padding(.horizontal, 40)
+                    .padding(.vertical, 44)
                     .frame(maxWidth: .infinity, alignment: .topLeading)
                 }
+                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+                .background(SonnyTheme.collectionSurface)
+                .overlay(
+                    RoundedRectangle(cornerRadius: SonnyRadius.container)
+                        .stroke(SonnyTheme.border, lineWidth: 1)
+                )
+                .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
             }
             .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-            .background(SonnyTheme.collectionSurface)
-            .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.container)
-                    .stroke(SonnyTheme.border, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
         }
         .padding(.horizontal, 28)
         .padding(.top, 24)
@@ -1538,12 +1692,15 @@ private struct SettingsFoundationView: View {
 
     private var settingsSidebar: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("My Account")
-                .font(SonnyType.eyebrow)
-                .foregroundStyle(SonnyTheme.muted)
-                .textCase(.uppercase)
-                .padding(.horizontal, 11)
-                .padding(.bottom, 2)
+            HStack(spacing: 6) {
+                Image(systemName: "person.crop.circle")
+                    .font(SonnyType.icon(12, weight: .medium))
+                Text("My Account")
+                    .font(SonnyType.itemTitle)
+            }
+            .foregroundStyle(SonnyTheme.muted)
+            .padding(.horizontal, 11)
+            .padding(.bottom, 2)
 
             ForEach(SettingsSection.allCases) { section in
                 Button {
@@ -1586,26 +1743,42 @@ private struct SettingsFoundationView: View {
     }
 }
 
+private struct SettingsDivider: View {
+    var body: some View {
+        Rectangle()
+            .fill(SonnyTheme.border)
+            .frame(height: 1)
+    }
+}
+
 private struct SettingsPreferencesPage: View {
     @ObservedObject var viewModel: AgentViewModel
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: 0) {
             SettingsPageTitle(title: "Preferences", subtitle: "Manage your preferences")
+                .padding(.bottom, 20)
+
+            SettingsDivider()
 
             SettingsSectionBlock(title: "Display") {
-                SettingsToggleRow(
-                    title: "Use pointer cursors",
-                    detail: "Change the cursor to a pointer when hovering over any interactive element.",
-                    isOn: $viewModel.usePointerCursors
-                )
-
                 SettingsToggleRow(
                     title: "Display full names",
                     detail: "Show full names of users instead of shorter display names.",
                     isOn: $viewModel.displayFullNames
                 )
+
+                SettingsDivider()
+
+                SettingsToggleRow(
+                    title: "Use pointer cursors",
+                    detail: "Change the cursor to a pointer when hovering over any interactive element.",
+                    isOn: $viewModel.usePointerCursors
+                )
             }
+            .padding(.vertical, 20)
+
+            SettingsDivider()
 
             SettingsSectionBlock(title: "Theme") {
                 SettingsAdaptiveControlRow {
@@ -1622,6 +1795,7 @@ private struct SettingsPreferencesPage: View {
                     .fixedSize(horizontal: true, vertical: false)
                 }
             }
+            .padding(.top, 20)
         }
         .frame(maxWidth: 700, alignment: .topLeading)
     }
@@ -1632,8 +1806,11 @@ private struct SettingsPrivacyPage: View {
     @State private var showDeleteLocalDataConfirmation = false
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 24) {
+        VStack(alignment: .leading, spacing: 0) {
             SettingsPageTitle(title: "Privacy & Permissions", subtitle: "Review local readiness and data controls")
+                .padding(.bottom, 20)
+
+            SettingsDivider()
 
             SettingsSectionBlock(title: "Permission readiness") {
                 VStack(alignment: .leading, spacing: 14) {
@@ -1649,6 +1826,8 @@ private struct SettingsPrivacyPage: View {
                 }
                 .padding(.vertical, 16)
             }
+
+            SettingsDivider()
 
             SettingsSectionBlock(title: "Local data") {
                 VStack(alignment: .leading, spacing: 12) {
@@ -1730,12 +1909,12 @@ private struct SettingsControlLabel: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 3) {
             Text(title)
-                .font(SonnyType.body)
+                .font(SonnyType.bodyEmphasis)
                 .foregroundStyle(SonnyTheme.text)
                 .lineLimit(1)
                 .fixedSize(horizontal: false, vertical: true)
             Text(detail)
-                .font(SonnyType.micro)
+                .font(SonnyType.body)
                 .foregroundStyle(SonnyTheme.muted)
                 .fixedSize(horizontal: false, vertical: true)
         }
@@ -1749,16 +1928,21 @@ private struct SettingsPageTitle: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 6) {
             Text(title)
-                .font(SonnyType.hero)
+                .font(SonnyType.settingsContentTitle)
                 .foregroundStyle(SonnyTheme.text)
             Text(subtitle)
-                .font(SonnyType.body)
+                .font(SonnyType.bodyEmphasis)
                 .foregroundStyle(SonnyTheme.muted)
         }
         .padding(.bottom, 2)
     }
 }
 
+// Flat by design — the wireframe's Preferences/Privacy body is one continuous bordered panel
+// (provided by the caller's ScrollView background) with hairline dividers between blocks and
+// between rows within a block, not per-section cards. `SettingsSectionBlock` only groups a
+// title with its rows now; `SettingsDivider()` between blocks/rows is the caller's job, since
+// this view has no way to know how many un-typed children `content` actually contains.
 private struct SettingsSectionBlock<Content: View>: View {
     let title: String
     let content: Content
@@ -1777,14 +1961,7 @@ private struct SettingsSectionBlock<Content: View>: View {
             VStack(spacing: 0) {
                 content
             }
-            .padding(.horizontal, 18)
             .frame(maxWidth: .infinity, alignment: .leading)
-            .background(SonnyTheme.collectionSurface)
-            .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.container)
-                    .stroke(SonnyTheme.border, lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
         }
     }
 }

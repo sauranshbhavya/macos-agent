@@ -473,8 +473,6 @@ struct ProductShellTests {
 
         let routinePresentation = RoutineRowPresentation(routine: routine)
         #expect(routinePresentation.name == "Morning planning")
-        #expect(routinePresentation.stepCount == 3)
-        #expect(routinePresentation.stepCountText == "3")
         #expect(routinePresentation.detailText == "Open Safari · Create draft · +1 more")
 
         let taskHistoryRecords = [

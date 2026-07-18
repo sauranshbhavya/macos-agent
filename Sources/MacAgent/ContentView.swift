@@ -112,67 +112,29 @@ struct AgentCommandComposerView: View {
     }
 
     var body: some View {
-        VStack(alignment: .leading, spacing: 10) {
-            VStack(alignment: .leading, spacing: 8) {
-                Text("Ask Sonny")
-                    .font(SonnyType.eyebrow)
-                    .foregroundStyle(SonnyTheme.muted)
+        VStack(alignment: .leading, spacing: 8) {
+            // Single-row pill (icon, input, primary action, voice) matches the wireframe's
+            // compact composer. Dry run / hotkey hint / reset have no wireframe equivalent —
+            // they're real Sonny controls with nowhere to go in that row, so they stay as a
+            // secondary row below rather than being dropped.
+            HStack(spacing: 10) {
+                ZStack {
+                    Circle().fill(SonnyTheme.accent.opacity(0.16))
+                    Image(systemName: "wand.and.stars")
+                        .font(SonnyType.icon(13, weight: .medium))
+                        .foregroundStyle(SonnyTheme.accent)
+                }
+                .frame(width: 28, height: 28)
+
                 TextField("Open Safari, zip files, convert docs...", text: $viewModel.command)
                     .textFieldStyle(.plain)
                     .font(SonnyType.command)
-                    .padding(.horizontal, 12)
-                    .padding(.vertical, 11)
-                    .background(SonnyTheme.input)
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 8)
-                            .stroke(
-                                commandFocused ? SonnyTheme.accent.opacity(0.72) : SonnyTheme.border,
-                                lineWidth: 1
-                            )
-                    )
-                    .clipShape(RoundedRectangle(cornerRadius: 8))
                     .disabled(viewModel.isRunning)
                     .focused($commandFocused)
                     .submitLabel(.go)
                     .onSubmit {
                         viewModel.start()
                     }
-
-                if let recentTask = viewModel.recentTaskAffordanceText {
-                    RecentTaskAffordance(text: recentTask)
-                }
-
-                if !viewModel.voiceTranscript.isEmpty {
-                    Label("Voice command received", systemImage: "waveform")
-                        .font(SonnyType.caption)
-                        .foregroundStyle(SonnyTheme.muted)
-                }
-            }
-
-            HStack(spacing: 8) {
-                HStack(spacing: 8) {
-                    DryRunToggle(isOn: $viewModel.dryRun)
-                        .disabled(viewModel.isRunning || viewModel.isAwaitingApproval)
-
-                    Button {
-                        viewModel.toggleVoiceRecording()
-                    } label: {
-                        Label(viewModel.voiceButtonTitle, systemImage: viewModel.voiceButtonIcon)
-                    }
-                    .disabled(!viewModel.canUseVoice && !viewModel.isRecordingVoice)
-                    .buttonStyle(
-                        SonnyButtonStyle(
-                            tone: viewModel.isRecordingVoice ? .danger : .secondary,
-                            width: 86
-                        )
-                    )
-                    .help("Click to speak, or hold Control-Option-Space")
-
-                    HotKeyHint(title: viewModel.voiceHotKeyReady ? "Ctrl-Opt-Space" : "Unavailable")
-                }
-                .frame(width: 320, alignment: .leading)
-
-                Spacer(minLength: 12)
 
                 if viewModel.canCancel {
                     Button {
@@ -183,6 +145,55 @@ struct AgentCommandComposerView: View {
                     .buttonStyle(SonnyButtonStyle(tone: .secondary, width: 86))
                 } else {
                     Button {
+                        viewModel.start()
+                    } label: {
+                        Label(viewModel.primaryButtonTitle, systemImage: viewModel.primaryButtonIcon)
+                    }
+                    .keyboardShortcut(.return, modifiers: [])
+                    .disabled(!viewModel.canSubmit)
+                    .buttonStyle(SonnyButtonStyle(tone: .primary, width: 92))
+                }
+
+                Button {
+                    viewModel.toggleVoiceRecording()
+                } label: {
+                    Image(systemName: viewModel.voiceButtonIcon)
+                }
+                .disabled(!viewModel.canUseVoice && !viewModel.isRecordingVoice)
+                .buttonStyle(SonnyVoiceCircleButtonStyle(isActive: viewModel.isRecordingVoice))
+                .help("Click to speak, or hold Control-Option-Space")
+            }
+            .padding(.horizontal, 10)
+            .padding(.vertical, 8)
+            .background(SonnyTheme.input)
+            .overlay(
+                Capsule().stroke(
+                    commandFocused ? SonnyTheme.accent.opacity(0.72) : SonnyTheme.border,
+                    lineWidth: 1
+                )
+            )
+            .clipShape(Capsule())
+
+            if let recentTask = viewModel.recentTaskAffordanceText {
+                RecentTaskAffordance(text: recentTask)
+            }
+
+            if !viewModel.voiceTranscript.isEmpty {
+                Label("Voice command received", systemImage: "waveform")
+                    .font(SonnyType.caption)
+                    .foregroundStyle(SonnyTheme.muted)
+            }
+
+            HStack(spacing: 8) {
+                DryRunToggle(isOn: $viewModel.dryRun)
+                    .disabled(viewModel.isRunning || viewModel.isAwaitingApproval)
+
+                HotKeyHint(title: viewModel.voiceHotKeyReady ? "Ctrl-Opt-Space" : "Unavailable")
+
+                Spacer(minLength: 12)
+
+                if !viewModel.canCancel {
+                    Button {
                         viewModel.reset()
                     } label: {
                         Label("Reset", systemImage: "arrow.counterclockwise")
@@ -190,17 +201,7 @@ struct AgentCommandComposerView: View {
                     .disabled(viewModel.isRunning)
                     .buttonStyle(SonnyButtonStyle(tone: .secondary, width: 80))
                 }
-
-                Button {
-                    viewModel.start()
-                } label: {
-                    Label(viewModel.primaryButtonTitle, systemImage: viewModel.primaryButtonIcon)
-                }
-                .keyboardShortcut(.return, modifiers: [])
-                .disabled(!viewModel.canSubmit)
-                .buttonStyle(SonnyButtonStyle(tone: .primary, width: 92))
             }
-            .frame(maxWidth: .infinity)
         }
         .onAppear {
             if autoFocus {
@@ -1305,6 +1306,20 @@ enum SonnyType {
     static let brand = inter(42, weight: .semibold)
     static let hero = inter(28, weight: .semibold)
     static let panelTitle = inter(23, weight: .semibold)
+    /// Command Center page titles ("Tasks", "Insights", "Routines", "Workspaces") — 23px/500 per
+    /// the wireframes. Deliberately separate from `panelTitle` (23px/600, a different existing
+    /// consumer: the sidebar "Sonny" wordmark) so this fix doesn't silently change that unrelated
+    /// element's weight too. NOT used for Settings — its "Settings"/"Preferences" pair is its own
+    /// two-tier hierarchy (`pageTitleCompact`/`settingsContentTitle` below), confirmed distinct
+    /// sizes in that page's own wireframe (15px nav label vs. 24px content-pane title), unlike
+    /// every other page where nav label and content title are the same element.
+    static let pageTitle = inter(23, weight: .medium)
+    /// Settings' compact nav-level label ("Settings") — 15px/500, the smaller half of that page's
+    /// two-tier title hierarchy. See `pageTitle`'s note.
+    static let pageTitleCompact = inter(15, weight: .medium)
+    /// Settings' content-pane title ("Preferences", "Privacy & Permissions") — 24px/500, the larger
+    /// half of that page's two-tier title hierarchy. See `pageTitle`'s note.
+    static let settingsContentTitle = inter(24, weight: .medium)
     static let heroStat = inter(22, weight: .medium)
     static let tagline = inter(12)
     static let eyebrow = inter(11, weight: .medium)
@@ -1347,6 +1362,12 @@ enum SonnyTheme {
     static let success = Color(red: 63 / 255, green: 185 / 255, blue: 80 / 255)
     static let chartBarMuted = Color(red: 36 / 255, green: 46 / 255, blue: 82 / 255)
     static let danger = Color(red: 0.973, green: 0.169, blue: 0.376)
+    /// Task-history status-dot colors. The wireframe's own "Done" dot is Linear's brand purple
+    /// (#5E6AD2), resolved in docs/sonny-design-system-reference.md §2.4 as un-cleaned template
+    /// residue — `accent` (#5C84FE) is canonical everywhere, so `taskDone` aliases it rather than
+    /// reproducing the wireframe's literal (wrong) value.
+    static let taskDone = accent
+    static let taskCanceled = Color(red: 0x95 / 255, green: 0xA2 / 255, blue: 0xB3 / 255)
     static let info = text.opacity(0.92)
 }
 
@@ -1521,6 +1542,22 @@ private struct SonnyIconButtonStyle: ButtonStyle {
             .frame(width: 30, height: 30)
             .background(configuration.isPressed ? SonnyTheme.surfaceRaised : Color.clear)
             .clipShape(RoundedRectangle(cornerRadius: 8))
+            .sonnyPointerCursor()
+    }
+}
+
+private struct SonnyVoiceCircleButtonStyle: ButtonStyle {
+    let isActive: Bool
+    @Environment(\.isEnabled) private var isEnabled
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(SonnyType.icon(13, weight: .medium))
+            .foregroundStyle(SonnyTheme.ink)
+            .frame(width: 30, height: 30)
+            .background(isActive ? SonnyTheme.danger : SonnyTheme.accent)
+            .clipShape(Circle())
+            .opacity(configuration.isPressed ? 0.72 : (isEnabled ? 1 : 0.4))
             .sonnyPointerCursor()
     }
 }
