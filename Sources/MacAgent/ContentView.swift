@@ -1309,17 +1309,20 @@ enum SonnyType {
     /// Command Center page titles ("Tasks", "Insights", "Routines", "Workspaces") — 23px/500 per
     /// the wireframes. Deliberately separate from `panelTitle` (23px/600, a different existing
     /// consumer: the sidebar "Sonny" wordmark) so this fix doesn't silently change that unrelated
-    /// element's weight too. NOT used for Settings — its "Settings"/"Preferences" pair is its own
-    /// two-tier hierarchy (`pageTitleCompact`/`settingsContentTitle` below), confirmed distinct
-    /// sizes in that page's own wireframe (15px nav label vs. 24px content-pane title), unlike
-    /// every other page where nav label and content title are the same element.
+    /// element's weight too. NOT used for Settings, which isn't a sidebar destination at all
+    /// (2026-07-18: Settings moved into its own dialog, see `SettingsDialogView`).
     static let pageTitle = inter(23, weight: .medium)
-    /// Settings' compact nav-level label ("Settings") — 15px/500, the smaller half of that page's
-    /// two-tier title hierarchy. See `pageTitle`'s note.
-    static let pageTitleCompact = inter(15, weight: .medium)
-    /// Settings' content-pane title ("Preferences", "Privacy & Permissions") — 24px/500, the larger
-    /// half of that page's two-tier title hierarchy. See `pageTitle`'s note.
+    /// Sidebar "Sonny" wordmark — 13px/600 per the wireframes, deliberately separate from
+    /// `panelTitle` (23px/600, the popover's own `PanelHeader` title) so fixing the wordmark's
+    /// size doesn't silently change that unrelated surface too.
+    static let sidebarWordmark = inter(13, weight: .semibold)
+    /// Settings dialog's content-pane title ("Preferences", "Usage", ...) — 24px/500.
     static let settingsContentTitle = inter(24, weight: .medium)
+    /// Settings subsection labels ("Display", "Theme") — 18px/500, one real step louder than the
+    /// 13px row titles beneath them. Collapsing these to the same size as row titles was a real,
+    /// verified hierarchy loss (`10-MainAppSettings.svg`'s own `font-size` attribute), not a
+    /// close-enough token reuse.
+    static let settingsSectionLabel = inter(18, weight: .medium)
     static let heroStat = inter(22, weight: .medium)
     static let tagline = inter(12)
     static let eyebrow = inter(11, weight: .medium)
@@ -1351,6 +1354,10 @@ enum SonnyTheme {
     static let text = Color(red: 1, green: 1, blue: 1)
     static let muted = Color(red: 149 / 255, green: 150 / 255, blue: 153 / 255)
     static let accent = Color(red: 92 / 255, green: 132 / 255, blue: 254 / 255)
+    /// Sidebar nav-item label color — slightly warmer than pure white, uniform across every
+    /// main-app screen's shared sidebar (the wireframes show no selected/unselected text-color
+    /// distinction on nav rows at all).
+    static let sidebarNavText = Color(red: 226 / 255, green: 227 / 255, blue: 229 / 255)
 
     // Compatibility alias keeps established surfaces on the same rebranded token.
     static let cream = text
@@ -1379,6 +1386,23 @@ enum SonnyRadius {
     static let workspaceCard: CGFloat = 8
     static let sidebarIcon: CGFloat = 10
     static let pill: CGFloat = 20
+}
+
+extension View {
+    /// The sidebar top icon button's own two-pass drop shadow — one of only two shadow
+    /// exceptions in System A besides the Settings toggle knob (`sonnySidebarIconShadow`'s
+    /// counterpart being `sonnyLogoGlow` below). CSS: `drop-shadow(0px 1px 2px rgba(0,0,0,.04))
+    /// drop-shadow(0px 2px 4px rgba(0,0,0,.04))`.
+    func sonnySidebarIconShadow() -> some View {
+        self
+            .shadow(color: .black.opacity(0.04), radius: 1, x: 0, y: 1)
+            .shadow(color: .black.opacity(0.04), radius: 2, x: 0, y: 2)
+    }
+
+    /// The sidebar logo's ambient glow. CSS: `drop-shadow(0px 0px 19.8px rgba(255,255,255,.11))`.
+    func sonnyLogoGlow() -> some View {
+        self.shadow(color: .white.opacity(0.11), radius: 9.9, x: 0, y: 0)
+    }
 }
 
 private struct SonnyPointerCursorsEnabledKey: EnvironmentKey {
@@ -1429,9 +1453,35 @@ private struct SonnyPointerCursorModifier: ViewModifier {
     }
 }
 
+/// Universal hover feedback (2026-07-18): a subtle white tint overlaid on top of whatever the
+/// control already renders, so it works the same way whether the control has a solid background
+/// fill (buttons like `CommandCenterRowActionStyle`) or none (sidebar nav rows, which are only
+/// filled when selected) — one primitive instead of hand-tuning a different "brighter" color per
+/// component. Respects `isEnabled` the same way `sonnyPointerCursor()` does, so disabled controls
+/// (e.g. the account menu's "Get help") correctly show no hover feedback at all.
+private struct SonnyHoverHighlightModifier: ViewModifier {
+    @Environment(\.isEnabled) private var isControlEnabled
+    @State private var isHovering = false
+    let cornerRadius: CGFloat
+
+    func body(content: Content) -> some View {
+        content
+            .overlay(
+                RoundedRectangle(cornerRadius: cornerRadius)
+                    .fill(Color.white.opacity(isHovering && isControlEnabled ? 0.06 : 0))
+                    .allowsHitTesting(false)
+            )
+            .onHover { isHovering = $0 }
+    }
+}
+
 extension View {
     func sonnyPointerCursor() -> some View {
         modifier(SonnyPointerCursorModifier())
+    }
+
+    func sonnyHoverHighlight(cornerRadius: CGFloat = SonnyRadius.container) -> some View {
+        modifier(SonnyHoverHighlightModifier(cornerRadius: cornerRadius))
     }
 
     func glassPanel(cornerRadius: CGFloat) -> some View {
@@ -1477,6 +1527,7 @@ struct SonnyButtonStyle: ButtonStyle {
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .sonnyPointerCursor()
+                .sonnyHoverHighlight(cornerRadius: 8)
         } else {
             label(configuration)
                 .padding(.horizontal, 12)
@@ -1488,6 +1539,7 @@ struct SonnyButtonStyle: ButtonStyle {
                 )
                 .clipShape(RoundedRectangle(cornerRadius: 8))
                 .sonnyPointerCursor()
+                .sonnyHoverHighlight(cornerRadius: 8)
         }
     }
 
@@ -1559,6 +1611,7 @@ private struct SonnyVoiceCircleButtonStyle: ButtonStyle {
             .clipShape(Circle())
             .opacity(configuration.isPressed ? 0.72 : (isEnabled ? 1 : 0.4))
             .sonnyPointerCursor()
+            .sonnyHoverHighlight(cornerRadius: 15)
     }
 }
 

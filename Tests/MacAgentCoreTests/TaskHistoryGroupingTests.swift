@@ -11,7 +11,7 @@ struct TaskHistoryGroupingTests {
 
         let sections = TaskHistoryGrouping.groupedByOutcome(records: [completed, failed, canceled])
 
-        let completedSection = try #require(sections.first { $0.title == "Completed" })
+        let completedSection = try #require(sections.first { $0.title == "Done" })
         let failedSection = try #require(sections.first { $0.title == "Failed" })
         let canceledSection = try #require(sections.first { $0.title == "Canceled" })
 
@@ -27,7 +27,7 @@ struct TaskHistoryGroupingTests {
 
         let sections = TaskHistoryGrouping.groupedByOutcome(records: records)
 
-        let completedSection = try #require(sections.first { $0.title == "Completed" })
+        let completedSection = try #require(sections.first { $0.title == "Done" })
         let failedSection = try #require(sections.first { $0.title == "Failed" })
 
         #expect(completedSection.records.count == 12)
@@ -40,7 +40,7 @@ struct TaskHistoryGroupingTests {
 
         let sections = TaskHistoryGrouping.groupedByOutcome(records: records)
 
-        #expect(sections.map(\.title) == ["Completed"])
+        #expect(sections.map(\.title) == ["Done"])
     }
 
     @Test

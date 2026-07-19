@@ -25,13 +25,14 @@ struct ProductShellTests {
 
     @Test
     func commandCenterDestinationsKeepTheLockedSidebarOrder() {
+        // Settings is no longer a sidebar destination (2026-07-18) — it moved to its own dialog,
+        // opened from the bottom account row. See `SettingsDialogView`.
         #expect(
             CommandCenterDestination.allCases == [
                 .tasks,
                 .insights,
                 .routines,
-                .workspaces,
-                .settings
+                .workspaces
             ]
         )
     }

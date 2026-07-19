@@ -56,17 +56,19 @@ private struct LiquidGlassPanelBackground: ViewModifier {
     func body(content: Content) -> some View {
         content
             .background(
+                // §3.1's exact recipe: the opaque base layer carries `lighten`; both translucent
+                // `rgba(26,26,26,.5)` layers carry `luminosity`. `.compositingGroup()` isolates
+                // this stack so the blend modes composite against each other, not whatever's
+                // drawn behind the sheet.
                 ZStack {
                     RoutineDetailTheme.basePanel
-                    LinearGradient(
-                        colors: [RoutineDetailTheme.basePanel.opacity(0.5), RoutineDetailTheme.basePanel.opacity(0.5)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    )
-                    .blendMode(.lighten)
+                        .blendMode(.lighten)
+                    RoutineDetailTheme.basePanel.opacity(0.5)
+                        .blendMode(.luminosity)
                     RoutineDetailTheme.basePanel.opacity(0.5)
                         .blendMode(.luminosity)
                 }
+                .compositingGroup()
             )
             .overlay(
                 // Approximates the inset "inner glass highlight" (`inset 0 40px 10px -40px #1A1A1A`
@@ -83,14 +85,16 @@ private struct LiquidGlassPanelBackground: ViewModifier {
             )
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius)
-                    .stroke(RoutineDetailTheme.hairline.opacity(0.6), lineWidth: 0.5)
+                    .stroke(RoutineDetailTheme.hairline, lineWidth: 0.5)
             )
             .clipShape(RoundedRectangle(cornerRadius: cornerRadius))
             // The 3-pass hairline rim from §3.2 (±1.25px offset passes plus the 0.5px outline
             // stroke already applied above as an overlay, the more precise translation for a
-            // zero-blur/zero-offset CSS shadow pass).
-            .shadow(color: RoutineDetailTheme.hairline.opacity(0.5), radius: 0.5, x: 1.25, y: 0)
-            .shadow(color: RoutineDetailTheme.hairline.opacity(0.5), radius: 0.5, x: -1.25, y: 0)
+            // zero-blur/zero-offset CSS shadow pass). §3.2's outline color is fully opaque —
+            // SwiftUI's blur-based `.shadow` still softens what CSS's spread-based passes render
+            // sharp, but the color itself shouldn't be additionally dimmed on top of that.
+            .shadow(color: RoutineDetailTheme.hairline, radius: 0.5, x: 1.25, y: 0)
+            .shadow(color: RoutineDetailTheme.hairline, radius: 0.5, x: -1.25, y: 0)
             // The outer drop shadow: `0px <offset>px 48px rgba(0,0,0,.45)`.
             .shadow(color: Color.black.opacity(0.45), radius: 24, x: 0, y: shadowOffset)
     }
@@ -120,8 +124,8 @@ struct RoutineDetailView: View {
 
             ScrollView {
                 VStack(alignment: .leading, spacing: 14) {
-                    ForEach(Array(routine.steps.enumerated()), id: \.element.id) { index, step in
-                        RoutineDetailStepRow(index: index, step: step)
+                    ForEach(routine.steps) { step in
+                        RoutineDetailStepRow(step: step)
                     }
 
                     // Deliberately no Run button here — branch 10 hasn't decided whether Run stays
@@ -153,15 +157,32 @@ struct RoutineDetailView: View {
 }
 
 private struct RoutineDetailStepRow: View {
-    let index: Int
     let step: AgentStep
+
+    /// Icon slot matching the floating widget's own row grammar (§3.3.2: "icon slot... + label
+    /// text") — `docs/sonny-founder-design-decisions.md` asks for "one consistent... experience"
+    /// across both surfaces, not a plain numbered list wearing glass chrome. Resolves the step's
+    /// real app icon the same way `WorkspaceAppIconStack` already does; falls back to a step
+    /// glyph when the step has no app (or it isn't installed).
+    private var resolvedIcon: NSImage? {
+        guard let appName = step.appName else { return nil }
+        return WorkspaceAppIconResolver.shared.icon(forAppName: appName)
+    }
 
     var body: some View {
         HStack(alignment: .top, spacing: 12) {
-            Text("\(index + 1)")
-                .font(RoutineDetailType.sectionLabel)
-                .foregroundStyle(RoutineDetailTheme.mutedText)
-                .frame(width: 20, alignment: .leading)
+            ZStack {
+                if let resolvedIcon {
+                    Image(nsImage: resolvedIcon)
+                        .resizable()
+                        .aspectRatio(contentMode: .fit)
+                } else {
+                    Image(systemName: AgentActivityPresentation.eventIcon(.act))
+                        .font(RoutineDetailType.sectionLabel)
+                        .foregroundStyle(RoutineDetailTheme.mutedText)
+                }
+            }
+            .frame(width: 20, height: 20)
 
             VStack(alignment: .leading, spacing: 2) {
                 Text(AgentActivityPresentation.operationTitle(step))

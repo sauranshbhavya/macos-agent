@@ -15,7 +15,9 @@ public struct TaskHistorySection: Equatable, Sendable, Identifiable {
 public enum TaskHistoryGrouping {
     public static func groupedByOutcome(records: [CompletedTaskRecord]) -> [TaskHistorySection] {
         [
-            TaskHistorySection(title: "Completed", records: records.filter { $0.outcomeStatus == .completed }),
+            // "Done", not "Completed" — matches the wireframe's literal section label
+            // (`9-MainAppHomeScreen.svg`) exactly.
+            TaskHistorySection(title: "Done", records: records.filter { $0.outcomeStatus == .completed }),
             TaskHistorySection(title: "Failed", records: records.filter { $0.outcomeStatus == .failed }),
             TaskHistorySection(title: "Canceled", records: records.filter { $0.outcomeStatus == .canceled })
         ].filter { !$0.records.isEmpty }
