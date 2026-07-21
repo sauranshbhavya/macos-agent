@@ -1,6 +1,6 @@
 # Sonny (macos-agent)
 
-AI-native macOS agent platform. Two Swift package targets: `MacAgentCore` (business logic — capability adapters, risk/approval engine, local stores, planner integration, no UI) and `MacAgent` (the executable — SwiftUI app, menu-bar popover + Command Center window sharing one `AgentViewModel`). Read these before assuming anything about current state — they're the source of truth, not this file:
+AI-native macOS agent platform. Two Swift package targets: `MacAgentCore` (business logic — capability adapters, risk/approval engine, local stores, planner integration, no UI) and `MacAgent` (the executable — SwiftUI app, a floating command widget (`FloatingWidgetView`, opened from the menu-bar icon or the push-to-talk hotkey) + Command Center window sharing one `AgentViewModel`). Read these before assuming anything about current state — they're the source of truth, not this file:
 
 - `docs/sonny-major-release-spec.md` — product spec.
 - `docs/sonny-v1-implementation-changelog.md` — branch-by-branch history, the locked roadmap, and per-branch "Architectural decisions / pitfalls discovered" sections. Read the relevant entries before touching an area you haven't worked in this session.
@@ -18,9 +18,27 @@ env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disabl
 ```
 Plain `swift test` will fail to link. The flags above are required, not optional.
 
+`swift run MacAgent` works for everyday iteration, but a bare SwiftPM executable has no real
+app-bundle identity — `UNUserNotificationCenter`, the microphone permission prompt
+(`AVCaptureDevice.requestAccess`), and Apple-Events-gated automation (Finder/Word) all require one
+and either fail silently or crash outright without it. To manually test any of that, package and
+run a real `.app` instead:
+```
+./scripts/package-app.sh            # add "release" for a release build
+open .build/arm64-apple-macosx/debug/MacAgent.app
+# or, to see console output live:
+.build/arm64-apple-macosx/debug/MacAgent.app/Contents/MacOS/MacAgent
+```
+`Packaging/Info.plist` is the bundle's real `Info.plist` (`CFBundleIdentifier`,
+`NSMicrophoneUsageDescription`, `NSAppleEventsUsageDescription`) — update it if a new capability
+needs its own usage-description key, the same class of requirement that made this necessary in the
+first place. The script ad-hoc-codesigns the assembled bundle; no Apple Developer account needed
+for local testing.
+
 ## Conventions
 
 - Implementation duty is not fixed to one agent — Codex or Claude may implement a given branch/checkpoint, and whichever agent didn't implement it reviews, tracked explicitly per-branch in the changelog (`Implementing agent` / `Reviewing agent` fields), per spec §24.4. When Codex implements, Claude drafts detailed kickoff/fix prompts for it (single fenced block, no nested triple-backtick fences inside it, precise not padded). Whoever reviews — including Claude reviewing its own prior implementation on a later pass — independently verifies: read the real diff in full, rerun the real test suite, hand-trace any non-trivial logic (date math, state machines) rather than trusting a passing test suite alone.
+- **Wireframe fidelity is the literal baseline for any page that has a wireframe, not a reference consulted only for whatever a given checkpoint happens to need.** Build/match the page's *entire* wireframe first — every element, not just the one thing a specific checkpoint is adding — then layer that branch's own feature/data-model work on top of it. Never deflect from the wireframe's established design language while extending it. Pulling exact measurements for the one thing being built is not the same as confirming the whole page still matches once changes land — that gap is exactly how a real mismatch survived undetected across branch 8 and all of branch 9 (the Routines row's yellow badge is wired to step count, but the wireframe's own SVG layer is literally named `streak`) until caught by direct comparison against the raw SVG, not the derived design-reference doc. When a wireframe element is deliberately not built (out of this branch's scope, or an interaction model already rejected), that's a stated, reasoned exception recorded in the changelog — not a silent gap.
 - Work happens in small reviewable checkpoints on one feature branch, not one large unreviewed implementation. See the "Feature Branch Checkpoint Workflow" section at the top of the changelog.
 - Stop and report back instead of trying another fix when either trigger hits: the same test/build failure persists across 3 consecutive fix attempts, or resolving it would require touching files/scope the checkpoint didn't name. State what was tried, why it didn't work, and what's actually needed — don't keep guessing, and don't silently expand the checkpoint's scope to route around it. Applies to whichever agent is implementing that checkpoint.
 - Never commit, push, merge, or open/modify a PR without explicit approval in that exact moment, including on a fresh branch. The user runs `git commit` themselves — give them the message as a single paste-ready `git commit -m "$(cat <<'EOF' ... EOF)"` block (embedded quotes in a plain `-m "..."` break shell parsing), don't run it yourself unless directly told to for that specific commit.

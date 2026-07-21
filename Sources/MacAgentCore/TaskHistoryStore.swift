@@ -5,17 +5,20 @@ public struct CompletedTaskRecord: Codable, Equatable, Sendable {
     public var startedAt: Date
     public var completedAt: Date
     public var outcomeStatus: PriorTaskOutcomeStatus
+    public var workspaceName: String?
 
     public init(
         command: String,
         startedAt: Date,
         completedAt: Date,
-        outcomeStatus: PriorTaskOutcomeStatus
+        outcomeStatus: PriorTaskOutcomeStatus,
+        workspaceName: String? = nil
     ) {
         self.command = command.trimmingCharacters(in: .whitespacesAndNewlines)
         self.startedAt = startedAt
         self.completedAt = completedAt
         self.outcomeStatus = outcomeStatus
+        self.workspaceName = workspaceName
     }
 }
 

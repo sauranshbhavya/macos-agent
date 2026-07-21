@@ -14,24 +14,25 @@ struct ProductShellTests {
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let viewModel = fixture.viewModel
         let coordinator = AppWindowCoordinator(viewModel: viewModel)
-        let popover = ContentView(viewModel: viewModel)
+        let widget = FloatingWidgetView(viewModel: viewModel)
         let commandCenter = CommandCenterView(viewModel: viewModel)
 
         #expect(coordinator.viewModel === viewModel)
-        #expect(popover.viewModel === viewModel)
+        #expect(widget.viewModel === viewModel)
         #expect(commandCenter.viewModel === viewModel)
-        #expect(popover.viewModel === commandCenter.viewModel)
+        #expect(widget.viewModel === commandCenter.viewModel)
     }
 
     @Test
     func commandCenterDestinationsKeepTheLockedSidebarOrder() {
+        // Settings is no longer a sidebar destination (2026-07-18) — it moved to its own dialog,
+        // opened from the bottom account row. See `SettingsDialogView`.
         #expect(
             CommandCenterDestination.allCases == [
                 .tasks,
                 .insights,
                 .routines,
-                .workspaces,
-                .settings
+                .workspaces
             ]
         )
     }
@@ -57,17 +58,17 @@ struct ProductShellTests {
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         defer { fixture.userDefaults.removePersistentDomain(forName: fixture.userDefaultsSuiteName) }
         let viewModel = fixture.viewModel
-        let popover = ContentView(viewModel: viewModel)
+        let widget = FloatingWidgetView(viewModel: viewModel)
         let commandCenter = CommandCenterView(viewModel: viewModel)
 
         #expect(viewModel.usePointerCursors)
 
         viewModel.usePointerCursors = false
-        #expect(popover.viewModel.usePointerCursors == false)
+        #expect(widget.viewModel.usePointerCursors == false)
         #expect(commandCenter.viewModel.usePointerCursors == false)
 
         viewModel.usePointerCursors = true
-        #expect(popover.viewModel.usePointerCursors)
+        #expect(widget.viewModel.usePointerCursors)
         #expect(commandCenter.viewModel.usePointerCursors)
     }
 
@@ -101,6 +102,58 @@ struct ProductShellTests {
         )
         defer { try? FileManager.default.removeItem(at: thirdLaunch.root) }
         #expect(thirdLaunch.viewModel.usePointerCursors)
+    }
+
+    @Test
+    func displayFullNamesPreferenceIsSharedInProcessAcrossSurfaces() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        defer { fixture.userDefaults.removePersistentDomain(forName: fixture.userDefaultsSuiteName) }
+        let viewModel = fixture.viewModel
+        let widget = FloatingWidgetView(viewModel: viewModel)
+        let commandCenter = CommandCenterView(viewModel: viewModel)
+
+        #expect(viewModel.displayFullNames == false)
+
+        viewModel.displayFullNames = true
+        #expect(widget.viewModel.displayFullNames)
+        #expect(commandCenter.viewModel.displayFullNames)
+
+        viewModel.displayFullNames = false
+        #expect(widget.viewModel.displayFullNames == false)
+        #expect(commandCenter.viewModel.displayFullNames == false)
+    }
+
+    @Test
+    func displayFullNamesPreferencePersistsThroughInjectedUserDefaults() throws {
+        let suiteName = "ProductShellDisplayFullNames-\(UUID().uuidString)"
+        let userDefaults = try #require(UserDefaults(suiteName: suiteName))
+        defer { userDefaults.removePersistentDomain(forName: suiteName) }
+
+        let firstLaunch = try makeProductShellFixture(
+            userDefaults: userDefaults,
+            userDefaultsSuiteName: suiteName
+        )
+        defer { try? FileManager.default.removeItem(at: firstLaunch.root) }
+        #expect(firstLaunch.viewModel.displayFullNames == false)
+
+        firstLaunch.viewModel.displayFullNames = true
+
+        let secondLaunch = try makeProductShellFixture(
+            userDefaults: userDefaults,
+            userDefaultsSuiteName: suiteName
+        )
+        defer { try? FileManager.default.removeItem(at: secondLaunch.root) }
+        #expect(secondLaunch.viewModel.displayFullNames)
+
+        secondLaunch.viewModel.displayFullNames = false
+
+        let thirdLaunch = try makeProductShellFixture(
+            userDefaults: userDefaults,
+            userDefaultsSuiteName: suiteName
+        )
+        defer { try? FileManager.default.removeItem(at: thirdLaunch.root) }
+        #expect(thirdLaunch.viewModel.displayFullNames == false)
     }
 
     @Test
@@ -196,6 +249,7 @@ struct ProductShellTests {
         #expect(record.command == "= 1 + 1")
         #expect(record.outcomeStatus == .completed)
         #expect(record.completedAt >= record.startedAt)
+        #expect(record.workspaceName == nil)
         #expect(viewModel.taskHistoryRecords.map(\.command) == ["= 1 + 1"])
     }
 
@@ -216,6 +270,7 @@ struct ProductShellTests {
         #expect(record.command == "calc apples")
         #expect(record.outcomeStatus == .failed)
         #expect(record.completedAt >= record.startedAt)
+        #expect(record.workspaceName == nil)
         #expect(viewModel.taskHistoryRecords.map(\.command) == ["calc apples"])
         #expect(viewModel.errorMessage?.contains("Could not calculate that expression") == true)
     }
@@ -240,34 +295,117 @@ struct ProductShellTests {
         #expect(record.command == "snippet save ;history-test = Hello")
         #expect(record.outcomeStatus == .canceled)
         #expect(record.completedAt >= record.startedAt)
+        #expect(record.workspaceName == nil)
         #expect(viewModel.taskHistoryRecords.map(\.command) == ["snippet save ;history-test = Hello"])
         #expect(viewModel.finalSummary == "Approval canceled. No action was taken.")
     }
 
-    @Test(.enabled(if: ProductShellSmokeConfiguration.isEnabled))
-    func popoverContentKeepsItsExistingRootSizeAfterSharedViewExtraction() throws {
+    @Test
+    func directWorkspaceDispatchTagsTheCompletedTaskRecord() async throws {
         let fixture = try makeProductShellFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
-        let hostingController = NSHostingController(
-            rootView: ContentView(viewModel: fixture.viewModel)
-        )
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 600, height: 740),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
-        window.contentViewController = hostingController
-        window.setContentSize(NSSize(width: 600, height: 740))
-        window.makeKeyAndOrderFront(nil)
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
+        let viewModel = fixture.viewModel
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Research", apps: [], urls: []))
+        viewModel.refreshSavedItems()
 
-        #expect(window.contentLayoutRect.size == NSSize(width: 600, height: 740))
+        // Deliberately not `viewModel.openWorkspaceWidget(_:)` — that convenience method appends a
+        // trailing period to the generated command, which defeats InstantCommandResolver's exact
+        // suffix-stripping match and falls through to the real (unconfigured-in-tests) planner, a
+        // pre-existing quirk unrelated to this checkpoint. Using the same plain command string
+        // QuickDispatchTests already proves resolves instantly avoids relying on that code path.
+        viewModel.command = "open research workspace"
+        viewModel.dryRun = false
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
 
-        if let snapshotPath = ProcessInfo.processInfo.environment["SONNY_POPOVER_SNAPSHOT"] {
-            try render(window: window, to: URL(fileURLWithPath: snapshotPath))
-        }
-        window.close()
+        let records = try fixture.taskHistoryStore.loadAll()
+        let record = try #require(records.last)
+        #expect(record.outcomeStatus == .completed)
+        #expect(record.workspaceName == "Research")
+    }
+
+    @Test
+    func routineThatOpensAWorkspaceTagsTheRecordEvenThoughTheCommandNeverMentionsIt() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Research", apps: [], urls: []))
+        let routine = StoredRoutine(
+            name: "Morning Setup",
+            steps: [
+                AgentStep(
+                    id: "open-workspace",
+                    operation: .openWorkspace,
+                    description: "Open workspace",
+                    workspaceName: "Research"
+                )
+            ]
+        )
+        try fixture.routineStore.save(routine)
+        viewModel.refreshSavedItems()
+
+        viewModel.command = "run morning setup"
+        viewModel.dryRun = false
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+        #expect(viewModel.approvalRequest != nil)
+
+        viewModel.cancelCurrentRun()
+
+        let records = try fixture.taskHistoryStore.loadAll()
+        let record = try #require(records.last)
+        #expect(record.outcomeStatus == .canceled)
+        // The command text never mentions "Research" — this can only be tagged via the
+        // routine-nested resolution reading the routine's own saved steps, not free-text matching.
+        #expect(record.workspaceName == "Research")
+    }
+
+    // MARK: - Regression coverage for a separate, pre-existing bug surfaced while testing the
+    // above (unrelated to task-to-workspace tagging itself): runRoutineWidget/openWorkspaceWidget
+    // built commands ending in a trailing period, which defeated InstantCommandResolver's exact
+    // suffix-stripping match and silently fell through to the real network planner instead of
+    // resolving instantly and locally.
+
+    @Test
+    func runRoutineWidgetCommandInstantResolvesWithoutTrailingPunctuationBreakingTheMatch() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let routine = StoredRoutine(
+            name: "Morning Setup",
+            steps: [AgentStep(id: "open", operation: .openApp, description: "", appName: "Safari")]
+        )
+        try fixture.routineStore.save(routine)
+        viewModel.refreshSavedItems()
+
+        viewModel.runRoutineWidget(routine)
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        // run_routine's default tier (2) requires approval — reaching that state, rather than a
+        // planner-missing-key failure, proves the command resolved instantly and locally, with no
+        // network call attempted.
+        #expect(viewModel.approvalRequest != nil)
+        #expect(viewModel.errorMessage == nil)
+    }
+
+    @Test
+    func openWorkspaceWidgetCommandInstantResolvesWithoutTrailingPunctuationBreakingTheMatch() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let workspace = StoredWorkspace(name: "Research", apps: [], urls: [])
+        try fixture.workspaceStore.save(workspace)
+        viewModel.refreshSavedItems()
+
+        viewModel.openWorkspaceWidget(workspace)
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        let records = try fixture.taskHistoryStore.loadAll()
+        let record = try #require(records.last)
+        // open_workspace's default tier (1) auto-runs — completing successfully, rather than a
+        // planner-missing-key failure, proves the command resolved instantly and locally.
+        #expect(record.outcomeStatus == .completed)
+        #expect(viewModel.errorMessage == nil)
     }
 
     @Test
@@ -310,24 +448,48 @@ struct ProductShellTests {
 
         let routinePresentation = RoutineRowPresentation(routine: routine)
         #expect(routinePresentation.name == "Morning planning")
-        #expect(routinePresentation.stepCount == 3)
-        #expect(routinePresentation.stepCountText == "3")
         #expect(routinePresentation.detailText == "Open Safari · Create draft · +1 more")
 
-        let workspacePresentation = WorkspaceCardPresentation(workspace: workspace)
+        let taskHistoryRecords = [
+            CompletedTaskRecord(command: "a", startedAt: .distantPast, completedAt: Date(), outcomeStatus: .completed, workspaceName: "Research"),
+            CompletedTaskRecord(command: "b", startedAt: .distantPast, completedAt: Date(), outcomeStatus: .completed, workspaceName: "Research"),
+            CompletedTaskRecord(command: "c", startedAt: .distantPast, completedAt: Date(), outcomeStatus: .failed, workspaceName: "Research"),
+            CompletedTaskRecord(command: "d", startedAt: .distantPast, completedAt: Date(), outcomeStatus: .completed, workspaceName: "Other")
+        ]
+
+        let workspacePresentation = WorkspaceCardPresentation(
+            workspace: workspace,
+            taskHistoryRecords: taskHistoryRecords,
+            iconResolver: NeverResolvingWorkspaceAppIconResolver()
+        )
         #expect(workspacePresentation.name == "Research")
-        #expect(workspacePresentation.initial == "R")
-        #expect(workspacePresentation.savedItemCount == 3)
-        #expect(workspacePresentation.savedItemCountText == "3 saved items")
-        #expect(workspacePresentation.appsText == "Safari, Notes")
+        #expect(workspacePresentation.effectiveTeamType == .solo)
+        #expect(workspacePresentation.isDefaultTeamType == true)
+        // Only the 2 .completed records tagged "Research" count — the .failed one and the one
+        // tagged "Other" are both excluded.
+        #expect(workspacePresentation.taskCount == 2)
+        #expect(workspacePresentation.taskCountText == "2 tasks")
+        #expect(workspacePresentation.appIcons.map(\.appName) == ["Safari", "Notes"])
         #expect(workspacePresentation.urlsText == "example.com")
+
+        let teamWorkspace = StoredWorkspace(name: "Client Work", apps: [], urls: [], teamType: .team)
+        let teamPresentation = WorkspaceCardPresentation(
+            workspace: teamWorkspace,
+            taskHistoryRecords: taskHistoryRecords,
+            iconResolver: NeverResolvingWorkspaceAppIconResolver()
+        )
+        #expect(teamPresentation.effectiveTeamType == .team)
+        #expect(teamPresentation.isDefaultTeamType == false)
+        #expect(teamPresentation.appIcons.isEmpty)
+        #expect(teamPresentation.taskCount == 0)
+        #expect(teamPresentation.taskCountText == "0 tasks")
     }
 
     @Test
     func savedItemRefreshImmediatelyPublishesCreatesAndUpdatesToTheSharedViewModel() throws {
         let fixture = try makeProductShellFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
-        let popover = ContentView(viewModel: fixture.viewModel)
+        let widget = FloatingWidgetView(viewModel: fixture.viewModel)
         let commandCenter = CommandCenterView(viewModel: fixture.viewModel)
 
         try fixture.routineStore.save(
@@ -341,8 +503,8 @@ struct ProductShellTests {
         )
         fixture.viewModel.refreshSavedItems()
 
-        #expect(popover.viewModel === commandCenter.viewModel)
-        #expect(popover.viewModel.savedRoutines.map(\.name) == ["Morning planning"])
+        #expect(widget.viewModel === commandCenter.viewModel)
+        #expect(widget.viewModel.savedRoutines.map(\.name) == ["Morning planning"])
         #expect(commandCenter.viewModel.savedWorkspaces.map(\.name) == ["Research"])
 
         try fixture.routineStore.save(
@@ -363,8 +525,8 @@ struct ProductShellTests {
         )
         fixture.viewModel.refreshSavedItems()
 
-        #expect(popover.viewModel.savedRoutines.count == 1)
-        #expect(popover.viewModel.savedRoutines.first?.steps.count == 2)
+        #expect(widget.viewModel.savedRoutines.count == 1)
+        #expect(widget.viewModel.savedRoutines.first?.steps.count == 2)
         #expect(commandCenter.viewModel.savedWorkspaces.count == 1)
         #expect(commandCenter.viewModel.savedWorkspaces.first?.apps == ["Safari", "Notes"])
     }
@@ -530,6 +692,15 @@ private struct ProductShellFixedKeyManager: LocalStorageKeyManaging {
 private struct ProductShellEmptyShortcutCatalog: ShortcutCatalogProviding {
     func shortcutNames() throws -> [String] {
         []
+    }
+}
+
+/// Always returns `nil`, so tests never depend on real installed apps or live `NSWorkspace`/
+/// LaunchServices calls — deterministic across every machine and CI runner.
+@MainActor
+private struct NeverResolvingWorkspaceAppIconResolver: WorkspaceAppIconResolving {
+    func icon(forAppName appName: String) -> NSImage? {
+        nil
     }
 }
 
