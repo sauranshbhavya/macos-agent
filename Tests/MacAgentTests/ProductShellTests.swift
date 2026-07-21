@@ -14,13 +14,13 @@ struct ProductShellTests {
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let viewModel = fixture.viewModel
         let coordinator = AppWindowCoordinator(viewModel: viewModel)
-        let popover = ContentView(viewModel: viewModel)
+        let widget = FloatingWidgetView(viewModel: viewModel)
         let commandCenter = CommandCenterView(viewModel: viewModel)
 
         #expect(coordinator.viewModel === viewModel)
-        #expect(popover.viewModel === viewModel)
+        #expect(widget.viewModel === viewModel)
         #expect(commandCenter.viewModel === viewModel)
-        #expect(popover.viewModel === commandCenter.viewModel)
+        #expect(widget.viewModel === commandCenter.viewModel)
     }
 
     @Test
@@ -58,17 +58,17 @@ struct ProductShellTests {
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         defer { fixture.userDefaults.removePersistentDomain(forName: fixture.userDefaultsSuiteName) }
         let viewModel = fixture.viewModel
-        let popover = ContentView(viewModel: viewModel)
+        let widget = FloatingWidgetView(viewModel: viewModel)
         let commandCenter = CommandCenterView(viewModel: viewModel)
 
         #expect(viewModel.usePointerCursors)
 
         viewModel.usePointerCursors = false
-        #expect(popover.viewModel.usePointerCursors == false)
+        #expect(widget.viewModel.usePointerCursors == false)
         #expect(commandCenter.viewModel.usePointerCursors == false)
 
         viewModel.usePointerCursors = true
-        #expect(popover.viewModel.usePointerCursors)
+        #expect(widget.viewModel.usePointerCursors)
         #expect(commandCenter.viewModel.usePointerCursors)
     }
 
@@ -110,17 +110,17 @@ struct ProductShellTests {
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         defer { fixture.userDefaults.removePersistentDomain(forName: fixture.userDefaultsSuiteName) }
         let viewModel = fixture.viewModel
-        let popover = ContentView(viewModel: viewModel)
+        let widget = FloatingWidgetView(viewModel: viewModel)
         let commandCenter = CommandCenterView(viewModel: viewModel)
 
         #expect(viewModel.displayFullNames == false)
 
         viewModel.displayFullNames = true
-        #expect(popover.viewModel.displayFullNames)
+        #expect(widget.viewModel.displayFullNames)
         #expect(commandCenter.viewModel.displayFullNames)
 
         viewModel.displayFullNames = false
-        #expect(popover.viewModel.displayFullNames == false)
+        #expect(widget.viewModel.displayFullNames == false)
         #expect(commandCenter.viewModel.displayFullNames == false)
     }
 
@@ -408,32 +408,6 @@ struct ProductShellTests {
         #expect(viewModel.errorMessage == nil)
     }
 
-    @Test(.enabled(if: ProductShellSmokeConfiguration.isEnabled))
-    func popoverContentKeepsItsExistingRootSizeAfterSharedViewExtraction() throws {
-        let fixture = try makeProductShellFixture()
-        defer { try? FileManager.default.removeItem(at: fixture.root) }
-        let hostingController = NSHostingController(
-            rootView: ContentView(viewModel: fixture.viewModel)
-        )
-        let window = NSWindow(
-            contentRect: NSRect(x: 0, y: 0, width: 600, height: 740),
-            styleMask: [.borderless],
-            backing: .buffered,
-            defer: false
-        )
-        window.contentViewController = hostingController
-        window.setContentSize(NSSize(width: 600, height: 740))
-        window.makeKeyAndOrderFront(nil)
-        RunLoop.main.run(until: Date(timeIntervalSinceNow: 0.1))
-
-        #expect(window.contentLayoutRect.size == NSSize(width: 600, height: 740))
-
-        if let snapshotPath = ProcessInfo.processInfo.environment["SONNY_POPOVER_SNAPSHOT"] {
-            try render(window: window, to: URL(fileURLWithPath: snapshotPath))
-        }
-        window.close()
-    }
-
     @Test
     func activityPresentationHidesInternalOperationAndPhaseNames() {
         let step = AgentStep(
@@ -515,7 +489,7 @@ struct ProductShellTests {
     func savedItemRefreshImmediatelyPublishesCreatesAndUpdatesToTheSharedViewModel() throws {
         let fixture = try makeProductShellFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
-        let popover = ContentView(viewModel: fixture.viewModel)
+        let widget = FloatingWidgetView(viewModel: fixture.viewModel)
         let commandCenter = CommandCenterView(viewModel: fixture.viewModel)
 
         try fixture.routineStore.save(
@@ -529,8 +503,8 @@ struct ProductShellTests {
         )
         fixture.viewModel.refreshSavedItems()
 
-        #expect(popover.viewModel === commandCenter.viewModel)
-        #expect(popover.viewModel.savedRoutines.map(\.name) == ["Morning planning"])
+        #expect(widget.viewModel === commandCenter.viewModel)
+        #expect(widget.viewModel.savedRoutines.map(\.name) == ["Morning planning"])
         #expect(commandCenter.viewModel.savedWorkspaces.map(\.name) == ["Research"])
 
         try fixture.routineStore.save(
@@ -551,8 +525,8 @@ struct ProductShellTests {
         )
         fixture.viewModel.refreshSavedItems()
 
-        #expect(popover.viewModel.savedRoutines.count == 1)
-        #expect(popover.viewModel.savedRoutines.first?.steps.count == 2)
+        #expect(widget.viewModel.savedRoutines.count == 1)
+        #expect(widget.viewModel.savedRoutines.first?.steps.count == 2)
         #expect(commandCenter.viewModel.savedWorkspaces.count == 1)
         #expect(commandCenter.viewModel.savedWorkspaces.first?.apps == ["Safari", "Notes"])
     }

@@ -9,9 +9,105 @@ element that either (a) got built visually with no real data behind it yet, or (
 *not* built because there's no defensible real value to show — so a future backend-focused session
 knows exactly what's still owed, instead of having to re-diff the wireframes from scratch.
 
-## Not built: real system notifications for approval/permission requests
+## Resolved (2026-07-19): floating widget (System B) + real system notifications
 
-**Major, load-bearing gap — read this before touching approval UI on any Command Center page.**
+The gap below this note described the state before the floating-widget phase. As of 2026-07-19
+both are built:
+
+- **Floating widget** (`Sources/MacAgent/FloatingWidgetView.swift`, `SonnyWidgetTheme.swift`,
+  `FloatingWidgetWindowController.swift`) replaces the old menu-bar `NSPopover` entirely
+  (`ContentView.swift`'s `ContentView`/`AgentTaskActivityView`/`ApprovalPanel`/etc. are deleted).
+  The menu-bar icon (now icon-only, no title) and the existing Ctrl-Opt-Space push-to-talk hotkey
+  both open it. It implements all 6 wireframe lifecycle states (§3.3) plus a best-effort 7th
+  (clarification, no wireframe — see below), driven entirely by real `AgentViewModel` state: step
+  rows from `plan.steps`/`stepStatuses`, the permission row from the real `approvalRequest`
+  (tier-based risk approval, not a macOS system-permission prompt), the result card from real
+  `finalSummary`/`suggestions` plus live `FileManager` attributes and the file's real `NSWorkspace`
+  icon, and the failure row from the real `errorMessage`. Composited positioning inside the
+  Command Center window (§3.4) is implemented but only repositions on state/visibility change, not
+  continuously while the Command Center window is being dragged — a minor polish gap, not
+  incorrect, just not live-tracked.
+- **System notifications** (`Sources/MacAgent/SonnyNotificationService.swift`) are real native
+  `UserNotifications` banners per `docs/sonny-founder-design-decisions.md` ("native macOS
+  notifications for v1, not a custom overlay") — macOS renders the chrome shown in
+  `1-PermissionNotification.png`/`2-ErrorNotification.png` itself; this class only supplies
+  title/body/action (Allow / Retry) and routes the actions back to real `AgentViewModel` behavior
+  (`start()` / `retryLastCommand()`). `AppDelegate` posts them only when neither the widget nor the
+  Command Center window is currently visible/frontmost, so they're a fallback for "user is in
+  another app," not a duplicate of the inline UI.
+
+**New real gap this surfaced:** `AgentActionExecutor`/`AgentRunner` update `stepStatuses` coarsely
+— `markAllSteps(.running)` before execution, `markAllSteps(.complete)` or `.failed` after, all at
+once — not incrementally per step as a multi-step chain (e.g. a multi-step routine, or a
+scan-then-zip pair) actually progresses. The wireframe's own Working state (`4-FloatingWidgetWorking.png`)
+shows genuine row-by-row progress: one step checked off while the next spins. The floating widget
+renders whatever `stepStatuses` actually says, so today a multi-step plan's rows visually jump
+straight from all-pending to all-spinning to all-done/failed, rather than progressing one at a
+time. Fixing this for real needs `AgentActionExecutor.executeChain` (and the single-capability
+`execute` path) to report per-step-id completion via a callback as each segment finishes, not just
+before/after the whole run — that's executor-layer work, out of scope for this UI-focused branch.
+
+**Also surfaced, smaller:** §3's own open question #5 (exact SF Symbol identity of a few icon-only
+buttons — mic, retry, Allow/Deny) was never resolved from the wireframe alone (no readable label,
+inferred from convention/position). The widget currently uses `mic`/`mic.fill` (via
+`viewModel.voiceButtonIcon`, reused from the same real voice-recording state the old popover used),
+`arrow.clockwise` (retry), `xmark`/`checkmark` (Deny/Allow) — reasonable SF Symbol choices, not
+confirmed pixel-identical to Figma's originals; worth a visual gut-check against the actual app.
+
+**Clarification state (no wireframe):** `AgentViewModel.clarificationQuestion` is a real, reachable
+state (the planner asking a follow-up question) that none of the 8 wireframes cover. Built as a
+best-effort inline row matching System B's visual language (question text + an inline answer field
+styled like a lighter-weight version of the compose pill), reusing the existing real
+`submitClarification()` path — flagged here since, unlike every other state, there's no wireframe
+to hold this specific design to.
+
+**Also resolved as part of this same branch:** the clipboard-history consent notice
+(`ClipboardHistoryNotice`, previously the *only* UI for `clipboardHistoryEnabled` anywhere, and
+only ever rendered inside the now-deleted popover) is now a persistent toggle in Command Center's
+Settings → Security & Access → "Clipboard History" section, wired through the same
+`applyClipboardHistoryNoticeChoice()` method so it still both persists the choice and starts/stops
+real monitoring, not just a cosmetic switch. This was a real regression risk this branch's own
+restructuring would otherwise have caused (deleting the popover with no replacement UI would have
+made a privacy-sensitive toggle permanently unreachable) — fixed directly rather than left as a gap.
+
+**New gap surfaced (2026-07-20), resolved same day: the notification fallback path is currently
+unreachable — by deliberate decision, not left open.**
+`AppDelegate.isAnySonnySurfaceVisible` (`Sources/MacAgent/AppDelegate.swift`) gates every
+`SonnyNotificationService` post on `widgetController.isVisible || commandCenterWindow?.isKeyWindow`.
+`widgetController.hide()` is never called anywhere in the app (confirmed via a full-project grep) —
+the widget opens on launch and just stays open; combined with its window being `.floating` level
+with `.canJoinAllSpaces` and `.fullScreenAuxiliary` (`FloatingWidgetWindowController.makePanel()`),
+it's genuinely on screen over every app and every Space at all times. That means
+`isAnySonnySurfaceVisible` evaluates `true` in every real scenario, so the permission/error
+notification posts this branch built — whose entire purpose was covering "user is in another app" —
+are wired correctly but never actually fire under the app's current lifecycle. Not a crash and not
+user-visible as broken (the widget's own inline UI genuinely does cover the same states instead),
+but it means one of this branch's two headline deliverables ships as dead code today.
+
+**Decision (2026-07-20, direct confirmation):** the widget stays a permanent on-screen overlay by
+design — no dismiss/hide action is being added. Notifications are therefore accepted as effectively
+unused in their current form; this is a known, documented tradeoff, not a silently-shipped gap (see
+`docs/sonny-founder-design-decisions.md`'s "Notifications" section, which already frames the
+native-notifications choice as "explicitly open to revisiting later, not permanent"). The real
+consequence lands on future work, not this branch: scheduled/background routine execution (branch
+10, `feature/routine-scheduling`) is exactly the future scenario where a task can need
+approval/clarification/failure-reporting with no one actually watching the widget, and — since the
+notification fallback isn't reachable and won't be made reachable by adding a dismiss action — that
+branch must give Command Center its own real, native surface for those three states rather than
+relying on the widget or on notifications. See `docs/sonny-ui-backend-roadmap.md`'s "Command
+Center's own missing permission/clarification/failure UI" entry for the specifics.
+
+**Composited-position staleness, expanded beyond dragging:** the "not continuously tracked while
+dragging" note above is one instance of a broader gap — `FloatingWidgetWindowController.reposition()`
+only runs from `show()` or `contentFrameDidChange` (the widget's *own* content resizing); there's no
+observer on the Command Center window's key status, move, or resize. So switching focus away from
+Command Center to another app (or back), not just dragging the window, leaves the widget glued to
+its last composited-vs-standalone position and pill-visibility state until something else happens to
+trigger a reposition.
+
+---
+
+The original gap description follows, preserved for history/context:
 
 Per direct instruction (2026-07-18, Routines page review): the rich inline
 Plan/Preview/step-log/Approval surface that used to render on Tasks/Routines/Workspaces whenever a
@@ -24,26 +120,29 @@ compact line (spinner + command text + Cancel), no approval controls, no step br
 notification, top-right corner — the user pointed directly at this being already specified in the
 wireframes: `/Users/sauranshbhardwaj/Desktop/wireframes/Sonny UI PNG/1-PermissionNotification.png`
 and `2-ErrorNotification.png` (System B — see `docs/sonny-design-system-reference.md` §3 for the
-liquid-glass token recipe both of these use). **This does not exist in the codebase at all today.**
-No `UNUserNotificationCenter`/`NSUserNotification` integration, no notification-posting code
-anywhere in `Sources/`. Building it needs: real macOS notification permission request/handling,
-posting a notification when `AgentViewModel.approvalRequest` becomes non-nil (and for permission-
-readiness failures), and — this is the hard part — a way for the user to actually act on it
-(Approve/Deny) from *within* the notification itself (macOS notification action buttons) or by
-clicking through to the app. Matching the wireframe's two exact visual states is System B work,
-same design system as the not-yet-built floating widget (branch 11 in the old roadmap numbering).
+liquid-glass token recipe both of these use).
 
-**What still works in the meantime, so this isn't a hard functional gap today:** the menu-bar
-popover (`ContentView.swift`'s `AgentTaskActivityView`, untouched by this UI pass, out of its
-Command-Center-only scope) still renders the full step log, Plan/Preview, and a real
-Approve/Deny `ApprovalPanel`. Both surfaces observe the same shared `AgentViewModel`, so a
-command started from the Command Center that needs tier-2+ approval can still be approved or
-denied — just by opening the popover, not from whichever Command Center page it was started on.
-**This is a real, known UX regression to call out, not a hidden one**: there is currently zero
-indication *on the Command Center pages themselves* that something is waiting for approval beyond
-the compact line's "Waiting for approval: ..." text — no prompt to go check the popover. Once real
-notifications exist, that becomes the actual fix; until then, whoever picks this up should decide
-whether a temporary "check the menu bar" hint is worth adding to the compact indicator.
+## Not built: dry-run mode gives a generic message instead of a real preview
+
+Surfaced 2026-07-20 while manually testing the floating widget: submitting `calc 2*2` with
+Command Center's own Dry Run toggle on returns the same fixed string `AgentViewModel.performStart`
+hardcodes for *every* dry-run command — "Dry run complete. No files were written, no apps were
+opened, and no documents were converted." — regardless of what the command actually was. For a
+calculator command this reads as broken (the user asked "what's 2×2," dry run answered "no files
+were written," never mentioning 4), even though nothing is actually wrong: this is pre-existing
+behavior, not something introduced or touched by the floating-widget work — `dryRun` only lives on
+Command Center's own composer (the floating widget always bypasses it, per this project's earlier
+"Always real, tier-gated" decision), and this generic string predates this branch entirely.
+
+The real gap: dry-run mode's whole design only accounts for *side-effecting* operations (files
+written, apps opened, documents converted) — it has no concept of previewing what a *pure
+computation* (the calculator, and likely other read-only/no-side-effect operations) would actually
+produce. A real fix needs either a per-capability dry-run preview (the calculator adapter computing
+and showing the real answer even under dry-run, since evaluating `2*2` has no side effect worth
+gating), or at minimum a message that doesn't imply nothing happened when the honest answer is "this
+command has no side effects to preview, but here's what running it for real would produce." Worth
+scoping alongside whichever branch next touches `CalculatorCapabilityAdapter`/`performStart`'s
+dry-run branch in `Sources/MacAgentCore` / `Sources/MacAgent/AgentViewModel.swift`.
 
 ## Not built: persisted result/output text for completed tasks
 

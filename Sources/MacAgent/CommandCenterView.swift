@@ -490,12 +490,11 @@ private struct TasksToolbarRow: View {
 /// Plan/Preview/step-log/Approval surface that used to render inline on Tasks/Routines/
 /// Workspaces, which was explicitly "not at all" wanted there; "logs + summary + activity should
 /// just be a flow as to how that thing worked under the hood," nothing more, and definitely not
-/// an approval UI. No approval/permission controls live here either — per direct instruction,
-/// that's meant to surface as a system notification instead (the wireframes already have 2
-/// notification designs for exactly this; not yet built, see docs/sonny-ui-backend-gaps.md). In
-/// the meantime the menu-bar popover still renders the full `AgentTaskActivityView`, including
-/// the real Approve/Deny controls, since it observes the same shared `AgentViewModel` — a pending
-/// approval is never actually unreachable, just not visible on this page.
+/// an approval UI. No approval/permission controls live here either — the real Approve/Deny
+/// controls now live in the floating widget (`FloatingWidgetView`, §3.3.3), which observes the
+/// same shared `AgentViewModel`, so a pending approval is never actually unreachable, just not
+/// visible on this page. If neither the widget nor Command Center is frontmost when an approval
+/// or error occurs, `SonnyNotificationService` posts a native macOS notification as the fallback.
 private struct CommandCenterRunningIndicator: View {
     @ObservedObject var viewModel: AgentViewModel
 
@@ -2252,6 +2251,31 @@ private struct SettingsSecurityAccessPage: View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsPageTitle(title: "Security & Access", subtitle: "Review local readiness")
                 .padding(.bottom, 20)
+
+            SettingsDivider()
+
+            // Previously a one-time dismissible notice inside the now-removed menu-bar popover —
+            // that was this setting's only UI anywhere, and dismissing it was the actual action
+            // that let clipboard monitoring start (see AgentViewModel.refreshClipboardHistoryNotice's
+            // `noticeDismissed && isEnabled` gate). A persistent Settings toggle replaces it here,
+            // reusing the same commit path (`applyClipboardHistoryNoticeChoice`) so every interaction
+            // still both persists the choice and starts/stops monitoring, not just cosmetically
+            // flips a switch.
+            SettingsSectionBlock(title: "Clipboard History") {
+                SettingsToggleRow(
+                    title: "Watch clipboard history",
+                    detail: "Sonny can watch copied text system-wide, excluding password-manager entries flagged ConcealedType or TransientType, and keeps a capped local history.",
+                    isOn: Binding(
+                        get: { viewModel.clipboardHistoryEnabled },
+                        set: { newValue in
+                            viewModel.clipboardHistoryEnabled = newValue
+                            viewModel.applyClipboardHistoryNoticeChoice()
+                        }
+                    )
+                )
+            }
+            .padding(.top, 24)
+            .padding(.bottom, 16)
 
             SettingsDivider()
 

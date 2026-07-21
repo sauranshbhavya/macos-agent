@@ -21,17 +21,18 @@ final class AgentViewModel: ObservableObject {
     @Published var isTranscribingVoice: Bool = false
     @Published var voiceHotKeyStatus: String = "Hold Ctrl-Opt-Space"
     @Published var voiceHotKeyReady: Bool = true
-    @Published var showPermissionPanel: Bool = false
     @Published var permissionItems: [PermissionReadinessItem] = []
     @Published var savedRoutines: [StoredRoutine] = []
     @Published var savedWorkspaces: [StoredWorkspace] = []
     @Published var approvalRequest: RiskApprovalRequest?
-    @Published var showClipboardHistoryNotice: Bool = false
     @Published var clipboardHistoryEnabled: Bool = true
     @Published var priorTaskContext: PriorTaskContext?
     @Published var taskUsageSummary: TaskUsageSummary = .empty
     @Published var taskHistoryRecords: [CompletedTaskRecord] = []
     @Published var localDataDeletionStatusMessage: String?
+    /// Set once at the start of each *new* task (not touched by approve/clarify continuations,
+    /// which resume the same task rather than starting one) — see `TaskOrigin`.
+    @Published private(set) var activeTaskOrigin: TaskOrigin = .commandCenter
     @Published var usePointerCursors: Bool = true {
         didSet {
             userDefaults.set(usePointerCursors, forKey: UserDefaultsKeys.usePointerCursors)
@@ -65,6 +66,20 @@ final class AgentViewModel: ObservableObject {
     private let userDefaults: UserDefaults
     private var clipboardHistoryTimer: Timer?
     private var clarificationAutoExecute = false
+    private var clarificationForcesRealExecution = false
+    /// Preserves the original task's origin across the clarification pause, same pattern as
+    /// `clarificationAutoExecute`/`clarificationForcesRealExecution` — `submitClarification()`
+    /// re-calls `start()`, which would otherwise silently reset origin to its default.
+    private var clarificationOrigin: TaskOrigin = .commandCenter
+    /// Which surface's mic button started the in-progress recording — `toggleVoiceRecording()` is
+    /// called identically from both Command Center's composer and the floating widget's own mic
+    /// button, so this is set explicitly by the caller rather than inferred. Read back when voice
+    /// transcription auto-submits, so that submission is attributed correctly.
+    private var voiceRecordingOrigin: TaskOrigin = .commandCenter
+    /// The last command text actually submitted for real execution — tracked on the shared view
+    /// model (not as widget-local UI state) so both the widget's own retry button and a system
+    /// notification's "Retry" action, which fires from outside SwiftUI entirely, can resubmit it.
+    private var lastCommand = ""
     private var isPushToTalkHotKeyDown = false
     private var pendingCommandForPriorTaskContext: String?
     private var pendingTaskHistoryStartedAt: Date?
@@ -95,6 +110,16 @@ final class AgentViewModel: ObservableObject {
     private enum VoiceRecordingTrigger {
         case button
         case hotKey
+    }
+
+    /// Which surface actually submitted the currently-relevant task — the shared `AgentViewModel`
+    /// has no such concept until now, which was the real cause of the floating widget rendering
+    /// its own duplicate progress/result panel for tasks submitted through Command Center's own
+    /// composer: both surfaces observe the exact same `isRunning`/`finalSummary`/etc. with no way
+    /// to tell which one actually initiated the current activity.
+    enum TaskOrigin {
+        case commandCenter
+        case widget
     }
 
     private enum UserDefaultsKeys {
@@ -223,7 +248,14 @@ final class AgentViewModel: ObservableObject {
         return dryRun ? "eye" : "play"
     }
 
-    func start(autoExecute: Bool = false) {
+    /// - Parameter forceRealExecution: Bypasses the `dryRun` preview-only gate for this run without
+    ///   mutating the shared `dryRun` toggle itself, so a caller (the floating widget, which has no
+    ///   dry-run UI of its own) can always act for real while leaving Command Center's own composer
+    ///   toggle exactly as the user left it.
+    /// - Parameter origin: Which surface is submitting this — see `TaskOrigin`. Defaults to
+    ///   `.commandCenter` so every existing call site (Command Center's own composer) needs no
+    ///   change; the floating widget's own call sites pass `.widget` explicitly.
+    func start(autoExecute: Bool = false, forceRealExecution: Bool = false, origin: TaskOrigin = .commandCenter) {
         if isAwaitingApproval {
             approvePendingRun()
             return
@@ -239,11 +271,12 @@ final class AgentViewModel: ObservableObject {
         currentTask?.cancel()
         isRunning = true
         currentTask = Task {
-            await performStart(autoExecute: autoExecute)
+            await performStart(autoExecute: autoExecute, forceRealExecution: forceRealExecution, origin: origin)
         }
     }
 
-    private func performStart(autoExecute: Bool) async {
+    private func performStart(autoExecute: Bool, forceRealExecution: Bool, origin: TaskOrigin) async {
+        activeTaskOrigin = origin
         errorMessage = nil
         finalSummary = ""
         plan = nil
@@ -271,6 +304,7 @@ final class AgentViewModel: ObservableObject {
         }
 
         let submittedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        lastCommand = submittedCommand
         let taskHistoryStartedAt = Date()
         let priorContextForPlanner = priorTaskContextStore.currentContext()
         priorTaskContext = priorContextForPlanner
@@ -313,7 +347,9 @@ final class AgentViewModel: ObservableObject {
 
             if let question = prepared.clarificationQuestion {
                 clarificationQuestion = question
-                clarificationAutoExecute = autoExecute || !dryRun
+                clarificationAutoExecute = autoExecute || !dryRun || forceRealExecution
+                clarificationForcesRealExecution = forceRealExecution
+                clarificationOrigin = origin
                 finalSummary = "Clarification needed before I can act."
                 logStore.append(.summarize, "Clarification needed: \(question)")
                 recordPriorTaskContext(
@@ -325,7 +361,7 @@ final class AgentViewModel: ObservableObject {
                 return
             }
 
-            if dryRun {
+            if dryRun && !forceRealExecution {
                 markAllSteps(.complete)
                 finalSummary = "Dry run complete. No files were written, no apps were opened, and no documents were converted."
                 logStore.append(.summarize, finalSummary)
@@ -464,6 +500,29 @@ final class AgentViewModel: ObservableObject {
         currentTask?.cancel()
     }
 
+    /// Whether `retryLastCommand()` would actually do anything. `errorMessage` also carries
+    /// pre-flight errors that never reached a real submission (an empty-command validation
+    /// message, a voice-transcription failure) — those leave `lastCommand` empty, so a UI that
+    /// shows a Retry button for *any* `errorMessage` would show one that's silently a no-op for
+    /// exactly those cases. Exposed as a bool rather than exposing `lastCommand` itself, since
+    /// callers only need the yes/no, not the text.
+    var hasRetryableCommand: Bool {
+        !lastCommand.isEmpty
+    }
+
+    /// Resubmits the last real command as-is. Used by the floating widget's task-level-failure
+    /// retry button (§3.3.6) and by the error notification's "Retry" action.
+    func retryLastCommand() {
+        guard !lastCommand.isEmpty, !isRunning, !isAwaitingApproval else {
+            return
+        }
+        command = lastCommand
+        // Retry only has a real UI in the widget's own failure panel and the error notification
+        // (Command Center has no retry control) — tagging it `.widget` regardless of the original
+        // failed task's origin reflects that the retry action itself is a widget interaction.
+        start(forceRealExecution: true, origin: .widget)
+    }
+
     func submitClarification() {
         guard let question = clarificationQuestion else {
             return
@@ -482,17 +541,24 @@ final class AgentViewModel: ObservableObject {
         Clarification answer: \(answer)
         """
         let shouldAutoExecute = clarificationAutoExecute
+        let shouldForceRealExecution = clarificationForcesRealExecution
+        let shouldUseOrigin = clarificationOrigin
         clarificationAutoExecute = false
+        clarificationForcesRealExecution = false
+        clarificationOrigin = .commandCenter
         clarificationQuestion = nil
         clarificationAnswer = ""
-        start(autoExecute: shouldAutoExecute)
+        start(autoExecute: shouldAutoExecute, forceRealExecution: shouldForceRealExecution, origin: shouldUseOrigin)
     }
 
-    func toggleVoiceRecording() {
+    /// - Parameter origin: Which surface's mic button this is — `toggleVoiceRecording()` is called
+    ///   identically from Command Center's composer and the floating widget's own mic button, so
+    ///   the caller states which one explicitly rather than it being inferred.
+    func toggleVoiceRecording(origin: TaskOrigin = .commandCenter) {
         if isRecordingVoice {
             stopVoiceRecordingAndTranscribe()
         } else {
-            startVoiceRecording(trigger: .button)
+            startVoiceRecording(trigger: .button, origin: origin)
         }
     }
 
@@ -508,7 +574,10 @@ final class AgentViewModel: ObservableObject {
         }
 
         isPushToTalkHotKeyDown = true
-        startVoiceRecording(trigger: .hotKey)
+        // The global hotkey always shows the floating widget first (see AppDelegate's
+        // pushToTalkHotKey.onPress), so a hotkey-triggered recording is always a widget
+        // interaction regardless of which surface happened to be focused.
+        startVoiceRecording(trigger: .hotKey, origin: .widget)
     }
 
     func endPushToTalkVoice() {
@@ -536,11 +605,6 @@ final class AgentViewModel: ObservableObject {
             hasAPIKey: hasAPIKey,
             hotKeyReady: voiceHotKeyReady
         )
-    }
-
-    func togglePermissionPanel() {
-        refreshPermissions()
-        showPermissionPanel.toggle()
     }
 
     func refreshSavedItems() {
@@ -584,7 +648,6 @@ final class AgentViewModel: ObservableObject {
         }
 
         clipboardHistoryEnabled = settings.isEnabled
-        showClipboardHistoryNotice = !settings.noticeDismissed
 
         if settings.noticeDismissed && settings.isEnabled {
             startClipboardHistoryMonitoring()
@@ -600,7 +663,6 @@ final class AgentViewModel: ObservableObject {
         )
         do {
             try clipboardHistorySettingsStore.save(settings)
-            showClipboardHistoryNotice = false
             if clipboardHistoryEnabled {
                 startClipboardHistoryMonitoring()
             } else {
@@ -687,6 +749,7 @@ final class AgentViewModel: ObservableObject {
         clarificationQuestion = nil
         clarificationAnswer = ""
         clarificationAutoExecute = false
+        clarificationForcesRealExecution = false
         approvalRequest = nil
         suggestions = []
         stepStatuses = [:]
@@ -697,7 +760,6 @@ final class AgentViewModel: ObservableObject {
         isRecordingVoice = false
         isTranscribingVoice = false
         isPushToTalkHotKeyDown = false
-        showPermissionPanel = false
         refreshPermissions()
         refreshSavedItems()
         refreshTaskHistory()
@@ -724,6 +786,7 @@ final class AgentViewModel: ObservableObject {
         clarificationQuestion = nil
         clarificationAnswer = ""
         clarificationAutoExecute = false
+        clarificationForcesRealExecution = false
         preparedRun = nil
         runner = nil
         pendingCommandForPriorTaskContext = nil
@@ -809,7 +872,7 @@ final class AgentViewModel: ObservableObject {
         )
     }
 
-    private func startVoiceRecording(trigger: VoiceRecordingTrigger) {
+    private func startVoiceRecording(trigger: VoiceRecordingTrigger, origin: TaskOrigin) {
         guard canUseVoice else {
             if !hasAPIKey {
                 errorMessage = "OPENAI_API_KEY is not set. Export it before launching Sonny, then relaunch the app."
@@ -817,6 +880,7 @@ final class AgentViewModel: ObservableObject {
             return
         }
 
+        voiceRecordingOrigin = origin
         isPreparingVoiceRecording = true
 
         Task {
@@ -890,7 +954,7 @@ final class AgentViewModel: ObservableObject {
                 isTranscribingVoice = false
                 preserveUsageForNextStart = true
                 logStore.append(.observe, "Transcript ready. Sonny will act now.")
-                start(autoExecute: true)
+                start(autoExecute: true, origin: voiceRecordingOrigin)
             } catch {
                 isTranscribingVoice = false
                 errorMessage = error.localizedDescription

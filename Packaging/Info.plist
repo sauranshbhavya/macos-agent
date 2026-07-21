@@ -1,0 +1,39 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+	<key>CFBundleIdentifier</key>
+	<string>com.sonny.MacAgent</string>
+	<key>CFBundleName</key>
+	<string>Sonny</string>
+	<key>CFBundleDisplayName</key>
+	<string>Sonny</string>
+	<key>CFBundleExecutable</key>
+	<string>MacAgent</string>
+	<key>CFBundlePackageType</key>
+	<string>APPL</string>
+	<key>CFBundleInfoDictionaryVersion</key>
+	<string>6.0</string>
+	<key>CFBundleShortVersionString</key>
+	<string>1.0</string>
+	<key>CFBundleVersion</key>
+	<string>1</string>
+	<key>LSMinimumSystemVersion</key>
+	<string>14.0</string>
+	<key>NSHighResolutionCapable</key>
+	<true/>
+	<!-- AudioCommandRecorder.swift calls AVCaptureDevice.requestAccess(for: .audio) for voice
+	     commands (push-to-talk and the widget's mic button) — without this key, macOS denies the
+	     request outright for a real bundled app, the same class of failure UNUserNotificationCenter
+	     hit without a bundle identity at all. -->
+	<key>NSMicrophoneUsageDescription</key>
+	<string>Sonny listens while you hold the voice hotkey or tap the mic button, so it can turn what you say into a command.</string>
+	<!-- FinderContextService.swift and DocumentConverter.swift both shell out to /usr/bin/osascript
+	     to drive Finder and Microsoft Word via Apple Events; TCC attributes that automation to the
+	     responsible parent process (this app), which needs its own usage description for the
+	     resulting "MacAgent wants to control Finder/Microsoft Word" prompt to work instead of
+	     silently failing. -->
+	<key>NSAppleEventsUsageDescription</key>
+	<string>Sonny automates Finder to read your selected files and folders, and Microsoft Word to convert documents you ask it to convert.</string>
+</dict>
+</plist>

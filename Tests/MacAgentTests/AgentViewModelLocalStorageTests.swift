@@ -20,7 +20,6 @@ struct AgentViewModelLocalStorageTests {
         #expect(viewModel.savedWorkspaces.isEmpty)
         #expect(viewModel.taskHistoryRecords.isEmpty)
         #expect(viewModel.clipboardHistoryEnabled)
-        #expect(viewModel.showClipboardHistoryNotice)
         #expect(viewModel.errorMessage == nil)
     }
 
@@ -60,7 +59,7 @@ struct AgentViewModelLocalStorageTests {
     }
 
     @Test
-    func clipboardSettingsDecryptFailureSurfacesVisibleErrorAndDoesNotDefaultToEnabledNoticeState() throws {
+    func clipboardSettingsDecryptFailureSurfacesVisibleError() throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let settingsURL = root.appendingPathComponent("clipboard-history-settings.json")
@@ -73,7 +72,6 @@ struct AgentViewModelLocalStorageTests {
         let message = try #require(viewModel.errorMessage)
         #expect(message.contains("Sonny could not load encrypted local data"))
         #expect(message.contains("clipboard history settings"))
-        #expect(!viewModel.showClipboardHistoryNotice)
     }
 
     @Test

@@ -1,6 +1,6 @@
 # Sonny (macos-agent)
 
-AI-native macOS agent platform. Two Swift package targets: `MacAgentCore` (business logic — capability adapters, risk/approval engine, local stores, planner integration, no UI) and `MacAgent` (the executable — SwiftUI app, menu-bar popover + Command Center window sharing one `AgentViewModel`). Read these before assuming anything about current state — they're the source of truth, not this file:
+AI-native macOS agent platform. Two Swift package targets: `MacAgentCore` (business logic — capability adapters, risk/approval engine, local stores, planner integration, no UI) and `MacAgent` (the executable — SwiftUI app, a floating command widget (`FloatingWidgetView`, opened from the menu-bar icon or the push-to-talk hotkey) + Command Center window sharing one `AgentViewModel`). Read these before assuming anything about current state — they're the source of truth, not this file:
 
 - `docs/sonny-major-release-spec.md` — product spec.
 - `docs/sonny-v1-implementation-changelog.md` — branch-by-branch history, the locked roadmap, and per-branch "Architectural decisions / pitfalls discovered" sections. Read the relevant entries before touching an area you haven't worked in this session.
@@ -17,6 +17,23 @@ env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disabl
   -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/usr/lib
 ```
 Plain `swift test` will fail to link. The flags above are required, not optional.
+
+`swift run MacAgent` works for everyday iteration, but a bare SwiftPM executable has no real
+app-bundle identity — `UNUserNotificationCenter`, the microphone permission prompt
+(`AVCaptureDevice.requestAccess`), and Apple-Events-gated automation (Finder/Word) all require one
+and either fail silently or crash outright without it. To manually test any of that, package and
+run a real `.app` instead:
+```
+./scripts/package-app.sh            # add "release" for a release build
+open .build/arm64-apple-macosx/debug/MacAgent.app
+# or, to see console output live:
+.build/arm64-apple-macosx/debug/MacAgent.app/Contents/MacOS/MacAgent
+```
+`Packaging/Info.plist` is the bundle's real `Info.plist` (`CFBundleIdentifier`,
+`NSMicrophoneUsageDescription`, `NSAppleEventsUsageDescription`) — update it if a new capability
+needs its own usage-description key, the same class of requirement that made this necessary in the
+first place. The script ad-hoc-codesigns the assembled bundle; no Apple Developer account needed
+for local testing.
 
 ## Conventions
 
