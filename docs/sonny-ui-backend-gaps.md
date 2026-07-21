@@ -105,6 +105,18 @@ Command Center to another app (or back), not just dragging the window, leaves th
 its last composited-vs-standalone position and pill-visibility state until something else happens to
 trigger a reposition.
 
+**Known UI mistakes deferred to the next branch (2026-07-21, explicit decision):** manual testing of
+this branch's round-3 widget fixes (commit `598582d`) surfaced real UI mistakes in the floating
+widget, per direct user feedback. This project's default rule is that any bug found during a branch's
+own testing gets fixed in that branch before merge, never deferred — that default was explicitly
+overridden here, by direct instruction, rather than silently skipped: the mistakes will be addressed
+in the next branch (`feature/command-center-depth-and-data-model`, or whichever branch actually picks
+up UI+backend work next) instead of here. Specifics were not captured at decision time — Claude has
+no way to independently observe the running app (all manual/visual verification is done by the user),
+so this entry is a placeholder marking that known, real widget UI issues exist and were consciously
+deferred, not a record of what they actually are. Whoever picks up the next branch should get the
+specifics from the user directly before assuming the widget's current UI state is clean.
+
 ---
 
 The original gap description follows, preserved for history/context:
