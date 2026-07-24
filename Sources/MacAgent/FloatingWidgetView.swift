@@ -352,6 +352,7 @@ private extension FloatingWidgetView {
                 plan: viewModel.plan,
                 stepStatuses: viewModel.stepStatuses,
                 request: request,
+                isFirstApproval: !viewModel.hasCompletedFirstApproval,
                 onAllow: { viewModel.start() },
                 onDeny: { viewModel.cancelCurrentRun() }
             )
@@ -479,12 +480,22 @@ private struct WidgetPermissionPanel: View {
     let plan: AgentPlan?
     let stepStatuses: [String: AgentStepStatus]
     let request: RiskApprovalRequest
+    /// Branch 9 checkpoint 8, split 2026-07-24 (see `docs/sonny-founder-design-decisions.md`):
+    /// only the first-time explainer line ships here — the "curated example" half of the original
+    /// resolution is explicitly deferred, not built.
+    let isFirstApproval: Bool
     let onAllow: () -> Void
     let onDeny: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             WidgetExistingStepRows(plan: plan, stepStatuses: stepStatuses)
+
+            if isFirstApproval {
+                Text("Sonny always asks first for actions like this — you decide, every time.")
+                    .font(WidgetType.captionSmall)
+                    .foregroundStyle(WidgetTheme.textMuted)
+            }
 
             HStack(spacing: 8) {
                 Image(systemName: "exclamationmark.triangle")

@@ -57,6 +57,16 @@ final class AgentViewModel: ObservableObject {
             userDefaults.set(displayFullNames, forKey: UserDefaultsKeys.displayFullNames)
         }
     }
+    /// Gates the widget's one-time first-approval explainer copy (branch 9 checkpoint 8, split
+    /// 2026-07-24 — see `docs/sonny-founder-design-decisions.md`). Flips permanently the first time
+    /// the user resolves *any* approval, allow or deny — "shown once, ever," not "shown until
+    /// dismissed." `private(set)`: only `performApproval`/`cancelCurrentRun`'s deny branch, the two
+    /// real resolution points, should ever flip it.
+    @Published private(set) var hasCompletedFirstApproval: Bool = false {
+        didSet {
+            userDefaults.set(hasCompletedFirstApproval, forKey: UserDefaultsKeys.hasCompletedFirstApproval)
+        }
+    }
 
     let logStore = AgentLogStore()
 
@@ -138,6 +148,7 @@ final class AgentViewModel: ObservableObject {
     private enum UserDefaultsKeys {
         static let usePointerCursors = "com.sonny.preferences.usePointerCursors"
         static let displayFullNames = "com.sonny.preferences.displayFullNames"
+        static let hasCompletedFirstApproval = "com.sonny.state.hasCompletedFirstApproval"
     }
 
     init(
@@ -160,6 +171,7 @@ final class AgentViewModel: ObservableObject {
         self.userDefaults = userDefaults
         usePointerCursors = userDefaults.object(forKey: UserDefaultsKeys.usePointerCursors) as? Bool ?? true
         displayFullNames = userDefaults.object(forKey: UserDefaultsKeys.displayFullNames) as? Bool ?? false
+        hasCompletedFirstApproval = userDefaults.object(forKey: UserDefaultsKeys.hasCompletedFirstApproval) as? Bool ?? false
         self.audioRecorder = audioRecorder
         self.permissionReadinessService = permissionReadinessService
         self.routineStore = routineStore
@@ -523,6 +535,7 @@ final class AgentViewModel: ObservableObject {
                 )
             }
             approvalRequest = nil
+            hasCompletedFirstApproval = true
             preparedRun = nil
             runner = nil
             pendingCommandForPriorTaskContext = nil
@@ -1041,6 +1054,7 @@ final class AgentViewModel: ObservableObject {
         errorMessage = nil
         finalSummary = ""
         self.approvalRequest = nil
+        hasCompletedFirstApproval = true
 
         defer {
             publishTaskUsageSummary()

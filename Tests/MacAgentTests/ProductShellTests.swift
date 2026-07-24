@@ -402,6 +402,103 @@ struct ProductShellTests {
         #expect(viewModel.errorMessage == nil)
     }
 
+    // MARK: - Cross-surface shared-state coverage (docs/sonny-manual-test-checklist.md §5) — these
+    // scenarios were previously only manually verified; each targets a specific, real behavior found
+    // by reading the actual implementation, not a guessed-at contract.
+
+    @Test
+    func retryLastCommandTagsOriginAsWidgetRegardlessOfOriginalOrigin() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let workspace = StoredWorkspace(name: "Research", apps: [], urls: [])
+        try fixture.workspaceStore.save(workspace)
+        viewModel.refreshSavedItems()
+
+        // Command-Center-originated (the default) task that completes cleanly.
+        viewModel.openWorkspaceWidget(workspace)
+        try await waitForViewModelToBecomeIdle(viewModel)
+        #expect(viewModel.activeTaskOrigin == .commandCenter)
+        #expect(viewModel.hasRetryableCommand)
+
+        viewModel.retryLastCommand()
+
+        // `isRunning` flips synchronously inside `start()`, before `performStart` (which sets
+        // `activeTaskOrigin`) actually runs on a later turn — `CommandCenterRunningIndicator` only
+        // ever gates on `isRunning || isAwaitingApproval` (see macagent-ui-conventions.md), never on
+        // origin, so it should read this retried task as running immediately, regardless of what
+        // origin ends up tagged.
+        #expect(viewModel.isRunning)
+
+        try await waitForViewModelToBecomeIdle(viewModel)
+        // `retryLastCommand()` hardcodes origin to `.widget` even though the original task was
+        // Command-Center-originated (see its own doc comment) — documented, deliberate behavior;
+        // this locks it in as a regression guard rather than leaving it to only be discovered again.
+        #expect(viewModel.activeTaskOrigin == .widget)
+        #expect(viewModel.runningCommandDisplayText == "Open my Research workspace")
+    }
+
+    @Test
+    func secondRowActionSubmissionIsBlockedWhileATaskIsAlreadyRunning() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let first = StoredWorkspace(name: "Research", apps: [], urls: [])
+        let second = StoredWorkspace(name: "Personal", apps: [], urls: [])
+        try fixture.workspaceStore.save(first)
+        try fixture.workspaceStore.save(second)
+        viewModel.refreshSavedItems()
+
+        viewModel.openWorkspaceWidget(first)
+        #expect(viewModel.isRunning)
+        #expect(viewModel.runningCommandDisplayText == "Open my Research workspace")
+
+        // Simulates a second row-action click (from either surface) while the first is still
+        // running. Command Center's own Run/Open buttons are separately disabled on
+        // `viewModel.isRunning || viewModel.isAwaitingApproval` at the UI layer
+        // (CommandCenterView.swift) — this exercises the ViewModel-level guard underneath that
+        // defense (`start()`'s `guard canSubmit else { return }`), not just the UI affordance.
+        viewModel.openWorkspaceWidget(second)
+        // Still reflects the first, unchanged — the second call never got far enough to touch
+        // any shared state.
+        #expect(viewModel.runningCommandDisplayText == "Open my Research workspace")
+
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        let records = try fixture.taskHistoryStore.loadAll()
+        // Exactly one record — if the guard had failed, the second call would have raced in a
+        // second, silently overlapping task.
+        #expect(records.count == 1)
+        #expect(records.first?.command == "Open my Research workspace")
+    }
+
+    @Test
+    func cancelCurrentRunResetsWidgetRelevantStateRegardlessOfOrigin() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        viewModel.command = "snippet save ;cross-surface-test = Hello"
+
+        // Default origin is `.commandCenter` — simulates a task a Command-Center-only entry point
+        // (a row action) started, reaching the exact state only the widget renders controls for:
+        // "Command Center itself has no approval/permission UI of its own" (macagent-ui-conventions.md).
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+        #expect(viewModel.activeTaskOrigin == .commandCenter)
+        #expect(viewModel.approvalRequest != nil)
+        #expect(viewModel.isAwaitingApproval)
+
+        // `cancelCurrentRun()` is the one shared method both surfaces' Cancel controls call —
+        // this proves it correctly resets every piece of state the widget's own panel-gating logic
+        // reads, even though the task itself was never `.widget`-origin.
+        viewModel.cancelCurrentRun()
+
+        #expect(viewModel.approvalRequest == nil)
+        #expect(!viewModel.isAwaitingApproval)
+        #expect(!viewModel.isRunning)
+        #expect(viewModel.finalSummary == "Approval canceled. No action was taken.")
+    }
+
     @Test
     func activityPresentationHidesInternalOperationAndPhaseNames() {
         let step = AgentStep(
