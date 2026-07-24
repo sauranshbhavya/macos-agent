@@ -20,21 +20,19 @@ private enum WidgetState {
 
 struct FloatingWidgetView: View {
     @ObservedObject var viewModel: AgentViewModel
-    /// Whether `FloatingWidgetWindowController` currently has this composited inside the Command
-    /// Center window (§3.4) rather than floating standalone — defaulted so existing call sites
-    /// (tests constructing this directly) don't need updating; the window controller passes its
-    /// own real instance. Drives hiding the compose pill/compact capsule entirely while
-    /// composited: per §3.4, "only the step-log panel appears; the separate idle input pill is
-    /// not shown alongside it" — Command Center already has its own composer on-page, a second
-    /// one floating on top of it is exactly what read as "2 widgets" being shown.
-    @ObservedObject var positionState: WidgetPositionState = WidgetPositionState()
     @FocusState private var pillFocused: Bool
     /// Per Wispr Flow's own "shrink the bubble when not in use" behavior — collapses to a tiny
     /// icon-only capsule after a period with nothing needing attention, so the widget doesn't sit
     /// on screen as a constant visual barrier. Only meaningful while `isCollapsible` (see below);
-    /// forced back to `false` the instant something needs real attention.
+    /// forced back to `false` the instant something needs real attention. One single timer drives
+    /// both this AND clearing stale `.result`/`.failure` content together (see
+    /// `scheduleAutoDismissIfNeeded`) — they used to be two separate timers at two different
+    /// delays, which was a real, reported bug: the widget would visually shrink while the old
+    /// result/error was still logically "there," and anything that caused a re-render before the
+    /// second timer caught up would show the exact same stale content again, reading as "it took
+    /// multiple compacts to actually go away."
     @State private var isCompact = false
-    @State private var autoCollapseTask: Task<Void, Never>?
+    @State private var autoDismissTask: Task<Void, Never>?
     /// Drives a hover hint shown as a real layout row (see `micHoverHint`) rather than a
     /// `.help()` tooltip — `.help()` already proved unreliable in this exact app once before
     /// (the Insights weekly chart), and was confirmed unreliable here too, not just assumed.
@@ -49,14 +47,9 @@ struct FloatingWidgetView: View {
         // 472pt), so .trailing right-aligned them, leaving the panel's *left* edge visibly
         // indented relative to the pill below it. That was the "error banner misplaced" bug.
         VStack(alignment: .leading, spacing: 12) {
-            if positionState.isComposited {
-                if showsPanel {
-                    styledPanel
-                }
-                // Nothing else while composited — no compose pill, no compact capsule, no mic
-                // hint. Command Center's own composer/indicator already occupies that role on
-                // the page underneath; showing a second one here is the exact bug this fixes.
-            } else if isCompact {
+            // One positioning mode, always — the widget never composites into Command Center's
+            // (or any other app's) own window. See FloatingWidgetWindowController's doc comment.
+            if isCompact {
                 compactCapsule
             } else {
                 if showsPanel {
@@ -79,18 +72,26 @@ struct FloatingWidgetView: View {
         .padding(16)
         .onAppear {
             pillFocused = true
-            scheduleAutoCollapseIfNeeded()
+            scheduleAutoDismissIfNeeded()
         }
         .onChange(of: widgetStateKey) { _, _ in
-            scheduleAutoCollapseIfNeeded()
+            scheduleAutoDismissIfNeeded()
         }
         .onChange(of: viewModel.command) { _, _ in
             if !isCompact {
-                scheduleAutoCollapseIfNeeded()
+                scheduleAutoDismissIfNeeded()
             }
         }
         .onChange(of: isVoiceActive) { _, _ in
-            scheduleAutoCollapseIfNeeded()
+            scheduleAutoDismissIfNeeded()
+        }
+        .onChange(of: viewModel.widgetPresentationRequest) { _, _ in
+            if isCompact {
+                expandFromCompact()
+            } else {
+                pillFocused = true
+                scheduleAutoDismissIfNeeded()
+            }
         }
         // Forces SwiftUI to report its real ideal (non-expanding) size rather than growing to fill
         // whatever frame AppKit hands it — FloatingWidgetWindowController reads that size via
@@ -99,27 +100,13 @@ struct FloatingWidgetView: View {
     }
 
     /// Whether the panel (step-log/permission/clarification/result/failure) should render at all.
-    /// `.working`/`.result` are gated to `activeTaskOrigin == .widget` — those are exactly the two
-    /// states that showed real content, and showing them for a task the widget didn't submit is
-    /// what caused the widget to render a second, confusing copy of whatever Command Center's own
-    /// composer/indicator was already showing for the same task. `.permission`/`.clarification`
-    /// stay ungated: they're the *only* functional path to resolve either today (Command Center's
-    /// own on-page indicator deliberately has no approval controls), so hiding them for a
-    /// Command-Center-originated task would make it permanently un-actionable, not just visually
-    /// duplicated. `.failure` also stays ungated for a related reason: Command Center shows
-    /// `errorMessage` nowhere on its own pages, so the widget is currently the only place a task
-    /// failure is proactively surfaced at all — gating it away would make failures invisible
-    /// rather than just non-duplicated. Flagged in docs/sonny-ui-backend-gaps.md as worth a real
-    /// fix (e.g. Command Center showing its own failure state) rather than silently left this way.
+    /// Delegates to `AgentViewModel.hasVisibleWidgetPanel` — see its doc comment for the full
+    /// per-state reasoning (origin-gating on working/result, why permission/clarification/failure
+    /// always show) — kept there rather than duplicated here since
+    /// `FloatingWidgetWindowController`'s compositing decision now depends on the exact same
+    /// predicate and the two must never drift apart.
     private var showsPanel: Bool {
-        switch state {
-        case .idle:
-            return false
-        case .working, .result:
-            return viewModel.activeTaskOrigin == .widget
-        case .permission, .clarification, .failure:
-            return true
-        }
+        viewModel.hasVisibleWidgetPanel
     }
 
     /// Voice recording/transcription isn't part of `WidgetState` (it's orthogonal to a task being
@@ -140,7 +127,12 @@ struct FloatingWidgetView: View {
             return false
         }
         switch state {
-        case .idle, .result, .failure:
+        case .idle:
+            // Idle is the one state where the composer is enabled and the user can actually be
+            // mid-typing. Collapsing out from under unsent text after 6s of thinking-while-typing
+            // was a real bug — the field is genuinely "in use" even with nothing submitted yet.
+            return viewModel.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        case .result, .failure:
             return true
         case .working:
             return viewModel.activeTaskOrigin != .widget
@@ -149,23 +141,43 @@ struct FloatingWidgetView: View {
         }
     }
 
-    private func scheduleAutoCollapseIfNeeded() {
-        autoCollapseTask?.cancel()
+    /// `.result` (including a clean "Canceled.") always clears when this fires — there's no
+    /// persistent-vs-transient axis for a completed run the way there is for errors, every result
+    /// is tied to one specific, already-finished task. `.failure` only clears when
+    /// `errorIsPersistent` is false — a config problem (API key missing, mic permission denied)
+    /// keeps saying so until the user actually fixes it rather than silently vanishing.
+    private var shouldClearOutcomeOnDismiss: Bool {
+        switch state {
+        case .result:
+            return true
+        case .failure:
+            return !viewModel.errorIsPersistent
+        default:
+            return false
+        }
+    }
+
+    private func scheduleAutoDismissIfNeeded() {
+        autoDismissTask?.cancel()
         guard isCollapsible else {
             isCompact = false
             return
         }
-        autoCollapseTask = Task {
+        let shouldClearOutcome = shouldClearOutcomeOnDismiss
+        autoDismissTask = Task {
             try? await Task.sleep(for: Self.autoCollapseDelay)
             guard !Task.isCancelled else { return }
             isCompact = true
+            if shouldClearOutcome {
+                viewModel.clearStaleTaskOutcome()
+            }
         }
     }
 
     private func expandFromCompact() {
         isCompact = false
         pillFocused = true
-        scheduleAutoCollapseIfNeeded()
+        scheduleAutoDismissIfNeeded()
     }
 
     private var styledPanel: some View {
@@ -228,8 +240,9 @@ struct FloatingWidgetView: View {
     private func submit() {
         let text = viewModel.command.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty, !isTaskInFlight else { return }
-        viewModel.start(forceRealExecution: true, origin: .widget)
-        viewModel.command = ""
+        // `start()` itself now clears `command` centrally, synchronously, right after capturing
+        // it — correct for every caller, not just this one.
+        viewModel.start(origin: .widget)
     }
 
     private var composerPill: some View {
@@ -286,20 +299,32 @@ struct FloatingWidgetView: View {
         .frame(width: 36, height: 36)
         .widgetCircularBackground(tint: WidgetTheme.secondaryCircular)
         .disabled(!viewModel.canUseVoice && !viewModel.isRecordingVoice)
-        .onHover { hovering in isMicHovered = hovering }
+        // Diagnosed via a debug print: hover worked exactly once, right after a fresh launch, and
+        // never again — including after the panel had since lost key status (e.g. the user clicked
+        // into another app). SwiftUI's `.onHover` is backed by an `NSTrackingArea` that defaults to
+        // `.activeInKeyWindow` — it only tracks mouse enter/exit while this panel is *actually* the
+        // system's key window, which stops being true the instant focus moves anywhere else. This
+        // widget needs hover to work regardless of key status (it's visible and interactive even
+        // when some other app is active), so it needs a real `.activeAlways` tracking area instead
+        // of SwiftUI's default — not achievable through `.onHover` itself.
+        .overlay(AlwaysActiveHoverTracker(isHovering: $isMicHovered))
     }
 
     /// Real layout row (same slot the panel occupies), not a `.help()` tooltip or a floating
     /// `.overlay` — both would need extra window padding to avoid clipping the same way the old
     /// drop shadow did; this participates in `fixedSize()`'s measurement like everything else, so
-    /// the window just grows to fit it correctly.
+    /// the window just grows to fit it correctly. Deliberately matches `composerPill`'s own shape
+    /// (`Capsule` via `widgetGlassPill()`, not `widgetGlassPanel()`'s `RoundedRectangle`) and exact
+    /// 472×40 frame, not just a text-sized bubble — an unconstrained width/height and a different
+    /// corner shape than the pill directly beneath it read as a stray, misaligned fragment rather
+    /// than a hint that visibly belongs to the row it's describing.
     private var micHoverHint: some View {
         Text("Speak your command — or hold Ctrl-Opt-Space anywhere")
             .font(WidgetType.captionSmall)
             .foregroundStyle(WidgetTheme.textFull)
             .padding(.horizontal, 14)
-            .padding(.vertical, 10)
-            .widgetGlassPanel()
+            .frame(width: 472, height: 40, alignment: .leading)
+            .widgetGlassPill()
             .transition(.opacity)
     }
 }
@@ -689,6 +714,55 @@ private struct WidgetFailurePanel: View {
                     .widgetCircularBackground(tint: WidgetTheme.taskFailureRetry)
                 }
             }
+        }
+    }
+}
+
+// MARK: - Hover tracking that works regardless of key-window status
+
+/// SwiftUI's `.onHover` is backed by an `NSTrackingArea` that only tracks while the containing
+/// window is key by default — wrong for a permanent overlay that's routinely *not* key (any other
+/// app being active means this panel isn't). Uses a real `.activeAlways` tracking area instead,
+/// which AppKit fires regardless of key-window status. `.inVisibleRect` keeps the tracked region
+/// correct automatically as the view's frame changes (this panel resizes/repositions often), with
+/// no manual re-registration needed.
+private struct AlwaysActiveHoverTracker: NSViewRepresentable {
+    @Binding var isHovering: Bool
+
+    func makeNSView(context: Context) -> TrackingNSView {
+        let view = TrackingNSView()
+        view.isHovering = $isHovering
+        return view
+    }
+
+    func updateNSView(_ nsView: TrackingNSView, context: Context) {
+        nsView.isHovering = $isHovering
+    }
+
+    final class TrackingNSView: NSView {
+        var isHovering: Binding<Bool>?
+
+        override func updateTrackingAreas() {
+            super.updateTrackingAreas()
+            for area in trackingAreas {
+                removeTrackingArea(area)
+            }
+            addTrackingArea(
+                NSTrackingArea(
+                    rect: .zero,
+                    options: [.mouseEnteredAndExited, .activeAlways, .inVisibleRect],
+                    owner: self,
+                    userInfo: nil
+                )
+            )
+        }
+
+        override func mouseEntered(with event: NSEvent) {
+            isHovering?.wrappedValue = true
+        }
+
+        override func mouseExited(with event: NSEvent) {
+            isHovering?.wrappedValue = false
         }
     }
 }

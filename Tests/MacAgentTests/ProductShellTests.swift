@@ -211,7 +211,6 @@ struct ProductShellTests {
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let viewModel = fixture.viewModel
         viewModel.command = "= 1 + 1"
-        viewModel.dryRun = false
 
         viewModel.start()
         while viewModel.isRunning {
@@ -238,7 +237,6 @@ struct ProductShellTests {
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let viewModel = fixture.viewModel
         viewModel.command = "= 1 + 1"
-        viewModel.dryRun = false
 
         viewModel.start()
         try await waitForViewModelToBecomeIdle(viewModel)
@@ -259,7 +257,6 @@ struct ProductShellTests {
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let viewModel = fixture.viewModel
         viewModel.command = "calc apples"
-        viewModel.dryRun = false
 
         viewModel.start()
         try await waitForViewModelToBecomeIdle(viewModel)
@@ -281,7 +278,6 @@ struct ProductShellTests {
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let viewModel = fixture.viewModel
         viewModel.command = "snippet save ;history-test = Hello"
-        viewModel.dryRun = false
 
         viewModel.start()
         try await waitForViewModelToBecomeIdle(viewModel)
@@ -314,7 +310,6 @@ struct ProductShellTests {
         // pre-existing quirk unrelated to this checkpoint. Using the same plain command string
         // QuickDispatchTests already proves resolves instantly avoids relying on that code path.
         viewModel.command = "open research workspace"
-        viewModel.dryRun = false
         viewModel.start()
         try await waitForViewModelToBecomeIdle(viewModel)
 
@@ -345,7 +340,6 @@ struct ProductShellTests {
         viewModel.refreshSavedItems()
 
         viewModel.command = "run morning setup"
-        viewModel.dryRun = false
         viewModel.start()
         try await waitForViewModelToBecomeIdle(viewModel)
         #expect(viewModel.approvalRequest != nil)

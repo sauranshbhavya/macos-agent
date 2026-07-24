@@ -5,17 +5,24 @@ import MacAgentCore
 @MainActor
 final class AgentViewModel: ObservableObject {
     @Published var command: String = ""
-    @Published var dryRun: Bool = true
     @Published var isRunning: Bool = false
     @Published var plan: AgentPlan?
     @Published var previews: [ActionPreview] = []
     @Published var finalSummary: String = ""
     @Published var errorMessage: String?
+    /// Whether the current `errorMessage` is a persistent configuration problem (missing API key,
+    /// denied mic permission, unavailable hotkey) that will keep being true until the user actually
+    /// fixes their setup — as opposed to a transient, one-off outcome (a failed task, an empty
+    /// transcription, a validation nudge) that's fully resolved by simply trying again. Only the
+    /// latter auto-clears (see `FloatingWidgetView`'s failure-timeout) — the widget is a permanent,
+    /// undismissable overlay, so a persistent problem needs to keep saying so, but a transient one
+    /// sitting there forever after the moment has passed is exactly as stale as the bug this was
+    /// built to fix. Set via `setError(_:persistent:)`, never assigned directly.
+    @Published private(set) var errorIsPersistent: Bool = false
     @Published var clarificationQuestion: String?
     @Published var clarificationAnswer: String = ""
     @Published var suggestions: [RunSuggestion] = []
     @Published var stepStatuses: [String: AgentStepStatus] = [:]
-    @Published var voiceTranscript: String = ""
     @Published var isPreparingVoiceRecording: Bool = false
     @Published var isRecordingVoice: Bool = false
     @Published var isTranscribingVoice: Bool = false
@@ -33,6 +40,13 @@ final class AgentViewModel: ObservableObject {
     /// Set once at the start of each *new* task (not touched by approve/clarify continuations,
     /// which resume the same task rather than starting one) — see `TaskOrigin`.
     @Published private(set) var activeTaskOrigin: TaskOrigin = .commandCenter
+    /// Bump counter Command Center uses to ask the widget to come forward and take focus — e.g.
+    /// "New routine"/"Create workspace" pre-fill `command` with a starting phrase and need
+    /// somewhere for the user to finish typing it, now that Command Center has no composer of its
+    /// own. `AppDelegate` observes this to call `widgetController.show()`; `FloatingWidgetView`
+    /// observes it to focus its text field — both surfaces reacting to the same shared state
+    /// rather than Command Center reaching into AppKit/the widget directly.
+    @Published var widgetPresentationRequest: Int = 0
     @Published var usePointerCursors: Bool = true {
         didSet {
             userDefaults.set(usePointerCursors, forKey: UserDefaultsKeys.usePointerCursors)
@@ -66,9 +80,8 @@ final class AgentViewModel: ObservableObject {
     private let userDefaults: UserDefaults
     private var clipboardHistoryTimer: Timer?
     private var clarificationAutoExecute = false
-    private var clarificationForcesRealExecution = false
     /// Preserves the original task's origin across the clarification pause, same pattern as
-    /// `clarificationAutoExecute`/`clarificationForcesRealExecution` — `submitClarification()`
+    /// `clarificationAutoExecute` — `submitClarification()`
     /// re-calls `start()`, which would otherwise silently reset origin to its default.
     private var clarificationOrigin: TaskOrigin = .commandCenter
     /// Which surface's mic button started the in-progress recording — `toggleVoiceRecording()` is
@@ -213,8 +226,34 @@ final class AgentViewModel: ObservableObject {
             || !logStore.events.isEmpty
     }
 
-    var recentTaskAffordanceText: String? {
-        priorTaskContext?.shortDisplayText
+    /// Whether the floating widget currently has real content to show — a permission/clarification/
+    /// failure state (the only place either is actionable at all, regardless of which surface
+    /// submitted the task), or a working/result state for a task the widget itself submitted.
+    /// Single source of truth for both `FloatingWidgetView`'s own panel rendering and
+    /// `FloatingWidgetWindowController`'s decision to composite into Command Center — compositing
+    /// whenever Command Center merely has key focus, regardless of this, was the real cause of the
+    /// widget silently vanishing right after launch: Command Center takes key-window focus first,
+    /// the widget composited in immediately while still idle, and an idle+composited render showed
+    /// literally nothing (no compact capsule, no pill), with no way to click back into it. Mirrors
+    /// `FloatingWidgetView`'s private `state`/`showsPanel` precedence exactly — keep both in sync if
+    /// either changes.
+    var hasVisibleWidgetPanel: Bool {
+        if approvalRequest != nil {
+            return true
+        }
+        if clarificationQuestion != nil {
+            return true
+        }
+        if errorMessage != nil && !isRunning {
+            return true
+        }
+        if isRunning {
+            return activeTaskOrigin == .widget
+        }
+        if !finalSummary.isEmpty {
+            return activeTaskOrigin == .widget
+        }
+        return false
     }
 
     var voiceButtonTitle: String {
@@ -234,28 +273,9 @@ final class AgentViewModel: ObservableObject {
         isRecordingVoice ? "stop.circle" : "mic"
     }
 
-    var primaryButtonTitle: String {
-        if isAwaitingApproval {
-            return "Approve"
-        }
-        return dryRun ? "Preview" : "Run"
-    }
-
-    var primaryButtonIcon: String {
-        if isAwaitingApproval {
-            return "checkmark.shield"
-        }
-        return dryRun ? "eye" : "play"
-    }
-
-    /// - Parameter forceRealExecution: Bypasses the `dryRun` preview-only gate for this run without
-    ///   mutating the shared `dryRun` toggle itself, so a caller (the floating widget, which has no
-    ///   dry-run UI of its own) can always act for real while leaving Command Center's own composer
-    ///   toggle exactly as the user left it.
     /// - Parameter origin: Which surface is submitting this — see `TaskOrigin`. Defaults to
-    ///   `.commandCenter` so every existing call site (Command Center's own composer) needs no
-    ///   change; the floating widget's own call sites pass `.widget` explicitly.
-    func start(autoExecute: Bool = false, forceRealExecution: Bool = false, origin: TaskOrigin = .commandCenter) {
+    ///   `.commandCenter`; the floating widget's own call sites pass `.widget` explicitly.
+    func start(autoExecute: Bool = false, origin: TaskOrigin = .commandCenter) {
         if isAwaitingApproval {
             approvePendingRun()
             return
@@ -263,19 +283,48 @@ final class AgentViewModel: ObservableObject {
 
         guard canSubmit else {
             if command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-                errorMessage = "Enter a natural-language command first."
+                setError("Enter a natural-language command first.")
             }
             return
         }
 
+        // Captured now, synchronously, rather than re-read from `command` inside `performStart`.
+        // `performStart` is the body of an unstructured `Task` — it only actually begins running on
+        // a later main-actor turn, not synchronously with this call — and a caller is free to clear
+        // `command` immediately after calling `start()`. Reading the live property from inside
+        // `performStart` meant every widget text submission ran with an already-cleared empty
+        // command: a silently dropped real command, an "Enter a natural-language command first"
+        // failure, and a blank "Untitled task" history record instead of what was typed.
+        let submittedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        // Set here, synchronously, not inside `performStart` — `CommandCenterRunningIndicator`
+        // needs a correct "what's actually running" label the instant `isRunning` flips true, not
+        // a render or two later once the scheduled `Task` catches up.
+        lastCommand = submittedCommand
+        // Cleared centrally, for every caller, rather than leaving each call site (voice, routine/
+        // workspace quick actions, retry, clarification-resume) responsible for remembering to do
+        // it themselves — that inconsistency was the actual bug: voice and the quick actions never
+        // cleared it, so a stale command sat in the widget's own field (and got misread as "what's
+        // running" by the display below) long after the real submission had already moved on.
+        command = ""
+
         currentTask?.cancel()
         isRunning = true
         currentTask = Task {
-            await performStart(autoExecute: autoExecute, forceRealExecution: forceRealExecution, origin: origin)
+            await performStart(submittedCommand: submittedCommand, autoExecute: autoExecute, origin: origin)
         }
     }
 
-    private func performStart(autoExecute: Bool, forceRealExecution: Bool, origin: TaskOrigin) async {
+    /// `currentTask?.cancel()` doesn't guarantee the in-flight work throws Swift's own
+    /// `CancellationError` — a cancelled `URLSession` request (the planner/transcriber's network
+    /// calls) can surface as `URLError(.cancelled)` instead, depending on exactly where the
+    /// cancellation lands. Catching only `CancellationError` meant a cancel that happened mid-network-
+    /// call fell through to the generic failure path: styled red, a Retry button, "cancelled" as the
+    /// error text — a deliberate user cancellation rendered as if it were a real failure.
+    private func isCancellationError(_ error: Error) -> Bool {
+        error is CancellationError || (error as? URLError)?.code == .cancelled
+    }
+
+    private func performStart(submittedCommand: String, autoExecute: Bool, origin: TaskOrigin) async {
         activeTaskOrigin = origin
         errorMessage = nil
         finalSummary = ""
@@ -303,8 +352,6 @@ final class AgentViewModel: ObservableObject {
             currentTask = nil
         }
 
-        let submittedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
-        lastCommand = submittedCommand
         let taskHistoryStartedAt = Date()
         let priorContextForPlanner = priorTaskContextStore.currentContext()
         priorTaskContext = priorContextForPlanner
@@ -347,8 +394,7 @@ final class AgentViewModel: ObservableObject {
 
             if let question = prepared.clarificationQuestion {
                 clarificationQuestion = question
-                clarificationAutoExecute = autoExecute || !dryRun || forceRealExecution
-                clarificationForcesRealExecution = forceRealExecution
+                clarificationAutoExecute = autoExecute
                 clarificationOrigin = origin
                 finalSummary = "Clarification needed before I can act."
                 logStore.append(.summarize, "Clarification needed: \(question)")
@@ -361,116 +407,106 @@ final class AgentViewModel: ObservableObject {
                 return
             }
 
-            if dryRun && !forceRealExecution {
+            let request = try runner.approvalRequest(for: prepared, logAssessment: true)
+            switch request.requirement {
+            case .autoRun:
+                break
+            case .lightweightConfirmation, .explicitApproval:
+                approvalRequest = request
+                pendingCommandForPriorTaskContext = submittedCommand
+                pendingTaskHistoryStartedAt = taskHistoryStartedAt
+                finalSummary = "Approval needed before Sonny can act."
+                logStore.append(.confirm, "Approval required for \(request.assessment.effectiveTier.displayName)")
+                recordPriorTaskContext(
+                    command: submittedCommand,
+                    preparedRun: prepared,
+                    status: .approvalNeeded,
+                    summary: finalSummary
+                )
+                return
+            case .previewOnly:
                 markAllSteps(.complete)
-                finalSummary = "Dry run complete. No files were written, no apps were opened, and no documents were converted."
+                finalSummary = "Preview complete. The current approval policy does not allow this action to run automatically."
                 logStore.append(.summarize, finalSummary)
                 recordPriorTaskContext(
                     command: submittedCommand,
                     preparedRun: prepared,
-                    status: .dryRun,
+                    status: .prepared,
                     summary: finalSummary
                 )
-            } else {
-                let request = try runner.approvalRequest(for: prepared, logAssessment: true)
-                switch request.requirement {
-                case .autoRun:
-                    break
-                case .lightweightConfirmation, .explicitApproval:
-                    approvalRequest = request
-                    pendingCommandForPriorTaskContext = submittedCommand
-                    pendingTaskHistoryStartedAt = taskHistoryStartedAt
-                    finalSummary = "Approval needed before Sonny can act."
-                    logStore.append(.confirm, "Approval required for \(request.assessment.effectiveTier.displayName)")
+                return
+            case .refuse:
+                markAllSteps(.failed)
+                setError("Sonny refused this action under the current approval policy.")
+                logStore.append(.summarize, "Refused by approval policy")
+                recordPriorTaskContext(
+                    command: submittedCommand,
+                    preparedRun: prepared,
+                    status: .failed,
+                    summary: errorMessage ?? "Refused by approval policy",
+                    startedAt: taskHistoryStartedAt
+                )
+                return
+            }
+
+            let result = try await executePreparedRun(
+                preparedRun: prepared,
+                runner: runner,
+                approvalDecision: .notRequested,
+                confirmationMessage: autoExecute ? "Voice command auto-approved execution" : "Typed command auto-approved execution",
+                logRiskAssessment: false
+            )
+            finalSummary = result.summary
+            suggestions = result.suggestions
+            recordPriorTaskContext(
+                command: submittedCommand,
+                preparedRun: prepared,
+                status: .completed,
+                summary: result.summary,
+                startedAt: taskHistoryStartedAt
+            )
+            refreshSavedItems()
+        } catch {
+            if isCancellationError(error) {
+                markAllSteps(.canceled)
+                finalSummary = "Canceled."
+                logStore.append(.summarize, "Canceled by user")
+                if let preparedRun {
                     recordPriorTaskContext(
                         command: submittedCommand,
-                        preparedRun: prepared,
-                        status: .approvalNeeded,
-                        summary: finalSummary
-                    )
-                    return
-                case .previewOnly:
-                    markAllSteps(.complete)
-                    finalSummary = "Preview complete. The current approval policy does not allow this action to run automatically."
-                    logStore.append(.summarize, finalSummary)
-                    recordPriorTaskContext(
-                        command: submittedCommand,
-                        preparedRun: prepared,
-                        status: .prepared,
-                        summary: finalSummary
-                    )
-                    return
-                case .refuse:
-                    markAllSteps(.failed)
-                    errorMessage = "Sonny refused this action under the current approval policy."
-                    logStore.append(.summarize, "Refused by approval policy")
-                    recordPriorTaskContext(
-                        command: submittedCommand,
-                        preparedRun: prepared,
-                        status: .failed,
-                        summary: errorMessage ?? "Refused by approval policy",
+                        preparedRun: preparedRun,
+                        status: .canceled,
+                        summary: finalSummary,
                         startedAt: taskHistoryStartedAt
                     )
-                    return
+                } else {
+                    recordPriorTaskContext(
+                        command: submittedCommand,
+                        status: .canceled,
+                        summary: finalSummary,
+                        startedAt: taskHistoryStartedAt
+                    )
                 }
-
-                let result = try await executePreparedRun(
-                    preparedRun: prepared,
-                    runner: runner,
-                    approvalDecision: .notRequested,
-                    confirmationMessage: autoExecute ? "Voice command auto-approved execution" : "Typed command auto-approved execution",
-                    logRiskAssessment: false
-                )
-                finalSummary = result.summary
-                suggestions = result.suggestions
-                recordPriorTaskContext(
-                    command: submittedCommand,
-                    preparedRun: prepared,
-                    status: .completed,
-                    summary: result.summary,
-                    startedAt: taskHistoryStartedAt
-                )
-                refreshSavedItems()
-            }
-        } catch is CancellationError {
-            markAllSteps(.canceled)
-            finalSummary = "Canceled."
-            logStore.append(.summarize, "Canceled by user")
-            if let preparedRun {
-                recordPriorTaskContext(
-                    command: submittedCommand,
-                    preparedRun: preparedRun,
-                    status: .canceled,
-                    summary: finalSummary,
-                    startedAt: taskHistoryStartedAt
-                )
             } else {
-                recordPriorTaskContext(
-                    command: submittedCommand,
-                    status: .canceled,
-                    summary: finalSummary,
-                    startedAt: taskHistoryStartedAt
-                )
-            }
-        } catch {
-            markAllSteps(.failed)
-            errorMessage = error.localizedDescription
-            logStore.append(.summarize, "Stopped: \(error.localizedDescription)")
-            if let preparedRun {
-                recordPriorTaskContext(
-                    command: submittedCommand,
-                    preparedRun: preparedRun,
-                    status: .failed,
-                    summary: error.localizedDescription,
-                    startedAt: taskHistoryStartedAt
-                )
-            } else {
-                recordPriorTaskContext(
-                    command: submittedCommand,
-                    status: .failed,
-                    summary: error.localizedDescription,
-                    startedAt: taskHistoryStartedAt
-                )
+                markAllSteps(.failed)
+                setError(error.localizedDescription)
+                logStore.append(.summarize, "Stopped: \(error.localizedDescription)")
+                if let preparedRun {
+                    recordPriorTaskContext(
+                        command: submittedCommand,
+                        preparedRun: preparedRun,
+                        status: .failed,
+                        summary: error.localizedDescription,
+                        startedAt: taskHistoryStartedAt
+                    )
+                } else {
+                    recordPriorTaskContext(
+                        command: submittedCommand,
+                        status: .failed,
+                        summary: error.localizedDescription,
+                        startedAt: taskHistoryStartedAt
+                    )
+                }
             }
         }
     }
@@ -504,10 +540,48 @@ final class AgentViewModel: ObservableObject {
     /// pre-flight errors that never reached a real submission (an empty-command validation
     /// message, a voice-transcription failure) — those leave `lastCommand` empty, so a UI that
     /// shows a Retry button for *any* `errorMessage` would show one that's silently a no-op for
-    /// exactly those cases. Exposed as a bool rather than exposing `lastCommand` itself, since
-    /// callers only need the yes/no, not the text.
+    /// exactly those cases. Exposed as a bool here since retry-eligibility callers only need the
+    /// yes/no, not the text — see `runningCommandDisplayText` below for the text itself.
     var hasRetryableCommand: Bool {
         !lastCommand.isEmpty
+    }
+
+    /// The real command driving the current/last run — `command` itself is cleared the instant
+    /// `start()` captures it (see `start()`), so by the time a task is visibly `isRunning`, `command`
+    /// is already empty again. A surface showing "what's actually running" (Command Center's
+    /// running indicator) needs this instead of `command`, or it reads every task as "Untitled
+    /// task" regardless of what was actually submitted.
+    var runningCommandDisplayText: String {
+        lastCommand
+    }
+
+    /// Called by the widget after a `.result` (including a clean "Canceled.") or a genuinely
+    /// transient `.failure` has sat unacknowledged for a while (see `FloatingWidgetView`'s
+    /// auto-clear timer) — the widget is a permanent, undismissable overlay, so with no timeout
+    /// either would otherwise sit there indefinitely; merely collapsing to the small capsule
+    /// doesn't help, since re-expanding it would show the exact same stale content again (this was
+    /// a real, reported bug — a cancellation's "Canceled." banner survived collapsing the widget
+    /// multiple times, because collapsing was the only thing this used to do). Clears both
+    /// `errorMessage` and `finalSummary`/`suggestions` unconditionally — whichever pair wasn't
+    /// actually active is already empty, so clearing it too is harmless. Deliberately scoped here,
+    /// not a broader `reset()`. `FloatingWidgetView`'s timer only ever calls this for `.result`, or
+    /// for `.failure` when `errorIsPersistent` is false, so a real configuration problem never gets
+    /// silently cleared out from under the user.
+    func clearStaleTaskOutcome() {
+        errorMessage = nil
+        finalSummary = ""
+        suggestions = []
+    }
+
+    /// The one place `errorMessage` should be set (never assign it directly) — forces every call
+    /// site to make an explicit, visible choice about `persistent` rather than silently inheriting
+    /// whatever the last call happened to leave behind. Defaults to `false` (transient) since most
+    /// errors in this app are one-off task/validation outcomes, not environment problems; the small
+    /// number of genuinely persistent cases (missing API key, denied mic permission, unavailable
+    /// hotkey) pass `persistent: true` explicitly.
+    private func setError(_ message: String, persistent: Bool = false) {
+        errorMessage = message
+        errorIsPersistent = persistent
     }
 
     /// Resubmits the last real command as-is. Used by the floating widget's task-level-failure
@@ -520,7 +594,7 @@ final class AgentViewModel: ObservableObject {
         // Retry only has a real UI in the widget's own failure panel and the error notification
         // (Command Center has no retry control) — tagging it `.widget` regardless of the original
         // failed task's origin reflects that the retry action itself is a widget interaction.
-        start(forceRealExecution: true, origin: .widget)
+        start(origin: .widget)
     }
 
     func submitClarification() {
@@ -530,7 +604,7 @@ final class AgentViewModel: ObservableObject {
 
         let answer = clarificationAnswer.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !answer.isEmpty else {
-            errorMessage = "Enter an answer before continuing."
+            setError("Enter an answer before continuing.")
             return
         }
 
@@ -541,14 +615,12 @@ final class AgentViewModel: ObservableObject {
         Clarification answer: \(answer)
         """
         let shouldAutoExecute = clarificationAutoExecute
-        let shouldForceRealExecution = clarificationForcesRealExecution
         let shouldUseOrigin = clarificationOrigin
         clarificationAutoExecute = false
-        clarificationForcesRealExecution = false
         clarificationOrigin = .commandCenter
         clarificationQuestion = nil
         clarificationAnswer = ""
-        start(autoExecute: shouldAutoExecute, forceRealExecution: shouldForceRealExecution, origin: shouldUseOrigin)
+        start(autoExecute: shouldAutoExecute, origin: shouldUseOrigin)
     }
 
     /// - Parameter origin: Which surface's mic button this is — `toggleVoiceRecording()` is called
@@ -568,7 +640,7 @@ final class AgentViewModel: ObservableObject {
         }
         guard canUseVoice else {
             if !hasAPIKey {
-                errorMessage = "OPENAI_API_KEY is not set. Export it before launching Sonny, then relaunch the app."
+                setError("OPENAI_API_KEY is not set. Export it before launching Sonny, then relaunch the app.", persistent: true)
             }
             return
         }
@@ -596,7 +668,7 @@ final class AgentViewModel: ObservableObject {
     func markVoiceHotKeyUnavailable(_ message: String) {
         voiceHotKeyReady = false
         voiceHotKeyStatus = "Hotkey unavailable"
-        errorMessage = message
+        setError(message, persistent: true)
         refreshPermissions()
     }
 
@@ -669,13 +741,13 @@ final class AgentViewModel: ObservableObject {
                 stopClipboardHistoryMonitoring()
             }
         } catch {
-            errorMessage = "Could not save clipboard history setting: \(error.localizedDescription)"
+            setError("Could not save clipboard history setting: \(error.localizedDescription)")
         }
     }
 
     func deleteLocalData() {
         guard !isRunning else {
-            errorMessage = "Stop the current run before deleting local data."
+            setError("Stop the current run before deleting local data.")
             return
         }
 
@@ -692,19 +764,17 @@ final class AgentViewModel: ObservableObject {
         } catch {
             let message = "Could not delete local data: \(error.localizedDescription)"
             localDataDeletionStatusMessage = message
-            errorMessage = message
+            setError(message)
         }
     }
 
     func runRoutineWidget(_ routine: StoredRoutine) {
         command = "Run my \(routine.name) routine"
-        dryRun = false
         start(autoExecute: true)
     }
 
     func openWorkspaceWidget(_ workspace: StoredWorkspace) {
         command = "Open my \(workspace.name) workspace"
-        dryRun = false
         start(autoExecute: true)
     }
 
@@ -715,7 +785,7 @@ final class AgentViewModel: ObservableObject {
             try workspaceStore.save(updated)
             refreshSavedItems()
         } catch {
-            errorMessage = "Could not update workspace: \(error.localizedDescription)"
+            setError("Could not update workspace: \(error.localizedDescription)")
         }
     }
 
@@ -735,45 +805,6 @@ final class AgentViewModel: ObservableObject {
         pasteboard.setString(finalSummary, forType: .string)
     }
 
-    func reset() {
-        currentTask?.cancel()
-        audioRecorder.cancel()
-        command = ""
-        dryRun = true
-        isRunning = false
-        plan = nil
-        previews = []
-        finalSummary = ""
-        errorMessage = nil
-        localDataDeletionStatusMessage = nil
-        clarificationQuestion = nil
-        clarificationAnswer = ""
-        clarificationAutoExecute = false
-        clarificationForcesRealExecution = false
-        approvalRequest = nil
-        suggestions = []
-        stepStatuses = [:]
-        priorTaskContext = nil
-        taskUsageSummary = .empty
-        voiceTranscript = ""
-        isPreparingVoiceRecording = false
-        isRecordingVoice = false
-        isTranscribingVoice = false
-        isPushToTalkHotKeyDown = false
-        refreshPermissions()
-        refreshSavedItems()
-        refreshTaskHistory()
-        refreshClipboardHistoryNotice()
-        preparedRun = nil
-        runner = nil
-        pendingCommandForPriorTaskContext = nil
-        pendingTaskHistoryStartedAt = nil
-        preserveUsageForNextStart = false
-        priorTaskContextStore.clear()
-        taskUsageRecorder.reset()
-        logStore.reset()
-    }
-
     private func clearInMemoryLocalDataState() {
         plan = nil
         previews = []
@@ -786,7 +817,6 @@ final class AgentViewModel: ObservableObject {
         clarificationQuestion = nil
         clarificationAnswer = ""
         clarificationAutoExecute = false
-        clarificationForcesRealExecution = false
         preparedRun = nil
         runner = nil
         pendingCommandForPriorTaskContext = nil
@@ -847,7 +877,7 @@ final class AgentViewModel: ObservableObject {
             .joined(separator: "; ")
         let message = "Sonny could not load encrypted local data. A local data file exists but could not be decrypted or decoded. \(details)"
         localStorageLoadErrorMessage = message
-        errorMessage = message
+        setError(message, persistent: true)
     }
 
     private func makeInstantCommandResolver() -> InstantCommandResolver {
@@ -875,7 +905,7 @@ final class AgentViewModel: ObservableObject {
     private func startVoiceRecording(trigger: VoiceRecordingTrigger, origin: TaskOrigin) {
         guard canUseVoice else {
             if !hasAPIKey {
-                errorMessage = "OPENAI_API_KEY is not set. Export it before launching Sonny, then relaunch the app."
+                setError("OPENAI_API_KEY is not set. Export it before launching Sonny, then relaunch the app.", persistent: true)
             }
             return
         }
@@ -887,7 +917,7 @@ final class AgentViewModel: ObservableObject {
             let granted = await AudioCommandRecorder.requestMicrophonePermission()
             guard granted else {
                 isPreparingVoiceRecording = false
-                errorMessage = "Microphone permission was denied. Allow microphone access for the launching app, then try again."
+                setError("Microphone permission was denied. Allow microphone access for the launching app, then try again.", persistent: true)
                 return
             }
 
@@ -906,16 +936,23 @@ final class AgentViewModel: ObservableObject {
 
                 isPreparingVoiceRecording = false
                 isRecordingVoice = true
-                voiceTranscript = ""
                 finalSummary = ""
                 errorMessage = nil
+                // A fresh recording is a fresh interaction — clear the *previous* task's leftovers
+                // now, not only once a real submission reaches `performStart`. Otherwise, if this
+                // new attempt fails before ever getting that far (e.g. transcription comes back
+                // with no text), the failure panel reuses `WidgetExistingStepRows` and renders the
+                // old, unrelated task's step rows above the new error — a real, reported bug.
+                plan = nil
+                stepStatuses = [:]
+                suggestions = []
                 let recordingMessage = trigger == .hotKey
                     ? "Recording voice command from hotkey"
                     : "Recording voice command"
                 logStore.append(.observe, recordingMessage)
             } catch {
                 isPreparingVoiceRecording = false
-                errorMessage = error.localizedDescription
+                setError(error.localizedDescription)
                 logStore.append(.summarize, "Voice recording failed: \(error.localizedDescription)")
             }
         }
@@ -929,7 +966,7 @@ final class AgentViewModel: ObservableObject {
         } catch {
             isRecordingVoice = false
             isPushToTalkHotKeyDown = false
-            errorMessage = error.localizedDescription
+            setError(error.localizedDescription)
             return
         }
 
@@ -948,8 +985,6 @@ final class AgentViewModel: ObservableObject {
                 let transcriber = try OpenAITranscriber(usageRecorder: taskUsageRecorder)
                 let result = try await transcriber.transcribe(audioFileURL: audioURL)
                 command = result.text
-                voiceTranscript = result.text
-                dryRun = false
                 finalSummary = ""
                 isTranscribingVoice = false
                 preserveUsageForNextStart = true
@@ -957,7 +992,12 @@ final class AgentViewModel: ObservableObject {
                 start(autoExecute: true, origin: voiceRecordingOrigin)
             } catch {
                 isTranscribingVoice = false
-                errorMessage = error.localizedDescription
+                // This is the bug that made the auto-clear timer feel broken: a failed
+                // transcription (e.g. no speech captured) never calls `start()`, so it never
+                // touches `lastCommand` — the old `hasRetryableCommand`-based gate treated that
+                // exactly like a persistent config problem and refused to time it out. It isn't
+                // one: try again and it's just as likely to work fine.
+                setError(error.localizedDescription)
                 logStore.append(.summarize, "Transcription failed: \(error.localizedDescription)")
             }
         }
@@ -1030,7 +1070,7 @@ final class AgentViewModel: ObservableObject {
             pendingCommandForPriorTaskContext = nil
             pendingTaskHistoryStartedAt = nil
             refreshSavedItems()
-        } catch is CancellationError {
+        } catch let error where isCancellationError(error) {
             markAllSteps(.canceled)
             finalSummary = "Canceled."
             logStore.append(.summarize, "Canceled by user")
@@ -1060,7 +1100,7 @@ final class AgentViewModel: ObservableObject {
             }
         } catch {
             markAllSteps(.failed)
-            errorMessage = error.localizedDescription
+            setError(error.localizedDescription)
             logStore.append(.summarize, "Stopped: \(error.localizedDescription)")
             if let pendingCommandForPriorTaskContext {
                 recordPriorTaskContext(
@@ -1141,7 +1181,7 @@ final class AgentViewModel: ObservableObject {
             )
             refreshTaskHistory()
         } catch {
-            errorMessage = "Could not save task history: \(error.localizedDescription)"
+            setError("Could not save task history: \(error.localizedDescription)")
             logStore.append(.observe, "Could not record task history: \(error.localizedDescription)")
         }
     }

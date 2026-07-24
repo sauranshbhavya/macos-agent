@@ -89,44 +89,22 @@ struct CommandCenterView: View {
 
     private var sidebar: some View {
         VStack(alignment: .leading, spacing: 20) {
-            HStack(spacing: 0) {
-                HStack(spacing: 11) {
-                    ZStack {
-                        RoundedRectangle(cornerRadius: SonnyRadius.container)
-                            .fill(SonnyTheme.accent.opacity(0.16))
-                        RoundedRectangle(cornerRadius: SonnyRadius.container)
-                            .stroke(SonnyTheme.accent.opacity(0.42), lineWidth: 1)
-                        Image(systemName: "wand.and.stars")
-                            .font(SonnyType.icon(10, weight: .medium))
-                            .foregroundStyle(SonnyTheme.accent)
-                    }
-                    .frame(width: 20, height: 20)
-                    .sonnyLogoGlow()
-
-                    HStack(spacing: 6) {
-                        Text("Sonny")
-                            .font(SonnyType.sidebarWordmark)
-                            .foregroundStyle(SonnyTheme.text)
-                        // Wireframe shows a dropdown affordance next to the wordmark
-                        // (`9-MainAppHomeScreen.svg:33`). Built as static chrome matching the
-                        // wireframe's visual — no menu exists behind it; nothing in Sonny's
-                        // current scope defines what it would open.
-                        Image(systemName: "chevron.down")
-                            .font(SonnyType.icon(9, weight: .semibold))
-                            .foregroundStyle(SonnyTheme.muted)
-                    }
+            HStack(spacing: 11) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: SonnyRadius.container)
+                        .fill(SonnyTheme.accent.opacity(0.16))
+                    RoundedRectangle(cornerRadius: SonnyRadius.container)
+                        .stroke(SonnyTheme.accent.opacity(0.42), lineWidth: 1)
+                    Image(systemName: "wand.and.stars")
+                        .font(SonnyType.icon(10, weight: .medium))
+                        .foregroundStyle(SonnyTheme.accent)
                 }
+                .frame(width: 20, height: 20)
+                .sonnyLogoGlow()
 
-                Spacer(minLength: 8)
-
-                // Wireframe search affordance (`9-MainAppHomeScreen.svg:38`). Same treatment as
-                // the chevron above — static, no search feature exists behind it yet.
-                Image(systemName: "magnifyingglass")
-                    .font(SonnyType.icon(13, weight: .medium))
-                    .foregroundStyle(SonnyTheme.muted)
-                    .frame(width: 28, height: 28)
-                    .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.sidebarIcon))
-                    .sonnySidebarIconShadow()
+                Text("Sonny")
+                    .font(SonnyType.sidebarWordmark)
+                    .foregroundStyle(SonnyTheme.text)
             }
 
             VStack(spacing: 2) {
@@ -395,54 +373,50 @@ private struct TasksFoundationView: View {
     @State private var selectedLogEntry: TaskLogEntry?
 
     var body: some View {
-        VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 18) {
-                CommandCenterPageHeader(title: greeting)
+        VStack(alignment: .leading, spacing: 18) {
+            CommandCenterPageHeader(title: greeting)
 
-                ScrollView {
-                    VStack(alignment: .leading, spacing: 0) {
-                        // Wireframe "Frame 6" toolbar row (`9-MainAppHomeScreen.svg`) — the
-                        // "Personal" scope pill on its leading edge is a deliberately rejected
-                        // persistent-active-workspace affordance (see the task-to-workspace
-                        // association decision in the changelog), so only the trailing
-                        // filter/search icons are built here.
-                        TasksToolbarRow()
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    // Wireframe "Frame 6" toolbar row (`9-MainAppHomeScreen.svg`) — the
+                    // "Personal" scope pill on its leading edge is a deliberately rejected
+                    // persistent-active-workspace affordance (see the task-to-workspace
+                    // association decision in the changelog), so only the trailing
+                    // filter/search icons are built here.
+                    TasksToolbarRow()
 
-                        // Wireframe has exactly three status groups (In Progress / Done /
-                        // Canceled, `9-MainAppHomeScreen.svg`) — per direct feedback (2026-07-18),
-                        // the live-running task now renders as this list's own "In Progress"
-                        // group instead of a separate block above it, and there's no separate
-                        // idle "No active task" placeholder; the group simply isn't there when
-                        // nothing is running. Gated on `isRunning || isAwaitingApproval`
-                        // specifically, not the broader `hasTaskActivity` — once a run finishes,
-                        // it belongs in the Done/Canceled history below, not lingering up here.
-                        if viewModel.isRunning || viewModel.isAwaitingApproval {
-                            InProgressTaskGroup(viewModel: viewModel)
-                        }
-
-                        TaskHistoryGroupedPanel(
-                            records: viewModel.taskHistoryRecords,
-                            onSelect: { selectedLogEntry = TaskLogEntry(record: $0) }
-                        )
-                        .padding(.bottom, 24)
+                    // Wireframe has exactly three status groups (In Progress / Done /
+                    // Canceled, `9-MainAppHomeScreen.svg`) — per direct feedback (2026-07-18),
+                    // the live-running task now renders as this list's own "In Progress"
+                    // group instead of a separate block above it, and there's no separate
+                    // idle "No active task" placeholder; the group simply isn't there when
+                    // nothing is running. Gated on `isRunning || isAwaitingApproval`
+                    // specifically, not the broader `hasTaskActivity` — once a run finishes,
+                    // it belongs in the Done/Canceled history below, not lingering up here.
+                    if viewModel.isRunning || viewModel.isAwaitingApproval {
+                        InProgressTaskGroup(viewModel: viewModel)
                     }
-                    .frame(maxWidth: .infinity, alignment: .topLeading)
-                }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .background(CommandCenterPalette.collectionSurface)
-                .overlay(
-                    RoundedRectangle(cornerRadius: SonnyRadius.container)
-                        .stroke(SonnyTheme.border, lineWidth: 1)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
-            }
-            .padding(.horizontal, 28)
-            .padding(.top, 24)
-            .padding(.bottom, 18)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
 
-            CommandCenterComposerFooter(viewModel: viewModel)
+                    TaskHistoryGroupedPanel(
+                        records: displayedRecords,
+                        onSelect: { selectedLogEntry = TaskLogEntry(record: $0) }
+                    )
+                    .padding(.bottom, 24)
+                }
+                .frame(maxWidth: .infinity, alignment: .topLeading)
+            }
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(CommandCenterPalette.collectionSurface)
+            .overlay(
+                RoundedRectangle(cornerRadius: SonnyRadius.container)
+                    .stroke(SonnyTheme.border, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
         }
+        .padding(.horizontal, 28)
+        .padding(.top, 24)
+        .padding(.bottom, 18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(SonnyTheme.ink)
         .onAppear {
             viewModel.refreshTaskHistory()
@@ -463,6 +437,13 @@ private struct TasksFoundationView: View {
             fullName: NSFullUserName(),
             displayFullNames: viewModel.displayFullNames
         )
+    }
+
+    /// Display-only windowing (inspired by Wispr Flow's ~90-day home-page history) — this page's
+    /// own list only shows the last 90 days. Nothing is deleted: `viewModel.taskHistoryRecords`
+    /// itself is untouched, so Insights and everything else still sees the complete history.
+    private var displayedRecords: [CompletedTaskRecord] {
+        TaskHistoryDisplayWindow.withinWindow(viewModel.taskHistoryRecords, now: Date())
     }
 }
 
@@ -529,10 +510,15 @@ private struct CommandCenterRunningIndicator: View {
         .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
     }
 
+    // `viewModel.command` is not what's shown here on purpose — it's cleared the instant `start()`
+    // captures it (so the composer/widget field is ready for the next input), which would make
+    // every single running task read as "Untitled task" regardless of what was actually submitted.
+    // `runningCommandDisplayText` is the command that's actually driving this run.
     private var statusText: String {
-        let command = viewModel.command.isEmpty
+        let display = viewModel.runningCommandDisplayText
+        let command = display.isEmpty
             ? "Untitled task"
-            : viewModel.command.sentenceCapitalized.truncatedForRowDisplay()
+            : display.sentenceCapitalized.truncatedForRowDisplay()
         return viewModel.isAwaitingApproval ? "Waiting for approval: \(command)" : "Running: \(command)"
     }
 }
@@ -1134,6 +1120,9 @@ private struct TaskLogDetailDialog: View {
                 .sonnyPointerCursor()
                 .sonnyHoverHighlight(cornerRadius: 12)
                 .accessibilityLabel("Close")
+                // Standard macOS escape-hatch for a close button, and an independent way to
+                // dismiss if the click itself is ever the thing not registering.
+                .keyboardShortcut(.cancelAction)
             }
             .padding(.horizontal, 14)
             .padding(.top, 14)
@@ -1450,78 +1439,72 @@ struct WorkspaceCardPresentation: Equatable {
 
 private struct RoutinesView: View {
     @ObservedObject var viewModel: AgentViewModel
-    @State private var composerFocusRequest = 0
     @State private var selectedRoutine: StoredRoutine?
 
     var body: some View {
-        VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 18) {
-                CommandCenterPageHeader(title: "Routines")
+        VStack(alignment: .leading, spacing: 18) {
+            CommandCenterPageHeader(title: "Routines")
 
-                VStack(spacing: 0) {
-                    CollectionHeader(
-                        title: "All routines",
-                        actionTitle: "New routine",
-                        action: beginNewRoutine
+            VStack(spacing: 0) {
+                CollectionHeader(
+                    title: "All routines",
+                    actionTitle: "New routine",
+                    action: beginNewRoutine
+                )
+
+                Rectangle()
+                    .fill(SonnyTheme.border)
+                    .frame(height: 1)
+
+                if viewModel.savedRoutines.isEmpty {
+                    CollectionEmptyState(
+                        systemImage: "repeat",
+                        title: "No routines yet",
+                        message: "Ask Sonny to save a repeatable sequence, then it will appear here."
                     )
-
-                    Rectangle()
-                        .fill(SonnyTheme.border)
-                        .frame(height: 1)
-
-                    if viewModel.savedRoutines.isEmpty {
-                        CollectionEmptyState(
-                            systemImage: "repeat",
-                            title: "No routines yet",
-                            message: "Ask Sonny to save a repeatable sequence, then it will appear here."
-                        )
-                    } else {
-                        ScrollView {
-                            LazyVStack(spacing: 0) {
-                                ForEach(Array(viewModel.savedRoutines.enumerated()), id: \.element.name) { index, routine in
-                                    RoutineRow(
-                                        presentation: RoutineRowPresentation(routine: routine),
-                                        isLast: index == viewModel.savedRoutines.count - 1,
-                                        isRunning: viewModel.isRunning || viewModel.isAwaitingApproval,
-                                        run: { viewModel.runRoutineWidget(routine) },
-                                        openDetail: { selectedRoutine = routine }
-                                    )
-                                }
+                } else {
+                    ScrollView {
+                        LazyVStack(spacing: 0) {
+                            ForEach(Array(viewModel.savedRoutines.enumerated()), id: \.element.name) { index, routine in
+                                RoutineRow(
+                                    presentation: RoutineRowPresentation(routine: routine),
+                                    isLast: index == viewModel.savedRoutines.count - 1,
+                                    isRunning: viewModel.isRunning || viewModel.isAwaitingApproval,
+                                    run: { viewModel.runRoutineWidget(routine) },
+                                    openDetail: { selectedRoutine = routine }
+                                )
                             }
                         }
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .background(CommandCenterPalette.collectionSurface)
-                .overlay(
-                    RoundedRectangle(cornerRadius: SonnyRadius.container)
-                        .stroke(SonnyTheme.border, lineWidth: 1)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
-
-                if viewModel.isRunning || viewModel.isAwaitingApproval {
-                    CommandCenterRunningIndicator(viewModel: viewModel)
-                }
             }
-            .padding(.horizontal, 28)
-            .padding(.top, 24)
-            .padding(.bottom, 18)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-
-            CommandCenterComposerFooter(
-                viewModel: viewModel,
-                focusRequest: composerFocusRequest
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(CommandCenterPalette.collectionSurface)
+            .overlay(
+                RoundedRectangle(cornerRadius: SonnyRadius.container)
+                    .stroke(SonnyTheme.border, lineWidth: 1)
             )
+            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+
+            if viewModel.isRunning || viewModel.isAwaitingApproval {
+                CommandCenterRunningIndicator(viewModel: viewModel)
+            }
         }
+        .padding(.horizontal, 28)
+        .padding(.top, 24)
+        .padding(.bottom, 18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(SonnyTheme.ink)
         .sheet(item: $selectedRoutine) { routine in
             RoutineDetailView(routine: routine)
         }
     }
 
+    // Command Center has no composer of its own — pre-fill the command and bring the widget
+    // forward so the user finishes typing the routine name there.
     private func beginNewRoutine() {
         viewModel.command = "Create a routine called "
-        composerFocusRequest += 1
+        viewModel.widgetPresentationRequest += 1
     }
 }
 
@@ -1584,87 +1567,81 @@ private struct RoutineRow: View {
 
 private struct WorkspacesView: View {
     @ObservedObject var viewModel: AgentViewModel
-    @State private var composerFocusRequest = 0
 
     private let columns = [
         GridItem(.adaptive(minimum: 356, maximum: 356), spacing: 14, alignment: .top)
     ]
 
     var body: some View {
-        VStack(spacing: 0) {
-            VStack(alignment: .leading, spacing: 18) {
-                CommandCenterPageHeader(title: "Workspaces")
+        VStack(alignment: .leading, spacing: 18) {
+            CommandCenterPageHeader(title: "Workspaces")
 
-                VStack(spacing: 0) {
-                    CollectionHeader(
-                        title: "All workspaces",
-                        actionTitle: "Create workspace",
-                        action: beginNewWorkspace
+            VStack(spacing: 0) {
+                CollectionHeader(
+                    title: "All workspaces",
+                    actionTitle: "Create workspace",
+                    action: beginNewWorkspace
+                )
+
+                Rectangle()
+                    .fill(SonnyTheme.border)
+                    .frame(height: 1)
+
+                if viewModel.savedWorkspaces.isEmpty {
+                    CollectionEmptyState(
+                        systemImage: "rectangle.3.group",
+                        title: "No workspaces yet",
+                        message: "Ask Sonny to group apps and safe URLs for one-click opening."
                     )
-
-                    Rectangle()
-                        .fill(SonnyTheme.border)
-                        .frame(height: 1)
-
-                    if viewModel.savedWorkspaces.isEmpty {
-                        CollectionEmptyState(
-                            systemImage: "rectangle.3.group",
-                            title: "No workspaces yet",
-                            message: "Ask Sonny to group apps and safe URLs for one-click opening."
-                        )
-                    } else {
-                        ScrollView {
-                            LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
-                                ForEach(Array(viewModel.savedWorkspaces.enumerated()), id: \.element.name) { index, workspace in
-                                    WorkspaceCard(
-                                        presentation: WorkspaceCardPresentation(
-                                            workspace: workspace,
-                                            taskHistoryRecords: viewModel.taskHistoryRecords
-                                        ),
-                                        accent: CommandCenterPalette.workspaceAvatarColors[
-                                            index % CommandCenterPalette.workspaceAvatarColors.count
-                                        ],
-                                        isRunning: viewModel.isRunning || viewModel.isAwaitingApproval,
-                                        open: { viewModel.openWorkspaceWidget(workspace) },
-                                        markAsTeam: { viewModel.markWorkspaceAsTeam(workspace) }
-                                    )
-                                }
+                } else {
+                    ScrollView {
+                        LazyVGrid(columns: columns, alignment: .leading, spacing: 14) {
+                            ForEach(Array(viewModel.savedWorkspaces.enumerated()), id: \.element.name) { index, workspace in
+                                WorkspaceCard(
+                                    presentation: WorkspaceCardPresentation(
+                                        workspace: workspace,
+                                        taskHistoryRecords: viewModel.taskHistoryRecords
+                                    ),
+                                    accent: CommandCenterPalette.workspaceAvatarColors[
+                                        index % CommandCenterPalette.workspaceAvatarColors.count
+                                    ],
+                                    isRunning: viewModel.isRunning || viewModel.isAwaitingApproval,
+                                    open: { viewModel.openWorkspaceWidget(workspace) },
+                                    markAsTeam: { viewModel.markWorkspaceAsTeam(workspace) }
+                                )
                             }
-                            .padding(30)
                         }
+                        .padding(30)
                     }
                 }
-                .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                .background(CommandCenterPalette.collectionSurface)
-                .overlay(
-                    RoundedRectangle(cornerRadius: SonnyRadius.container)
-                        .stroke(SonnyTheme.border, lineWidth: 1)
-                )
-                .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
-
-                if viewModel.isRunning || viewModel.isAwaitingApproval {
-                    CommandCenterRunningIndicator(viewModel: viewModel)
-                }
             }
-            .padding(.horizontal, 28)
-            .padding(.top, 24)
-            .padding(.bottom, 18)
-            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
-
-            CommandCenterComposerFooter(
-                viewModel: viewModel,
-                focusRequest: composerFocusRequest
+            .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+            .background(CommandCenterPalette.collectionSurface)
+            .overlay(
+                RoundedRectangle(cornerRadius: SonnyRadius.container)
+                    .stroke(SonnyTheme.border, lineWidth: 1)
             )
+            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+
+            if viewModel.isRunning || viewModel.isAwaitingApproval {
+                CommandCenterRunningIndicator(viewModel: viewModel)
+            }
         }
+        .padding(.horizontal, 28)
+        .padding(.top, 24)
+        .padding(.bottom, 18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(SonnyTheme.ink)
         .onAppear {
             viewModel.refreshTaskHistory()
         }
     }
 
+    // Command Center has no composer of its own — pre-fill the command and bring the widget
+    // forward so the user finishes typing the workspace name there.
     private func beginNewWorkspace() {
         viewModel.command = "Create a workspace called "
-        composerFocusRequest += 1
+        viewModel.widgetPresentationRequest += 1
     }
 }
 
@@ -1900,28 +1877,6 @@ private struct CollectionEmptyState: View {
     }
 }
 
-private struct CommandCenterComposerFooter: View {
-    @ObservedObject var viewModel: AgentViewModel
-    var focusRequest = 0
-
-    var body: some View {
-        VStack(spacing: 0) {
-            Rectangle()
-                .fill(SonnyTheme.border)
-                .frame(height: 1)
-
-            AgentCommandComposerView(
-                viewModel: viewModel,
-                autoFocus: false,
-                focusRequest: focusRequest
-            )
-            .padding(.horizontal, 28)
-            .padding(.vertical, 18)
-        }
-        .background(CommandCenterPalette.composerSurface)
-    }
-}
-
 private struct CommandCenterHeaderActionStyle: ButtonStyle {
     @Environment(\.isEnabled) private var isEnabled
 
@@ -1968,7 +1923,6 @@ private enum CommandCenterPalette {
     static let collectionSurface = SonnyTheme.collectionSurface
     static let cardSurface = SonnyTheme.surfaceRaised
     static let buttonSurface = SonnyTheme.surfaceRaised
-    static let composerSurface = SonnyTheme.collectionSurface
     // Flat #242E52 per the wireframe (not a translucent accent tint) — SonnyTheme.chartBarMuted
     // is already exactly this hex, just previously unused here.
     static let routineIconBackground = SonnyTheme.chartBarMuted

@@ -14,26 +14,41 @@ public enum AsyncProcessRunner {
     private final class ProcessBox: @unchecked Sendable {
         private let lock = NSLock()
         private var process: Process?
+        private var isLaunched = false
         private var cancelled = false
 
-        func set(_ process: Process) {
+        /// Launches `process` unless cancellation already landed — atomically with respect to
+        /// `cancel()`, since `process.run()` itself happens while holding the same lock `cancel()`
+        /// uses to decide whether terminating is safe. That closes the race the previous
+        /// set()-then-run() split had: `cancel()` could see a stored `process` and call
+        /// `.terminate()` on it before `run()` had actually been called, and Foundation's
+        /// `Process.terminate()` on an unlaunched process throws an uncatchable NSException
+        /// (`-[NSConcreteTask terminate]: task not launched`) that crashes the whole process, not a
+        /// catchable Swift error. Returns false (without ever calling `.run()`) if cancellation
+        /// already landed, so the caller can throw a clean `CancellationError` instead.
+        func launchIfNotCancelled(_ process: Process) throws -> Bool {
             lock.lock()
-            self.process = process
-            let shouldTerminate = cancelled
-            lock.unlock()
+            defer { lock.unlock() }
 
-            if shouldTerminate {
-                process.terminate()
+            self.process = process
+            guard !cancelled else {
+                return false
             }
+            try process.run()
+            isLaunched = true
+            return true
         }
 
         func cancel() {
             lock.lock()
             cancelled = true
+            let shouldTerminate = isLaunched
             let process = process
             lock.unlock()
 
-            process?.terminate()
+            if shouldTerminate {
+                process?.terminate()
+            }
         }
 
         var isCancelled: Bool {
@@ -62,12 +77,10 @@ public enum AsyncProcessRunner {
                 process.standardOutput = pipe
                 process.standardError = pipe
 
-                box.set(process)
-                if box.isCancelled {
+                guard try box.launchIfNotCancelled(process) else {
                     throw CancellationError()
                 }
 
-                try process.run()
                 process.waitUntilExit()
 
                 if box.isCancelled {
