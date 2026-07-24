@@ -11,51 +11,65 @@ public struct ProcessResult: Sendable, Equatable {
 }
 
 public enum AsyncProcessRunner {
+    /// Tracks a `Process` alongside cancellation so `terminate()` is only ever called on an
+    /// instance that has actually completed `run()`. `Process.terminate()` raises an uncaught
+    /// `NSException` ("task not launched") if called before launch completes, and cancellation
+    /// can arrive at any point relative to launch because the runner executes on a detached task
+    /// that does not inherit structured-concurrency cancellation. `phase` and `cancelled` are
+    /// only ever read/written together under `lock`, so exactly one of `cancel()` or
+    /// `confirmLaunched()` ends up responsible for terminating a given process — never both,
+    /// and never before `run()` has returned successfully.
     private final class ProcessBox: @unchecked Sendable {
+        private enum Phase {
+            case notLaunched
+            case launched
+            case finished
+        }
+
         private let lock = NSLock()
         private var process: Process?
-        private var isLaunched = false
+        private var phase: Phase = .notLaunched
         private var cancelled = false
 
-        /// Launches `process` unless cancellation already landed — atomically with respect to
-        /// `cancel()`, since `process.run()` itself happens while holding the same lock `cancel()`
-        /// uses to decide whether terminating is safe. That closes the race the previous
-        /// set()-then-run() split had: `cancel()` could see a stored `process` and call
-        /// `.terminate()` on it before `run()` had actually been called, and Foundation's
-        /// `Process.terminate()` on an unlaunched process throws an uncatchable NSException
-        /// (`-[NSConcreteTask terminate]: task not launched`) that crashes the whole process, not a
-        /// catchable Swift error. Returns false (without ever calling `.run()`) if cancellation
-        /// already landed, so the caller can throw a clean `CancellationError` instead.
-        func launchIfNotCancelled(_ process: Process) throws -> Bool {
+        /// Registers the process. Returns `false` if cancellation already happened, in which
+        /// case the caller must skip calling `run()` entirely.
+        func register(_ process: Process) -> Bool {
             lock.lock()
             defer { lock.unlock() }
-
             self.process = process
-            guard !cancelled else {
-                return false
-            }
-            try process.run()
-            isLaunched = true
-            return true
+            return !cancelled
+        }
+
+        /// Call immediately after `process.run()` returns successfully. Returns `true` if the
+        /// caller must terminate the process itself because cancellation raced in before it
+        /// could be observed as launched.
+        func confirmLaunched() -> Bool {
+            lock.lock()
+            defer { lock.unlock() }
+            phase = .launched
+            return cancelled
+        }
+
+        /// Call immediately after `process.waitUntilExit()` returns.
+        func confirmFinished() {
+            lock.lock()
+            phase = .finished
+            lock.unlock()
         }
 
         func cancel() {
             lock.lock()
             cancelled = true
-            let shouldTerminate = isLaunched
-            let process = process
+            let processToTerminate = phase == .launched ? process : nil
             lock.unlock()
 
-            if shouldTerminate {
-                process?.terminate()
-            }
+            processToTerminate?.terminate()
         }
 
         var isCancelled: Bool {
             lock.lock()
-            let value = cancelled
-            lock.unlock()
-            return value
+            defer { lock.unlock() }
+            return cancelled
         }
     }
 
@@ -77,11 +91,17 @@ public enum AsyncProcessRunner {
                 process.standardOutput = pipe
                 process.standardError = pipe
 
-                guard try box.launchIfNotCancelled(process) else {
+                guard box.register(process) else {
                     throw CancellationError()
                 }
 
+                try process.run()
+                if box.confirmLaunched() {
+                    process.terminate()
+                }
+
                 process.waitUntilExit()
+                box.confirmFinished()
 
                 if box.isCancelled {
                     throw CancellationError()

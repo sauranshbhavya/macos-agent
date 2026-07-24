@@ -54,6 +54,40 @@ struct AgentActionExecutorTests {
     }
 
     @Test
+    func asyncProcessRunnerCancelledBeforeLaunchDoesNotCrash() async throws {
+        // Regression test for a race that twice crashed the whole test process with an
+        // uncaught `-[NSConcreteTask terminate]: task not launched` NSException (see
+        // docs/sonny-v1-implementation-changelog.md). Cancelling with no delay (unlike
+        // `asyncProcessRunnerCancelsRunningProcess`'s 100ms sleep) races `box.cancel()`
+        // against the detached task's own launch every iteration, since a detached task does
+        // not inherit the parent's cancellation and can be cancelled before it has even created
+        // its `Process`. Looping amplifies a race that reproduced only twice across many months
+        // of real runs into something this test can catch reliably.
+        for _ in 0..<200 {
+            let task = Task {
+                try await AsyncProcessRunner.run(executablePath: "/bin/sleep", arguments: ["5"])
+            }
+            task.cancel()
+
+            do {
+                _ = try await task.value
+                Issue.record("Expected process cancellation to throw CancellationError.")
+            } catch is CancellationError {
+                continue
+            } catch {
+                Issue.record("Expected CancellationError, got \(error).")
+            }
+        }
+    }
+
+    @Test
+    func asyncProcessRunnerCapturesRealStdout() async throws {
+        let result = try await AsyncProcessRunner.run(executablePath: "/bin/echo", arguments: ["hello"])
+        #expect(result.terminationStatus == 0)
+        #expect(result.output.trimmingCharacters(in: .whitespacesAndNewlines) == "hello")
+    }
+
+    @Test
     func defaultZipOutputIsStableBetweenPreviewAndExecution() async throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
