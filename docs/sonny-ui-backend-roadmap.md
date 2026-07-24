@@ -13,19 +13,14 @@ Branch numbers below match the ones already in use in `docs/sonny-v1-implementat
 and `docs/sonny-ui-backend-gaps.md` as of this writing — the roadmap has been renumbered before, so
 confirm the actual target branch at implementation time rather than trusting a number here.
 
-## Dry-run preview for pure computations
+## ~~Dry-run preview for pure computations~~ — superseded, remove from any future scoping
 
-**Backend:** `docs/sonny-ui-backend-gaps.md`'s "dry-run mode gives a generic message" gap — a
-per-capability dry-run preview (e.g. `CalculatorCapabilityAdapter` actually computing and returning
-the real answer under dry run, since evaluating `2*2` has no side effect worth gating).
-
-**UI update owed:** once a capability can report a real dry-run preview value instead of nothing,
-`AgentViewModel.performStart`'s dry-run branch (`Sources/MacAgent/AgentViewModel.swift`) needs to
-prefer that real preview text over the current hardcoded "Dry run complete. No files were written…"
-string. That flows automatically into both places `finalSummary` renders (Command Center's own
-result display and `WidgetResultPanel` in `Sources/MacAgent/FloatingWidgetView.swift`) — no separate
-per-surface UI work needed once the string itself is real, but worth a visual check that a longer
-real answer still reads well in both the width-472 widget panel and Command Center's own layout.
+**Moot as of 2026-07-21: dry-run mode was deleted entirely, not improved.** There is no `dryRun`
+concept anywhere in `AgentViewModel` or any capability adapter anymore, and no UI control to trigger
+it — every command runs for real, gated only by the approval-tier system. Nothing below this line
+describes real work; kept only so a future branch that remembers "wasn't there a dry-run preview
+item on the roadmap" finds this note instead of silently rediscovering the same dead end. See
+`docs/sonny-ui-backend-gaps.md`'s matching (also superseded) entry for the original context.
 
 ## Incremental per-step execution status
 
