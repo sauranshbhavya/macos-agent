@@ -37,10 +37,11 @@ public struct CalculatorService: Sendable {
     public init() {}
 
     public func evaluate(_ rawExpression: String) throws -> CalculatorEvaluation {
-        let expression = rawExpression.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !expression.isEmpty else {
+        let trimmed = rawExpression.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
             throw CalculatorError.missingExpression
         }
+        let expression = SpokenArithmeticNormalizer.normalize(trimmed)
 
         if looksLikeConversion(expression) {
             return try evaluateConversion(expression)

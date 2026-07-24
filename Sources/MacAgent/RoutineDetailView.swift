@@ -113,9 +113,11 @@ private extension View {
 /// window rather than the literal floating widget window — presented here via `.sheet(item:)`.
 struct RoutineDetailView: View {
     let routine: StoredRoutine
+    @Environment(\.dismiss) private var dismiss
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
+            closeButtonRow
             header
 
             Rectangle()
@@ -140,6 +142,32 @@ struct RoutineDetailView: View {
         .liquidGlassPanel(cornerRadius: RoutineDetailTheme.panelRadius, shadowOffset: RoutineDetailTheme.shadowOffset)
     }
 
+    /// This view is presented via `.sheet(item:)` with no other dismiss affordance anywhere in the
+    /// wireframe/founder-decisions source for it — without this, the sheet had no way to close at
+    /// all (found during manual QA, 2026-07-24). `.keyboardShortcut(.cancelAction)` matches
+    /// `TaskLogDetailDialog`'s own close button, an independent Escape-key path in case the click
+    /// itself is ever the thing not registering.
+    private var closeButtonRow: some View {
+        HStack {
+            Spacer()
+            Button {
+                dismiss()
+            } label: {
+                Image(systemName: "xmark")
+                    .font(RoutineDetailType.sectionLabel)
+                    .foregroundStyle(RoutineDetailTheme.mutedText)
+                    .frame(width: 24, height: 24)
+            }
+            .buttonStyle(.plain)
+            .sonnyPointerCursor()
+            .sonnyHoverHighlight(cornerRadius: 12)
+            .accessibilityLabel("Close")
+            .keyboardShortcut(.cancelAction)
+        }
+        .padding(.horizontal, 14)
+        .padding(.top, 14)
+    }
+
     private var header: some View {
         VStack(alignment: .leading, spacing: 4) {
             Text(routine.name)
@@ -152,7 +180,8 @@ struct RoutineDetailView: View {
                 .foregroundStyle(RoutineDetailTheme.mutedText)
         }
         .frame(maxWidth: .infinity, alignment: .leading)
-        .padding(20)
+        .padding(.horizontal, 20)
+        .padding(.bottom, 20)
     }
 }
 

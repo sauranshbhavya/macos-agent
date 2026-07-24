@@ -4,13 +4,13 @@ paths:
 ---
 # MacAgent (UI) conventions
 
-`MacAgent` is the executable — the floating command widget (`FloatingWidgetView`, opened from the menu-bar icon or the push-to-talk hotkey) and the Command Center window. Both are views over one shared `AgentViewModel`. There is no menu-bar popover anymore — it was replaced entirely by the floating widget; `ContentView.swift` now only holds shared System A tokens/components (`SonnyTheme`/`SonnyType`/`SonnyRadius`, `AgentCommandComposerView`, button styles), not a view of its own.
+`MacAgent` is the executable — the floating command widget (`FloatingWidgetView`, opened from the menu-bar icon or the push-to-talk hotkey) and the Command Center window. Both are views over one shared `AgentViewModel`. There is no menu-bar popover anymore — it was replaced entirely by the floating widget. Command Center's own command composer was later deleted too (`feature/ui-ux-wireframe-fidelity`, 2026-07-21) — the widget is now the *only* place to type or speak a command anywhere in the app; `ContentView.swift` now only holds shared System A tokens/components (`SonnyTheme`/`SonnyType`/`SonnyRadius`, button styles), not a view of its own.
 
 ## Shared state
 
 The floating widget (`FloatingWidgetView.swift`) and the Command Center (`CommandCenterView.swift`) observe the *same* `AgentViewModel` instance — that's the whole point of the product-shell-shared-state work, carried forward when the widget replaced the old popover. New published state (a new local store's records, a new preference) gets added to that one instance. Never build a second, independently-coded state path for either surface, even for something that feels surface-local.
 
-Because both surfaces render off the same state, a task submitted from either one is visible to both. `AgentViewModel.TaskOrigin` (`.commandCenter` / `.widget`) tracks which surface actually submitted the currently-active task, so the widget can tell its own task apart from one Command Center's composer submitted and avoid rendering a second, duplicate progress/result panel for the latter (`FloatingWidgetView.showsPanel`). Any new task-submitting entry point needs to pass its own real `origin` explicitly — it does not get inferred, and the default is `.commandCenter`.
+Because both surfaces render off the same state, a task submitted from either one is visible to both. `AgentViewModel.TaskOrigin` (`.commandCenter` / `.widget`) tracks which surface actually submitted the currently-active task, so the widget can tell its own task apart from one a Command Center row action submitted (`runRoutineWidget`/`openWorkspaceWidget`, both default to `.commandCenter` origin despite the "Widget" in their names) and avoid rendering a second, duplicate progress/result panel for the latter (`FloatingWidgetView.showsPanel`). Any new task-submitting entry point needs to pass its own real `origin` explicitly — it does not get inferred, and the default is `.commandCenter`.
 
 ## Design tokens — two separate systems, both in active use
 

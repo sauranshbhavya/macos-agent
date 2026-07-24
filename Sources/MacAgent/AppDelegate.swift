@@ -8,10 +8,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private let viewModel = AgentViewModel()
     private lazy var windowCoordinator = AppWindowCoordinator(viewModel: viewModel)
-    private lazy var widgetController = FloatingWidgetWindowController(
-        viewModel: viewModel,
-        commandCenterWindowProvider: { [weak self] in self?.windowCoordinator.commandCenterWindow }
-    )
+    private lazy var widgetController = FloatingWidgetWindowController(viewModel: viewModel)
     private lazy var notificationService = SonnyNotificationService(
         onAllow: { [weak self] in self?.viewModel.start() },
         onRetry: { [weak self] in self?.viewModel.retryLastCommand() },
@@ -49,6 +46,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
 
         observeNotificationTriggers()
+        observeWidgetPresentationRequests()
 
         // Both surfaces open on launch, matching Wispr Flow's reference behavior — a real,
         // confirmed tradeoff: this also makes the Dock icon a permanent fixture, since
@@ -65,6 +63,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// it's a redundant second prompt for something already on screen.
     private var isAnySonnySurfaceVisible: Bool {
         widgetController.isVisible || windowCoordinator.commandCenterWindow?.isKeyWindow == true
+    }
+
+    /// Command Center has no composer of its own anymore — quick actions like "New routine"/
+    /// "Create workspace" pre-fill `viewModel.command` and need the widget to come forward so the
+    /// user can finish typing there. Independent of `notificationService`'s bundle-identity guard:
+    /// showing the widget works identically under `swift run`, unlike system notifications.
+    private func observeWidgetPresentationRequests() {
+        viewModel.$widgetPresentationRequest
+            .dropFirst()
+            .sink { [weak self] _ in
+                self?.widgetController.show()
+            }
+            .store(in: &cancellables)
     }
 
     private func observeNotificationTriggers() {

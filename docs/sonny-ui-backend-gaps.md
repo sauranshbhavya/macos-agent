@@ -23,10 +23,12 @@ both are built:
   rows from `plan.steps`/`stepStatuses`, the permission row from the real `approvalRequest`
   (tier-based risk approval, not a macOS system-permission prompt), the result card from real
   `finalSummary`/`suggestions` plus live `FileManager` attributes and the file's real `NSWorkspace`
-  icon, and the failure row from the real `errorMessage`. Composited positioning inside the
+  icon, and the failure row from the real `errorMessage`. ~~Composited positioning inside the
   Command Center window (§3.4) is implemented but only repositions on state/visibility change, not
   continuously while the Command Center window is being dragged — a minor polish gap, not
-  incorrect, just not live-tracked.
+  incorrect, just not live-tracked.~~ **Superseded 2026-07-21:** compositing was removed entirely,
+  not fixed — the widget is now always an independent, screen-anchored overlay, never tucked inside
+  Command Center's window. This "minor polish gap" no longer applies to anything real.
 - **System notifications** (`Sources/MacAgent/SonnyNotificationService.swift`) are real native
   `UserNotifications` banners per `docs/sonny-founder-design-decisions.md` ("native macOS
   notifications for v1, not a custom overlay") — macOS renders the chrome shown in
@@ -97,13 +99,16 @@ branch must give Command Center its own real, native surface for those three sta
 relying on the widget or on notifications. See `docs/sonny-ui-backend-roadmap.md`'s "Command
 Center's own missing permission/clarification/failure UI" entry for the specifics.
 
-**Composited-position staleness, expanded beyond dragging:** the "not continuously tracked while
+~~**Composited-position staleness, expanded beyond dragging:** the "not continuously tracked while
 dragging" note above is one instance of a broader gap — `FloatingWidgetWindowController.reposition()`
 only runs from `show()` or `contentFrameDidChange` (the widget's *own* content resizing); there's no
 observer on the Command Center window's key status, move, or resize. So switching focus away from
 Command Center to another app (or back), not just dragging the window, leaves the widget glued to
 its last composited-vs-standalone position and pill-visibility state until something else happens to
-trigger a reposition.
+trigger a reposition.~~ **Superseded 2026-07-21, same removal as above** — there's no
+composited-vs-standalone distinction left to go stale; the widget only ever has one position mode
+now, kept correct by a 0.75s cursor-position poll plus an app-activation observer (see the changelog's
+2026-07-23 roadmap note for the multi-monitor work this became).
 
 **Known UI mistakes deferred to the next branch (2026-07-21, explicit decision):** manual testing of
 this branch's round-3 widget fixes (commit `598582d`) surfaced real UI mistakes in the floating
@@ -116,6 +121,16 @@ no way to independently observe the running app (all manual/visual verification 
 so this entry is a placeholder marking that known, real widget UI issues exist and were consciously
 deferred, not a record of what they actually are. Whoever picks up the next branch should get the
 specifics from the user directly before assuming the widget's current UI state is clean.
+
+**Resolved 2026-07-24:** the "next branch" turned out to be the rest of `feature/ui-ux-wireframe-fidelity`
+itself (branch 9's scope was absorbed into this branch rather than starting a new one). An extensive,
+multi-round manual QA pass did get the specifics directly from the user and fixed everything found —
+widget-invisible-after-collapse, mic-hover tracking (twice, the real root cause was SwiftUI's
+`.onHover` losing tracking on key-status loss), the empty-command race, "Untitled task" mislabeling,
+cancellation misclassified as failure, transcription-errors never auto-clearing, stale step-rows
+leaking between tasks, and a timer-desync that needed 2+ widget compactions to clear stale content.
+Full detail in `docs/sonny-manual-test-checklist.md`'s status tracker, not repeated here. This
+placeholder's job is done — nothing here should read as still-open.
 
 ---
 
@@ -134,7 +149,17 @@ wireframes: `/Users/sauranshbhardwaj/Desktop/wireframes/Sonny UI PNG/1-Permissio
 and `2-ErrorNotification.png` (System B — see `docs/sonny-design-system-reference.md` §3 for the
 liquid-glass token recipe both of these use).
 
-## Not built: dry-run mode gives a generic message instead of a real preview
+## ~~Not built: dry-run mode gives a generic message instead of a real preview~~
+
+**Superseded 2026-07-21 — moot, not fixed: dry-run mode was dropped entirely, not improved.**
+`AgentViewModel` has no `dryRun` property, no `forceRealExecution` parameter, and no dry-run branch
+in `performStart` anymore — every command just runs for real everywhere, still gated by the
+approval-tier system. There is no toggle left anywhere in Command Center to turn dry-run on. The
+original gap description below is preserved for history only — nothing in it describes current
+behavior, and no future branch should scope work against it.
+
+<details>
+<summary>Original gap description (historical only)</summary>
 
 Surfaced 2026-07-20 while manually testing the floating widget: submitting `calc 2*2` with
 Command Center's own Dry Run toggle on returns the same fixed string `AgentViewModel.performStart`
@@ -155,6 +180,8 @@ gating), or at minimum a message that doesn't imply nothing happened when the ho
 command has no side effects to preview, but here's what running it for real would produce." Worth
 scoping alongside whichever branch next touches `CalculatorCapabilityAdapter`/`performStart`'s
 dry-run branch in `Sources/MacAgentCore` / `Sources/MacAgent/AgentViewModel.swift`.
+
+</details>
 
 ## Not built: persisted result/output text for completed tasks
 

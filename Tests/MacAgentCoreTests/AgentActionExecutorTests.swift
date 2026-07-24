@@ -81,6 +81,13 @@ struct AgentActionExecutorTests {
     }
 
     @Test
+    func asyncProcessRunnerCapturesRealStdout() async throws {
+        let result = try await AsyncProcessRunner.run(executablePath: "/bin/echo", arguments: ["hello"])
+        #expect(result.terminationStatus == 0)
+        #expect(result.output.trimmingCharacters(in: .whitespacesAndNewlines) == "hello")
+    }
+
+    @Test
     func defaultZipOutputIsStableBetweenPreviewAndExecution() async throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
