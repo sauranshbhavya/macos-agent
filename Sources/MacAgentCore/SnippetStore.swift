@@ -89,10 +89,7 @@ public struct SnippetStore: @unchecked Sendable {
             from: data,
             decoder: .snippetISO8601
         )
-        if decoded.wasLegacyPlaintext {
-            try write(decoded.value)
-        }
-        return decoded.value
+        return decoded.migratingLegacyPlaintext(store: "snippets", write: write)
     }
 
     private func validated(_ snippet: StoredSnippet) throws -> StoredSnippet {

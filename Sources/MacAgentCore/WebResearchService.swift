@@ -10,6 +10,7 @@ public enum WebResearchError: Error, Equatable, LocalizedError {
     case noReadableContent(String)
     case searchProviderNotConfigured
     case noSearchResults(String)
+    case allSourcesFailed([String], String)
 
     public var errorDescription: String? {
         switch self {
@@ -29,6 +30,9 @@ public enum WebResearchError: Error, Equatable, LocalizedError {
             return "Web search provider not configured."
         case .noSearchResults(let query):
             return "No web search results were found for \(query)."
+        case .allSourcesFailed(let urls, let firstReason):
+            let count = urls.count
+            return "None of the \(count) source\(count == 1 ? "" : "s") could be retrieved, so no note was written. First failure: \(firstReason)"
         }
     }
 }
@@ -191,6 +195,15 @@ public struct PublicWebPageLoader {
         }
 
         let page = try await fetcher.fetch(url)
+        // Redirects can land on a different host whose robots.txt was never consulted and whose
+        // address may be private. This check is reactive — the redirect target has already been
+        // fetched once by then — but it keeps the content from being used or synthesized.
+        if page.finalURL.host?.lowercased() != url.host?.lowercased() {
+            let finalURL = try SafeURL.validateWebURL(page.finalURL.absoluteString)
+            guard try await robotsChecker.canFetch(finalURL, userAgent: userAgent) else {
+                throw WebResearchError.robotsDisallowed(finalURL.absoluteString)
+            }
+        }
         try validate(page)
         return try extractor.extract(
             html: page.html,

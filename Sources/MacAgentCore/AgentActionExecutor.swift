@@ -75,6 +75,7 @@ public final class AgentActionExecutor {
     private let capabilityRegistry: CapabilityRegistry
     private let fileManager: FileManager
     private let now: () -> Date
+    private let hotKeyReady: () -> Bool
 
     public init(
         whitelist: PathWhitelist = PathWhitelist(),
@@ -107,7 +108,8 @@ public final class AgentActionExecutor {
         shortcutRunHistoryStore: ShortcutRunHistoryStore = ShortcutRunHistoryStore(),
         capabilityRegistry: CapabilityRegistry = .default,
         fileManager: FileManager = .default,
-        now: @escaping () -> Date = Date.init
+        now: @escaping () -> Date = Date.init,
+        hotKeyReady: @escaping () -> Bool = { true }
     ) {
         self.whitelist = whitelist
         self.inventory = inventory
@@ -142,6 +144,7 @@ public final class AgentActionExecutor {
         self.capabilityRegistry = capabilityRegistry
         self.fileManager = fileManager
         self.now = now
+        self.hotKeyReady = hotKeyReady
     }
 
     public func prepare(plan: AgentPlan) throws -> PreparedAgentRun {
@@ -161,8 +164,91 @@ public final class AgentActionExecutor {
             )
             return PreparedAgentRun(plan: resolvedPlan, previews: [preview], clarificationQuestion: question)
         }
-        let previews = try preview(plan: resolvedPlan)
-        return PreparedAgentRun(plan: resolvedPlan, previews: previews)
+
+        do {
+            let previews = try preview(plan: resolvedPlan)
+            return PreparedAgentRun(plan: resolvedPlan, previews: previews)
+        } catch let error as AutomationStoreError {
+            // Only a not-found target converts, and only *after* preview has run, so an earlier
+            // step's real error still wins: previewing in step order is what decides which
+            // problem the user hears about first.
+            guard let question = missingAutomationTargetQuestion(for: error) else {
+                throw error
+            }
+            let clarifyPlan = Self.clarificationPlan(question: question)
+            let preview = ActionPreview(
+                title: "Clarification needed",
+                details: [question]
+            )
+            return PreparedAgentRun(plan: clarifyPlan, previews: [preview], clarificationQuestion: question)
+        }
+    }
+
+    /// Turns a planner-invented workspace/routine name into a clarification instead of a hard
+    /// failure. Asked something vague like "focus on writing", the planner will confidently emit
+    /// `open_workspace(workspaceName: "writing")`; letting that reach the adapter produced
+    /// "No workspace named writing is saved." — a technical error about a concept the user never
+    /// raised. Mirrors how the instant resolver already turns an unknown Shortcut name into a
+    /// clarification rather than a failure (spec §4A.7).
+    ///
+    /// Deliberately narrow: **only** a name that matches nothing becomes a clarification. A
+    /// missing/empty name, an unreadable store, a malformed plan, or an unresolvable app inside
+    /// a workspace that does exist all still throw exactly as before.
+    private func missingAutomationTargetQuestion(for error: AutomationStoreError) -> String? {
+        switch error {
+        case .missingWorkspace(let name):
+            return missingTargetQuestion(
+                name: name,
+                kind: "workspace",
+                savedNames: (try? workspaceStore.loadAll())?.values.map(\.name)
+            )
+        case .missingRoutine(let name):
+            return missingTargetQuestion(
+                name: name,
+                kind: "routine",
+                savedNames: (try? routineStore.loadAll())?.values.map(\.name)
+            )
+        case .missingName, .emptyRoutine, .emptyWorkspace, .unsafeRoutineStep:
+            // Every other automation-store failure keeps its own error. A missing name, an
+            // empty definition, or an unsafe nested step are real problems, not "did you mean".
+            return nil
+        }
+    }
+
+    private func missingTargetQuestion(name: String, kind: String, savedNames: [String]?) -> String? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let savedNames else {
+            // The store could not be read at all. That is a load failure with its own
+            // surfacing — do not disguise it as "you never saved this".
+            return nil
+        }
+
+        let sorted = savedNames.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        guard !sorted.isEmpty else {
+            return "I don't have a \(kind) called \"\(trimmed)\" saved — you haven't saved any \(kind)s yet. What would you like me to do instead?"
+        }
+
+        let shown = sorted.prefix(5).joined(separator: ", ")
+        let remainder = sorted.count > 5 ? ", and \(sorted.count - 5) more" : ""
+        return "I don't have a \(kind) called \"\(trimmed)\" saved — did you mean one of: \(shown)\(remainder)? Or would you like to do something else?"
+    }
+
+    /// Same shape the planner emits for a genuine clarification, so every downstream path
+    /// (risk assessment, the widget's clarification panel, prior-task context) treats this
+    /// identically to one rather than needing a second notion of "needs clarification".
+    private static func clarificationPlan(question: String) -> AgentPlan {
+        AgentPlan(
+            summary: question,
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(
+                    id: "clarify-missing-automation-target",
+                    operation: .clarify,
+                    description: question,
+                    question: question
+                )
+            ]
+        )
     }
 
     public func assessRisk(plan: AgentPlan) throws -> CapabilityRiskAssessment {
@@ -469,9 +555,15 @@ public final class AgentActionExecutor {
         _ = try workflow(in: plan)
         var resolvedPlan = plan
 
-        if resolvedPlan.steps.contains(where: { $0.operation == .createZip }) {
+        if resolvedPlan.steps.contains(where: { [.scanSelectLargestFiles, .createZip].contains($0.operation) }) {
             resolvedPlan = try capabilityRegistry
                 .adapter(for: .scanSelectLargestFiles)
+                .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext())
+        }
+
+        if resolvedPlan.steps.contains(where: { [.scanDocx, .convertDocxToPDF].contains($0.operation) }) {
+            resolvedPlan = try capabilityRegistry
+                .adapter(for: .scanDocx)
                 .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext())
         }
 
@@ -592,7 +684,7 @@ public final class AgentActionExecutor {
             if let sourceURLs = step.sourceURLs {
                 resources.append(contentsOf: sourceURLs)
             }
-            appendIfPresent(step.searchQuery.map { "Search: \($0)" }, to: &resources)
+            appendIfPresent(searchQueryResource(for: step), to: &resources)
             appendIfPresent(step.outputPath, to: &resources)
             appendIfPresent(step.inputPath, to: &resources)
             appendIfPresent(step.routineName.map { "Routine: \($0)" }, to: &resources)
@@ -615,21 +707,55 @@ public final class AgentActionExecutor {
         return names.isEmpty ? "Prepared Sonny action" : names.joined(separator: ", ")
     }
 
+    private static let dataEgressOperations: Set<AgentOperation> = [
+        .openHackerNews,
+        .fetchHNHeadlines,
+        .webToMarkdown,
+        .openAppSearchURL,
+        .openURL,
+        .playMedia,
+        .openWorkspace,
+        .invokeShortcut
+    ]
+
+    /// `AgentStep.searchQuery` is reused by several operations for a value that is not a search
+    /// term at all — a snippet trigger, a calculator expression, an app name. Labeling those
+    /// "Search: …" misdescribes the action in the approval prompt, which is the one place the
+    /// user reads it (a snippet save showed "Allow access to Search: ;sig").
+    private func searchQueryResource(for step: AgentStep) -> String? {
+        guard let raw = step.searchQuery?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else {
+            return nil
+        }
+
+        switch step.operation {
+        case .saveSnippet, .expandSnippet:
+            return "Snippet: \(raw)"
+        case .calculateUtility:
+            return "Calculation: \(raw)"
+        case .switchRunningApp:
+            return "App: \(raw)"
+        default:
+            return "Search: \(raw)"
+        }
+    }
+
     private func dataLeavesDevice(in plan: AgentPlan) -> Bool {
         plan.steps.contains { step in
-            switch step.operation {
-            case .openHackerNews,
-                 .fetchHNHeadlines,
-                 .webToMarkdown,
-                 .openAppSearchURL,
-                 .openURL,
-                 .playMedia,
-                 .openWorkspace,
-                 .invokeShortcut:
+            if Self.dataEgressOperations.contains(step.operation) {
                 return true
-            default:
+            }
+            guard step.operation == .runRoutine else {
                 return false
             }
+            // A saved routine can wrap egress steps, so the outer .runRoutine step alone says
+            // nothing. Stored routines cannot themselves contain .runRoutine (rejected at save
+            // time), so one level is enough. A routine that fails to load surfaces through the
+            // adapter's assessRisk before this copy is built.
+            guard let routine = try? routineStore.routine(named: step.routineName ?? "") else {
+                return false
+            }
+            return routine.steps.contains { Self.dataEgressOperations.contains($0.operation) }
         }
     }
 
@@ -707,6 +833,7 @@ public final class AgentActionExecutor {
             shortcutRunHistoryStore: shortcutRunHistoryStore,
             fileManager: fileManager,
             now: now,
+            hotKeyReady: hotKeyReady,
             assessNestedPlan: { [weak self] plan in
                 guard let self else {
                     throw AgentExecutionError.invalidPlan("Executor is unavailable for nested risk assessment.")
@@ -750,6 +877,7 @@ public final class AgentActionExecutor {
     ) async throws -> AgentRunResult {
         var summaries: [String] = []
         var suggestions: [RunSuggestion] = []
+        var previews: [ActionPreview] = []
         var previousArtifactPath: String?
 
         for segment in try segmentPlans(in: plan) {
@@ -757,6 +885,9 @@ public final class AgentActionExecutor {
             let result = try await execute(plan: resolved, log: log)
             summaries.append(result.summary)
             suggestions.append(contentsOf: result.suggestions)
+            // Accumulate each segment's real result previews — re-running previewChain after
+            // execution would re-resolve default output paths and misreport what was written.
+            previews.append(contentsOf: result.previews)
             if let producedPath = result.previews.flatMap(\.writes).last {
                 previousArtifactPath = producedPath
             } else if let suggestionPath = result.suggestions.last?.value {
@@ -764,9 +895,8 @@ public final class AgentActionExecutor {
             }
         }
 
-        let preview = try previewChain(plan)
         let summary = summaries.joined(separator: " ")
-        return AgentRunResult(plan: plan, previews: preview, summary: summary, suggestions: suggestions)
+        return AgentRunResult(plan: plan, previews: previews, summary: summary, suggestions: suggestions)
     }
 
     private func segmentPlans(in plan: AgentPlan) throws -> [AgentPlan] {

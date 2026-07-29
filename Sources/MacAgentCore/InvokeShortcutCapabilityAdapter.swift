@@ -42,7 +42,13 @@ public struct InvokeShortcutCapabilityAdapter: CapabilityAdapter {
     }
 
     public func preview(plan: AgentPlan, context: CapabilityExecutionContext) throws -> [ActionPreview] {
-        let spec = try spec(in: plan, context: context)
+        try preview(for: try spec(in: plan, context: context), context: context)
+    }
+
+    private func preview(
+        for spec: ShortcutSpec,
+        context: CapabilityExecutionContext
+    ) throws -> [ActionPreview] {
         var details = [
             "Shortcut: \(spec.name)",
             "Risk: \(try context.shortcutRunHistoryStore.hasCleanObservedSuccess(for: spec.name) ? "Sonny-observed successful invocation" : "No Sonny-observed successful invocation yet")"
@@ -70,26 +76,34 @@ public struct InvokeShortcutCapabilityAdapter: CapabilityAdapter {
         context: CapabilityExecutionContext,
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
+        // One spec resolution per execute: each one shells out to `shortcuts list`, which
+        // enumerates the user's whole Shortcuts library.
         let spec = try spec(in: plan, context: context)
-        let previews = try preview(plan: plan, context: context)
+        let previews = try preview(for: spec, context: context)
         log(.act, "Running Shortcut \(spec.name)")
 
         let result: ProcessResult
         do {
             result = try await context.shortcutInvoker.invokeShortcut(name: spec.name, input: spec.input)
         } catch {
-            try? context.shortcutRunHistoryStore.recordFailure(shortcutName: spec.name, at: context.now())
+            recordHistory(context: context, log: log) {
+                try context.shortcutRunHistoryStore.recordFailure(shortcutName: spec.name, at: context.now())
+            }
             log(.summarize, "Shortcut failed")
             throw error
         }
 
         guard result.terminationStatus == 0 else {
-            try? context.shortcutRunHistoryStore.recordFailure(shortcutName: spec.name, at: context.now())
+            recordHistory(context: context, log: log) {
+                try context.shortcutRunHistoryStore.recordFailure(shortcutName: spec.name, at: context.now())
+            }
             log(.summarize, "Shortcut failed")
             throw ShortcutsBridgeError.invocationFailed(spec.name, result.terminationStatus, result.output)
         }
 
-        try? context.shortcutRunHistoryStore.recordSuccess(shortcutName: spec.name, at: context.now())
+        recordHistory(context: context, log: log) {
+            try context.shortcutRunHistoryStore.recordSuccess(shortcutName: spec.name, at: context.now())
+        }
         if !result.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             log(.observe, result.output.trimmingCharacters(in: .whitespacesAndNewlines))
         }
@@ -99,6 +113,21 @@ public struct InvokeShortcutCapabilityAdapter: CapabilityAdapter {
             previews: previews,
             summary: "Ran Shortcut \(spec.name)."
         )
+    }
+
+    /// Run-history bookkeeping must not fail the invocation that already happened, but it also
+    /// must not vanish: this history feeds `hasCleanObservedSuccess`, which decides whether a
+    /// future run is tier 1 or tier 2. Silent rot there quietly changes risk gating.
+    private func recordHistory(
+        context: CapabilityExecutionContext,
+        log: @escaping (AgentPhase, String) -> Void,
+        write: () throws -> Void
+    ) {
+        do {
+            try write()
+        } catch {
+            log(.observe, "Could not update Shortcut run history: \(error.localizedDescription)")
+        }
     }
 
     private struct ShortcutSpec {

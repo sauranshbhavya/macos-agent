@@ -16,8 +16,8 @@ public struct LargestFilesZipCapabilityAdapter: CapabilityAdapter {
             AgentTool(
                 operation: .scanSelectLargestFiles,
                 name: "Scan and select largest files",
-                description: "Recursively scan a whitelisted folder, skip symlinks, and select the largest regular files.",
-                requiredFields: ["inputPath", "count"],
+                description: "Recursively scan a whitelisted folder, skip symlinks, and select the largest regular files. Defaults to the 3 largest when count is omitted.",
+                requiredFields: ["inputPath"],
                 sideEffects: [],
                 dryRunBehavior: "Show the selected files and sizes.",
                 examples: ["Find the 3 largest files in ~/Desktop/MacAgentDemo"]
@@ -39,7 +39,12 @@ public struct LargestFilesZipCapabilityAdapter: CapabilityAdapter {
     )
 
     public func resolveDefaultOutputs(in plan: AgentPlan, context: CapabilityExecutionContext) throws -> AgentPlan {
-        var resolvedPlan = plan
+        var resolvedPlan = try FinderSelectionResolver.pinningSelectedDirectoryInput(
+            in: plan,
+            operations: [.scanSelectLargestFiles, .createZip],
+            whitelist: context.whitelist,
+            finderContextReader: context.finderContextReader
+        )
         guard let zipIndex = resolvedPlan.steps.firstIndex(where: { $0.operation == .createZip }) else {
             return resolvedPlan
         }
@@ -57,14 +62,15 @@ public struct LargestFilesZipCapabilityAdapter: CapabilityAdapter {
         guard !files.isEmpty else {
             throw AgentExecutionError.noMatchingFiles("No regular files were found in \(spec.folder.path).")
         }
+        return [preview(for: files, spec: spec)]
+    }
 
-        return [
-            ActionPreview(
-                title: "Zip \(files.count) largest files",
-                details: files.map { "\($0.url.pathRelative(to: spec.folder)) (\($0.displaySize))" },
-                writes: [spec.outputURL.path]
-            )
-        ]
+    private func preview(for files: [FileRecord], spec: LargestFileSpec) -> ActionPreview {
+        ActionPreview(
+            title: "Zip \(files.count) largest files",
+            details: files.map { "\($0.url.pathRelative(to: spec.folder)) (\($0.displaySize))" },
+            writes: [spec.outputURL.path]
+        )
     }
 
     public func assessRisk(plan: AgentPlan, context: CapabilityExecutionContext) throws -> CapabilityRiskAssessment {
@@ -86,7 +92,6 @@ public struct LargestFilesZipCapabilityAdapter: CapabilityAdapter {
         context: CapabilityExecutionContext,
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
-        let previews = try preview(plan: plan, context: context)
         let spec = try spec(in: plan, context: context)
         log(.act, "Scanning \(spec.folder.path) for regular files")
         let files = try context.inventory.largestFiles(in: spec.folder, count: spec.count)
@@ -94,6 +99,7 @@ public struct LargestFilesZipCapabilityAdapter: CapabilityAdapter {
             throw AgentExecutionError.noMatchingFiles("No regular files were found in \(spec.folder.path).")
         }
 
+        let previews = [preview(for: files, spec: spec)]
         log(.observe, "Selected \(files.count) files")
         let totalBytes = files.reduce(Int64(0)) { $0 + $1.byteCount }
         let totalSize = ByteCountFormatter.string(fromByteCount: totalBytes, countStyle: .file)

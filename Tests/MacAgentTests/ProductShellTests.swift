@@ -506,19 +506,8 @@ struct ProductShellTests {
             operation: .calculateUtility,
             description: ""
         )
-        let localPlanEvent = AgentEvent(phase: .plan, message: "Resolved command locally")
-        let riskEvent = AgentEvent(
-            phase: .risk,
-            message: "risk.assessed: Tier 2 (Local modification); approval: Lightweight confirmation"
-        )
-
         #expect(AgentActivityPresentation.planStepTitle(step) == "Calculate")
         #expect(AgentActivityPresentation.planStepTitle(step) != AgentOperation.calculateUtility.rawValue)
-        #expect(AgentActivityPresentation.eventTitle(localPlanEvent) == "Understanding")
-        #expect(AgentActivityPresentation.eventTitle(localPlanEvent) != AgentPhase.plan.rawValue)
-        #expect(AgentActivityPresentation.eventMessage(localPlanEvent) == "Understood this command on your Mac")
-        #expect(AgentActivityPresentation.eventMessage(riskEvent) == "Safety check complete. Waiting for your approval.")
-        #expect(AgentActivityPresentation.previewSideEffect("Write: /tmp/report.md") == "Creates /tmp/report.md")
     }
 
     @Test

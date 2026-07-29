@@ -176,8 +176,10 @@ public final class OpenAIPlanner: Planning {
 
 public enum OpenAIResponseParser {
     public static func outputText(from data: Data) throws -> String {
-        let object = try JSONSerialization.jsonObject(with: data)
-        guard let dictionary = object as? [String: Any] else {
+        // A truncated or non-JSON response body would otherwise escape as a raw Foundation
+        // error the user sees verbatim; every failure here is the same user-facing problem.
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              let dictionary = object as? [String: Any] else {
             throw PlannerError.missingOutputText
         }
 

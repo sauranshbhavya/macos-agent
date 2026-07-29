@@ -19,7 +19,7 @@ https://drive.google.com/file/d/12lJnnqiBrbGnua2pGyE2GsYaVBcil0qe/view?usp=shari
 **Agent loop and safety**
 - Plans typed or spoken commands through OpenAI, validates the plan against a strict schema and a registered capability contract, then executes only registered local capabilities — never model-generated code, shell, or AppleScript.
 - Every capability declares a default risk tier (0 informational/auto-run, 1 low-impact/auto-run, 2 local modification/lightweight confirmation, 3 external-or-destructive/explicit approval, 4 refused) and can escalate dynamically at validation time — e.g. a zip whose output path already exists, or a routine save that would replace an existing one, escalates to explicit approval before it runs.
-- A visible approval panel appears for tier 2+ actions on every Command Center page with a command composer, not just the popover.
+- Tier 2+ actions pause for approval in the floating widget, which is the app's only command surface; Command Center pages show a compact running indicator instead of their own approval UI.
 
 **File and document workflows**
 - Find the largest files in a whitelisted folder and zip them.
@@ -65,7 +65,7 @@ https://drive.google.com/file/d/12lJnnqiBrbGnua2pGyE2GsYaVBcil0qe/view?usp=shari
 - Settings with a functional pointer-cursor preference and a Dark theme (Light/System are visible placeholders, not yet functional).
 - Note (2026-07-14): a post-completion review found the built Command Center pages fall short of the Figma wireframes in content depth and information architecture, and two founder-conversation decisions (task-to-workspace association, real routine scheduling) aren't yet supported by the data model. See `docs/sonny-v1-implementation-changelog.md`'s branch 8 entry and `docs/sonny-founder-design-decisions.md` for the specifics; `feature/v1-strategy-replan` is resolving how this closes.
 
-**Not yet built**: the floating Spotlight-style command widget and system notifications (System B in `docs/sonny-design-system-reference.md`), screen intelligence / screen Q&A, Power Mode (approved-app UI control), hosted backend/billing/accounts, and enterprise features. See the changelog's roadmap table for sequencing.
+**Not yet built**: screen intelligence / screen Q&A, Power Mode (approved-app UI control), hosted backend/billing/accounts, and enterprise features. The floating Spotlight-style command widget and native system notifications (System B in `docs/sonny-design-system-reference.md`) both shipped — see the "Resolved (2026-07-19)" section of `docs/sonny-ui-backend-gaps.md`; note that the notification fallback is reachable only when no Sonny surface is visible, which the permanently-on-screen widget makes rare by design. See the changelog's roadmap table for sequencing.
 
 ## Setup
 
@@ -85,7 +85,7 @@ env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift run --disable
 ```
 
 The visible product name is Sonny. The SwiftPM executable is still `MacAgent`.
-Sonny's main-app UI (the "System A" design system) uses Inter typography on a near-black, flat, zero-shadow palette (`#090909` background, `#5C84FE` accent) matched to the product's Figma wireframes — see `docs/sonny-design-system-reference.md` for the full token set, including the separate System B tokens reserved for the not-yet-built floating widget.
+Sonny's main-app UI (the "System A" design system) uses Inter typography on a near-black, flat, zero-shadow palette (`#090909` background, `#5C84FE` accent) matched to the product's Figma wireframes — see `docs/sonny-design-system-reference.md` for the full token set, including the separate System B tokens used by the floating widget and system notifications.
 
 Typed instant-utility commands (calculator, clipboard, snippets, running-app switch, recent artifacts, quick routine/workspace dispatch) work without `OPENAI_API_KEY`. Non-instant typed commands and voice transcription both require it.
 
@@ -147,7 +147,7 @@ Coverage spans strict plan decoding, the full capability-adapter registry, risk-
 
 ## Manual Smoke Test
 
-1. Launch Sonny from SwiftPM. The menu-bar `Sonny` item opens the popover; open the Command Center window for Tasks/Insights/Routines/Workspaces/Settings.
+1. Launch Sonny from SwiftPM. The menu-bar icon opens the floating command widget (as does the Ctrl-Opt-Space push-to-talk hotkey); open the Command Center window for Tasks/Insights/Routines/Workspaces/Settings.
 2. Typed dry run and real run:
    - `Find the 3 largest files in ~/Desktop/MacAgentDemo and zip them.`
    - `Convert all .docx to .pdf in ~/Documents/MacAgentDocs.`
@@ -178,6 +178,6 @@ Coverage spans strict plan decoding, the full capability-adapter registry, risk-
 Two Swift package targets:
 
 - **`MacAgentCore`** — business logic only, no UI. Owns the capability-adapter registry (every executable action is a `CapabilityAdapter` with its own `preview`/`assessRisk`/`execute`), the risk/approval engine (`AgentRunner`, `RiskApproval`), the eight encrypted local stores (`LocalStorageEncryption`, `AutomationStores`, `ClipboardHistoryService`, `SnippetStore`, `RecentArtifactStore`, `ShortcutsBridgeService`, `TaskHistoryStore`), planner integration (`OpenAIPlanner`, `OpenAITranscriber`, `ToolRegistry`), web research (`WebResearchService`, `WebResearchSynthesizer`, `WebResearchMarkdownCapabilityAdapter`), media playback resolution (`MediaPlaybackService`), the instant-utility resolver (`InstantCommandResolver`), and the path/URL safety boundary (`PathWhitelist`, `SafeURL`).
-- **`MacAgent`** — the executable. `AppDelegate` + `AppWindowCoordinator` manage the menu-bar status item and the Command Center window, both observing one shared `AgentViewModel`. `ContentView` is the popover (and hosts the System A design tokens, `SonnyTheme`/`SonnyType`/`SonnyRadius`); `CommandCenterView` is the Command Center window's five destinations. `AgentActivityPresentation` maps internal operation/phase names to user-facing task-activity copy.
+- **`MacAgent`** — the executable. `AppDelegate` + `AppWindowCoordinator` manage the menu-bar status item and the Command Center window, both observing one shared `AgentViewModel`. `FloatingWidgetView` (with `FloatingWidgetWindowController` and the System B tokens in `SonnyWidgetTheme`) is the sole command surface — the old menu-bar popover was removed; `ContentView` now only hosts the shared System A design tokens (`SonnyTheme`/`SonnyType`/`SonnyRadius`); `CommandCenterView` is the Command Center window's five destinations. `AgentActivityPresentation` maps internal operation/phase names to user-facing task-activity copy.
 
 See `.claude/rules/macagentcore-conventions.md` and `.claude/rules/macagent-ui-conventions.md` for the specific patterns each target follows (capability-adapter shape, risk-tier gating discipline, local-store encryption pattern, shared-state rules, design-token boundaries) — those are kept current as the source of truth for contributors; this README stays at the orientation level.

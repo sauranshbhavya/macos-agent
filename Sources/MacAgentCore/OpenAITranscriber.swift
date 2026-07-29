@@ -81,7 +81,11 @@ public struct OpenAITranscriber: Sendable {
             throw TranscriptionError.badResponse(httpResponse.statusCode, body)
         }
 
-        let decoded = try JSONDecoder().decode(Response.self, from: data)
+        // A response missing `text` entirely is the same user-facing problem as an empty one:
+        // no transcript. A raw DecodingError here would reach the user verbatim.
+        guard let decoded = try? JSONDecoder().decode(Response.self, from: data) else {
+            throw TranscriptionError.missingText
+        }
         let text = decoded.text.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !text.isEmpty else {
             throw TranscriptionError.missingText

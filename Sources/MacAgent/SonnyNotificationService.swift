@@ -1,8 +1,13 @@
 import Foundation
+import OSLog
 import UserNotifications
 
 /// Not `@MainActor`-isolated so the identifiers stay reachable from `UNUserNotificationCenterDelegate`
 /// callbacks, which macOS can invoke off the main actor.
+enum SonnyNotificationLog {
+    static let logger = Logger(subsystem: "com.sonny.macagent", category: "notifications")
+}
+
 private enum SonnyNotificationCategory {
     static let permission = "SONNY_PERMISSION"
     static let error = "SONNY_ERROR"
@@ -43,7 +48,19 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
         super.init()
         center.delegate = self
         registerCategories()
-        center.requestAuthorization(options: [.alert]) { _, _ in }
+        // Both results were previously discarded, so a denied prompt left every later post
+        // failing silently with nothing anywhere to explain why no banner ever appeared.
+        center.requestAuthorization(options: [.alert]) { granted, error in
+            if let error {
+                SonnyNotificationLog.logger.warning(
+                    "Notification authorization failed: \(error.localizedDescription, privacy: .public)"
+                )
+            } else if !granted {
+                SonnyNotificationLog.logger.info(
+                    "Notification authorization denied; Sonny's fallback banners will not appear."
+                )
+            }
+        }
     }
 
     private func registerCategories() {
@@ -83,7 +100,13 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
     }
 
     private func deliver(_ content: UNMutableNotificationContent) {
-        center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil))
+        center.add(UNNotificationRequest(identifier: UUID().uuidString, content: content, trigger: nil)) { error in
+            if let error {
+                SonnyNotificationLog.logger.warning(
+                    "Notification delivery failed: \(error.localizedDescription, privacy: .public)"
+                )
+            }
+        }
     }
 
     nonisolated func userNotificationCenter(

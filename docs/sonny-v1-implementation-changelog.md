@@ -36,6 +36,7 @@ Dependency-ordered. Do not start a branch before the ones above it are merged, u
 | 8 | `feature/product-shell-shared-state` | §4A.1 (shell only), §6.2, §6.3, §17.3 | Superseded — see branch 9. Branch 8 itself is frozen, no further commits. |
 | 9 | `feature/command-center-depth-and-data-model` | Founder-decisions UI-fidelity audit, task-to-workspace association; recommended (not mandatory) home for the first-run tier-2 legibility moment | Checkpoints 1-7 complete (shipped on `feature/ui-ux-wireframe-fidelity`, which absorbed this branch's scope — see 2026-07-23 note below). Checkpoint 8 split 2026-07-24: first-time approval copy shipping now, curated-example surfacing explicitly deferred — see `docs/sonny-founder-design-decisions.md`'s "Approval panel — first-run moment" |
 | 10 | `feature/routine-scheduling` | Real scheduler/execution-trigger (defined run time, enabled/disabled state) per `docs/sonny-founder-design-decisions.md` | Not started — confirmed 2026-07-23, no scheduling/trigger code exists anywhere in the codebase |
+| — | `feature/full-repo-correctness-review` | None (cross-cutting correctness pass over branches 1-11) | Complete 2026-07-29 — 37 verified behavior/claim divergences fixed across capability adapters, the safety core, the 8 local stores, the planner/web boundary, system services, and the UI shell |
 | 11 | `feature/floating-command-widget` | §17.3 (cockpit surface, visual form only); user wireframes (2026-07-08), not spec-mandated | Complete, and substantially extended beyond original scope (shipped on `feature/ui-ux-wireframe-fidelity` — see 2026-07-23 note below) |
 | 12 | `feature/hosted-agent-runtime-backend` | §6.1, §8, §9, §16, §21.2, §21.3, §6.19 | Not started |
 | 13 | `feature/billing-command-center-memory` | §6.14, §16.3, §16.4, §6.3A (full), §6.10; plus a locked free-tier allowance mechanism, see note below | Not started |
@@ -870,3 +871,77 @@ Must preserve: shared-state architecture (both surfaces observe one `AgentViewMo
 Known pitfalls to avoid repeating: do not assume Figma MCP tool calls are available — check quota first, default to manual SVG/CSS export; System A and System B are not variants of one system, don't reuse System A tokens for the widget; do not reuse `recordLocalStorageLoadFailure` for write-path failures on any store; any new page with a composer needs its own explicit `CommandCenterTaskActivitySurface`; do not start UI work until the instant-utility quick-results-list wireframe exists and the menu-bar-trim style decision is made.
 
 Start in plan mode. Confirm git status is clean on main, confirm the changelog's account of the prior branch still matches the current code, then produce an implementation plan before editing anything. Do not commit, push, merge, or open a PR without explicit approval.
+
+---
+
+### Branch: feature/full-repo-correctness-review
+Status: complete
+Date: 2026-07-29
+Implementing agent: Claude
+Reviewing agent: pending
+
+Spec sections covered: none directly — this is a cross-cutting correctness pass over every area shipped by branches 1-11, not new feature work. Nothing in the spec changed.
+
+Files changed: 58 files. `MacAgentCore`: AgentActionExecutor, AgentPlan, AgentRunner, AsyncProcessRunner, AutomationStores, CapabilityAdapter, ClipboardHistoryService, DocumentConverter, DocxConversionCapabilityAdapter, FinderContextService, FinderSelectionResolver, HackerNewsService, InstantCommandResolver, InvokeShortcutCapabilityAdapter, LargestFilesZipCapabilityAdapter, LocalDataDeletionService, LocalStorageEncryption, MediaPlaybackService, OpenAIPlanner, OpenAITranscriber, PermissionReadinessCapabilityAdapter, RecentArtifactStore, RecentCompletedTasks, RunRoutineCapabilityAdapter, SafeURL, ShortcutsBridgeService, SnippetSaveCapabilityAdapter, SnippetStore, TaskHistoryStore, TaskUsage, WebResearchMarkdownCapabilityAdapter, WebResearchService, WebResearchSynthesizer. `MacAgent`: AgentActivityPresentation, AgentViewModel, AppDelegate, CommandCenterView, FloatingWidgetView, SonnyNotificationService. Tests: 16 files including a new ProcessSeamTests. Docs: README, sonny-design-system-reference.
+
+Tests: `env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disable-sandbox -Xswiftc -F -Xswiftc /Library/Developer/CommandLineTools/Library/Developer/Frameworks -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/Frameworks -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/usr/lib` -> pass, 293 tests in 36 suites (was 271 on main).
+
+Behavior added:
+- Finder-selection input folders resolve once and pin into the plan, so the folder previewed/approved is the folder actually zipped or converted. Docx needed both an adapter `resolveDefaultOutputs` override and a new dispatcher branch in `AgentActionExecutor.resolveDefaultOutputs` — no branch existed for `.scanDocx`, so an override alone would never have run.
+- `run_routine` and `executeChain` return the previews from the real nested execution instead of re-deriving them afterward with a fresh timestamp.
+- SSRF blocking in `SafeURL` (loopback, RFC1918, link-local incl. 169.254.169.254, CGNAT, IPv6, `.local`, integer-IPv4 form), applied to the requested URL and to redirect targets; robots.txt re-checked on cross-host redirects.
+- Observed-content URLs get URL-safe delimiter neutralization (percent-encoding), distinct from the text escaper.
+- Snippet save escalates to tier 3 when it would replace an existing trigger.
+- Instant-resolver ambiguous launches defer to the planner; broad `switch`/`focus`/`activate` prefixes require a plausible app-name remainder.
+- Subprocess output is drained before waiting for exit at all three sites (fixes a real hang).
+- Browser opens, Apple Music opens, and local-data deletion report real failures; deletion is best-effort across all 8 stores.
+- Decode failures normalize to the app's own error types across planner, plan decoder, note decoder, usage parser, and transcriber.
+- Web research synthesizes from the sources that loaded and names skipped ones; fails only when all fail.
+- Permission readiness reads real hotkey state via a new `hotKeyReady` context seam.
+- New `localStorageNotice` channel separates local-store health from task failure, with a widget auxiliary strip, a Command Center banner, and an AppDelegate subscription.
+- Clipboard monitor fails closed when its consent setting cannot be read.
+
+Behavior preserved (required, no blanket claims):
+- Risk/approval protocol: `AgentRunner` remains the only gate, still re-assesses at execute time, still requires approved tier >= fresh effective tier, still refuses tier 4. `AgentActionExecutor.execute` still does not re-gate. Verified by the existing approval tests plus the new snippet-escalation test.
+- All 8 encrypted stores keep the `SONNYENC1` header, AES-GCM encryption, DI'd `encryption` param, and legacy-plaintext migration; `LocalDataDeletionService` still covers all 8 (now best-effort).
+- Shared-state architecture: both surfaces still observe one `AgentViewModel`; no second state path was added — `localStorageNotice` is one property on that same instance.
+- `TaskOrigin` behavior across approve/clarify continuations is unchanged; only the doc comment describing it was corrected.
+- Untrusted-content boundary: fetched content still never enters `OpenAIPlanner.plan`; wrappers unchanged apart from URL-field hardening.
+- System A / System B token separation: the widget strip uses only `WidgetTheme`/`WidgetType`, the Command Center banner only `SonnyTheme`/`SonnyType`.
+- Existing Command Center running-indicator behavior on Tasks/Routines/Workspaces is unchanged; Insights gained one.
+
+Architectural decisions / pitfalls discovered (required):
+- **Writing tests found bugs the review missed.** Three fixes only happened because a new test failed: `AIUsagePayloadParser.responsesUsage` had the same unguarded `JSONSerialization` and runs *before* `outputText`, so it pre-empted the descriptive error; the transcriber threw a raw `DecodingError` when `text` was absent (not merely empty); and the shortcut-catalog counter proved a third `shortcuts list` spawn came from plan validation, not the adapter.
+- **`.previewOnly` could not be deleted as planned.** `RiskApprovalRequirement` is public API, so the switch must stay exhaustive. The branch was rewritten to report through `errorMessage` (which both surfaces render) instead of `finalSummary` plus a `.prepared` status no surface shows — fixing the "invisible if reached" half of the finding. It remains unreachable: nothing constructs a policy with `tier2Mode == .previewOnly`.
+- **A unit test must not drive Launch Services.** The first browser-opener test used a real unregistered URL scheme; `NSWorkspace.open` put a system dialog on the developer's screen on every run. `WorkspaceBrowserOpener` now takes an injectable open closure.
+- **Don't `git checkout <file>` to undo a scratch experiment mid-branch** — it reverts to HEAD, discarding uncommitted work in that file. Cost a near-miss on `AsyncProcessRunner.swift`; use an explicit backup copy.
+- The Command Center storage banner must sit *outside* the `isRunning || isAwaitingApproval` conditional. It self-gates on `localStorageNotice`; nesting it inside (including inside `InProgressTaskGroup`, which only renders while a task is active) hides a corrupt store exactly when nothing is running.
+- Reverting a fix to watch its test fail is the cheapest way to prove a repro test is real. Done for the Finder pinning, run-routine previews, the pipe deadlock, the migration rewrite, and the storage-notice separation.
+- **`AgentStep.searchQuery` is overloaded**, and generic code that formats it lies. Snippet save, snippet expansion, the calculator, and running-app switch all stuff a non-search value into it, so `involvedResource` labeled a snippet save "Search: ;sig" in the approval prompt. Any new consumer of a shared `AgentStep` field must switch on the operation rather than assume the field means what its name says.
+- **`WidgetPermissionPanel` renders only `involvedResource`** — not `riskReason`, `undoDescription`, `dataLeavesDevice`, or `escalations`. Escalation reasons now render as their own line (the resource line is `lineLimit(1)` and would truncate them); the rest of `RiskApprovalCopy` is still computed and still unread by any surface.
+- **A same-named workspace and app produce indistinguishable result text.** Confirmed by trace that the collision correctly defers to the planner, but `open_app` summarized as "Opened Slack." while the workspace path says "Opened workspace Slack…", leaving the user unable to tell which ran. The app path now says "Opened the Slack app."
+- **A "broken URL" in web research takes two different paths**: syntactically invalid URLs are rejected by `SafeURL` while the plan is validated (nothing fetched, nothing written), while valid-but-unreachable URLs are skipped per-source and only abort when every source fails. Worth knowing before reading a manual test result as a partial-synthesis bug.
+
+Known limitations / deferred scope:
+- **Partial by design:** the invoke-shortcut catalog still resolves twice per full run (adapter duplicate removed; the plan-validation read remains). A lifecycle-wide cache was judged not worth it for a latency-only issue.
+- **Deferred:** `RunRoutineCapabilityAdapter` still re-fetches and re-resolves the routine in preview/assessRisk/execute. Only the concretely-traced preview bug was fixed; "resolve once, thread through" needs a nested-defaults seam that does not exist.
+- **Deferred:** the migration-rewrite fix is the cheap variant (catch, return decoded data, log). Making a deferred migration user-visible would need `loadAll()`'s return shape changed across all 8 stores.
+- The robots.txt redirect re-check is reactive: the redirect target is fetched once before the check can run. Preventing the fetch entirely needs a redirect-intercepting `URLSession` delegate.
+- SSRF blocking covers literal hosts only — DNS rebinding is explicitly out of scope.
+- Not verified visually: the widget storage strip, the Command Center banner, the Insights running indicator, and whether the Tasks-page banner leaves a gap when absent. All manual/visual verification is the user's.
+
+Unknown workspace/routine names now ask instead of failing (added after manual testing, item 8): a vague command like "focus on writing" correctly reaches the real planner, which then invents a workspace named "writing" and calls `open_workspace` with it — the user got back "No workspace named writing is saved.", a technical error about a concept they never mentioned. `AgentActionExecutor.prepare(plan:)` now converts a `run_routine`/`open_workspace` target that matches nothing in the store into a clarification, rewriting the plan into the same single-`.clarify`-step shape the planner emits for a genuine clarification so every downstream path (risk assessment, the widget panel, prior-task context, `submitClarification()`) treats it identically rather than needing a second notion of "needs clarification". The question lists what is actually saved when there is anything to list. This follows the precedent `InstantCommandResolver.shortcutResolution` already set for unknown Shortcut names per spec §4A.7, but at a different layer — that one handles typed names before the planner, this one handles the planner's own tool call.
+
+**Deliberately narrow, and tested as such:** only a name matching nothing changes behavior. A missing/empty name still throws `missingName`, an unreadable store still surfaces as a load failure rather than being disguised as "you never saved this", and a workspace that genuinely exists but holds an app outside the allowlist still throws. A test pins each of those.
+
+**The second half of this fix is a probabilistic nudge, not a guarantee:** `open_workspace`'s and `run_routine`'s `AgentTool` descriptions now tell the planner not to infer a saved name from vague activity phrasing. That reduces how often the clarification path fires but cannot prevent it — it is prompt text the model may still ignore, which is exactly why the graceful handling above exists rather than relying on the nudge alone. No general-purpose conversational fallback was added; that remains a deliberately deferred product decision.
+
+Pending future work surfaced by this branch's manual testing (NOT implemented here — feature work, out of scope for a correctness pass):
+- **Delete a saved workspace or routine.** There is no delete action anywhere today: `RoutineStore`/`WorkspaceStore` expose `save`/`loadAll`/lookup but no remove, and no Command Center row action or menu offers one. A user who creates a workspace by mistake can only overwrite it by saving another with the same name, or wipe everything via Settings > Security & Access > Delete Local Data. Needs both the store method and a row-level affordance with its own confirmation (deleting a saved item is destructive and unrecoverable).
+- **Cancel/back affordance on the clarification panel.** `WidgetClarificationPanel` has only a text field and submit; the widget's Deny control belongs to `WidgetPermissionPanel` and is not present during clarification. Once a user has answered a clarifying question there is no way to back out or restart the command short of letting it run and cancelling mid-flight. Note the interaction with `submitClarification()`, which starts a *new* run rather than resuming — a "back" action needs to decide whether it discards the whole command or returns to the pre-clarification prompt.
+
+Open questions for the next chat (required, write "none" if true):
+- Should the deferred plaintext->encrypted migration ever surface to the user, or is the log line enough?
+- `.previewOnly` is dead but costs a maintained branch. Delete `Tier2ApprovalMode` entirely, or build the Settings control that makes it reachable?
+
+Next branch: `feature/routine-scheduling` (branch 10 per the roadmap above), unchanged by this pass.

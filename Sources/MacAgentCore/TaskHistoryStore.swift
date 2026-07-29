@@ -66,10 +66,7 @@ public struct TaskHistoryStore: @unchecked Sendable {
             from: data,
             decoder: .taskHistoryISO8601
         )
-        if decoded.wasLegacyPlaintext {
-            try write(decoded.value)
-        }
-        return decoded.value
+        return decoded.migratingLegacyPlaintext(store: "task history", write: write)
     }
 
     private func capped(_ records: [CompletedTaskRecord]) -> [CompletedTaskRecord] {

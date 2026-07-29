@@ -86,10 +86,7 @@ public struct ShortcutRunHistoryStore: @unchecked Sendable {
             from: data,
             decoder: .shortcutHistoryISO8601
         )
-        if decoded.wasLegacyPlaintext {
-            try write(decoded.value)
-        }
-        return decoded.value
+        return decoded.migratingLegacyPlaintext(store: "Shortcut run history", write: write)
     }
 
     private func write(_ records: [String: ShortcutRunHistoryRecord]) throws {
@@ -150,10 +147,7 @@ public struct ProcessShortcutCatalog: ShortcutCatalogProviding {
         process.standardError = pipe
 
         try process.run()
-        process.waitUntilExit()
-
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        let output = String(data: data, encoding: .utf8) ?? "<unreadable process output>"
+        let output = ProcessOutputCapture.drainThenWait(process: process, pipe: pipe)
         guard process.terminationStatus == 0 else {
             throw ShortcutsBridgeError.listFailed(process.terminationStatus, output)
         }

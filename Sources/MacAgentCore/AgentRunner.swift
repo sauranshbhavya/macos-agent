@@ -133,6 +133,11 @@ public final class AgentRunner {
         return result
     }
 
+    /// Set when artifact bookkeeping failed during the last `execute`. `AgentLogStore` alone is
+    /// not a user-visible surface — no view renders its events — so the caller reads this to
+    /// report the failure somewhere the user will actually see it.
+    public private(set) var lastRecentArtifactFailure: String?
+
     private func recordRecentArtifacts(from result: AgentRunResult) {
         guard let recentArtifactStore else {
             return
@@ -142,8 +147,11 @@ public final class AgentRunner {
             if count > 0 {
                 logStore.append(.observe, "Recorded \(count) recent artifact\(count == 1 ? "" : "s")")
             }
+            lastRecentArtifactFailure = nil
         } catch {
-            logStore.append(.observe, "Could not record recent artifacts: \(error.localizedDescription)")
+            let description = "Sonny could not update its recent-artifacts list: \(error.localizedDescription)"
+            logStore.append(.observe, description)
+            lastRecentArtifactFailure = description
         }
     }
 

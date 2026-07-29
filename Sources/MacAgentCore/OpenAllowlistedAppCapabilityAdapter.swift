@@ -33,7 +33,7 @@ public struct OpenAllowlistedAppCapabilityAdapter: CapabilityAdapter {
         let spec = try spec(in: plan, context: context)
         return [
             ActionPreview(
-                title: "Open \(spec.app.displayName)",
+                title: "Open the \(spec.app.displayName) app",
                 details: [
                     "Bundle: \(spec.app.bundleIdentifier)",
                     "Allowed apps: \(context.appCatalog.displayList)"
@@ -53,7 +53,10 @@ public struct OpenAllowlistedAppCapabilityAdapter: CapabilityAdapter {
         log(.act, "Opening \(spec.app.displayName)")
         try await context.appOpener.open(bundleIdentifier: spec.app.bundleIdentifier)
         log(.summarize, "Opened \(spec.app.displayName)")
-        return AgentRunResult(plan: plan, previews: previews, summary: "Opened \(spec.app.displayName).")
+        // Says "app" explicitly: a saved workspace can share a name with an allowlisted app
+        // (a workspace called "Slack"), and a bare "Opened Slack." left the user unable to tell
+        // which one actually ran. The workspace summary already names itself a workspace.
+        return AgentRunResult(plan: plan, previews: previews, summary: "Opened the \(spec.app.displayName) app.")
     }
 
     private struct AppSpec {

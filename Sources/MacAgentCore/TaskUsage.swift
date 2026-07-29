@@ -226,8 +226,11 @@ public enum AIUsageEstimator {
 
 public enum AIUsagePayloadParser {
     public static func responsesUsage(from data: Data) throws -> AIUsageTokenCounts? {
-        let object = try JSONSerialization.jsonObject(with: data)
-        guard let dictionary = object as? [String: Any],
+        // Usage is optional telemetry read before the response is parsed for real. A malformed
+        // body must not throw a raw Foundation error from here and pre-empt the caller's own,
+        // far more descriptive parse failure.
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              let dictionary = object as? [String: Any],
               let usage = dictionary["usage"],
               !(usage is NSNull),
               let usageObject = usage as? [String: Any] else {

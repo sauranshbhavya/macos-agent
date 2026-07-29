@@ -948,15 +948,21 @@ public struct NativeMediaOpener: MediaOpening {
             return "Opened Apple Music result for \(request.displayTitle)."
         }
 
+        // Only the catalog search is guarded here. Opening the found track must stay outside the
+        // catch, or a failed open gets reported as "catalog lookup failed" even though the
+        // lookup succeeded — and the real openFailed detail is lost.
+        let track: AppleMusicCatalogTrack?
         do {
-            if let track = try await appleMusicSearcher.bestTrack(for: request) {
-                try openURL(track.albumTrackAppURL, failureMessage: "Could not open Apple Music catalog result.")
-                return "Opened Apple Music album result for \(track.title) by \(track.artist)."
-            }
+            track = try await appleMusicSearcher.bestTrack(for: request)
         } catch {
             let searchURL = appleMusicSearchURL(query: request.query)
             try openURL(searchURL, failureMessage: "Could not open Apple Music search.")
             return "Apple Music catalog lookup failed, so Sonny opened search for \(request.displayTitle)."
+        }
+
+        if let track {
+            try openURL(track.albumTrackAppURL, failureMessage: "Could not open Apple Music catalog result.")
+            return "Opened Apple Music album result for \(track.title) by \(track.artist)."
         }
 
         let searchURL = appleMusicSearchURL(query: request.query)

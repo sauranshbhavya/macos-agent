@@ -39,8 +39,22 @@ public struct DocxConversionCapabilityAdapter: CapabilityAdapter {
         defaultRiskTier: .tier2
     )
 
+    public func resolveDefaultOutputs(in plan: AgentPlan, context: CapabilityExecutionContext) throws -> AgentPlan {
+        try FinderSelectionResolver.pinningSelectedDirectoryInput(
+            in: plan,
+            operations: [.scanDocx, .convertDocxToPDF],
+            whitelist: context.whitelist,
+            finderContextReader: context.finderContextReader
+        )
+    }
+
     public func preview(plan: AgentPlan, context: CapabilityExecutionContext) throws -> [ActionPreview] {
         let spec = try spec(in: plan, context: context)
+        let records = try records(for: spec, context: context)
+        return [preview(for: records, context: context)]
+    }
+
+    private func records(for spec: DocxSpec, context: CapabilityExecutionContext) throws -> [DocxRecord] {
         let records = try context.inventory.docxFiles(
             in: spec.folder,
             outputFolder: spec.outputFolder,
@@ -49,22 +63,23 @@ public struct DocxConversionCapabilityAdapter: CapabilityAdapter {
         guard !records.isEmpty else {
             throw AgentExecutionError.noMatchingFiles("No .docx files were found in \(spec.folder.path).")
         }
+        return records
+    }
 
+    @MainActor
+    private func preview(for records: [DocxRecord], context: CapabilityExecutionContext) -> ActionPreview {
         let pending = records.filter { !$0.skippedBecausePDFExists }
         let skipped = records.filter(\.skippedBecausePDFExists)
-
-        return [
-            ActionPreview(
-                title: "Convert \(pending.count) DOCX files",
-                details: [
-                    "Converter: \(context.documentConverter.modeName)",
-                    "Found \(records.count) .docx files",
-                    "Skipping \(skipped.count) existing PDFs"
-                ],
-                writes: pending.map(\.destinationURL.path),
-                conversions: pending.map { "\($0.sourceURL.path) -> \($0.destinationURL.path)" }
-            )
-        ]
+        return ActionPreview(
+            title: "Convert \(pending.count) DOCX files",
+            details: [
+                "Converter: \(context.documentConverter.modeName)",
+                "Found \(records.count) .docx files",
+                "Skipping \(skipped.count) existing PDFs"
+            ],
+            writes: pending.map(\.destinationURL.path),
+            conversions: pending.map { "\($0.sourceURL.path) -> \($0.destinationURL.path)" }
+        )
     }
 
     public func execute(
@@ -72,17 +87,10 @@ public struct DocxConversionCapabilityAdapter: CapabilityAdapter {
         context: CapabilityExecutionContext,
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
-        let previews = try preview(plan: plan, context: context)
         let spec = try spec(in: plan, context: context)
         log(.act, "Scanning \(spec.folder.path) for .docx files")
-        let records = try context.inventory.docxFiles(
-            in: spec.folder,
-            outputFolder: spec.outputFolder,
-            mockDestinations: spec.usesMockDestinations
-        )
-        guard !records.isEmpty else {
-            throw AgentExecutionError.noMatchingFiles("No .docx files were found in \(spec.folder.path).")
-        }
+        let records = try records(for: spec, context: context)
+        let previews = [preview(for: records, context: context)]
 
         let pending = records.filter { !$0.skippedBecausePDFExists }
         let skipped = records.count - pending.count
@@ -129,9 +137,11 @@ public struct DocxConversionCapabilityAdapter: CapabilityAdapter {
             outputFolder = try context.whitelist.validateExistingDirectory(rawOutput)
         }
 
-        let usesMock = !MicrosoftWordDocumentConverter().isAvailable &&
-            ProcessInfo.processInfo.environment["MAC_AGENT_MOCK_DOCX"] == "1"
-        return DocxSpec(folder: folder, outputFolder: outputFolder, usesMockDestinations: usesMock)
+        return DocxSpec(
+            folder: folder,
+            outputFolder: outputFolder,
+            usesMockDestinations: context.documentConverter.usesMockNaming
+        )
     }
 
     private func suggestions(for spec: DocxSpec) -> [RunSuggestion] {

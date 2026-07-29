@@ -7,7 +7,6 @@ final class AgentViewModel: ObservableObject {
     @Published var command: String = ""
     @Published var isRunning: Bool = false
     @Published var plan: AgentPlan?
-    @Published var previews: [ActionPreview] = []
     @Published var finalSummary: String = ""
     @Published var errorMessage: String?
     /// Whether the current `errorMessage` is a persistent configuration problem (missing API key,
@@ -36,9 +35,16 @@ final class AgentViewModel: ObservableObject {
     @Published var priorTaskContext: PriorTaskContext?
     @Published var taskUsageSummary: TaskUsageSummary = .empty
     @Published var taskHistoryRecords: [CompletedTaskRecord] = []
+    /// Local-storage health, kept deliberately separate from `errorMessage`: a corrupt store or
+    /// a failed save is about Sonny's own data, not about the task the user just ran, and must
+    /// never make a successful task read as failed. Rendered as its own notice on both surfaces.
+    @Published var localStorageNotice: String?
     @Published var localDataDeletionStatusMessage: String?
-    /// Set once at the start of each *new* task (not touched by approve/clarify continuations,
-    /// which resume the same task rather than starting one) — see `TaskOrigin`.
+    /// Set on every `start()`. Approving a pending run genuinely does not touch it —
+    /// `performApproval` reuses the existing prepared run. A clarification answer *does* go back
+    /// through `start()` and reassign this, but `submitClarification()` passes the preserved
+    /// original origin, so the observable value still doesn't change across the pause. See
+    /// `TaskOrigin`.
     @Published private(set) var activeTaskOrigin: TaskOrigin = .commandCenter
     /// Bump counter Command Center uses to ask the widget to come forward and take focus — e.g.
     /// "New routine"/"Create workspace" pre-fill `command` with a starting phrase and need
@@ -108,13 +114,17 @@ final class AgentViewModel: ObservableObject {
     private var pendingTaskHistoryStartedAt: Date?
     private var preserveUsageForNextStart = false
     private var localStorageLoadFailures: [LocalStorageLoadFailureSource: String] = [:]
-    private var localStorageLoadErrorMessage: String?
+    /// Last clipboard-poll failure text, so a repeating 1s failure is reported once, not 60×/min.
+    private var clipboardHistoryPollFailure: String?
 
     private enum LocalStorageLoadFailureSource: CaseIterable, Hashable {
         case savedRoutines
         case savedWorkspaces
         case clipboardHistorySettings
+        case clipboardHistoryItems
         case taskHistory
+        case snippets
+        case recentArtifacts
 
         var label: String {
             switch self {
@@ -124,8 +134,14 @@ final class AgentViewModel: ObservableObject {
                 return "saved workspaces"
             case .clipboardHistorySettings:
                 return "clipboard history settings"
+            case .clipboardHistoryItems:
+                return "clipboard history"
             case .taskHistory:
                 return "task history"
+            case .snippets:
+                return "snippets"
+            case .recentArtifacts:
+                return "recent artifacts"
             }
         }
     }
@@ -224,18 +240,6 @@ final class AgentViewModel: ObservableObject {
 
     var activeTaskCount: Int {
         isRunning || isAwaitingApproval ? 1 : 0
-    }
-
-    var hasTaskActivity: Bool {
-        isRunning
-            || isAwaitingApproval
-            || plan != nil
-            || !previews.isEmpty
-            || !finalSummary.isEmpty
-            || errorMessage != nil
-            || clarificationQuestion != nil
-            || taskUsageSummary.requestCount > 0
-            || !logStore.events.isEmpty
     }
 
     /// Whether the floating widget currently has real content to show — a permission/clarification/
@@ -341,7 +345,6 @@ final class AgentViewModel: ObservableObject {
         errorMessage = nil
         finalSummary = ""
         plan = nil
-        previews = []
         suggestions = []
         clarificationQuestion = nil
         clarificationAnswer = ""
@@ -401,7 +404,6 @@ final class AgentViewModel: ObservableObject {
 
             preparedRun = prepared
             plan = prepared.plan
-            previews = prepared.previews
             initializeStepStatuses(for: prepared.plan)
 
             if let question = prepared.clarificationQuestion {
@@ -437,14 +439,22 @@ final class AgentViewModel: ObservableObject {
                 )
                 return
             case .previewOnly:
+                // Unreachable today: nothing in the app ever builds a `RiskApprovalPolicy` with
+                // `tier2Mode == .previewOnly`, so `AgentRunner` always uses `.default`. The case
+                // still has to be handled because the requirement is public API. It reports
+                // through `errorMessage` rather than `finalSummary` so that *if* a policy
+                // control ever makes it reachable, the outcome is actually visible — the widget
+                // and Command Center both surface errors, but neither renders a `.prepared`
+                // prior-task-context status.
                 markAllSteps(.complete)
-                finalSummary = "Preview complete. The current approval policy does not allow this action to run automatically."
-                logStore.append(.summarize, finalSummary)
+                setError("The current approval policy limits this action to a preview, so Sonny did not run it.")
+                logStore.append(.summarize, "Preview-only approval policy")
                 recordPriorTaskContext(
                     command: submittedCommand,
                     preparedRun: prepared,
                     status: .prepared,
-                    summary: finalSummary
+                    summary: errorMessage ?? "Preview-only approval policy",
+                    startedAt: taskHistoryStartedAt
                 )
                 return
             case .refuse:
@@ -610,6 +620,11 @@ final class AgentViewModel: ObservableObject {
         start(origin: .widget)
     }
 
+    /// Submits the clarification answer as a **new** run, not a resume: this appends the Q&A to
+    /// the command and calls `start()`, which clears `plan`/`stepStatuses`/`preparedRun` and
+    /// re-plans from scratch. (Approval is the real resume — it reuses the existing prepared
+    /// run.) The auto-execute flag and origin are carried across the pause deliberately so the
+    /// continuation behaves like the task the user actually started.
     func submitClarification() {
         guard let question = clarificationQuestion else {
             return
@@ -707,6 +722,30 @@ final class AgentViewModel: ObservableObject {
             clearLocalStorageLoadFailure(.savedWorkspaces)
         } catch {
             recordLocalStorageLoadFailure(.savedWorkspaces, error: error)
+        }
+
+        refreshSilentlyReadStoreHealth()
+    }
+
+    /// Snippets, recent artifacts, and clipboard items are otherwise only read through `try?`
+    /// paths (the instant resolver's trigger/artifact lookups and the 1s clipboard poll), so a
+    /// corrupt file there is invisible: the feature just silently stops working. These stores
+    /// have no UI list of their own to surface a load failure, so probe them here.
+    private func refreshSilentlyReadStoreHealth() {
+        checkStoreHealth(.snippets) { _ = try snippetStore.loadAll() }
+        checkStoreHealth(.recentArtifacts) { _ = try recentArtifactStore.loadAll() }
+        checkStoreHealth(.clipboardHistoryItems) { try clipboardHistoryMonitor.verifyHistoryReadable() }
+    }
+
+    private func checkStoreHealth(
+        _ source: LocalStorageLoadFailureSource,
+        load: () throws -> Void
+    ) {
+        do {
+            try load()
+            clearLocalStorageLoadFailure(source)
+        } catch {
+            recordLocalStorageLoadFailure(source, error: error)
         }
     }
 
@@ -820,7 +859,6 @@ final class AgentViewModel: ObservableObject {
 
     private func clearInMemoryLocalDataState() {
         plan = nil
-        previews = []
         suggestions = []
         approvalRequest = nil
         stepStatuses = [:]
@@ -848,14 +886,32 @@ final class AgentViewModel: ObservableObject {
             return
         }
 
-        _ = try? clipboardHistoryMonitor.poll()
+        pollClipboardHistory()
         clipboardHistoryTimer = Timer.scheduledTimer(withTimeInterval: 1.0, repeats: true) { [weak self] _ in
             Task { @MainActor in
-                guard let self else {
-                    return
-                }
-                _ = try? self.clipboardHistoryMonitor.poll()
+                self?.pollClipboardHistory()
             }
+        }
+    }
+
+    /// Surfaces a polling failure once rather than discarding it every second. Without this the
+    /// clipboard toggle can read "on" while nothing is actually being recorded — a settings-read
+    /// failure now fails closed in the monitor, so silence here would hide a privacy-relevant
+    /// state from the user indefinitely.
+    private func pollClipboardHistory() {
+        do {
+            _ = try clipboardHistoryMonitor.poll()
+            if clipboardHistoryPollFailure != nil {
+                clipboardHistoryPollFailure = nil
+                localStorageNotice = nil
+            }
+        } catch {
+            let description = error.localizedDescription
+            guard clipboardHistoryPollFailure != description else {
+                return
+            }
+            clipboardHistoryPollFailure = description
+            recordLocalStorageWriteFailure(description)
         }
     }
 
@@ -876,21 +932,26 @@ final class AgentViewModel: ObservableObject {
         publishLocalStorageLoadError()
     }
 
+    /// Local-storage problems publish to `localStorageNotice`, never to `errorMessage`.
+    /// `errorMessage` means "the task you just ran failed" — routing a corrupt-store notice
+    /// there made a *successful* task render as a failure in the widget, since the widget picks
+    /// `.failure` ahead of `.result`.
     private func publishLocalStorageLoadError() {
         guard !localStorageLoadFailures.isEmpty else {
-            if errorMessage == localStorageLoadErrorMessage {
-                errorMessage = nil
-            }
-            localStorageLoadErrorMessage = nil
+            localStorageNotice = nil
             return
         }
 
         let details = LocalStorageLoadFailureSource.allCases
             .compactMap { localStorageLoadFailures[$0] }
             .joined(separator: "; ")
-        let message = "Sonny could not load encrypted local data. A local data file exists but could not be decrypted or decoded. \(details)"
-        localStorageLoadErrorMessage = message
-        setError(message, persistent: true)
+        localStorageNotice = "Sonny could not load encrypted local data. A local data file exists but could not be decrypted or decoded. \(details)"
+    }
+
+    /// A local-store *write* failure, which needs its own accurate wording — the load-failure
+    /// text ("could not be decrypted or decoded") describes the wrong problem entirely.
+    private func recordLocalStorageWriteFailure(_ description: String) {
+        localStorageNotice = description
     }
 
     private func makeInstantCommandResolver() -> InstantCommandResolver {
@@ -911,7 +972,8 @@ final class AgentViewModel: ObservableObject {
             snippetStore: snippetStore,
             recentArtifactStore: recentArtifactStore,
             shortcutCatalog: shortcutCatalog,
-            shortcutRunHistoryStore: shortcutRunHistoryStore
+            shortcutRunHistoryStore: shortcutRunHistoryStore,
+            hotKeyReady: { [weak self] in self?.voiceHotKeyReady ?? true }
         )
     }
 
@@ -1031,6 +1093,10 @@ final class AgentViewModel: ObservableObject {
             logRiskAssessment: logRiskAssessment
         )
         markAllSteps(.complete)
+        // The task itself succeeded; a bookkeeping failure is a storage notice, not a task error.
+        if let artifactFailure = runner.lastRecentArtifactFailure {
+            recordLocalStorageWriteFailure(artifactFailure)
+        }
         return result
     }
 

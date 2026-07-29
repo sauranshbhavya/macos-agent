@@ -156,6 +156,48 @@ struct ClipboardHistoryTests {
         #expect(result.summary == "Found 1 clipboard item.")
     }
 
+    /// Consent must fail closed. When the settings file can't be read we cannot know the user
+    /// left clipboard history enabled, so recording anything would be recording without consent.
+    @Test
+    func monitorFailsClosedWhenClipboardSettingsCannotBeRead() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = ClipboardHistoryStore(
+            fileURL: root.appendingPathComponent("history.json"),
+            encryption: testEncryption(byte: 0x42)
+        )
+        let settingsURL = root.appendingPathComponent("settings.json")
+        try ClipboardHistorySettingsStore(fileURL: settingsURL, encryption: testEncryption(byte: 0x42))
+            .save(ClipboardHistorySettings(noticeDismissed: true, isEnabled: true))
+        // A different key makes the existing settings file undecryptable.
+        let unreadableSettings = ClipboardHistorySettingsStore(
+            fileURL: settingsURL,
+            encryption: testEncryption(byte: 0x99)
+        )
+        let reader = FakePasteboardReader(
+            changeCount: 1,
+            types: [NSPasteboard.PasteboardType.string.rawValue],
+            string: "private text"
+        )
+        let monitor = ClipboardHistoryMonitor(
+            reader: reader,
+            store: store,
+            settingsStore: unreadableSettings
+        )
+
+        #expect(throws: ClipboardHistoryError.self) {
+            _ = try monitor.poll()
+        }
+        #expect(try store.loadAll().isEmpty)
+        #expect(reader.stringReadCount == 0)
+    }
+
+    private func testEncryption(byte: UInt8) -> LocalStorageEncryption {
+        LocalStorageEncryption(
+            keyManager: FixedClipboardKeyManager(bytes: Data(repeating: byte, count: 32))
+        )
+    }
+
     private func makeDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("ClipboardHistoryTests-\(UUID().uuidString)", isDirectory: true)
@@ -191,5 +233,13 @@ private struct FailingPlanner: Planning {
     func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
         Issue.record("Planner should not be called for clipboard instant commands.")
         throw PlannerError.missingAPIKey
+    }
+}
+
+private struct FixedClipboardKeyManager: LocalStorageKeyManaging {
+    let bytes: Data
+
+    func keyData() throws -> Data {
+        bytes
     }
 }

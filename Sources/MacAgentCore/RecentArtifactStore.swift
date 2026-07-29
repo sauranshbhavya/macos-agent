@@ -86,10 +86,8 @@ public struct RecentArtifactStore: @unchecked Sendable {
             from: data,
             decoder: .recentArtifactISO8601
         )
-        if decoded.wasLegacyPlaintext {
-            try write(decoded.value)
-        }
-        return capped(decoded.value.sorted { $0.recordedAt > $1.recordedAt }, now: now)
+        let artifacts = decoded.migratingLegacyPlaintext(store: "recent artifacts", write: write)
+        return capped(artifacts.sorted { $0.recordedAt > $1.recordedAt }, now: now)
     }
 
     public func recent(matching rawQuery: String? = nil, limit: Int = 10, now: Date = Date()) throws -> [RecentArtifact] {

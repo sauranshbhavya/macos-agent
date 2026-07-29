@@ -107,6 +107,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 notificationService.postErrorNotification(message: message)
             }
             .store(in: &cancellables)
+
+        // Local-storage problems moved off `errorMessage` so a corrupt store can't make a
+        // successful task read as failed. They still deserve the same fallback notification when
+        // no Sonny surface is in front of the user, so subscribe to the new channel too.
+        viewModel.$localStorageNotice
+            .compactMap { $0 }
+            .sink { [weak self] message in
+                guard let self, !isAnySonnySurfaceVisible else {
+                    return
+                }
+                notificationService.postErrorNotification(message: message)
+            }
+            .store(in: &cancellables)
     }
 
     /// Deliberately not `Bundle.module` (SwiftPM's auto-generated resource accessor). That

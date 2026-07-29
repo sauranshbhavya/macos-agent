@@ -25,11 +25,14 @@ public struct ClipboardHistorySettings: Codable, Equatable, Sendable {
 
 public enum ClipboardHistoryError: Error, Equatable, LocalizedError {
     case emptyClipboardText
+    case settingsUnavailable(String)
 
     public var errorDescription: String? {
         switch self {
         case .emptyClipboardText:
             return "Clipboard history needs copied text."
+        case .settingsUnavailable(let detail):
+            return "Sonny stopped recording clipboard history because your clipboard settings could not be read: \(detail)"
         }
     }
 }
@@ -84,10 +87,8 @@ public struct ClipboardHistoryStore: @unchecked Sendable {
             from: data,
             decoder: .clipboardISO8601
         )
-        if decoded.wasLegacyPlaintext {
-            try write(decoded.value)
-        }
-        return capped(decoded.value.sorted { $0.copiedAt > $1.copiedAt }, now: now)
+        let items = decoded.migratingLegacyPlaintext(store: "clipboard history", write: write)
+        return capped(items.sorted { $0.copiedAt > $1.copiedAt }, now: now)
     }
 
     public func recent(matching rawQuery: String? = nil, limit: Int = 10, now: Date = Date()) throws -> [ClipboardHistoryItem] {
@@ -167,10 +168,7 @@ public struct ClipboardHistorySettingsStore: @unchecked Sendable {
             from: data,
             decoder: .clipboardISO8601
         )
-        if decoded.wasLegacyPlaintext {
-            try save(decoded.value)
-        }
-        return decoded.value
+        return decoded.migratingLegacyPlaintext(store: "clipboard history settings", write: save)
     }
 
     public func save(_ settings: ClipboardHistorySettings) throws {
@@ -239,9 +237,24 @@ public final class ClipboardHistoryMonitor {
         self.now = now
     }
 
+    /// Probes the backing history file so the UI can report a corrupt store once. `poll()` only
+    /// touches the store when the clipboard actually changes, so corruption would otherwise stay
+    /// invisible until the user's next copy — and then only as a silently dropped record.
+    public func verifyHistoryReadable() throws {
+        _ = try store.loadAll(now: now())
+    }
+
     @discardableResult
     public func poll() throws -> ClipboardHistoryItem? {
-        guard (try? settingsStore.load().isEnabled) ?? true else {
+        // Fail closed. If the consent setting can't be read, recording clipboard contents is the
+        // one thing we must not default to — the user may well have turned it off.
+        let isEnabled: Bool
+        do {
+            isEnabled = try settingsStore.load().isEnabled
+        } catch {
+            throw ClipboardHistoryError.settingsUnavailable(error.localizedDescription)
+        }
+        guard isEnabled else {
             return nil
         }
 

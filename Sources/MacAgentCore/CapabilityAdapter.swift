@@ -149,6 +149,10 @@ public struct CapabilityExecutionContext {
     public var shortcutRunHistoryStore: ShortcutRunHistoryStore
     public var fileManager: FileManager
     public var now: () -> Date
+    /// Live push-to-talk hotkey registration state. Read through a closure for the same reason
+    /// as `now` — the real value lives in the UI layer and changes after launch, so a snapshot
+    /// or a hardcoded `true` would misreport an actual Control-Option-Space conflict.
+    public var hotKeyReady: () -> Bool
     public var assessNestedPlan: AssessNestedPlan
     public var previewNestedPlan: PreviewNestedPlan
     public var executeNestedPlan: ExecuteNestedPlan
@@ -183,6 +187,7 @@ public struct CapabilityExecutionContext {
         shortcutRunHistoryStore: ShortcutRunHistoryStore,
         fileManager: FileManager = .default,
         now: @escaping () -> Date = Date.init,
+        hotKeyReady: @escaping () -> Bool = { true },
         assessNestedPlan: @escaping AssessNestedPlan,
         previewNestedPlan: @escaping PreviewNestedPlan,
         executeNestedPlan: @escaping ExecuteNestedPlan
@@ -216,6 +221,7 @@ public struct CapabilityExecutionContext {
         self.shortcutRunHistoryStore = shortcutRunHistoryStore
         self.fileManager = fileManager
         self.now = now
+        self.hotKeyReady = hotKeyReady
         self.assessNestedPlan = assessNestedPlan
         self.previewNestedPlan = previewNestedPlan
         self.executeNestedPlan = executeNestedPlan

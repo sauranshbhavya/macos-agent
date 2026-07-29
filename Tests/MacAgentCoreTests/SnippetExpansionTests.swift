@@ -113,6 +113,38 @@ struct SnippetExpansionTests {
     }
 
     @Test
+    func resavingExistingSnippetTriggerEscalatesToTierThree() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SnippetStore(fileURL: root.appendingPathComponent("snippets.json"))
+        try store.save(StoredSnippet(trigger: ";sig", expansion: "Old text"))
+        let executor = AgentActionExecutor(
+            snippetStore: store,
+            now: { Date(timeIntervalSince1970: 123) }
+        )
+        let runner = AgentRunner(planner: FailingPlanner(), executor: executor)
+        let resolver = InstantCommandResolver(snippetStore: store)
+
+        guard case .plan(let savePlan) = resolver.resolve(command: "snippet save ;sig = New text") else {
+            Issue.record("Expected snippet save command to resolve locally.")
+            return
+        }
+
+        let prepared = try runner.prepare(plan: savePlan, source: .instantResolver)
+        let request = try runner.approvalRequest(for: prepared)
+
+        #expect(request.assessment.effectiveTier == .tier3)
+        #expect(request.requirement == .explicitApproval)
+        #expect(request.assessment.escalations.contains { $0.reason.contains(";sig") })
+        #expect(try store.findExactTrigger(";sig")?.expansion == "Old text")
+
+        // The approval prompt reads "Allow access to <involvedResource>". Snippet save stores
+        // its trigger in `searchQuery`, which used to make that read "Search: ;sig".
+        #expect(request.approvalCopy.involvedResource == "Snippet: ;sig")
+        #expect(!request.approvalCopy.involvedResource.contains("Search:"))
+    }
+
+    @Test
     func snippetSaveCommandClarifiesWhenTriggerOrExpansionIsMissing() {
         let resolver = InstantCommandResolver()
 

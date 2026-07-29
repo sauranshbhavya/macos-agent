@@ -63,6 +63,9 @@ public struct PermissionReadinessCapabilityAdapter: CapabilityAdapter {
         let hasAPIKey = !(ProcessInfo.processInfo.environment["OPENAI_API_KEY"] ?? "")
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .isEmpty
-        return context.permissionReadinessService.currentStatus(hasAPIKey: hasAPIKey, hotKeyReady: true)
+        return context.permissionReadinessService.currentStatus(
+            hasAPIKey: hasAPIKey,
+            hotKeyReady: context.hotKeyReady()
+        )
     }
 }

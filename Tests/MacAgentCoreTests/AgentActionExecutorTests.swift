@@ -151,6 +151,196 @@ struct AgentActionExecutorTests {
     }
 
     @Test
+    func finderSelectionInputIsPinnedOnceAcrossPrepareAndExecute() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folderA = root.appendingPathComponent("A", isDirectory: true)
+        let folderB = root.appendingPathComponent("B", isDirectory: true)
+        try FileManager.default.createDirectory(at: folderA, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: folderB, withIntermediateDirectories: true)
+        try write(String(repeating: "a", count: 2048), to: folderA.appendingPathComponent("from-a.txt"))
+        try write(String(repeating: "b", count: 2048), to: folderB.appendingPathComponent("from-b.txt"))
+
+        let reader = SequenceFinderContextReader(responses: [[folderA], [folderB]])
+        let archiver = CapturingZipArchiver()
+        let executor = makeExecutor(root: root, zipArchiver: archiver, finderContextReader: reader)
+        let plan = AgentPlan(
+            summary: "Zip largest files in the selected folder.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "scan",
+                    operation: .scanSelectLargestFiles,
+                    description: "Scan selected folder",
+                    count: 1,
+                    contextSource: .finderSelection
+                ),
+                AgentStep(
+                    id: "zip",
+                    operation: .createZip,
+                    description: "Zip selected folder",
+                    contextSource: .finderSelection
+                )
+            ]
+        )
+
+        let prepared = try executor.prepare(plan: plan)
+        let result = try await executor.execute(plan: prepared.plan) { _, _ in }
+
+        #expect(reader.callCount == 1)
+        #expect(archiver.capturedFiles.map(\.lastPathComponent) == ["from-a.txt"])
+        #expect(result.previews.first?.details.contains { $0.contains("from-a.txt") } == true)
+        let pinnedInput = prepared.plan.steps.first?.inputPath ?? ""
+        #expect(
+            URL(fileURLWithPath: pinnedInput).resolvingSymlinksInPath()
+                == folderA.resolvingSymlinksInPath()
+        )
+    }
+
+    @Test
+    func runRoutineResultPreviewsReportTheFileActuallyWritten() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try routineStore.save(
+            StoredRoutine(
+                name: "Morning Notes",
+                steps: [
+                    AgentStep(
+                        id: "draft",
+                        operation: .createLocalDraft,
+                        description: "Create note",
+                        draftTitle: "Morning Note",
+                        draftContent: "Hello"
+                    )
+                ]
+            )
+        )
+        let clock = TickingClock()
+        let executor = makeExecutor(root: root, routineStore: routineStore, now: clock.next)
+        let plan = AgentPlan(
+            summary: "Run routine Morning Notes.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "run",
+                    operation: .runRoutine,
+                    description: "Run routine",
+                    routineName: "Morning Notes"
+                )
+            ]
+        )
+
+        let result = try await executor.execute(plan: plan) { _, _ in }
+
+        let reportedWrites = result.previews.flatMap(\.writes)
+        #expect(!reportedWrites.isEmpty)
+        #expect(reportedWrites.allSatisfy { FileManager.default.fileExists(atPath: $0) })
+    }
+
+    @Test
+    func chainedRunRoutineThenOpenArtifactUsesTheRealWrittenPath() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try routineStore.save(
+            StoredRoutine(
+                name: "Morning Notes",
+                steps: [
+                    AgentStep(
+                        id: "draft",
+                        operation: .createLocalDraft,
+                        description: "Create note",
+                        draftTitle: "Morning Note",
+                        draftContent: "Hello"
+                    )
+                ]
+            )
+        )
+        let clock = TickingClock()
+        let fileOpener = RecordingFileOpener()
+        let executor = makeExecutor(
+            root: root,
+            fileOpener: fileOpener,
+            routineStore: routineStore,
+            now: clock.next
+        )
+        let plan = AgentPlan(
+            summary: "Run routine and open the result.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "run",
+                    operation: .runRoutine,
+                    description: "Run routine",
+                    routineName: "Morning Notes"
+                ),
+                AgentStep(
+                    id: "open",
+                    operation: .openGeneratedArtifact,
+                    description: "Open the generated note"
+                )
+            ]
+        )
+
+        _ = try await executor.execute(plan: plan) { _, _ in }
+
+        #expect(fileOpener.openedFiles.count == 1)
+        #expect(fileOpener.openedFiles.allSatisfy { FileManager.default.fileExists(atPath: $0.path) })
+    }
+
+    @Test
+    func runRoutineWrappingOpenURLReportsDataLeavingDevice() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try routineStore.save(
+            StoredRoutine(
+                name: "Standup",
+                steps: [
+                    AgentStep(
+                        id: "open",
+                        operation: .openURL,
+                        description: "Open the standup board",
+                        targetURL: "https://example.com/standup"
+                    )
+                ]
+            )
+        )
+        let executor = makeExecutor(root: root, routineStore: routineStore)
+        let plan = AgentPlan(
+            summary: "Run routine Standup.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "run",
+                    operation: .runRoutine,
+                    description: "Run routine",
+                    routineName: "Standup"
+                )
+            ]
+        )
+
+        let assessment = try executor.assessRisk(plan: plan)
+
+        #expect(assessment.approvalCopy?.dataLeavesDevice == true)
+    }
+
+    @Test
+    func docxPreviewDestinationNamingMatchesInjectedConverter() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("docx-b", to: root.appendingPathComponent("b.docx"))
+        let executor = makeExecutor(root: root, documentConverter: MockDocumentConverter())
+
+        let preview = try executor.preview(plan: docxPlan(root: root))
+
+        #expect(preview.first?.details.contains("Converter: Mock DOCX placeholder") == true)
+        #expect(preview.first?.writes.isEmpty == false)
+        #expect(preview.first?.writes.allSatisfy { $0.hasSuffix(".mock.pdf") } == true)
+    }
+
+    @Test
     func docxPreviewCanUseSelectedFinderFolderContext() throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -256,14 +446,7 @@ struct AgentActionExecutorTests {
                 title: "Article One Notes",
                 summary: "A concise summary.",
                 keyPoints: ["First point"],
-                citations: ["Article One citation"],
-                sources: [
-                    WebResearchNoteSource(
-                        title: "Article One",
-                        url: source.absoluteString,
-                        retrievedAt: ISO8601DateFormatter().string(from: retrievedAt)
-                    )
-                ]
+                citations: ["Article One citation"]
             )
         )
         let executor = makeExecutor(
@@ -313,8 +496,7 @@ struct AgentActionExecutorTests {
                     title: "Comparison",
                     summary: "The sources differ.",
                     keyPoints: ["Compare point"],
-                    citations: [],
-                    sources: []
+                    citations: []
                 )
             )
         )
@@ -328,6 +510,317 @@ struct AgentActionExecutorTests {
         #expect(markdown.contains("- [First Source](https://example.com/one)"))
         #expect(markdown.contains("- [Second Source](https://example.com/two)"))
         #expect(result.summary == "Saved comparison Markdown for 2 sources to \(output.path).")
+    }
+
+    @Test
+    func webResearchSynthesizesFromSourcesThatSucceededAndNamesTheSkippedOnes() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let output = root.appendingPathComponent("comparison.md")
+        let first = URL(string: "https://example.com/one")!
+        let second = URL(string: "https://example.com/two")!
+        let unreachable = URL(string: "https://example.com/missing")!
+        // Only the first two are in the fixture map; the third throws on fetch.
+        let pageLoader = webPageLoader(pages: [
+            first.absoluteString: readablePage(url: first, title: "First Source"),
+            second.absoluteString: readablePage(url: second, title: "Second Source")
+        ])
+        let executor = makeExecutor(
+            root: root,
+            webPageLoader: pageLoader,
+            webResearchSynthesizer: StaticWebResearchSynthesizer(
+                note: WebResearchNote(
+                    title: "Comparison",
+                    summary: "The reachable sources differ.",
+                    keyPoints: ["Compare point"],
+                    citations: []
+                )
+            )
+        )
+
+        let result = try await executor.execute(
+            plan: webComparisonPlan(urls: [first, second, unreachable], output: output)
+        ) { _, _ in }
+
+        let markdown = try String(contentsOf: output)
+        #expect(markdown.contains("- [First Source](https://example.com/one)"))
+        #expect(markdown.contains("- [Second Source](https://example.com/two)"))
+        #expect(markdown.contains("## Skipped Sources"))
+        #expect(markdown.contains("https://example.com/missing"))
+        #expect(result.summary.contains("Skipped 1 unreachable source"))
+        #expect(result.summary.contains("https://example.com/missing"))
+    }
+
+    @Test
+    func webResearchStillFailsWhenEverySourceIsUnreachable() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let output = root.appendingPathComponent("comparison.md")
+        let first = URL(string: "https://example.com/one")!
+        let second = URL(string: "https://example.com/two")!
+        let executor = makeExecutor(
+            root: root,
+            webPageLoader: webPageLoader(pages: [:]),
+            webResearchSynthesizer: StaticWebResearchSynthesizer(
+                note: WebResearchNote(
+                    title: "Unused",
+                    summary: "",
+                    keyPoints: [],
+                    citations: []
+                )
+            )
+        )
+
+        await #expect(throws: WebResearchError.self) {
+            _ = try await executor.execute(
+                plan: webComparisonPlan(urls: [first, second], output: output)
+            ) { _, _ in }
+        }
+        #expect(!FileManager.default.fileExists(atPath: output.path))
+    }
+
+    /// A "broken URL" reaches one of two different paths, and the distinction matters when
+    /// reading live behavior: a *syntactically invalid* URL is rejected while the plan is being
+    /// validated, before any fetch happens, so nothing is written; an *unreachable but valid*
+    /// URL is skipped per-source and only aborts the step when it was the only source.
+    @Test
+    func brokenSourceURLsTakeTheRightPathDependingOnHowTheyAreBroken() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let reachable = URL(string: "https://example.com/one")!
+        let unreachable = URL(string: "https://example.com/missing")!
+        let pageLoader = webPageLoader(pages: [
+            reachable.absoluteString: readablePage(url: reachable, title: "First Source")
+        ])
+        let synthesizer = StaticWebResearchSynthesizer(
+            note: WebResearchNote(
+                title: "Comparison",
+                summary: "Summary.",
+                keyPoints: ["Point"],
+                citations: []
+            )
+        )
+
+        // 1. Malformed URL among valid ones: rejected at validation, no partial note written.
+        let malformedOutput = root.appendingPathComponent("malformed.md")
+        let malformedPlan = AgentPlan(
+            summary: "Compare web sources as Markdown.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "web-comparison",
+                    operation: .webToMarkdown,
+                    description: "Compare source URLs.",
+                    outputPath: malformedOutput.path,
+                    sourceURLs: [reachable.absoluteString, "ht!tp://not a url"]
+                )
+            ]
+        )
+        let malformedExecutor = makeExecutor(
+            root: root,
+            webPageLoader: pageLoader,
+            webResearchSynthesizer: synthesizer
+        )
+        await #expect(throws: SafeURLError.self) {
+            _ = try await malformedExecutor.execute(plan: malformedPlan) { _, _ in }
+        }
+        #expect(!FileManager.default.fileExists(atPath: malformedOutput.path))
+
+        // 2. A single valid-but-unreachable source: no partial note, all-sources-failed.
+        let singleOutput = root.appendingPathComponent("single.md")
+        let singleExecutor = makeExecutor(
+            root: root,
+            webPageLoader: pageLoader,
+            webResearchSynthesizer: synthesizer
+        )
+        await #expect(throws: WebResearchError.self) {
+            _ = try await singleExecutor.execute(
+                plan: webComparisonPlan(urls: [unreachable], output: singleOutput)
+            ) { _, _ in }
+        }
+        #expect(!FileManager.default.fileExists(atPath: singleOutput.path))
+
+        // 3. Valid-but-unreachable alongside a reachable one: partial note naming the skip.
+        let partialOutput = root.appendingPathComponent("partial.md")
+        let partialExecutor = makeExecutor(
+            root: root,
+            webPageLoader: pageLoader,
+            webResearchSynthesizer: synthesizer
+        )
+        let result = try await partialExecutor.execute(
+            plan: webComparisonPlan(urls: [reachable, unreachable], output: partialOutput)
+        ) { _, _ in }
+
+        let markdown = try String(contentsOf: partialOutput)
+        #expect(markdown.contains("- [First Source](https://example.com/one)"))
+        #expect(markdown.contains("## Skipped Sources"))
+        #expect(markdown.contains(unreachable.absoluteString))
+        #expect(!markdown.contains("- [](https://example.com/missing)"))
+        #expect(result.summary.contains("Skipped 1 unreachable source"))
+    }
+
+    /// The manual-testing case: "focus on writing" reaches the planner, which invents a
+    /// workspace named "writing". That used to fail with "No workspace named writing is saved."
+    /// — a technical error about a concept the user never mentioned.
+    @Test
+    func unknownWorkspaceOrRoutineNameBecomesAClarificationInsteadOfAnError() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try workspaceStore.save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: []))
+        try routineStore.save(
+            StoredRoutine(
+                name: "Morning Setup",
+                steps: [AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")]
+            )
+        )
+        let executor = makeExecutor(root: root, routineStore: routineStore, workspaceStore: workspaceStore)
+
+        let workspacePrepared = try executor.prepare(plan: openWorkspacePlan(name: "writing"))
+        let workspaceQuestion = try #require(workspacePrepared.clarificationQuestion)
+        #expect(workspaceQuestion.contains("writing"))
+        #expect(workspaceQuestion.contains("Research"))
+        // Rewritten into the same shape the planner emits for a real clarification, so every
+        // downstream path treats it identically.
+        #expect(workspacePrepared.plan.steps.map(\.operation) == [.clarify])
+        #expect(workspacePrepared.previews.first?.title == "Clarification needed")
+
+        let routinePrepared = try executor.prepare(plan: runRoutinePlan(name: "deep work"))
+        let routineQuestion = try #require(routinePrepared.clarificationQuestion)
+        #expect(routineQuestion.contains("deep work"))
+        #expect(routineQuestion.contains("Morning Setup"))
+        #expect(routinePrepared.plan.steps.map(\.operation) == [.clarify])
+    }
+
+    @Test
+    func unknownTargetClarificationSaysSoWhenNothingIsSavedYet() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root)
+
+        let prepared = try executor.prepare(plan: openWorkspacePlan(name: "writing"))
+
+        let question = try #require(prepared.clarificationQuestion)
+        #expect(question.contains("haven't saved any workspaces yet"))
+    }
+
+    /// Only the not-found case changes. Everything else these two adapters can fail on must
+    /// still fail, or a real problem would be disguised as a friendly question.
+    @Test
+    func onlyNotFoundBecomesClarificationForWorkspacesAndRoutines() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try workspaceStore.save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://example.com"]))
+        try workspaceStore.save(StoredWorkspace(name: "Broken", apps: ["NotAnAllowlistedApp"], urls: []))
+        try routineStore.save(
+            StoredRoutine(
+                name: "Morning Setup",
+                steps: [AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")]
+            )
+        )
+        let executor = makeExecutor(root: root, routineStore: routineStore, workspaceStore: workspaceStore)
+
+        // A workspace that exists still prepares normally — no clarification.
+        let existing = try executor.prepare(plan: openWorkspacePlan(name: "Research"))
+        #expect(existing.clarificationQuestion == nil)
+        #expect(existing.plan.steps.map(\.operation) == [.openWorkspace])
+
+        let existingRoutine = try executor.prepare(plan: runRoutinePlan(name: "Morning Setup"))
+        #expect(existingRoutine.clarificationQuestion == nil)
+        #expect(existingRoutine.plan.steps.map(\.operation) == [.runRoutine])
+
+        // A missing name is a different error and must still throw.
+        #expect(throws: AutomationStoreError.missingName("Workspace")) {
+            _ = try executor.prepare(plan: openWorkspacePlan(name: nil))
+        }
+        #expect(throws: AutomationStoreError.missingName("Routine")) {
+            _ = try executor.prepare(plan: runRoutinePlan(name: "   "))
+        }
+
+        // A workspace that exists but holds an app outside the allowlist is a real failure,
+        // not a "did you mean" — the user did name something real.
+        #expect(throws: MacAppCatalogError.self) {
+            _ = try executor.prepare(plan: openWorkspacePlan(name: "Broken"))
+        }
+
+        // Ordering: an earlier step's real error must still win. Previewing runs in step order,
+        // so a bad app in step 1 surfaces instead of step 2's unknown workspace name — the
+        // clarification must not pre-empt a genuine problem the user needs to hear about.
+        let chainPlan = AgentPlan(
+            summary: "Open an app and a workspace.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "open-app",
+                    operation: .openApp,
+                    description: "Open an app outside the allowlist.",
+                    appName: "DefinitelyNotAllowlisted"
+                ),
+                AgentStep(
+                    id: "open-workspace",
+                    operation: .openWorkspace,
+                    description: "Open workspace.",
+                    workspaceName: "writing"
+                )
+            ]
+        )
+        #expect(throws: MacAppCatalogError.self) {
+            _ = try executor.prepare(plan: chainPlan)
+        }
+    }
+
+    @Test
+    func unknownRoutineClarificationAlsoHandlesTheEmptyStoreCase() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root)
+
+        let prepared = try executor.prepare(plan: runRoutinePlan(name: "deep work"))
+
+        let question = try #require(prepared.clarificationQuestion)
+        #expect(question.contains("haven't saved any routines yet"))
+        #expect(question.contains("deep work"))
+    }
+
+    /// A store that cannot be read is a load failure, not a not-found — it must keep its own
+    /// error rather than being softened into "you haven't saved any".
+    @Test
+    func unreadableAutomationStoreStillThrowsInsteadOfClarifying() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceURL = root.appendingPathComponent("workspaces.json")
+        try Data("this is not valid encrypted or plaintext JSON".utf8).write(to: workspaceURL)
+        let executor = makeExecutor(
+            root: root,
+            workspaceStore: WorkspaceStore(fileURL: workspaceURL)
+        )
+
+        #expect(throws: (any Error).self) {
+            _ = try executor.prepare(plan: openWorkspacePlan(name: "writing"))
+        }
+        do {
+            _ = try executor.prepare(plan: openWorkspacePlan(name: "writing"))
+        } catch let error as AutomationStoreError {
+            Issue.record("A decode failure must not surface as \(error).")
+        } catch {
+            // Any non-AutomationStoreError (the real decode/decrypt failure) is correct here.
+        }
+    }
+
+    @Test
+    func permissionReadinessReportsRealHotkeyConflict() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root, hotKeyReady: { false })
+
+        let previews = try executor.preview(plan: permissionReadinessPlan())
+
+        let details = previews.flatMap(\.details)
+        #expect(details.contains { $0.contains("Voice hotkey") && $0.contains("Needs action") })
+        #expect(details.contains { $0.contains("Another app is using Control-Option-Space") })
     }
 
     @Test
@@ -350,8 +843,7 @@ struct AgentActionExecutorTests {
                 title: "Swift Concurrency Research",
                 summary: "Search-backed research summary.",
                 keyPoints: ["Search point"],
-                citations: [],
-                sources: []
+                citations: []
             )
         )
         let executor = makeExecutor(
@@ -387,7 +879,7 @@ struct AgentActionExecutorTests {
         let executor = makeExecutor(
             root: root,
             webResearchSynthesizer: StaticWebResearchSynthesizer(
-                note: WebResearchNote(title: "Unused", summary: "Unused", keyPoints: [], citations: [], sources: [])
+                note: WebResearchNote(title: "Unused", summary: "Unused", keyPoints: [], citations: [])
             )
         )
         let plan = webSearchPlan(query: "unconfigured provider", output: output)
@@ -484,7 +976,7 @@ struct AgentActionExecutorTests {
 
         #expect(appOpener.openedBundleIDs == ["com.apple.Safari"])
         #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com"])
-        #expect(appResult.summary == "Opened Safari.")
+        #expect(appResult.summary == "Opened the Safari app.")
         #expect(urlResult.summary == "Opened https://github.com.")
     }
 
@@ -737,7 +1229,7 @@ struct AgentActionExecutorTests {
         #expect(FileManager.default.fileExists(atPath: output.path))
         #expect(appOpener.openedBundleIDs == ["com.apple.Safari"])
         #expect(result.summary.contains("Created largest.zip"))
-        #expect(result.summary.contains("Opened Safari."))
+        #expect(result.summary.contains("Opened the Safari app."))
     }
 
     @Test
@@ -960,7 +1452,7 @@ struct AgentActionExecutorTests {
 
         #expect(appOpener.openedBundleIDs == ["com.apple.Safari"])
         #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com"])
-        #expect(result.summary == "Ran routine Mixed Launch. Opened Safari. Opened https://github.com.")
+        #expect(result.summary == "Ran routine Mixed Launch. Opened the Safari app. Opened https://github.com.")
     }
 
     @Test
@@ -1101,7 +1593,9 @@ struct AgentActionExecutorTests {
         workspaceStore: WorkspaceStore? = nil,
         webPageLoader: PublicWebPageLoader? = nil,
         webSearchProvider: (any WebSearchProviding)? = nil,
-        webResearchSynthesizer: (any WebResearchSynthesizing)? = nil
+        webResearchSynthesizer: (any WebResearchSynthesizing)? = nil,
+        now: @escaping () -> Date = Date.init,
+        hotKeyReady: @escaping () -> Bool = { true }
     ) -> AgentActionExecutor {
         AgentActionExecutor(
             whitelist: PathWhitelist(roots: [root]),
@@ -1121,7 +1615,9 @@ struct AgentActionExecutorTests {
             workspaceStore: workspaceStore ?? WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json")),
             webPageLoader: webPageLoader,
             webSearchProvider: webSearchProvider,
-            webResearchSynthesizer: webResearchSynthesizer
+            webResearchSynthesizer: webResearchSynthesizer,
+            now: now,
+            hotKeyReady: hotKeyReady
         )
     }
 
@@ -1210,6 +1706,36 @@ struct AgentActionExecutorTests {
                     description: "Summarize web article.",
                     outputPath: output.path,
                     targetURL: url.absoluteString
+                )
+            ]
+        )
+    }
+
+    private func openWorkspacePlan(name: String?) -> AgentPlan {
+        AgentPlan(
+            summary: "Open workspace.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "open-workspace",
+                    operation: .openWorkspace,
+                    description: "Open workspace.",
+                    workspaceName: name
+                )
+            ]
+        )
+    }
+
+    private func runRoutinePlan(name: String?) -> AgentPlan {
+        AgentPlan(
+            summary: "Run routine.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "run-routine",
+                    operation: .runRoutine,
+                    description: "Run routine.",
+                    routineName: name
                 )
             ]
         )
@@ -1408,6 +1934,7 @@ private struct RecordingZipArchiver: ZipArchiving {
 private struct FakeDocumentConverter: DocumentConverting {
     var isAvailable: Bool { true }
     var modeName: String { "Fake converter" }
+    var usesMockNaming: Bool { false }
 
     func convert(_ records: [DocxRecord], log: @escaping (String) -> Void) async throws -> [DocxRecord] {
         var converted: [DocxRecord] = []
@@ -1519,6 +2046,56 @@ private struct FakeFinderContextReader: FinderContextReading {
             throw FinderContextError.noSelection
         }
         return selection
+    }
+}
+
+/// Advances two seconds per call so every `Timestamp.fileSafe` read mints a different name —
+/// any code path that re-derives a "default" output name after the fact becomes visible.
+private final class TickingClock {
+    private var current = Date(timeIntervalSince1970: 1_783_526_400)
+
+    func next() -> Date {
+        defer { current = current.addingTimeInterval(2) }
+        return current
+    }
+}
+
+/// Returns a different Finder selection on each call, so a test can prove the selection is
+/// resolved exactly once and pinned rather than re-read live at every phase.
+private final class SequenceFinderContextReader: FinderContextReading, @unchecked Sendable {
+    private let lock = NSLock()
+    private let responses: [[URL]]
+    private var calls = 0
+
+    init(responses: [[URL]]) {
+        self.responses = responses
+    }
+
+    var callCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return calls
+    }
+
+    func selectedItems() throws -> [URL] {
+        lock.lock()
+        defer {
+            calls += 1
+            lock.unlock()
+        }
+        return responses[min(calls, responses.count - 1)]
+    }
+}
+
+@MainActor
+private final class CapturingZipArchiver: ZipArchiving {
+    private(set) var capturedFiles: [URL] = []
+    private(set) var capturedOutputURL: URL?
+
+    func createArchive(sourceFolder: URL, files: [URL], outputURL: URL) async throws {
+        capturedFiles = files
+        capturedOutputURL = outputURL
+        try "fake zip".data(using: .utf8)?.write(to: outputURL)
     }
 }
 

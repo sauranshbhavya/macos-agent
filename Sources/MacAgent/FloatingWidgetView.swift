@@ -58,6 +58,12 @@ struct FloatingWidgetView: View {
                     micHoverHint
                 }
 
+                if let notice = viewModel.localStorageNotice {
+                    WidgetStorageNoticeStrip(message: notice) {
+                        viewModel.localStorageNotice = nil
+                    }
+                }
+
                 HStack(alignment: .center, spacing: 12) {
                     composerPill
                     micButton
@@ -487,6 +493,12 @@ private struct WidgetPermissionPanel: View {
     let onAllow: () -> Void
     let onDeny: () -> Void
 
+    private var escalationReasons: String {
+        request.assessment.escalations
+            .map(\.reason)
+            .joined(separator: " ")
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             WidgetExistingStepRows(plan: plan, stepStatuses: stepStatuses)
@@ -495,6 +507,19 @@ private struct WidgetPermissionPanel: View {
                 Text("Sonny always asks first for actions like this — you decide, every time.")
                     .font(WidgetType.captionSmall)
                     .foregroundStyle(WidgetTheme.textMuted)
+            }
+
+            // Why this action was escalated above its default tier — "the zip already exists",
+            // "this snippet trigger would be replaced". Without it the panel asks for approval
+            // on a raised tier while showing nothing about what raised it. Rendered as its own
+            // line rather than folded into the resource line below, which is `lineLimit(1)` and
+            // would truncate these mid-sentence; the first-approval line above sets the
+            // precedent for an explanatory line in this panel.
+            if !escalationReasons.isEmpty {
+                Text(escalationReasons)
+                    .font(WidgetType.captionSmall)
+                    .foregroundStyle(WidgetTheme.errorGlyph)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             HStack(spacing: 8) {
@@ -681,6 +706,46 @@ private struct WidgetFilePreviewChip: View {
 }
 
 // MARK: - Task-level failure (§3.3.6)
+
+/// Local-storage health, shown *alongside* whatever the widget is already doing rather than as a
+/// `WidgetState`. It is deliberately not part of the state priority chain: a corrupt store is not
+/// a task outcome, and routing it through `.failure` is exactly what made a successful task read
+/// as failed. It never raises the panel on its own — it only appears when the widget is expanded.
+private struct WidgetStorageNoticeStrip: View {
+    let message: String
+    let onDismiss: () -> Void
+
+    var body: some View {
+        HStack(alignment: .top, spacing: 8) {
+            Image(systemName: "externaldrive.badge.exclamationmark")
+                .font(WidgetType.icon)
+                .foregroundStyle(WidgetTheme.errorGlyph)
+            Text(message)
+                .font(WidgetType.caption)
+                .foregroundStyle(WidgetTheme.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+            Spacer(minLength: 8)
+            Button(action: onDismiss) {
+                Image(systemName: "xmark")
+                    .font(WidgetType.captionSmall)
+                    .foregroundStyle(WidgetTheme.textMuted)
+            }
+            .buttonStyle(.plain)
+            .accessibilityLabel("Dismiss storage notice")
+        }
+        .padding(.horizontal, 16)
+        .padding(.vertical, 12)
+        .frame(width: 472, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .fill(WidgetTheme.panelBase.opacity(0.92))
+        )
+        .overlay(
+            RoundedRectangle(cornerRadius: 16, style: .continuous)
+                .strokeBorder(WidgetTheme.hairline.opacity(0.25), lineWidth: 1)
+        )
+    }
+}
 
 private struct WidgetFailurePanel: View {
     let plan: AgentPlan?
