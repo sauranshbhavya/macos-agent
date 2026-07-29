@@ -25,8 +25,8 @@ public struct WebResearchMarkdownCapabilityAdapter: CapabilityAdapter {
             AgentTool(
                 operation: .fetchHNHeadlines,
                 name: "Fetch Hacker News headlines",
-                description: "Fetch the top Hacker News headlines from the public API.",
-                requiredFields: ["count"],
+                description: "Fetch the top Hacker News headlines from the public API. Defaults to the top 5 when count is omitted.",
+                requiredFields: [],
                 sideEffects: ["network request"],
                 dryRunBehavior: "Show the number of headlines that would be fetched.",
                 examples: ["Grab the top 5 headlines"]
@@ -43,7 +43,7 @@ public struct WebResearchMarkdownCapabilityAdapter: CapabilityAdapter {
             AgentTool(
                 operation: .webToMarkdown,
                 name: "Web page to Markdown",
-                description: "Fetch one public http/https URL, resolve a topic through a configured search provider, or fetch multiple http/https sourceURLs for comparison, synthesize a research note, and save Markdown in a whitelisted output path.",
+                description: "Fetch one public http/https URL, resolve a topic through a configured search provider, or fetch multiple http/https sourceURLs for comparison, synthesize a research note, and save Markdown in a whitelisted output path. Sources that cannot be retrieved are skipped and listed in the note; the step fails only when every source fails.",
                 requiredFields: ["targetURL, sourceURLs, or searchQuery"],
                 sideEffects: ["network request", "send fetched public page content to OpenAI", "write file"],
                 dryRunBehavior: "Show source URL(s), search query, and Markdown output path without fetching pages or writing files.",

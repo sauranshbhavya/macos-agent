@@ -33,11 +33,15 @@ public enum BrowserOpeningError: Error, LocalizedError, Equatable {
 }
 
 public struct WorkspaceBrowserOpener: BrowserOpening {
-    public init() {}
+    private let openURL: @MainActor (URL) -> Bool
+
+    public init(openURL: @escaping @MainActor (URL) -> Bool = { NSWorkspace.shared.open($0) }) {
+        self.openURL = openURL
+    }
 
     @MainActor
     public func open(_ url: URL) async throws {
-        guard NSWorkspace.shared.open(url) else {
+        guard openURL(url) else {
             throw BrowserOpeningError.failedToOpen(url.absoluteString)
         }
     }

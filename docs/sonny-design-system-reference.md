@@ -13,9 +13,9 @@ Source files live at `/Users/sauranshbhardwaj/Desktop/wireframes/`, named `<numb
 The wireframes contain **two unrelated visual systems**, not one shared one. Do not blend them.
 
 - **System A — Main App / Command Center.** Everything under the Sonny app window: Tasks, Insights, Routines, Workspaces, Settings, the sidebar. Inter typeface, flat opaque colors, no shadows anywhere. This is what branch 8 (`feature/product-shell-shared-state`) already implements.
-- **System B — Floating Widget + System Notifications.** The Spotlight-style floating command bar and macOS Notification Center banners. SF Pro / SF Pro Display typeface, a translucent "Liquid Glass" material with heavy blend-mode layering, genuine multi-pass drop shadows, and its own accent-color set that does **not** match System A's accent. This belongs to branch 9 (`feature/floating-command-widget`), not yet built.
+- **System B — Floating Widget + System Notifications.** The Spotlight-style floating command bar and macOS Notification Center banners. SF Pro / SF Pro Display typeface, a translucent "Liquid Glass" material with heavy blend-mode layering, genuine multi-pass drop shadows, and its own accent-color set that does **not** match System A's accent. Built as of 2026-07-19 (`FloatingWidgetView`/`SonnyWidgetTheme`/`FloatingWidgetWindowController` and `SonnyNotificationService`) — see `docs/sonny-ui-backend-gaps.md`'s "Resolved (2026-07-19)" section.
 
-When branch 9 starts, it needs its own token set from day one — it should not inherit `SonnyTheme`/`SonnyType`.
+The widget has its own token set and does not inherit `SonnyTheme`/`SonnyType`; keep it that way.
 
 ---
 

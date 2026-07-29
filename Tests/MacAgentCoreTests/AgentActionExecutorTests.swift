@@ -446,14 +446,7 @@ struct AgentActionExecutorTests {
                 title: "Article One Notes",
                 summary: "A concise summary.",
                 keyPoints: ["First point"],
-                citations: ["Article One citation"],
-                sources: [
-                    WebResearchNoteSource(
-                        title: "Article One",
-                        url: source.absoluteString,
-                        retrievedAt: ISO8601DateFormatter().string(from: retrievedAt)
-                    )
-                ]
+                citations: ["Article One citation"]
             )
         )
         let executor = makeExecutor(
@@ -503,8 +496,7 @@ struct AgentActionExecutorTests {
                     title: "Comparison",
                     summary: "The sources differ.",
                     keyPoints: ["Compare point"],
-                    citations: [],
-                    sources: []
+                    citations: []
                 )
             )
         )
@@ -541,8 +533,7 @@ struct AgentActionExecutorTests {
                     title: "Comparison",
                     summary: "The reachable sources differ.",
                     keyPoints: ["Compare point"],
-                    citations: [],
-                    sources: []
+                    citations: []
                 )
             )
         )
@@ -575,8 +566,7 @@ struct AgentActionExecutorTests {
                     title: "Unused",
                     summary: "",
                     keyPoints: [],
-                    citations: [],
-                    sources: []
+                    citations: []
                 )
             )
         )
@@ -587,6 +577,86 @@ struct AgentActionExecutorTests {
             ) { _, _ in }
         }
         #expect(!FileManager.default.fileExists(atPath: output.path))
+    }
+
+    /// A "broken URL" reaches one of two different paths, and the distinction matters when
+    /// reading live behavior: a *syntactically invalid* URL is rejected while the plan is being
+    /// validated, before any fetch happens, so nothing is written; an *unreachable but valid*
+    /// URL is skipped per-source and only aborts the step when it was the only source.
+    @Test
+    func brokenSourceURLsTakeTheRightPathDependingOnHowTheyAreBroken() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let reachable = URL(string: "https://example.com/one")!
+        let unreachable = URL(string: "https://example.com/missing")!
+        let pageLoader = webPageLoader(pages: [
+            reachable.absoluteString: readablePage(url: reachable, title: "First Source")
+        ])
+        let synthesizer = StaticWebResearchSynthesizer(
+            note: WebResearchNote(
+                title: "Comparison",
+                summary: "Summary.",
+                keyPoints: ["Point"],
+                citations: []
+            )
+        )
+
+        // 1. Malformed URL among valid ones: rejected at validation, no partial note written.
+        let malformedOutput = root.appendingPathComponent("malformed.md")
+        let malformedPlan = AgentPlan(
+            summary: "Compare web sources as Markdown.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "web-comparison",
+                    operation: .webToMarkdown,
+                    description: "Compare source URLs.",
+                    outputPath: malformedOutput.path,
+                    sourceURLs: [reachable.absoluteString, "ht!tp://not a url"]
+                )
+            ]
+        )
+        let malformedExecutor = makeExecutor(
+            root: root,
+            webPageLoader: pageLoader,
+            webResearchSynthesizer: synthesizer
+        )
+        await #expect(throws: SafeURLError.self) {
+            _ = try await malformedExecutor.execute(plan: malformedPlan) { _, _ in }
+        }
+        #expect(!FileManager.default.fileExists(atPath: malformedOutput.path))
+
+        // 2. A single valid-but-unreachable source: no partial note, all-sources-failed.
+        let singleOutput = root.appendingPathComponent("single.md")
+        let singleExecutor = makeExecutor(
+            root: root,
+            webPageLoader: pageLoader,
+            webResearchSynthesizer: synthesizer
+        )
+        await #expect(throws: WebResearchError.self) {
+            _ = try await singleExecutor.execute(
+                plan: webComparisonPlan(urls: [unreachable], output: singleOutput)
+            ) { _, _ in }
+        }
+        #expect(!FileManager.default.fileExists(atPath: singleOutput.path))
+
+        // 3. Valid-but-unreachable alongside a reachable one: partial note naming the skip.
+        let partialOutput = root.appendingPathComponent("partial.md")
+        let partialExecutor = makeExecutor(
+            root: root,
+            webPageLoader: pageLoader,
+            webResearchSynthesizer: synthesizer
+        )
+        let result = try await partialExecutor.execute(
+            plan: webComparisonPlan(urls: [reachable, unreachable], output: partialOutput)
+        ) { _, _ in }
+
+        let markdown = try String(contentsOf: partialOutput)
+        #expect(markdown.contains("- [First Source](https://example.com/one)"))
+        #expect(markdown.contains("## Skipped Sources"))
+        #expect(markdown.contains(unreachable.absoluteString))
+        #expect(!markdown.contains("- [](https://example.com/missing)"))
+        #expect(result.summary.contains("Skipped 1 unreachable source"))
     }
 
     @Test
@@ -622,8 +692,7 @@ struct AgentActionExecutorTests {
                 title: "Swift Concurrency Research",
                 summary: "Search-backed research summary.",
                 keyPoints: ["Search point"],
-                citations: [],
-                sources: []
+                citations: []
             )
         )
         let executor = makeExecutor(
@@ -659,7 +728,7 @@ struct AgentActionExecutorTests {
         let executor = makeExecutor(
             root: root,
             webResearchSynthesizer: StaticWebResearchSynthesizer(
-                note: WebResearchNote(title: "Unused", summary: "Unused", keyPoints: [], citations: [], sources: [])
+                note: WebResearchNote(title: "Unused", summary: "Unused", keyPoints: [], citations: [])
             )
         )
         let plan = webSearchPlan(query: "unconfigured provider", output: output)
@@ -756,7 +825,7 @@ struct AgentActionExecutorTests {
 
         #expect(appOpener.openedBundleIDs == ["com.apple.Safari"])
         #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com"])
-        #expect(appResult.summary == "Opened Safari.")
+        #expect(appResult.summary == "Opened the Safari app.")
         #expect(urlResult.summary == "Opened https://github.com.")
     }
 
@@ -1009,7 +1078,7 @@ struct AgentActionExecutorTests {
         #expect(FileManager.default.fileExists(atPath: output.path))
         #expect(appOpener.openedBundleIDs == ["com.apple.Safari"])
         #expect(result.summary.contains("Created largest.zip"))
-        #expect(result.summary.contains("Opened Safari."))
+        #expect(result.summary.contains("Opened the Safari app."))
     }
 
     @Test
@@ -1232,7 +1301,7 @@ struct AgentActionExecutorTests {
 
         #expect(appOpener.openedBundleIDs == ["com.apple.Safari"])
         #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com"])
-        #expect(result.summary == "Ran routine Mixed Launch. Opened Safari. Opened https://github.com.")
+        #expect(result.summary == "Ran routine Mixed Launch. Opened the Safari app. Opened https://github.com.")
     }
 
     @Test

@@ -25,7 +25,7 @@ struct AgentRunnerTests {
         #expect(request.assessment.effectiveTier == .tier1)
         #expect(request.requirement == .autoRun)
         #expect(appOpener.openedBundleIDs == ["com.apple.Safari"])
-        #expect(result.summary == "Opened Safari.")
+        #expect(result.summary == "Opened the Safari app.")
     }
 
     @Test
@@ -655,7 +655,7 @@ struct AgentRunnerTests {
         )
 
         #expect(appOpener.openedBundleIDs == ["com.apple.Safari"])
-        #expect(result.summary == "Ran routine Morning Setup. Opened Safari.")
+        #expect(result.summary == "Ran routine Morning Setup. Opened the Safari app.")
     }
 
     @Test

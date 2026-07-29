@@ -61,6 +61,35 @@ struct QuickDispatchTests {
         #expect(routinePlan.steps[0].routineName == "Deep Work")
     }
 
+    /// The exact case from manual testing: a workspace saved as "slack" (lowercase) while
+    /// "Slack" is an allowlisted app. `resolve()` must return nil so the real planner decides,
+    /// rather than instant-running the workspace behind the user's back.
+    @Test
+    func lowercaseWorkspaceNamedLikeAnAllowlistedAppDefersToThePlanner() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try workspaceStore.save(
+            StoredWorkspace(name: "slack", apps: ["Notes"], urls: ["https://example.com"])
+        )
+        let resolver = InstantCommandResolver(
+            routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
+            workspaceStore: workspaceStore
+        )
+
+        #expect(resolver.resolve(command: "open Slack") == nil)
+        #expect(resolver.resolve(command: "open slack") == nil)
+        #expect(resolver.resolve(command: "launch Slack") == nil)
+
+        // The explicit form is unambiguous and must still resolve instantly.
+        guard case .plan(let plan) = resolver.resolve(command: "open workspace slack") else {
+            Issue.record("Expected the explicit workspace form to resolve locally.")
+            return
+        }
+        #expect(plan.steps.map(\.operation) == [.openWorkspace])
+        #expect(plan.steps[0].workspaceName == "slack")
+    }
+
     @Test
     func broadRunningAppPrefixesOnlyClaimPlausibleAppNames() throws {
         let root = try makeDirectory()

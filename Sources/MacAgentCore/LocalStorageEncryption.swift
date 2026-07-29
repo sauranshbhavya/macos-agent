@@ -1,5 +1,6 @@
 import CryptoKit
 import Foundation
+import OSLog
 
 public protocol LocalStorageKeyManaging: Sendable {
     func keyData() throws -> Data
@@ -77,6 +78,45 @@ public enum LocalStorageDecoded<Value> {
         case .legacy:
             return true
         }
+    }
+
+    /// Opportunistically re-writes a legacy plaintext file as encrypted, returning the decoded
+    /// value either way.
+    ///
+    /// A failed re-encryption is **not** a load failure and must not be reported as one: the
+    /// decode succeeded, so the data is intact and usable. Store writes are atomic, so a failed
+    /// write leaves the original plaintext file exactly as it was, and the migration simply
+    /// retries for free on the next load. Letting the write error propagate out of `loadAll()`
+    /// (as every store used to) made callers discard data that had just decoded correctly and
+    /// show the "could not be decrypted or decoded" banner, which is wrong on both counts.
+    public func migratingLegacyPlaintext(
+        store: String,
+        write: (Value) throws -> Void
+    ) -> Value {
+        guard wasLegacyPlaintext else {
+            return value
+        }
+
+        do {
+            try write(value)
+        } catch {
+            LocalStorageMigrationLog.recordDeferredMigration(store: store, error: error)
+        }
+        return value
+    }
+}
+
+public enum LocalStorageMigrationLog {
+    private static let logger = Logger(subsystem: "com.sonny.macagent", category: "local-storage")
+
+    static func recordDeferredMigration(store: String, error: Error) {
+        logger.warning(
+            """
+            Deferred plaintext-to-encrypted migration for \(store, privacy: .public): \
+            \(error.localizedDescription, privacy: .public). The existing file is intact and \
+            the migration retries on the next load.
+            """
+        )
     }
 }
 

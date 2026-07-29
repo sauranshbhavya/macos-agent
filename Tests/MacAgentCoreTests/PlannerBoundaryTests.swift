@@ -129,8 +129,8 @@ struct PlannerBoundaryTests {
 
 private let expectedDefaultPlannerDescription = """
 - scan_select_largest_files: Scan and select largest files
-  description: Recursively scan a whitelisted folder, skip symlinks, and select the largest regular files.
-  required fields: inputPath, count
+  description: Recursively scan a whitelisted folder, skip symlinks, and select the largest regular files. Defaults to the 3 largest when count is omitted.
+  required fields: inputPath
   side effects: none
   dry run: Show the selected files and sizes.
   examples: Find the 3 largest files in ~/Desktop/MacAgentDemo
@@ -159,8 +159,8 @@ private let expectedDefaultPlannerDescription = """
   dry run: Show that Hacker News would open.
   examples: Open Hacker News
 - fetch_hn_headlines: Fetch Hacker News headlines
-  description: Fetch the top Hacker News headlines from the public API.
-  required fields: count
+  description: Fetch the top Hacker News headlines from the public API. Defaults to the top 5 when count is omitted.
+  required fields: none
   side effects: network request
   dry run: Show the number of headlines that would be fetched.
   examples: Grab the top 5 headlines
@@ -171,7 +171,7 @@ private let expectedDefaultPlannerDescription = """
   dry run: Show the Markdown path without writing it.
   examples: Save to a Markdown file
 - web_to_markdown: Web page to Markdown
-  description: Fetch one public http/https URL, resolve a topic through a configured search provider, or fetch multiple http/https sourceURLs for comparison, synthesize a research note, and save Markdown in a whitelisted output path.
+  description: Fetch one public http/https URL, resolve a topic through a configured search provider, or fetch multiple http/https sourceURLs for comparison, synthesize a research note, and save Markdown in a whitelisted output path. Sources that cannot be retrieved are skipped and listed in the note; the step fails only when every source fails.
   required fields: targetURL, sourceURLs, or searchQuery
   side effects: network request, send fetched public page content to OpenAI, write file
   dry run: Show source URL(s), search query, and Markdown output path without fetching pages or writing files.

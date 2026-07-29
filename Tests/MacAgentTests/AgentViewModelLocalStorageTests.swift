@@ -21,6 +21,7 @@ struct AgentViewModelLocalStorageTests {
         #expect(viewModel.taskHistoryRecords.isEmpty)
         #expect(viewModel.clipboardHistoryEnabled)
         #expect(viewModel.errorMessage == nil)
+        #expect(viewModel.localStorageNotice == nil)
     }
 
     @Test
@@ -49,7 +50,7 @@ struct AgentViewModelLocalStorageTests {
 
         viewModel.refreshSavedItems()
 
-        let message = try #require(viewModel.errorMessage)
+        let message = try #require(viewModel.localStorageNotice)
         #expect(message.contains("Sonny could not load encrypted local data"))
         #expect(message.contains("A local data file exists but could not be decrypted or decoded"))
         #expect(message.contains("saved routines"))
@@ -69,7 +70,7 @@ struct AgentViewModelLocalStorageTests {
 
         viewModel.refreshClipboardHistoryNotice()
 
-        let message = try #require(viewModel.errorMessage)
+        let message = try #require(viewModel.localStorageNotice)
         #expect(message.contains("Sonny could not load encrypted local data"))
         #expect(message.contains("clipboard history settings"))
     }
@@ -92,10 +93,66 @@ struct AgentViewModelLocalStorageTests {
 
         viewModel.refreshTaskHistory()
 
-        let message = try #require(viewModel.errorMessage)
+        let message = try #require(viewModel.localStorageNotice)
         #expect(message.contains("Sonny could not load encrypted local data"))
         #expect(message.contains("task history"))
         #expect(viewModel.taskHistoryRecords.isEmpty)
+    }
+
+    /// The shipped bug this branch fixes: `refreshSavedItems()` runs after every successful task,
+    /// so a corrupt store unrelated to that task used to overwrite `errorMessage` and make the
+    /// widget render `.failure` instead of the real result.
+    @Test
+    func corruptStoreDoesNotMakeASuccessfulTaskLookLikeAFailure() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try RoutineStore(
+            fileURL: root.appendingPathComponent("routines.json"),
+            encryption: testEncryption(byte: 0x42)
+        ).save(StoredRoutine(name: "Unreadable", steps: [
+            AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")
+        ]))
+        let viewModel = try makeViewModel(root: root, encryption: testEncryption(byte: 0x99))
+
+        viewModel.command = "= 1 + 1"
+        viewModel.start()
+        while viewModel.isRunning {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        // The task itself succeeded and its result is intact...
+        #expect(viewModel.finalSummary.contains("2"))
+        #expect(viewModel.errorMessage == nil)
+        // ...while the unrelated storage problem is reported on its own channel.
+        let notice = try #require(viewModel.localStorageNotice)
+        #expect(notice.contains("saved routines"))
+    }
+
+    @Test
+    func silentlyReadStoresReportCorruptionThatWouldOtherwiseBeInvisible() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try SnippetStore(
+            fileURL: root.appendingPathComponent("snippets.json"),
+            encryption: testEncryption(byte: 0x42)
+        ).save(StoredSnippet(trigger: ";sig", expansion: "Best,\nSonny"))
+        // `record` no-ops unless the artifact really exists on disk, so create it first —
+        // otherwise nothing is written and there is no corrupt store to detect.
+        let artifactURL = root.appendingPathComponent("note.md")
+        try Data("note".utf8).write(to: artifactURL)
+        try RecentArtifactStore(
+            fileURL: root.appendingPathComponent("recent-artifacts.json"),
+            encryption: testEncryption(byte: 0x42)
+        ).record(path: artifactURL.path, recordedAt: .fixture)
+        let viewModel = try makeViewModel(root: root, encryption: testEncryption(byte: 0x99))
+
+        viewModel.refreshSavedItems()
+
+        // Snippets and recent artifacts are otherwise only read through `try?` paths, so without
+        // this probe a corrupt file just silently stops those features working.
+        let notice = try #require(viewModel.localStorageNotice)
+        #expect(notice.contains("snippets"))
+        #expect(notice.contains("recent artifacts"))
     }
 }
 

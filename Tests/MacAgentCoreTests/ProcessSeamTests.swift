@@ -62,16 +62,27 @@ struct ProcessSeamTests {
         }
     }
 
-    /// `NSWorkspace.open` returns false for an unregistered scheme, which is exactly the signal
-    /// the opener used to discard — every failed browser open was reported as a success.
+    /// The bug was that a `false` return from `NSWorkspace.open` was discarded, so every failed
+    /// browser open reported success. This exercises that decision with an injected result
+    /// rather than a real unregistered scheme — asking Launch Services to open one puts a
+    /// "no application set to open the URL" dialog on the developer's screen every test run.
     @MainActor
     @Test
-    func workspaceBrowserOpenerThrowsWhenMacOSCannotOpenTheURL() async throws {
-        let url = try #require(URL(string: "sonny-nonexistent-scheme-\(UUID().uuidString)://x"))
+    func workspaceBrowserOpenerThrowsWhenMacOSDeclinesToOpenTheURL() async throws {
+        let url = try #require(URL(string: "https://example.com/story"))
 
-        await #expect(throws: BrowserOpeningError.self) {
-            try await WorkspaceBrowserOpener().open(url)
+        let refusing = WorkspaceBrowserOpener(openURL: { _ in false })
+        await #expect(throws: BrowserOpeningError.failedToOpen(url.absoluteString)) {
+            try await refusing.open(url)
         }
+
+        var openedURLs: [URL] = []
+        let accepting = WorkspaceBrowserOpener(openURL: { opened in
+            openedURLs.append(opened)
+            return true
+        })
+        try await accepting.open(url)
+        #expect(openedURLs == [url])
     }
 
     private func makeDirectory() throws -> URL {

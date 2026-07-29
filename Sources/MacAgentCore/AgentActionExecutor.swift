@@ -601,7 +601,7 @@ public final class AgentActionExecutor {
             if let sourceURLs = step.sourceURLs {
                 resources.append(contentsOf: sourceURLs)
             }
-            appendIfPresent(step.searchQuery.map { "Search: \($0)" }, to: &resources)
+            appendIfPresent(searchQueryResource(for: step), to: &resources)
             appendIfPresent(step.outputPath, to: &resources)
             appendIfPresent(step.inputPath, to: &resources)
             appendIfPresent(step.routineName.map { "Routine: \($0)" }, to: &resources)
@@ -634,6 +634,28 @@ public final class AgentActionExecutor {
         .openWorkspace,
         .invokeShortcut
     ]
+
+    /// `AgentStep.searchQuery` is reused by several operations for a value that is not a search
+    /// term at all — a snippet trigger, a calculator expression, an app name. Labeling those
+    /// "Search: …" misdescribes the action in the approval prompt, which is the one place the
+    /// user reads it (a snippet save showed "Allow access to Search: ;sig").
+    private func searchQueryResource(for step: AgentStep) -> String? {
+        guard let raw = step.searchQuery?.trimmingCharacters(in: .whitespacesAndNewlines),
+              !raw.isEmpty else {
+            return nil
+        }
+
+        switch step.operation {
+        case .saveSnippet, .expandSnippet:
+            return "Snippet: \(raw)"
+        case .calculateUtility:
+            return "Calculation: \(raw)"
+        case .switchRunningApp:
+            return "App: \(raw)"
+        default:
+            return "Search: \(raw)"
+        }
+    }
 
     private func dataLeavesDevice(in plan: AgentPlan) -> Bool {
         plan.steps.contains { step in

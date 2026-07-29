@@ -2,6 +2,40 @@ import Foundation
 import Testing
 @testable import MacAgentCore
 
+@Suite
+struct RecentCompletedTasksOrderingTests {
+    /// `TaskHistoryStore.loadAll()` returns records in append (oldest-first) order, so a caller
+    /// that doesn't pre-sort used to get the *oldest* completed tasks under a "recent" label.
+    @Test
+    func recentReturnsNewestFirstEvenWhenInputIsOldestFirst() {
+        let base = Date(timeIntervalSince1970: 1_700_000_000)
+        let records = [
+            CompletedTaskRecord(
+                command: "oldest",
+                startedAt: base,
+                completedAt: base,
+                outcomeStatus: .completed
+            ),
+            CompletedTaskRecord(
+                command: "middle",
+                startedAt: base,
+                completedAt: base.addingTimeInterval(3_600),
+                outcomeStatus: .completed
+            ),
+            CompletedTaskRecord(
+                command: "newest",
+                startedAt: base,
+                completedAt: base.addingTimeInterval(7_200),
+                outcomeStatus: .completed
+            )
+        ]
+
+        let recent = RecentCompletedTasks.recent(from: records, limit: 2)
+
+        #expect(recent.map(\.command) == ["newest", "middle"])
+    }
+}
+
 struct RecentCompletedTasksTests {
     @Test
     func excludesFailedAndCanceledRecordsEvenWhenMoreRecentThanCompletedOnes() throws {

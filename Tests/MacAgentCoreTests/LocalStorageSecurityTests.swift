@@ -189,6 +189,39 @@ struct LocalStorageSecurityTests {
         try assertTaskHistoryMigration(root: root, encryption: encryption)
     }
 
+    /// A failed re-encryption during legacy migration is not a load failure: the decode already
+    /// succeeded and the write is atomic, so the original file is intact and the data is usable.
+    /// Letting that write error escape `loadAll()` made callers blank the data and show the
+    /// "could not be decrypted or decoded" banner for data that decoded perfectly.
+    @Test
+    func failedLegacyMigrationRewriteStillReturnsTheDecodedData() throws {
+        let root = try makeDirectory()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let plaintextURL = root.appendingPathComponent("routines.json")
+        let legacy = [
+            "morning": StoredRoutine(
+                name: "Morning",
+                steps: [
+                    AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")
+                ]
+            )
+        ]
+        try JSONEncoder().encode(legacy).write(to: plaintextURL)
+        // Read-only directory: the file still reads, but the migration rewrite cannot land.
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: root.path)
+
+        let store = RoutineStore(fileURL: plaintextURL, encryption: testEncryption())
+        let loaded = try store.loadAll()
+
+        #expect(loaded["morning"]?.name == "Morning")
+        // The plaintext original is untouched, so the migration retries on the next load.
+        let raw = try Data(contentsOf: plaintextURL)
+        #expect(!raw.starts(with: LocalStorageEncryption.fileHeader))
+    }
+
     @Test
     func keyManagerGeneratesStoresAndReusesSymmetricKeyData() throws {
         let generated = Data(repeating: 0xAB, count: 32)

@@ -14,13 +14,14 @@ struct WebResearchSynthesizerTests {
         let schema = try #require(format["schema"] as? [String: Any])
         #expect(schema["type"] as? String == "object")
         #expect(schema["additionalProperties"] as? Bool == false)
-        #expect(schema["required"] as? [String] == ["title", "summary", "keyPoints", "citations", "sources"])
+        #expect(schema["required"] as? [String] == ["title", "summary", "keyPoints", "citations"])
 
+        // No `sources` property: the note's Sources section is built from the pages Sonny
+        // actually fetched, so asking the model for source URLs added an unused round-trip
+        // field that could carry attacker-influenced URLs into the output file.
         let properties = try #require(schema["properties"] as? [String: Any])
-        let sources = try #require(properties["sources"] as? [String: Any])
-        let sourceItems = try #require(sources["items"] as? [String: Any])
-        #expect(sourceItems["additionalProperties"] as? Bool == false)
-        #expect(sourceItems["required"] as? [String] == ["title", "url", "retrievedAt"])
+        #expect(properties["sources"] == nil)
+        #expect(Set(properties.keys) == ["title", "summary", "keyPoints", "citations"])
     }
 
     @Test
@@ -31,7 +32,6 @@ struct WebResearchSynthesizerTests {
           "summary": "Summary",
           "keyPoints": [],
           "citations": [],
-          "sources": [],
           "agentPlan": {"operation": "open_url"}
         }
         """
@@ -40,7 +40,10 @@ struct WebResearchSynthesizerTests {
             try WebResearchNoteDecoder.decodeStrict(from: topLevelJSON)
         }
 
-        let sourceJSON = """
+        // `sources` was removed from the schema (the Markdown "Sources" section is built from the
+        // pages actually fetched, never from model-reported URLs). It must now be rejected like
+        // any other unexpected key, so a model can't reintroduce attacker-influenced URLs here.
+        let reintroducedSourcesJSON = """
         {
           "title": "Note",
           "summary": "Summary",
@@ -49,16 +52,15 @@ struct WebResearchSynthesizerTests {
           "sources": [
             {
               "title": "Source",
-              "url": "https://example.com",
-              "retrievedAt": "2026-07-08T12:00:00Z",
-              "outputPath": "/tmp/pwned.md"
+              "url": "https://evil.example",
+              "retrievedAt": "2026-07-08T12:00:00Z"
             }
           ]
         }
         """
 
-        #expect(throws: WebResearchNoteDecodingError.unexpectedSourceKey("outputPath")) {
-            try WebResearchNoteDecoder.decodeStrict(from: sourceJSON)
+        #expect(throws: WebResearchNoteDecodingError.unexpectedTopLevelKey("sources")) {
+            try WebResearchNoteDecoder.decodeStrict(from: reintroducedSourcesJSON)
         }
     }
 
@@ -283,7 +285,7 @@ struct WebResearchSynthesizerTests {
     private static let noteResponseWithUsageJSON = #"""
     {
       "id": "resp_web",
-      "output_text": "{\"title\":\"Fixture Note\",\"summary\":\"Short summary.\",\"keyPoints\":[\"One\"],\"citations\":[\"Citation\"],\"sources\":[{\"title\":\"Example\",\"url\":\"https://example.com/article\",\"retrievedAt\":\"2026-07-09T12:00:00Z\"}]}",
+      "output_text": "{\"title\":\"Fixture Note\",\"summary\":\"Short summary.\",\"keyPoints\":[\"One\"],\"citations\":[\"Citation\"]}",
       "usage": {
         "input_tokens": 80,
         "output_tokens": 25,

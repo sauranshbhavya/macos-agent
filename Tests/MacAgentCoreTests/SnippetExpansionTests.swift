@@ -137,6 +137,11 @@ struct SnippetExpansionTests {
         #expect(request.requirement == .explicitApproval)
         #expect(request.assessment.escalations.contains { $0.reason.contains(";sig") })
         #expect(try store.findExactTrigger(";sig")?.expansion == "Old text")
+
+        // The approval prompt reads "Allow access to <involvedResource>". Snippet save stores
+        // its trigger in `searchQuery`, which used to make that read "Search: ;sig".
+        #expect(request.approvalCopy.involvedResource == "Snippet: ;sig")
+        #expect(!request.approvalCopy.involvedResource.contains("Search:"))
     }
 
     @Test

@@ -72,48 +72,7 @@ enum AgentActivityPresentation {
         }
     }
 
-    static func statusTitle(_ status: AgentStepStatus) -> String {
-        switch status {
-        case .pending:
-            return "Ready"
-        case .running:
-            return "In progress"
-        case .complete:
-            return "Complete"
-        case .failed:
-            return "Needs attention"
-        case .canceled:
-            return "Canceled"
-        }
-    }
 
-    static func eventTitle(_ event: AgentEvent) -> String {
-        switch event.phase {
-        case .plan:
-            return "Understanding"
-        case .validate:
-            return "Checking"
-        case .risk:
-            return "Safety check"
-        case .preview:
-            return "Ready to review"
-        case .confirm:
-            return event.message.localizedCaseInsensitiveContains("required")
-                ? "Needs approval"
-                : "Approved"
-        case .act:
-            return "Working"
-        case .observe:
-            return "Update"
-        case .summarize:
-            if event.message.hasPrefix("Stopped")
-                || event.message.localizedCaseInsensitiveContains("failed")
-                || event.message.localizedCaseInsensitiveContains("canceled") {
-                return "Stopped"
-            }
-            return "Done"
-        }
-    }
 
     static func eventIcon(_ phase: AgentPhase) -> String {
         switch phase {
@@ -136,76 +95,5 @@ enum AgentActivityPresentation {
         }
     }
 
-    static func eventMessage(_ event: AgentEvent) -> String {
-        let message = event.message.trimmingCharacters(in: .whitespacesAndNewlines)
-        switch message {
-        case "Sending command to planner":
-            return "Understanding your request"
-        case "Resolved command locally":
-            return "Understood this command on your Mac"
-        case "Short-lived prior task context available to planner":
-            return "Using your recent task for context"
-        case "Validating whitelist and supported operations":
-            return "Checking supported actions and allowed locations"
-        case "Typed command auto-approved execution", "Voice command auto-approved execution", "Execution approved":
-            return "No extra approval needed"
-        case "Execution paused by preview-only approval policy":
-            return "Preview ready. This action will not run under the current settings."
-        case "Execution refused by approval policy":
-            return "Sonny stopped this action to keep you safe."
-        default:
-            break
-        }
 
-        if message.hasPrefix("Received plan: ") {
-            return "Plan ready: " + String(message.dropFirst("Received plan: ".count))
-        }
-        if message.hasPrefix("Prepared "), message.contains(" preview item") {
-            let count = message.split(separator: " ").dropFirst().first.flatMap { Int($0) } ?? 0
-            return "Ready to review \(count) action\(count == 1 ? "" : "s")"
-        }
-        if message.hasPrefix("Approval required for ") {
-            return "Waiting for your approval"
-        }
-        if message.hasPrefix("User approved ") {
-            return "You approved this action"
-        }
-        if message.hasPrefix("risk.assessed:") {
-            if message.localizedCaseInsensitiveContains("approval: Auto-run") {
-                return "Safety check complete. No approval needed."
-            }
-            if message.localizedCaseInsensitiveContains("approval: Refuse") {
-                return "Safety check complete. This action cannot run."
-            }
-            return "Safety check complete. Waiting for your approval."
-        }
-        if message.hasPrefix("risk.escalated:"), let reason = message.split(separator: ":", maxSplits: 2).last {
-            return "This action needs extra care: \(String(reason).trimmingCharacters(in: .whitespaces))"
-        }
-        if message.hasPrefix("Recorded ") {
-            return message.replacingOccurrences(of: "Recorded", with: "Saved", options: .anchored)
-                + " to Recent Outputs"
-        }
-        if message.hasPrefix("Could not record recent artifacts:") {
-            return message.replacingOccurrences(
-                of: "Could not record recent artifacts:",
-                with: "Could not add results to Recent Outputs:",
-                options: .anchored
-            )
-        }
-        return message
-    }
-
-    static func previewSideEffect(_ sideEffect: String) -> String {
-        if sideEffect.hasPrefix("Write: ") {
-            return "Creates " + String(sideEffect.dropFirst("Write: ".count))
-        }
-        if sideEffect.hasPrefix("Open: ") {
-            return "Opens " + String(sideEffect.dropFirst("Open: ".count))
-        }
-        if sideEffect.hasPrefix("Convert: ") {
-            return "Converts " + String(sideEffect.dropFirst("Convert: ".count))
-        }
-        return sideEffect
-    }
 }

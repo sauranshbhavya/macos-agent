@@ -16,8 +16,8 @@ public struct LargestFilesZipCapabilityAdapter: CapabilityAdapter {
             AgentTool(
                 operation: .scanSelectLargestFiles,
                 name: "Scan and select largest files",
-                description: "Recursively scan a whitelisted folder, skip symlinks, and select the largest regular files.",
-                requiredFields: ["inputPath", "count"],
+                description: "Recursively scan a whitelisted folder, skip symlinks, and select the largest regular files. Defaults to the 3 largest when count is omitted.",
+                requiredFields: ["inputPath"],
                 sideEffects: [],
                 dryRunBehavior: "Show the selected files and sizes.",
                 examples: ["Find the 3 largest files in ~/Desktop/MacAgentDemo"]

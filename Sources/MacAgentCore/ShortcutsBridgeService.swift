@@ -86,10 +86,7 @@ public struct ShortcutRunHistoryStore: @unchecked Sendable {
             from: data,
             decoder: .shortcutHistoryISO8601
         )
-        if decoded.wasLegacyPlaintext {
-            try write(decoded.value)
-        }
-        return decoded.value
+        return decoded.migratingLegacyPlaintext(store: "Shortcut run history", write: write)
     }
 
     private func write(_ records: [String: ShortcutRunHistoryRecord]) throws {

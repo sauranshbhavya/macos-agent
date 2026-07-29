@@ -86,18 +86,24 @@ public struct InvokeShortcutCapabilityAdapter: CapabilityAdapter {
         do {
             result = try await context.shortcutInvoker.invokeShortcut(name: spec.name, input: spec.input)
         } catch {
-            try? context.shortcutRunHistoryStore.recordFailure(shortcutName: spec.name, at: context.now())
+            recordHistory(context: context, log: log) {
+                try context.shortcutRunHistoryStore.recordFailure(shortcutName: spec.name, at: context.now())
+            }
             log(.summarize, "Shortcut failed")
             throw error
         }
 
         guard result.terminationStatus == 0 else {
-            try? context.shortcutRunHistoryStore.recordFailure(shortcutName: spec.name, at: context.now())
+            recordHistory(context: context, log: log) {
+                try context.shortcutRunHistoryStore.recordFailure(shortcutName: spec.name, at: context.now())
+            }
             log(.summarize, "Shortcut failed")
             throw ShortcutsBridgeError.invocationFailed(spec.name, result.terminationStatus, result.output)
         }
 
-        try? context.shortcutRunHistoryStore.recordSuccess(shortcutName: spec.name, at: context.now())
+        recordHistory(context: context, log: log) {
+            try context.shortcutRunHistoryStore.recordSuccess(shortcutName: spec.name, at: context.now())
+        }
         if !result.output.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             log(.observe, result.output.trimmingCharacters(in: .whitespacesAndNewlines))
         }
@@ -107,6 +113,21 @@ public struct InvokeShortcutCapabilityAdapter: CapabilityAdapter {
             previews: previews,
             summary: "Ran Shortcut \(spec.name)."
         )
+    }
+
+    /// Run-history bookkeeping must not fail the invocation that already happened, but it also
+    /// must not vanish: this history feeds `hasCleanObservedSuccess`, which decides whether a
+    /// future run is tier 1 or tier 2. Silent rot there quietly changes risk gating.
+    private func recordHistory(
+        context: CapabilityExecutionContext,
+        log: @escaping (AgentPhase, String) -> Void,
+        write: () throws -> Void
+    ) {
+        do {
+            try write()
+        } catch {
+            log(.observe, "Could not update Shortcut run history: \(error.localizedDescription)")
+        }
     }
 
     private struct ShortcutSpec {

@@ -115,10 +115,7 @@ public struct RoutineStore: @unchecked Sendable {
         }
         let data = try Data(contentsOf: fileURL)
         let decoded = try encryption.decode([String: StoredRoutine].self, from: data)
-        if decoded.wasLegacyPlaintext {
-            try write(decoded.value)
-        }
-        return decoded.value
+        return decoded.migratingLegacyPlaintext(store: "routines", write: write)
     }
 
     private func write(_ routines: [String: StoredRoutine]) throws {
@@ -171,10 +168,7 @@ public struct WorkspaceStore: @unchecked Sendable {
         }
         let data = try Data(contentsOf: fileURL)
         let decoded = try encryption.decode([String: StoredWorkspace].self, from: data)
-        if decoded.wasLegacyPlaintext {
-            try write(decoded.value)
-        }
-        return decoded.value
+        return decoded.migratingLegacyPlaintext(store: "workspaces", write: write)
     }
 
     private func write(_ workspaces: [String: StoredWorkspace]) throws {

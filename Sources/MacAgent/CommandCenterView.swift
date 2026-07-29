@@ -385,14 +385,19 @@ private struct TasksFoundationView: View {
                     // filter/search icons are built here.
                     TasksToolbarRow()
 
+                    // Outside the In Progress group on purpose: that group only exists while a
+                    // task is active, so nesting the storage notice inside it would hide a
+                    // corrupt store whenever nothing happens to be running.
+                    CommandCenterStorageNotice(viewModel: viewModel, insets: .tasksPage)
+
                     // Wireframe has exactly three status groups (In Progress / Done /
                     // Canceled, `9-MainAppHomeScreen.svg`) — per direct feedback (2026-07-18),
                     // the live-running task now renders as this list's own "In Progress"
                     // group instead of a separate block above it, and there's no separate
                     // idle "No active task" placeholder; the group simply isn't there when
-                    // nothing is running. Gated on `isRunning || isAwaitingApproval`
-                    // specifically, not the broader `hasTaskActivity` — once a run finishes,
-                    // it belongs in the Done/Canceled history below, not lingering up here.
+                    // nothing is running. Gated narrowly on `isRunning || isAwaitingApproval`
+                    // rather than on any broader "has this task left traces" notion — once a
+                    // run finishes it belongs in the Done/Canceled history below, not up here.
                     if viewModel.isRunning || viewModel.isAwaitingApproval {
                         InProgressTaskGroup(viewModel: viewModel)
                     }
@@ -523,6 +528,61 @@ private struct CommandCenterRunningIndicator: View {
     }
 }
 
+/// Local-storage health banner (System A). Separate from the task-failure path on purpose: this
+/// reports that one of Sonny's own encrypted stores could not be read or written, which is not a
+/// statement about whatever task the user last ran. Unlike `CommandCenterRunningIndicator`, this
+/// is rendered unconditionally by its pages and self-gates on `localStorageNotice` — a corrupt
+/// store must stay visible whether or not a task happens to be running.
+private struct CommandCenterStorageNotice: View {
+    /// Outer spacing lives here rather than on the call site so a page with no notice gets no
+    /// stray gap — the `else { EmptyView() }` below plus zero applied padding keeps this view
+    /// genuinely absent from its parent stack's layout when there is nothing to say.
+    struct Insets {
+        static let none = Insets(horizontal: 0, bottom: 0)
+        static let tasksPage = Insets(horizontal: 30, bottom: 12)
+
+        var horizontal: CGFloat
+        var bottom: CGFloat
+    }
+
+    @ObservedObject var viewModel: AgentViewModel
+    var insets: Insets = .none
+
+    var body: some View {
+        if let message = viewModel.localStorageNotice {
+            HStack(alignment: .top, spacing: 10) {
+                Image(systemName: "externaldrive.badge.exclamationmark")
+                    .font(.system(size: 13, weight: .semibold))
+                    .foregroundStyle(SonnyTheme.warning)
+
+                Text(message)
+                    .font(SonnyType.itemTitle)
+                    .foregroundStyle(SonnyTheme.sidebarNavText)
+                    .fixedSize(horizontal: false, vertical: true)
+
+                Spacer(minLength: 12)
+
+                Button("Dismiss") {
+                    viewModel.localStorageNotice = nil
+                }
+                .buttonStyle(CommandCenterRowActionStyle())
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .background(CommandCenterPalette.cardSurface)
+            .overlay(
+                RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
+                    .stroke(SonnyTheme.warning.opacity(0.4), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
+            .padding(.horizontal, insets.horizontal)
+            .padding(.bottom, insets.bottom)
+        } else {
+            EmptyView()
+        }
+    }
+}
+
 private struct InsightsView: View {
     @ObservedObject var viewModel: AgentViewModel
 
@@ -537,6 +597,16 @@ private struct InsightsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             CommandCenterPageHeader(title: "Insights")
+
+            CommandCenterStorageNotice(viewModel: viewModel)
+
+            // Insights was the one page with no running indicator, so a task started from
+            // Routines/Workspaces/Tasks was invisible here — the widget hides its own panel for
+            // a `.commandCenter`-origin task, so there was no "something is happening" signal
+            // anywhere while the user sat on this page.
+            if viewModel.isRunning || viewModel.isAwaitingApproval {
+                CommandCenterRunningIndicator(viewModel: viewModel)
+            }
 
             ScrollView {
                 // No "Overview" (or other) section-group label — neither the wireframe nor
@@ -1486,6 +1556,12 @@ private struct RoutinesView: View {
             )
             .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
 
+            // Self-gates on `localStorageNotice`, deliberately outside the running check: a
+            // corrupt store is worth reporting whether or not a task happens to be in flight,
+            // and Command Center is the reliable surface for it since the widget never raises
+            // itself for a storage notice.
+            CommandCenterStorageNotice(viewModel: viewModel)
+
             if viewModel.isRunning || viewModel.isAwaitingApproval {
                 CommandCenterRunningIndicator(viewModel: viewModel)
             }
@@ -1622,6 +1698,12 @@ private struct WorkspacesView: View {
                     .stroke(SonnyTheme.border, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+
+            // Self-gates on `localStorageNotice`, deliberately outside the running check: a
+            // corrupt store is worth reporting whether or not a task happens to be in flight,
+            // and Command Center is the reliable surface for it since the widget never raises
+            // itself for a storage notice.
+            CommandCenterStorageNotice(viewModel: viewModel)
 
             if viewModel.isRunning || viewModel.isAwaitingApproval {
                 CommandCenterRunningIndicator(viewModel: viewModel)
