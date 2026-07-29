@@ -10,6 +10,19 @@ public struct ProcessResult: Sendable, Equatable {
     }
 }
 
+public enum ProcessOutputCapture {
+    /// Drains `pipe` to EOF and *only then* waits for exit. The opposite order deadlocks any
+    /// child that writes more than the OS pipe buffer holds (~64KB): the child blocks in
+    /// `write()` waiting for a reader while the parent blocks in `waitUntilExit()` waiting for
+    /// the child, and neither side can ever proceed. Every combined-output `Process` call in
+    /// this package goes through here so the ordering can't regress site by site.
+    public static func drainThenWait(process: Process, pipe: Pipe) -> String {
+        let data = pipe.fileHandleForReading.readDataToEndOfFile()
+        process.waitUntilExit()
+        return String(data: data, encoding: .utf8) ?? "<unreadable process output>"
+    }
+}
+
 public enum AsyncProcessRunner {
     /// Tracks a `Process` alongside cancellation so `terminate()` is only ever called on an
     /// instance that has actually completed `run()`. `Process.terminate()` raises an uncaught
@@ -100,15 +113,13 @@ public enum AsyncProcessRunner {
                     process.terminate()
                 }
 
-                process.waitUntilExit()
+                let output = ProcessOutputCapture.drainThenWait(process: process, pipe: pipe)
                 box.confirmFinished()
 
                 if box.isCancelled {
                     throw CancellationError()
                 }
 
-                let data = pipe.fileHandleForReading.readDataToEndOfFile()
-                let output = String(data: data, encoding: .utf8) ?? "<unreadable process output>"
                 return ProcessResult(terminationStatus: process.terminationStatus, output: output)
             }.value
         } onCancel: {

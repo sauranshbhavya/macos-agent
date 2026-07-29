@@ -268,6 +268,42 @@ struct LocalStorageSecurityTests {
         let secondResult = try service.deleteAllLocalData()
         #expect(secondResult == LocalDataDeletionResult(deletedFileCount: 0, missingFileCount: 8))
     }
+
+    @Test
+    func localDataDeletionAttemptsEveryFileEvenWhenOneFails() throws {
+        let root = try makeDirectory()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.appendingPathComponent("locked").path)
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        let first = root.appendingPathComponent("first.json")
+        let lockedDirectory = root.appendingPathComponent("locked", isDirectory: true)
+        try FileManager.default.createDirectory(at: lockedDirectory, withIntermediateDirectories: true)
+        let blocked = lockedDirectory.appendingPathComponent("blocked.json")
+        let last = root.appendingPathComponent("last.json")
+        for url in [first, blocked, last] {
+            try Data("{}".utf8).write(to: url)
+        }
+        // A read-only parent directory makes removeItem fail for `blocked` only.
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: lockedDirectory.path)
+
+        let service = LocalDataDeletionService(fileURLs: [first, blocked, last])
+
+        do {
+            _ = try service.deleteAllLocalData()
+            Issue.record("Expected deletion to report the file it could not remove.")
+        } catch let error as LocalDataDeletionError {
+            #expect(error.result.deletedFileCount == 2)
+            #expect(error.result.failedFilePaths == [blocked.path])
+            #expect(error.errorDescription?.contains("blocked.json") == true)
+        }
+
+        // The failure must not stop the files after it from being deleted.
+        #expect(!FileManager.default.fileExists(atPath: first.path))
+        #expect(!FileManager.default.fileExists(atPath: last.path))
+        #expect(FileManager.default.fileExists(atPath: blocked.path))
+    }
 }
 
 private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncryption) throws -> [URL] {

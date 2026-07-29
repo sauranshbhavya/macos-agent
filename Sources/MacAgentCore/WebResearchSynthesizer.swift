@@ -38,6 +38,7 @@ public enum WebResearchNoteDecodingError: Error, Equatable, LocalizedError {
     case invalidJSON
     case unexpectedTopLevelKey(String)
     case unexpectedSourceKey(String)
+    case malformedNote(String)
 
     public var errorDescription: String? {
         switch self {
@@ -47,6 +48,8 @@ public enum WebResearchNoteDecodingError: Error, Equatable, LocalizedError {
             return "Web research note response included unexpected key \(key)."
         case .unexpectedSourceKey(let key):
             return "Web research note source included unexpected key \(key)."
+        case .malformedNote(let detail):
+            return "Web research note response could not be read: \(detail)"
         }
     }
 }
@@ -74,8 +77,8 @@ public enum WebResearchNoteDecoder {
     }
 
     public static func decodeStrict(from data: Data) throws -> WebResearchNote {
-        let object = try JSONSerialization.jsonObject(with: data)
-        guard let dictionary = object as? [String: Any] else {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              let dictionary = object as? [String: Any] else {
             throw WebResearchNoteDecodingError.invalidJSON
         }
 
@@ -93,7 +96,30 @@ public enum WebResearchNoteDecoder {
             }
         }
 
-        return try JSONDecoder().decode(WebResearchNote.self, from: data)
+        // As with AgentPlanDecoder, the key allowlist checks names only — a wrong field type
+        // (keyPoints as a string, say) still reaches the decoder.
+        do {
+            return try JSONDecoder().decode(WebResearchNote.self, from: data)
+        } catch let error as DecodingError {
+            throw WebResearchNoteDecodingError.malformedNote(describe(error))
+        }
+    }
+
+    private static func describe(_ error: DecodingError) -> String {
+        switch error {
+        case .dataCorrupted(let context):
+            return context.debugDescription
+        case .keyNotFound(let key, _):
+            return "missing field \(key.stringValue)"
+        case .typeMismatch(let type, let context):
+            let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+            return "\(path.isEmpty ? "value" : path) is not a \(type)"
+        case .valueNotFound(let type, let context):
+            let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+            return "\(path.isEmpty ? "value" : path) is missing a \(type)"
+        @unknown default:
+            return error.localizedDescription
+        }
     }
 }
 

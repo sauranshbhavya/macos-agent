@@ -521,6 +521,88 @@ struct AgentActionExecutorTests {
     }
 
     @Test
+    func webResearchSynthesizesFromSourcesThatSucceededAndNamesTheSkippedOnes() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let output = root.appendingPathComponent("comparison.md")
+        let first = URL(string: "https://example.com/one")!
+        let second = URL(string: "https://example.com/two")!
+        let unreachable = URL(string: "https://example.com/missing")!
+        // Only the first two are in the fixture map; the third throws on fetch.
+        let pageLoader = webPageLoader(pages: [
+            first.absoluteString: readablePage(url: first, title: "First Source"),
+            second.absoluteString: readablePage(url: second, title: "Second Source")
+        ])
+        let executor = makeExecutor(
+            root: root,
+            webPageLoader: pageLoader,
+            webResearchSynthesizer: StaticWebResearchSynthesizer(
+                note: WebResearchNote(
+                    title: "Comparison",
+                    summary: "The reachable sources differ.",
+                    keyPoints: ["Compare point"],
+                    citations: [],
+                    sources: []
+                )
+            )
+        )
+
+        let result = try await executor.execute(
+            plan: webComparisonPlan(urls: [first, second, unreachable], output: output)
+        ) { _, _ in }
+
+        let markdown = try String(contentsOf: output)
+        #expect(markdown.contains("- [First Source](https://example.com/one)"))
+        #expect(markdown.contains("- [Second Source](https://example.com/two)"))
+        #expect(markdown.contains("## Skipped Sources"))
+        #expect(markdown.contains("https://example.com/missing"))
+        #expect(result.summary.contains("Skipped 1 unreachable source"))
+        #expect(result.summary.contains("https://example.com/missing"))
+    }
+
+    @Test
+    func webResearchStillFailsWhenEverySourceIsUnreachable() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let output = root.appendingPathComponent("comparison.md")
+        let first = URL(string: "https://example.com/one")!
+        let second = URL(string: "https://example.com/two")!
+        let executor = makeExecutor(
+            root: root,
+            webPageLoader: webPageLoader(pages: [:]),
+            webResearchSynthesizer: StaticWebResearchSynthesizer(
+                note: WebResearchNote(
+                    title: "Unused",
+                    summary: "",
+                    keyPoints: [],
+                    citations: [],
+                    sources: []
+                )
+            )
+        )
+
+        await #expect(throws: WebResearchError.self) {
+            _ = try await executor.execute(
+                plan: webComparisonPlan(urls: [first, second], output: output)
+            ) { _, _ in }
+        }
+        #expect(!FileManager.default.fileExists(atPath: output.path))
+    }
+
+    @Test
+    func permissionReadinessReportsRealHotkeyConflict() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root, hotKeyReady: { false })
+
+        let previews = try executor.preview(plan: permissionReadinessPlan())
+
+        let details = previews.flatMap(\.details)
+        #expect(details.contains { $0.contains("Voice hotkey") && $0.contains("Needs action") })
+        #expect(details.contains { $0.contains("Another app is using Control-Option-Space") })
+    }
+
+    @Test
     func webResearchSearchQueryUsesInjectedProviderAndWritesMarkdown() async throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1292,7 +1374,8 @@ struct AgentActionExecutorTests {
         webPageLoader: PublicWebPageLoader? = nil,
         webSearchProvider: (any WebSearchProviding)? = nil,
         webResearchSynthesizer: (any WebResearchSynthesizing)? = nil,
-        now: @escaping () -> Date = Date.init
+        now: @escaping () -> Date = Date.init,
+        hotKeyReady: @escaping () -> Bool = { true }
     ) -> AgentActionExecutor {
         AgentActionExecutor(
             whitelist: PathWhitelist(roots: [root]),
@@ -1313,7 +1396,8 @@ struct AgentActionExecutorTests {
             webPageLoader: webPageLoader,
             webSearchProvider: webSearchProvider,
             webResearchSynthesizer: webResearchSynthesizer,
-            now: now
+            now: now,
+            hotKeyReady: hotKeyReady
         )
     }
 

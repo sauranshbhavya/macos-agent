@@ -233,4 +233,43 @@ struct AgentPlanDecoderTests {
 
         #expect(plan.steps[0].operation == .fetchHNHeadlines)
     }
+
+    @Test
+    func malformedPlannerJSONSurfacesAsSonnysOwnDecodingError() throws {
+        // Truncated JSON: raw Foundation errors must not reach the user.
+        #expect(throws: AgentPlanDecodingError.invalidJSON) {
+            _ = try AgentPlanDecoder.decodeStrict(from: "{\"summary\":\"broken\"")
+        }
+
+        // A wrong field type passes the key allowlist and only fails inside JSONDecoder.
+        let wrongType = """
+        {"summary":"Zip","requiresConfirmation":true,"steps":[{"id":"scan","operation":"scan_select_largest_files","description":"Scan","count":"three"}]}
+        """
+        do {
+            _ = try AgentPlanDecoder.decodeStrict(from: wrongType)
+            Issue.record("Expected a type mismatch to be reported as a plan decoding error.")
+        } catch let error as AgentPlanDecodingError {
+            guard case .malformedPlan(let detail) = error else {
+                Issue.record("Expected .malformedPlan, got \(error).")
+                return
+            }
+            #expect(detail.contains("count"))
+            #expect(error.errorDescription?.contains("could not read") == true)
+        }
+
+        // An unknown operation value likewise decodes past the key check.
+        let unknownOperation = """
+        {"summary":"X","requiresConfirmation":false,"steps":[{"id":"a","operation":"format_hard_drive","description":"No"}]}
+        """
+        #expect(throws: AgentPlanDecodingError.self) {
+            _ = try AgentPlanDecoder.decodeStrict(from: unknownOperation)
+        }
+    }
+
+    @Test
+    func nonJSONResponseBodySurfacesAsMissingOutputText() throws {
+        #expect(throws: PlannerError.missingOutputText) {
+            _ = try OpenAIResponseParser.outputText(from: Data("<html>502 Bad Gateway</html>".utf8))
+        }
+    }
 }

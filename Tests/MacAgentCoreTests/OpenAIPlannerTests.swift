@@ -151,6 +151,83 @@ struct OpenAIPlannerTests {
         #expect(Self.messageText(input[2]) == "use ~/Documents instead")
     }
 
+    @Test
+    func plannerSurfacesBadHTTPStatusWithResponseBody() async throws {
+        PlannerFixtureURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 500,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data(#"{"error":{"message":"upstream exploded"}}"#.utf8))
+        }
+
+        let planner = try OpenAIPlanner(
+            apiKey: "test-key",
+            endpoint: URL(string: "https://api.openai.com/v1/responses")!,
+            session: Self.fixtureSession()
+        )
+
+        do {
+            _ = try await planner.plan(command: "Open Safari")
+            Issue.record("Expected an HTTP 500 to surface as PlannerError.badResponse.")
+        } catch let error as PlannerError {
+            guard case .badResponse(let status, let body) = error else {
+                Issue.record("Expected .badResponse, got \(error).")
+                return
+            }
+            #expect(status == 500)
+            #expect(body.contains("upstream exploded"))
+        }
+    }
+
+    @Test
+    func plannerSurfacesMalformedOutputTextAsItsOwnDecodingError() async throws {
+        PlannerFixtureURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data(#"{"output_text":"{not valid json"}"#.utf8))
+        }
+
+        let planner = try OpenAIPlanner(
+            apiKey: "test-key",
+            endpoint: URL(string: "https://api.openai.com/v1/responses")!,
+            session: Self.fixtureSession()
+        )
+
+        await #expect(throws: AgentPlanDecodingError.invalidJSON) {
+            _ = try await planner.plan(command: "Open Safari")
+        }
+    }
+
+    @Test
+    func plannerSurfacesUnreadableResponseBodyAsMissingOutputText() async throws {
+        PlannerFixtureURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 200,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data("<html>not json at all</html>".utf8))
+        }
+
+        let planner = try OpenAIPlanner(
+            apiKey: "test-key",
+            endpoint: URL(string: "https://api.openai.com/v1/responses")!,
+            session: Self.fixtureSession()
+        )
+
+        await #expect(throws: PlannerError.missingOutputText) {
+            _ = try await planner.plan(command: "Open Safari")
+        }
+    }
+
     private static func messageText(_ message: [String: Any]) -> String? {
         guard let content = message["content"] as? [[String: Any]],
               let first = content.first else {

@@ -21,12 +21,25 @@ public protocol HackerNewsFetching {
     func topHeadlines(limit: Int) async throws -> [HackerNewsHeadline]
 }
 
+public enum BrowserOpeningError: Error, LocalizedError, Equatable {
+    case failedToOpen(String)
+
+    public var errorDescription: String? {
+        switch self {
+        case .failedToOpen(let url):
+            return "macOS could not open \(url) in a browser."
+        }
+    }
+}
+
 public struct WorkspaceBrowserOpener: BrowserOpening {
     public init() {}
 
     @MainActor
     public func open(_ url: URL) async throws {
-        NSWorkspace.shared.open(url)
+        guard NSWorkspace.shared.open(url) else {
+            throw BrowserOpeningError.failedToOpen(url.absoluteString)
+        }
     }
 }
 

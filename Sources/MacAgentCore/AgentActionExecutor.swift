@@ -75,6 +75,7 @@ public final class AgentActionExecutor {
     private let capabilityRegistry: CapabilityRegistry
     private let fileManager: FileManager
     private let now: () -> Date
+    private let hotKeyReady: () -> Bool
 
     public init(
         whitelist: PathWhitelist = PathWhitelist(),
@@ -107,7 +108,8 @@ public final class AgentActionExecutor {
         shortcutRunHistoryStore: ShortcutRunHistoryStore = ShortcutRunHistoryStore(),
         capabilityRegistry: CapabilityRegistry = .default,
         fileManager: FileManager = .default,
-        now: @escaping () -> Date = Date.init
+        now: @escaping () -> Date = Date.init,
+        hotKeyReady: @escaping () -> Bool = { true }
     ) {
         self.whitelist = whitelist
         self.inventory = inventory
@@ -142,6 +144,7 @@ public final class AgentActionExecutor {
         self.capabilityRegistry = capabilityRegistry
         self.fileManager = fileManager
         self.now = now
+        self.hotKeyReady = hotKeyReady
     }
 
     public func prepare(plan: AgentPlan) throws -> PreparedAgentRun {
@@ -725,6 +728,7 @@ public final class AgentActionExecutor {
             shortcutRunHistoryStore: shortcutRunHistoryStore,
             fileManager: fileManager,
             now: now,
+            hotKeyReady: hotKeyReady,
             assessNestedPlan: { [weak self] plan in
                 guard let self else {
                     throw AgentExecutionError.invalidPlan("Executor is unavailable for nested risk assessment.")

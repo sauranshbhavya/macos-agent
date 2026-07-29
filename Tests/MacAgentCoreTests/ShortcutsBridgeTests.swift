@@ -173,6 +173,26 @@ struct ShortcutsBridgeTests {
         #expect(plan.steps[0].shortcutInput == "hello")
     }
 
+    /// `execute` used to resolve the shortcut spec twice on its own (once directly, once via the
+    /// preview it builds), on top of the plan-validation pass in `resolveDefaultOutputs` — three
+    /// `shortcuts list` spawns for one invocation. The adapter's own duplicate is gone; the
+    /// remaining read is the separate validation pass, deliberately left in place.
+    @Test
+    func invokingAShortcutDoesNotResolveTheCatalogTwiceInsideExecute() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let catalog = CountingShortcutCatalog(names: ["Focus Mode"])
+        let executor = makeExecutor(
+            catalog: catalog,
+            invoker: FakeShortcutInvoker(results: [ProcessResult(terminationStatus: 0, output: "")]),
+            history: ShortcutRunHistoryStore(fileURL: root.appendingPathComponent("history.json"))
+        )
+
+        _ = try await executor.execute(plan: shortcutPlan(name: "Focus Mode")) { _, _ in }
+
+        #expect(catalog.readCount == 2)
+    }
+
     private func makeDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("ShortcutsBridgeTests-\(UUID().uuidString)", isDirectory: true)
@@ -214,6 +234,31 @@ private struct FakeShortcutCatalog: ShortcutCatalogProviding {
 
     func shortcutNames() throws -> [String] {
         names
+    }
+}
+
+/// Counts catalog reads. The real catalog shells out to `shortcuts list` on every call, so a
+/// duplicate resolution inside one execute is a real, avoidable subprocess spawn.
+private final class CountingShortcutCatalog: ShortcutCatalogProviding, @unchecked Sendable {
+    private let lock = NSLock()
+    private let names: [String]
+    private var reads = 0
+
+    init(names: [String]) {
+        self.names = names
+    }
+
+    var readCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return reads
+    }
+
+    func shortcutNames() throws -> [String] {
+        lock.lock()
+        reads += 1
+        lock.unlock()
+        return names
     }
 }
 

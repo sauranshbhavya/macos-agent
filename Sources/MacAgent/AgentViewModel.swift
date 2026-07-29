@@ -911,7 +911,8 @@ final class AgentViewModel: ObservableObject {
             snippetStore: snippetStore,
             recentArtifactStore: recentArtifactStore,
             shortcutCatalog: shortcutCatalog,
-            shortcutRunHistoryStore: shortcutRunHistoryStore
+            shortcutRunHistoryStore: shortcutRunHistoryStore,
+            hotKeyReady: { [weak self] in self?.voiceHotKeyReady ?? true }
         )
     }
 

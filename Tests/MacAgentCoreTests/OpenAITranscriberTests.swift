@@ -89,6 +89,85 @@ struct OpenAITranscriberTests {
         #expect(summary.reportedTotalTokens == 0)
         #expect(summary.audioDurationSeconds == 2.5)
     }
+
+    @Test
+    func transcriberSurfacesBadHTTPStatusWithBody() async throws {
+        let audioURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("macagent-transcriber-test-\(UUID().uuidString).m4a")
+        try Data("fake-audio".utf8).write(to: audioURL)
+        defer { try? FileManager.default.removeItem(at: audioURL) }
+
+        FixtureURLProtocol.handler = { request in
+            let response = HTTPURLResponse(
+                url: request.url!,
+                statusCode: 429,
+                httpVersion: nil,
+                headerFields: nil
+            )!
+            return (response, Data(#"{"error":{"message":"rate limited"}}"#.utf8))
+        }
+
+        let transcriber = try Self.makeTranscriber()
+
+        do {
+            _ = try await transcriber.transcribe(audioFileURL: audioURL)
+            Issue.record("Expected HTTP 429 to surface as TranscriptionError.badResponse.")
+        } catch let error as TranscriptionError {
+            guard case .badResponse(let status, let body) = error else {
+                Issue.record("Expected .badResponse, got \(error).")
+                return
+            }
+            #expect(status == 429)
+            #expect(body.contains("rate limited"))
+        }
+    }
+
+    @Test
+    func transcriberRejectsEmptyAndWhitespaceOnlyTranscripts() async throws {
+        let audioURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("macagent-transcriber-test-\(UUID().uuidString).m4a")
+        try Data("fake-audio".utf8).write(to: audioURL)
+        defer { try? FileManager.default.removeItem(at: audioURL) }
+
+        for body in [#"{"text":""}"#, #"{"text":"   \n  "}"#, #"{}"#] {
+            FixtureURLProtocol.handler = { request in
+                let response = HTTPURLResponse(
+                    url: request.url!,
+                    statusCode: 200,
+                    httpVersion: nil,
+                    headerFields: nil
+                )!
+                return (response, Data(body.utf8))
+            }
+
+            let transcriber = try Self.makeTranscriber()
+            await #expect(throws: TranscriptionError.missingText, "body \(body) should be rejected") {
+                _ = try await transcriber.transcribe(audioFileURL: audioURL)
+            }
+        }
+    }
+
+    @Test
+    func transcriberReportsUnreadableAudioFile() async throws {
+        let missingURL = FileManager.default.temporaryDirectory
+            .appendingPathComponent("macagent-missing-\(UUID().uuidString).m4a")
+        let transcriber = try Self.makeTranscriber()
+
+        await #expect(throws: TranscriptionError.unreadableAudioFile(missingURL.path)) {
+            _ = try await transcriber.transcribe(audioFileURL: missingURL)
+        }
+    }
+
+    private static func makeTranscriber() throws -> OpenAITranscriber {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.protocolClasses = [FixtureURLProtocol.self]
+        return try OpenAITranscriber(
+            apiKey: "test-key",
+            endpoint: URL(string: "https://api.openai.com/v1/audio/transcriptions")!,
+            session: URLSession(configuration: configuration),
+            usageRecorder: TaskUsageRecorder()
+        )
+    }
 }
 
 private final class FixtureURLProtocol: URLProtocol {

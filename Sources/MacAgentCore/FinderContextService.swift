@@ -3,6 +3,7 @@ import Foundation
 public enum FinderContextError: Error, LocalizedError, Equatable {
     case noSelection
     case noDirectorySelection
+    case automationPermissionDenied(String)
     case appleScriptFailed(String)
 
     public var errorDescription: String? {
@@ -11,9 +12,22 @@ public enum FinderContextError: Error, LocalizedError, Equatable {
             return "Finder has no selected items."
         case .noDirectorySelection:
             return "Select one folder in Finder first."
+        case .automationPermissionDenied:
+            return "Sonny is not allowed to control Finder. Grant Automation access in System Settings > Privacy & Security > Automation."
         case .appleScriptFailed(let detail):
             return "Could not read Finder selection: \(detail)"
         }
+    }
+
+    /// Classifies an `osascript` failure from its output text. The exit code is a generic 1 for
+    /// every AppleScript error, so the `-1743` authorization marker (user has not granted
+    /// Automation access) is only distinguishable from the stderr text itself.
+    public static func from(output: String) -> FinderContextError {
+        let detail = output.trimmingCharacters(in: .whitespacesAndNewlines)
+        if detail.contains("-1743") || detail.localizedCaseInsensitiveContains("Not authorized to send Apple events") {
+            return .automationPermissionDenied(detail)
+        }
+        return .appleScriptFailed(detail)
     }
 }
 
@@ -45,12 +59,9 @@ public struct AppleScriptFinderContextReader: FinderContextReading {
         process.standardOutput = pipe
         process.standardError = pipe
         try process.run()
-        process.waitUntilExit()
-
-        let data = pipe.fileHandleForReading.readDataToEndOfFile()
-        let output = String(data: data, encoding: .utf8) ?? ""
+        let output = ProcessOutputCapture.drainThenWait(process: process, pipe: pipe)
         guard process.terminationStatus == 0 else {
-            throw FinderContextError.appleScriptFailed(output.trimmingCharacters(in: .whitespacesAndNewlines))
+            throw FinderContextError.from(output: output)
         }
 
         let urls = output

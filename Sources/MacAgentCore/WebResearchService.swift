@@ -10,6 +10,7 @@ public enum WebResearchError: Error, Equatable, LocalizedError {
     case noReadableContent(String)
     case searchProviderNotConfigured
     case noSearchResults(String)
+    case allSourcesFailed([String], String)
 
     public var errorDescription: String? {
         switch self {
@@ -29,6 +30,9 @@ public enum WebResearchError: Error, Equatable, LocalizedError {
             return "Web search provider not configured."
         case .noSearchResults(let query):
             return "No web search results were found for \(query)."
+        case .allSourcesFailed(let urls, let firstReason):
+            let count = urls.count
+            return "None of the \(count) source\(count == 1 ? "" : "s") could be retrieved, so no note was written. First failure: \(firstReason)"
         }
     }
 }

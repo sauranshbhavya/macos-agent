@@ -42,7 +42,13 @@ public struct InvokeShortcutCapabilityAdapter: CapabilityAdapter {
     }
 
     public func preview(plan: AgentPlan, context: CapabilityExecutionContext) throws -> [ActionPreview] {
-        let spec = try spec(in: plan, context: context)
+        try preview(for: try spec(in: plan, context: context), context: context)
+    }
+
+    private func preview(
+        for spec: ShortcutSpec,
+        context: CapabilityExecutionContext
+    ) throws -> [ActionPreview] {
         var details = [
             "Shortcut: \(spec.name)",
             "Risk: \(try context.shortcutRunHistoryStore.hasCleanObservedSuccess(for: spec.name) ? "Sonny-observed successful invocation" : "No Sonny-observed successful invocation yet")"
@@ -70,8 +76,10 @@ public struct InvokeShortcutCapabilityAdapter: CapabilityAdapter {
         context: CapabilityExecutionContext,
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
+        // One spec resolution per execute: each one shells out to `shortcuts list`, which
+        // enumerates the user's whole Shortcuts library.
         let spec = try spec(in: plan, context: context)
-        let previews = try preview(plan: plan, context: context)
+        let previews = try preview(for: spec, context: context)
         log(.act, "Running Shortcut \(spec.name)")
 
         let result: ProcessResult

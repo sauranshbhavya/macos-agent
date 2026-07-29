@@ -133,14 +133,64 @@ public struct WebResearchMarkdownCapabilityAdapter: CapabilityAdapter {
         let spec = try webResearchSpec(in: resolvedPlan, context: context)
         let sourceURLs = try await sourceURLs(for: spec, context: context, log: log)
 
+        // One unreachable source (404, paywall, robots-disallowed) must not throw away the
+        // sources that did load — synthesize from what succeeded and name what was skipped.
         var pages: [ReadableWebPage] = []
+        var skippedSources: [SkippedSource] = []
         for sourceURL in sourceURLs {
             log(.act, "Fetching \(sourceURL.absoluteString)")
-            let page = try await context.webPageLoader.load(rawURL: sourceURL.absoluteString)
-            log(.observe, "Extracted readable content from \(page.sourceURL.absoluteString)")
-            pages.append(page)
+            do {
+                let page = try await context.webPageLoader.load(rawURL: sourceURL.absoluteString)
+                log(.observe, "Extracted readable content from \(page.sourceURL.absoluteString)")
+                pages.append(page)
+            } catch is CancellationError {
+                throw CancellationError()
+            } catch {
+                log(.observe, "Skipped \(sourceURL.absoluteString): \(error.localizedDescription)")
+                skippedSources.append(
+                    SkippedSource(url: sourceURL, reason: error.localizedDescription)
+                )
+            }
         }
 
+        if pages.isEmpty, let firstFailure = skippedSources.first {
+            throw WebResearchError.allSourcesFailed(
+                skippedSources.map(\.url.absoluteString),
+                firstFailure.reason
+            )
+        }
+
+        return try await synthesizeAndWrite(
+            resolvedPlan: resolvedPlan,
+            spec: spec,
+            previews: previews,
+            pages: pages,
+            skippedSources: skippedSources,
+            context: context,
+            log: log
+        )
+    }
+
+    public struct SkippedSource: Equatable, Sendable {
+        public var url: URL
+        public var reason: String
+
+        public init(url: URL, reason: String) {
+            self.url = url
+            self.reason = reason
+        }
+    }
+
+    @MainActor
+    private func synthesizeAndWrite(
+        resolvedPlan: AgentPlan,
+        spec: WebResearchSpec,
+        previews: [ActionPreview],
+        pages: [ReadableWebPage],
+        skippedSources: [SkippedSource],
+        context: CapabilityExecutionContext,
+        log: @escaping (AgentPhase, String) -> Void
+    ) async throws -> AgentRunResult {
         let prompt = WebResearchPromptBuilder.prompt(
             trustedPlan: resolvedPlan,
             trustedUserInstruction: spec.instruction,
@@ -148,11 +198,16 @@ public struct WebResearchMarkdownCapabilityAdapter: CapabilityAdapter {
         )
         log(.act, "Synthesizing web research note")
         let note = try await context.webResearchSynthesizer.synthesize(prompt: prompt)
-        let markdown = WebResearchMarkdownWriter.markdown(note: note, pages: pages, generatedAt: context.now())
+        let markdown = WebResearchMarkdownWriter.markdown(
+            note: note,
+            pages: pages,
+            skippedSources: skippedSources,
+            generatedAt: context.now()
+        )
         try Data(markdown.utf8).write(to: spec.outputURL, options: .atomic)
         log(.summarize, "Saved web research Markdown")
 
-        let summary = summary(for: spec, sourceCount: sourceURLs.count)
+        let summary = summary(for: spec, sourceCount: pages.count, skippedSources: skippedSources)
         return AgentRunResult(
             plan: resolvedPlan,
             previews: previews,
@@ -308,15 +363,26 @@ public struct WebResearchMarkdownCapabilityAdapter: CapabilityAdapter {
         }
     }
 
-    private func summary(for spec: WebResearchSpec, sourceCount: Int) -> String {
+    private func summary(
+        for spec: WebResearchSpec,
+        sourceCount: Int,
+        skippedSources: [SkippedSource]
+    ) -> String {
+        let base: String
         switch spec.input {
         case .urls:
-            return sourceCount == 1
+            base = sourceCount == 1
                 ? "Saved web research Markdown to \(spec.outputURL.path)."
                 : "Saved comparison Markdown for \(sourceCount) sources to \(spec.outputURL.path)."
         case .search(let query, _):
-            return "Saved web research Markdown for search query \"\(query)\" using \(sourceCount) sources to \(spec.outputURL.path)."
+            base = "Saved web research Markdown for search query \"\(query)\" using \(sourceCount) sources to \(spec.outputURL.path)."
         }
+
+        guard !skippedSources.isEmpty else {
+            return base
+        }
+        let names = skippedSources.map(\.url.absoluteString).joined(separator: ", ")
+        return "\(base) Skipped \(skippedSources.count) unreachable source\(skippedSources.count == 1 ? "" : "s"): \(names)."
     }
 
     private func uniqueURLs(_ urls: [URL]) -> [URL] {
@@ -354,7 +420,12 @@ public struct WebResearchMarkdownCapabilityAdapter: CapabilityAdapter {
 }
 
 public enum WebResearchMarkdownWriter {
-    public static func markdown(note: WebResearchNote, pages: [ReadableWebPage], generatedAt: Date) -> String {
+    public static func markdown(
+        note: WebResearchNote,
+        pages: [ReadableWebPage],
+        skippedSources: [WebResearchMarkdownCapabilityAdapter.SkippedSource] = [],
+        generatedAt: Date
+    ) -> String {
         let formatter = ISO8601DateFormatter()
         var lines = [
             "# \(escape(note.title))",
@@ -401,6 +472,18 @@ public enum WebResearchMarkdownWriter {
             }
         }
         lines.append("")
+
+        if !skippedSources.isEmpty {
+            lines.append("## Skipped Sources")
+            lines.append("")
+            lines.append("These sources could not be retrieved, so this note does not cover them:")
+            lines.append("")
+            for skipped in skippedSources {
+                lines.append("- \(skipped.url.absoluteString)")
+                lines.append("  - Reason: \(escape(skipped.reason))")
+            }
+            lines.append("")
+        }
 
         return lines.joined(separator: "\n")
     }

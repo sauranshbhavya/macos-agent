@@ -159,6 +159,7 @@ public enum AgentPlanDecodingError: Error, Equatable, LocalizedError {
     case unexpectedTopLevelKey(String)
     case unexpectedStepKey(String)
     case missingOutputText
+    case malformedPlan(String)
 
     public var errorDescription: String? {
         switch self {
@@ -170,6 +171,8 @@ public enum AgentPlanDecodingError: Error, Equatable, LocalizedError {
             return "Planner returned an unexpected step key: \(key)."
         case .missingOutputText:
             return "Planner response did not include output text."
+        case .malformedPlan(let detail):
+            return "Planner returned a plan Sonny could not read: \(detail)"
         }
     }
 }
@@ -209,8 +212,8 @@ public enum AgentPlanDecoder {
     ]
 
     public static func decodeStrict(from data: Data) throws -> AgentPlan {
-        let object = try JSONSerialization.jsonObject(with: data)
-        guard let dictionary = object as? [String: Any] else {
+        guard let object = try? JSONSerialization.jsonObject(with: data),
+              let dictionary = object as? [String: Any] else {
             throw AgentPlanDecodingError.invalidJSON
         }
 
@@ -226,7 +229,32 @@ public enum AgentPlanDecoder {
             try validateStepKeys(step)
         }
 
-        return try JSONDecoder().decode(AgentPlan.self, from: data)
+        // The key allowlist above only inspects key *names*. An unknown operation value or a
+        // wrong field type still reaches the decoder, and a raw DecodingError would surface to
+        // the user as unreadable Foundation text.
+        do {
+            return try JSONDecoder().decode(AgentPlan.self, from: data)
+        } catch let error as DecodingError {
+            throw AgentPlanDecodingError.malformedPlan(Self.describe(error))
+        }
+    }
+
+    private static func describe(_ error: DecodingError) -> String {
+        switch error {
+        case .dataCorrupted(let context):
+            let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+            return path.isEmpty ? context.debugDescription : "\(path): \(context.debugDescription)"
+        case .keyNotFound(let key, _):
+            return "missing field \(key.stringValue)"
+        case .typeMismatch(let type, let context):
+            let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+            return "\(path.isEmpty ? "value" : path) is not a \(type)"
+        case .valueNotFound(let type, let context):
+            let path = context.codingPath.map(\.stringValue).joined(separator: ".")
+            return "\(path.isEmpty ? "value" : path) is missing a \(type)"
+        @unknown default:
+            return error.localizedDescription
+        }
     }
 
     public static func decodeStrict(from text: String) throws -> AgentPlan {
