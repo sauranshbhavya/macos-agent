@@ -608,16 +608,21 @@ final class AgentViewModel: ObservableObject {
     }
 
     /// Resubmits the last real command as-is. Used by the floating widget's task-level-failure
-    /// retry button (§3.3.6) and by the error notification's "Retry" action.
-    func retryLastCommand() {
+    /// retry button (§3.3.6), the error notification's "Retry" action, and Command Center's own
+    /// failure row.
+    ///
+    /// - Parameter origin: Which surface's retry control this is. Defaults to `.widget` so the
+    ///   two pre-existing call sites keep their original behavior. This used to be hardcoded
+    ///   `.widget` on the reasoning that Command Center had no retry control — true until branch
+    ///   10 checkpoint 1 gave it one. The retry action is a fresh interaction on whichever surface
+    ///   the user pressed it, not an inheritance of the failed task's origin, so the caller states
+    ///   it rather than it being inferred — same convention as `toggleVoiceRecording(origin:)`.
+    func retryLastCommand(origin: TaskOrigin = .widget) {
         guard !lastCommand.isEmpty, !isRunning, !isAwaitingApproval else {
             return
         }
         command = lastCommand
-        // Retry only has a real UI in the widget's own failure panel and the error notification
-        // (Command Center has no retry control) — tagging it `.widget` regardless of the original
-        // failed task's origin reflects that the retry action itself is a widget interaction.
-        start(origin: .widget)
+        start(origin: origin)
     }
 
     /// Submits the clarification answer as a **new** run, not a resume: this appends the Q&A to

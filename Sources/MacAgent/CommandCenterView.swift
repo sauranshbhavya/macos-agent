@@ -417,6 +417,11 @@ private struct TasksFoundationView: View {
                     .stroke(SonnyTheme.border, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+
+            // Pinned below the scroll area rather than placed in the list flow like the storage
+            // notice above: an approval the user has to act on must not be scrollable out of
+            // sight. Self-gates on its own state, so an idle page renders nothing here.
+            CommandCenterAttentionPanel(viewModel: viewModel)
         }
         .padding(.horizontal, 28)
         .padding(.top, 24)
@@ -583,6 +588,229 @@ private struct CommandCenterStorageNotice: View {
     }
 }
 
+/// Command Center's own permission / clarification / failure surface (System A).
+///
+/// Until branch 10 these three states rendered *only* in the floating widget, which was fine while
+/// every task was started by a user who was looking at it. Scheduled routines break that
+/// assumption: a run fires with nobody watching, and the system-notification fallback is
+/// unreachable by deliberate decision (the widget is a permanent overlay with no dismiss action),
+/// so without a Command-Center-native surface an unattended run that needs approval or fails would
+/// be silently stuck. `docs/sonny-ui-backend-roadmap.md` names this a hard prerequisite for
+/// background execution, not polish.
+///
+/// The widget is deliberately **not** changed to compensate: it keeps showing all three states for
+/// every task regardless of origin, so both surfaces can show controls for the same task at once.
+/// That redundancy is the intended trade — the widget is always visible, Command Center is a window
+/// that may be closed, so for an unattended run the widget is the more reliable surface, not the
+/// less. See `AgentViewModel.hasVisibleWidgetPanel`.
+///
+/// Rendered unconditionally by its pages and self-gating on its own state, same as
+/// `CommandCenterStorageNotice` — never wrapped in a caller-side condition. Nesting a self-gating
+/// strip inside `if isRunning || isAwaitingApproval` was a real shipped bug on the storage notice.
+///
+/// Deliberately origin-agnostic: it never reads `activeTaskOrigin`, which is what lets a third
+/// `TaskOrigin` case for scheduled runs land later without touching this view.
+private struct CommandCenterAttentionPanel: View {
+    @ObservedObject var viewModel: AgentViewModel
+
+    /// Mirrors `FloatingWidgetView`'s private `state` precedence exactly (permission >
+    /// clarification > failure, and failure only once the run has actually stopped). Both surfaces
+    /// observe the same view model, so if these two disagreed about which state wins they would
+    /// show contradictory controls for one task.
+    private enum AttentionState {
+        case permission(RiskApprovalRequest)
+        case clarification(String)
+        case failure(String)
+    }
+
+    private var state: AttentionState? {
+        if let approvalRequest = viewModel.approvalRequest {
+            return .permission(approvalRequest)
+        }
+        if let question = viewModel.clarificationQuestion {
+            return .clarification(question)
+        }
+        if let error = viewModel.errorMessage, !viewModel.isRunning {
+            return .failure(error)
+        }
+        return nil
+    }
+
+    var body: some View {
+        if let state {
+            VStack(alignment: .leading, spacing: 10) {
+                switch state {
+                case .permission(let request):
+                    permissionContent(request)
+                case .clarification(let question):
+                    clarificationContent(question)
+                case .failure(let message):
+                    failureContent(message)
+                }
+            }
+            .padding(.horizontal, 12)
+            .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
+            .background(CommandCenterPalette.cardSurface)
+            .overlay(
+                RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
+                    .stroke(accentColor.opacity(0.4), lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
+        } else {
+            EmptyView()
+        }
+    }
+
+    private var accentColor: Color {
+        switch state {
+        case .failure:
+            return SonnyTheme.danger
+        default:
+            return SonnyTheme.warning
+        }
+    }
+
+    @ViewBuilder
+    private func permissionContent(_ request: RiskApprovalRequest) -> some View {
+        header(icon: "exclamationmark.triangle", title: "Approval needed")
+
+        // The same first-approval explainer the widget shows. Included here rather than left as a
+        // widget-only moment because which surface the user happens to be looking at the first
+        // time Sonny asks shouldn't decide whether they get the explanation.
+        if !viewModel.hasCompletedFirstApproval {
+            Text("Sonny always asks first for actions like this — you decide, every time.")
+                .font(SonnyType.micro)
+                .foregroundStyle(SonnyTheme.muted)
+        }
+
+        // `approvalCopy.lines` is the same five-line disclosure the risk engine builds for every
+        // surface — what/why/involves/data-leaves-device/undo. Rendered in full here rather than
+        // condensed to the resource name: Command Center has the vertical room the widget's
+        // single-line treatment doesn't, and this may be the only surface an unattended run's
+        // approval is ever read on.
+        ForEach(Array(request.approvalCopy.lines.enumerated()), id: \.offset) { _, line in
+            Text(line)
+                .font(SonnyType.micro)
+                .foregroundStyle(SonnyTheme.sidebarNavText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+
+        // What raised this above its default tier — "the zip already exists", "this snippet
+        // trigger would be replaced". The widget added this line last branch; without it the
+        // panel asks for approval on a raised tier while showing nothing about what raised it.
+        let escalationReasons = request.assessment.escalations.map(\.reason).joined(separator: " ")
+        if !escalationReasons.isEmpty {
+            Text(escalationReasons)
+                .font(SonnyType.micro)
+                .foregroundStyle(SonnyTheme.warning)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+
+        HStack(spacing: 8) {
+            Spacer(minLength: 0)
+
+            // Same entry points the widget's own permission panel uses — `start()` routes to the
+            // private `approvePendingRun()` through its `isAwaitingApproval` guard, and there is
+            // no separate deny method. Calling anything else here would fork the approval path.
+            Button("Deny") {
+                viewModel.cancelCurrentRun()
+            }
+            .buttonStyle(CommandCenterRowActionStyle())
+
+            Button("Allow") {
+                viewModel.start()
+            }
+            .buttonStyle(CommandCenterRowActionStyle())
+        }
+    }
+
+    @ViewBuilder
+    private func clarificationContent(_ question: String) -> some View {
+        header(icon: "questionmark.circle", title: "Clarification needed")
+
+        Text(question)
+            .font(SonnyType.micro)
+            .foregroundStyle(SonnyTheme.sidebarNavText)
+            .fixedSize(horizontal: false, vertical: true)
+
+        HStack(spacing: 8) {
+            TextField(
+                "",
+                text: $viewModel.clarificationAnswer,
+                prompt: Text("Type your answer…").foregroundStyle(SonnyTheme.muted)
+            )
+            .textFieldStyle(.plain)
+            .font(SonnyType.caption)
+            .foregroundStyle(SonnyTheme.text)
+            .padding(.horizontal, 10)
+            .frame(height: 23)
+            .background(CommandCenterPalette.collectionSurface)
+            .overlay(
+                RoundedRectangle(cornerRadius: SonnyRadius.container)
+                    .stroke(SonnyTheme.cardBorder, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+            .onSubmit { viewModel.submitClarification() }
+
+            Button("Send") {
+                viewModel.submitClarification()
+            }
+            .buttonStyle(CommandCenterRowActionStyle())
+            .disabled(viewModel.clarificationAnswer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+    }
+
+    @ViewBuilder
+    private func failureContent(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(SonnyTheme.danger)
+
+            Text(message)
+                .font(SonnyType.itemTitle)
+                .foregroundStyle(SonnyTheme.sidebarNavText)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 12)
+
+            // `errorMessage` also carries pre-flight errors (empty-command validation, voice
+            // transcription failures) that never reached a real submission, and `retryLastCommand`
+            // silently no-ops for those — so gate on `hasRetryableCommand` rather than shipping a
+            // dead button, same as the widget's failure panel.
+            if viewModel.hasRetryableCommand {
+                Button("Retry") {
+                    viewModel.retryLastCommand(origin: .commandCenter)
+                }
+                .buttonStyle(CommandCenterRowActionStyle())
+            }
+
+            Button("Dismiss") {
+                viewModel.errorMessage = nil
+            }
+            .buttonStyle(CommandCenterRowActionStyle())
+        }
+    }
+
+    /// Permission and clarification share this header; failure has its own single-line layout with
+    /// the message inline, so it deliberately does not use this.
+    @ViewBuilder
+    private func header(icon: String, title: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(SonnyTheme.warning)
+
+            Text(title)
+                .font(SonnyType.bodyEmphasis)
+                .foregroundStyle(SonnyTheme.text)
+
+            Spacer(minLength: 12)
+        }
+    }
+}
+
 private struct InsightsView: View {
     @ObservedObject var viewModel: AgentViewModel
 
@@ -597,6 +825,8 @@ private struct InsightsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             CommandCenterPageHeader(title: "Insights")
+
+            CommandCenterAttentionPanel(viewModel: viewModel)
 
             CommandCenterStorageNotice(viewModel: viewModel)
 
@@ -1556,6 +1786,8 @@ private struct RoutinesView: View {
             )
             .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
 
+            CommandCenterAttentionPanel(viewModel: viewModel)
+
             // Self-gates on `localStorageNotice`, deliberately outside the running check: a
             // corrupt store is worth reporting whether or not a task happens to be in flight,
             // and Command Center is the reliable surface for it since the widget never raises
@@ -1698,6 +1930,8 @@ private struct WorkspacesView: View {
                     .stroke(SonnyTheme.border, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+
+            CommandCenterAttentionPanel(viewModel: viewModel)
 
             // Self-gates on `localStorageNotice`, deliberately outside the running check: a
             // corrupt store is worth reporting whether or not a task happens to be in flight,
