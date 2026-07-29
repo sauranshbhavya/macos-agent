@@ -659,6 +659,157 @@ struct AgentActionExecutorTests {
         #expect(result.summary.contains("Skipped 1 unreachable source"))
     }
 
+    /// The manual-testing case: "focus on writing" reaches the planner, which invents a
+    /// workspace named "writing". That used to fail with "No workspace named writing is saved."
+    /// — a technical error about a concept the user never mentioned.
+    @Test
+    func unknownWorkspaceOrRoutineNameBecomesAClarificationInsteadOfAnError() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try workspaceStore.save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: []))
+        try routineStore.save(
+            StoredRoutine(
+                name: "Morning Setup",
+                steps: [AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")]
+            )
+        )
+        let executor = makeExecutor(root: root, routineStore: routineStore, workspaceStore: workspaceStore)
+
+        let workspacePrepared = try executor.prepare(plan: openWorkspacePlan(name: "writing"))
+        let workspaceQuestion = try #require(workspacePrepared.clarificationQuestion)
+        #expect(workspaceQuestion.contains("writing"))
+        #expect(workspaceQuestion.contains("Research"))
+        // Rewritten into the same shape the planner emits for a real clarification, so every
+        // downstream path treats it identically.
+        #expect(workspacePrepared.plan.steps.map(\.operation) == [.clarify])
+        #expect(workspacePrepared.previews.first?.title == "Clarification needed")
+
+        let routinePrepared = try executor.prepare(plan: runRoutinePlan(name: "deep work"))
+        let routineQuestion = try #require(routinePrepared.clarificationQuestion)
+        #expect(routineQuestion.contains("deep work"))
+        #expect(routineQuestion.contains("Morning Setup"))
+        #expect(routinePrepared.plan.steps.map(\.operation) == [.clarify])
+    }
+
+    @Test
+    func unknownTargetClarificationSaysSoWhenNothingIsSavedYet() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root)
+
+        let prepared = try executor.prepare(plan: openWorkspacePlan(name: "writing"))
+
+        let question = try #require(prepared.clarificationQuestion)
+        #expect(question.contains("haven't saved any workspaces yet"))
+    }
+
+    /// Only the not-found case changes. Everything else these two adapters can fail on must
+    /// still fail, or a real problem would be disguised as a friendly question.
+    @Test
+    func onlyNotFoundBecomesClarificationForWorkspacesAndRoutines() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try workspaceStore.save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://example.com"]))
+        try workspaceStore.save(StoredWorkspace(name: "Broken", apps: ["NotAnAllowlistedApp"], urls: []))
+        try routineStore.save(
+            StoredRoutine(
+                name: "Morning Setup",
+                steps: [AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")]
+            )
+        )
+        let executor = makeExecutor(root: root, routineStore: routineStore, workspaceStore: workspaceStore)
+
+        // A workspace that exists still prepares normally — no clarification.
+        let existing = try executor.prepare(plan: openWorkspacePlan(name: "Research"))
+        #expect(existing.clarificationQuestion == nil)
+        #expect(existing.plan.steps.map(\.operation) == [.openWorkspace])
+
+        let existingRoutine = try executor.prepare(plan: runRoutinePlan(name: "Morning Setup"))
+        #expect(existingRoutine.clarificationQuestion == nil)
+        #expect(existingRoutine.plan.steps.map(\.operation) == [.runRoutine])
+
+        // A missing name is a different error and must still throw.
+        #expect(throws: AutomationStoreError.missingName("Workspace")) {
+            _ = try executor.prepare(plan: openWorkspacePlan(name: nil))
+        }
+        #expect(throws: AutomationStoreError.missingName("Routine")) {
+            _ = try executor.prepare(plan: runRoutinePlan(name: "   "))
+        }
+
+        // A workspace that exists but holds an app outside the allowlist is a real failure,
+        // not a "did you mean" — the user did name something real.
+        #expect(throws: MacAppCatalogError.self) {
+            _ = try executor.prepare(plan: openWorkspacePlan(name: "Broken"))
+        }
+
+        // Ordering: an earlier step's real error must still win. Previewing runs in step order,
+        // so a bad app in step 1 surfaces instead of step 2's unknown workspace name — the
+        // clarification must not pre-empt a genuine problem the user needs to hear about.
+        let chainPlan = AgentPlan(
+            summary: "Open an app and a workspace.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "open-app",
+                    operation: .openApp,
+                    description: "Open an app outside the allowlist.",
+                    appName: "DefinitelyNotAllowlisted"
+                ),
+                AgentStep(
+                    id: "open-workspace",
+                    operation: .openWorkspace,
+                    description: "Open workspace.",
+                    workspaceName: "writing"
+                )
+            ]
+        )
+        #expect(throws: MacAppCatalogError.self) {
+            _ = try executor.prepare(plan: chainPlan)
+        }
+    }
+
+    @Test
+    func unknownRoutineClarificationAlsoHandlesTheEmptyStoreCase() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root)
+
+        let prepared = try executor.prepare(plan: runRoutinePlan(name: "deep work"))
+
+        let question = try #require(prepared.clarificationQuestion)
+        #expect(question.contains("haven't saved any routines yet"))
+        #expect(question.contains("deep work"))
+    }
+
+    /// A store that cannot be read is a load failure, not a not-found — it must keep its own
+    /// error rather than being softened into "you haven't saved any".
+    @Test
+    func unreadableAutomationStoreStillThrowsInsteadOfClarifying() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceURL = root.appendingPathComponent("workspaces.json")
+        try Data("this is not valid encrypted or plaintext JSON".utf8).write(to: workspaceURL)
+        let executor = makeExecutor(
+            root: root,
+            workspaceStore: WorkspaceStore(fileURL: workspaceURL)
+        )
+
+        #expect(throws: (any Error).self) {
+            _ = try executor.prepare(plan: openWorkspacePlan(name: "writing"))
+        }
+        do {
+            _ = try executor.prepare(plan: openWorkspacePlan(name: "writing"))
+        } catch let error as AutomationStoreError {
+            Issue.record("A decode failure must not surface as \(error).")
+        } catch {
+            // Any non-AutomationStoreError (the real decode/decrypt failure) is correct here.
+        }
+    }
+
     @Test
     func permissionReadinessReportsRealHotkeyConflict() throws {
         let root = try makeDirectory()
@@ -1555,6 +1706,36 @@ struct AgentActionExecutorTests {
                     description: "Summarize web article.",
                     outputPath: output.path,
                     targetURL: url.absoluteString
+                )
+            ]
+        )
+    }
+
+    private func openWorkspacePlan(name: String?) -> AgentPlan {
+        AgentPlan(
+            summary: "Open workspace.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "open-workspace",
+                    operation: .openWorkspace,
+                    description: "Open workspace.",
+                    workspaceName: name
+                )
+            ]
+        )
+    }
+
+    private func runRoutinePlan(name: String?) -> AgentPlan {
+        AgentPlan(
+            summary: "Run routine.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "run-routine",
+                    operation: .runRoutine,
+                    description: "Run routine.",
+                    routineName: name
                 )
             ]
         )

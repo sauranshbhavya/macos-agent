@@ -164,8 +164,91 @@ public final class AgentActionExecutor {
             )
             return PreparedAgentRun(plan: resolvedPlan, previews: [preview], clarificationQuestion: question)
         }
-        let previews = try preview(plan: resolvedPlan)
-        return PreparedAgentRun(plan: resolvedPlan, previews: previews)
+
+        do {
+            let previews = try preview(plan: resolvedPlan)
+            return PreparedAgentRun(plan: resolvedPlan, previews: previews)
+        } catch let error as AutomationStoreError {
+            // Only a not-found target converts, and only *after* preview has run, so an earlier
+            // step's real error still wins: previewing in step order is what decides which
+            // problem the user hears about first.
+            guard let question = missingAutomationTargetQuestion(for: error) else {
+                throw error
+            }
+            let clarifyPlan = Self.clarificationPlan(question: question)
+            let preview = ActionPreview(
+                title: "Clarification needed",
+                details: [question]
+            )
+            return PreparedAgentRun(plan: clarifyPlan, previews: [preview], clarificationQuestion: question)
+        }
+    }
+
+    /// Turns a planner-invented workspace/routine name into a clarification instead of a hard
+    /// failure. Asked something vague like "focus on writing", the planner will confidently emit
+    /// `open_workspace(workspaceName: "writing")`; letting that reach the adapter produced
+    /// "No workspace named writing is saved." — a technical error about a concept the user never
+    /// raised. Mirrors how the instant resolver already turns an unknown Shortcut name into a
+    /// clarification rather than a failure (spec §4A.7).
+    ///
+    /// Deliberately narrow: **only** a name that matches nothing becomes a clarification. A
+    /// missing/empty name, an unreadable store, a malformed plan, or an unresolvable app inside
+    /// a workspace that does exist all still throw exactly as before.
+    private func missingAutomationTargetQuestion(for error: AutomationStoreError) -> String? {
+        switch error {
+        case .missingWorkspace(let name):
+            return missingTargetQuestion(
+                name: name,
+                kind: "workspace",
+                savedNames: (try? workspaceStore.loadAll())?.values.map(\.name)
+            )
+        case .missingRoutine(let name):
+            return missingTargetQuestion(
+                name: name,
+                kind: "routine",
+                savedNames: (try? routineStore.loadAll())?.values.map(\.name)
+            )
+        case .missingName, .emptyRoutine, .emptyWorkspace, .unsafeRoutineStep:
+            // Every other automation-store failure keeps its own error. A missing name, an
+            // empty definition, or an unsafe nested step are real problems, not "did you mean".
+            return nil
+        }
+    }
+
+    private func missingTargetQuestion(name: String, kind: String, savedNames: [String]?) -> String? {
+        let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let savedNames else {
+            // The store could not be read at all. That is a load failure with its own
+            // surfacing — do not disguise it as "you never saved this".
+            return nil
+        }
+
+        let sorted = savedNames.sorted { $0.localizedCaseInsensitiveCompare($1) == .orderedAscending }
+        guard !sorted.isEmpty else {
+            return "I don't have a \(kind) called \"\(trimmed)\" saved — you haven't saved any \(kind)s yet. What would you like me to do instead?"
+        }
+
+        let shown = sorted.prefix(5).joined(separator: ", ")
+        let remainder = sorted.count > 5 ? ", and \(sorted.count - 5) more" : ""
+        return "I don't have a \(kind) called \"\(trimmed)\" saved — did you mean one of: \(shown)\(remainder)? Or would you like to do something else?"
+    }
+
+    /// Same shape the planner emits for a genuine clarification, so every downstream path
+    /// (risk assessment, the widget's clarification panel, prior-task context) treats this
+    /// identically to one rather than needing a second notion of "needs clarification".
+    private static func clarificationPlan(question: String) -> AgentPlan {
+        AgentPlan(
+            summary: question,
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(
+                    id: "clarify-missing-automation-target",
+                    operation: .clarify,
+                    description: question,
+                    question: question
+                )
+            ]
+        )
     }
 
     public func assessRisk(plan: AgentPlan) throws -> CapabilityRiskAssessment {

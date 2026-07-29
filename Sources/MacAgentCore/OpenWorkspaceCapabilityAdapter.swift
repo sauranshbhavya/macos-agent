@@ -16,7 +16,7 @@ public struct OpenWorkspaceCapabilityAdapter: CapabilityAdapter {
             AgentTool(
                 operation: .openWorkspace,
                 name: "Open saved workspace",
-                description: "Open every app and URL saved in a named workspace.",
+                description: "Open every app and URL saved in a named workspace. Use only when the user names a workspace they have actually saved; do not infer a workspace name from vague activity phrasing such as \"focus on writing\" or \"get into research mode\" — ask a clarifying question instead.",
                 requiredFields: ["workspaceName"],
                 sideEffects: ["open apps", "open browser"],
                 dryRunBehavior: "Show apps and URLs that would open.",

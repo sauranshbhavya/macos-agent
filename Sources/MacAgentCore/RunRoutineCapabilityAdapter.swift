@@ -16,7 +16,7 @@ public struct RunRoutineCapabilityAdapter: CapabilityAdapter {
             AgentTool(
                 operation: .runRoutine,
                 name: "Run saved routine",
-                description: "Load a saved routine by name and execute its registered steps with the same validation and logging as normal plans.",
+                description: "Load a saved routine by name and execute its registered steps with the same validation and logging as normal plans. Use only when the user names a routine they have actually saved; do not infer a routine name from vague activity phrasing such as \"start my day\" — ask a clarifying question instead.",
                 requiredFields: ["routineName"],
                 sideEffects: ["depends on saved routine"],
                 dryRunBehavior: "Preview the saved routine without executing its steps.",

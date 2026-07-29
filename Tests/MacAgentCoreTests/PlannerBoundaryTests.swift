@@ -237,7 +237,7 @@ private let expectedDefaultPlannerDescription = """
   dry run: Show the routine name and nested steps without saving.
   examples: Teach Sonny a routine called morning setup that opens Safari and Notes
 - run_routine: Run saved routine
-  description: Load a saved routine by name and execute its registered steps with the same validation and logging as normal plans.
+  description: Load a saved routine by name and execute its registered steps with the same validation and logging as normal plans. Use only when the user names a routine they have actually saved; do not infer a routine name from vague activity phrasing such as "start my day" — ask a clarifying question instead.
   required fields: routineName
   side effects: depends on saved routine
   dry run: Preview the saved routine without executing its steps.
@@ -249,7 +249,7 @@ private let expectedDefaultPlannerDescription = """
   dry run: Show the workspace apps and URLs without saving.
   examples: Create a workspace called research with Safari, VS Code, and https://github.com
 - open_workspace: Open saved workspace
-  description: Open every app and URL saved in a named workspace.
+  description: Open every app and URL saved in a named workspace. Use only when the user names a workspace they have actually saved; do not infer a workspace name from vague activity phrasing such as "focus on writing" or "get into research mode" — ask a clarifying question instead.
   required fields: workspaceName
   side effects: open apps, open browser
   dry run: Show apps and URLs that would open.
