@@ -469,9 +469,15 @@ public final class AgentActionExecutor {
         _ = try workflow(in: plan)
         var resolvedPlan = plan
 
-        if resolvedPlan.steps.contains(where: { $0.operation == .createZip }) {
+        if resolvedPlan.steps.contains(where: { [.scanSelectLargestFiles, .createZip].contains($0.operation) }) {
             resolvedPlan = try capabilityRegistry
                 .adapter(for: .scanSelectLargestFiles)
+                .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext())
+        }
+
+        if resolvedPlan.steps.contains(where: { [.scanDocx, .convertDocxToPDF].contains($0.operation) }) {
+            resolvedPlan = try capabilityRegistry
+                .adapter(for: .scanDocx)
                 .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext())
         }
 
@@ -615,21 +621,33 @@ public final class AgentActionExecutor {
         return names.isEmpty ? "Prepared Sonny action" : names.joined(separator: ", ")
     }
 
+    private static let dataEgressOperations: Set<AgentOperation> = [
+        .openHackerNews,
+        .fetchHNHeadlines,
+        .webToMarkdown,
+        .openAppSearchURL,
+        .openURL,
+        .playMedia,
+        .openWorkspace,
+        .invokeShortcut
+    ]
+
     private func dataLeavesDevice(in plan: AgentPlan) -> Bool {
         plan.steps.contains { step in
-            switch step.operation {
-            case .openHackerNews,
-                 .fetchHNHeadlines,
-                 .webToMarkdown,
-                 .openAppSearchURL,
-                 .openURL,
-                 .playMedia,
-                 .openWorkspace,
-                 .invokeShortcut:
+            if Self.dataEgressOperations.contains(step.operation) {
                 return true
-            default:
+            }
+            guard step.operation == .runRoutine else {
                 return false
             }
+            // A saved routine can wrap egress steps, so the outer .runRoutine step alone says
+            // nothing. Stored routines cannot themselves contain .runRoutine (rejected at save
+            // time), so one level is enough. A routine that fails to load surfaces through the
+            // adapter's assessRisk before this copy is built.
+            guard let routine = try? routineStore.routine(named: step.routineName ?? "") else {
+                return false
+            }
+            return routine.steps.contains { Self.dataEgressOperations.contains($0.operation) }
         }
     }
 
@@ -750,6 +768,7 @@ public final class AgentActionExecutor {
     ) async throws -> AgentRunResult {
         var summaries: [String] = []
         var suggestions: [RunSuggestion] = []
+        var previews: [ActionPreview] = []
         var previousArtifactPath: String?
 
         for segment in try segmentPlans(in: plan) {
@@ -757,6 +776,9 @@ public final class AgentActionExecutor {
             let result = try await execute(plan: resolved, log: log)
             summaries.append(result.summary)
             suggestions.append(contentsOf: result.suggestions)
+            // Accumulate each segment's real result previews — re-running previewChain after
+            // execution would re-resolve default output paths and misreport what was written.
+            previews.append(contentsOf: result.previews)
             if let producedPath = result.previews.flatMap(\.writes).last {
                 previousArtifactPath = producedPath
             } else if let suggestionPath = result.suggestions.last?.value {
@@ -764,9 +786,8 @@ public final class AgentActionExecutor {
             }
         }
 
-        let preview = try previewChain(plan)
         let summary = summaries.joined(separator: " ")
-        return AgentRunResult(plan: plan, previews: preview, summary: summary, suggestions: suggestions)
+        return AgentRunResult(plan: plan, previews: previews, summary: summary, suggestions: suggestions)
     }
 
     private func segmentPlans(in plan: AgentPlan) throws -> [AgentPlan] {

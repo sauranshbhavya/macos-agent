@@ -4,6 +4,10 @@ import Foundation
 public protocol DocumentConverting {
     var isAvailable: Bool { get }
     var modeName: String { get }
+    /// Whether conversion destinations use the `.mock.pdf` placeholder naming. Must agree with
+    /// what `convert(_:log:)` actually writes — destination naming is derived from the injected
+    /// converter, never from a separately-constructed default instance.
+    var usesMockNaming: Bool { get }
     func convert(_ records: [DocxRecord], log: @escaping (String) -> Void) async throws -> [DocxRecord]
 }
 
@@ -42,6 +46,10 @@ public struct MicrosoftWordDocumentConverter: DocumentConverting {
 
     public var modeName: String {
         "Microsoft Word AppleScript"
+    }
+
+    public var usesMockNaming: Bool {
+        false
     }
 
     public func convert(_ records: [DocxRecord], log: @escaping (String) -> Void) async throws -> [DocxRecord] {
@@ -138,6 +146,10 @@ public struct MockDocumentConverter: DocumentConverting {
         "Mock DOCX placeholder"
     }
 
+    public var usesMockNaming: Bool {
+        true
+    }
+
     public func convert(_ records: [DocxRecord], log: @escaping (String) -> Void) async throws -> [DocxRecord] {
         guard isAvailable else {
             throw DocumentConversionError.wordUnavailable
@@ -182,6 +194,10 @@ public struct AutoDocumentConverter: DocumentConverting {
 
     public var modeName: String {
         word.isAvailable ? word.modeName : mock.modeName
+    }
+
+    public var usesMockNaming: Bool {
+        word.isAvailable ? word.usesMockNaming : mock.usesMockNaming
     }
 
     public func convert(_ records: [DocxRecord], log: @escaping (String) -> Void) async throws -> [DocxRecord] {

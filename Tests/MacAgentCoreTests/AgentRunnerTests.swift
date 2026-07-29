@@ -1254,6 +1254,7 @@ private struct NoopFileOpener: FileOpening {
 private struct FakeDocumentConverter: DocumentConverting {
     var isAvailable: Bool { true }
     var modeName: String { "Fake converter" }
+    var usesMockNaming: Bool { false }
 
     func convert(_ records: [DocxRecord], log: @escaping (String) -> Void) async throws -> [DocxRecord] {
         records.filter { !$0.skippedBecausePDFExists }

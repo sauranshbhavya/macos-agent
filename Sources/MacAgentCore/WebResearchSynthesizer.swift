@@ -247,10 +247,10 @@ public enum WebResearchPromptBuilder {
             "Published: \(escapeObserved(page.publishedDate ?? "unknown"))",
             "Headings: \(escapeObserved(page.headings.joined(separator: " | ")))",
             "Links:",
-            page.links.map { "- \(escapeObserved($0.text)): \($0.url.absoluteString)" }.joined(separator: "\n"),
+            page.links.map { "- \(escapeObserved($0.text)): \(escapeObservedURL($0.url))" }.joined(separator: "\n"),
             "Images:",
             page.images.map { image in
-                "- \(escapeObserved(image.altText ?? "image")): \(image.url.absoluteString)"
+                "- \(escapeObserved(image.altText ?? "image")): \(escapeObservedURL(image.url))"
             }.joined(separator: "\n"),
             "Citations:",
             page.citations.map { "- \(escapeObserved($0))" }.joined(separator: "\n"),
@@ -259,10 +259,27 @@ public enum WebResearchPromptBuilder {
         ].filter { !$0.isEmpty }
 
         return """
-        \(observedBeginDelimiter) id=\(escapeAttribute(id)) source_url=\(page.sourceURL.absoluteString) retrieved_at=\(formatter.string(from: page.retrievedAt))
+        \(observedBeginDelimiter) id=\(escapeAttribute(id)) source_url=\(escapeObservedURL(page.sourceURL)) retrieved_at=\(formatter.string(from: page.retrievedAt))
         \(metadataLines.joined(separator: "\n"))
         \(observedEndDelimiter) id=\(escapeAttribute(id))
         """
+    }
+
+    /// Neutralizes wrapper delimiters that appear inside a URL. Unlike `escapeObserved`, the
+    /// replacement must keep the URL parseable, so the delimiter substring is percent-encoded
+    /// in place instead of bracketed with spaces and punctuation.
+    private static func escapeObservedURL(_ url: URL) -> String {
+        var value = url.absoluteString
+        for delimiter in [
+            observedBeginDelimiter,
+            observedEndDelimiter,
+            trustedInstructionBeginDelimiter,
+            trustedInstructionEndDelimiter
+        ] {
+            let encoded = delimiter.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? delimiter
+            value = value.replacingOccurrences(of: delimiter, with: encoded)
+        }
+        return value
     }
 
     private static func escapeObserved(_ value: String) -> String {

@@ -11,19 +11,22 @@ public struct InstantCommandResolver: Sendable {
     private let routineStore: RoutineStore
     private let workspaceStore: WorkspaceStore
     private let shortcutCatalog: any ShortcutCatalogProviding
+    private let appCatalog: MacAppCatalog
 
     public init(
         snippetStore: SnippetStore = SnippetStore(),
         recentArtifactStore: RecentArtifactStore = RecentArtifactStore(),
         routineStore: RoutineStore = RoutineStore(),
         workspaceStore: WorkspaceStore = WorkspaceStore(),
-        shortcutCatalog: any ShortcutCatalogProviding = ProcessShortcutCatalog()
+        shortcutCatalog: any ShortcutCatalogProviding = ProcessShortcutCatalog(),
+        appCatalog: MacAppCatalog = .default
     ) {
         self.snippetStore = snippetStore
         self.recentArtifactStore = recentArtifactStore
         self.routineStore = routineStore
         self.workspaceStore = workspaceStore
         self.shortcutCatalog = shortcutCatalog
+        self.appCatalog = appCatalog
     }
 
     public func resolve(command rawCommand: String) -> InstantCommandResolution? {
@@ -119,12 +122,36 @@ public struct InstantCommandResolver: Sendable {
     }
 
     private func quickDispatchResolution(in command: String) -> InstantCommandResolution? {
-        if let routine = savedRoutine(matching: explicitRoutineCandidates(in: command)) {
+        let routineCandidates = routineLaunchCandidates(in: command)
+        let workspaceCandidates = workspaceLaunchCandidates(in: command)
+
+        // Kind-prefixed forms ("run routine X", "open workspace X") are unambiguous and stay
+        // instant.
+        if let routine = savedRoutine(matching: routineCandidates.explicit) {
             return .plan(runRoutinePlan(routine))
         }
-
-        if let workspace = savedWorkspace(matching: explicitWorkspaceCandidates(in: command)) {
+        if let workspace = savedWorkspace(matching: workspaceCandidates.explicit) {
             return .plan(openWorkspacePlan(workspace))
+        }
+
+        // Direct-prefixed forms ("open X", "run X", "start X", "launch X") are ambiguous: the
+        // same name can be a saved routine, a saved workspace, or an allowlisted app. On any
+        // collision, step aside (nil) so the planner interprets the command instead of one
+        // meaning silently auto-running.
+        let directRoutine = savedRoutine(matching: routineCandidates.direct)
+        let directWorkspace = savedWorkspace(matching: workspaceCandidates.direct)
+        let namesAllowlistedApp = (routineCandidates.direct + workspaceCandidates.direct)
+            .contains { (try? appCatalog.resolve($0)) != nil }
+
+        switch (directRoutine, directWorkspace) {
+        case (.some, .some):
+            return nil
+        case (.some(let routine), nil):
+            return namesAllowlistedApp ? nil : .plan(runRoutinePlan(routine))
+        case (nil, .some(let workspace)):
+            return namesAllowlistedApp ? nil : .plan(openWorkspacePlan(workspace))
+        case (nil, nil):
+            break
         }
 
         let routine = savedRoutine(matching: [command])
@@ -141,7 +168,7 @@ public struct InstantCommandResolver: Sendable {
         }
     }
 
-    private func explicitRoutineCandidates(in command: String) -> [String] {
+    private func routineLaunchCandidates(in command: String) -> LaunchCandidateSet {
         launchCandidates(
             in: command,
             kind: "routine",
@@ -150,7 +177,7 @@ public struct InstantCommandResolver: Sendable {
         )
     }
 
-    private func explicitWorkspaceCandidates(in command: String) -> [String] {
+    private func workspaceLaunchCandidates(in command: String) -> LaunchCandidateSet {
         launchCandidates(
             in: command,
             kind: "workspace",
@@ -159,32 +186,42 @@ public struct InstantCommandResolver: Sendable {
         )
     }
 
+    private struct LaunchCandidateSet {
+        var explicit: [String]
+        var direct: [String]
+    }
+
     private func launchCandidates(
         in command: String,
         kind: String,
         directPrefixes: [String],
         kindPrefixes: [String]
-    ) -> [String] {
+    ) -> LaunchCandidateSet {
         let lowered = command.lowercased()
-        var candidates: [String] = []
+        var explicitCandidates: [String] = []
+        var directCandidates: [String] = []
 
         for prefix in kindPrefixes {
             if lowered.hasPrefix("\(prefix) ") {
-                candidates.append(String(command.dropFirst(prefix.count)))
+                explicitCandidates.append(String(command.dropFirst(prefix.count)))
             }
         }
 
         for prefix in directPrefixes {
             if lowered.hasPrefix("\(prefix) ") {
                 let remainder = String(command.dropFirst(prefix.count))
-                candidates.append(remainder)
+                directCandidates.append(remainder)
                 if remainder.lowercased().hasSuffix(" \(kind)") {
-                    candidates.append(String(remainder.dropLast(kind.count + 1)))
+                    // "run X routine" names its kind just like "run routine X" does.
+                    explicitCandidates.append(String(remainder.dropLast(kind.count + 1)))
                 }
             }
         }
 
-        return uniqueLaunchCandidates(candidates.flatMap { [$0, strippedLaunchArticle($0)] })
+        return LaunchCandidateSet(
+            explicit: uniqueLaunchCandidates(explicitCandidates.flatMap { [$0, strippedLaunchArticle($0)] }),
+            direct: uniqueLaunchCandidates(directCandidates.flatMap { [$0, strippedLaunchArticle($0)] })
+        )
     }
 
     private func savedRoutine(matching candidates: [String]) -> StoredRoutine? {
@@ -276,11 +313,28 @@ public struct InstantCommandResolver: Sendable {
                 return ""
             }
             if lowered.hasPrefix("\(prefix) ") {
-                return String(command.dropFirst(prefix.count))
+                let remainder = String(command.dropFirst(prefix.count))
                     .trimmingCharacters(in: .whitespacesAndNewlines)
+                return looksLikeRunningAppName(remainder) ? remainder : nil
             }
         }
         return nil
+    }
+
+    /// Heuristic guard so the broad verbs ("focus", "activate", bare "switch") only claim
+    /// commands whose object plausibly names an app. "focus on writing my essay" or
+    /// "activate dark mode" must fall through to the planner instead of dead-ending on
+    /// running-app matching.
+    private func looksLikeRunningAppName(_ remainder: String) -> Bool {
+        let words = remainder.split(separator: " ")
+        guard !words.isEmpty, words.count <= 3 else {
+            return false
+        }
+        let leadingStopWords: Set<String> = ["on", "to", "in", "at", "the", "a", "an", "my"]
+        if leadingStopWords.contains(words[0].lowercased()) {
+            return false
+        }
+        return words.last?.lowercased() != "mode"
     }
 
     private func recentArtifactRequest(in command: String) -> RecentArtifactRequest? {

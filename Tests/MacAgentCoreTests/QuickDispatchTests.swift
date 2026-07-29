@@ -33,6 +33,55 @@ struct QuickDispatchTests {
     }
 
     @Test
+    func directLaunchCollisionsDeferToThePlanner() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try workspaceStore.save(StoredWorkspace(name: "Slack", apps: ["Notes"], urls: []))
+        try routineStore.save(StoredRoutine(name: "Deep Work", steps: [openSafariStep()]))
+        try workspaceStore.save(StoredWorkspace(name: "Deep Work", apps: ["Safari"], urls: []))
+        let resolver = InstantCommandResolver(routineStore: routineStore, workspaceStore: workspaceStore)
+
+        // A workspace named like an allowlisted app: "open Slack" is ambiguous and must reach
+        // the planner, while the explicit kind-prefixed form stays instant.
+        #expect(resolver.resolve(command: "open Slack") == nil)
+        guard case .plan(let workspacePlan) = resolver.resolve(command: "open workspace Slack") else {
+            Issue.record("Expected explicit workspace launch to resolve locally.")
+            return
+        }
+        #expect(workspacePlan.steps[0].workspaceName == "Slack")
+
+        // The same name saved as both a routine and a workspace: direct prefixes are ambiguous.
+        #expect(resolver.resolve(command: "start Deep Work") == nil)
+        guard case .plan(let routinePlan) = resolver.resolve(command: "run routine Deep Work") else {
+            Issue.record("Expected explicit routine launch to resolve locally.")
+            return
+        }
+        #expect(routinePlan.steps[0].routineName == "Deep Work")
+    }
+
+    @Test
+    func broadRunningAppPrefixesOnlyClaimPlausibleAppNames() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let resolver = InstantCommandResolver(
+            routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
+            workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        )
+
+        #expect(resolver.resolve(command: "focus on writing my essay") == nil)
+        #expect(resolver.resolve(command: "activate dark mode") == nil)
+
+        guard case .plan(let plan) = resolver.resolve(command: "switch to Safari") else {
+            Issue.record("Expected a plain app name to keep resolving locally.")
+            return
+        }
+        #expect(plan.steps.map(\.operation) == [.switchRunningApp])
+        #expect(plan.steps[0].appName == "Safari")
+    }
+
+    @Test
     func instantRoutineWithTierTwoNestedStepStillRequiresApproval() async throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }

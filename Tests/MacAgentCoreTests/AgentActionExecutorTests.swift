@@ -151,6 +151,196 @@ struct AgentActionExecutorTests {
     }
 
     @Test
+    func finderSelectionInputIsPinnedOnceAcrossPrepareAndExecute() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folderA = root.appendingPathComponent("A", isDirectory: true)
+        let folderB = root.appendingPathComponent("B", isDirectory: true)
+        try FileManager.default.createDirectory(at: folderA, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: folderB, withIntermediateDirectories: true)
+        try write(String(repeating: "a", count: 2048), to: folderA.appendingPathComponent("from-a.txt"))
+        try write(String(repeating: "b", count: 2048), to: folderB.appendingPathComponent("from-b.txt"))
+
+        let reader = SequenceFinderContextReader(responses: [[folderA], [folderB]])
+        let archiver = CapturingZipArchiver()
+        let executor = makeExecutor(root: root, zipArchiver: archiver, finderContextReader: reader)
+        let plan = AgentPlan(
+            summary: "Zip largest files in the selected folder.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "scan",
+                    operation: .scanSelectLargestFiles,
+                    description: "Scan selected folder",
+                    count: 1,
+                    contextSource: .finderSelection
+                ),
+                AgentStep(
+                    id: "zip",
+                    operation: .createZip,
+                    description: "Zip selected folder",
+                    contextSource: .finderSelection
+                )
+            ]
+        )
+
+        let prepared = try executor.prepare(plan: plan)
+        let result = try await executor.execute(plan: prepared.plan) { _, _ in }
+
+        #expect(reader.callCount == 1)
+        #expect(archiver.capturedFiles.map(\.lastPathComponent) == ["from-a.txt"])
+        #expect(result.previews.first?.details.contains { $0.contains("from-a.txt") } == true)
+        let pinnedInput = prepared.plan.steps.first?.inputPath ?? ""
+        #expect(
+            URL(fileURLWithPath: pinnedInput).resolvingSymlinksInPath()
+                == folderA.resolvingSymlinksInPath()
+        )
+    }
+
+    @Test
+    func runRoutineResultPreviewsReportTheFileActuallyWritten() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try routineStore.save(
+            StoredRoutine(
+                name: "Morning Notes",
+                steps: [
+                    AgentStep(
+                        id: "draft",
+                        operation: .createLocalDraft,
+                        description: "Create note",
+                        draftTitle: "Morning Note",
+                        draftContent: "Hello"
+                    )
+                ]
+            )
+        )
+        let clock = TickingClock()
+        let executor = makeExecutor(root: root, routineStore: routineStore, now: clock.next)
+        let plan = AgentPlan(
+            summary: "Run routine Morning Notes.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "run",
+                    operation: .runRoutine,
+                    description: "Run routine",
+                    routineName: "Morning Notes"
+                )
+            ]
+        )
+
+        let result = try await executor.execute(plan: plan) { _, _ in }
+
+        let reportedWrites = result.previews.flatMap(\.writes)
+        #expect(!reportedWrites.isEmpty)
+        #expect(reportedWrites.allSatisfy { FileManager.default.fileExists(atPath: $0) })
+    }
+
+    @Test
+    func chainedRunRoutineThenOpenArtifactUsesTheRealWrittenPath() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try routineStore.save(
+            StoredRoutine(
+                name: "Morning Notes",
+                steps: [
+                    AgentStep(
+                        id: "draft",
+                        operation: .createLocalDraft,
+                        description: "Create note",
+                        draftTitle: "Morning Note",
+                        draftContent: "Hello"
+                    )
+                ]
+            )
+        )
+        let clock = TickingClock()
+        let fileOpener = RecordingFileOpener()
+        let executor = makeExecutor(
+            root: root,
+            fileOpener: fileOpener,
+            routineStore: routineStore,
+            now: clock.next
+        )
+        let plan = AgentPlan(
+            summary: "Run routine and open the result.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "run",
+                    operation: .runRoutine,
+                    description: "Run routine",
+                    routineName: "Morning Notes"
+                ),
+                AgentStep(
+                    id: "open",
+                    operation: .openGeneratedArtifact,
+                    description: "Open the generated note"
+                )
+            ]
+        )
+
+        _ = try await executor.execute(plan: plan) { _, _ in }
+
+        #expect(fileOpener.openedFiles.count == 1)
+        #expect(fileOpener.openedFiles.allSatisfy { FileManager.default.fileExists(atPath: $0.path) })
+    }
+
+    @Test
+    func runRoutineWrappingOpenURLReportsDataLeavingDevice() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try routineStore.save(
+            StoredRoutine(
+                name: "Standup",
+                steps: [
+                    AgentStep(
+                        id: "open",
+                        operation: .openURL,
+                        description: "Open the standup board",
+                        targetURL: "https://example.com/standup"
+                    )
+                ]
+            )
+        )
+        let executor = makeExecutor(root: root, routineStore: routineStore)
+        let plan = AgentPlan(
+            summary: "Run routine Standup.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "run",
+                    operation: .runRoutine,
+                    description: "Run routine",
+                    routineName: "Standup"
+                )
+            ]
+        )
+
+        let assessment = try executor.assessRisk(plan: plan)
+
+        #expect(assessment.approvalCopy?.dataLeavesDevice == true)
+    }
+
+    @Test
+    func docxPreviewDestinationNamingMatchesInjectedConverter() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("docx-b", to: root.appendingPathComponent("b.docx"))
+        let executor = makeExecutor(root: root, documentConverter: MockDocumentConverter())
+
+        let preview = try executor.preview(plan: docxPlan(root: root))
+
+        #expect(preview.first?.details.contains("Converter: Mock DOCX placeholder") == true)
+        #expect(preview.first?.writes.isEmpty == false)
+        #expect(preview.first?.writes.allSatisfy { $0.hasSuffix(".mock.pdf") } == true)
+    }
+
+    @Test
     func docxPreviewCanUseSelectedFinderFolderContext() throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
@@ -1101,7 +1291,8 @@ struct AgentActionExecutorTests {
         workspaceStore: WorkspaceStore? = nil,
         webPageLoader: PublicWebPageLoader? = nil,
         webSearchProvider: (any WebSearchProviding)? = nil,
-        webResearchSynthesizer: (any WebResearchSynthesizing)? = nil
+        webResearchSynthesizer: (any WebResearchSynthesizing)? = nil,
+        now: @escaping () -> Date = Date.init
     ) -> AgentActionExecutor {
         AgentActionExecutor(
             whitelist: PathWhitelist(roots: [root]),
@@ -1121,7 +1312,8 @@ struct AgentActionExecutorTests {
             workspaceStore: workspaceStore ?? WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json")),
             webPageLoader: webPageLoader,
             webSearchProvider: webSearchProvider,
-            webResearchSynthesizer: webResearchSynthesizer
+            webResearchSynthesizer: webResearchSynthesizer,
+            now: now
         )
     }
 
@@ -1408,6 +1600,7 @@ private struct RecordingZipArchiver: ZipArchiving {
 private struct FakeDocumentConverter: DocumentConverting {
     var isAvailable: Bool { true }
     var modeName: String { "Fake converter" }
+    var usesMockNaming: Bool { false }
 
     func convert(_ records: [DocxRecord], log: @escaping (String) -> Void) async throws -> [DocxRecord] {
         var converted: [DocxRecord] = []
@@ -1519,6 +1712,56 @@ private struct FakeFinderContextReader: FinderContextReading {
             throw FinderContextError.noSelection
         }
         return selection
+    }
+}
+
+/// Advances two seconds per call so every `Timestamp.fileSafe` read mints a different name —
+/// any code path that re-derives a "default" output name after the fact becomes visible.
+private final class TickingClock {
+    private var current = Date(timeIntervalSince1970: 1_783_526_400)
+
+    func next() -> Date {
+        defer { current = current.addingTimeInterval(2) }
+        return current
+    }
+}
+
+/// Returns a different Finder selection on each call, so a test can prove the selection is
+/// resolved exactly once and pinned rather than re-read live at every phase.
+private final class SequenceFinderContextReader: FinderContextReading, @unchecked Sendable {
+    private let lock = NSLock()
+    private let responses: [[URL]]
+    private var calls = 0
+
+    init(responses: [[URL]]) {
+        self.responses = responses
+    }
+
+    var callCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return calls
+    }
+
+    func selectedItems() throws -> [URL] {
+        lock.lock()
+        defer {
+            calls += 1
+            lock.unlock()
+        }
+        return responses[min(calls, responses.count - 1)]
+    }
+}
+
+@MainActor
+private final class CapturingZipArchiver: ZipArchiving {
+    private(set) var capturedFiles: [URL] = []
+    private(set) var capturedOutputURL: URL?
+
+    func createArchive(sourceFolder: URL, files: [URL], outputURL: URL) async throws {
+        capturedFiles = files
+        capturedOutputURL = outputURL
+        try "fake zip".data(using: .utf8)?.write(to: outputURL)
     }
 }
 

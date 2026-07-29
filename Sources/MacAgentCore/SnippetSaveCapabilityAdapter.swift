@@ -31,6 +31,20 @@ public struct SnippetSaveCapabilityAdapter: CapabilityAdapter {
         ]
     }
 
+    public func assessRisk(plan: AgentPlan, context: CapabilityExecutionContext) throws -> CapabilityRiskAssessment {
+        let spec = try snippetSpec(in: plan)
+        let escalations = try context.snippetStore.findExactTrigger(spec.trigger) != nil
+            ? [
+                CapabilityRiskEscalation(
+                    fromTier: metadata.defaultRiskTier,
+                    toTier: .tier3,
+                    reason: "Snippet trigger \(spec.trigger) already exists and would be replaced."
+                )
+            ]
+            : []
+        return CapabilityRiskAssessment(defaultTier: metadata.defaultRiskTier, escalations: escalations)
+    }
+
     public func execute(
         plan: AgentPlan,
         context: CapabilityExecutionContext,
