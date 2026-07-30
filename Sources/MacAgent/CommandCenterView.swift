@@ -554,37 +554,62 @@ private struct CommandCenterStorageNotice: View {
     var insets: Insets = .none
 
     var body: some View {
-        if let message = viewModel.localStorageNotice {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "externaldrive.badge.exclamationmark")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(SonnyTheme.warning)
-
-                Text(message)
-                    .font(SonnyType.itemTitle)
-                    .foregroundStyle(SonnyTheme.sidebarNavText)
-                    .fixedSize(horizontal: false, vertical: true)
-
-                Spacer(minLength: 12)
-
-                Button("Dismiss") {
-                    viewModel.localStorageNotice = nil
-                }
-                .buttonStyle(CommandCenterRowActionStyle())
+        if let message = viewModel.scheduledRunNotice {
+            noticeRow(
+                icon: "clock.arrow.circlepath",
+                tint: SonnyTheme.accent,
+                message: message
+            ) {
+                viewModel.scheduledRunNotice = nil
             }
-            .padding(.horizontal, 12)
-            .padding(.vertical, 10)
-            .background(CommandCenterPalette.cardSurface)
-            .overlay(
-                RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
-                    .stroke(SonnyTheme.warning.opacity(0.4), lineWidth: 1)
-            )
-            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
-            .padding(.horizontal, insets.horizontal)
-            .padding(.bottom, insets.bottom)
+        } else if let message = viewModel.localStorageNotice {
+            noticeRow(
+                icon: "externaldrive.badge.exclamationmark",
+                tint: SonnyTheme.warning,
+                message: message
+            ) {
+                viewModel.localStorageNotice = nil
+            }
         } else {
             EmptyView()
         }
+    }
+
+    /// Both notices share one row treatment. The scheduler's takes precedence when both are set:
+    /// it reports something that already happened without the user present, which is more urgent
+    /// than an ambient storage problem that will still be true after they dismiss this.
+    @ViewBuilder
+    private func noticeRow(
+        icon: String,
+        tint: Color,
+        message: String,
+        dismiss: @escaping () -> Void
+    ) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(tint)
+
+            Text(message)
+                .font(SonnyType.itemTitle)
+                .foregroundStyle(SonnyTheme.sidebarNavText)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 12)
+
+            Button("Dismiss", action: dismiss)
+                .buttonStyle(CommandCenterRowActionStyle())
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(CommandCenterPalette.cardSurface)
+        .overlay(
+            RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
+                .stroke(tint.opacity(0.4), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
+        .padding(.horizontal, insets.horizontal)
+        .padding(.bottom, insets.bottom)
     }
 }
 

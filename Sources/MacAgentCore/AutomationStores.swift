@@ -112,6 +112,21 @@ public enum AutomationStoreError: Error, LocalizedError, Equatable {
     }
 }
 
+/// Every mutating method here is a *single synchronous call* that loads, mutates and writes without
+/// suspending. That is the property that makes routine-store writes safe, and it is load-bearing as
+/// of branch 10: the scheduler's timer is this codebase's first background writer, so for the first
+/// time two writers can genuinely want the same record. Until now every writer was user-initiated
+/// and therefore serialized by human pace, which is why the identical read-modify-write shape in
+/// the other stores has never been reachable.
+///
+/// A lock is deliberately *not* the fix. All callers are `@MainActor` (`AgentViewModel` and the
+/// capability adapters), so the actor already serializes whole synchronous calls against each
+/// other; a lock would add nothing. What a lock would *also* not fix is the real hazard, so state
+/// it plainly: **never read a routine, `await` anything, then write it back.** A read-modify-write
+/// spanning a suspension point can interleave with another main-actor task and silently drop the
+/// loser's write, and no amount of locking inside these methods prevents that. If a caller needs a
+/// new kind of mutation, add a method here rather than reading, awaiting and saving at the call
+/// site.
 public struct RoutineStore: @unchecked Sendable {
     public let fileURL: URL
     private let fileManager: FileManager
@@ -167,6 +182,26 @@ public struct RoutineStore: @unchecked Sendable {
             throw AutomationStoreError.missingRoutine(rawName)
         }
         routine.schedule = schedule
+        routines[key] = routine
+        try write(routines)
+    }
+
+    /// Moves the scheduler's catch-up baseline past a handled occurrence.
+    ///
+    /// Called for *every* resolved occurrence, not just successful ones — a run, a tier-3 skip, a
+    /// clarification skip and a too-stale skip all advance it. Without that, the next tick would
+    /// resolve the same occurrence again and the scheduler would retry a routine it just refused,
+    /// or re-report the same missed run, once per tick forever.
+    ///
+    /// A no-op for a routine with no schedule rather than an error: a schedule can legitimately be
+    /// cleared between the decision and the write.
+    public func advanceScheduleBaseline(routineNamed rawName: String, to occurrence: Date) throws {
+        let key = try normalizedName(rawName, kind: "Routine")
+        var routines = try loadAll()
+        guard var routine = routines[key], routine.schedule != nil else {
+            return
+        }
+        routine.schedule?.lastRunAt = occurrence
         routines[key] = routine
         try write(routines)
     }

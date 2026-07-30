@@ -1,24 +1,43 @@
 import Foundation
 
+/// What started a task. Scheduled runs are recorded in history like any other task — they are real
+/// work Sonny did, and a scheduled run that failed has to be debuggable — but they are excluded
+/// from the two Insights stats that are claims about the *user's* habit rather than about Sonny's
+/// output. See `TaskHistoryInsights`.
+public enum TaskTrigger: String, Codable, Equatable, Sendable {
+    case manual
+    case scheduled
+}
+
 public struct CompletedTaskRecord: Codable, Equatable, Sendable {
     public var command: String
     public var startedAt: Date
     public var completedAt: Date
     public var outcomeStatus: PriorTaskOutcomeStatus
     public var workspaceName: String?
+    /// Optional so a task-history.json written before routine scheduling still decodes — the same
+    /// `decodeIfPresent` reasoning as `StoredWorkspace.teamType`. Absent means manual, which is
+    /// what every pre-existing record is.
+    public var trigger: TaskTrigger?
 
     public init(
         command: String,
         startedAt: Date,
         completedAt: Date,
         outcomeStatus: PriorTaskOutcomeStatus,
-        workspaceName: String? = nil
+        workspaceName: String? = nil,
+        trigger: TaskTrigger? = nil
     ) {
         self.command = command.trimmingCharacters(in: .whitespacesAndNewlines)
         self.startedAt = startedAt
         self.completedAt = completedAt
         self.outcomeStatus = outcomeStatus
         self.workspaceName = workspaceName
+        self.trigger = trigger
+    }
+
+    public var effectiveTrigger: TaskTrigger {
+        trigger ?? .manual
     }
 }
 

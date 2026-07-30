@@ -47,6 +47,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         observeNotificationTriggers()
         observeWidgetPresentationRequests()
+        // Starts the schedule tick and the wake observer. Deliberately after the notification and
+        // presentation subscriptions above: the first check runs synchronously inside this call, so
+        // anything it reports must already have somewhere to go.
+        viewModel.startRoutineScheduling()
 
         // Both surfaces open on launch, matching Wispr Flow's reference behavior — a real,
         // confirmed tradeoff: this also makes the Dock icon a permanent fixture, since
@@ -112,6 +116,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // successful task read as failed. They still deserve the same fallback notification when
         // no Sonny surface is in front of the user, so subscribe to the new channel too.
         viewModel.$localStorageNotice
+            .compactMap { $0 }
+            .sink { [weak self] message in
+                guard let self, !isAnySonnySurfaceVisible else {
+                    return
+                }
+                notificationService.postErrorNotification(message: message)
+            }
+            .store(in: &cancellables)
+
+        // Scheduled runs are the one case this fallback was actually designed for: the run happens
+        // with nobody watching, which is precisely when no Sonny surface is in front of the user.
+        // Unlike the two above, this path is genuinely reachable rather than accepted-as-unused.
+        viewModel.$scheduledRunNotice
             .compactMap { $0 }
             .sink { [weak self] message in
                 guard let self, !isAnySonnySurfaceVisible else {

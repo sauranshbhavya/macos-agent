@@ -945,3 +945,29 @@ Open questions for the next chat (required, write "none" if true):
 - `.previewOnly` is dead but costs a maintained branch. Delete `Tier2ApprovalMode` entirely, or build the Settings control that makes it reachable?
 
 Next branch: `feature/routine-scheduling` (branch 10 per the roadmap above), unchanged by this pass.
+
+### Branch: feature/routine-scheduling
+Status: in progress (checkpoints 1-3 of 4 complete)
+Date: 2026-07-29
+Implementing agent: Claude
+Reviewing agent: pending
+
+**Cross-feature decisions made during checkpoint 3, recorded here because both are the kind of interaction that reads as correct in isolation and wrong in sequence.**
+
+**1. A scheduled run is excluded from the follow-up-correction context, and from retry, and from every other property that describes "your last task."**
+
+The interaction: the user runs "zip my desktop files", their 9am routine fires a minute later, they type "use ~/Downloads instead" — and the correction lands on the routine. It is internally consistent (the scheduled run genuinely *was* the last task) but a silent redirect caused by something the user did not initiate is a different thing from correcting your own last action, and nothing in the phrasing reveals that a background event moved the target.
+
+Decided: exclude. `performScheduledRun` does not call `recordPriorTaskContext` and does not touch `lastCommand`. Two reasons, and the second is the stronger one: a routine's steps are *saved and fixed*, so there is no command text for a correction to rewrite — correcting a scheduled routine run is not merely confusing, it is not a meaningful operation. The cost named against this option (you cannot follow up on a failed scheduled run) is therefore largely theoretical; the answer to a broken routine is to edit the routine.
+
+`lastCommand` and `priorTaskContext` move together because `lastCommand` also feeds `hasRetryableCommand`/`retryLastCommand()`. Proven by re-introducing the old behavior: the widget's Retry button then produced "Approval needed before Sonny can act." for a routine instead of re-running the user's own calculation.
+
+**The same review found a worse instance of the same class.** `performScheduledRun` was also clearing `errorMessage`, `finalSummary`, `suggestions`, `plan`, `stepStatuses`, `preparedRun` and the usage summary — so a background run silently erased an unresolved error, or an "open the file" suggestion the user had not acted on yet. Fixed under one principle rather than case by case: **an unattended run must not mutate any state that describes the user's own last task.** `isRunning` and `activeTaskOrigin` are the only exceptions, both needed during the run for re-entrancy and widget gating, and origin is restored on the way out. A scheduled run's entire output is `scheduledRunNotice`, task history, and the routine's run history. `runningCommandDisplayText` reads a separate `scheduledRunDisplayCommand` so Command Center's running indicator still has a label without claiming `lastCommand`.
+
+Consequence worth stating: scheduled-run token usage is no longer reset/published into `taskUsageSummary`, so it is not separately metered today. Accurate per-run metering is branch 13's territory; under-reporting it is preferable to misattributing it to the user's next task.
+
+**2. `scheduledRunNotice` persists until dismissed rather than clearing on the user's next task.**
+
+The premise of the whole feature is that the user was not watching when the run happened, which makes their next action the moment they are *most* likely to be about to read it — clearing it exactly then would defeat the point. It has an explicit Dismiss control, and this matches `localStorageNotice`, which is already not cleared by task starts. A newer scheduled run overwrites an older notice, which is correct: the recent one is the one that matters.
+
+Both behaviors are pinned by tests in `Tests/MacAgentTests/ScheduledRoutineRunTests.swift`, each verified by re-introducing the old behavior and watching them fail.
