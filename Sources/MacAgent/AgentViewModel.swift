@@ -1134,6 +1134,11 @@ final class AgentViewModel: ObservableObject {
         AgentActionExecutor(
             routineStore: routineStore,
             workspaceStore: workspaceStore,
+            // `try?` is the degradation path, not error swallowing: construction only throws for
+            // a missing TAVILY_API_KEY, and nil falls back to `UnavailableWebSearchProvider`'s
+            // existing "Web search provider not configured." error. Constructed per executor like
+            // everything else here, so a key exported after launch works on the next run.
+            webSearchProvider: try? TavilySearchProvider(),
             usageRecorder: taskUsageRecorder,
             snippetStore: snippetStore,
             recentArtifactStore: recentArtifactStore,
