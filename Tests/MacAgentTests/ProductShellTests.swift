@@ -620,7 +620,110 @@ struct ProductShellTests {
         #expect(commandCenter.viewModel.savedWorkspaces.first?.apps == ["Safari", "Notes"])
     }
 
+    @Test
+    func deletingARoutineRemovesItFromTheSharedViewModelAndTheStore() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try fixture.routineStore.save(StoredRoutine(name: "Morning", steps: [productShellInertStep]))
+        try fixture.routineStore.save(StoredRoutine(name: "Evening", steps: [productShellInertStep]))
+        fixture.viewModel.refreshSavedItems()
+
+        fixture.viewModel.deleteRoutine(try fixture.routineStore.routine(named: "Morning"))
+
+        #expect(fixture.viewModel.savedRoutines.map(\.name) == ["Evening"])
+        #expect(try fixture.routineStore.loadAll().keys.sorted() == ["evening"])
+        #expect(fixture.viewModel.errorMessage == nil)
+    }
+
+    /// The in-flight guard covers both halves of "a task is in flight" — a run in progress and a
+    /// run parked at an approval — because an approved run re-reads the store when it resumes.
+    /// `deleteLocalData` guards only `isRunning`; these pin that the delete methods deliberately
+    /// use the broader condition every other in-flight gate already uses.
+    @Test
+    func deletingARoutineWhileATaskIsRunningIsRefused() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try fixture.routineStore.save(StoredRoutine(name: "Morning", steps: [productShellInertStep]))
+        fixture.viewModel.refreshSavedItems()
+        fixture.viewModel.isRunning = true
+
+        fixture.viewModel.deleteRoutine(try fixture.routineStore.routine(named: "Morning"))
+
+        #expect(fixture.viewModel.errorMessage?.contains("Finish or stop the current task") == true)
+        #expect(try fixture.routineStore.loadAll().count == 1)
+    }
+
+    @Test
+    func deletingARoutineWhileAwaitingApprovalIsRefused() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try fixture.routineStore.save(StoredRoutine(name: "Morning", steps: [productShellInertStep]))
+        fixture.viewModel.refreshSavedItems()
+        fixture.viewModel.approvalRequest = RiskApprovalRequest(
+            assessment: CapabilityRiskAssessment(defaultTier: .tier2),
+            requirement: .explicitApproval
+        )
+
+        fixture.viewModel.deleteRoutine(try fixture.routineStore.routine(named: "Morning"))
+
+        #expect(fixture.viewModel.errorMessage?.contains("Finish or stop the current task") == true)
+        #expect(try fixture.routineStore.loadAll().count == 1)
+    }
+
+    @Test
+    func deletingAWorkspaceRemovesItFromTheSharedViewModelAndTheStore() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: []))
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Client Work", apps: ["Mail"], urls: []))
+        fixture.viewModel.refreshSavedItems()
+
+        fixture.viewModel.deleteWorkspace(try fixture.workspaceStore.workspace(named: "Research"))
+
+        #expect(fixture.viewModel.savedWorkspaces.map(\.name) == ["Client Work"])
+        #expect(try fixture.workspaceStore.loadAll().keys.sorted() == ["client work"])
+        #expect(fixture.viewModel.errorMessage == nil)
+    }
+
+    @Test
+    func deletingAWorkspaceWhileATaskIsRunningIsRefused() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: []))
+        fixture.viewModel.refreshSavedItems()
+        fixture.viewModel.isRunning = true
+
+        fixture.viewModel.deleteWorkspace(try fixture.workspaceStore.workspace(named: "Research"))
+
+        #expect(fixture.viewModel.errorMessage?.contains("Finish or stop the current task") == true)
+        #expect(try fixture.workspaceStore.loadAll().count == 1)
+    }
+
+    @Test
+    func deletingAWorkspaceWhileAwaitingApprovalIsRefused() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: []))
+        fixture.viewModel.refreshSavedItems()
+        fixture.viewModel.approvalRequest = RiskApprovalRequest(
+            assessment: CapabilityRiskAssessment(defaultTier: .tier2),
+            requirement: .explicitApproval
+        )
+
+        fixture.viewModel.deleteWorkspace(try fixture.workspaceStore.workspace(named: "Research"))
+
+        #expect(fixture.viewModel.errorMessage?.contains("Finish or stop the current task") == true)
+        #expect(try fixture.workspaceStore.loadAll().count == 1)
+    }
+
 }
+
+private let productShellInertStep = AgentStep(
+    id: "calc",
+    operation: .calculateUtility,
+    description: "Calculate 1 + 1.",
+    searchQuery: "1 + 1"
+)
 
 @MainActor
 private func render(window: NSWindow, to fileURL: URL) throws {

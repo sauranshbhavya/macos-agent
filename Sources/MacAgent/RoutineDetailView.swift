@@ -177,6 +177,7 @@ struct RoutineDetailView: View {
     @ObservedObject var viewModel: AgentViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var unattendedAdvisory: String?
+    @State private var showDeleteRoutineConfirmation = false
     /// Uncommitted schedule edits. Nil means "showing what is saved".
     ///
     /// Checkpoint 5 wrote every control straight through to the store. Manual testing found that
@@ -239,6 +240,7 @@ struct RoutineDetailView: View {
                     scheduleControls
                     unattendedTrustControl
                     runControl
+                    deleteRoutineControl
 
                     Spacer(minLength: 24)
                 }
@@ -562,6 +564,37 @@ struct RoutineDetailView: View {
         .disabled(viewModel.isRunning || viewModel.isAwaitingApproval)
         .sonnyPointerCursor()
         .accessibilityLabel("Run \(live.name) now")
+    }
+
+    /// Deleting the whole routine, distinct from "Remove" above, which only clears the schedule.
+    /// That one deliberately has no confirmation because a removed schedule is recoverable by
+    /// making another; this deletes the routine's steps and run history too, which nothing can
+    /// bring back, so it gets the same confirmation dialog "Delete Local Data" uses.
+    private var deleteRoutineControl: some View {
+        Button {
+            showDeleteRoutineConfirmation = true
+        } label: {
+            Label("Delete routine", systemImage: "trash")
+        }
+        .buttonStyle(RoutineDetailActionStyle(tone: .danger))
+        .disabled(viewModel.isRunning || viewModel.isAwaitingApproval)
+        .help("Delete this routine")
+        .accessibilityLabel("Delete \(live.name)")
+        .confirmationDialog(
+            "Delete “\(live.name)”?",
+            isPresented: $showDeleteRoutineConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button("Delete Routine", role: .destructive) {
+                viewModel.deleteRoutine(live)
+                // Nothing auto-closes this sheet when its routine disappears — `live` falls back
+                // to the stale presentation snapshot — so the dismiss has to be explicit.
+                dismiss()
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("This deletes “\(live.name)”’s saved steps, schedule, and run history. Past task history mentioning “\(live.name)” is not deleted.")
+        }
     }
 
     /// This view is presented via `.sheet(item:)` with no other dismiss affordance anywhere in the

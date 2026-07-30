@@ -2003,7 +2003,8 @@ private struct WorkspacesView: View {
                                     ],
                                     isRunning: viewModel.isRunning || viewModel.isAwaitingApproval,
                                     open: { viewModel.openWorkspaceWidget(workspace) },
-                                    markAsTeam: { viewModel.markWorkspaceAsTeam(workspace) }
+                                    markAsTeam: { viewModel.markWorkspaceAsTeam(workspace) },
+                                    delete: { viewModel.deleteWorkspace(workspace) }
                                 )
                             }
                         }
@@ -2055,6 +2056,8 @@ private struct WorkspaceCard: View {
     let isRunning: Bool
     let open: () -> Void
     let markAsTeam: () -> Void
+    let delete: () -> Void
+    @State private var showDeleteConfirmation = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -2087,6 +2090,33 @@ private struct WorkspaceCard: View {
             HStack {
                 WorkspaceAppIconStack(icons: presentation.appIcons, accent: accent)
                 Spacer()
+                // Labeled like the card's other controls, not icon-only — and deleting lives here
+                // on the card, unlike a routine's delete in its detail view, because the card *is*
+                // where a workspace's whole content already is: there is no detail view to open,
+                // and building one just to host a delete button would invent a surface to solve a
+                // placement problem.
+                Button {
+                    showDeleteConfirmation = true
+                } label: {
+                    Label("Delete", systemImage: "trash")
+                }
+                .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
+                .disabled(isRunning)
+                .accessibilityLabel("Delete \(presentation.name)")
+                .help("Delete \(presentation.name)")
+                .confirmationDialog(
+                    "Delete “\(presentation.name)”?",
+                    isPresented: $showDeleteConfirmation,
+                    titleVisibility: .visible
+                ) {
+                    Button("Delete Workspace", role: .destructive) {
+                        delete()
+                    }
+                    Button("Cancel", role: .cancel) {}
+                } message: {
+                    Text("This deletes “\(presentation.name)”’s saved apps and URLs. Past task history mentioning “\(presentation.name)” is not deleted.")
+                }
+
                 Button(action: open) {
                     Text("Open")
                 }
@@ -2303,23 +2333,51 @@ private struct CommandCenterHeaderActionStyle: ButtonStyle {
 }
 
 private struct CommandCenterRowActionStyle: ButtonStyle {
+    /// `.danger` carries the same treatment "Delete Local Data" and the routine panel's danger
+    /// buttons already use — danger-tinted label and border over the normal surface — at this
+    /// style's own row-action scale, rather than importing `SonnyButtonStyle`'s larger filled
+    /// block into a card footer built around 23pt controls.
+    enum Tone {
+        case neutral
+        case danger
+    }
+
     @Environment(\.isEnabled) private var isEnabled
+    var tone: Tone = .neutral
 
     func makeBody(configuration: Configuration) -> some View {
         configuration.label
             .font(SonnyType.microEmphasis)
-            .foregroundStyle(SonnyTheme.text.opacity(configuration.isPressed ? 0.68 : 0.92))
+            .foregroundStyle(foreground.opacity(configuration.isPressed ? 0.68 : 0.92))
             .padding(.horizontal, 11)
             .frame(height: 23)
             .background(CommandCenterPalette.buttonSurface)
             .overlay(
                 RoundedRectangle(cornerRadius: SonnyRadius.container)
-                    .stroke(SonnyTheme.cardBorder, lineWidth: 1)
+                    .stroke(border, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
             .sonnyPointerCursor()
             .sonnyHoverHighlight()
             .opacity(isEnabled ? 1 : 0.46)
+    }
+
+    private var foreground: Color {
+        switch tone {
+        case .neutral:
+            return SonnyTheme.text
+        case .danger:
+            return SonnyTheme.danger
+        }
+    }
+
+    private var border: Color {
+        switch tone {
+        case .neutral:
+            return SonnyTheme.cardBorder
+        case .danger:
+            return SonnyTheme.danger.opacity(0.45)
+        }
     }
 }
 

@@ -970,6 +970,43 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
+    /// Permanently deletes a saved routine — steps, schedule, and run history all live under the
+    /// same store key, so all three go together.
+    ///
+    /// Guarded on the full "task in flight" condition, not just `isRunning`: a run paused at an
+    /// approval still holds a prepared plan that re-reads the store when approved, so deleting out
+    /// from under it has the same failure as deleting mid-run. `isRunning || isAwaitingApproval`
+    /// is what `checkScheduledRoutines` and every running-indicator gate already treat as "in
+    /// flight"; `deleteLocalData`'s narrower `isRunning`-only guard predates that convention and
+    /// is left as it is here.
+    func deleteRoutine(_ routine: StoredRoutine) {
+        guard !isRunning, !isAwaitingApproval else {
+            setError("Finish or stop the current task before deleting this routine.")
+            return
+        }
+        do {
+            try routineStore.delete(routineNamed: routine.name)
+            refreshSavedItems()
+        } catch {
+            setError("Could not delete routine: \(error.localizedDescription)")
+        }
+    }
+
+    /// Permanently deletes a saved workspace. See `deleteRoutine` for the in-flight guard's
+    /// rationale.
+    func deleteWorkspace(_ workspace: StoredWorkspace) {
+        guard !isRunning, !isAwaitingApproval else {
+            setError("Finish or stop the current task before deleting this workspace.")
+            return
+        }
+        do {
+            try workspaceStore.delete(workspaceNamed: workspace.name)
+            refreshSavedItems()
+        } catch {
+            setError("Could not delete workspace: \(error.localizedDescription)")
+        }
+    }
+
     func runSuggestion(_ suggestion: RunSuggestion) {
         let url = URL(fileURLWithPath: suggestion.value)
         switch suggestion.kind {
