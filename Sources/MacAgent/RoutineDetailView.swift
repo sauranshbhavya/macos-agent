@@ -138,6 +138,7 @@ struct RoutineDetailView: View {
                         RoutineDetailStepRow(step: step)
                     }
 
+                    scheduleControls
                     unattendedTrustControl
                     runControl
 
@@ -148,6 +149,196 @@ struct RoutineDetailView: View {
         }
         .frame(width: 420, height: 480)
         .liquidGlassPanel(cornerRadius: RoutineDetailTheme.panelRadius, shadowOffset: RoutineDetailTheme.shadowOffset)
+    }
+
+    /// Schedule authoring — **designed rather than matched.**
+    ///
+    /// `11-MainAppRoutines.svg` specifies the list side thoroughly (cadence headers, "Weekly · Mon"
+    /// text, row toggles) but contains no cadence picker, time picker, or create affordance
+    /// anywhere. CLAUDE.md makes wireframe fidelity the baseline for a page that has one, so this
+    /// is a stated exception rather than an unremarked addition: the wireframe shows what a
+    /// schedule *looks like*, never how one is made, and without a creation path nothing else on
+    /// this branch can be reached at all.
+    ///
+    /// It follows what this view already establishes — System B tokens from this file (which
+    /// deliberately keeps its own copy rather than sharing `SonnyWidgetTheme.swift`, per
+    /// `.claude/rules/macagent-ui-conventions.md`), label-plus-control rows matching the toggle
+    /// below, and native controls, which this view already uses for its switch and buttons.
+    ///
+    /// There is no draft state: every control writes through to the store immediately, so what is
+    /// on screen is always what is saved. That also means the pickers only ever exist once a
+    /// schedule does, which is what keeps them structurally unable to produce an invalid one —
+    /// weekday is offered only for weekly, day-of-month only for monthly, and both are bounded to
+    /// what `validate()` accepts. `validate()` stays as the backstop; the UI should never reach it.
+    @ViewBuilder
+    private var scheduleControls: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text("Schedule")
+                .font(RoutineDetailType.sectionLabel)
+                .foregroundStyle(RoutineDetailTheme.text)
+
+            if let schedule = live.schedule {
+                scheduleRow("Repeats") {
+                    Picker("", selection: cadenceBinding(schedule)) {
+                        ForEach(RoutineCadence.allCases, id: \.self) { cadence in
+                            Text(cadence.displayName).tag(cadence)
+                        }
+                    }
+                    .labelsHidden()
+                    .pickerStyle(.segmented)
+                    .frame(width: 210)
+                }
+
+                scheduleRow("At") {
+                    DatePicker("", selection: timeBinding(schedule), displayedComponents: .hourAndMinute)
+                        .labelsHidden()
+                        .datePickerStyle(.field)
+                }
+
+                switch schedule.cadence {
+                case .daily:
+                    EmptyView()
+                case .weekly:
+                    scheduleRow("On") {
+                        Picker("", selection: weekdayBinding(schedule)) {
+                            // 1...7 is exactly the range `validate()` accepts, and the symbols are
+                            // indexed by the same Sunday == 1 convention `Calendar` uses.
+                            ForEach(1...7, id: \.self) { weekday in
+                                Text(Calendar.current.weekdaySymbols[weekday - 1]).tag(weekday)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 140)
+                    }
+                case .monthly:
+                    scheduleRow("Day") {
+                        Picker("", selection: dayOfMonthBinding(schedule)) {
+                            ForEach(1...31, id: \.self) { day in
+                                Text("\(day)").tag(day)
+                            }
+                        }
+                        .labelsHidden()
+                        .frame(width: 140)
+                    }
+                }
+
+                // Day 29-31 does not exist in every month. CP2 accepts those values on purpose and
+                // the scheduler clamps to the last day, but that is worth saying out loud rather
+                // than leaving the user to discover it in February.
+                if schedule.cadence == .monthly, let day = schedule.dayOfMonth, day > 28 {
+                    Text("Months without a \(day)\(ordinalSuffix(day)) run on their last day.")
+                        .font(RoutineDetailType.micro)
+                        .foregroundStyle(RoutineDetailTheme.mutedText)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+
+                Button("Remove schedule") {
+                    viewModel.setRoutineSchedule(live, to: nil)
+                    unattendedAdvisory = nil
+                }
+                .buttonStyle(.plain)
+                .font(RoutineDetailType.micro)
+                .foregroundStyle(RoutineDetailTheme.mutedText)
+                .sonnyPointerCursor()
+            } else {
+                Text("This routine only runs when you ask it to.")
+                    .font(RoutineDetailType.micro)
+                    .foregroundStyle(RoutineDetailTheme.mutedText)
+
+                Button("Add a schedule") {
+                    // Built through `newlyCreated` rather than the initializer so the catch-up
+                    // baseline is anchored to now — otherwise creating a 9am schedule in the
+                    // afternoon reads as "this morning was missed" and fires immediately.
+                    viewModel.setRoutineSchedule(
+                        live,
+                        to: .newlyCreated(cadence: .daily, hour: 9, minute: 0, now: Date())
+                    )
+                }
+                .buttonStyle(.plain)
+                .font(RoutineDetailType.sectionLabel)
+                .foregroundStyle(SonnyTheme.accent)
+                .sonnyPointerCursor()
+            }
+        }
+        .padding(.top, 6)
+    }
+
+    private func scheduleRow<Control: View>(
+        _ label: String,
+        @ViewBuilder control: () -> Control
+    ) -> some View {
+        HStack(spacing: 12) {
+            Text(label)
+                .font(RoutineDetailType.body)
+                .foregroundStyle(RoutineDetailTheme.mutedText)
+                .frame(width: 56, alignment: .leading)
+            control()
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func cadenceBinding(_ schedule: RoutineSchedule) -> Binding<RoutineCadence> {
+        Binding(
+            get: { schedule.cadence },
+            set: { newCadence in
+                var updated = schedule
+                // Fills in whatever the new cadence requires, so switching to Weekly or Monthly
+                // can never leave a schedule `validate()` would reject.
+                updated.setCadence(newCadence, now: Date())
+                viewModel.setRoutineSchedule(live, to: updated)
+            }
+        )
+    }
+
+    private func timeBinding(_ schedule: RoutineSchedule) -> Binding<Date> {
+        Binding(
+            get: {
+                Calendar.current.date(
+                    bySettingHour: schedule.hour,
+                    minute: schedule.minute,
+                    second: 0,
+                    of: Date()
+                ) ?? Date()
+            },
+            set: { newTime in
+                let parts = Calendar.current.dateComponents([.hour, .minute], from: newTime)
+                var updated = schedule
+                updated.hour = parts.hour ?? schedule.hour
+                updated.minute = parts.minute ?? schedule.minute
+                viewModel.setRoutineSchedule(live, to: updated)
+            }
+        )
+    }
+
+    private func weekdayBinding(_ schedule: RoutineSchedule) -> Binding<Int> {
+        Binding(
+            get: { schedule.weekday ?? Calendar.current.component(.weekday, from: Date()) },
+            set: { newWeekday in
+                var updated = schedule
+                updated.weekday = newWeekday
+                viewModel.setRoutineSchedule(live, to: updated)
+            }
+        )
+    }
+
+    private func dayOfMonthBinding(_ schedule: RoutineSchedule) -> Binding<Int> {
+        Binding(
+            get: { schedule.dayOfMonth ?? Calendar.current.component(.day, from: Date()) },
+            set: { newDay in
+                var updated = schedule
+                updated.dayOfMonth = newDay
+                viewModel.setRoutineSchedule(live, to: updated)
+            }
+        )
+    }
+
+    private func ordinalSuffix(_ value: Int) -> String {
+        switch value {
+        case 1, 21, 31: return "st"
+        case 2, 22: return "nd"
+        case 3, 23: return "rd"
+        default: return "th"
+        }
     }
 
     /// The per-routine unattended-run opt-in, deliberately here rather than on the Routines row.

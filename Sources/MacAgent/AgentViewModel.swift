@@ -851,6 +851,17 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
+    /// Creates, replaces, or removes a routine's schedule. Passing nil unschedules it.
+    ///
+    /// The two methods below can only *modify* an existing schedule — both open with a
+    /// `guard let schedule = routine.schedule` — so this is the only path that brings one into
+    /// existence. Callers should build the schedule with `RoutineSchedule.newlyCreated(...)`
+    /// rather than the initializer, so the catch-up baseline is anchored; see that factory for
+    /// what goes wrong otherwise.
+    func setRoutineSchedule(_ routine: StoredRoutine, to schedule: RoutineSchedule?) {
+        applySchedule(schedule, to: routine.name)
+    }
+
     /// Turns a routine's schedule on or off from the Routines row.
     ///
     /// Goes through `RoutineSchedule.setEnabled(_:now:)` rather than assigning `isEnabled`, because
@@ -883,7 +894,7 @@ final class AgentViewModel: ObservableObject {
         return UnattendedTrustAdvisory.warning(forRoutineNamed: routine.name, executor: makeExecutor())
     }
 
-    private func applySchedule(_ schedule: RoutineSchedule, to routineName: String) {
+    private func applySchedule(_ schedule: RoutineSchedule?, to routineName: String) {
         do {
             try routineStore.setSchedule(routineNamed: routineName, to: schedule)
             refreshSavedItems()

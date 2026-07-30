@@ -338,6 +338,117 @@ struct ScheduledRoutineRunTests {
         #expect(try fixture.routineStore.routine(named: "Morning").schedule?.unattendedTrusted == true)
     }
 
+    // MARK: - Schedule authoring
+
+    /// The whole point of checkpoint 5: before it, nothing in the app could bring a schedule into
+    /// existence, so everything else on this branch was unreachable.
+    @Test
+    func creatingAScheduleRoundTripsThroughTheStore() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.routineStore.save(StoredRoutine(name: "Morning", steps: [fixture.inertStep]))
+        let routine = try fixture.routineStore.routine(named: "Morning")
+        #expect(routine.schedule == nil)
+
+        fixture.viewModel.setRoutineSchedule(
+            routine,
+            to: .newlyCreated(cadence: .weekly, hour: 7, minute: 30, weekday: 2, now: fixture.tenAM)
+        )
+
+        let saved = try #require(try fixture.routineStore.routine(named: "Morning").schedule)
+        #expect(saved.cadence == .weekly)
+        #expect(saved.hour == 7)
+        #expect(saved.minute == 30)
+        #expect(saved.weekday == 2)
+        #expect(saved.isEnabled)
+        #expect(fixture.viewModel.savedRoutines.first?.schedule == saved)
+    }
+
+    /// The correctness trap, proven end to end through the real creation path rather than only at
+    /// the factory: a schedule created in the afternoon must not treat that morning's occurrence
+    /// as outstanding and fire an unattended run seconds after being made.
+    @Test
+    func aScheduleCreatedAfterItsRunTimeDoesNotImmediatelyFire() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.routineStore.save(StoredRoutine(name: "Morning", steps: [fixture.inertStep]))
+        let routine = try fixture.routineStore.routine(named: "Morning")
+        let threePM = fixture.nineAM.addingTimeInterval(6 * 60 * 60)
+
+        fixture.viewModel.setRoutineSchedule(
+            routine,
+            to: .newlyCreated(cadence: .daily, hour: 9, minute: 0, unattendedTrusted: true, now: threePM)
+        )
+
+        fixture.viewModel.checkScheduledRoutines(now: threePM)
+        try await fixture.waitForIdle()
+
+        #expect(fixture.viewModel.scheduledRunNotice == nil)
+        #expect(try fixture.routineStore.routine(named: "Morning").effectiveRecentRunDates.isEmpty)
+    }
+
+    @Test
+    func removingAScheduleClearsItAndLeavesTheRoutineIntact() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.saveRoutine(unattendedTrusted: true)
+        let routine = try fixture.routineStore.routine(named: "Morning")
+
+        fixture.viewModel.setRoutineSchedule(routine, to: nil)
+
+        let saved = try fixture.routineStore.routine(named: "Morning")
+        #expect(saved.schedule == nil)
+        #expect(saved.steps.isEmpty == false)
+    }
+
+    /// The two modify-only methods must still work on a schedule that came from the new creation
+    /// path, not just on one built in a test fixture.
+    @Test
+    func theEnabledAndTrustTogglesStillWorkOnACreatedSchedule() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.routineStore.save(StoredRoutine(name: "Morning", steps: [fixture.inertStep]))
+        fixture.viewModel.setRoutineSchedule(
+            try fixture.routineStore.routine(named: "Morning"),
+            to: .newlyCreated(cadence: .daily, hour: 9, minute: 0, now: fixture.tenAM)
+        )
+
+        fixture.viewModel.setRoutineScheduleEnabled(try fixture.routineStore.routine(named: "Morning"), to: false)
+        #expect(try fixture.routineStore.routine(named: "Morning").schedule?.isEnabled == false)
+
+        #expect(
+            fixture.viewModel.setRoutineUnattendedTrust(
+                try fixture.routineStore.routine(named: "Morning"),
+                to: true
+            ) == nil
+        )
+        #expect(try fixture.routineStore.routine(named: "Morning").schedule?.unattendedTrusted == true)
+    }
+
+    /// The UI is built so these cannot be produced — weekday is only offered for weekly, day only
+    /// for monthly, both bounded to the accepted range. `validate()` stays the backstop, and this
+    /// pins that it still refuses what the UI is structurally unable to send.
+    @Test
+    func validationStillRejectsWhatTheAuthoringUIIsUnableToProduce() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.routineStore.save(StoredRoutine(name: "Morning", steps: [fixture.inertStep]))
+
+        #expect(throws: AutomationStoreError.invalidSchedule("A weekly routine needs a weekday.")) {
+            try fixture.routineStore.setSchedule(
+                routineNamed: "Morning",
+                to: RoutineSchedule(cadence: .weekly, hour: 9, minute: 0)
+            )
+        }
+        #expect(throws: AutomationStoreError.invalidSchedule("Run time must be a real time of day.")) {
+            try fixture.routineStore.setSchedule(
+                routineNamed: "Morning",
+                to: RoutineSchedule(cadence: .daily, hour: 25, minute: 0)
+            )
+        }
+        #expect(try fixture.routineStore.routine(named: "Morning").schedule == nil)
+    }
+
     // MARK: - Fixture
 
     private func makeFixture() throws -> Fixture {
@@ -402,6 +513,16 @@ struct ScheduledRoutineRunTests {
                 priorTaskContextStore: PriorTaskContextStore(),
                 taskUsageRecorder: TaskUsageRecorder(),
                 userDefaults: userDefaults
+            )
+        }
+
+        /// Tier 0, pure arithmetic, touches nothing outside the process.
+        var inertStep: AgentStep {
+            AgentStep(
+                id: "calc",
+                operation: .calculateUtility,
+                description: "Calculate 1 + 1.",
+                searchQuery: "1 + 1"
             )
         }
 

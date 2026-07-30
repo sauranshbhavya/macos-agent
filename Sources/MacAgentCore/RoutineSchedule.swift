@@ -84,6 +84,61 @@ public struct RoutineSchedule: Codable, Equatable, Sendable {
         self.lastRunAt = lastRunAt
     }
 
+    /// Builds a schedule for a routine that does not have one, with the catch-up baseline anchored.
+    ///
+    /// **Use this rather than the initializer for anything user-created.** `init` defaults
+    /// `lastRunAt` to nil, and `RoutineScheduler.decision` reads a nil baseline as `.distantPast` —
+    /// so `RoutineSchedule(cadence: .daily, hour: 9, minute: 0, isEnabled: true)` built at 3pm
+    /// resolves *this morning's* 09:00 as outstanding, and either fires an immediate unattended run
+    /// or posts a "did not run at its scheduled time" notice for a schedule that is seconds old.
+    /// That is precisely the hazard `setEnabled(_:now:)` exists to prevent, and it is reachable
+    /// through any creation path that sets `isEnabled` directly. This constructs disabled and then
+    /// goes through `setEnabled`, so there is one anchoring path rather than two.
+    public static func newlyCreated(
+        cadence: RoutineCadence,
+        hour: Int,
+        minute: Int,
+        weekday: Int? = nil,
+        dayOfMonth: Int? = nil,
+        isEnabled: Bool = true,
+        unattendedTrusted: Bool = false,
+        now: Date
+    ) -> RoutineSchedule {
+        var schedule = RoutineSchedule(
+            cadence: cadence,
+            hour: hour,
+            minute: minute,
+            weekday: weekday,
+            dayOfMonth: dayOfMonth,
+            isEnabled: false,
+            unattendedTrusted: unattendedTrusted
+        )
+        schedule.setEnabled(isEnabled, now: now)
+        return schedule
+    }
+
+    /// Switches cadence, filling in whatever the new cadence requires.
+    ///
+    /// Weekly needs a weekday and monthly needs a day of the month; carrying over a nil from the
+    /// previous cadence would produce a schedule `validate()` rejects. Defaulting from `now` means
+    /// switching to Weekly gives "today's weekday", which is the least surprising answer and is
+    /// always in range.
+    public mutating func setCadence(_ newCadence: RoutineCadence, now: Date, calendar: Calendar = .current) {
+        cadence = newCadence
+        switch newCadence {
+        case .daily:
+            break
+        case .weekly:
+            if weekday == nil {
+                weekday = calendar.component(.weekday, from: now)
+            }
+        case .monthly:
+            if dayOfMonth == nil {
+                dayOfMonth = calendar.component(.day, from: now)
+            }
+        }
+    }
+
     /// Flips `isEnabled`, re-anchoring the catch-up baseline on every off → on transition.
     ///
     /// The anchor starts at the moment of enabling rather than at nil/zero because a nil baseline

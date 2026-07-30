@@ -875,7 +875,7 @@ Start in plan mode. Confirm git status is clean on main, confirm the changelog's
 ---
 
 ### Branch: feature/full-repo-correctness-review
-Status: complete
+Status: complete (5 checkpoints)
 Date: 2026-07-29
 Implementing agent: Claude
 Reviewing agent: pending
@@ -971,6 +971,38 @@ Behavior preserved (required, no blanket claims):
 
 Architectural decisions / pitfalls discovered:
 
+**Schedule authoring is a designed element, not a matched one — a stated wireframe exception.**
+Checkpoint 5 was added after checkpoints 1-4 were complete, because the branch had shipped a
+feature nobody could turn on: `RoutineSchedule` was never constructed anywhere in `Sources/`, and
+both `setRoutineScheduleEnabled` and `setRoutineUnattendedTrust` open with
+`guard let schedule = routine.schedule` — they modify a schedule, neither makes one. Every routine
+therefore had `schedule == nil` permanently, which meant no cadence headers, no streak badge, no
+next-run text, no row toggle, no unattended-trust toggle, and a scheduler that never fired. The
+encrypted store ruled out hand-editing `routines.json` as a workaround. This was a hole in the
+checkpoint plan, which was carried forward from the original design audit's four-checkpoint list
+without noticing none of them authored a schedule.
+
+`11-MainAppRoutines.svg` specifies the list side thoroughly but contains no cadence picker, time
+picker, or create affordance anywhere — it shows what a schedule *looks like*, never how one is
+made. CLAUDE.md makes wireframe fidelity the literal baseline for a page that has a wireframe, so
+this is recorded as a reasoned exception: the controls live in `RoutineDetailView` and follow what
+that view already establishes (its own System B token copy, label-plus-control rows matching the
+existing toggle, native controls it already uses). There is no draft state — every control writes
+through immediately, so what is on screen is always what is saved. Awaiting the user's visual review.
+
+**The trap this checkpoint had to avoid, and why the factory exists.** `RoutineSchedule.init`
+defaults `lastRunAt` to nil and `RoutineScheduler.decision` reads a nil baseline as `.distantPast`,
+so `RoutineSchedule(cadence: .daily, hour: 9, minute: 0, isEnabled: true)` built at 3pm resolves
+*that morning's* 09:00 as outstanding — firing an unattended run, or reporting a missed one, for a
+schedule seconds old. That is exactly what checkpoint 2's baseline anchoring exists to prevent,
+reachable through the new creation path. `RoutineSchedule.newlyCreated(...)` constructs disabled and
+then goes through `setEnabled(_:now:)`, so there is one anchoring path rather than two, and the UI
+cannot get it wrong. Verified by bypassing the anchor and watching the suite reproduce the real
+symptom: `.missed(occurrence: 9am)` and a "did not run at its scheduled time" notice on a
+brand-new schedule. `setCadence(_:now:)` fills in whatever a new cadence requires for the same
+reason — the controls are structurally unable to produce a schedule `validate()` would reject, with
+`validate()` kept as the backstop.
+
 **Wireframe fidelity note.** `11-MainAppRoutines.svg` was read directly rather than through `docs/sonny-design-system-reference.md`, per CLAUDE.md. That mattered: the row's second line is the routine's *cadence* ("Daily", "Weekly · Mon", "Monthly · 1st"), not its step list, and the trailing slot holds a next-run string *and* a toggle. An early sorted listing of the SVG's layer ids truncated before `toggle`, which briefly looked like evidence that no toggle existed — checking the markup directly is what corrected it. Layer `streak` confirms the badge is a streak, not a step count.
 
 **The streak counts occurrences, not days.** The wireframe shows 12 for a daily routine, 4 for a weekly one and 3 for a monthly one; those numbers are only coherent if a streak counts consecutive *scheduled occurrences*. A day-based streak — the obvious reading, and the one `TaskHistoryInsights.currentStreakDays` uses — would pin every weekly routine at 1 forever. The two are deliberately different computations answering different questions, and `RoutineStreak` says so in its doc comment.
@@ -996,7 +1028,7 @@ The premise of the whole feature is that the user was not watching when the run 
 Both behaviors are pinned by tests in `Tests/MacAgentTests/ScheduledRoutineRunTests.swift`, each verified by re-introducing the old behavior and watching them fail.
 
 Known limitations / deferred scope:
-- No UI creates a schedule yet. The data model, scheduler, toggle and opt-in are all real, but a routine only gets a schedule if something writes one — `RoutineStore.setSchedule` is the entry point, and a cadence/time picker is the obvious next piece. The row toggle enables and disables an existing schedule; it cannot author one.
+- Schedule authoring is per-routine only, from the detail view. There is no natural-language path ("run my morning routine at 9 every day"), which would be a planner schema change this project treats as high-blast-radius.
 - Scheduled-run token usage is not separately metered. `performScheduledRun` deliberately does not reset or publish `taskUsageSummary`, since doing so would wipe the display of the user's own last task; the cost is that a scheduled run's usage is discarded by the next manual task's reset rather than attributed anywhere. Accurate per-run metering is branch 13's territory.
 - Deleting a routine still does not exist, and its absence is load-bearing: it is one of the two things keeping the scheduler's missing-routine clarification path unreachable. Adding delete means revisiting that analysis, not just adding a button.
 - The catch-up windows (3 hours daily, 1 day weekly, 3 days monthly) are a judgement call, not derived from anything. They are named constants on `RoutineCadence` so they are cheap to revise once real use suggests better numbers.

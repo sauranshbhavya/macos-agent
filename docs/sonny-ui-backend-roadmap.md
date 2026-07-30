@@ -48,9 +48,13 @@ text and schedule toggle, and the Run button moved into `RoutineDetailView` alon
 unattended-trust opt-in — the wireframe's row has no Run button and reserves that slot for exactly
 the schedule text and toggle.
 
-**Still owed:** nothing creates a schedule from the UI yet. `RoutineStore.setSchedule` is the entry
-point and the row toggle enables/disables an existing schedule, but a cadence/time picker (or a
-planner path for "run my morning routine at 9 every day") does not exist.
+Schedule authoring lives in `RoutineDetailView` (cadence, run time, weekday or day-of-month, and
+removal) — designed rather than wireframe-matched, since `11-MainAppRoutines.svg` shows what a
+schedule looks like but never how one is made. See the changelog's branch 10 entry for that stated
+exception.
+
+**Still owed:** no natural-language path for scheduling ("run my morning routine at 9 every day"),
+which would be a planner schema change.
 
 ## AI-generated command titles
 

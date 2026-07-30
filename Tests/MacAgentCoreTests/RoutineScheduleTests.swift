@@ -118,6 +118,78 @@ struct RoutineScheduleTests {
         #expect(schedule.lastRunAt == enabledAt)
     }
 
+    // MARK: - Creation
+
+    /// The trap the creation path exists to avoid. `init` leaves `lastRunAt` nil, and
+    /// `RoutineScheduler.decision` reads a nil baseline as `.distantPast` — so a daily 9am schedule
+    /// built with `isEnabled: true` at 3pm resolves *this morning's* 09:00 as outstanding and
+    /// either fires an unattended run or reports a missed one, for a schedule seconds old.
+    @Test
+    func aFreshlyCreatedEnabledScheduleHasNothingOutstanding() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))
+        let threePM = try #require(
+            calendar.date(from: DateComponents(year: 2026, month: 7, day: 15, hour: 15, minute: 0))
+        )
+
+        let created = RoutineSchedule.newlyCreated(cadence: .daily, hour: 9, minute: 0, now: threePM)
+
+        #expect(created.isEnabled)
+        #expect(created.lastRunAt == threePM)
+        #expect(RoutineScheduler.decision(for: created, now: threePM, calendar: calendar) == .notDue)
+        // Still nothing that evening — the first real run is tomorrow morning.
+        let elevenPM = threePM.addingTimeInterval(8 * 60 * 60)
+        #expect(RoutineScheduler.decision(for: created, now: elevenPM, calendar: calendar) == .notDue)
+        // And it does fire on the next real occurrence rather than being suppressed forever.
+        let tomorrow = threePM.addingTimeInterval(19 * 60 * 60)
+        #expect(RoutineScheduler.decision(for: created, now: tomorrow, calendar: calendar) != .notDue)
+    }
+
+    /// Creating one disabled leaves no baseline, which is correct — a disabled schedule has no
+    /// outstanding occurrence, and enabling it later is what anchors it.
+    @Test
+    func creatingADisabledScheduleLeavesTheBaselineUnsetUntilItIsEnabled() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+        var created = RoutineSchedule.newlyCreated(
+            cadence: .daily,
+            hour: 9,
+            minute: 0,
+            isEnabled: false,
+            now: now
+        )
+        #expect(created.lastRunAt == nil)
+
+        let later = now.addingTimeInterval(3_600)
+        created.setEnabled(true, now: later)
+        #expect(created.lastRunAt == later)
+    }
+
+    /// Switching cadence must fill in what the new cadence requires, or it produces a schedule
+    /// `validate()` rejects — a weekly with no weekday, a monthly with no day.
+    @Test
+    func switchingCadenceFillsInTheFieldsTheNewCadenceRequires() throws {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))
+        // Wednesday 15 July 2026 — weekday 4 under Calendar's Sunday == 1 convention.
+        let now = try #require(
+            calendar.date(from: DateComponents(year: 2026, month: 7, day: 15, hour: 12, minute: 0))
+        )
+        var schedule = RoutineSchedule.newlyCreated(cadence: .daily, hour: 9, minute: 0, now: now)
+
+        schedule.setCadence(.weekly, now: now, calendar: calendar)
+        #expect(schedule.weekday == 4)
+        #expect(throws: Never.self) { try schedule.validate() }
+
+        schedule.setCadence(.monthly, now: now, calendar: calendar)
+        #expect(schedule.dayOfMonth == 15)
+        #expect(throws: Never.self) { try schedule.validate() }
+
+        // Switching back does not discard what was already chosen.
+        schedule.setCadence(.weekly, now: now, calendar: calendar)
+        #expect(schedule.weekday == 4)
+    }
+
     // MARK: - Catch-up windows
 
     /// Bounded by duration, deliberately not "the rest of the scheduled period": for a daily 9am
