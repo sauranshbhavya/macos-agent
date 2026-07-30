@@ -141,6 +141,34 @@ struct ScheduledRoutineRunTests {
         #expect(try fixture.routineStore.routine(named: "Morning").schedule?.lastRunAt == fixture.enabledAt)
     }
 
+    /// The race `performScheduledRun`'s missing-routine comment describes: `checkScheduledRoutines`
+    /// reads the routine, decides `.due`, and spawns the run as a `Task` — a real suspension point
+    /// before the run re-resolves the routine *by name*. Deleting it in that window must fail
+    /// closed through the same missing-target clarification a planner-invented name takes, not
+    /// crash, stall, or partially run.
+    ///
+    /// The delete below is synchronous, before any `await` — both this test and the spawned task
+    /// body run on the main actor, so the deletion is guaranteed to land before the task body's
+    /// first line, hitting the window every time rather than sometimes.
+    @Test
+    func aRoutineDeletedBetweenScheduleFireAndTaskStartBecomesAClarificationInstead() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.saveRoutine(unattendedTrusted: true)
+
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
+        try fixture.routineStore.delete(routineNamed: "Morning")
+        try await fixture.waitForIdle()
+
+        let notice = try #require(fixture.viewModel.scheduledRunNotice)
+        #expect(notice.contains("needed to ask something first"))
+        // Failed closed: nothing ran, nothing recorded, nothing left in flight.
+        #expect(fixture.viewModel.isRunning == false)
+        #expect(fixture.viewModel.isAwaitingApproval == false)
+        #expect(try fixture.routineStore.loadAll().isEmpty)
+        #expect(try fixture.taskHistoryStore.loadAll().isEmpty)
+    }
+
     /// Scheduled runs are recorded in task history — a scheduled run that failed has to be
     /// debuggable — but tagged, so Insights can tell them apart from what the user did.
     @Test

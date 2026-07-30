@@ -1448,8 +1448,10 @@ final class AgentViewModel: ObservableObject {
 
         // Read from the store, never from `savedRoutines`. An in-memory snapshot can outlive the
         // file — "delete all local data" wipes routines.json while the published array still holds
-        // the old values — and firing against a routine that no longer exists is the one way the
-        // otherwise-unreachable missing-routine path below becomes reachable.
+        // the old values, and `RoutineStore.delete(routineNamed:)` can now remove one routine the
+        // same way. A fresh read narrows the window in which a fired routine can be missing by
+        // run time, but no longer closes it: see `performScheduledRun`'s missing-routine comment
+        // for the in-flight race that remains, and the guard there that fails it closed.
         let routines: [StoredRoutine]
         do {
             routines = Array(try routineStore.loadAll().values)
@@ -1542,13 +1544,19 @@ final class AgentViewModel: ObservableObject {
                 plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: name),
                 source: .instantResolver
             )
-            // Defensive, and currently unreachable: `SaveRoutineCapabilityAdapter` rejects
-            // open_workspace and run_routine steps at save time, so a routine's own steps cannot
-            // name a missing target, and the routine itself must exist because its schedule was
-            // just read off it. Two changes would make this reachable — moving schedules off
-            // StoredRoutine into a store keyed by name, or a routine saved before that step
-            // validation existed — so it fails closed rather than stalling on a question nobody
-            // is present to answer.
+            // Reachable since routine deletion exists, not merely defensive.
+            // `SaveRoutineCapabilityAdapter` still rejects open_workspace and run_routine steps at
+            // save time, so a routine's own steps still cannot name a missing target — but the
+            // routine itself is re-resolved *by name* in `prepare` above, and
+            // `checkScheduledRoutines` spawning this method as a `Task` is a real suspension point
+            // between reading the routine and this line running. Deleting the routine inside that
+            // window makes `RunRoutineCapabilityAdapter`'s store read throw `.missingRoutine`,
+            // which `AgentActionExecutor.prepare` converts into this clarification. Failing closed
+            // rather than stalling on a question nobody is present to answer is correct for every
+            // cause. Pinned by ScheduledRoutineRunTests.
+            // aRoutineDeletedBetweenScheduleFireAndTaskStartBecomesAClarificationInstead. (A
+            // delete landing later still fails closed: `runner.execute`'s own store read throws
+            // into the generic catch below.)
             if let question = prepared.clarificationQuestion {
                 scheduledRunNotice = "“\(name)” was not run because Sonny needed to ask something first: \(question)"
                 return
