@@ -113,7 +113,15 @@ private extension View {
 /// window rather than the literal floating widget window — presented here via `.sheet(item:)`.
 struct RoutineDetailView: View {
     let routine: StoredRoutine
+    @ObservedObject var viewModel: AgentViewModel
     @Environment(\.dismiss) private var dismiss
+    @State private var unattendedAdvisory: String?
+
+    /// The sheet is presented with a snapshot, so toggling anything here would otherwise leave the
+    /// controls showing stale state. Read the live record back out of the view model instead.
+    private var live: StoredRoutine {
+        viewModel.savedRoutines.first { $0.name == routine.name } ?? routine
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -130,9 +138,9 @@ struct RoutineDetailView: View {
                         RoutineDetailStepRow(step: step)
                     }
 
-                    // Deliberately no Run button here — branch 10 hasn't decided whether Run stays
-                    // on the Routines list row or moves into this view. This trailing spacer just
-                    // leaves room for one to be added later without the layout needing rework.
+                    unattendedTrustControl
+                    runControl
+
                     Spacer(minLength: 24)
                 }
                 .padding(20)
@@ -140,6 +148,69 @@ struct RoutineDetailView: View {
         }
         .frame(width: 420, height: 480)
         .liquidGlassPanel(cornerRadius: RoutineDetailTheme.panelRadius, shadowOffset: RoutineDetailTheme.shadowOffset)
+    }
+
+    /// The per-routine unattended-run opt-in, deliberately here rather than on the Routines row.
+    ///
+    /// The row's trailing slot belongs to the schedule toggle per the wireframe, and there is no
+    /// space for a second switch — but the real reason is that this is a consequential safety
+    /// decision (it lets a scheduled trigger bypass the tier-2 gate a manual click keeps), and it
+    /// deserves the context of the step list it is granting that permission over.
+    @ViewBuilder
+    private var unattendedTrustControl: some View {
+        if live.schedule != nil {
+            VStack(alignment: .leading, spacing: 8) {
+                Toggle(isOn: Binding(
+                    get: { live.schedule?.unattendedTrusted == true },
+                    set: { unattendedAdvisory = viewModel.setRoutineUnattendedTrust(live, to: $0) }
+                )) {
+                    VStack(alignment: .leading, spacing: 2) {
+                        Text("Run without asking me")
+                            .font(RoutineDetailType.sectionLabel)
+                            .foregroundStyle(RoutineDetailTheme.text)
+                        Text("Lets this routine run on its schedule while you are away.")
+                            .font(RoutineDetailType.micro)
+                            .foregroundStyle(RoutineDetailTheme.mutedText)
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                }
+                .toggleStyle(.switch)
+                .controlSize(.small)
+                .tint(SonnyTheme.accent)
+
+                // Best-effort heads-up, never a gate: blocking the opt-in for a tier-3 routine
+                // would be the save-time tier gating this branch explicitly rejected.
+                if let unattendedAdvisory {
+                    Text(unattendedAdvisory)
+                        .font(RoutineDetailType.micro)
+                        .foregroundStyle(SonnyTheme.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+            }
+            .padding(.top, 6)
+        }
+    }
+
+    /// Running a routine by hand lives here now. The wireframe's own row has no Run button at all
+    /// and reserves that slot for the schedule time and toggle, so keeping one there would have
+    /// crowded out the thing the wireframe actually specifies.
+    private var runControl: some View {
+        Button {
+            viewModel.runRoutineWidget(live)
+            dismiss()
+        } label: {
+            Text("Run now")
+                .font(RoutineDetailType.sectionLabel)
+                .foregroundStyle(RoutineDetailTheme.text)
+                .frame(maxWidth: .infinity)
+                .frame(height: 32)
+                .background(Color.white.opacity(0.08))
+                .clipShape(RoundedRectangle(cornerRadius: 8))
+        }
+        .buttonStyle(.plain)
+        .disabled(viewModel.isRunning || viewModel.isAwaitingApproval)
+        .sonnyPointerCursor()
+        .accessibilityLabel("Run \(live.name) now")
     }
 
     /// This view is presented via `.sheet(item:)` with no other dismiss affordance anywhere in the

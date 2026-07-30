@@ -851,6 +851,49 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
+    /// Turns a routine's schedule on or off from the Routines row.
+    ///
+    /// Goes through `RoutineSchedule.setEnabled(_:now:)` rather than assigning `isEnabled`, because
+    /// that is what re-anchors the catch-up baseline — enabling a 9am routine at 3pm must not read
+    /// as "this morning was missed" and fire an immediate unattended run.
+    func setRoutineScheduleEnabled(_ routine: StoredRoutine, to isEnabled: Bool) {
+        guard var schedule = routine.schedule else {
+            return
+        }
+        schedule.setEnabled(isEnabled, now: Date())
+        applySchedule(schedule, to: routine.name)
+    }
+
+    /// Turns the per-routine unattended-run opt-in on or off, returning advisory copy when the
+    /// routine currently assesses at tier 3+ and therefore could not run unattended anyway.
+    ///
+    /// The advisory is a heads-up, never a gate — blocking the opt-in here would be the save-time
+    /// tier gating this branch explicitly rejected. It is also best-effort: tiers escalate from
+    /// real run-time conditions, so a routine that reads clean today can still be skipped later.
+    @discardableResult
+    func setRoutineUnattendedTrust(_ routine: StoredRoutine, to isTrusted: Bool) -> String? {
+        guard var schedule = routine.schedule else {
+            return nil
+        }
+        schedule.unattendedTrusted = isTrusted
+        applySchedule(schedule, to: routine.name)
+        guard isTrusted else {
+            return nil
+        }
+        return UnattendedTrustAdvisory.warning(forRoutineNamed: routine.name, executor: makeExecutor())
+    }
+
+    private func applySchedule(_ schedule: RoutineSchedule, to routineName: String) {
+        do {
+            try routineStore.setSchedule(routineNamed: routineName, to: schedule)
+            refreshSavedItems()
+        } catch {
+            recordLocalStorageWriteFailure(
+                "Sonny could not save this routine's schedule: \(error.localizedDescription)"
+            )
+        }
+    }
+
     func runRoutineWidget(_ routine: StoredRoutine) {
         command = "Run my \(routine.name) routine"
         start(autoExecute: true)

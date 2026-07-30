@@ -530,9 +530,14 @@ struct ProductShellTests {
             urls: ["https://www.example.com/reference"]
         )
 
-        let routinePresentation = RoutineRowPresentation(routine: routine)
+        // An unscheduled routine keeps the step summary on its second line — the cadence label
+        // that replaced it for scheduled routines has nothing to show here.
+        let routinePresentation = RoutineRowPresentation(routine: routine, now: Date())
         #expect(routinePresentation.name == "Morning planning")
         #expect(routinePresentation.detailText == "Open Safari · Create draft · +1 more")
+        #expect(routinePresentation.isScheduleable == false)
+        #expect(routinePresentation.nextRunText == nil)
+        #expect(routinePresentation.streak == nil)
 
         let taskHistoryRecords = [
             CompletedTaskRecord(command: "a", startedAt: .distantPast, completedAt: Date(), outcomeStatus: .completed, workspaceName: "Research"),

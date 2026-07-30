@@ -86,6 +86,63 @@ public enum RoutineScheduler {
             .sorted { ($0.occurrence ?? .distantPast) < ($1.occurrence ?? .distantPast) }
     }
 
+    /// The next scheduled occurrence strictly after `now`. Drives the row's "Today, 9:00 AM" text.
+    public static func nextOccurrence(
+        of schedule: RoutineSchedule,
+        after now: Date,
+        calendar: Calendar = .current
+    ) -> Date? {
+        switch schedule.cadence {
+        case .daily:
+            return firstForwardMatch(dayOffsets: 0...1, schedule: schedule, after: now, calendar: calendar) { _ in true }
+        case .weekly:
+            guard let weekday = schedule.weekday else {
+                return nil
+            }
+            return firstForwardMatch(dayOffsets: 0...7, schedule: schedule, after: now, calendar: calendar) { day in
+                calendar.component(.weekday, from: day) == weekday
+            }
+        case .monthly:
+            guard let dayOfMonth = schedule.dayOfMonth else {
+                return nil
+            }
+            for monthOffset in 0...1 {
+                guard let anchor = calendar.date(byAdding: .month, value: monthOffset, to: now),
+                      let candidate = occurrence(
+                          dayOfMonth: dayOfMonth,
+                          hour: schedule.hour,
+                          minute: schedule.minute,
+                          inMonthOf: anchor,
+                          calendar: calendar
+                      ),
+                      candidate > now else {
+                    continue
+                }
+                return candidate
+            }
+            return nil
+        }
+    }
+
+    private static func firstForwardMatch(
+        dayOffsets: ClosedRange<Int>,
+        schedule: RoutineSchedule,
+        after now: Date,
+        calendar: Calendar,
+        matches: (Date) -> Bool
+    ) -> Date? {
+        for dayOffset in dayOffsets {
+            guard let day = calendar.date(byAdding: .day, value: dayOffset, to: now),
+                  matches(day),
+                  let candidate = time(schedule.hour, schedule.minute, on: day, calendar: calendar),
+                  candidate > now else {
+                continue
+            }
+            return candidate
+        }
+        return nil
+    }
+
     /// The latest scheduled occurrence at or exactly on `now`.
     ///
     /// "At or on" matters: a tick landing precisely on 09:00:00 must resolve to today's 09:00, not

@@ -38,26 +38,19 @@ top-level state changes (idle → working → result, etc.), not on `stepStatuse
 `.working`. If per-step transitions look like a hard cut rather than an animated one once real data
 drives them, add a second `.animation(value:)` keyed off a cheap hash/count of `stepStatuses`.
 
-## Routine run-history and streak badge
+## Resolved: routine scheduling, run history and streak badge (branch 10)
 
-**Backend:** branch 10 (`feature/routine-scheduling`) adding real run-count/last-run-date/streak
-tracking to `StoredRoutine` (`Sources/MacAgentCore/AutomationStores.swift`), which doesn't exist at
-all today — see `docs/sonny-ui-backend-gaps.md`'s "Routines row streak/step-count badge" gap.
+All built. `StoredRoutine` carries a `RoutineSchedule` (cadence, run time, enabled state,
+per-routine unattended-run opt-in, catch-up baseline) plus bounded run history; `RoutineScheduler`
+decides what is outstanding; `AgentViewModel` fires on a 30-second tick and on
+`NSWorkspace.didWakeNotification`. `RoutineRow` now shows the wireframe's streak badge, next-run
+text and schedule toggle, and the Run button moved into `RoutineDetailView` alongside the
+unattended-trust opt-in — the wireframe's row has no Run button and reserves that slot for exactly
+the schedule text and toggle.
 
-**UI update owed:** once a routine has real per-run history to compute a streak from, add the yellow
-(`#F2BE00`) dot + number badge to `RoutineRow` in `Sources/MacAgent/CommandCenterView.swift` — the
-`Spacer(minLength: 14)` immediately before the `Run` button is the wireframe-mapped slot, already
-reserved and empty for exactly this.
-
-## Routine real scheduling
-
-**Backend:** branch 10 — a defined run time, enabled/disabled toggle, and cadence grouping for
-routines, none of which exist yet.
-
-**UI update owed:** `RoutineRow`'s current `Run` button (`Sources/MacAgent/CommandCenterView.swift`)
-is an explicit temporary affordance — the wireframe's own row has no Run button at all; that slot is
-reserved for schedule-time text + an enabled/disabled toggle. Swap it out once real scheduling data
-exists rather than layering the toggle in alongside the button.
+**Still owed:** nothing creates a schedule from the UI yet. `RoutineStore.setSchedule` is the entry
+point and the row toggle enables/disables an existing schedule, but a cadence/time picker (or a
+planner path for "run my morning routine at 9 every day") does not exist.
 
 ## AI-generated command titles
 

@@ -271,6 +271,73 @@ struct ScheduledRoutineRunTests {
         #expect(fixture.viewModel.scheduledRunNotice == nil)
     }
 
+    // MARK: - The Routines row controls
+
+    /// Flipping the row's toggle on must re-anchor the catch-up baseline, not just set a flag.
+    /// Turning a 9am routine on at 3pm and having it immediately fire a catch-up run would make
+    /// the act of enabling scheduling itself the trigger for an unattended action.
+    @Test
+    func enablingTheRowToggleReAnchorsTheBaselineInsteadOfFiringACatchUp() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.saveRoutine(unattendedTrusted: true)
+        let threePM = fixture.nineAM.addingTimeInterval(6 * 60 * 60)
+        let routine = try fixture.routineStore.routine(named: "Morning")
+        fixture.viewModel.setRoutineScheduleEnabled(routine, to: false)
+
+        let disabled = try fixture.routineStore.routine(named: "Morning")
+        fixture.viewModel.setRoutineScheduleEnabled(disabled, to: true)
+
+        // Re-anchored to roughly now, so this morning's 09:00 no longer looks outstanding.
+        let reEnabled = try #require(try fixture.routineStore.routine(named: "Morning").schedule?.lastRunAt)
+        #expect(reEnabled > fixture.nineAM)
+
+        fixture.viewModel.checkScheduledRoutines(now: threePM)
+        try await fixture.waitForIdle()
+        #expect(fixture.viewModel.scheduledRunNotice == nil)
+        #expect(try fixture.routineStore.routine(named: "Morning").effectiveRecentRunDates.isEmpty)
+    }
+
+    /// The opt-in warns for a routine that could never run unattended, and warns rather than
+    /// blocking — refusing the toggle would be the save-time tier gating this branch rejected.
+    @Test
+    func turningOnUnattendedTrustWarnsButStillAppliesForATierThreeRoutine() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.snippetStore.save(StoredSnippet(trigger: ";sig", expansion: "Old text"))
+        try fixture.saveRoutine(
+            unattendedTrusted: false,
+            steps: [
+                AgentStep(
+                    id: "snippet",
+                    operation: .saveSnippet,
+                    description: "Save snippet ;sig.",
+                    searchQuery: ";sig",
+                    draftContent: "New text"
+                )
+            ]
+        )
+        let routine = try fixture.routineStore.routine(named: "Morning")
+
+        let advisory = fixture.viewModel.setRoutineUnattendedTrust(routine, to: true)
+
+        let warning = try #require(advisory)
+        #expect(warning.contains("Morning"))
+        // Warned, not blocked — the setting really did apply.
+        #expect(try fixture.routineStore.routine(named: "Morning").schedule?.unattendedTrusted == true)
+    }
+
+    @Test
+    func turningOnUnattendedTrustForAnOrdinaryRoutineWarnsAboutNothing() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.saveRoutine(unattendedTrusted: false)
+        let routine = try fixture.routineStore.routine(named: "Morning")
+
+        #expect(fixture.viewModel.setRoutineUnattendedTrust(routine, to: true) == nil)
+        #expect(try fixture.routineStore.routine(named: "Morning").schedule?.unattendedTrusted == true)
+    }
+
     // MARK: - Fixture
 
     private func makeFixture() throws -> Fixture {

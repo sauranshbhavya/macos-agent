@@ -1210,7 +1210,7 @@ private struct InsightsRecentActivityRow: View {
 /// keep the wireframe's two-tone hierarchy: a brighter medium-weight label next to a dimmer
 /// regular-weight count, not one uniform muted string. Shared by every status group on this page,
 /// including the live "In Progress" group, so all of them look like one continuous list.
-private struct TaskStatusGroupHeader: View {
+private struct CommandCenterGroupHeader: View {
     let title: String
     let count: Int
 
@@ -1244,7 +1244,7 @@ private struct InProgressTaskGroup: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            TaskStatusGroupHeader(title: "In Progress", count: 1)
+            CommandCenterGroupHeader(title: "In Progress", count: 1)
 
             CommandCenterRunningIndicator(viewModel: viewModel)
                 .padding(.horizontal, 30)
@@ -1278,7 +1278,7 @@ private struct TaskHistoryGroupedPanel: View {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(sections) { section in
                     VStack(alignment: .leading, spacing: 0) {
-                        TaskStatusGroupHeader(title: section.title, count: section.records.count)
+                        CommandCenterGroupHeader(title: section.title, count: section.records.count)
 
                         VStack(spacing: 0) {
                             ForEach(section.records, id: \.startedAt) { record in
@@ -1690,19 +1690,40 @@ private extension String {
 struct RoutineRowPresentation: Equatable {
     let name: String
     let detailText: String
+    let streak: Int?
+    let nextRunText: String?
+    let isEnabled: Bool
+    let isScheduleable: Bool
 
-    init(routine: StoredRoutine) {
+    init(routine: StoredRoutine, now: Date) {
         name = routine.name
+        isScheduleable = routine.schedule != nil
+        isEnabled = routine.isScheduled
 
-        let visibleLabels = routine.steps.prefix(2).map(AgentActivityPresentation.operationTitle)
-        let remainingCount = routine.steps.count - visibleLabels.count
-        let visibleText = visibleLabels.joined(separator: " · ")
-        if remainingCount > 0 {
-            detailText = "\(visibleText) · +\(remainingCount) more"
-        } else if visibleText.isEmpty {
-            detailText = "No saved steps"
+        // The wireframe's second line is the routine's cadence ("Daily", "Weekly · Mon"), not its
+        // step list. An unscheduled routine has no cadence to show, so it keeps the step summary
+        // rather than leaving the line blank.
+        if let schedule = routine.schedule {
+            detailText = RoutineScheduleDisplay.cadenceLabel(for: schedule)
         } else {
-            detailText = visibleText
+            let visibleLabels = routine.steps.prefix(2).map(AgentActivityPresentation.operationTitle)
+            let remainingCount = routine.steps.count - visibleLabels.count
+            let visibleText = visibleLabels.joined(separator: " · ")
+            if remainingCount > 0 {
+                detailText = "\(visibleText) · +\(remainingCount) more"
+            } else if visibleText.isEmpty {
+                detailText = "No saved steps"
+            } else {
+                detailText = visibleText
+            }
+        }
+
+        let streakCount = RoutineStreak.current(for: routine, now: now)
+        // Hidden rather than shown as "0" — the badge is a reward, and a zero badge on every
+        // never-run routine is visual noise that makes the real ones harder to spot.
+        streak = streakCount > 0 ? streakCount : nil
+        nextRunText = routine.schedule.flatMap {
+            RoutineScheduleDisplay.nextRunText(for: $0, now: now)
         }
     }
 }
@@ -1766,6 +1787,10 @@ private struct RoutinesView: View {
     @ObservedObject var viewModel: AgentViewModel
     @State private var selectedRoutine: StoredRoutine?
 
+    private var sections: [RoutineCadenceSection] {
+        RoutineGrouping.groupedByCadence(routines: viewModel.savedRoutines)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             CommandCenterPageHeader(title: "Routines")
@@ -1790,14 +1815,19 @@ private struct RoutinesView: View {
                 } else {
                     ScrollView {
                         LazyVStack(spacing: 0) {
-                            ForEach(Array(viewModel.savedRoutines.enumerated()), id: \.element.name) { index, routine in
-                                RoutineRow(
-                                    presentation: RoutineRowPresentation(routine: routine),
-                                    isLast: index == viewModel.savedRoutines.count - 1,
-                                    isRunning: viewModel.isRunning || viewModel.isAwaitingApproval,
-                                    run: { viewModel.runRoutineWidget(routine) },
-                                    openDetail: { selectedRoutine = routine }
-                                )
+                            // Cadence-grouped per `11-MainAppRoutines.svg`, which has Daily /
+                            // Weekly / Monthly headings with counts rather than one flat list.
+                            ForEach(sections) { section in
+                                CommandCenterGroupHeader(title: section.title, count: section.routines.count)
+
+                                ForEach(Array(section.routines.enumerated()), id: \.element.name) { index, routine in
+                                    RoutineRow(
+                                        presentation: RoutineRowPresentation(routine: routine, now: Date()),
+                                        isLast: index == section.routines.count - 1,
+                                        setEnabled: { viewModel.setRoutineScheduleEnabled(routine, to: $0) },
+                                        openDetail: { selectedRoutine = routine }
+                                    )
+                                }
                             }
                         }
                     }
@@ -1829,7 +1859,7 @@ private struct RoutinesView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(SonnyTheme.ink)
         .sheet(item: $selectedRoutine) { routine in
-            RoutineDetailView(routine: routine)
+            RoutineDetailView(routine: routine, viewModel: viewModel)
         }
     }
 
@@ -1844,8 +1874,7 @@ private struct RoutinesView: View {
 private struct RoutineRow: View {
     let presentation: RoutineRowPresentation
     let isLast: Bool
-    let isRunning: Bool
-    let run: () -> Void
+    let setEnabled: (Bool) -> Void
     let openDetail: () -> Void
 
     var body: some View {
@@ -1873,12 +1902,46 @@ private struct RoutineRow: View {
 
                 Spacer(minLength: 14)
 
-                Button(action: run) {
-                    Text("Run")
+                // The wireframe's `streak` layer: a 10pt #F2BE00 dot and the count beside it.
+                // Wired to real per-occurrence run history, never to `steps.count` — a step count
+                // does not decay the way a streak does, which is the documented prior mistake here.
+                if let streak = presentation.streak {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(SonnyTheme.warning)
+                            .frame(width: 10, height: 10)
+                        Text("\(streak)")
+                            .font(SonnyType.caption)
+                            .foregroundStyle(SonnyTheme.warning)
+                    }
+                    .accessibilityLabel("\(streak) run streak")
                 }
-                .buttonStyle(CommandCenterRowActionStyle())
-                .disabled(isRunning)
-                .accessibilityLabel("Run \(presentation.name)")
+
+                if let nextRun = presentation.nextRunText {
+                    Text(nextRun)
+                        .font(SonnyType.caption)
+                        .foregroundStyle(SonnyTheme.muted)
+                        .lineLimit(1)
+                }
+
+                // Replaces the old Run button, which was an original addition never in the
+                // wireframe — this slot is the toggle's. Running a routine by hand now lives in
+                // the detail view, which the row opens on tap.
+                if presentation.isScheduleable {
+                    // `set:` takes the closure inline rather than passing `setEnabled` directly:
+                    // the bare function reference converts to a `@Sendable` parameter and trips
+                    // Swift 6's data-race check, since the closure captures the main-actor view
+                    // model. Both this view and the handler are already main-actor isolated.
+                    Toggle("", isOn: Binding(
+                        get: { presentation.isEnabled },
+                        set: { isOn in setEnabled(isOn) }
+                    ))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .tint(SonnyTheme.accent)
+                        .accessibilityLabel("Run \(presentation.name) on schedule")
+                }
             }
             .padding(.horizontal, 18)
             .frame(height: 56)
