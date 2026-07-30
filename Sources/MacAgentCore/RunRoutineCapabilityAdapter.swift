@@ -27,6 +27,27 @@ public struct RunRoutineCapabilityAdapter: CapabilityAdapter {
         defaultRiskTier: .tier2
     )
 
+    /// The canonical single-step plan that runs a saved routine by name.
+    ///
+    /// Lives on the adapter that owns `.runRoutine` because the plan shape *is* that operation's
+    /// contract. Shared by the instant resolver, the unattended-trust advisory, and the scheduler
+    /// so a scheduled run goes through exactly the plan a typed "run my X routine" produces —
+    /// three hand-rolled copies of this literal would be three chances to drift.
+    public static func plan(forRoutineNamed name: String) -> AgentPlan {
+        AgentPlan(
+            summary: "Run routine \(name).",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "run-routine",
+                    operation: .runRoutine,
+                    description: "Run saved routine \(name).",
+                    routineName: name
+                )
+            ]
+        )
+    }
+
     public func preview(plan: AgentPlan, context: CapabilityExecutionContext) throws -> [ActionPreview] {
         let routine = try routineRunSpec(plan, context: context)
         let nested = try context.previewNestedPlan(routine.plan)

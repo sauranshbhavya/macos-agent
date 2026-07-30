@@ -195,25 +195,15 @@ an old entry's detail dialog later. If a richer "what did it actually produce" v
 `CompletedTaskRecord` needs a new field (plus encrypted-store migration, following the same pattern
 as every other field addition to this struct) to persist that text at completion time.
 
-## Not built: Routines row streak/step-count badge
+## Resolved: Routines row streak badge (branch 10)
 
-Wireframe (`11-MainAppRoutines.svg`): every routine row has a yellow (`#F2BE00`) dot + number
-between the row body and the trailing schedule-time/toggle slot. The SVG layer is literally named
-`streak` — **not** step count. `CLAUDE.md`'s own "Non-obvious gotchas" section already documents a
-prior mistake of wiring this badge to `routine.steps.count`, which is wrong on its face (a routine's
-step count doesn't decay/reset the way a streak does).
-
-`StoredRoutine` (`Sources/MacAgentCore/AutomationStores.swift`) has no run-count, last-run-date, or
-streak field at all today — there is no real per-routine execution history to compute a genuine
-streak from. Building the badge now would mean either repeating the known step-count mistake or
-fabricating a number with no real meaning, so it was left off this pass rather than shipped wrong.
-
-**What's needed:** a real per-routine run-history concept (at minimum: timestamps of past
-runs/completions per routine name) that a streak can be computed from — this naturally lands
-alongside branch 10 (`feature/routine-scheduling`)'s scheduling/execution-trigger work, since that
-branch already needs to track when a routine last ran. Once that data exists, add the badge to
-`RoutineRow` in `Sources/MacAgent/CommandCenterView.swift` (the `Spacer(minLength: 14)` right before
-the `Run` button is the correct wireframe-mapped slot).
+Built. The badge is wired to `RoutineStreak.current(for:now:)`, which counts consecutive scheduled
+**occurrences** with a run recorded — not calendar days, and not `routine.steps.count`. The
+occurrence framing is what the wireframe's own numbers require: it shows 12 for a daily routine, 4
+for a weekly one and 3 for a monthly one, and a day-based streak would pin every weekly routine at 1
+forever. Backed by `StoredRoutine.recentRunDates`, a bounded list of real run timestamps that
+includes manual runs. Deliberately a different computation from
+`TaskHistoryInsights.currentStreakDays`, which remains a per-day streak across all of Sonny.
 
 ## Not built: AI-generated command summaries (like a chat app auto-titling a conversation)
 

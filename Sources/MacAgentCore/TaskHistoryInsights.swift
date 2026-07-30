@@ -63,8 +63,15 @@ public enum TaskHistoryInsights {
             completedThisWeek: completedWeekRecords.count,
             completionRate: completionRate(in: weekRecords),
             averageCompletedCycleTime: averageCycleTime(in: completedWeekRecords),
-            currentStreakDays: currentStreakDays(records: records, now: now, calendar: calendar),
-            hasCompletedToday: records.contains {
+            // Streak and "completed today" deliberately ignore scheduled runs — see
+            // `userInitiated(_:)`. Every other stat here counts them, because those are claims
+            // about what Sonny did rather than about what the user did.
+            currentStreakDays: currentStreakDays(
+                records: userInitiated(records),
+                now: now,
+                calendar: calendar
+            ),
+            hasCompletedToday: userInitiated(records).contains {
                 $0.outcomeStatus == .completed && calendar.startOfDay(for: $0.completedAt) == today
             },
             weeklyCompletedCounts: weeklyCompletedCounts(in: completedWeekRecords, week: week, calendar: calendar),
@@ -72,6 +79,18 @@ public enum TaskHistoryInsights {
             previousWeekCompletionRate: completionRate(in: previousWeekRecords),
             previousWeekAverageCompletedCycleTime: averageCycleTime(in: previousCompletedRecords)
         )
+    }
+
+    /// Records that represent something the user actually did.
+    ///
+    /// A daily scheduled routine would otherwise guarantee a permanent streak and a permanently
+    /// lit "completed today" — both stats would stop carrying any information, since they would be
+    /// true whether or not the user ever opened Sonny. A streak is a claim about a habit, so
+    /// automation cannot be allowed to earn it. The counts, completion rate, cycle time and weekly
+    /// chart deliberately keep scheduled runs: those describe Sonny's output, which a scheduled run
+    /// genuinely is.
+    private static func userInitiated(_ records: [CompletedTaskRecord]) -> [CompletedTaskRecord] {
+        records.filter { $0.effectiveTrigger == .manual }
     }
 
     private static func currentMondayWeek(containing date: Date, calendar: Calendar) -> DateInterval {

@@ -95,17 +95,65 @@ struct TaskHistoryInsightsTests {
         #expect(summary.previousWeekAverageCompletedCycleTime == 240)
     }
 
+    /// A streak is a claim about the user's habit, so automation must not be able to earn one. A
+    /// daily scheduled routine would otherwise guarantee a permanent streak and a permanently lit
+    /// "completed today" — both stats would be true whether or not the user ever opened Sonny, and
+    /// would stop carrying any information at all.
+    @Test
+    func scheduledRunsDoNotEarnAStreakOrLightUpCompletedToday() throws {
+        let calendar = utcISOCalendar()
+        let now = try date("2026-07-15T18:00:00Z")
+        let records = (0..<5).map { dayOffset in
+            record(
+                "scheduled morning routine",
+                completedAt: now.addingTimeInterval(Double(-dayOffset) * 86_400),
+                outcome: .completed,
+                trigger: .scheduled
+            )
+        }
+
+        let summary = TaskHistoryInsights.summarize(records: records, now: now, calendar: calendar)
+
+        #expect(summary.currentStreakDays == 0)
+        #expect(summary.hasCompletedToday == false)
+        // ...while the stats that describe Sonny's output rather than the user's habit still count
+        // them, because a scheduled run is genuinely work Sonny did.
+        #expect(summary.completedThisWeek > 0)
+        #expect(summary.completionRate == 1)
+    }
+
+    /// The other half: a scheduled run must not *break* a real streak either, and manual runs on
+    /// the same days still earn one normally.
+    @Test
+    func manualRunsStillEarnAStreakAlongsideScheduledOnes() throws {
+        let calendar = utcISOCalendar()
+        let now = try date("2026-07-15T18:00:00Z")
+        var records: [CompletedTaskRecord] = []
+        for dayOffset in 0..<3 {
+            let day = now.addingTimeInterval(Double(-dayOffset) * 86_400)
+            records.append(record("manual", completedAt: day, outcome: .completed))
+            records.append(record("scheduled", completedAt: day, outcome: .completed, trigger: .scheduled))
+        }
+
+        let summary = TaskHistoryInsights.summarize(records: records, now: now, calendar: calendar)
+
+        #expect(summary.currentStreakDays == 3)
+        #expect(summary.hasCompletedToday)
+    }
+
     private func record(
         _ command: String,
         completedAt: Date,
         duration: TimeInterval = 60,
-        outcome: PriorTaskOutcomeStatus
+        outcome: PriorTaskOutcomeStatus,
+        trigger: TaskTrigger? = nil
     ) -> CompletedTaskRecord {
         CompletedTaskRecord(
             command: command,
             startedAt: completedAt.addingTimeInterval(-duration),
             completedAt: completedAt,
-            outcomeStatus: outcome
+            outcomeStatus: outcome,
+            trigger: trigger
         )
     }
 

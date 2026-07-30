@@ -517,18 +517,7 @@ public struct InstantCommandResolver: Sendable {
     }
 
     private func runRoutinePlan(_ routine: StoredRoutine) -> AgentPlan {
-        AgentPlan(
-            summary: "Run routine \(routine.name).",
-            requiresConfirmation: true,
-            steps: [
-                AgentStep(
-                    id: "run-routine",
-                    operation: .runRoutine,
-                    description: "Run saved routine \(routine.name).",
-                    routineName: routine.name
-                )
-            ]
-        )
+        RunRoutineCapabilityAdapter.plan(forRoutineNamed: routine.name)
     }
 
     private func openWorkspacePlan(_ workspace: StoredWorkspace) -> AgentPlan {

@@ -431,9 +431,13 @@ struct ProductShellTests {
         #expect(viewModel.isRunning)
 
         try await waitForViewModelToBecomeIdle(viewModel)
-        // `retryLastCommand()` hardcodes origin to `.widget` even though the original task was
-        // Command-Center-originated (see its own doc comment) — documented, deliberate behavior;
-        // this locks it in as a regression guard rather than leaving it to only be discovered again.
+        // `retryLastCommand()` *defaults* to `.widget` even though the original task was
+        // Command-Center-originated (see its own doc comment) — documented, deliberate behavior:
+        // the retry is a fresh interaction on whichever surface it was pressed, not an inheritance
+        // of the failed task's origin. Branch 10 checkpoint 1 turned the old hardcoded `.widget`
+        // into a defaulted parameter when Command Center gained its own failure row; this argument-
+        // less call is still the widget's own path, so the expectation is unchanged. See
+        // `CommandCenterAttentionSurfaceTests` for the `.commandCenter` half.
         #expect(viewModel.activeTaskOrigin == .widget)
         #expect(viewModel.runningCommandDisplayText == "Open my Research workspace")
     }
@@ -526,9 +530,14 @@ struct ProductShellTests {
             urls: ["https://www.example.com/reference"]
         )
 
-        let routinePresentation = RoutineRowPresentation(routine: routine)
+        // An unscheduled routine keeps the step summary on its second line — the cadence label
+        // that replaced it for scheduled routines has nothing to show here.
+        let routinePresentation = RoutineRowPresentation(routine: routine, now: Date())
         #expect(routinePresentation.name == "Morning planning")
         #expect(routinePresentation.detailText == "Open Safari · Create draft · +1 more")
+        #expect(routinePresentation.isScheduleable == false)
+        #expect(routinePresentation.nextRunText == nil)
+        #expect(routinePresentation.streak == nil)
 
         let taskHistoryRecords = [
             CompletedTaskRecord(command: "a", startedAt: .distantPast, completedAt: Date(), outcomeStatus: .completed, workspaceName: "Research"),

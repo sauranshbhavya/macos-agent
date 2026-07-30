@@ -208,9 +208,10 @@ public final class AgentActionExecutor {
                 kind: "routine",
                 savedNames: (try? routineStore.loadAll())?.values.map(\.name)
             )
-        case .missingName, .emptyRoutine, .emptyWorkspace, .unsafeRoutineStep:
+        case .missingName, .emptyRoutine, .emptyWorkspace, .unsafeRoutineStep, .invalidSchedule:
             // Every other automation-store failure keeps its own error. A missing name, an
-            // empty definition, or an unsafe nested step are real problems, not "did you mean".
+            // empty definition, an unsafe nested step, or a malformed schedule are real problems,
+            // not "did you mean".
             return nil
         }
     }

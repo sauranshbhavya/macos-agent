@@ -39,6 +39,17 @@ final class AgentViewModel: ObservableObject {
     /// a failed save is about Sonny's own data, not about the task the user just ran, and must
     /// never make a successful task read as failed. Rendered as its own notice on both surfaces.
     @Published var localStorageNotice: String?
+    /// What the scheduler did while nobody was watching — a routine ran, or was skipped and why.
+    ///
+    /// Its own channel rather than `errorMessage` or `localStorageNotice`, following the split this
+    /// project already draws: `errorMessage` means "the task *you ran* failed", and a scheduled run
+    /// is not one; `localStorageNotice` means "something ambient needs your attention", which is the
+    /// right shape but the wrong subject. A user has to be able to tell "my 9am routine didn't run"
+    /// apart from "your snippets file is corrupt", because the two need different actions.
+    ///
+    /// Carries successes too, not just skips: an action taken with nobody watching should be
+    /// visible after the fact, which is the whole reason unattended execution needs a surface.
+    @Published var scheduledRunNotice: String?
     @Published var localDataDeletionStatusMessage: String?
     /// Set on every `start()`. Approving a pending run genuinely does not touch it —
     /// `performApproval` reuses the existing prepared run. A clarification answer *does* go back
@@ -95,6 +106,12 @@ final class AgentViewModel: ObservableObject {
     private let taskUsageRecorder: TaskUsageRecorder
     private let userDefaults: UserDefaults
     private var clipboardHistoryTimer: Timer?
+    private var routineScheduleTimer: Timer?
+    /// Label for the currently-running scheduled routine. Separate from `lastCommand` so a
+    /// background run can drive the running indicator without becoming the retry or follow-up
+    /// target — see `performScheduledRun`.
+    private var scheduledRunDisplayCommand: String?
+    private var wakeObserver: (any NSObjectProtocol)?
     private var clarificationAutoExecute = false
     /// Preserves the original task's origin across the clarification pause, same pattern as
     /// `clarificationAutoExecute` — `submitClarification()`
@@ -159,6 +176,13 @@ final class AgentViewModel: ObservableObject {
     enum TaskOrigin {
         case commandCenter
         case widget
+        /// Started by the routine scheduler with nobody watching. Deliberately its own case rather
+        /// than borrowing `.commandCenter`: the widget gates its working/result panel on
+        /// `.widget`, so a scheduled run correctly shows no progress panel there while its
+        /// permission/clarification/failure states — the ones that actually need a human — still
+        /// surface on both surfaces. It also drives the `.scheduled` task-history trigger, which
+        /// keeps automated runs out of the Insights streak.
+        case scheduled
     }
 
     private enum UserDefaultsKeys {
@@ -575,7 +599,9 @@ final class AgentViewModel: ObservableObject {
     /// running indicator) needs this instead of `command`, or it reads every task as "Untitled
     /// task" regardless of what was actually submitted.
     var runningCommandDisplayText: String {
-        lastCommand
+        // A scheduled run needs a label for Command Center's running indicator without claiming
+        // `lastCommand`, which belongs to whatever the user last submitted themselves.
+        scheduledRunDisplayCommand ?? lastCommand
     }
 
     /// Called by the widget after a `.result` (including a clean "Canceled.") or a genuinely
@@ -608,16 +634,21 @@ final class AgentViewModel: ObservableObject {
     }
 
     /// Resubmits the last real command as-is. Used by the floating widget's task-level-failure
-    /// retry button (§3.3.6) and by the error notification's "Retry" action.
-    func retryLastCommand() {
+    /// retry button (§3.3.6), the error notification's "Retry" action, and Command Center's own
+    /// failure row.
+    ///
+    /// - Parameter origin: Which surface's retry control this is. Defaults to `.widget` so the
+    ///   two pre-existing call sites keep their original behavior. This used to be hardcoded
+    ///   `.widget` on the reasoning that Command Center had no retry control — true until branch
+    ///   10 checkpoint 1 gave it one. The retry action is a fresh interaction on whichever surface
+    ///   the user pressed it, not an inheritance of the failed task's origin, so the caller states
+    ///   it rather than it being inferred — same convention as `toggleVoiceRecording(origin:)`.
+    func retryLastCommand(origin: TaskOrigin = .widget) {
         guard !lastCommand.isEmpty, !isRunning, !isAwaitingApproval else {
             return
         }
         command = lastCommand
-        // Retry only has a real UI in the widget's own failure panel and the error notification
-        // (Command Center has no retry control) — tagging it `.widget` regardless of the original
-        // failed task's origin reflects that the retry action itself is a widget interaction.
-        start(origin: .widget)
+        start(origin: origin)
     }
 
     /// Submits the clarification answer as a **new** run, not a resume: this appends the Q&A to
@@ -817,6 +848,104 @@ final class AgentViewModel: ObservableObject {
             let message = "Could not delete local data: \(error.localizedDescription)"
             localDataDeletionStatusMessage = message
             setError(message)
+        }
+    }
+
+    /// Creates, replaces, or removes a routine's schedule. Passing nil unschedules it.
+    ///
+    /// The two methods below can only *modify* an existing schedule — both open with a
+    /// `guard let schedule = routine.schedule` — so this is the only path that brings one into
+    /// existence. Callers should build the schedule with `RoutineSchedule.newlyCreated(...)`
+    /// rather than the initializer, so the catch-up baseline is anchored; see that factory for
+    /// what goes wrong otherwise.
+    func setRoutineSchedule(_ routine: StoredRoutine, to schedule: RoutineSchedule?) {
+        applySchedule(schedule, to: routine.name)
+    }
+
+    /// Commits an edited schedule from the detail view's draft.
+    ///
+    /// Takes the fields rather than a built `RoutineSchedule` on purpose: the view never
+    /// constructs one, so the catch-up-baseline invariant cannot drift back into the UI where it
+    /// was a trap. Everything goes through `RoutineSchedule.newlyCreated`, which is the single
+    /// anchoring path.
+    ///
+    /// **Editing re-anchors the baseline, and that is deliberate.** Changing a daily routine from
+    /// 9am to 7am in the afternoon would otherwise leave the old baseline in place, making today's
+    /// 07:00 look outstanding and firing a run — or reporting a missed one — for a time the user
+    /// just set. It is the same hazard creation has, reached through a different door. Anchoring at
+    /// confirm time means a schedule always starts counting from the moment it became real.
+    ///
+    /// `isEnabled` and `unattendedTrusted` carry over from the existing schedule: neither is part
+    /// of the draft, since both are separate decisions about a schedule rather than fields of one
+    /// being composed.
+    func commitScheduleDraft(
+        for routine: StoredRoutine,
+        cadence: RoutineCadence,
+        hour: Int,
+        minute: Int,
+        weekday: Int,
+        dayOfMonth: Int,
+        now: Date = Date()
+    ) {
+        let existing = routine.schedule
+        applySchedule(
+            .newlyCreated(
+                cadence: cadence,
+                hour: hour,
+                minute: minute,
+                // Both are passed regardless of cadence so switching back and forth in the draft
+                // does not silently discard a choice; `validate()` only checks the one that
+                // applies.
+                weekday: weekday,
+                dayOfMonth: dayOfMonth,
+                isEnabled: existing?.isEnabled ?? true,
+                unattendedTrusted: existing?.unattendedTrusted ?? false,
+                now: now
+            ),
+            to: routine.name
+        )
+    }
+
+    /// Turns a routine's schedule on or off from the Routines row.
+    ///
+    /// Goes through `RoutineSchedule.setEnabled(_:now:)` rather than assigning `isEnabled`, because
+    /// that is what re-anchors the catch-up baseline — enabling a 9am routine at 3pm must not read
+    /// as "this morning was missed" and fire an immediate unattended run.
+    func setRoutineScheduleEnabled(_ routine: StoredRoutine, to isEnabled: Bool) {
+        guard var schedule = routine.schedule else {
+            return
+        }
+        schedule.setEnabled(isEnabled, now: Date())
+        applySchedule(schedule, to: routine.name)
+    }
+
+    /// Turns the per-routine unattended-run opt-in on or off, returning advisory copy when the
+    /// routine currently assesses at tier 3+ and therefore could not run unattended anyway.
+    ///
+    /// The advisory is a heads-up, never a gate — blocking the opt-in here would be the save-time
+    /// tier gating this branch explicitly rejected. It is also best-effort: tiers escalate from
+    /// real run-time conditions, so a routine that reads clean today can still be skipped later.
+    @discardableResult
+    func setRoutineUnattendedTrust(_ routine: StoredRoutine, to isTrusted: Bool) -> String? {
+        guard var schedule = routine.schedule else {
+            return nil
+        }
+        schedule.unattendedTrusted = isTrusted
+        applySchedule(schedule, to: routine.name)
+        guard isTrusted else {
+            return nil
+        }
+        return UnattendedTrustAdvisory.warning(forRoutineNamed: routine.name, executor: makeExecutor())
+    }
+
+    private func applySchedule(_ schedule: RoutineSchedule?, to routineName: String) {
+        do {
+            try routineStore.setSchedule(routineNamed: routineName, to: schedule)
+            refreshSavedItems()
+        } catch {
+            recordLocalStorageWriteFailure(
+                "Sonny could not save this routine's schedule: \(error.localizedDescription)"
+            )
         }
     }
 
@@ -1256,13 +1385,250 @@ final class AgentViewModel: ObservableObject {
                     startedAt: startedAt,
                     completedAt: Date(),
                     outcomeStatus: status,
-                    workspaceName: workspaceName
+                    workspaceName: workspaceName,
+                    // Derived from origin rather than threaded through every call site — origin
+                    // already records who started this run, and a second parameter saying the same
+                    // thing is a second thing to forget to pass.
+                    trigger: activeTaskOrigin == .scheduled ? .scheduled : .manual
                 )
             )
             refreshTaskHistory()
         } catch {
             setError("Could not save task history: \(error.localizedDescription)")
             logStore.append(.observe, "Could not record task history: \(error.localizedDescription)")
+        }
+    }
+
+    // MARK: - Routine scheduling
+
+    /// Poll interval. Far coarser than the clipboard monitor's 1s because nothing here is
+    /// interactive — the worst case is starting a routine up to this late, which is irrelevant
+    /// against catch-up windows measured in hours.
+    private static let scheduleTickInterval: TimeInterval = 30
+
+    /// Starts the schedule timer and the wake observer.
+    ///
+    /// The wake observer is not redundant with the timer: `Timer` does not fire while the machine
+    /// is asleep and does not retroactively catch up on wake, and the app commonly stays running
+    /// across a sleep — so checking only on launch and on tick would miss the single most common
+    /// real scenario, a laptop closed overnight and opened in the morning.
+    func startRoutineScheduling() {
+        routineScheduleTimer?.invalidate()
+        checkScheduledRoutines()
+        routineScheduleTimer = Timer.scheduledTimer(
+            withTimeInterval: Self.scheduleTickInterval,
+            repeats: true
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.checkScheduledRoutines()
+            }
+        }
+        wakeObserver = NSWorkspace.shared.notificationCenter.addObserver(
+            forName: NSWorkspace.didWakeNotification,
+            object: nil,
+            queue: .main
+        ) { [weak self] _ in
+            Task { @MainActor in
+                self?.checkScheduledRoutines()
+            }
+        }
+    }
+
+    /// Handles at most one outstanding occurrence per call, oldest first.
+    ///
+    /// One at a time rather than draining the whole backlog: each run sets `isRunning`, which the
+    /// guard below respects, so a backlog is worked through across ticks instead of firing several
+    /// unattended routines at once — which is exactly the burst behavior that ruled out unbounded
+    /// catch-up in the first place.
+    func checkScheduledRoutines(now: Date = Date()) {
+        // Never interrupt or race a task already in flight, whoever started it.
+        guard !isRunning, !isAwaitingApproval else {
+            return
+        }
+
+        // Read from the store, never from `savedRoutines`. An in-memory snapshot can outlive the
+        // file — "delete all local data" wipes routines.json while the published array still holds
+        // the old values — and firing against a routine that no longer exists is the one way the
+        // otherwise-unreachable missing-routine path below becomes reachable.
+        let routines: [StoredRoutine]
+        do {
+            routines = Array(try routineStore.loadAll().values)
+        } catch {
+            recordLocalStorageLoadFailure(.savedRoutines, error: error)
+            return
+        }
+
+        guard let next = RoutineScheduler.outstanding(in: routines, now: now).first,
+              let occurrence = next.occurrence else {
+            return
+        }
+
+        switch next.decision {
+        case .notDue:
+            return
+        case .missed:
+            resolveOccurrence(for: next.routine.name, at: occurrence)
+            scheduledRunNotice = "“\(next.routine.name)” did not run at its scheduled time — too much time had passed by the time Sonny was available again."
+        case .due:
+            guard next.routine.schedule?.unattendedTrusted == true else {
+                // An enabled schedule without unattended trust cannot run: the outer run-routine
+                // gate is tier 2 and there is nobody to approve it. Skipping and saying so is
+                // deliberate — pausing at the approval and waiting was considered for this branch
+                // and rejected, because it reduces scheduling to "notify me it's ready, I'll
+                // finish it myself".
+                resolveOccurrence(for: next.routine.name, at: occurrence)
+                scheduledRunNotice = "“\(next.routine.name)” was not run because it is not set to run unattended. Turn on unattended running for it, or run it yourself."
+                return
+            }
+            isRunning = true
+            // Deliberately does not touch `lastCommand`. That property is the user's own last
+            // submission: it feeds `hasRetryableCommand` and `retryLastCommand()`, so overwriting
+            // it here would point the widget's Retry button at a routine the user never ran.
+            // `runningCommandDisplayText` reads the scheduled label separately while this runs.
+            currentTask = Task {
+                await performScheduledRun(next.routine, occurrence: occurrence)
+            }
+        }
+    }
+
+    /// Runs a routine with nobody watching, without disturbing anything that describes the user's
+    /// own last task.
+    ///
+    /// That isolation is the whole design of this method, and it is why it does not reuse
+    /// `performStart`'s state handling. Every property that surface UI reads as "your last task" —
+    /// `errorMessage`, `finalSummary`, `suggestions`, `plan`, `stepStatuses`, `preparedRun`,
+    /// `lastCommand`, `priorTaskContext`, the usage summary — is deliberately untouched here. A
+    /// background event silently erasing an unresolved error, or an "open the file" suggestion the
+    /// user had not acted on yet, is a worse failure than a scheduled run being under-reported: the
+    /// user did not do anything, so nothing they were looking at should change.
+    ///
+    /// `isRunning` and `activeTaskOrigin` are the two exceptions, because both are needed *during*
+    /// the run — one blocks re-entrancy and drives Command Center's running indicator, the other
+    /// keeps the widget from raising a progress panel for a task the user never started. Origin is
+    /// restored afterwards so the user's previous result stays visible in the widget.
+    ///
+    /// Everything this method has to say goes to `scheduledRunNotice`, task history, and the
+    /// routine's own run history.
+    private func performScheduledRun(_ routine: StoredRoutine, occurrence: Date) async {
+        let previousOrigin = activeTaskOrigin
+        activeTaskOrigin = .scheduled
+        let startedAt = Date()
+        let name = routine.name
+        scheduledRunDisplayCommand = "Run my \(name) routine"
+        defer {
+            activeTaskOrigin = previousOrigin
+            scheduledRunDisplayCommand = nil
+            isRunning = false
+            currentTask = nil
+        }
+
+        // Whatever happens below, this occurrence is handled. Advancing first means an unexpected
+        // throw can't leave it outstanding for the next tick to retry 30 seconds later, forever.
+        resolveOccurrence(for: name, at: occurrence)
+
+        do {
+            let executor = makeExecutor()
+            let runner = AgentRunner(
+                planner: InstantOnlyFallbackPlanner(),
+                executor: executor,
+                logStore: logStore,
+                recentArtifactStore: recentArtifactStore
+            )
+            self.runner = runner
+            // The same plan a typed "run my X routine" produces — built directly rather than
+            // round-tripped through the resolver or the planner, so a scheduled run is
+            // deterministic and costs no model call.
+            let prepared = try runner.prepare(
+                plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: name),
+                source: .instantResolver
+            )
+            // Defensive, and currently unreachable: `SaveRoutineCapabilityAdapter` rejects
+            // open_workspace and run_routine steps at save time, so a routine's own steps cannot
+            // name a missing target, and the routine itself must exist because its schedule was
+            // just read off it. Two changes would make this reachable — moving schedules off
+            // StoredRoutine into a store keyed by name, or a routine saved before that step
+            // validation existed — so it fails closed rather than stalling on a question nobody
+            // is present to answer.
+            if let question = prepared.clarificationQuestion {
+                scheduledRunNotice = "“\(name)” was not run because Sonny needed to ask something first: \(question)"
+                return
+            }
+
+            let result = try await runner.execute(
+                prepared,
+                approvalDecision: .approved(.tier2),
+                confirmationMessage: "Scheduled run approved by this routine's unattended-run setting"
+            )
+            recordScheduledRunInHistory(name: name, at: occurrence)
+            recordScheduledTaskHistory(status: .completed, startedAt: startedAt)
+            scheduledRunNotice = "“\(name)” ran on schedule. \(result.summary)"
+        } catch let error as RiskApprovalError {
+            // The tier-3+ backstop firing. `AgentRunner` re-assesses at execute time and requires
+            // the approved tier to be at least the effective tier, so a tier-2 unattended approval
+            // simply cannot satisfy a tier-3 plan — the refusal is structural, not a policy check
+            // written here that could drift out of sync with the real gate.
+            logStore.append(.summarize, "Scheduled run skipped: \(error.localizedDescription)")
+            scheduledRunNotice = "“\(name)” was not run because it needs your explicit approval this time. Run it yourself to review what it wants to do."
+        } catch {
+            logStore.append(.summarize, "Scheduled run failed: \(error.localizedDescription)")
+            recordScheduledTaskHistory(status: .failed, startedAt: startedAt)
+            scheduledRunNotice = "“\(name)” failed on its scheduled run: \(error.localizedDescription)"
+        }
+    }
+
+    /// Records a scheduled run in task history *without* going through `recordPriorTaskContext`.
+    ///
+    /// The split is the point. History is a log of what Sonny did, and a scheduled run that failed
+    /// has to be debuggable, so it belongs there. `PriorTaskContext` is a different thing: it is
+    /// the last-task-only context that lets "use ~/Downloads instead" correct a just-finished task
+    /// without restating it — a feature explicitly about correcting *your own* last action. Letting
+    /// a background event become that target would silently redirect the next correction onto a
+    /// task the user never started, with nothing in the phrasing to reveal it.
+    ///
+    /// A routine is also the wrong shape for that feature even setting the confusion aside: its
+    /// steps are saved and fixed, so there is no command text for a correction to rewrite.
+    private func recordScheduledTaskHistory(status: PriorTaskOutcomeStatus, startedAt: Date) {
+        guard let command = scheduledRunDisplayCommand else {
+            return
+        }
+        do {
+            try taskHistoryStore.record(
+                CompletedTaskRecord(
+                    command: command,
+                    startedAt: startedAt,
+                    completedAt: Date(),
+                    outcomeStatus: status,
+                    trigger: .scheduled
+                )
+            )
+            refreshTaskHistory()
+        } catch {
+            recordLocalStorageWriteFailure(
+                "Sonny could not save this scheduled run to task history: \(error.localizedDescription)"
+            )
+        }
+    }
+
+    /// Marks an occurrence handled so the next tick moves past it. Applies to every outcome — ran,
+    /// refused, skipped, missed — because any of them leaving the baseline untouched would make the
+    /// scheduler retry the same occurrence every 30 seconds.
+    private func resolveOccurrence(for routineName: String, at occurrence: Date) {
+        do {
+            try routineStore.advanceScheduleBaseline(routineNamed: routineName, to: occurrence)
+        } catch {
+            recordLocalStorageWriteFailure(
+                "Sonny could not save this routine's schedule state: \(error.localizedDescription)"
+            )
+        }
+    }
+
+    private func recordScheduledRunInHistory(name: String, at occurrence: Date) {
+        do {
+            try routineStore.recordRun(routineNamed: name, at: occurrence)
+        } catch {
+            recordLocalStorageWriteFailure(
+                "Sonny could not save this routine's run history: \(error.localizedDescription)"
+            )
         }
     }
 

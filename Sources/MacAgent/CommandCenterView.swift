@@ -417,6 +417,11 @@ private struct TasksFoundationView: View {
                     .stroke(SonnyTheme.border, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+
+            // Pinned below the scroll area rather than placed in the list flow like the storage
+            // notice above: an approval the user has to act on must not be scrollable out of
+            // sight. Self-gates on its own state, so an idle page renders nothing here.
+            CommandCenterAttentionPanel(viewModel: viewModel)
         }
         .padding(.horizontal, 28)
         .padding(.top, 24)
@@ -549,36 +554,284 @@ private struct CommandCenterStorageNotice: View {
     var insets: Insets = .none
 
     var body: some View {
-        if let message = viewModel.localStorageNotice {
-            HStack(alignment: .top, spacing: 10) {
-                Image(systemName: "externaldrive.badge.exclamationmark")
-                    .font(.system(size: 13, weight: .semibold))
-                    .foregroundStyle(SonnyTheme.warning)
+        if let message = viewModel.scheduledRunNotice {
+            noticeRow(
+                icon: "clock.arrow.circlepath",
+                tint: SonnyTheme.accent,
+                message: message
+            ) {
+                viewModel.scheduledRunNotice = nil
+            }
+        } else if let message = viewModel.localStorageNotice {
+            noticeRow(
+                icon: "externaldrive.badge.exclamationmark",
+                tint: SonnyTheme.warning,
+                message: message
+            ) {
+                viewModel.localStorageNotice = nil
+            }
+        } else {
+            EmptyView()
+        }
+    }
 
-                Text(message)
-                    .font(SonnyType.itemTitle)
-                    .foregroundStyle(SonnyTheme.sidebarNavText)
-                    .fixedSize(horizontal: false, vertical: true)
+    /// Both notices share one row treatment. The scheduler's takes precedence when both are set:
+    /// it reports something that already happened without the user present, which is more urgent
+    /// than an ambient storage problem that will still be true after they dismiss this.
+    @ViewBuilder
+    private func noticeRow(
+        icon: String,
+        tint: Color,
+        message: String,
+        dismiss: @escaping () -> Void
+    ) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(tint)
 
-                Spacer(minLength: 12)
+            Text(message)
+                .font(SonnyType.itemTitle)
+                .foregroundStyle(SonnyTheme.sidebarNavText)
+                .fixedSize(horizontal: false, vertical: true)
 
-                Button("Dismiss") {
-                    viewModel.localStorageNotice = nil
-                }
+            Spacer(minLength: 12)
+
+            Button("Dismiss", action: dismiss)
                 .buttonStyle(CommandCenterRowActionStyle())
+        }
+        .padding(.horizontal, 12)
+        .padding(.vertical, 10)
+        .background(CommandCenterPalette.cardSurface)
+        .overlay(
+            RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
+                .stroke(tint.opacity(0.4), lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
+        .padding(.horizontal, insets.horizontal)
+        .padding(.bottom, insets.bottom)
+    }
+}
+
+/// Command Center's own permission / clarification / failure surface (System A).
+///
+/// Until branch 10 these three states rendered *only* in the floating widget, which was fine while
+/// every task was started by a user who was looking at it. Scheduled routines break that
+/// assumption: a run fires with nobody watching, and the system-notification fallback is
+/// unreachable by deliberate decision (the widget is a permanent overlay with no dismiss action),
+/// so without a Command-Center-native surface an unattended run that needs approval or fails would
+/// be silently stuck. `docs/sonny-ui-backend-roadmap.md` names this a hard prerequisite for
+/// background execution, not polish.
+///
+/// The widget is deliberately **not** changed to compensate: it keeps showing all three states for
+/// every task regardless of origin, so both surfaces can show controls for the same task at once.
+/// That redundancy is the intended trade — the widget is always visible, Command Center is a window
+/// that may be closed, so for an unattended run the widget is the more reliable surface, not the
+/// less. See `AgentViewModel.hasVisibleWidgetPanel`.
+///
+/// Rendered unconditionally by its pages and self-gating on its own state, same as
+/// `CommandCenterStorageNotice` — never wrapped in a caller-side condition. Nesting a self-gating
+/// strip inside `if isRunning || isAwaitingApproval` was a real shipped bug on the storage notice.
+///
+/// Deliberately origin-agnostic: it never reads `activeTaskOrigin`, which is what lets a third
+/// `TaskOrigin` case for scheduled runs land later without touching this view.
+private struct CommandCenterAttentionPanel: View {
+    @ObservedObject var viewModel: AgentViewModel
+
+    /// Mirrors `FloatingWidgetView`'s private `state` precedence exactly (permission >
+    /// clarification > failure, and failure only once the run has actually stopped). Both surfaces
+    /// observe the same view model, so if these two disagreed about which state wins they would
+    /// show contradictory controls for one task.
+    private enum AttentionState {
+        case permission(RiskApprovalRequest)
+        case clarification(String)
+        case failure(String)
+    }
+
+    private var state: AttentionState? {
+        if let approvalRequest = viewModel.approvalRequest {
+            return .permission(approvalRequest)
+        }
+        if let question = viewModel.clarificationQuestion {
+            return .clarification(question)
+        }
+        if let error = viewModel.errorMessage, !viewModel.isRunning {
+            return .failure(error)
+        }
+        return nil
+    }
+
+    var body: some View {
+        if let state {
+            VStack(alignment: .leading, spacing: 10) {
+                switch state {
+                case .permission(let request):
+                    permissionContent(request)
+                case .clarification(let question):
+                    clarificationContent(question)
+                case .failure(let message):
+                    failureContent(message)
+                }
             }
             .padding(.horizontal, 12)
             .padding(.vertical, 10)
+            .frame(maxWidth: .infinity, alignment: .leading)
             .background(CommandCenterPalette.cardSurface)
             .overlay(
                 RoundedRectangle(cornerRadius: SonnyRadius.panelCard)
-                    .stroke(SonnyTheme.warning.opacity(0.4), lineWidth: 1)
+                    .stroke(accentColor.opacity(0.4), lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.panelCard))
-            .padding(.horizontal, insets.horizontal)
-            .padding(.bottom, insets.bottom)
         } else {
             EmptyView()
+        }
+    }
+
+    private var accentColor: Color {
+        switch state {
+        case .failure:
+            return SonnyTheme.danger
+        default:
+            return SonnyTheme.warning
+        }
+    }
+
+    @ViewBuilder
+    private func permissionContent(_ request: RiskApprovalRequest) -> some View {
+        header(icon: "exclamationmark.triangle", title: "Approval needed")
+
+        // The same first-approval explainer the widget shows. Included here rather than left as a
+        // widget-only moment because which surface the user happens to be looking at the first
+        // time Sonny asks shouldn't decide whether they get the explanation.
+        if !viewModel.hasCompletedFirstApproval {
+            Text("Sonny always asks first for actions like this — you decide, every time.")
+                .font(SonnyType.micro)
+                .foregroundStyle(SonnyTheme.muted)
+        }
+
+        // `approvalCopy.lines` is the same five-line disclosure the risk engine builds for every
+        // surface — what/why/involves/data-leaves-device/undo. Rendered in full here rather than
+        // condensed to the resource name: Command Center has the vertical room the widget's
+        // single-line treatment doesn't, and this may be the only surface an unattended run's
+        // approval is ever read on.
+        ForEach(Array(request.approvalCopy.lines.enumerated()), id: \.offset) { _, line in
+            Text(line)
+                .font(SonnyType.micro)
+                .foregroundStyle(SonnyTheme.sidebarNavText)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+
+        // What raised this above its default tier — "the zip already exists", "this snippet
+        // trigger would be replaced". The widget added this line last branch; without it the
+        // panel asks for approval on a raised tier while showing nothing about what raised it.
+        let escalationReasons = request.assessment.escalations.map(\.reason).joined(separator: " ")
+        if !escalationReasons.isEmpty {
+            Text(escalationReasons)
+                .font(SonnyType.micro)
+                .foregroundStyle(SonnyTheme.warning)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+
+        HStack(spacing: 8) {
+            Spacer(minLength: 0)
+
+            // Same entry points the widget's own permission panel uses — `start()` routes to the
+            // private `approvePendingRun()` through its `isAwaitingApproval` guard, and there is
+            // no separate deny method. Calling anything else here would fork the approval path.
+            Button("Deny") {
+                viewModel.cancelCurrentRun()
+            }
+            .buttonStyle(CommandCenterRowActionStyle())
+
+            Button("Allow") {
+                viewModel.start()
+            }
+            .buttonStyle(CommandCenterRowActionStyle())
+        }
+    }
+
+    @ViewBuilder
+    private func clarificationContent(_ question: String) -> some View {
+        header(icon: "questionmark.circle", title: "Clarification needed")
+
+        Text(question)
+            .font(SonnyType.micro)
+            .foregroundStyle(SonnyTheme.sidebarNavText)
+            .fixedSize(horizontal: false, vertical: true)
+
+        HStack(spacing: 8) {
+            TextField(
+                "",
+                text: $viewModel.clarificationAnswer,
+                prompt: Text("Type your answer…").foregroundStyle(SonnyTheme.muted)
+            )
+            .textFieldStyle(.plain)
+            .font(SonnyType.caption)
+            .foregroundStyle(SonnyTheme.text)
+            .padding(.horizontal, 10)
+            .frame(height: 23)
+            .background(CommandCenterPalette.collectionSurface)
+            .overlay(
+                RoundedRectangle(cornerRadius: SonnyRadius.container)
+                    .stroke(SonnyTheme.cardBorder, lineWidth: 1)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+            .onSubmit { viewModel.submitClarification() }
+
+            Button("Send") {
+                viewModel.submitClarification()
+            }
+            .buttonStyle(CommandCenterRowActionStyle())
+            .disabled(viewModel.clarificationAnswer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+        }
+    }
+
+    @ViewBuilder
+    private func failureContent(_ message: String) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "exclamationmark.circle.fill")
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(SonnyTheme.danger)
+
+            Text(message)
+                .font(SonnyType.itemTitle)
+                .foregroundStyle(SonnyTheme.sidebarNavText)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Spacer(minLength: 12)
+
+            // `errorMessage` also carries pre-flight errors (empty-command validation, voice
+            // transcription failures) that never reached a real submission, and `retryLastCommand`
+            // silently no-ops for those — so gate on `hasRetryableCommand` rather than shipping a
+            // dead button, same as the widget's failure panel.
+            if viewModel.hasRetryableCommand {
+                Button("Retry") {
+                    viewModel.retryLastCommand(origin: .commandCenter)
+                }
+                .buttonStyle(CommandCenterRowActionStyle())
+            }
+
+            Button("Dismiss") {
+                viewModel.errorMessage = nil
+            }
+            .buttonStyle(CommandCenterRowActionStyle())
+        }
+    }
+
+    /// Permission and clarification share this header; failure has its own single-line layout with
+    /// the message inline, so it deliberately does not use this.
+    @ViewBuilder
+    private func header(icon: String, title: String) -> some View {
+        HStack(spacing: 8) {
+            Image(systemName: icon)
+                .font(.system(size: 13, weight: .semibold))
+                .foregroundStyle(SonnyTheme.warning)
+
+            Text(title)
+                .font(SonnyType.bodyEmphasis)
+                .foregroundStyle(SonnyTheme.text)
+
+            Spacer(minLength: 12)
         }
     }
 }
@@ -597,6 +850,8 @@ private struct InsightsView: View {
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             CommandCenterPageHeader(title: "Insights")
+
+            CommandCenterAttentionPanel(viewModel: viewModel)
 
             CommandCenterStorageNotice(viewModel: viewModel)
 
@@ -955,7 +1210,7 @@ private struct InsightsRecentActivityRow: View {
 /// keep the wireframe's two-tone hierarchy: a brighter medium-weight label next to a dimmer
 /// regular-weight count, not one uniform muted string. Shared by every status group on this page,
 /// including the live "In Progress" group, so all of them look like one continuous list.
-private struct TaskStatusGroupHeader: View {
+private struct CommandCenterGroupHeader: View {
     let title: String
     let count: Int
 
@@ -989,7 +1244,7 @@ private struct InProgressTaskGroup: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            TaskStatusGroupHeader(title: "In Progress", count: 1)
+            CommandCenterGroupHeader(title: "In Progress", count: 1)
 
             CommandCenterRunningIndicator(viewModel: viewModel)
                 .padding(.horizontal, 30)
@@ -1023,7 +1278,7 @@ private struct TaskHistoryGroupedPanel: View {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(sections) { section in
                     VStack(alignment: .leading, spacing: 0) {
-                        TaskStatusGroupHeader(title: section.title, count: section.records.count)
+                        CommandCenterGroupHeader(title: section.title, count: section.records.count)
 
                         VStack(spacing: 0) {
                             ForEach(section.records, id: \.startedAt) { record in
@@ -1435,19 +1690,40 @@ private extension String {
 struct RoutineRowPresentation: Equatable {
     let name: String
     let detailText: String
+    let streak: Int?
+    let nextRunText: String?
+    let isEnabled: Bool
+    let isScheduleable: Bool
 
-    init(routine: StoredRoutine) {
+    init(routine: StoredRoutine, now: Date) {
         name = routine.name
+        isScheduleable = routine.schedule != nil
+        isEnabled = routine.isScheduled
 
-        let visibleLabels = routine.steps.prefix(2).map(AgentActivityPresentation.operationTitle)
-        let remainingCount = routine.steps.count - visibleLabels.count
-        let visibleText = visibleLabels.joined(separator: " · ")
-        if remainingCount > 0 {
-            detailText = "\(visibleText) · +\(remainingCount) more"
-        } else if visibleText.isEmpty {
-            detailText = "No saved steps"
+        // The wireframe's second line is the routine's cadence ("Daily", "Weekly · Mon"), not its
+        // step list. An unscheduled routine has no cadence to show, so it keeps the step summary
+        // rather than leaving the line blank.
+        if let schedule = routine.schedule {
+            detailText = RoutineScheduleDisplay.cadenceLabel(for: schedule)
         } else {
-            detailText = visibleText
+            let visibleLabels = routine.steps.prefix(2).map(AgentActivityPresentation.operationTitle)
+            let remainingCount = routine.steps.count - visibleLabels.count
+            let visibleText = visibleLabels.joined(separator: " · ")
+            if remainingCount > 0 {
+                detailText = "\(visibleText) · +\(remainingCount) more"
+            } else if visibleText.isEmpty {
+                detailText = "No saved steps"
+            } else {
+                detailText = visibleText
+            }
+        }
+
+        let streakCount = RoutineStreak.current(for: routine, now: now)
+        // Hidden rather than shown as "0" — the badge is a reward, and a zero badge on every
+        // never-run routine is visual noise that makes the real ones harder to spot.
+        streak = streakCount > 0 ? streakCount : nil
+        nextRunText = routine.schedule.flatMap {
+            RoutineScheduleDisplay.nextRunText(for: $0, now: now)
         }
     }
 }
@@ -1511,6 +1787,10 @@ private struct RoutinesView: View {
     @ObservedObject var viewModel: AgentViewModel
     @State private var selectedRoutine: StoredRoutine?
 
+    private var sections: [RoutineCadenceSection] {
+        RoutineGrouping.groupedByCadence(routines: viewModel.savedRoutines)
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
             CommandCenterPageHeader(title: "Routines")
@@ -1535,14 +1815,19 @@ private struct RoutinesView: View {
                 } else {
                     ScrollView {
                         LazyVStack(spacing: 0) {
-                            ForEach(Array(viewModel.savedRoutines.enumerated()), id: \.element.name) { index, routine in
-                                RoutineRow(
-                                    presentation: RoutineRowPresentation(routine: routine),
-                                    isLast: index == viewModel.savedRoutines.count - 1,
-                                    isRunning: viewModel.isRunning || viewModel.isAwaitingApproval,
-                                    run: { viewModel.runRoutineWidget(routine) },
-                                    openDetail: { selectedRoutine = routine }
-                                )
+                            // Cadence-grouped per `11-MainAppRoutines.svg`, which has Daily /
+                            // Weekly / Monthly headings with counts rather than one flat list.
+                            ForEach(sections) { section in
+                                CommandCenterGroupHeader(title: section.title, count: section.routines.count)
+
+                                ForEach(Array(section.routines.enumerated()), id: \.element.name) { index, routine in
+                                    RoutineRow(
+                                        presentation: RoutineRowPresentation(routine: routine, now: Date()),
+                                        isLast: index == section.routines.count - 1,
+                                        setEnabled: { viewModel.setRoutineScheduleEnabled(routine, to: $0) },
+                                        openDetail: { selectedRoutine = routine }
+                                    )
+                                }
                             }
                         }
                     }
@@ -1555,6 +1840,8 @@ private struct RoutinesView: View {
                     .stroke(SonnyTheme.border, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+
+            CommandCenterAttentionPanel(viewModel: viewModel)
 
             // Self-gates on `localStorageNotice`, deliberately outside the running check: a
             // corrupt store is worth reporting whether or not a task happens to be in flight,
@@ -1572,7 +1859,7 @@ private struct RoutinesView: View {
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(SonnyTheme.ink)
         .sheet(item: $selectedRoutine) { routine in
-            RoutineDetailView(routine: routine)
+            RoutineDetailView(routine: routine, viewModel: viewModel)
         }
     }
 
@@ -1587,8 +1874,7 @@ private struct RoutinesView: View {
 private struct RoutineRow: View {
     let presentation: RoutineRowPresentation
     let isLast: Bool
-    let isRunning: Bool
-    let run: () -> Void
+    let setEnabled: (Bool) -> Void
     let openDetail: () -> Void
 
     var body: some View {
@@ -1616,12 +1902,46 @@ private struct RoutineRow: View {
 
                 Spacer(minLength: 14)
 
-                Button(action: run) {
-                    Text("Run")
+                // The wireframe's `streak` layer: a 10pt #F2BE00 dot and the count beside it.
+                // Wired to real per-occurrence run history, never to `steps.count` — a step count
+                // does not decay the way a streak does, which is the documented prior mistake here.
+                if let streak = presentation.streak {
+                    HStack(spacing: 4) {
+                        Circle()
+                            .fill(SonnyTheme.warning)
+                            .frame(width: 10, height: 10)
+                        Text("\(streak)")
+                            .font(SonnyType.caption)
+                            .foregroundStyle(SonnyTheme.warning)
+                    }
+                    .accessibilityLabel("\(streak) run streak")
                 }
-                .buttonStyle(CommandCenterRowActionStyle())
-                .disabled(isRunning)
-                .accessibilityLabel("Run \(presentation.name)")
+
+                if let nextRun = presentation.nextRunText {
+                    Text(nextRun)
+                        .font(SonnyType.caption)
+                        .foregroundStyle(SonnyTheme.muted)
+                        .lineLimit(1)
+                }
+
+                // Replaces the old Run button, which was an original addition never in the
+                // wireframe — this slot is the toggle's. Running a routine by hand now lives in
+                // the detail view, which the row opens on tap.
+                if presentation.isScheduleable {
+                    // `set:` takes the closure inline rather than passing `setEnabled` directly:
+                    // the bare function reference converts to a `@Sendable` parameter and trips
+                    // Swift 6's data-race check, since the closure captures the main-actor view
+                    // model. Both this view and the handler are already main-actor isolated.
+                    Toggle("", isOn: Binding(
+                        get: { presentation.isEnabled },
+                        set: { isOn in setEnabled(isOn) }
+                    ))
+                        .labelsHidden()
+                        .toggleStyle(.switch)
+                        .controlSize(.mini)
+                        .tint(SonnyTheme.accent)
+                        .accessibilityLabel("Run \(presentation.name) on schedule")
+                }
             }
             .padding(.horizontal, 18)
             .frame(height: 56)
@@ -1698,6 +2018,8 @@ private struct WorkspacesView: View {
                     .stroke(SonnyTheme.border, lineWidth: 1)
             )
             .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+
+            CommandCenterAttentionPanel(viewModel: viewModel)
 
             // Self-gates on `localStorageNotice`, deliberately outside the running check: a
             // corrupt store is worth reporting whether or not a task happens to be in flight,

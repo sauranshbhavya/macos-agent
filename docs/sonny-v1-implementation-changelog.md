@@ -35,7 +35,7 @@ Dependency-ordered. Do not start a branch before the ones above it are merged, u
 | 7 | `feature/local-storage-privacy-foundation` | §15.4 | Complete |
 | 8 | `feature/product-shell-shared-state` | §4A.1 (shell only), §6.2, §6.3, §17.3 | Superseded — see branch 9. Branch 8 itself is frozen, no further commits. |
 | 9 | `feature/command-center-depth-and-data-model` | Founder-decisions UI-fidelity audit, task-to-workspace association; recommended (not mandatory) home for the first-run tier-2 legibility moment | Checkpoints 1-7 complete (shipped on `feature/ui-ux-wireframe-fidelity`, which absorbed this branch's scope — see 2026-07-23 note below). Checkpoint 8 split 2026-07-24: first-time approval copy shipping now, curated-example surfacing explicitly deferred — see `docs/sonny-founder-design-decisions.md`'s "Approval panel — first-run moment" |
-| 10 | `feature/routine-scheduling` | Real scheduler/execution-trigger (defined run time, enabled/disabled state) per `docs/sonny-founder-design-decisions.md` | Not started — confirmed 2026-07-23, no scheduling/trigger code exists anywhere in the codebase |
+| 10 | `feature/routine-scheduling` | Real scheduler/execution-trigger (defined run time, enabled/disabled state) per `docs/sonny-founder-design-decisions.md` | Complete 2026-07-29 — schedule data model, scheduler firing on tick and system wake, per-routine unattended-run opt-in with a structural tier-3+ backstop, Command-Center-native approval surface, cadence-grouped Routines UI. Schedule *authoring* UI still owed |
 | — | `feature/full-repo-correctness-review` | None (cross-cutting correctness pass over branches 1-11) | Complete 2026-07-29 — 37 verified behavior/claim divergences fixed across capability adapters, the safety core, the 8 local stores, the planner/web boundary, system services, and the UI shell |
 | 11 | `feature/floating-command-widget` | §17.3 (cockpit surface, visual form only); user wireframes (2026-07-08), not spec-mandated | Complete, and substantially extended beyond original scope (shipped on `feature/ui-ux-wireframe-fidelity` — see 2026-07-23 note below) |
 | 12 | `feature/hosted-agent-runtime-backend` | §6.1, §8, §9, §16, §21.2, §21.3, §6.19 | Not started |
@@ -875,7 +875,7 @@ Start in plan mode. Confirm git status is clean on main, confirm the changelog's
 ---
 
 ### Branch: feature/full-repo-correctness-review
-Status: complete
+Status: complete (5 checkpoints)
 Date: 2026-07-29
 Implementing agent: Claude
 Reviewing agent: pending
@@ -945,3 +945,137 @@ Open questions for the next chat (required, write "none" if true):
 - `.previewOnly` is dead but costs a maintained branch. Delete `Tier2ApprovalMode` entirely, or build the Settings control that makes it reachable?
 
 Next branch: `feature/routine-scheduling` (branch 10 per the roadmap above), unchanged by this pass.
+
+### Branch: feature/routine-scheduling
+Status: complete
+Date: 2026-07-29
+Implementing agent: Claude
+Reviewing agent: pending
+
+Spec sections covered: routine scheduling per `docs/sonny-founder-design-decisions.md`'s Routines section; the Command-Center-native permission/clarification/failure surface `docs/sonny-ui-backend-roadmap.md` names as a hard prerequisite for background execution.
+Files changed: `Sources/MacAgentCore/RoutineSchedule.swift` (new), `RoutineScheduler.swift` (new), `RoutineStreak.swift` (new), `UnattendedTrustAdvisory.swift` (new), `AutomationStores.swift`, `TaskHistoryStore.swift`, `TaskHistoryInsights.swift`, `RunRoutineCapabilityAdapter.swift`, `InstantCommandResolver.swift`, `AgentActionExecutor.swift`; `Sources/MacAgent/AgentViewModel.swift`, `CommandCenterView.swift`, `RoutineDetailView.swift`, `AppDelegate.swift`; tests `RoutineScheduleTests.swift` (new), `RoutineSchedulerTests.swift` (new), `RoutineStreakTests.swift` (new), `ScheduledRoutineRunTests.swift` (new), `CommandCenterAttentionSurfaceTests.swift` (new), `TaskHistoryInsightsTests.swift`, `ProductShellTests.swift`.
+Tests: `env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disable-sandbox -Xswiftc -F ...` (full flags per CLAUDE.md) -> pass, 373 tests in 42 suites (from 300 at branch start).
+
+Behavior added:
+- Command Center's own permission/clarification/failure surface, origin-agnostic and rendered on the four pages that host the storage notice.
+- Real routine schedules: cadence, run time, enabled state, per-routine unattended-run opt-in, catch-up baseline, bounded run history.
+- A scheduler that fires on a 30-second tick and on system wake, runs unattended routines through the real approval gate with a tier-2 approval, and skips-and-reports for tier-3+, missing unattended trust, staleness, or a clarification.
+- Cadence-grouped Routines list with the wireframe's streak badge, next-run text and schedule toggle; Run moved into the routine detail view alongside the unattended-trust opt-in.
+
+Behavior preserved (required, no blanket claims):
+- The floating widget is unchanged: it still shows permission/clarification/failure for every task regardless of origin, and `hasVisibleWidgetPanel` has a regression test pinning that.
+- Typed and voice command flows still route through `performStart` untouched; the scheduled path is separate and never reuses it.
+- `retryLastCommand()` still defaults to `.widget` origin for the widget's own failure panel and the error notification.
+- Manual routine runs still work, now from the detail view rather than the row, and still record prior-task context normally.
+- Insights counts, completion rate, cycle time and the weekly chart are unchanged for manual tasks; only the streak and completed-today stats changed, and only by excluding scheduled runs.
+
+Architectural decisions / pitfalls discovered:
+
+**Schedule authoring is a designed element, not a matched one — a stated wireframe exception.**
+Checkpoint 5 was added after checkpoints 1-4 were complete, because the branch had shipped a
+feature nobody could turn on: `RoutineSchedule` was never constructed anywhere in `Sources/`, and
+both `setRoutineScheduleEnabled` and `setRoutineUnattendedTrust` open with
+`guard let schedule = routine.schedule` — they modify a schedule, neither makes one. Every routine
+therefore had `schedule == nil` permanently, which meant no cadence headers, no streak badge, no
+next-run text, no row toggle, no unattended-trust toggle, and a scheduler that never fired. The
+encrypted store ruled out hand-editing `routines.json` as a workaround. This was a hole in the
+checkpoint plan, which was carried forward from the original design audit's four-checkpoint list
+without noticing none of them authored a schedule.
+
+`11-MainAppRoutines.svg` specifies the list side thoroughly but contains no cadence picker, time
+picker, or create affordance anywhere — it shows what a schedule *looks like*, never how one is
+made. CLAUDE.md makes wireframe fidelity the literal baseline for a page that has a wireframe, so
+this is recorded as a reasoned exception: the controls live in `RoutineDetailView` and follow what
+that view already establishes (its own System B token copy, label-plus-control rows matching the
+existing toggle, native controls it already uses). There is no draft state — every control writes
+through immediately, so what is on screen is always what is saved. Awaiting the user's visual review.
+
+**The trap this checkpoint had to avoid, and why the factory exists.** `RoutineSchedule.init`
+defaults `lastRunAt` to nil and `RoutineScheduler.decision` reads a nil baseline as `.distantPast`,
+so `RoutineSchedule(cadence: .daily, hour: 9, minute: 0, isEnabled: true)` built at 3pm resolves
+*that morning's* 09:00 as outstanding — firing an unattended run, or reporting a missed one, for a
+schedule seconds old. That is exactly what checkpoint 2's baseline anchoring exists to prevent,
+reachable through the new creation path. `RoutineSchedule.newlyCreated(...)` constructs disabled and
+then goes through `setEnabled(_:now:)`, so there is one anchoring path rather than two, and the UI
+cannot get it wrong. Verified by bypassing the anchor and watching the suite reproduce the real
+symptom: `.missed(occurrence: 9am)` and a "did not run at its scheduled time" notice on a
+brand-new schedule. `setCadence(_:now:)` fills in whatever a new cadence requires for the same
+reason — the controls are structurally unable to produce a schedule `validate()` would reject, with
+`validate()` kept as the backstop.
+
+**Reversal (checkpoint 6): schedule authoring commits explicitly rather than writing through.**
+Checkpoint 5 shipped every authoring control writing straight to the store on change, and stated
+that as a decision. Manual testing found it disorienting in use: the schedule mutated as you poked
+at controls, and there was no moment of having *set* it — nothing separated exploring the options
+from committing to them. Reversed to a local draft with an explicit confirm. The checkpoint 5
+commit message stands, since it accurately describes what that commit did.
+
+Four scoping decisions came with it. The unattended-trust toggle stays **outside** the draft and
+immediate: it is a distinct safety decision about a schedule that already exists, not a field of one
+being composed, and keeping it immediate means its tier-3 advisory describes real saved state rather
+than a hypothetical. "Remove schedule" likewise stays immediate — a discrete action, not a field
+edit. Dismissing the panel discards an uncommitted draft silently, which is acceptable *because* the
+confirm control is gated on the draft actually differing from what is saved: an untouched panel
+offers nothing to confirm, so nothing is lost invisibly, and a confirmation dialog would be more
+friction than that earns. The Routines list row's enabled toggle stays immediate too — a single
+toggle in a list is not a composed edit.
+
+**A second instance of the creation trap, found while building this.** Committing an *edit* also has
+to re-anchor the catch-up baseline. Moving a daily routine from 9am to 7am during the afternoon
+would otherwise leave the old baseline in place, making that day's 07:00 look outstanding — firing a
+run, or reporting a missed one, for a time the user had just set. Confirm therefore always goes
+through `RoutineSchedule.newlyCreated`, so a schedule starts counting from the moment it became
+real, whether it was created or changed. The view never constructs a `RoutineSchedule` at all now;
+`AgentViewModel.commitScheduleDraft` takes the fields, which keeps the anchoring invariant out of
+the UI where it was a trap. Verified by preserving the old baseline on edit and watching the suite
+reproduce the real symptom.
+
+**Baselines matched in the precision pass, and one deliberately not matched.** "Remove schedule"
+became a real control — danger tone, trash icon, short verb — following Settings → Privacy &
+Permissions' "Delete Local Data" rather than inventing a third destructive pattern, but without its
+confirmation dialog, since a removed schedule is recoverable by making another one and deleted local
+data is not. The tier-3 advisory moved from four lines of loose yellow body copy into an
+icon-plus-text tinted block, the shape `CommandCenterStorageNotice` and `CommandCenterAttentionPanel`
+already use for the same job. Both are re-implementations in this panel's own System B tokens rather
+than reuses of the System A components, because this view is the documented
+System-B-inside-System-A case and importing `SonnyButtonStyle` would mix the two systems.
+`SettingsAdaptiveControlRow` was considered and **not** adopted: it is a System A component with
+Settings-pane geometry (`minWidth: 220`, 16pt vertical padding), and the panel is a fixed 420x480
+sheet, so the narrow-window character-wrapping bug that pattern exists to prevent cannot occur here.
+Adopting it would have been consistency theatre at the cost of mixing systems.
+
+**Wireframe fidelity note.** `11-MainAppRoutines.svg` was read directly rather than through `docs/sonny-design-system-reference.md`, per CLAUDE.md. That mattered: the row's second line is the routine's *cadence* ("Daily", "Weekly · Mon", "Monthly · 1st"), not its step list, and the trailing slot holds a next-run string *and* a toggle. An early sorted listing of the SVG's layer ids truncated before `toggle`, which briefly looked like evidence that no toggle existed — checking the markup directly is what corrected it. Layer `streak` confirms the badge is a streak, not a step count.
+
+**The streak counts occurrences, not days.** The wireframe shows 12 for a daily routine, 4 for a weekly one and 3 for a monthly one; those numbers are only coherent if a streak counts consecutive *scheduled occurrences*. A day-based streak — the obvious reading, and the one `TaskHistoryInsights.currentStreakDays` uses — would pin every weekly routine at 1 forever. The two are deliberately different computations answering different questions, and `RoutineStreak` says so in its doc comment.
+
+**Cross-feature decisions, recorded because both read as correct in isolation and wrong in sequence.**
+
+**1. A scheduled run is excluded from the follow-up-correction context, and from retry, and from every other property that describes "your last task."**
+
+The interaction: the user runs "zip my desktop files", their 9am routine fires a minute later, they type "use ~/Downloads instead" — and the correction lands on the routine. It is internally consistent (the scheduled run genuinely *was* the last task) but a silent redirect caused by something the user did not initiate is a different thing from correcting your own last action, and nothing in the phrasing reveals that a background event moved the target.
+
+Decided: exclude. `performScheduledRun` does not call `recordPriorTaskContext` and does not touch `lastCommand`. Two reasons, and the second is the stronger one: a routine's steps are *saved and fixed*, so there is no command text for a correction to rewrite — correcting a scheduled routine run is not merely confusing, it is not a meaningful operation. The cost named against this option (you cannot follow up on a failed scheduled run) is therefore largely theoretical; the answer to a broken routine is to edit the routine.
+
+`lastCommand` and `priorTaskContext` move together because `lastCommand` also feeds `hasRetryableCommand`/`retryLastCommand()`. Proven by re-introducing the old behavior: the widget's Retry button then produced "Approval needed before Sonny can act." for a routine instead of re-running the user's own calculation.
+
+**The same review found a worse instance of the same class.** `performScheduledRun` was also clearing `errorMessage`, `finalSummary`, `suggestions`, `plan`, `stepStatuses`, `preparedRun` and the usage summary — so a background run silently erased an unresolved error, or an "open the file" suggestion the user had not acted on yet. Fixed under one principle rather than case by case: **an unattended run must not mutate any state that describes the user's own last task.** `isRunning` and `activeTaskOrigin` are the only exceptions, both needed during the run for re-entrancy and widget gating, and origin is restored on the way out. A scheduled run's entire output is `scheduledRunNotice`, task history, and the routine's run history. `runningCommandDisplayText` reads a separate `scheduledRunDisplayCommand` so Command Center's running indicator still has a label without claiming `lastCommand`.
+
+Consequence worth stating: scheduled-run token usage is no longer reset/published into `taskUsageSummary`, so it is not separately metered today. Accurate per-run metering is branch 13's territory; under-reporting it is preferable to misattributing it to the user's next task.
+
+**2. `scheduledRunNotice` persists until dismissed rather than clearing on the user's next task.**
+
+The premise of the whole feature is that the user was not watching when the run happened, which makes their next action the moment they are *most* likely to be about to read it — clearing it exactly then would defeat the point. It has an explicit Dismiss control, and this matches `localStorageNotice`, which is already not cleared by task starts. A newer scheduled run overwrites an older notice, which is correct: the recent one is the one that matters.
+
+Both behaviors are pinned by tests in `Tests/MacAgentTests/ScheduledRoutineRunTests.swift`, each verified by re-introducing the old behavior and watching them fail.
+
+Known limitations / deferred scope:
+- Schedule authoring is per-routine only, from the detail view. There is no natural-language path ("run my morning routine at 9 every day"), which would be a planner schema change this project treats as high-blast-radius.
+- Scheduled-run token usage is not separately metered. `performScheduledRun` deliberately does not reset or publish `taskUsageSummary`, since doing so would wipe the display of the user's own last task; the cost is that a scheduled run's usage is discarded by the next manual task's reset rather than attributed anywhere. Accurate per-run metering is branch 13's territory.
+- Deleting a routine still does not exist, and its absence is load-bearing: it is one of the two things keeping the scheduler's missing-routine clarification path unreachable. Adding delete means revisiting that analysis, not just adding a button.
+- The catch-up windows (3 hours daily, 1 day weekly, 3 days monthly) are a judgement call, not derived from anything. They are named constants on `RoutineCadence` so they are cheap to revise once real use suggests better numbers.
+
+Open questions for the next chat (required, write "none" if true):
+- Where should schedule authoring live — a picker in the routine detail view, or natural language ("run my morning routine at 9 every day") through the planner? The latter is a planner schema change, which this project treats as high-blast-radius.
+- Should a routine that is skipped for the same reason several times in a row stop reporting, or is a repeated notice the correct nag?
+
+Next branch: `feature/instant-utility-quick-results` (branch 11 per the roadmap above), unchanged by this pass.
