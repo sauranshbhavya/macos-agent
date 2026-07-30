@@ -862,6 +862,50 @@ final class AgentViewModel: ObservableObject {
         applySchedule(schedule, to: routine.name)
     }
 
+    /// Commits an edited schedule from the detail view's draft.
+    ///
+    /// Takes the fields rather than a built `RoutineSchedule` on purpose: the view never
+    /// constructs one, so the catch-up-baseline invariant cannot drift back into the UI where it
+    /// was a trap. Everything goes through `RoutineSchedule.newlyCreated`, which is the single
+    /// anchoring path.
+    ///
+    /// **Editing re-anchors the baseline, and that is deliberate.** Changing a daily routine from
+    /// 9am to 7am in the afternoon would otherwise leave the old baseline in place, making today's
+    /// 07:00 look outstanding and firing a run — or reporting a missed one — for a time the user
+    /// just set. It is the same hazard creation has, reached through a different door. Anchoring at
+    /// confirm time means a schedule always starts counting from the moment it became real.
+    ///
+    /// `isEnabled` and `unattendedTrusted` carry over from the existing schedule: neither is part
+    /// of the draft, since both are separate decisions about a schedule rather than fields of one
+    /// being composed.
+    func commitScheduleDraft(
+        for routine: StoredRoutine,
+        cadence: RoutineCadence,
+        hour: Int,
+        minute: Int,
+        weekday: Int,
+        dayOfMonth: Int,
+        now: Date = Date()
+    ) {
+        let existing = routine.schedule
+        applySchedule(
+            .newlyCreated(
+                cadence: cadence,
+                hour: hour,
+                minute: minute,
+                // Both are passed regardless of cadence so switching back and forth in the draft
+                // does not silently discard a choice; `validate()` only checks the one that
+                // applies.
+                weekday: weekday,
+                dayOfMonth: dayOfMonth,
+                isEnabled: existing?.isEnabled ?? true,
+                unattendedTrusted: existing?.unattendedTrusted ?? false,
+                now: now
+            ),
+            to: routine.name
+        )
+    }
+
     /// Turns a routine's schedule on or off from the Routines row.
     ///
     /// Goes through `RoutineSchedule.setEnabled(_:now:)` rather than assigning `isEnabled`, because

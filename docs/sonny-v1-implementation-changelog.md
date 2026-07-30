@@ -1003,6 +1003,47 @@ brand-new schedule. `setCadence(_:now:)` fills in whatever a new cadence require
 reason — the controls are structurally unable to produce a schedule `validate()` would reject, with
 `validate()` kept as the backstop.
 
+**Reversal (checkpoint 6): schedule authoring commits explicitly rather than writing through.**
+Checkpoint 5 shipped every authoring control writing straight to the store on change, and stated
+that as a decision. Manual testing found it disorienting in use: the schedule mutated as you poked
+at controls, and there was no moment of having *set* it — nothing separated exploring the options
+from committing to them. Reversed to a local draft with an explicit confirm. The checkpoint 5
+commit message stands, since it accurately describes what that commit did.
+
+Four scoping decisions came with it. The unattended-trust toggle stays **outside** the draft and
+immediate: it is a distinct safety decision about a schedule that already exists, not a field of one
+being composed, and keeping it immediate means its tier-3 advisory describes real saved state rather
+than a hypothetical. "Remove schedule" likewise stays immediate — a discrete action, not a field
+edit. Dismissing the panel discards an uncommitted draft silently, which is acceptable *because* the
+confirm control is gated on the draft actually differing from what is saved: an untouched panel
+offers nothing to confirm, so nothing is lost invisibly, and a confirmation dialog would be more
+friction than that earns. The Routines list row's enabled toggle stays immediate too — a single
+toggle in a list is not a composed edit.
+
+**A second instance of the creation trap, found while building this.** Committing an *edit* also has
+to re-anchor the catch-up baseline. Moving a daily routine from 9am to 7am during the afternoon
+would otherwise leave the old baseline in place, making that day's 07:00 look outstanding — firing a
+run, or reporting a missed one, for a time the user had just set. Confirm therefore always goes
+through `RoutineSchedule.newlyCreated`, so a schedule starts counting from the moment it became
+real, whether it was created or changed. The view never constructs a `RoutineSchedule` at all now;
+`AgentViewModel.commitScheduleDraft` takes the fields, which keeps the anchoring invariant out of
+the UI where it was a trap. Verified by preserving the old baseline on edit and watching the suite
+reproduce the real symptom.
+
+**Baselines matched in the precision pass, and one deliberately not matched.** "Remove schedule"
+became a real control — danger tone, trash icon, short verb — following Settings → Privacy &
+Permissions' "Delete Local Data" rather than inventing a third destructive pattern, but without its
+confirmation dialog, since a removed schedule is recoverable by making another one and deleted local
+data is not. The tier-3 advisory moved from four lines of loose yellow body copy into an
+icon-plus-text tinted block, the shape `CommandCenterStorageNotice` and `CommandCenterAttentionPanel`
+already use for the same job. Both are re-implementations in this panel's own System B tokens rather
+than reuses of the System A components, because this view is the documented
+System-B-inside-System-A case and importing `SonnyButtonStyle` would mix the two systems.
+`SettingsAdaptiveControlRow` was considered and **not** adopted: it is a System A component with
+Settings-pane geometry (`minWidth: 220`, 16pt vertical padding), and the panel is a fixed 420x480
+sheet, so the narrow-window character-wrapping bug that pattern exists to prevent cannot occur here.
+Adopting it would have been consistency theatre at the cost of mixing systems.
+
 **Wireframe fidelity note.** `11-MainAppRoutines.svg` was read directly rather than through `docs/sonny-design-system-reference.md`, per CLAUDE.md. That mattered: the row's second line is the routine's *cadence* ("Daily", "Weekly · Mon", "Monthly · 1st"), not its step list, and the trailing slot holds a next-run string *and* a toggle. An early sorted listing of the SVG's layer ids truncated before `toggle`, which briefly looked like evidence that no toggle existed — checking the markup directly is what corrected it. Layer `streak` confirms the badge is a streak, not a step count.
 
 **The streak counts occurrences, not days.** The wireframe shows 12 for a daily routine, 4 for a weekly one and 3 for a monthly one; those numbers are only coherent if a streak counts consecutive *scheduled occurrences*. A day-based streak — the obvious reading, and the one `TaskHistoryInsights.currentStreakDays` uses — would pin every weekly routine at 1 forever. The two are deliberately different computations answering different questions, and `RoutineStreak` says so in its doc comment.

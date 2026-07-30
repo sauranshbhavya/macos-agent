@@ -106,6 +106,67 @@ private extension View {
     }
 }
 
+/// Button chrome for this panel's actions, in System B tokens.
+///
+/// Follows the treatment Settings → Privacy & Permissions already uses for "Delete Local Data" —
+/// real button chrome, a danger tone, a trash icon and a short verb — rather than inventing a third
+/// destructive pattern. It is a re-implementation rather than a reuse of `SonnyButtonStyle`
+/// deliberately: that style is System A (Inter, `SonnyTheme` colors) and this panel is the
+/// documented System-B-inside-System-A case, so importing it would mix the two systems that
+/// CLAUDE.md says not to mix. The *pattern* is the shared thing; the tokens are not.
+private struct RoutineDetailActionStyle: ButtonStyle {
+    enum Tone {
+        case primary
+        case danger
+    }
+
+    @Environment(\.isEnabled) private var isEnabled
+    let tone: Tone
+
+    func makeBody(configuration: Configuration) -> some View {
+        configuration.label
+            .font(RoutineDetailType.sectionLabel)
+            .foregroundStyle(foreground.opacity(configuration.isPressed ? 0.7 : 1))
+            .padding(.horizontal, 12)
+            .frame(height: 26)
+            .background(background.opacity(configuration.isPressed ? 0.7 : 1))
+            .overlay(
+                RoundedRectangle(cornerRadius: 7)
+                    .stroke(border, lineWidth: 0.5)
+            )
+            .clipShape(RoundedRectangle(cornerRadius: 7))
+            .opacity(isEnabled ? 1 : 0.4)
+            .sonnyPointerCursor()
+    }
+
+    private var foreground: Color {
+        switch tone {
+        case .primary:
+            return .white
+        case .danger:
+            return SonnyTheme.danger
+        }
+    }
+
+    private var background: Color {
+        switch tone {
+        case .primary:
+            return SonnyTheme.accent
+        case .danger:
+            return Color.white.opacity(0.06)
+        }
+    }
+
+    private var border: Color {
+        switch tone {
+        case .primary:
+            return .clear
+        case .danger:
+            return SonnyTheme.danger.opacity(0.45)
+        }
+    }
+}
+
 // MARK: - Routine detail view
 
 /// Per `docs/sonny-founder-design-decisions.md`'s Routines section: clicking into a routine opens
@@ -116,6 +177,43 @@ struct RoutineDetailView: View {
     @ObservedObject var viewModel: AgentViewModel
     @Environment(\.dismiss) private var dismiss
     @State private var unattendedAdvisory: String?
+    /// Uncommitted schedule edits. Nil means "showing what is saved".
+    ///
+    /// Checkpoint 5 wrote every control straight through to the store. Manual testing found that
+    /// disorienting: the schedule mutated as you poked at controls, and there was no moment of
+    /// having *set* it — nothing separated exploring the options from committing to them. This
+    /// draft is discarded if the panel is dismissed, which is acceptable precisely because the
+    /// confirm control below is gated on the draft actually differing from what is saved: an
+    /// untouched panel offers nothing to confirm, so there is nothing to lose silently.
+    @State private var draft: ScheduleDraft?
+
+    /// Always holds a valid value for every cadence, so switching cadence can never leave a field
+    /// unfilled — the schedule's own `weekday`/`dayOfMonth` are Optional because a daily schedule
+    /// genuinely has neither, but a draft is a composition surface and carries both throughout.
+    private struct ScheduleDraft: Equatable {
+        var cadence: RoutineCadence
+        var hour: Int
+        var minute: Int
+        var weekday: Int
+        var dayOfMonth: Int
+
+        init(from schedule: RoutineSchedule, now: Date, calendar: Calendar) {
+            cadence = schedule.cadence
+            hour = schedule.hour
+            minute = schedule.minute
+            weekday = schedule.weekday ?? calendar.component(.weekday, from: now)
+            dayOfMonth = schedule.dayOfMonth ?? calendar.component(.day, from: now)
+        }
+
+        /// A new schedule starts daily at 9am — the wireframe's own example time.
+        init(now: Date, calendar: Calendar) {
+            cadence = .daily
+            hour = 9
+            minute = 0
+            weekday = calendar.component(.weekday, from: now)
+            dayOfMonth = calendar.component(.day, from: now)
+        }
+    }
 
     /// The sheet is presented with a snapshot, so toggling anything here would otherwise leave the
     /// controls showing stale state. Read the live record back out of the view model instead.
@@ -165,102 +263,144 @@ struct RoutineDetailView: View {
     /// `.claude/rules/macagent-ui-conventions.md`), label-plus-control rows matching the toggle
     /// below, and native controls, which this view already uses for its switch and buttons.
     ///
-    /// There is no draft state: every control writes through to the store immediately, so what is
-    /// on screen is always what is saved. That also means the pickers only ever exist once a
-    /// schedule does, which is what keeps them structurally unable to produce an invalid one —
-    /// weekday is offered only for weekly, day-of-month only for monthly, and both are bounded to
-    /// what `validate()` accepts. `validate()` stays as the backstop; the UI should never reach it.
+    /// Edits accumulate in a local draft and land only on an explicit confirm — checkpoint 5's
+    /// write-through was reversed after manual testing found ambient mutation disorienting, with
+    /// no moment of having *set* the schedule. The confirm is gated on the draft differing from
+    /// what is saved, so an untouched panel offers nothing to confirm.
+    ///
+    /// The controls are structurally unable to produce a schedule `validate()` would reject:
+    /// weekday is offered only for weekly, day-of-month only for monthly, both bounded to the
+    /// accepted ranges, and the draft carries a valid value for every cadence so switching can
+    /// never leave a field unfilled. `validate()` stays the backstop; the UI should never reach it.
+    ///
+    /// Two things stay outside the draft and act immediately, because neither is a field of a
+    /// schedule being composed: the unattended-trust toggle below (a distinct safety decision about
+    /// a schedule that already exists — keeping it immediate means its tier-3 advisory describes
+    /// real saved state rather than a hypothetical) and Remove (a discrete action, not an edit).
     @ViewBuilder
     private var scheduleControls: some View {
-        VStack(alignment: .leading, spacing: 10) {
+        let calendar = Calendar.current
+        let now = Date()
+        let saved = live.schedule.map { ScheduleDraft(from: $0, now: now, calendar: calendar) }
+        let shown = draft ?? saved
+
+        VStack(alignment: .leading, spacing: 12) {
             Text("Schedule")
                 .font(RoutineDetailType.sectionLabel)
                 .foregroundStyle(RoutineDetailTheme.text)
 
-            if let schedule = live.schedule {
+            if let shown {
                 scheduleRow("Repeats") {
-                    Picker("", selection: cadenceBinding(schedule)) {
+                    Picker("", selection: cadenceBinding(shown, now: now, calendar: calendar)) {
                         ForEach(RoutineCadence.allCases, id: \.self) { cadence in
                             Text(cadence.displayName).tag(cadence)
                         }
                     }
                     .labelsHidden()
                     .pickerStyle(.segmented)
-                    .frame(width: 210)
+                    .frame(width: 208)
                 }
 
                 scheduleRow("At") {
-                    DatePicker("", selection: timeBinding(schedule), displayedComponents: .hourAndMinute)
+                    DatePicker("", selection: timeBinding(shown, calendar: calendar), displayedComponents: .hourAndMinute)
                         .labelsHidden()
                         .datePickerStyle(.field)
+                        .frame(width: 92)
                 }
 
-                switch schedule.cadence {
+                switch shown.cadence {
                 case .daily:
                     EmptyView()
                 case .weekly:
                     scheduleRow("On") {
-                        Picker("", selection: weekdayBinding(schedule)) {
-                            // 1...7 is exactly the range `validate()` accepts, and the symbols are
-                            // indexed by the same Sunday == 1 convention `Calendar` uses.
+                        Picker("", selection: fieldBinding(shown, \.weekday)) {
+                            // 1...7 is exactly the range `validate()` accepts, indexed by the same
+                            // Sunday == 1 convention `Calendar` uses.
                             ForEach(1...7, id: \.self) { weekday in
-                                Text(Calendar.current.weekdaySymbols[weekday - 1]).tag(weekday)
+                                Text(calendar.weekdaySymbols[weekday - 1]).tag(weekday)
                             }
                         }
                         .labelsHidden()
-                        .frame(width: 140)
+                        .frame(width: 132)
                     }
                 case .monthly:
-                    scheduleRow("Day") {
-                        Picker("", selection: dayOfMonthBinding(schedule)) {
+                    scheduleRow("On day") {
+                        Picker("", selection: fieldBinding(shown, \.dayOfMonth)) {
                             ForEach(1...31, id: \.self) { day in
                                 Text("\(day)").tag(day)
                             }
                         }
                         .labelsHidden()
-                        .frame(width: 140)
+                        .frame(width: 132)
                     }
                 }
 
-                // Day 29-31 does not exist in every month. CP2 accepts those values on purpose and
-                // the scheduler clamps to the last day, but that is worth saying out loud rather
-                // than leaving the user to discover it in February.
-                if schedule.cadence == .monthly, let day = schedule.dayOfMonth, day > 28 {
-                    Text("Months without a \(day)\(ordinalSuffix(day)) run on their last day.")
-                        .font(RoutineDetailType.micro)
-                        .foregroundStyle(RoutineDetailTheme.mutedText)
-                        .fixedSize(horizontal: false, vertical: true)
+                // Day 29-31 does not exist in every month. The data model accepts those days on
+                // purpose and the scheduler clamps to the last day — worth saying rather than
+                // leaving the user to discover it in February.
+                if shown.cadence == .monthly, shown.dayOfMonth > 28 {
+                    scheduleNote("Months without a \(shown.dayOfMonth)\(ordinalSuffix(shown.dayOfMonth)) run on their last day.")
                 }
 
-                Button("Remove schedule") {
-                    viewModel.setRoutineSchedule(live, to: nil)
-                    unattendedAdvisory = nil
+                HStack(spacing: 10) {
+                    // Gated on the draft actually differing from what is saved, so an untouched
+                    // panel offers nothing to confirm and a dirty one visibly does. That is what
+                    // makes discarding on dismiss safe without a confirmation dialog.
+                    Button(live.schedule == nil ? "Save schedule" : "Save changes") {
+                        commitDraft(shown)
+                    }
+                    .buttonStyle(RoutineDetailActionStyle(tone: .primary))
+                    .disabled(!isDirty(shown: shown, saved: saved))
+
+                    if live.schedule != nil {
+                        // Immediate rather than part of the draft: removing a schedule is a
+                        // discrete action, not a field edit. No confirmation dialog — unlike
+                        // Delete Local Data, which this borrows its danger treatment from, a
+                        // removed schedule is recoverable by making another one.
+                        Button {
+                            viewModel.setRoutineSchedule(live, to: nil)
+                            draft = nil
+                            unattendedAdvisory = nil
+                        } label: {
+                            Label("Remove", systemImage: "trash")
+                        }
+                        .buttonStyle(RoutineDetailActionStyle(tone: .danger))
+                        .help("Remove this routine's schedule")
+                    }
+
+                    Spacer(minLength: 0)
                 }
-                .buttonStyle(.plain)
-                .font(RoutineDetailType.micro)
-                .foregroundStyle(RoutineDetailTheme.mutedText)
-                .sonnyPointerCursor()
+                .padding(.top, 2)
             } else {
-                Text("This routine only runs when you ask it to.")
-                    .font(RoutineDetailType.micro)
-                    .foregroundStyle(RoutineDetailTheme.mutedText)
+                scheduleNote("This routine only runs when you ask it to.")
 
                 Button("Add a schedule") {
-                    // Built through `newlyCreated` rather than the initializer so the catch-up
-                    // baseline is anchored to now — otherwise creating a 9am schedule in the
-                    // afternoon reads as "this morning was missed" and fires immediately.
-                    viewModel.setRoutineSchedule(
-                        live,
-                        to: .newlyCreated(cadence: .daily, hour: 9, minute: 0, now: Date())
-                    )
+                    draft = ScheduleDraft(now: now, calendar: calendar)
                 }
-                .buttonStyle(.plain)
-                .font(RoutineDetailType.sectionLabel)
-                .foregroundStyle(SonnyTheme.accent)
-                .sonnyPointerCursor()
+                .buttonStyle(RoutineDetailActionStyle(tone: .primary))
             }
         }
-        .padding(.top, 6)
+    }
+
+    private func isDirty(shown: ScheduleDraft, saved: ScheduleDraft?) -> Bool {
+        guard let saved else {
+            // A draft with nothing saved behind it is a schedule being created — always committable.
+            return true
+        }
+        return shown != saved
+    }
+
+    private func commitDraft(_ shown: ScheduleDraft) {
+        viewModel.commitScheduleDraft(
+            for: live,
+            cadence: shown.cadence,
+            hour: shown.hour,
+            minute: shown.minute,
+            weekday: shown.weekday,
+            dayOfMonth: shown.dayOfMonth
+        )
+        // Fall back to reflecting saved state, so the confirm control immediately reads as clean.
+        draft = nil
     }
 
     private func scheduleRow<Control: View>(
@@ -271,63 +411,62 @@ struct RoutineDetailView: View {
             Text(label)
                 .font(RoutineDetailType.body)
                 .foregroundStyle(RoutineDetailTheme.mutedText)
-                .frame(width: 56, alignment: .leading)
+                // One shared column width across every row so the controls line up rather than
+                // stepping in and out with the label text. Sized for "On day", the longest.
+                .frame(width: 62, alignment: .leading)
             control()
             Spacer(minLength: 0)
         }
+        .frame(height: 24)
     }
 
-    private func cadenceBinding(_ schedule: RoutineSchedule) -> Binding<RoutineCadence> {
+    private func scheduleNote(_ text: String) -> some View {
+        Text(text)
+            .font(RoutineDetailType.micro)
+            .foregroundStyle(RoutineDetailTheme.mutedText)
+            .fixedSize(horizontal: false, vertical: true)
+    }
+
+    private func cadenceBinding(
+        _ shown: ScheduleDraft,
+        now: Date,
+        calendar: Calendar
+    ) -> Binding<RoutineCadence> {
         Binding(
-            get: { schedule.cadence },
+            get: { shown.cadence },
             set: { newCadence in
-                var updated = schedule
-                // Fills in whatever the new cadence requires, so switching to Weekly or Monthly
-                // can never leave a schedule `validate()` would reject.
-                updated.setCadence(newCadence, now: Date())
-                viewModel.setRoutineSchedule(live, to: updated)
+                var updated = shown
+                updated.cadence = newCadence
+                draft = updated
             }
         )
     }
 
-    private func timeBinding(_ schedule: RoutineSchedule) -> Binding<Date> {
+    private func timeBinding(_ shown: ScheduleDraft, calendar: Calendar) -> Binding<Date> {
         Binding(
             get: {
-                Calendar.current.date(
-                    bySettingHour: schedule.hour,
-                    minute: schedule.minute,
-                    second: 0,
-                    of: Date()
-                ) ?? Date()
+                calendar.date(bySettingHour: shown.hour, minute: shown.minute, second: 0, of: Date()) ?? Date()
             },
             set: { newTime in
-                let parts = Calendar.current.dateComponents([.hour, .minute], from: newTime)
-                var updated = schedule
-                updated.hour = parts.hour ?? schedule.hour
-                updated.minute = parts.minute ?? schedule.minute
-                viewModel.setRoutineSchedule(live, to: updated)
+                let parts = calendar.dateComponents([.hour, .minute], from: newTime)
+                var updated = shown
+                updated.hour = parts.hour ?? shown.hour
+                updated.minute = parts.minute ?? shown.minute
+                draft = updated
             }
         )
     }
 
-    private func weekdayBinding(_ schedule: RoutineSchedule) -> Binding<Int> {
+    private func fieldBinding(
+        _ shown: ScheduleDraft,
+        _ keyPath: WritableKeyPath<ScheduleDraft, Int>
+    ) -> Binding<Int> {
         Binding(
-            get: { schedule.weekday ?? Calendar.current.component(.weekday, from: Date()) },
-            set: { newWeekday in
-                var updated = schedule
-                updated.weekday = newWeekday
-                viewModel.setRoutineSchedule(live, to: updated)
-            }
-        )
-    }
-
-    private func dayOfMonthBinding(_ schedule: RoutineSchedule) -> Binding<Int> {
-        Binding(
-            get: { schedule.dayOfMonth ?? Calendar.current.component(.day, from: Date()) },
-            set: { newDay in
-                var updated = schedule
-                updated.dayOfMonth = newDay
-                viewModel.setRoutineSchedule(live, to: updated)
+            get: { shown[keyPath: keyPath] },
+            set: { newValue in
+                var updated = shown
+                updated[keyPath: keyPath] = newValue
+                draft = updated
             }
         )
     }
@@ -371,14 +510,35 @@ struct RoutineDetailView: View {
 
                 // Best-effort heads-up, never a gate: blocking the opt-in for a tier-3 routine
                 // would be the save-time tier gating this branch explicitly rejected.
+                //
+                // Contained rather than loose: at four lines, unbroken yellow body copy read as an
+                // error state rather than a note. Icon-plus-text inside a tinted, stroked block is
+                // the shape `CommandCenterStorageNotice` and `CommandCenterAttentionPanel` already
+                // use for exactly this job on the System A side — the same pattern, in this
+                // panel's own tokens.
                 if let unattendedAdvisory {
-                    Text(unattendedAdvisory)
-                        .font(RoutineDetailType.micro)
-                        .foregroundStyle(SonnyTheme.warning)
-                        .fixedSize(horizontal: false, vertical: true)
+                    HStack(alignment: .top, spacing: 8) {
+                        Image(systemName: "exclamationmark.triangle")
+                            .font(.system(size: 11, weight: .semibold))
+                            .foregroundStyle(SonnyTheme.warning)
+
+                        Text(unattendedAdvisory)
+                            .font(RoutineDetailType.micro)
+                            .foregroundStyle(RoutineDetailTheme.text.opacity(0.85))
+                            .fixedSize(horizontal: false, vertical: true)
+                    }
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 8)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .background(SonnyTheme.warning.opacity(0.08))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 7)
+                            .stroke(SonnyTheme.warning.opacity(0.35), lineWidth: 0.5)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: 7))
                 }
             }
-            .padding(.top, 6)
+            .padding(.top, 4)
         }
     }
 

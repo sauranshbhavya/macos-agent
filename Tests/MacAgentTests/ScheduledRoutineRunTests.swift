@@ -449,6 +449,118 @@ struct ScheduledRoutineRunTests {
         #expect(try fixture.routineStore.routine(named: "Morning").schedule == nil)
     }
 
+    // MARK: - Committing a schedule draft
+
+    /// Editing re-anchors the catch-up baseline, and it has to. Moving a daily routine from 9am to
+    /// 7am during the afternoon would otherwise leave yesterday's baseline in place, making *today's*
+    /// 07:00 look outstanding — firing a run, or reporting a missed one, for a time the user just
+    /// set. Same hazard as creation, reached through a different door.
+    @Test
+    func committingAnEditedTimeReAnchorsTheBaselineInsteadOfLeavingAStaleOne() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.saveRoutine(unattendedTrusted: true)
+        let threePM = fixture.nineAM.addingTimeInterval(6 * 60 * 60)
+
+        fixture.viewModel.commitScheduleDraft(
+            for: try fixture.routineStore.routine(named: "Morning"),
+            cadence: .daily,
+            hour: 7,
+            minute: 0,
+            weekday: 2,
+            dayOfMonth: 1,
+            now: threePM
+        )
+
+        let saved = try #require(try fixture.routineStore.routine(named: "Morning").schedule)
+        #expect(saved.hour == 7)
+        #expect(saved.lastRunAt == threePM)
+
+        // Nothing outstanding for the 07:00 that already passed today.
+        fixture.viewModel.checkScheduledRoutines(now: threePM)
+        try await fixture.waitForIdle()
+        #expect(fixture.viewModel.scheduledRunNotice == nil)
+        #expect(try fixture.routineStore.routine(named: "Morning").effectiveRecentRunDates.isEmpty)
+    }
+
+    /// Neither flag is part of the draft, so committing an edit must carry both across rather than
+    /// silently resetting them — losing an unattended opt-in by changing the run time would be a
+    /// safety decision undone by an unrelated edit.
+    @Test
+    func committingAnEditPreservesEnabledStateAndUnattendedTrust() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.saveRoutine(unattendedTrusted: true)
+        fixture.viewModel.setRoutineScheduleEnabled(try fixture.routineStore.routine(named: "Morning"), to: false)
+
+        fixture.viewModel.commitScheduleDraft(
+            for: try fixture.routineStore.routine(named: "Morning"),
+            cadence: .weekly,
+            hour: 8,
+            minute: 30,
+            weekday: 3,
+            dayOfMonth: 1,
+            now: fixture.tenAM
+        )
+
+        let saved = try #require(try fixture.routineStore.routine(named: "Morning").schedule)
+        #expect(saved.cadence == .weekly)
+        #expect(saved.weekday == 3)
+        #expect(saved.unattendedTrusted)
+        #expect(saved.isEnabled == false)
+        // Disabled, so `newlyCreated` leaves no baseline — enabling it later is what anchors it.
+        #expect(saved.lastRunAt == nil)
+    }
+
+    /// Committing a draft for a routine with no schedule creates one, enabled and untrusted.
+    @Test
+    func committingADraftForAnUnscheduledRoutineCreatesTheSchedule() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.routineStore.save(StoredRoutine(name: "Morning", steps: [fixture.inertStep]))
+
+        fixture.viewModel.commitScheduleDraft(
+            for: try fixture.routineStore.routine(named: "Morning"),
+            cadence: .monthly,
+            hour: 9,
+            minute: 0,
+            weekday: 2,
+            dayOfMonth: 31,
+            now: fixture.tenAM
+        )
+
+        let saved = try #require(try fixture.routineStore.routine(named: "Morning").schedule)
+        #expect(saved.cadence == .monthly)
+        #expect(saved.dayOfMonth == 31)
+        #expect(saved.isEnabled)
+        #expect(saved.unattendedTrusted == false)
+        #expect(saved.lastRunAt == fixture.tenAM)
+    }
+
+    /// Both fields are committed regardless of cadence, so switching back and forth in the draft
+    /// does not silently discard a choice the user already made.
+    @Test
+    func committingCarriesBothCadenceFieldsSoSwitchingBackKeepsTheEarlierChoice() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.routineStore.save(StoredRoutine(name: "Morning", steps: [fixture.inertStep]))
+
+        fixture.viewModel.commitScheduleDraft(
+            for: try fixture.routineStore.routine(named: "Morning"),
+            cadence: .daily,
+            hour: 9,
+            minute: 0,
+            weekday: 6,
+            dayOfMonth: 20,
+            now: fixture.tenAM
+        )
+
+        let saved = try #require(try fixture.routineStore.routine(named: "Morning").schedule)
+        #expect(saved.cadence == .daily)
+        #expect(saved.weekday == 6)
+        #expect(saved.dayOfMonth == 20)
+    }
+
     // MARK: - Fixture
 
     private func makeFixture() throws -> Fixture {
