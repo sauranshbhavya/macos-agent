@@ -1088,8 +1088,10 @@ Implementing agent: Claude
 Reviewing agent: pending
 
 Spec sections covered: §6.8's "Disable or delete routine." (the delete half — disable already existed via branch 10's schedule toggle; workspace deletion has no spec bullet and rides along on the same rationale); §4A.2's search-provider seam and its "a search/topic command can produce a Markdown research note" acceptance criterion, resolving the branch 16 web-search note above. Two unrelated pieces shipped on one branch by explicit user decision, checkpointed separately.
-Files changed: `Sources/MacAgentCore/AutomationStores.swift`, `TavilySearchProvider.swift` (new); `Sources/MacAgent/AgentViewModel.swift`, `RoutineDetailView.swift`, `CommandCenterView.swift`; tests `AutomationStoresTests.swift`, `TavilySearchProviderTests.swift` (new), `ScheduledRoutineRunTests.swift`, `ProductShellTests.swift`; docs this file, `sonny-manual-test-checklist.md`.
-Tests: `env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disable-sandbox -Xswiftc -F ...` (full flags per CLAUDE.md) -> pass, 402 tests in 43 suites (from 385 at branch start — the 373 recorded in branch 10's entry above was stale, corrected 2026-07-30).
+Files changed: `Sources/MacAgentCore/AutomationStores.swift`, `TavilySearchProvider.swift` (new), `WebResearchMarkdownCapabilityAdapter.swift`, `WebResearchService.swift`; `Sources/MacAgent/AgentViewModel.swift`, `RoutineDetailView.swift`, `CommandCenterView.swift`; tests `AutomationStoresTests.swift`, `TavilySearchProviderTests.swift` (new), `AgentActionExecutorTests.swift`, `ScheduledRoutineRunTests.swift`, `ProductShellTests.swift`; docs this file, `sonny-manual-test-checklist.md`.
+Tests: `env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disable-sandbox -Xswiftc -F ...` (full flags per CLAUDE.md) -> pass, 403 tests in 43 suites (from 385 at branch start — the 373 recorded in branch 10's entry above was stale, corrected 2026-07-30).
+
+The manual pass produced three fixes, folded into this branch per the fix-in-branch rule: confirmation-dialog bodies use pronouns instead of repeating the quoted name the title already carries; the search summary's hardcoded "sources" now pluralizes (newly visible because partial synthesis can reduce the surviving count to one — pinned by `webResearchSearchSummaryUsesSingularSourceWhenOnlyOneSourceSurvives`); and the JavaScript-rendered-page finding below.
 
 Behavior added:
 - A saved routine can be deleted from its detail view; a saved workspace from a labeled danger-tone Delete button on its card. Both get a confirmation dialog and both are refused while a task is in flight.
@@ -1123,6 +1125,7 @@ Known limitations / deferred scope:
 - Per-search cost is not metered; the adapter's existing "Searching web for ..." log line is the only per-call visibility. Metering is branch 13's territory per its credit-weighting note above (web research = 3 credits partly because of Tavily's ~$0.008/search).
 - `StoredWorkspace` remains non-`Identifiable` and there is still no workspace detail view.
 - `deleteLocalData`'s narrower `isRunning`-only guard is a known inconsistency left in place — whoever next touches that method should widen it to match, with this entry as context.
+- **JavaScript-rendered pages cannot be summarized, and that is extraction working correctly, not a bug** (investigated 2026-07-30 during this branch's manual pass, via `summarize ycombinator.com/companies`): `SwiftSoupReadableWebExtractor` reads the static HTML the server sends, and a client-rendered directory page has no article-shaped content in it — not a fetch, URL-validation, or search-provider failure. Resolved by hinting in the `.noReadableContent` error copy ("may render its content with JavaScript") rather than leaving the bare not-found message, since that is the dominant real-world cause for a page that looks fine in a browser; a headless-rendering fallback would be a real feature with its own cost/security surface, deliberately not scoped here.
 
 Open questions for the next chat (required, write "none" if true): none
 

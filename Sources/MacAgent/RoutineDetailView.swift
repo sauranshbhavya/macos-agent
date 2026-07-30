@@ -593,7 +593,9 @@ struct RoutineDetailView: View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This deletes “\(live.name)”’s saved steps, schedule, and run history. Past task history mentioning “\(live.name)” is not deleted.")
+            // The title already names the routine; repeating the quoted name here read as noisy
+            // in a dialog this small (manual pass, 2026-07-30).
+            Text("This deletes its saved steps, schedule, and run history. Past task history mentioning this routine is not deleted.")
         }
     }
 

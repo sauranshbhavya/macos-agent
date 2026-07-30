@@ -871,6 +871,45 @@ struct AgentActionExecutorTests {
         #expect(result.summary == "Saved web research Markdown for search query \"Swift concurrency\" using 2 sources to \(output.path).")
     }
 
+    /// Partial synthesis can reduce the surviving source count to one — the summary must then say
+    /// "1 source", not "1 sources". The skipped-source clause pluralized correctly from the start;
+    /// the search base sentence hardcoded the plural, which stayed invisible until a real search
+    /// could actually skip a source.
+    @Test
+    func webResearchSearchSummaryUsesSingularSourceWhenOnlyOneSourceSurvives() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let output = root.appendingPathComponent("search-note.md")
+        let surviving = URL(string: "https://example.com/alive")!
+        let unreachable = URL(string: "https://example.com/dead")!
+        let searchProvider = StaticWebSearchProvider(results: [
+            WebSearchResult(title: "Alive", url: surviving, snippet: nil),
+            WebSearchResult(title: "Dead", url: unreachable, snippet: nil)
+        ])
+        let pageLoader = webPageLoader(pages: [
+            surviving.absoluteString: readablePage(url: surviving, title: "Alive")
+        ])
+        let synthesizer = StaticWebResearchSynthesizer(
+            note: WebResearchNote(
+                title: "Single Source",
+                summary: "One source survived.",
+                keyPoints: [],
+                citations: []
+            )
+        )
+        let executor = makeExecutor(
+            root: root,
+            webPageLoader: pageLoader,
+            webSearchProvider: searchProvider,
+            webResearchSynthesizer: synthesizer
+        )
+        let plan = webSearchPlan(query: "single survivor", output: output, count: 2)
+
+        let result = try await executor.execute(plan: plan) { _, _ in }
+
+        #expect(result.summary == "Saved web research Markdown for search query \"single survivor\" using 1 source to \(output.path). Skipped 1 unreachable source: https://example.com/dead.")
+    }
+
     @Test
     func webResearchSearchWithoutConfiguredProviderFailsClearly() async throws {
         let root = try makeDirectory()

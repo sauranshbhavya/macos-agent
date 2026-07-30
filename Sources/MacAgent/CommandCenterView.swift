@@ -2114,7 +2114,9 @@ private struct WorkspaceCard: View {
                     }
                     Button("Cancel", role: .cancel) {}
                 } message: {
-                    Text("This deletes “\(presentation.name)”’s saved apps and URLs. Past task history mentioning “\(presentation.name)” is not deleted.")
+                    // The title already names the workspace; pronouns keep this small dialog
+                    // readable (manual pass, 2026-07-30).
+                    Text("This deletes its saved apps and URLs. Past task history mentioning this workspace is not deleted.")
                 }
 
                 Button(action: open) {
