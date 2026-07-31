@@ -366,6 +366,19 @@ it feels confusing in practice, not just whether it's "technically correct."
 - [x] Push-to-talk (Ctrl-Opt-Space) works both with Command Center frontmost *and* with some other
       app entirely frontmost — it's a global hotkey, test it from outside Sonny too — **confirmed
       2026-07-24**
+- [ ] **(new 2026-07-30)** Standard editing shortcuts work in *both* text fields — ⌘A, ⌘C, ⌘V, ⌘X,
+      ⌘Z each in the widget's command field (Command Center closed → `.accessory` policy) and in
+      Command Center's clarification answer field (`.regular` policy). The app had **no main menu
+      at all** until 2026-07-30, which silently broke all of these app-wide; AppKit key-equivalent
+      dispatch can't be covered by the automated suite, so this row is the real verification
+- [ ] **(new 2026-07-30)** ⌘Q quits the app from anywhere — it was equally menu-routed and equally
+      broken; the status-item menu's Quit only ever dispatched while that dropdown was open
+- [ ] **(new 2026-07-30, fix re-test)** Widget idle state: the Start button now sits 8pt from the
+      pill's trailing edge, matching its 8pt top/bottom insets — confirm it reads even, and that
+      the in-flight state (button hidden, field disabled) looks unchanged from before
+- [ ] **(new 2026-07-30, fix re-test)** With a workspace saved as "hehe" and no routine by that
+      name, "run hehe" asks "…but you do have a workspace called \"hehe\" — did you mean to open
+      that?" instead of listing routine names; same cross-reference in the reverse direction
 
 ## 7. Command Center — page by page
 

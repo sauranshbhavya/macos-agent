@@ -194,15 +194,29 @@ public final class AgentActionExecutor {
     /// Deliberately narrow: **only** a name that matches nothing becomes a clarification. A
     /// missing/empty name, an unreadable store, a malformed plan, or an unresolvable app inside
     /// a workspace that does exist all still throw exactly as before.
+    ///
+    /// Checks the *other* store first: "run hehe" when hehe is a saved workspace used to answer
+    /// with a list of routine names while ignoring the exact-name workspace the user almost
+    /// certainly meant. Exact (store-normalized) match only, no fuzzy matching, and an unreadable
+    /// other store degrades to the same-kind list below rather than turning a good clarification
+    /// into a thrown error.
     private func missingAutomationTargetQuestion(for error: AutomationStoreError) -> String? {
         switch error {
         case .missingWorkspace(let name):
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let routine = (try? routineStore.loadAll())?[normalized(trimmed)]?.name {
+                return "I don't have a workspace called \"\(trimmed)\" saved, but you do have a routine called \"\(routine)\" — did you mean to run that?"
+            }
             return missingTargetQuestion(
                 name: name,
                 kind: "workspace",
                 savedNames: (try? workspaceStore.loadAll())?.values.map(\.name)
             )
         case .missingRoutine(let name):
+            let trimmed = name.trimmingCharacters(in: .whitespacesAndNewlines)
+            if let workspace = (try? workspaceStore.loadAll())?[normalized(trimmed)]?.name {
+                return "I don't have a routine called \"\(trimmed)\" saved, but you do have a workspace called \"\(workspace)\" — did you mean to open that?"
+            }
             return missingTargetQuestion(
                 name: name,
                 kind: "routine",

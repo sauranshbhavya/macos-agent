@@ -785,6 +785,111 @@ struct AgentActionExecutorTests {
         #expect(question.contains("deep work"))
     }
 
+    /// The manual-pass case: "run hehe" with a *workspace* named hehe saved used to list routine
+    /// names while ignoring the exact-name workspace the user almost certainly meant.
+    @Test
+    func unknownRoutineNameMatchingASavedWorkspaceCrossReferencesIt() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try workspaceStore.save(StoredWorkspace(name: "Hehe", apps: ["Safari"], urls: []))
+        try routineStore.save(
+            StoredRoutine(
+                name: "bhavya",
+                steps: [AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")]
+            )
+        )
+        let executor = makeExecutor(root: root, routineStore: routineStore, workspaceStore: workspaceStore)
+
+        // Store-normalized identity, so the case-variant query still matches — and the question
+        // shows the workspace's stored display name, not the query's casing.
+        let prepared = try executor.prepare(plan: runRoutinePlan(name: "hehe"))
+
+        let question = try #require(prepared.clarificationQuestion)
+        #expect(question.contains("I don't have a routine called \"hehe\""))
+        #expect(question.contains("but you do have a workspace called \"Hehe\""))
+        #expect(question.contains("did you mean to open that?"))
+        #expect(!question.contains("did you mean one of"))
+        #expect(prepared.plan.steps.map(\.operation) == [.clarify])
+    }
+
+    @Test
+    func unknownWorkspaceNameMatchingASavedRoutineCrossReferencesIt() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try workspaceStore.save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: []))
+        try routineStore.save(
+            StoredRoutine(
+                name: "hehe",
+                steps: [AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")]
+            )
+        )
+        let executor = makeExecutor(root: root, routineStore: routineStore, workspaceStore: workspaceStore)
+
+        let prepared = try executor.prepare(plan: openWorkspacePlan(name: "hehe"))
+
+        let question = try #require(prepared.clarificationQuestion)
+        #expect(question.contains("I don't have a workspace called \"hehe\""))
+        #expect(question.contains("but you do have a routine called \"hehe\""))
+        #expect(question.contains("did you mean to run that?"))
+        #expect(!question.contains("did you mean one of"))
+    }
+
+    /// Exact match only — a populated other store with no exact-name match must not change the
+    /// existing same-kind list, and there is deliberately no fuzzy matching.
+    @Test
+    func crossKindCheckRequiresAnExactMatchAndOtherwiseKeepsTheList() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try workspaceStore.save(StoredWorkspace(name: "hehe workspace", apps: ["Safari"], urls: []))
+        try routineStore.save(
+            StoredRoutine(
+                name: "bhavya",
+                steps: [AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")]
+            )
+        )
+        let executor = makeExecutor(root: root, routineStore: routineStore, workspaceStore: workspaceStore)
+
+        let prepared = try executor.prepare(plan: runRoutinePlan(name: "hehe"))
+
+        let question = try #require(prepared.clarificationQuestion)
+        #expect(question.contains("did you mean one of: bhavya"))
+        #expect(!question.contains("hehe workspace"))
+    }
+
+    /// An unreadable *other* store must not turn a good clarification into a thrown error — the
+    /// cross-kind check degrades to the same-kind list. (An unreadable *same-kind* store still
+    /// throws; that case is pinned separately below.)
+    @Test
+    func unreadableOtherStoreDegradesToTheSameKindListInsteadOfFailing() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceURL = root.appendingPathComponent("workspaces.json")
+        try Data("this is not valid encrypted or plaintext JSON".utf8).write(to: workspaceURL)
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try routineStore.save(
+            StoredRoutine(
+                name: "bhavya",
+                steps: [AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")]
+            )
+        )
+        let executor = makeExecutor(
+            root: root,
+            routineStore: routineStore,
+            workspaceStore: WorkspaceStore(fileURL: workspaceURL)
+        )
+
+        let prepared = try executor.prepare(plan: runRoutinePlan(name: "hehe"))
+
+        let question = try #require(prepared.clarificationQuestion)
+        #expect(question.contains("did you mean one of: bhavya"))
+    }
+
     /// A store that cannot be read is a load failure, not a not-found — it must keep its own
     /// error rather than being softened into "you haven't saved any".
     @Test
