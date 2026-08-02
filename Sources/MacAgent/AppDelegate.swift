@@ -20,6 +20,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     func applicationDidFinishLaunching(_ notification: Notification) {
         registerBundledFonts()
 
+        // The app shipped with no main menu at all until 2026-07-30 — `main.swift` is a bare
+        // AppKit lifecycle with no SwiftUI Scene to synthesize one — which silently broke every
+        // menu-routed key equivalent (⌘A/⌘C/⌘V/⌘X/⌘Z in any text field, and app-wide ⌘Q): macOS
+        // dispatches those by matching against main-menu items, so with no menu they never reach
+        // the first responder at all. Typing worked because that is direct key input. Installed
+        // even though an accessory-policy app displays no menu bar — visibility and key-equivalent
+        // routing are separate — and the bar *is* visible whenever Command Center has the app in
+        // `.regular` policy.
+        NSApp.mainMenu = makeMainMenu()
+
         let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.squareLength)
         item.button?.image = NSImage(systemSymbolName: "wand.and.stars.inverse", accessibilityDescription: "Sonny")
         item.button?.imagePosition = .imageOnly
@@ -193,6 +203,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
             print("Sonny could not register font \(fontName): \(registrationError.localizedDescription)")
         }
+    }
+
+    /// The real `NSApp.mainMenu`, distinct from `makeStatusMenu()`'s status-item dropdown. Two
+    /// menus only, deliberately: an Edit menu because that is what routes the standard editing
+    /// key equivalents to the first responder (nil targets → responder chain), and an app menu
+    /// carrying just Quit — the first top-level item renders as the bold app menu whenever the
+    /// bar is visible (`.regular` policy), so leaving Edit first would put "Edit" in the
+    /// app-name slot, and ⌘Q was equally menu-routed and equally broken (the status menu's own
+    /// "q" equivalent only dispatches while that dropdown is open). No File/View/Window/Help:
+    /// nothing in the app needs them.
+    private func makeMainMenu() -> NSMenu {
+        let mainMenu = NSMenu()
+
+        let appMenuItem = NSMenuItem()
+        let appMenu = NSMenu()
+        appMenu.addItem(
+            withTitle: "Quit Sonny",
+            action: #selector(quit),
+            keyEquivalent: "q"
+        ).target = self
+        appMenuItem.submenu = appMenu
+        mainMenu.addItem(appMenuItem)
+
+        let editMenuItem = NSMenuItem()
+        let editMenu = NSMenu(title: "Edit")
+        // `Selector(("undo:"))` / `Selector(("redo:"))`: not declared on NSResponder, but text
+        // views resolve them through the responder chain's undo manager — the standard AppKit
+        // wiring for hand-built Edit menus.
+        editMenu.addItem(withTitle: "Undo", action: Selector(("undo:")), keyEquivalent: "z")
+        // The capital "Z" key equivalent implies ⇧⌘Z — AppKit reads an uppercase letter as
+        // requiring Shift.
+        editMenu.addItem(withTitle: "Redo", action: Selector(("redo:")), keyEquivalent: "Z")
+        editMenu.addItem(.separator())
+        editMenu.addItem(withTitle: "Cut", action: #selector(NSText.cut(_:)), keyEquivalent: "x")
+        editMenu.addItem(withTitle: "Copy", action: #selector(NSText.copy(_:)), keyEquivalent: "c")
+        editMenu.addItem(withTitle: "Paste", action: #selector(NSText.paste(_:)), keyEquivalent: "v")
+        editMenu.addItem(.separator())
+        editMenu.addItem(
+            withTitle: "Select All",
+            action: #selector(NSText.selectAll(_:)),
+            keyEquivalent: "a"
+        )
+        editMenuItem.submenu = editMenu
+        mainMenu.addItem(editMenuItem)
+
+        return mainMenu
     }
 
     /// Just the two unambiguous actions for now — no "Recent"/usage section, since Sonny has no

@@ -366,6 +366,19 @@ it feels confusing in practice, not just whether it's "technically correct."
 - [x] Push-to-talk (Ctrl-Opt-Space) works both with Command Center frontmost *and* with some other
       app entirely frontmost — it's a global hotkey, test it from outside Sonny too — **confirmed
       2026-07-24**
+- [ ] **(new 2026-07-30)** Standard editing shortcuts work in *both* text fields — ⌘A, ⌘C, ⌘V, ⌘X,
+      ⌘Z each in the widget's command field (Command Center closed → `.accessory` policy) and in
+      Command Center's clarification answer field (`.regular` policy). The app had **no main menu
+      at all** until 2026-07-30, which silently broke all of these app-wide; AppKit key-equivalent
+      dispatch can't be covered by the automated suite, so this row is the real verification
+- [ ] **(new 2026-07-30)** ⌘Q quits the app from anywhere — it was equally menu-routed and equally
+      broken; the status-item menu's Quit only ever dispatched while that dropdown was open
+- [ ] **(new 2026-07-30, fix re-test)** Widget idle state: the Start button now sits 8pt from the
+      pill's trailing edge, matching its 8pt top/bottom insets — confirm it reads even, and that
+      the in-flight state (button hidden, field disabled) looks unchanged from before
+- [ ] **(new 2026-07-30, fix re-test)** With a workspace saved as "hehe" and no routine by that
+      name, "run hehe" asks "…but you do have a workspace called \"hehe\" — did you mean to open
+      that?" instead of listing routine names; same cross-reference in the reverse direction
 
 ## 7. Command Center — page by page
 
@@ -429,6 +442,14 @@ it feels confusing in practice, not just whether it's "technically correct."
       `TaskLogDetailDialog`'s exact pattern) plus `.keyboardShortcut(.cancelAction)` for Escape.
       **Confirmed working by you, 2026-07-24.** Whether it also closes automatically when the app
       quits (the original founder-decision requirement) is still separately, not yet, confirmed.
+- [ ] **(new 2026-07-30)** Detail view → "Delete routine" → confirmation dialog appears with the
+      routine's name in the title and a message naming steps/schedule/run history; Cancel leaves
+      everything intact; confirming closes the sheet and removes the row (and its cadence section
+      header if it was the last routine in it)
+- [ ] **(new 2026-07-30)** Delete a routine with an **enabled schedule** — no stray "did not run"
+      notice appears afterwards, and nothing fires at its old time
+- [ ] **(new 2026-07-30)** "Delete routine" is disabled while a task is running or parked at an
+      approval; visually confirm the disabled state reads as disabled
 
 ### Workspaces — `13-MainAppWorkspaces.svg`/`.png`
 - [x] Create a workspace (this is tier 2 — confirm the approval flow works here too)
@@ -441,6 +462,13 @@ it feels confusing in practice, not just whether it's "technically correct."
 - [x] App-icon stack shows the *actual* icons of apps in that workspace (cross-check Finder/Launchpad)
 - [x] Task count matches Insights' per-workspace breakdown — the two should agree
 - [x] No green "Active" badge, no Open-vs-Switch branching (deliberately not built)
+- [ ] **(new 2026-07-30)** Card footer has a labeled danger-tone "Delete" button left of "Open" —
+      check it reads clearly as destructive but doesn't visually overpower the card, and that the
+      confirmation dialog names the workspace and warns apps/URLs are deleted while past task
+      history is not
+- [ ] **(new 2026-07-30)** Delete a workspace that has completed tasks tagged to it — Insights'
+      workspace breakdown keeps the old rows under the stale name (point-in-time text, by design),
+      nothing crashes or re-attributes
 
 ### Settings — `10-MainAppSettings.svg`/`.png`, opened via the bottom-left account row
 - [x] Account row shows your real macOS full name only, no email/plan badge
@@ -463,6 +491,19 @@ it feels confusing in practice, not just whether it's "technically correct."
 - [x] "Learn more" → 4-item flyout (Documentation/Usage policy/Privacy policy/Terms of service), all
       4 individually disabled — confirm clicking any does nothing (no crash/hang)
 - [x] Both popovers dismiss cleanly on an outside click — no ghost panel left behind
+
+### Web research — topic/search commands (new 2026-07-30, Tavily provider)
+
+Needs `TAVILY_API_KEY` exported in the launching shell (GUI `open` won't inherit it). Each search
+costs real money (~$0.008), so a handful of runs is plenty.
+
+- [ ] Without the key set: a search command ("research three alternatives to Raycast and save a
+      comparison") still fails with the honest "Web search provider not configured." error — not a
+      crash, not a hang
+- [ ] With the key: the same command produces a real Markdown research note — Sources section lists
+      the pages actually fetched (not raw search-result text), and a generation timestamp is present
+- [ ] Direct-URL summarization ("summarize <url> and save it as Markdown") still works exactly as
+      before — the provider only affects search/topic commands
 
 ## 8. How to report back
 

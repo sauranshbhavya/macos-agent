@@ -90,6 +90,148 @@ struct QuickDispatchTests {
         #expect(plan.steps[0].workspaceName == "slack")
     }
 
+    /// The seventh manual-pass case: "run hehe" where hehe is only a saved *workspace* used to
+    /// fall through to the planner, which cannot name saved items and asked a generic question.
+    /// The kind-locked verb must clarify with the item that actually exists — and never silently
+    /// cross-resolve.
+    @Test
+    func runOfASavedWorkspaceNameClarifiesCrossKindInsteadOfReachingThePlanner() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try workspaceStore.save(StoredWorkspace(name: "Hehe", apps: ["Safari"], urls: []))
+        let resolver = InstantCommandResolver(
+            routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
+            workspaceStore: workspaceStore
+        )
+
+        guard case .clarify(let plan) = resolver.resolve(command: "run hehe") else {
+            Issue.record("Expected a cross-kind clarification, not planner fallthrough.")
+            return
+        }
+        #expect(plan.steps.map(\.operation) == [.clarify])
+        let question = try #require(plan.steps.first?.question)
+        #expect(question.contains("I don't have a routine called \"Hehe\""))
+        // Canonical stored name, not the raw lowercase typed candidate.
+        #expect(question.contains("but you do have a workspace called \"Hehe\""))
+        #expect(question.contains("did you mean to open that?"))
+    }
+
+    @Test
+    func openOfASavedRoutineNameClarifiesCrossKind() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try routineStore.save(StoredRoutine(name: "vibe", steps: [openSafariStep()]))
+        let resolver = InstantCommandResolver(
+            routineStore: routineStore,
+            workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        )
+
+        guard case .clarify(let plan) = resolver.resolve(command: "open vibe") else {
+            Issue.record("Expected a cross-kind clarification, not planner fallthrough.")
+            return
+        }
+        let question = try #require(plan.steps.first?.question)
+        #expect(question.contains("I don't have a workspace called \"vibe\""))
+        #expect(question.contains("but you do have a routine called \"vibe\""))
+        #expect(question.contains("did you mean to run that?"))
+    }
+
+    /// The kind-prefixed form misses cross-kind the same way: "run routine hehe" where hehe is
+    /// only a workspace gets the same clarification, via the explicit candidates.
+    @Test
+    func kindPrefixedRoutineFormWithAWorkspaceOnlyNameClarifies() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try workspaceStore.save(StoredWorkspace(name: "hehe", apps: ["Safari"], urls: []))
+        let resolver = InstantCommandResolver(
+            routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
+            workspaceStore: workspaceStore
+        )
+
+        guard case .clarify(let plan) = resolver.resolve(command: "run routine hehe") else {
+            Issue.record("Expected the kind-prefixed cross-kind miss to clarify.")
+            return
+        }
+        let question = try #require(plan.steps.first?.question)
+        #expect(question.contains("but you do have a workspace called \"hehe\""))
+        #expect(question.contains("did you mean to open that?"))
+    }
+
+    @Test
+    func kindPrefixedWorkspaceFormWithARoutineOnlyNameClarifies() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try routineStore.save(StoredRoutine(name: "vibe", steps: [openSafariStep()]))
+        let resolver = InstantCommandResolver(
+            routineStore: routineStore,
+            workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        )
+
+        guard case .clarify(let plan) = resolver.resolve(command: "open workspace vibe") else {
+            Issue.record("Expected the kind-prefixed cross-kind miss to clarify.")
+            return
+        }
+        let question = try #require(plan.steps.first?.question)
+        #expect(question.contains("but you do have a routine called \"vibe\""))
+        #expect(question.contains("did you mean to run that?"))
+    }
+
+    /// A name saved nowhere still reaches the planner — the cross-kind check must not overreach.
+    @Test
+    func runOfANameSavedNowhereStillReturnsNilToThePlanner() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try workspaceStore.save(StoredWorkspace(name: "hehe", apps: ["Safari"], urls: []))
+        let resolver = InstantCommandResolver(
+            routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
+            workspaceStore: workspaceStore
+        )
+
+        #expect(resolver.resolve(command: "run ghost") == nil)
+    }
+
+    /// "start" sits in both direct-prefix lists and already resolved cross-kind before this fix —
+    /// guard that the both-verbs path still resolves straight to a plan, not a clarification.
+    @Test
+    func startOfASavedWorkspaceStillResolvesInstantly() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try workspaceStore.save(StoredWorkspace(name: "hehe", apps: ["Safari"], urls: []))
+        let resolver = InstantCommandResolver(
+            routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
+            workspaceStore: workspaceStore
+        )
+
+        guard case .plan(let plan) = resolver.resolve(command: "start hehe") else {
+            Issue.record("Expected the both-verbs form to keep resolving instantly.")
+            return
+        }
+        #expect(plan.steps.map(\.operation) == [.openWorkspace])
+        #expect(plan.steps[0].workspaceName == "hehe")
+    }
+
+    /// Three-way ambiguity — the cross-kind name also names an allowlisted app — steps aside to
+    /// the planner, consistent with the existing direct-form collision handling.
+    @Test
+    func crossKindNameThatAlsoNamesAnAllowlistedAppDefersToThePlanner() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try workspaceStore.save(StoredWorkspace(name: "Slack", apps: ["Notes"], urls: []))
+        let resolver = InstantCommandResolver(
+            routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
+            workspaceStore: workspaceStore
+        )
+
+        #expect(resolver.resolve(command: "run Slack") == nil)
+    }
+
     @Test
     func broadRunningAppPrefixesOnlyClaimPlausibleAppNames() throws {
         let root = try makeDirectory()

@@ -230,6 +230,22 @@ public struct RoutineStore: @unchecked Sendable {
         try write(routines)
     }
 
+    /// Removes a routine entirely — steps, schedule, and run history go together, since all three
+    /// live under the same dictionary key. There is no narrower delete: clearing just the schedule
+    /// is `setSchedule(routineNamed:to:)` with nil.
+    ///
+    /// Throws rather than no-oping for an unknown name, same as `recordRun`: the only way a
+    /// user-initiated delete names a missing routine is a state change it should surface, not
+    /// swallow.
+    public func delete(routineNamed rawName: String) throws {
+        let key = try normalizedName(rawName, kind: "Routine")
+        var routines = try loadAll()
+        guard routines.removeValue(forKey: key) != nil else {
+            throw AutomationStoreError.missingRoutine(rawName)
+        }
+        try write(routines)
+    }
+
     public func routine(named rawName: String) throws -> StoredRoutine {
         let name = try normalizedName(rawName, kind: "Routine")
         guard let routine = try loadAll()[name] else {
@@ -280,6 +296,17 @@ public struct WorkspaceStore: @unchecked Sendable {
     public func save(_ workspace: StoredWorkspace) throws {
         var workspaces = try loadAll()
         workspaces[normalized(workspace.name)] = workspace
+        try write(workspaces)
+    }
+
+    /// Removes a workspace entirely. Throws rather than no-oping for an unknown name — see
+    /// `RoutineStore.delete(routineNamed:)`.
+    public func delete(workspaceNamed rawName: String) throws {
+        let key = try normalizedName(rawName, kind: "Workspace")
+        var workspaces = try loadAll()
+        guard workspaces.removeValue(forKey: key) != nil else {
+            throw AutomationStoreError.missingWorkspace(rawName)
+        }
         try write(workspaces)
     }
 

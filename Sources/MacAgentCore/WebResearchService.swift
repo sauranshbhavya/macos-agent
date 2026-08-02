@@ -25,7 +25,13 @@ public enum WebResearchError: Error, Equatable, LocalizedError {
         case .restrictedContent(let reason):
             return "Sonny will not bypass \(reason)."
         case .noReadableContent(let url):
-            return "No readable article content was found at \(url)."
+            // Investigated 2026-07-30 via `summarize ycombinator.com/companies`: this fires for
+            // JavaScript-rendered pages (a directory app with no article-shaped static HTML) —
+            // the extractor working correctly on what the server actually sent, not a fetch, URL,
+            // or search-provider failure. The copy hints at that cause because it is the dominant
+            // real-world one for a page the user can see fine in a browser, phrased as "may"
+            // because a genuinely empty static page lands here too.
+            return "No readable article content was found at \(url). The page may render its content with JavaScript, which Sonny does not run."
         case .searchProviderNotConfigured:
             return "Web search provider not configured."
         case .noSearchResults(let query):

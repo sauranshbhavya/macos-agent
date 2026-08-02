@@ -970,6 +970,43 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
+    /// Permanently deletes a saved routine — steps, schedule, and run history all live under the
+    /// same store key, so all three go together.
+    ///
+    /// Guarded on the full "task in flight" condition, not just `isRunning`: a run paused at an
+    /// approval still holds a prepared plan that re-reads the store when approved, so deleting out
+    /// from under it has the same failure as deleting mid-run. `isRunning || isAwaitingApproval`
+    /// is what `checkScheduledRoutines` and every running-indicator gate already treat as "in
+    /// flight"; `deleteLocalData`'s narrower `isRunning`-only guard predates that convention and
+    /// is left as it is here.
+    func deleteRoutine(_ routine: StoredRoutine) {
+        guard !isRunning, !isAwaitingApproval else {
+            setError("Finish or stop the current task before deleting this routine.")
+            return
+        }
+        do {
+            try routineStore.delete(routineNamed: routine.name)
+            refreshSavedItems()
+        } catch {
+            setError("Could not delete routine: \(error.localizedDescription)")
+        }
+    }
+
+    /// Permanently deletes a saved workspace. See `deleteRoutine` for the in-flight guard's
+    /// rationale.
+    func deleteWorkspace(_ workspace: StoredWorkspace) {
+        guard !isRunning, !isAwaitingApproval else {
+            setError("Finish or stop the current task before deleting this workspace.")
+            return
+        }
+        do {
+            try workspaceStore.delete(workspaceNamed: workspace.name)
+            refreshSavedItems()
+        } catch {
+            setError("Could not delete workspace: \(error.localizedDescription)")
+        }
+    }
+
     func runSuggestion(_ suggestion: RunSuggestion) {
         let url = URL(fileURLWithPath: suggestion.value)
         switch suggestion.kind {
@@ -1097,6 +1134,11 @@ final class AgentViewModel: ObservableObject {
         AgentActionExecutor(
             routineStore: routineStore,
             workspaceStore: workspaceStore,
+            // `try?` is the degradation path, not error swallowing: construction only throws for
+            // a missing TAVILY_API_KEY, and nil falls back to `UnavailableWebSearchProvider`'s
+            // existing "Web search provider not configured." error. Constructed per executor like
+            // everything else here, so a key exported after launch works on the next run.
+            webSearchProvider: try? TavilySearchProvider(),
             usageRecorder: taskUsageRecorder,
             snippetStore: snippetStore,
             recentArtifactStore: recentArtifactStore,
@@ -1448,8 +1490,10 @@ final class AgentViewModel: ObservableObject {
 
         // Read from the store, never from `savedRoutines`. An in-memory snapshot can outlive the
         // file — "delete all local data" wipes routines.json while the published array still holds
-        // the old values — and firing against a routine that no longer exists is the one way the
-        // otherwise-unreachable missing-routine path below becomes reachable.
+        // the old values, and `RoutineStore.delete(routineNamed:)` can now remove one routine the
+        // same way. A fresh read narrows the window in which a fired routine can be missing by
+        // run time, but no longer closes it: see `performScheduledRun`'s missing-routine comment
+        // for the in-flight race that remains, and the guard there that fails it closed.
         let routines: [StoredRoutine]
         do {
             routines = Array(try routineStore.loadAll().values)
@@ -1542,13 +1586,19 @@ final class AgentViewModel: ObservableObject {
                 plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: name),
                 source: .instantResolver
             )
-            // Defensive, and currently unreachable: `SaveRoutineCapabilityAdapter` rejects
-            // open_workspace and run_routine steps at save time, so a routine's own steps cannot
-            // name a missing target, and the routine itself must exist because its schedule was
-            // just read off it. Two changes would make this reachable — moving schedules off
-            // StoredRoutine into a store keyed by name, or a routine saved before that step
-            // validation existed — so it fails closed rather than stalling on a question nobody
-            // is present to answer.
+            // Reachable since routine deletion exists, not merely defensive.
+            // `SaveRoutineCapabilityAdapter` still rejects open_workspace and run_routine steps at
+            // save time, so a routine's own steps still cannot name a missing target — but the
+            // routine itself is re-resolved *by name* in `prepare` above, and
+            // `checkScheduledRoutines` spawning this method as a `Task` is a real suspension point
+            // between reading the routine and this line running. Deleting the routine inside that
+            // window makes `RunRoutineCapabilityAdapter`'s store read throw `.missingRoutine`,
+            // which `AgentActionExecutor.prepare` converts into this clarification. Failing closed
+            // rather than stalling on a question nobody is present to answer is correct for every
+            // cause. Pinned by ScheduledRoutineRunTests.
+            // aRoutineDeletedBetweenScheduleFireAndTaskStartBecomesAClarificationInstead. (A
+            // delete landing later still fails closed: `runner.execute`'s own store read throws
+            // into the generic catch below.)
             if let question = prepared.clarificationQuestion {
                 scheduledRunNotice = "“\(name)” was not run because Sonny needed to ask something first: \(question)"
                 return

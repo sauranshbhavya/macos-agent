@@ -785,6 +785,111 @@ struct AgentActionExecutorTests {
         #expect(question.contains("deep work"))
     }
 
+    /// The manual-pass case: "run hehe" with a *workspace* named hehe saved used to list routine
+    /// names while ignoring the exact-name workspace the user almost certainly meant.
+    @Test
+    func unknownRoutineNameMatchingASavedWorkspaceCrossReferencesIt() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try workspaceStore.save(StoredWorkspace(name: "Hehe", apps: ["Safari"], urls: []))
+        try routineStore.save(
+            StoredRoutine(
+                name: "bhavya",
+                steps: [AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")]
+            )
+        )
+        let executor = makeExecutor(root: root, routineStore: routineStore, workspaceStore: workspaceStore)
+
+        // Store-normalized identity, so the case-variant query still matches — and the question
+        // shows the workspace's stored display name, not the query's casing.
+        let prepared = try executor.prepare(plan: runRoutinePlan(name: "hehe"))
+
+        let question = try #require(prepared.clarificationQuestion)
+        #expect(question.contains("I don't have a routine called \"hehe\""))
+        #expect(question.contains("but you do have a workspace called \"Hehe\""))
+        #expect(question.contains("did you mean to open that?"))
+        #expect(!question.contains("did you mean one of"))
+        #expect(prepared.plan.steps.map(\.operation) == [.clarify])
+    }
+
+    @Test
+    func unknownWorkspaceNameMatchingASavedRoutineCrossReferencesIt() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try workspaceStore.save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: []))
+        try routineStore.save(
+            StoredRoutine(
+                name: "hehe",
+                steps: [AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")]
+            )
+        )
+        let executor = makeExecutor(root: root, routineStore: routineStore, workspaceStore: workspaceStore)
+
+        let prepared = try executor.prepare(plan: openWorkspacePlan(name: "hehe"))
+
+        let question = try #require(prepared.clarificationQuestion)
+        #expect(question.contains("I don't have a workspace called \"hehe\""))
+        #expect(question.contains("but you do have a routine called \"hehe\""))
+        #expect(question.contains("did you mean to run that?"))
+        #expect(!question.contains("did you mean one of"))
+    }
+
+    /// Exact match only — a populated other store with no exact-name match must not change the
+    /// existing same-kind list, and there is deliberately no fuzzy matching.
+    @Test
+    func crossKindCheckRequiresAnExactMatchAndOtherwiseKeepsTheList() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try workspaceStore.save(StoredWorkspace(name: "hehe workspace", apps: ["Safari"], urls: []))
+        try routineStore.save(
+            StoredRoutine(
+                name: "bhavya",
+                steps: [AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")]
+            )
+        )
+        let executor = makeExecutor(root: root, routineStore: routineStore, workspaceStore: workspaceStore)
+
+        let prepared = try executor.prepare(plan: runRoutinePlan(name: "hehe"))
+
+        let question = try #require(prepared.clarificationQuestion)
+        #expect(question.contains("did you mean one of: bhavya"))
+        #expect(!question.contains("hehe workspace"))
+    }
+
+    /// An unreadable *other* store must not turn a good clarification into a thrown error — the
+    /// cross-kind check degrades to the same-kind list. (An unreadable *same-kind* store still
+    /// throws; that case is pinned separately below.)
+    @Test
+    func unreadableOtherStoreDegradesToTheSameKindListInsteadOfFailing() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceURL = root.appendingPathComponent("workspaces.json")
+        try Data("this is not valid encrypted or plaintext JSON".utf8).write(to: workspaceURL)
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try routineStore.save(
+            StoredRoutine(
+                name: "bhavya",
+                steps: [AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")]
+            )
+        )
+        let executor = makeExecutor(
+            root: root,
+            routineStore: routineStore,
+            workspaceStore: WorkspaceStore(fileURL: workspaceURL)
+        )
+
+        let prepared = try executor.prepare(plan: runRoutinePlan(name: "hehe"))
+
+        let question = try #require(prepared.clarificationQuestion)
+        #expect(question.contains("did you mean one of: bhavya"))
+    }
+
     /// A store that cannot be read is a load failure, not a not-found — it must keep its own
     /// error rather than being softened into "you haven't saved any".
     @Test
@@ -869,6 +974,45 @@ struct AgentActionExecutorTests {
         #expect(markdown.contains("- [Swift Two](https://example.com/swift-two)"))
         #expect(synthesizer.prompts[0].trustedPlan.steps[0].searchQuery == "Swift concurrency")
         #expect(result.summary == "Saved web research Markdown for search query \"Swift concurrency\" using 2 sources to \(output.path).")
+    }
+
+    /// Partial synthesis can reduce the surviving source count to one — the summary must then say
+    /// "1 source", not "1 sources". The skipped-source clause pluralized correctly from the start;
+    /// the search base sentence hardcoded the plural, which stayed invisible until a real search
+    /// could actually skip a source.
+    @Test
+    func webResearchSearchSummaryUsesSingularSourceWhenOnlyOneSourceSurvives() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let output = root.appendingPathComponent("search-note.md")
+        let surviving = URL(string: "https://example.com/alive")!
+        let unreachable = URL(string: "https://example.com/dead")!
+        let searchProvider = StaticWebSearchProvider(results: [
+            WebSearchResult(title: "Alive", url: surviving, snippet: nil),
+            WebSearchResult(title: "Dead", url: unreachable, snippet: nil)
+        ])
+        let pageLoader = webPageLoader(pages: [
+            surviving.absoluteString: readablePage(url: surviving, title: "Alive")
+        ])
+        let synthesizer = StaticWebResearchSynthesizer(
+            note: WebResearchNote(
+                title: "Single Source",
+                summary: "One source survived.",
+                keyPoints: [],
+                citations: []
+            )
+        )
+        let executor = makeExecutor(
+            root: root,
+            webPageLoader: pageLoader,
+            webSearchProvider: searchProvider,
+            webResearchSynthesizer: synthesizer
+        )
+        let plan = webSearchPlan(query: "single survivor", output: output, count: 2)
+
+        let result = try await executor.execute(plan: plan) { _, _ in }
+
+        #expect(result.summary == "Saved web research Markdown for search query \"single survivor\" using 1 source to \(output.path). Skipped 1 unreachable source: https://example.com/dead.")
     }
 
     @Test

@@ -375,7 +375,9 @@ public struct WebResearchMarkdownCapabilityAdapter: CapabilityAdapter {
                 ? "Saved web research Markdown to \(spec.outputURL.path)."
                 : "Saved comparison Markdown for \(sourceCount) sources to \(spec.outputURL.path)."
         case .search(let query, _):
-            base = "Saved web research Markdown for search query \"\(query)\" using \(sourceCount) sources to \(spec.outputURL.path)."
+            // Singular matters here: partial synthesis (some sources skipped) can reduce the
+            // surviving count to one, same as the skipped-source clause below already handles.
+            base = "Saved web research Markdown for search query \"\(query)\" using \(sourceCount) source\(sourceCount == 1 ? "" : "s") to \(spec.outputURL.path)."
         }
 
         guard !skippedSources.isEmpty else {

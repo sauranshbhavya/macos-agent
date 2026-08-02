@@ -288,7 +288,13 @@ struct FloatingWidgetView: View {
                 .opacity(viewModel.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.5 : 1)
             }
         }
-        .padding(.horizontal, 14)
+        .padding(.leading, 14)
+        // 8pt matches the Start button's own vertical inset (24pt tall in a 40pt pill leaves 8pt
+        // above and below); the previous uniform 14pt left it visibly farther from the trailing
+        // edge than from the top and bottom. Conditional because the button is not rendered while
+        // a task is in flight — that state keeps its shipped 14pt rather than pulling the disabled
+        // field 6pt closer to the capsule's curve to fix a complaint about a different state.
+        .padding(.trailing, isTaskInFlight ? 14 : 8)
         .frame(width: 472, height: 40)
         .widgetGlassPill()
     }
