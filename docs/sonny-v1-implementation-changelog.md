@@ -131,7 +131,7 @@ Copy this for each completed branch. Fill every field — "none" is a valid answ
 ### Branch: feature/<name>
 Status: in progress | complete | blocked
 Date: YYYY-MM-DD
-Tickets: SON-<n>, SON-<n>, ... (with one-line outcomes)
+Tickets: SONNY-<n>, SONNY-<n>, ... (with one-line outcomes)
 Reviewed by: fresh session (per WORKFLOW.md step 7) — findings and their resolutions, or "none"
 
 Spec sections covered: (list; flag any left partial and why)
