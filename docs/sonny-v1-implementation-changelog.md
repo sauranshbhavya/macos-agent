@@ -878,8 +878,8 @@ Start in plan mode. Confirm git status is clean on main, confirm the changelog's
 ### Branch: feature/full-repo-correctness-review
 Status: complete (5 checkpoints)
 Date: 2026-07-29
-Implementing agent: Claude
-Reviewing agent: pending
+Implementing agent: Claude (separate session)
+Reviewing agent: Claude (primary session — per-checkpoint diff reads and independent suite reruns at implementation time; field resolved 2026-08-02, was left "pending" after merge)
 
 Spec sections covered: none directly — this is a cross-cutting correctness pass over every area shipped by branches 1-11, not new feature work. Nothing in the spec changed.
 
@@ -950,8 +950,8 @@ Next branch: `feature/routine-scheduling` (branch 10 per the roadmap above), unc
 ### Branch: feature/routine-scheduling
 Status: complete
 Date: 2026-07-29
-Implementing agent: Claude
-Reviewing agent: pending
+Implementing agent: Claude (separate session)
+Reviewing agent: Claude (primary session — per-checkpoint diff reads, hand-traced date math, independent suite reruns at implementation time; field resolved 2026-08-02, was left "pending" after merge)
 
 Spec sections covered: routine scheduling per `docs/sonny-founder-design-decisions.md`'s Routines section; the Command-Center-native permission/clarification/failure surface `docs/sonny-ui-backend-roadmap.md` names as a hard prerequisite for background execution.
 Files changed: `Sources/MacAgentCore/RoutineSchedule.swift` (new), `RoutineScheduler.swift` (new), `RoutineStreak.swift` (new), `UnattendedTrustAdvisory.swift` (new), `AutomationStores.swift`, `TaskHistoryStore.swift`, `TaskHistoryInsights.swift`, `RunRoutineCapabilityAdapter.swift`, `InstantCommandResolver.swift`, `AgentActionExecutor.swift`; `Sources/MacAgent/AgentViewModel.swift`, `CommandCenterView.swift`, `RoutineDetailView.swift`, `AppDelegate.swift`; tests `RoutineScheduleTests.swift` (new), `RoutineSchedulerTests.swift` (new), `RoutineStreakTests.swift` (new), `ScheduledRoutineRunTests.swift` (new), `CommandCenterAttentionSurfaceTests.swift` (new), `TaskHistoryInsightsTests.swift`, `ProductShellTests.swift`.
@@ -1084,8 +1084,8 @@ Next branch: `feature/instant-utility-quick-results` (branch 11 per the roadmap 
 ### Branch: feature/saved-item-deletion-and-search-provider
 Status: complete
 Date: 2026-07-30
-Implementing agent: Claude
-Reviewing agent: pending
+Implementing agent: Claude (separate session)
+Reviewing agent: Claude (primary session — per-checkpoint diff reads, hand-traced resolver/store logic, independent full-suite reruns; manual/visual verification by the user)
 
 Spec sections covered: §6.8's "Disable or delete routine." (the delete half — disable already existed via branch 10's schedule toggle; workspace deletion has no spec bullet and rides along on the same rationale); §4A.2's search-provider seam and its "a search/topic command can produce a Markdown research note" acceptance criterion, resolving the branch 16 web-search note above. Two unrelated pieces shipped on one branch by explicit user decision, checkpointed separately.
 Files changed: `Sources/MacAgentCore/AutomationStores.swift`, `TavilySearchProvider.swift` (new), `AgentActionExecutor.swift`, `InstantCommandResolver.swift`, `WebResearchMarkdownCapabilityAdapter.swift`, `WebResearchService.swift`; `Sources/MacAgent/AgentViewModel.swift`, `AppDelegate.swift`, `RoutineDetailView.swift`, `CommandCenterView.swift`, `FloatingWidgetView.swift`; tests `AutomationStoresTests.swift`, `TavilySearchProviderTests.swift` (new), `AgentActionExecutorTests.swift`, `QuickDispatchTests.swift`, `ScheduledRoutineRunTests.swift`, `ProductShellTests.swift`; docs this file, `sonny-manual-test-checklist.md`.
@@ -1128,7 +1128,8 @@ Known limitations / deferred scope:
 - `StoredWorkspace` remains non-`Identifiable` and there is still no workspace detail view.
 - `deleteLocalData`'s narrower `isRunning`-only guard is a known inconsistency left in place — whoever next touches that method should widen it to match, with this entry as context.
 - **JavaScript-rendered pages cannot be summarized, and that is extraction working correctly, not a bug** (investigated 2026-07-30 during this branch's manual pass, via `summarize ycombinator.com/companies`): `SwiftSoupReadableWebExtractor` reads the static HTML the server sends, and a client-rendered directory page has no article-shaped content in it — not a fetch, URL-validation, or search-provider failure. Resolved by hinting in the `.noReadableContent` error copy ("may render its content with JavaScript") rather than leaving the bare not-found message, since that is the dominant real-world cause for a page that looks fine in a browser; a headless-rendering fallback would be a real feature with its own cost/security surface, deliberately not scoped here.
+- **Two manual-pass findings deferred by explicit user decision (2026-08-01), a stated exception to the fix-in-branch rule with a named landing spot — the immediately-next branch, not a backlog.** (1) The menu bar's "New Task" item is a no-op: the real fix needs an actual widget-summon/focus trigger the app currently has no mechanism for, its own small design rather than a patch. (2) Workspace URLs open in the system default browser, not the workspace's own browser app (`WorkspaceBrowserOpener` calls `NSWorkspace.shared.open(url)` with no target app, so a Safari workspace opens its URLs in Chrome) — found by co-founder review during this branch's pass. Both land in the next branch alongside the cheap half of the approval-friction work.
 
 Open questions for the next chat (required, write "none" if true): none
 
-Next branch: unchanged by this ad hoc pass (off-roadmap, like `feature/full-repo-correctness-review`) — branch 10's entry above already names `feature/instant-utility-quick-results`.
+Next branch: the small-bugs branch agreed 2026-08-01 ("New Task" widget-focus trigger, per-workspace browser targeting, first-run approval legibility) — superseding branch 10's `feature/instant-utility-quick-results` pointer. The full upcoming-branch resequencing agreed the same day (small bugs → workspace-as-restriction-scope → structural approval relaxation → task-history controls → task-detail rehydration, all ahead of branch 12) will be written into the roadmap table together with the workflow-v2 transition note, not piecemeal here.
