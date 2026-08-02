@@ -164,8 +164,56 @@ public struct InstantCommandResolver: Sendable {
         case (.some(let routine), .some(let workspace)):
             return .clarify(quickDispatchClarificationPlan(name: routine.name, workspaceName: workspace.name))
         case (nil, nil):
-            return nil
+            return crossKindQuickDispatchResolution(
+                routineCandidates: routineCandidates,
+                workspaceCandidates: workspaceCandidates
+            )
         }
+    }
+
+    /// The kind-locked verbs' blind spot: "run" only ever looks its name up as a routine and
+    /// "open" only as a workspace, so "run hehe" where hehe is a saved *workspace* fell through
+    /// to the planner — which has no knowledge of saved names and can only ask generic questions,
+    /// never mentioning the item that exists. ("start"/"launch" sit in both direct-prefix lists
+    /// and already resolved cross-kind before reaching this point.) This is the resolver-side
+    /// sibling of `AgentActionExecutor.missingAutomationTargetQuestion`'s cross-kind check, which
+    /// sits behind the planner and so never fires for this input shape.
+    ///
+    /// Deliberately clarifies rather than silently cross-resolving — the user named a kind and
+    /// meant something else, and auto-running the other kind would contradict the collision
+    /// handling above. Exact-name match only; runs after the same-kind switches so a same-kind
+    /// match and an exact whole-command name both still win unchanged, and a name saved nowhere
+    /// still returns nil to the planner.
+    private func crossKindQuickDispatchResolution(
+        routineCandidates: LaunchCandidateSet,
+        workspaceCandidates: LaunchCandidateSet
+    ) -> InstantCommandResolution? {
+        // Explicit candidates included on purpose: "run routine hehe" where hehe is only a
+        // workspace is the same miss and gets the same clarification.
+        let routineSide = routineCandidates.explicit + routineCandidates.direct
+        let workspaceSide = workspaceCandidates.explicit + workspaceCandidates.direct
+
+        if let workspace = savedWorkspace(matching: routineSide) {
+            let namesApp = routineSide.contains { (try? appCatalog.resolve($0)) != nil }
+            // Three-way ambiguity (also an allowlisted app) steps aside to the planner, same as
+            // the direct-form collision handling above.
+            return namesApp ? nil : .clarify(crossKindQuickDispatchClarificationPlan(
+                missingKind: "routine",
+                foundKind: "workspace",
+                foundName: workspace.name,
+                verb: "open"
+            ))
+        }
+        if let routine = savedRoutine(matching: workspaceSide) {
+            let namesApp = workspaceSide.contains { (try? appCatalog.resolve($0)) != nil }
+            return namesApp ? nil : .clarify(crossKindQuickDispatchClarificationPlan(
+                missingKind: "workspace",
+                foundKind: "routine",
+                foundName: routine.name,
+                verb: "run"
+            ))
+        }
+        return nil
     }
 
     private func routineLaunchCandidates(in command: String) -> LaunchCandidateSet {
@@ -622,6 +670,28 @@ public struct InstantCommandResolver: Sendable {
                     operation: .clarify,
                     description: "Ask whether to run a routine or open a workspace.",
                     question: "I found both a routine named \(name) and a workspace named \(workspaceName). Which should I launch?"
+                )
+            ]
+        )
+    }
+
+    /// Mirrors `AgentActionExecutor.missingAutomationTargetQuestion`'s cross-kind wording, using
+    /// the stored item's canonical name rather than the raw typed candidate.
+    private func crossKindQuickDispatchClarificationPlan(
+        missingKind: String,
+        foundKind: String,
+        foundName: String,
+        verb: String
+    ) -> AgentPlan {
+        AgentPlan(
+            summary: "Clarification needed.",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(
+                    id: "clarify-cross-kind-quick-dispatch",
+                    operation: .clarify,
+                    description: "Ask whether the saved \(foundKind) was meant.",
+                    question: "I don't have a \(missingKind) called \"\(foundName)\" saved, but you do have a \(foundKind) called \"\(foundName)\" — did you mean to \(verb) that?"
                 )
             ]
         )
