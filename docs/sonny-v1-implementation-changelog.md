@@ -4,7 +4,11 @@ Canonical progress/handoff record for Sonny v1 implementation. This file is the 
 
 Branch naming: plain `feature/<name>` (no per-agent prefix). Agent identity is tracked per-entry below, not in the branch name.
 
-## Feature Branch Checkpoint Workflow
+## Workflow v2 (2026-08-02) — ticket-driven, single-agent
+
+The process moved to `WORKFLOW.md` at the repo root: Claude-only (the Codex/Claude rotation is retired), work decomposed into Plane.so tickets grouped by branch, one CLI session owning one ticket start to finish, closing comments as cross-session context handoff, a fresh-session adversarial review before merge, and explicit parallel-session rules (disjoint tickets only, worktree per ticket, 2–3 session cap, one live app instance, merge one branch at a time). Commits/pushes to ticket branches are pre-authorized; merges remain user-only. Everything below this section that describes *process* (checkpoint cadence, cross-agent review, per-checkpoint approval-to-commit) is v1 history kept for the record; everything that describes *rigor* (wireframe fidelity, fix-in-branch, stop-and-report, evidence-not-assertion, hand-tracing during review) carried forward into WORKFLOW.md unchanged.
+
+## Feature Branch Checkpoint Workflow (v1, retired 2026-08-02)
 
 Each roadmap row below is one feature branch, but a feature branch should be implemented as a sequence of small, reviewable checkpoints on that same branch. A checkpoint should map to one migrated capability, subfeature, or similarly coherent leg of the branch.
 
@@ -20,9 +24,9 @@ Checkpoint workflow:
 
 Do not batch an entire feature branch into one large unreviewed implementation. Do not create extra branches for every checkpoint unless this roadmap is explicitly updated. Never commit, push, merge, or open/modify a PR without explicit user approval.
 
-## Locked Branch Roadmap (2026-07-04)
+## Locked Branch Roadmap (2026-07-04; resequenced 2026-08-01/02)
 
-Dependency-ordered. Do not start a branch before the ones above it are merged, unless a later chat explicitly re-justifies reordering here.
+Dependency-ordered. Do not start a branch before the ones above it are merged, unless a later chat explicitly re-justifies reordering here. Rows A–E were inserted ahead of branch 12 per the user's 2026-08-01 decisions (manual-pass follow-ups and the approval/restriction/task-history sequence); numbered rows keep their original numbers because entries below reference them by number.
 
 | # | Branch | Spec sections | Status |
 |---|---|---|---|
@@ -39,6 +43,11 @@ Dependency-ordered. Do not start a branch before the ones above it are merged, u
 | — | `feature/full-repo-correctness-review` | None (cross-cutting correctness pass over branches 1-11) | Complete 2026-07-29 — 37 verified behavior/claim divergences fixed across capability adapters, the safety core, the 8 local stores, the planner/web boundary, system services, and the UI shell |
 | — | `feature/saved-item-deletion-and-search-provider` | §6.8 ("Disable or delete routine"), §4A.2 (search provider — resolves the branch 16 web-search note below) | Complete 2026-07-30 — routine/workspace deletion (stores + confirmed UI affordances, UI-only, no planner-invokable action) and the Tavily `WebSearchProviding` conformance; the scheduler's missing-routine clarification path is now genuinely reachable and pinned by a race test |
 | 11 | `feature/floating-command-widget` | §17.3 (cockpit surface, visual form only); user wireframes (2026-07-08), not spec-mandated | Complete, and substantially extended beyond original scope (shipped on `feature/ui-ux-wireframe-fidelity` — see 2026-07-23 note below) |
+| A | `feature/manual-pass-followups` | None (manual-pass findings deferred 2026-08-01 with this as their named landing spot — see the deletion/search-provider entry) | Not started — "New Task" widget-summon/focus trigger; per-workspace browser targeting (`WorkspaceBrowserOpener` ignores the workspace's own browser app); the cheap half of approval-friction work (first-run legibility, auditing over-eager tier-3 escalations) |
+| B | `feature/workspace-restriction-scope` | Spec-level change, sections TBD in its planning phase | Not started — workspace as a restriction scope for what a task may touch; needs a written plan and a founder decision with the co-founder before any implementation |
+| C | `feature/approval-relaxation-structural` | §10/§11 revisions, scoped in its planning phase | Not started — the structural half of approval relaxation, justified by restriction scoping existing (branch B first) |
+| D | `feature/task-history-controls` | §6.3A adjacent | Not started — hide-not-delete for task history, search, individual delete, incognito runs (30-day retention decision recorded 2026-08-01) |
+| E | `feature/task-detail-rehydration` | §6.3A adjacent | Not started — task detail reopens into the widget with retry/follow-up |
 | 12 | `feature/hosted-agent-runtime-backend` | §6.1, §8, §9, §16, §21.2, §21.3, §6.19 | Not started |
 | 13 | `feature/billing-command-center-memory` | §6.14, §16.3, §16.4, §6.3A (full), §6.10; plus a locked free-tier allowance mechanism, see note below | Not started |
 | 14 | `feature/screen-intelligence` | §6.4, §12, §20.3, §21.5, §6.13, §14.4A, §14.5 | Not started |
@@ -114,48 +123,29 @@ Notes on sequencing decisions behind this table:
 - **Branch 17 (`feature/mcp-client-integration`)** is new, added 2026-07-15 during `feature/v1-strategy-replan`'s Phase 4 — Raycast and other competitors now ship MCP client support, and Sonny has no equivalent. Locked now, non-negotiable: every MCP tool call is a `CapabilityAdapter` like any other capability, routing through `AgentRunner`'s existing risk-tier/approval gate with no parallel or bypassing trust path — this is the rule the whole product's trust story depends on and it must not be relitigated at implementation time. Explicitly left open for build time: which MCP servers/tools ship first, server-configuration UI, and initial risk-tier defaults for MCP tools pending real usage data — that ecosystem moves too fast to lock specifics now. Sequenced immediately before Power Mode; both the placement and its rationale are confirmed (2026-07-15): MCP is simply lower-risk and simpler than Power Mode, so it ships first to close the real competitive gap (Raycast and others already have this) sooner — not as a deliberate rehearsal for Power Mode. Do not scope additional branch-17 requirements around "stress-testing approval-flow edge cases for Power Mode's benefit" — that framing was considered and rejected, not left open. If Power Mode's own branch later finds real lessons in how MCP's approval flow held up, that's a natural look-back at that time, not a goal to design MCP around now.
 - The kill switch (§20.9) is folded into branch 18 (Power Mode) rather than given its own branch, since it's tightly coupled to Power Mode's emergency-stop work (§13.5).
 
-## Entry Template
+## Entry Template (v2, 2026-08-02)
 
-Copy this for each completed branch. Fill every field — "none" is a valid answer, a blank field is not. Product context, constraints, and non-negotiables already live permanently in the spec (§1-§26); do not restate them here, only reference section numbers. The two fields marked **(required, no blanket claims)** exist because a vague answer there is exactly how a later chat regresses something silently.
+Copy this for each completed branch. Fill every field — "none" is a valid answer, a blank field is not. Product context, constraints, and non-negotiables already live permanently in the spec (§1-§26); do not restate them here, only reference section numbers. The two fields marked **(required, no blanket claims)** exist because a vague answer there is exactly how a later chat regresses something silently. Per-ticket history (what each ticket did, closing comments, blocked findings) lives on the Plane tickets, not here — this entry is the branch-level architectural record. The v1 template's `Implementing agent`/`Reviewing agent` fields and its kickoff-prompt block are retired: session handoff now happens through ticket descriptions and closing comments per `WORKFLOW.md`.
 
 ```
 ### Branch: feature/<name>
 Status: in progress | complete | blocked
 Date: YYYY-MM-DD
-Implementing agent: Claude | Codex
-Reviewing agent: Claude | Codex | pending
+Tickets: SON-<n>, SON-<n>, ... (with one-line outcomes)
+Reviewed by: fresh session (per WORKFLOW.md step 7) — findings and their resolutions, or "none"
 
 Spec sections covered: (list; flag any left partial and why)
 Files changed: (actual list — not "see diff")
-Tests: (exact command run, from README) -> (pass/fail, counts)
+Tests: (exact command run, from CLAUDE.md) -> (pass/fail, counts)
 
 Behavior added: (one bullet per new capability)
 Behavior preserved (required, no blanket claims): (one bullet per EXISTING flow this branch touched, confirming it still works — "everything else still works" is not acceptable, name them)
 
 Architectural decisions / pitfalls discovered (required, write "none" if true): (anything a future chat would get wrong if it only read the spec and not this entry)
-Known limitations / deferred scope: 
-Open questions for the next chat (required, write "none" if true): 
+Known limitations / deferred scope: (deferrals need the user's explicit decision and a named landing-spot ticket)
+Open questions (required, write "none" if true): 
 
 Next branch: feature/<name> (per roadmap above, or state the reordering and why)
-```
-
-Then append this ready-to-paste block so the next chat can start cold without re-deriving context:
-
-```
---- Kickoff prompt for next chat (paste verbatim as the first message) ---
-Repo: /Users/sauranshbhardwaj/Desktop/macos-agent
-Spec: docs/sonny-major-release-spec.md
-Changelog: docs/sonny-v1-implementation-changelog.md — read the latest entry before anything else. Do not trust memory or assumptions over it; verify against current git state.
-
-Branch: feature/<next-name>
-Implementing agent: <X>  Reviewing agent: <Y>
-Primary target: §<sections>
-
-Just completed: feature/<prev-name> — <one-line summary>
-Must preserve: <the specific existing flows this branch must not break, pulled from "Behavior preserved" above>
-Known pitfalls to avoid repeating: <from "Architectural decisions / pitfalls discovered" above, or "none">
-
-Start in plan mode. Confirm git status is clean on main, confirm the changelog's account of the prior branch still matches the current code, then produce an implementation plan before editing anything. Do not commit, push, merge, or open a PR without explicit approval.
 ```
 
 ## Entries

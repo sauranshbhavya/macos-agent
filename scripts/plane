@@ -1,0 +1,277 @@
+#!/usr/bin/env bash
+
+set -euo pipefail
+
+readonly PLANE_BASE_URL="${PLANE_BASE_URL:-https://api.plane.so}"
+readonly PLANE_WORKSPACE="sonny"
+readonly PLANE_PROJECT_ID="c61e4035-d3a0-4089-a25a-1fb4f0aa813e"
+readonly PLANE_PROJECT_URL="https://app.plane.so/sonny/projects/${PLANE_PROJECT_ID}/issues/"
+readonly KEYCHAIN_SERVICE="sonny-plane-api-key"
+
+# One request payload at a time; the EXIT trap owns cleanup so no failure path leaks it.
+PAYLOAD_FILE=""
+cleanup_payload() {
+  if [[ -n "$PAYLOAD_FILE" ]]; then
+    rm -f "$PAYLOAD_FILE"
+  fi
+}
+trap cleanup_payload EXIT
+
+usage() {
+  cat <<'EOF'
+Usage: scripts/plane <command> [arguments]
+
+Commands:
+  auth                              Store an API key in macOS Keychain
+  project                           Get the configured Plane project
+  list                              List the newest 100 work items
+  pull <UUID|KEY|URL>               Fetch one work item
+  create <title> <html-file> [priority]
+                                    Create a work item (default priority: medium)
+  update <UUID|KEY|URL> <json-file> Patch a work item with a Plane JSON payload
+  state <UUID|KEY|URL> <name|group> Move a work item to a matching workflow state
+  states                            List project workflow states (first 100)
+  comment <UUID|KEY|URL> <html-file>
+                                    Append a comment to a work item
+  comments <UUID|KEY|URL>           List a work item's comments (first 100)
+  url                               Print the configured Plane project URL
+
+Authentication uses PLANE_API_KEY when set, then macOS Keychain. API keys are
+secrets and must not be committed to this repository.
+EOF
+}
+
+die() {
+  printf 'plane: %s\n' "$*" >&2
+  exit 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
+}
+
+store_key() {
+  require_command security
+  local token
+  read -r -s -p "Plane API key: " token
+  printf '\n'
+  [[ -n "$token" ]] || die "API key cannot be empty"
+  security add-generic-password -U -a "${USER}" -s "$KEYCHAIN_SERVICE" -w "$token" >/dev/null
+  unset token
+  printf 'Stored Plane API key in macOS Keychain.\n'
+}
+
+load_key() {
+  if [[ -n "${PLANE_API_KEY:-}" ]]; then
+    printf '%s' "$PLANE_API_KEY"
+    return
+  fi
+  if command -v security >/dev/null 2>&1; then
+    security find-generic-password -a "${USER}" -s "$KEYCHAIN_SERVICE" -w 2>/dev/null && return
+  fi
+  die "set PLANE_API_KEY or run scripts/plane auth"
+}
+
+api_request() {
+  local method="$1"
+  local path="$2"
+  local body_file="${3:-}"
+  local api_key
+  api_key="$(load_key)"
+
+  local args=(
+    --fail-with-body
+    --silent
+    --show-error
+    --request "$method"
+    --header "X-API-Key: ${api_key}"
+    --header "Accept: application/json"
+  )
+  if [[ -n "$body_file" ]]; then
+    [[ -f "$body_file" ]] || die "payload file not found: $body_file"
+    args+=(--header "Content-Type: application/json" --data-binary "@${body_file}")
+  fi
+
+  curl "${args[@]}" "${PLANE_BASE_URL}${path}"
+}
+
+pretty_request() {
+  api_request "$@" | jq
+}
+
+project_path() {
+  printf '/api/v1/workspaces/%s/projects/%s' "$PLANE_WORKSPACE" "$PLANE_PROJECT_ID"
+}
+
+extract_reference() {
+  local input="$1"
+  # A pasted Plane URL carries the PROJECT UUID in its path before the work item
+  # (.../projects/<project-uuid>/browse/SON-12, or legacy .../issues/<item-uuid>), so never
+  # grab the first UUID-shaped substring — take the segment after /browse/ or /issues/.
+  if [[ "$input" =~ /(browse|issues)/([^/?#]+) ]]; then
+    input="${BASH_REMATCH[2]}"
+  fi
+  if [[ "$input" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+    printf '%s' "$input"
+    return
+  fi
+  if [[ "$input" =~ ^[A-Za-z][A-Za-z0-9_-]*-[0-9]+$ ]]; then
+    printf '%s' "$input"
+    return
+  fi
+  die "expected a Plane work-item UUID, identifier such as SON-12, or issue URL"
+}
+
+pull_raw() {
+  local reference
+  reference="$(extract_reference "$1")"
+  # UUIDs use the project-scoped endpoint; SON-12-style identifiers use the separate
+  # workspace-level endpoint, which is the only one that accepts them.
+  if [[ "$reference" =~ ^[0-9a-fA-F]{8}- ]]; then
+    api_request GET "$(project_path)/work-items/${reference}/"
+  else
+    api_request GET "/api/v1/workspaces/${PLANE_WORKSPACE}/work-items/${reference}/"
+  fi
+}
+
+resolve_id() {
+  local reference
+  reference="$(extract_reference "$1")"
+  if [[ "$reference" =~ ^[0-9a-fA-F]{8}- ]]; then
+    printf '%s' "$reference"
+  else
+    pull_raw "$reference" | jq -er '.id'
+  fi
+}
+
+create_item() {
+  local title="$1"
+  local description_file="$2"
+  local priority="${3:-medium}"
+  [[ -f "$description_file" ]] || die "description file not found: $description_file"
+  [[ "$priority" =~ ^(urgent|high|medium|low|none)$ ]] || die "invalid priority: $priority"
+
+  PAYLOAD_FILE="$(mktemp)"
+  jq -n \
+    --arg name "$title" \
+    --rawfile description_html "$description_file" \
+    --arg priority "$priority" \
+    '{name: $name, description_html: $description_html, priority: $priority}' >"$PAYLOAD_FILE"
+  local response
+  if ! response="$(pretty_request POST "$(project_path)/work-items/" "$PAYLOAD_FILE")"; then
+    # $response holds Plane's formatted error body — losing it leaves only curl's terse
+    # one-liner, which never says which field was rejected.
+    printf '%s\n' "$response" >&2
+    return 1
+  fi
+  printf '%s\n' "$response"
+}
+
+move_state() {
+  local issue_id selector states state_id
+  issue_id="$(resolve_id "$1")"
+  selector="$2"
+  states="$(api_request GET "$(project_path)/states/?per_page=100")"
+  state_id="$(jq -er --arg selector "$selector" '
+    ($selector | ascii_downcase) as $normalized
+    | [.results[] | select((.name | ascii_downcase) == $normalized or (.group | ascii_downcase) == $normalized)]
+    | if length == 1 then .[0].id else error("expected exactly one matching state") end
+  ' <<<"$states")" || die "no unique workflow state matched: $selector"
+
+  PAYLOAD_FILE="$(mktemp)"
+  jq -n --arg state "$state_id" '{state: $state}' >"$PAYLOAD_FILE"
+  local response
+  if ! response="$(pretty_request PATCH "$(project_path)/work-items/${issue_id}/" "$PAYLOAD_FILE")"; then
+    printf '%s\n' "$response" >&2
+    return 1
+  fi
+  printf '%s\n' "$response"
+}
+
+add_comment() {
+  local issue_id comment_file
+  issue_id="$(resolve_id "$1")"
+  comment_file="$2"
+  [[ -f "$comment_file" ]] || die "comment file not found: $comment_file"
+
+  PAYLOAD_FILE="$(mktemp)"
+  jq -n --rawfile comment_html "$comment_file" '{comment_html: $comment_html}' >"$PAYLOAD_FILE"
+  local response
+  if response="$(pretty_request POST "$(project_path)/work-items/${issue_id}/comments/" "$PAYLOAD_FILE")"; then
+    printf '%s\n' "$response"
+    return 0
+  fi
+  printf '%s\n' "$response" >&2
+  # Known Plane bug (makeplane/plane#7505): a 400 from this endpoint sometimes means the
+  # comment WAS created. Blind retries produce duplicates.
+  printf 'plane: comment POST failed. If the error above is a 400, Plane may still have\n' >&2
+  printf 'plane: created the comment — verify before retrying: scripts/plane comments %s\n' "$1" >&2
+  return 1
+}
+
+list_comments() {
+  local issue_id
+  issue_id="$(resolve_id "$1")"
+  pretty_request GET "$(project_path)/work-items/${issue_id}/comments/?per_page=100"
+}
+
+main() {
+  require_command curl
+  require_command jq
+  local command="${1:-}"
+  case "$command" in
+    auth)
+      [[ $# -eq 1 ]] || die "auth takes no arguments"
+      store_key
+      ;;
+    project)
+      [[ $# -eq 1 ]] || die "project takes no arguments"
+      pretty_request GET "$(project_path)/"
+      ;;
+    list)
+      [[ $# -eq 1 ]] || die "list takes no arguments"
+      pretty_request GET "$(project_path)/work-items/?per_page=100&order_by=-created_at"
+      ;;
+    pull)
+      [[ $# -eq 2 ]] || die "usage: scripts/plane pull <UUID|KEY|URL>"
+      pull_raw "$2" | jq
+      ;;
+    create)
+      [[ $# -ge 3 && $# -le 4 ]] || die "usage: scripts/plane create <title> <html-file> [priority]"
+      create_item "$2" "$3" "${4:-medium}"
+      ;;
+    update)
+      [[ $# -eq 3 ]] || die "usage: scripts/plane update <UUID|KEY|URL> <json-file>"
+      pretty_request PATCH "$(project_path)/work-items/$(resolve_id "$2")/" "$3"
+      ;;
+    state)
+      [[ $# -eq 3 ]] || die "usage: scripts/plane state <UUID|KEY|URL> <name|group>"
+      move_state "$2" "$3"
+      ;;
+    states)
+      [[ $# -eq 1 ]] || die "states takes no arguments"
+      pretty_request GET "$(project_path)/states/?per_page=100"
+      ;;
+    comment)
+      [[ $# -eq 3 ]] || die "usage: scripts/plane comment <UUID|KEY|URL> <html-file>"
+      add_comment "$2" "$3"
+      ;;
+    comments)
+      [[ $# -eq 2 ]] || die "usage: scripts/plane comments <UUID|KEY|URL>"
+      list_comments "$2"
+      ;;
+    url)
+      [[ $# -eq 1 ]] || die "url takes no arguments"
+      printf '%s\n' "$PLANE_PROJECT_URL"
+      ;;
+    -h|--help|help)
+      usage
+      ;;
+    *)
+      usage >&2
+      exit 1
+      ;;
+  esac
+}
+
+main "$@"
