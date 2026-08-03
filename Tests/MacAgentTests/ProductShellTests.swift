@@ -24,6 +24,74 @@ struct ProductShellTests {
     }
 
     @Test
+    func newTaskMenuItemRoutesThroughTheSharedWidgetPresentationRequest() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let delegate = AppDelegate(viewModel: viewModel)
+
+        let menu = delegate.makeStatusMenu()
+        #expect(menu.items.map(\.title) == ["New Task", "", "Open Sonny", "", "Quit Sonny"])
+
+        // Titles alone pin nothing about wiring: an item rewired to a different selector keeps its
+        // title and a title-only assertion stays green. Every item gets its target, selector, and
+        // key equivalent asserted — ⌘Q in particular, since app-wide Quit was menu-routed and
+        // silently broken once already (see `makeMainMenu()`'s comment).
+        let expectedItems: [(title: String, action: Selector, keyEquivalent: String)] = [
+            ("New Task", #selector(AppDelegate.requestWidgetPresentation), ""),
+            ("Open Sonny", #selector(AppDelegate.openCommandCenter), ""),
+            ("Quit Sonny", #selector(AppDelegate.quit), "q")
+        ]
+        for expected in expectedItems {
+            let item = try #require(menu.items.first { $0.title == expected.title })
+            #expect(item.target === delegate)
+            #expect(item.action == expected.action)
+            #expect(item.keyEquivalent == expected.keyEquivalent)
+        }
+
+        let newTask = try #require(menu.items.first { $0.title == "New Task" })
+        let action = try #require(newTask.action)
+        #expect(viewModel.widgetPresentationRequest == 0)
+
+        // Dispatched through the menu item's own target/selector exactly as AppKit would, rather
+        // than calling the method directly: the bug this pins was a wiring bug (the item reached
+        // `widgetController.show()`, which fronts the panel and cannot touch keyboard focus), so
+        // the wiring is half of what needs asserting.
+        _ = (newTask.target as? NSObject)?.perform(action)
+        #expect(viewModel.widgetPresentationRequest == 1)
+
+        _ = (newTask.target as? NSObject)?.perform(action)
+        #expect(viewModel.widgetPresentationRequest == 2)
+    }
+
+    @Test
+    func pushToTalkPressSharesTheMenuItemsWidgetPresentationPath() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let delegate = AppDelegate(viewModel: viewModel)
+
+        // A run already in flight makes `canUseVoice` false whether or not the test host happens to
+        // have OPENAI_API_KEY exported, so `beginPushToTalkVoice()` returns before it can reach the
+        // microphone — deterministic, and it pins the more interesting half: the widget is asked to
+        // come forward even when voice itself refuses to start, since that request is what puts the
+        // resulting error on screen.
+        viewModel.isRunning = true
+
+        delegate.handlePushToTalkPress()
+        #expect(viewModel.widgetPresentationRequest == 1)
+        #expect(viewModel.isRecordingVoice == false)
+        #expect(viewModel.isPreparingVoiceRecording == false)
+
+        delegate.handlePushToTalkPress()
+        #expect(viewModel.widgetPresentationRequest == 2)
+
+        // Releasing is presentation-neutral — only the press half brings the widget forward.
+        delegate.handlePushToTalkRelease()
+        #expect(viewModel.widgetPresentationRequest == 2)
+    }
+
+    @Test
     func commandCenterDestinationsKeepTheLockedSidebarOrder() {
         // Settings is no longer a sidebar destination (2026-07-18) — it moved to its own dialog,
         // opened from the bottom account row. See `SettingsDialogView`.

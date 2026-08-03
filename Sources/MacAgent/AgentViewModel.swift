@@ -57,12 +57,14 @@ final class AgentViewModel: ObservableObject {
     /// original origin, so the observable value still doesn't change across the pause. See
     /// `TaskOrigin`.
     @Published private(set) var activeTaskOrigin: TaskOrigin = .commandCenter
-    /// Bump counter Command Center uses to ask the widget to come forward and take focus — e.g.
-    /// "New routine"/"Create workspace" pre-fill `command` with a starting phrase and need
-    /// somewhere for the user to finish typing it, now that Command Center has no composer of its
-    /// own. `AppDelegate` observes this to call `widgetController.show()`; `FloatingWidgetView`
-    /// observes it to focus its text field — both surfaces reacting to the same shared state
-    /// rather than Command Center reaching into AppKit/the widget directly.
+    /// Bump counter every hand-driven "bring the widget forward and take focus" entry point goes
+    /// through — Command Center's "New routine"/"Create workspace" quick actions (which pre-fill
+    /// `command` with a starting phrase and need somewhere for the user to finish typing it, now
+    /// that Command Center has no composer of its own), the status menu's "New Task" item, and the
+    /// push-to-talk hotkey (both via `AppDelegate.requestWidgetPresentation()`). `AppDelegate`
+    /// observes this to call `widgetController.show()`; `FloatingWidgetView` observes it to focus
+    /// its text field — every caller reacting through the same shared state rather than reaching
+    /// into AppKit/the widget directly, since `show()` alone cannot move keyboard focus.
     @Published var widgetPresentationRequest: Int = 0
     @Published var usePointerCursors: Bool = true {
         didSet {
@@ -705,9 +707,9 @@ final class AgentViewModel: ObservableObject {
         }
 
         isPushToTalkHotKeyDown = true
-        // The global hotkey always shows the floating widget first (see AppDelegate's
-        // pushToTalkHotKey.onPress), so a hotkey-triggered recording is always a widget
-        // interaction regardless of which surface happened to be focused.
+        // The global hotkey always brings the floating widget forward first (see
+        // `AppDelegate.handlePushToTalkPress()`), so a hotkey-triggered recording is always a
+        // widget interaction regardless of which surface happened to be focused.
         startVoiceRecording(trigger: .hotKey, origin: .widget)
     }
 
