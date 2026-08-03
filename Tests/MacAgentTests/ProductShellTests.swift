@@ -33,10 +33,24 @@ struct ProductShellTests {
         let menu = delegate.makeStatusMenu()
         #expect(menu.items.map(\.title) == ["New Task", "", "Open Sonny", "", "Quit Sonny"])
 
+        // Titles alone pin nothing about wiring: an item rewired to a different selector keeps its
+        // title and a title-only assertion stays green. Every item gets its target, selector, and
+        // key equivalent asserted — ⌘Q in particular, since app-wide Quit was menu-routed and
+        // silently broken once already (see `makeMainMenu()`'s comment).
+        let expectedItems: [(title: String, action: Selector, keyEquivalent: String)] = [
+            ("New Task", #selector(AppDelegate.requestWidgetPresentation), ""),
+            ("Open Sonny", #selector(AppDelegate.openCommandCenter), ""),
+            ("Quit Sonny", #selector(AppDelegate.quit), "q")
+        ]
+        for expected in expectedItems {
+            let item = try #require(menu.items.first { $0.title == expected.title })
+            #expect(item.target === delegate)
+            #expect(item.action == expected.action)
+            #expect(item.keyEquivalent == expected.keyEquivalent)
+        }
+
         let newTask = try #require(menu.items.first { $0.title == "New Task" })
         let action = try #require(newTask.action)
-        #expect(newTask.target === delegate)
-        #expect(action == #selector(AppDelegate.requestWidgetPresentation))
         #expect(viewModel.widgetPresentationRequest == 0)
 
         // Dispatched through the menu item's own target/selector exactly as AppKit would, rather

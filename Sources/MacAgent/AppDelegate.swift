@@ -318,11 +318,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewModel.endPushToTalkVoice()
     }
 
-    @objc private func openCommandCenter() {
+    /// Internal rather than `private`, like `requestWidgetPresentation()` above, so the status
+    /// menu's wiring is assertable by selector from `ProductShellTests` — a title-only assertion
+    /// leaves a rewired item green, which is exactly what a reviewer's decoy-selector mutation
+    /// caught on this branch.
+    @objc func openCommandCenter() {
         windowCoordinator.showCommandCenter()
     }
 
-    @objc private func quit() {
+    @objc func quit() {
         NSApplication.shared.terminate(nil)
     }
 }
