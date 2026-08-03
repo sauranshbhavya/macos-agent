@@ -1612,7 +1612,141 @@ struct AgentActionExecutorTests {
             appOpener: appOpener,
             workspaceStore: workspaceStore
         )
-        let createPlan = AgentPlan(
+        let plans = workspacePlans(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+
+        _ = try await executor.execute(plan: plans.create) { _, _ in }
+        let result = try await executor.execute(plan: plans.open) { _, _ in }
+
+        #expect(appOpener.openedBundleIDs == ["com.apple.Safari"])
+        #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com"])
+        #expect(result.summary == "Opened workspace Research with 1 app(s) and 1 URL(s).")
+    }
+
+    /// SONNY-9's headline case: a workspace that names Safari must hand its URLs to Safari even
+    /// though Chrome is the system default. "Chrome is default" is what the injected opener stands
+    /// in for — a `nil` browser reaching it is exactly the shipped bug, since `nil` means "let macOS
+    /// pick", and macOS picks Chrome.
+    @Test
+    func workspaceURLsOpenInTheWorkspacesOwnBrowserRatherThanTheSystemDefault() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let appOpener = RecordingAppOpener()
+        let browserOpener = RecordingBrowserOpener()
+        let executor = makeExecutor(
+            root: root,
+            browserOpener: browserOpener,
+            appOpener: appOpener,
+            workspaceStore: workspaceStore
+        )
+        let plans = workspacePlans(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+
+        _ = try await executor.execute(plan: plans.create) { _, _ in }
+        let result = try await executor.execute(plan: plans.open) { _, _ in }
+
+        #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com"])
+        #expect(browserOpener.openedBrowsers.map { $0?.bundleIdentifier } == ["com.apple.Safari"])
+        // The browser is opened as an app first, then handed the URL — unchanged ordering.
+        #expect(appOpener.openedBundleIDs == ["com.apple.Safari"])
+        #expect(result.summary == "Opened workspace Research with 1 app(s) and 1 URL(s).")
+    }
+
+    /// The unchanged half of the contract: a workspace with no browser among its apps still opens
+    /// its URLs wherever macOS sends them.
+    @Test
+    func workspaceWithoutABrowserAppStillOpensURLsInTheSystemDefaultBrowser() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let browserOpener = RecordingBrowserOpener()
+        let executor = makeExecutor(
+            root: root,
+            browserOpener: browserOpener,
+            workspaceStore: workspaceStore
+        )
+        let plans = workspacePlans(name: "Writing", apps: ["Notes"], urls: ["https://github.com"])
+
+        _ = try await executor.execute(plan: plans.create) { _, _ in }
+        _ = try await executor.execute(plan: plans.open) { _, _ in }
+
+        #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com"])
+        #expect(browserOpener.openedBrowsers == [nil])
+    }
+
+    /// "The workspace's browser" is the first *browser* in the saved apps list, not the first app,
+    /// and every URL in the workspace goes to that same one.
+    @Test
+    func workspaceBrowserIsTheFirstBrowserInTheSavedAppsListNotTheFirstApp() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let browserOpener = RecordingBrowserOpener()
+        let executor = makeExecutor(
+            root: root,
+            browserOpener: browserOpener,
+            workspaceStore: workspaceStore
+        )
+        let plans = workspacePlans(
+            name: "Research",
+            apps: ["Notes", "Chrome", "Safari"],
+            urls: ["https://github.com", "https://news.ycombinator.com"]
+        )
+
+        _ = try await executor.execute(plan: plans.create) { _, _ in }
+        _ = try await executor.execute(plan: plans.open) { _, _ in }
+
+        #expect(browserOpener.openedURLs.map(\.absoluteString) == [
+            "https://github.com",
+            "https://news.ycombinator.com"
+        ])
+        #expect(browserOpener.openedBrowsers.map { $0?.bundleIdentifier } == [
+            "com.google.Chrome",
+            "com.google.Chrome"
+        ])
+    }
+
+    /// End-to-end through the real `WorkspaceBrowserOpener` (both live seams injected): a workspace
+    /// naming a browser that cannot be opened still opens its URLs — in the system default — and
+    /// records why, rather than failing the run.
+    @Test
+    func workspaceURLsFallBackToTheDefaultBrowserWhenTheWorkspacesBrowserCannotBeOpened() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        var defaultBrowserURLs: [URL] = []
+        var fallbackLogs: [String] = []
+        let browserOpener = WorkspaceBrowserOpener(
+            openURL: { url in
+                defaultBrowserURLs.append(url)
+                return true
+            },
+            openURLInApplication: { _, browser in
+                throw AppOpeningError.appNotInstalled(browser.bundleIdentifier)
+            },
+            logFallback: { fallbackLogs.append($0) }
+        )
+        let executor = makeExecutor(
+            root: root,
+            browserOpener: browserOpener,
+            workspaceStore: workspaceStore
+        )
+        let plans = workspacePlans(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+
+        _ = try await executor.execute(plan: plans.create) { _, _ in }
+        let result = try await executor.execute(plan: plans.open) { _, _ in }
+
+        #expect(defaultBrowserURLs.map(\.absoluteString) == ["https://github.com"])
+        #expect(fallbackLogs.count == 1)
+        #expect(fallbackLogs.first?.contains("Safari") == true)
+        #expect(result.summary == "Opened workspace Research with 1 app(s) and 1 URL(s).")
+    }
+
+    private func workspacePlans(
+        name: String,
+        apps: [String],
+        urls: [String]
+    ) -> (create: AgentPlan, open: AgentPlan) {
+        let create = AgentPlan(
             summary: "Create workspace.",
             requiresConfirmation: true,
             steps: [
@@ -1620,13 +1754,13 @@ struct AgentActionExecutorTests {
                     id: "create-workspace",
                     operation: .createWorkspace,
                     description: "Create workspace.",
-                    workspaceName: "Research",
-                    workspaceApps: ["Safari"],
-                    workspaceURLs: ["https://github.com"]
+                    workspaceName: name,
+                    workspaceApps: apps,
+                    workspaceURLs: urls
                 )
             ]
         )
-        let openPlan = AgentPlan(
+        let open = AgentPlan(
             summary: "Open workspace.",
             requiresConfirmation: true,
             steps: [
@@ -1634,17 +1768,11 @@ struct AgentActionExecutorTests {
                     id: "open-workspace",
                     operation: .openWorkspace,
                     description: "Open workspace.",
-                    workspaceName: "Research"
+                    workspaceName: name
                 )
             ]
         )
-
-        _ = try await executor.execute(plan: createPlan) { _, _ in }
-        let result = try await executor.execute(plan: openPlan) { _, _ in }
-
-        #expect(appOpener.openedBundleIDs == ["com.apple.Safari"])
-        #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com"])
-        #expect(result.summary == "Opened workspace Research with 1 app(s) and 1 URL(s).")
+        return (create, open)
     }
 
     @Test
@@ -2092,15 +2220,18 @@ private struct FakeDocumentConverter: DocumentConverting {
 }
 
 private struct NoopBrowserOpener: BrowserOpening {
-    func open(_ url: URL) async throws {}
+    func open(_ url: URL, using browser: MacApp?) async throws {}
 }
 
 @MainActor
 private final class RecordingBrowserOpener: BrowserOpening {
     private(set) var openedURLs: [URL] = []
+    /// Parallel to `openedURLs`: the browser each open was targeted at, `nil` for the system default.
+    private(set) var openedBrowsers: [MacApp?] = []
 
-    func open(_ url: URL) async throws {
+    func open(_ url: URL, using browser: MacApp?) async throws {
         openedURLs.append(url)
+        openedBrowsers.append(browser)
     }
 }
 

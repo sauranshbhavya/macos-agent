@@ -617,6 +617,8 @@ struct AgentRunnerTests {
         #expect(request.requirement == .autoRun)
         #expect(appOpener.openedBundleIDs == ["com.apple.Safari"])
         #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com"])
+        // Browser targeting survives the full prepare/assess/approve path, not just direct execution.
+        #expect(browserOpener.openedBrowsers.map { $0?.bundleIdentifier } == ["com.apple.Safari"])
         #expect(result.summary == "Opened workspace Research with 1 app(s) and 1 URL(s).")
     }
 
@@ -1231,15 +1233,18 @@ private final class RecordingZipArchiver: ZipArchiving {
 }
 
 private struct NoopBrowserOpener: BrowserOpening {
-    func open(_ url: URL) async throws {}
+    func open(_ url: URL, using browser: MacApp?) async throws {}
 }
 
 @MainActor
 private final class RecordingBrowserOpener: BrowserOpening {
     private(set) var openedURLs: [URL] = []
+    /// Parallel to `openedURLs`: the browser each open was targeted at, `nil` for the system default.
+    private(set) var openedBrowsers: [MacApp?] = []
 
-    func open(_ url: URL) async throws {
+    func open(_ url: URL, using browser: MacApp?) async throws {
         openedURLs.append(url)
+        openedBrowsers.append(browser)
     }
 }
 
