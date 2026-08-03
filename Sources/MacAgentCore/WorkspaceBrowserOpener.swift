@@ -105,10 +105,16 @@ public struct WorkspaceBrowserOpener: BrowserOpening {
                 try await openURLInApplication(url, browser)
                 return
             } catch {
+                // Whether `localizedDescription` already ends in a period depends on which error
+                // this is — `AppOpeningError.appNotInstalled`'s does, `.failedToOpen`'s does not —
+                // so strip one if present and let the template own the sentence break. Assuming
+                // either way shipped "…com.apple.Safari.. Falling back…" for the not-installed case.
+                let reason = error.localizedDescription.trimmingCharacters(in: .whitespacesAndNewlines)
+                let clause = reason.hasSuffix(".") ? String(reason.dropLast()) : reason
                 logFallback(
                     """
                     Could not open \(url.absoluteString) in \(browser.displayName): \
-                    \(error.localizedDescription). Falling back to the default browser.
+                    \(clause). Falling back to the default browser.
                     """
                 )
             }

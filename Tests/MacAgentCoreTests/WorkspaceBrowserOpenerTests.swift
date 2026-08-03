@@ -124,11 +124,13 @@ struct WorkspaceBrowserOpenerTests {
         #expect(seam.applicationOpens.count == 1)
         #expect(seam.defaultBrowserURLs == [url])
         #expect(seam.fallbackLogs.count == 1)
-        let logLine = try #require(seam.fallbackLogs.first)
-        #expect(logLine.contains("https://github.com"))
-        #expect(logLine.contains("Safari"))
-        #expect(logLine.contains("com.apple.Safari"))
-        #expect(logLine.contains("Falling back to the default browser."))
+        // Asserted whole rather than by `contains`, because the defect this pins is punctuation:
+        // `appNotInstalled`'s own description ends in a period, and appending another one produced
+        // "…com.apple.Safari.. Falling back…". A substring check cannot see that.
+        #expect(seam.fallbackLogs.first == """
+            Could not open https://github.com in Safari: No installed app was found for bundle \
+            identifier com.apple.Safari. Falling back to the default browser.
+            """)
     }
 
     /// The other unresolvable case: the app exists but Launch Services refuses to launch it. Same
@@ -142,8 +144,12 @@ struct WorkspaceBrowserOpenerTests {
         try await seam.opener().open(url, using: Self.safari)
 
         #expect(seam.defaultBrowserURLs == [url])
-        let logLine = try #require(seam.fallbackLogs.first)
-        #expect(logLine.contains("Safari quit unexpectedly"))
+        // The other half of the punctuation rule: this description carries no trailing period, so
+        // nothing may be stripped from it and the template supplies the only one.
+        #expect(seam.fallbackLogs.first == """
+            Could not open https://github.com in Safari: Could not open app: Safari quit \
+            unexpectedly. Falling back to the default browser.
+            """)
     }
 
     /// The fallback is a fallback, not a swallow: when macOS also declines the default browser,

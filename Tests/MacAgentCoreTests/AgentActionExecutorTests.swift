@@ -420,6 +420,8 @@ struct AgentActionExecutorTests {
         let markdown = try String(contentsOf: output)
         #expect(markdown.contains("Fixture headline"))
         #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://news.ycombinator.com"])
+        // Non-workspace caller: the Hacker News link still goes to the system default browser.
+        #expect(browserOpener.openedBrowsers == [nil])
         #expect(result.suggestions.contains { suggestion in
             suggestion.title == "Reveal Markdown in Finder" &&
                 suggestion.kind == .revealInFinder &&
@@ -1101,6 +1103,8 @@ struct AgentActionExecutorTests {
         let result = try await executor.execute(plan: openAppSearchURLPlan(target: "GitHub", query: "Swift concurrency")) { _, _ in }
 
         #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com/search?q=Swift%20concurrency"])
+        // Non-workspace caller: an app search URL still goes to the system default browser.
+        #expect(browserOpener.openedBrowsers == [nil])
         #expect(result.summary == "Opened GitHub search for Swift concurrency.")
         #expect(throws: AppSearchURLCatalogError.searchTargetNotAllowed("Untrusted")) {
             try executor.preview(plan: openAppSearchURLPlan(target: "Untrusted", query: "Swift"))
@@ -1120,6 +1124,10 @@ struct AgentActionExecutorTests {
 
         #expect(appOpener.openedBundleIDs == ["com.apple.Safari"])
         #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com"])
+        // Non-workspace caller: a standalone open-URL still goes to the system default browser,
+        // even though this same plan pair also opened Safari as an app. Opening a browser app is
+        // not what binds a URL to it — only a workspace's saved apps list does that.
+        #expect(browserOpener.openedBrowsers == [nil])
         #expect(appResult.summary == "Opened the Safari app.")
         #expect(urlResult.summary == "Opened https://github.com.")
     }
@@ -1596,6 +1604,10 @@ struct AgentActionExecutorTests {
 
         #expect(appOpener.openedBundleIDs == ["com.apple.Safari"])
         #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com"])
+        // Non-workspace caller: a routine's openURL step still goes to the system default browser
+        // even though this routine opens Safari first. This pins current behavior, not desired
+        // behavior — SONNY-24 holds the question of whether a routine should bind its own browser.
+        #expect(browserOpener.openedBrowsers == [nil])
         #expect(result.summary == "Ran routine Mixed Launch. Opened the Safari app. Opened https://github.com.")
     }
 

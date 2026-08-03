@@ -48,6 +48,8 @@ struct AgentRunnerTests {
         #expect(request.assessment.effectiveTier == .tier1)
         #expect(request.requirement == .autoRun)
         #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com"])
+        // Non-workspace caller: a standalone open-URL still goes to the system default browser.
+        #expect(browserOpener.openedBrowsers == [nil])
         #expect(result.summary == "Opened https://github.com.")
     }
 
@@ -69,6 +71,8 @@ struct AgentRunnerTests {
         #expect(request.requirement == .autoRun)
         #expect(request.approvalCopy.dataLeavesDevice == true)
         #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com/search?q=Swift%20concurrency"])
+        // Non-workspace caller: an app search URL still goes to the system default browser.
+        #expect(browserOpener.openedBrowsers == [nil])
         #expect(result.summary == "Opened GitHub search for Swift concurrency.")
     }
 
