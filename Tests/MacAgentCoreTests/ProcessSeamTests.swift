@@ -62,28 +62,8 @@ struct ProcessSeamTests {
         }
     }
 
-    /// The bug was that a `false` return from `NSWorkspace.open` was discarded, so every failed
-    /// browser open reported success. This exercises that decision with an injected result
-    /// rather than a real unregistered scheme — asking Launch Services to open one puts a
-    /// "no application set to open the URL" dialog on the developer's screen every test run.
-    @MainActor
-    @Test
-    func workspaceBrowserOpenerThrowsWhenMacOSDeclinesToOpenTheURL() async throws {
-        let url = try #require(URL(string: "https://example.com/story"))
-
-        let refusing = WorkspaceBrowserOpener(openURL: { _ in false })
-        await #expect(throws: BrowserOpeningError.failedToOpen(url.absoluteString)) {
-            try await refusing.open(url)
-        }
-
-        var openedURLs: [URL] = []
-        let accepting = WorkspaceBrowserOpener(openURL: { opened in
-            openedURLs.append(opened)
-            return true
-        })
-        try await accepting.open(url)
-        #expect(openedURLs == [url])
-    }
+    // `WorkspaceBrowserOpener`'s seam tests moved to `WorkspaceBrowserOpenerTests` when the opener
+    // got its own file (SONNY-9).
 
     private func makeDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory

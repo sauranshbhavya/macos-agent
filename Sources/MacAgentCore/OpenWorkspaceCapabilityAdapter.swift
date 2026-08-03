@@ -50,15 +50,20 @@ public struct OpenWorkspaceCapabilityAdapter: CapabilityAdapter {
     ) async throws -> AgentRunResult {
         let previews = try preview(plan: plan, context: context)
         let workspace = try workspaceRunSpec(plan, context: context)
-        for appName in workspace.apps {
-            let app = try context.appCatalog.resolve(appName)
+        let apps = try workspace.apps.map { try context.appCatalog.resolve($0) }
+        for app in apps {
             log(.act, "Opening \(app.displayName)")
             try await context.appOpener.open(bundleIdentifier: app.bundleIdentifier)
         }
+        // A workspace that names a browser gets its URLs in that browser rather than the system
+        // default — the whole point of listing Safari in a Safari workspace. Resolved after the
+        // apps loop so the browser is already launching by the time its first URL arrives; `nil`
+        // (no browser in the list) keeps the pre-existing default-browser behavior exactly.
+        let browser = WorkspaceBrowserCatalog.firstBrowser(in: apps)
         for rawURL in workspace.urls {
             let url = try SafeURL.validateWebURL(rawURL)
             log(.act, "Opening \(url.absoluteString)")
-            try await context.browserOpener.open(url)
+            try await context.browserOpener.open(url, using: browser)
         }
         log(.summarize, "Opened workspace")
         let summary = "Opened workspace \(workspace.name) with \(workspace.apps.count) app(s) and \(workspace.urls.count) URL(s)."

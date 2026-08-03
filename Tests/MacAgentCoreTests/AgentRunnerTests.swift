@@ -48,6 +48,8 @@ struct AgentRunnerTests {
         #expect(request.assessment.effectiveTier == .tier1)
         #expect(request.requirement == .autoRun)
         #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com"])
+        // Non-workspace caller: a standalone open-URL still goes to the system default browser.
+        #expect(browserOpener.openedBrowsers == [nil])
         #expect(result.summary == "Opened https://github.com.")
     }
 
@@ -69,6 +71,8 @@ struct AgentRunnerTests {
         #expect(request.requirement == .autoRun)
         #expect(request.approvalCopy.dataLeavesDevice == true)
         #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com/search?q=Swift%20concurrency"])
+        // Non-workspace caller: an app search URL still goes to the system default browser.
+        #expect(browserOpener.openedBrowsers == [nil])
         #expect(result.summary == "Opened GitHub search for Swift concurrency.")
     }
 
@@ -617,6 +621,8 @@ struct AgentRunnerTests {
         #expect(request.requirement == .autoRun)
         #expect(appOpener.openedBundleIDs == ["com.apple.Safari"])
         #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com"])
+        // Browser targeting survives the full prepare/assess/approve path, not just direct execution.
+        #expect(browserOpener.openedBrowsers.map { $0?.bundleIdentifier } == ["com.apple.Safari"])
         #expect(result.summary == "Opened workspace Research with 1 app(s) and 1 URL(s).")
     }
 
@@ -1231,15 +1237,18 @@ private final class RecordingZipArchiver: ZipArchiving {
 }
 
 private struct NoopBrowserOpener: BrowserOpening {
-    func open(_ url: URL) async throws {}
+    func open(_ url: URL, using browser: MacApp?) async throws {}
 }
 
 @MainActor
 private final class RecordingBrowserOpener: BrowserOpening {
     private(set) var openedURLs: [URL] = []
+    /// Parallel to `openedURLs`: the browser each open was targeted at, `nil` for the system default.
+    private(set) var openedBrowsers: [MacApp?] = []
 
-    func open(_ url: URL) async throws {
+    func open(_ url: URL, using browser: MacApp?) async throws {
         openedURLs.append(url)
+        openedBrowsers.append(browser)
     }
 }
 

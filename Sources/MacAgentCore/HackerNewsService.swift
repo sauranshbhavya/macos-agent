@@ -1,4 +1,3 @@
-import AppKit
 import Foundation
 
 public struct HackerNewsHeadline: Codable, Equatable, Sendable {
@@ -12,39 +11,8 @@ public struct HackerNewsHeadline: Codable, Equatable, Sendable {
 }
 
 @MainActor
-public protocol BrowserOpening {
-    func open(_ url: URL) async throws
-}
-
-@MainActor
 public protocol HackerNewsFetching {
     func topHeadlines(limit: Int) async throws -> [HackerNewsHeadline]
-}
-
-public enum BrowserOpeningError: Error, LocalizedError, Equatable {
-    case failedToOpen(String)
-
-    public var errorDescription: String? {
-        switch self {
-        case .failedToOpen(let url):
-            return "macOS could not open \(url) in a browser."
-        }
-    }
-}
-
-public struct WorkspaceBrowserOpener: BrowserOpening {
-    private let openURL: @MainActor (URL) -> Bool
-
-    public init(openURL: @escaping @MainActor (URL) -> Bool = { NSWorkspace.shared.open($0) }) {
-        self.openURL = openURL
-    }
-
-    @MainActor
-    public func open(_ url: URL) async throws {
-        guard openURL(url) else {
-            throw BrowserOpeningError.failedToOpen(url.absoluteString)
-        }
-    }
 }
 
 public enum HackerNewsError: Error, LocalizedError, Equatable {
