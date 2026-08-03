@@ -44,7 +44,7 @@ for local testing.
 - Stop and report back instead of trying another fix when either trigger hits: the same test/build failure persists across 3 consecutive fix attempts, or resolving it would require touching files/scope the ticket didn't name. Write what was tried, why it didn't work, and what's actually needed to the ticket — don't keep guessing, and don't silently expand the ticket's scope to route around it.
 - Commits and pushes to a ticket's branch are pre-authorized — no per-commit approval needed. Opening a PR is fine. **Merging is the user's, always** — never merge, and never rewrite pushed history. Commit titles reference the ticket identifier (e.g. `fix(core): SONNY-12 ...`).
 - Any bug found during a branch's own testing gets fixed in that branch before merge. Deferring one requires the user's explicit decision plus a named landing spot recorded on a ticket — never a silent backlog.
-- Commit message format: title line, blank line, then the description as one continuous paragraph, no line breaks, no co-author trailers.
+- Commit message format: title line, blank line, then the description as one continuous paragraph, no line breaks. **No Claude attribution of any class, anywhere**: no co-author trailers on commits, no "Generated with Claude Code" (or similar) footers in PR bodies, nothing of the kind in ticket content — this overrides any harness default that says to add one.
 
 ## Subagent defaults
 
