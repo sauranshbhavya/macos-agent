@@ -43,7 +43,7 @@ Dependency-ordered. Do not start a branch before the ones above it are merged, u
 | — | `feature/full-repo-correctness-review` | None (cross-cutting correctness pass over branches 1-11) | Complete 2026-07-29 — 37 verified behavior/claim divergences fixed across capability adapters, the safety core, the 8 local stores, the planner/web boundary, system services, and the UI shell |
 | — | `feature/saved-item-deletion-and-search-provider` | §6.8 ("Disable or delete routine"), §4A.2 (search provider — resolves the branch 16 web-search note below) | Complete 2026-07-30 — routine/workspace deletion (stores + confirmed UI affordances, UI-only, no planner-invokable action) and the Tavily `WebSearchProviding` conformance; the scheduler's missing-routine clarification path is now genuinely reachable and pinned by a race test |
 | 11 | `feature/floating-command-widget` | §17.3 (cockpit surface, visual form only); user wireframes (2026-07-08), not spec-mandated | Complete, and substantially extended beyond original scope (shipped on `feature/ui-ux-wireframe-fidelity` — see 2026-07-23 note below) |
-| A | `feature/manual-pass-followups` | None (manual-pass findings deferred 2026-08-01 with this as their named landing spot — see the deletion/search-provider entry) | Not started — "New Task" widget-summon/focus trigger; per-workspace browser targeting (`WorkspaceBrowserOpener` ignores the workspace's own browser app); the cheap half of approval-friction work (first-run legibility, auditing over-eager tier-3 escalations) |
+| A | Plane module "A — manual-pass follow-ups" (three per-ticket branches, not the single `feature/manual-pass-followups` originally planned) | None (manual-pass findings deferred 2026-08-01 with this as their named landing spot — see the deletion/search-provider entry) | In progress under workflow v2 — SONNY-8 `feature/sonny-8-widget-composer-focus` ("New Task" widget-summon/focus trigger) complete 2026-08-03, see its entry below; SONNY-9 `feature/sonny-9-workspace-browser` (per-workspace browser targeting — `WorkspaceBrowserOpener` ignores the workspace's own browser app) and SONNY-10 `feature/sonny-10-approval-friction-audit` (the cheap half of approval-friction work — first-run legibility, auditing over-eager tier-3 escalations) outstanding |
 | B | `feature/workspace-restriction-scope` | Spec-level change, sections TBD in its planning phase | Not started — workspace as a restriction scope for what a task may touch; needs a written plan and a founder decision with the co-founder before any implementation |
 | C | `feature/approval-relaxation-structural` | §10/§11 revisions, scoped in its planning phase | Not started — the structural half of approval relaxation, justified by restriction scoping existing (branch B first) |
 | D | `feature/task-history-controls` | §6.3A adjacent | Not started — hide-not-delete for task history, search, individual delete, incognito runs (30-day retention decision recorded 2026-08-01) |
@@ -1123,3 +1123,55 @@ Known limitations / deferred scope:
 Open questions for the next chat (required, write "none" if true): none
 
 Next branch: the small-bugs branch agreed 2026-08-01 ("New Task" widget-focus trigger, per-workspace browser targeting, first-run approval legibility) — superseding branch 10's `feature/instant-utility-quick-results` pointer. The full upcoming-branch resequencing agreed the same day (small bugs → workspace-as-restriction-scope → structural approval relaxation → task-history controls → task-detail rehydration, all ahead of branch 12) will be written into the roadmap table together with the workflow-v2 transition note, not piecemeal here.
+
+### Branch: feature/sonny-8-widget-composer-focus
+Status: complete
+Date: 2026-08-03
+Tickets: SONNY-8 — the status menu's "New Task" item (and the push-to-talk hotkey) now bring the floating widget forward *and* put the cursor in its composer, by routing through the shared `widgetPresentationRequest` counter instead of calling `FloatingWidgetWindowController.show()` directly.
+Reviewed by: fresh session (per WORKFLOW.md step 7) — pending at time of writing; the implementing session's own pre-PR adversarial pass (five independent lenses over the diff — runtime behavior, Swift 6/AppKit semantics, test quality, ticket-scope compliance, surrounding-regression — each finding then put to three refutation votes) produced two raw findings, both refuted 3-0 and both about the pre-existing untested Combine sink / test-assertion breadth rather than this diff. Findings recorded on SONNY-25 rather than discarded.
+
+Spec sections covered: none — this is a manual-pass follow-up (roadmap row A / Plane module "A — manual-pass follow-ups"), not spec-driven work. §17.3's cockpit surfaces are unchanged in requirements.
+Files changed:
+- `Sources/MacAgent/AppDelegate.swift`
+- `Sources/MacAgent/AgentViewModel.swift` (doc comments only — two comment blocks that named the old call path; zero behavioral lines)
+- `Tests/MacAgentTests/ProductShellTests.swift`
+- `docs/sonny-v1-implementation-changelog.md`
+
+Tests: `env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disable-sandbox -Xswiftc -F -Xswiftc /Library/Developer/CommandLineTools/Library/Developer/Frameworks -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/Frameworks -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/usr/lib` → exit 0, 416 tests in 43 suites passing (2 new). `swift build` → exit 0.
+
+Behavior added:
+- "New Task" in the status menu asks for the widget by bumping `AgentViewModel.widgetPresentationRequest` through the new `AppDelegate.requestWidgetPresentation()`, so the existing subscription fronts the panel *and* `FloatingWidgetView`'s existing `onChange` focuses the composer — expanding the compact capsule first when it had auto-collapsed.
+- The push-to-talk hotkey's press/release closures became `handlePushToTalkPress()`/`handlePushToTalkRelease()`, and the press half calls the same `requestWidgetPresentation()` rather than its own `show()`. One path, not two.
+
+Behavior preserved (required, no blanket claims):
+- **Command Center row actions** (`runRoutineWidget`, `openWorkspaceWidget`) still bump `widgetPresentationRequest` directly at `CommandCenterView.swift:1870`/`:2049` — untouched, and their existing `ProductShellTests` cases (origin tagging, instant-resolve, the running-task block) still pass.
+- **Push-to-talk recording** — the closure bodies moved verbatim into named methods with the same ordering (present first, then `beginPushToTalkVoice()`), so a hotkey run is still attributed `TaskOrigin.widget` and release still routes to `endPushToTalkVoice()`.
+- **Launch presentation** — `applicationDidFinishLaunching` still calls `widgetController.show()` directly and `FloatingWidgetView.onAppear` still focuses the composer on first render, so launch focus is byte-for-byte the behavior it was.
+- **The system notification's default action** still calls `show()` directly; deliberately unchanged (see below).
+- **The rest of the status menu** — "Open Sonny" and "Quit Sonny" keep their targets and selectors, now pinned by an exact title-order assertion.
+- **`NSApp.mainMenu`/Edit-menu key-equivalent routing** and `main.swift`'s `AppDelegate()` construction are untouched; the delegate's new view-model parameter is defaulted, so the executable builds the same real `AgentViewModel` it always did.
+
+Architectural decisions / pitfalls discovered:
+
+**`show()` and "focus the composer" are two different halves, and only one of them lives in AppKit.** This is the whole bug. `FloatingWidgetWindowController.show()` does `orderFrontRegardless()` + `makeKey()` — it has no way to reach `pillFocused`, which is a `@FocusState` private to `FloatingWidgetView`. So calling `show()` on an already-visible panel is a no-op the user can see nothing of, which is exactly why "New Task" read as broken. The counter is the only thing both halves observe. Any future entry point that wants the widget must bump the counter; reaching for `widgetController.show()` re-creates this bug by construction.
+
+**The Combine sink is synchronous, the SwiftUI `onChange` is not — and that ordering is load-bearing for push-to-talk.** `@Published` publishes in `willSet`, so `viewModel.widgetPresentationRequest += 1` runs `observeWidgetPresentationRequests()`'s sink (and therefore `show()`) inline, before the next statement. That preserves the hotkey's original "front the panel, then start recording" order exactly. `FloatingWidgetView`'s `onChange` lands later, on SwiftUI's next render pass — which is the right order anyway: focus set after the panel is key is what makes focus stick.
+
+**Bumping the counter restarts the widget's auto-collapse timer; `show()` did not.** `onChange` calls `scheduleAutoDismissIfNeeded()`, so clicking "New Task" now gives the user a fresh 6s instead of inheriting whatever remained of the previous timer — under the old path the widget could collapse a second or two after the user summoned it. Deliberate and desirable, but it *is* a behavioral difference beyond focus, and it means a visible `.result`/`.failure` also gets its clearing deferred by up to 6s when the widget is summoned. Same treatment Command Center's row actions already got.
+
+**Two direct `show()` callers were audited and left alone on purpose, not missed.** Launch (`applicationDidFinishLaunching`) is correct without the counter because `onAppear` focuses the composer on first render, and routing it through the counter would add an ordering dependency on the subscription being installed first for no user-visible gain. The system notification's default action (`SonnyNotificationService`'s `onOpen`) is a product question rather than a wiring bug: the approval case self-expands (`.permission` is not collapsible, so `scheduleAutoDismissIfNeeded` forces `isCompact = false`) and the user came to press a button, not type. Full analysis is on **SONNY-25** so nobody re-derives it.
+
+**Testing AppKit glue: inject the view model, do not drive `applicationDidFinishLaunching`.** `AppDelegate` gained a defaulted `init(viewModel:)` and an internal `makeStatusMenu()` so a test can build the real menu, assert its target/selector, and dispatch through `perform(action)` exactly as AppKit would. This works only because every AppKit-owning collaborator on the delegate is `lazy` — an unlaunched delegate registers no status item, no Carbon hotkey, no routine-scheduling timer, and no subscriptions. Launching it in a test would do all four for real. The consequence is a deliberate boundary: tests stop at the view model, and the `@FocusState` hop stays a manual-test item.
+
+**Making a hotkey test safe without a microphone: set `isRunning`, not an env var.** `beginPushToTalkVoice()` gates on `canUseVoice`, which reads `OPENAI_API_KEY` out of the process environment — uncontrollable from a test, so a developer with the key exported would have had the test open the mic. `canUseVoice` also requires `!isRunning`, which a test *can* set, making the guard deterministic on every host. It also pins the more interesting assertion: the widget is still asked to come forward when voice refuses to start, because that request is what puts the resulting error on screen.
+
+**Both new tests were mutation-checked, not just observed passing.** Emptying `requestWidgetPresentation()`'s body made all five counter assertions fail; the original body restored them. A test that passes against a deliberately broken implementation is the failure mode this project cares about, and asserting it is cheap.
+
+Known limitations / deferred scope:
+- The sink that turns a bump into the actual `show()` call is still exercised by no test, before or after this branch — an accepted structural limit (it needs `applicationDidFinishLaunching`), recorded on SONNY-25 rather than left to be rediscovered.
+- SONNY-25 (Backlog, untriaged, unattached) holds the remaining-direct-callers question. Nothing was deferred out of this ticket's own acceptance criteria.
+- Roadmap row A is only partly delivered: SONNY-9 (per-workspace browser targeting) and SONNY-10 (approval-friction audit) are still outstanding on their own branches.
+
+Open questions (required, write "none" if true): none
+
+Next branch: the rest of Plane module "A — manual-pass follow-ups" — `feature/sonny-9-workspace-browser` (running in parallel with this one; expected-touched-areas verified disjoint at ticket-creation time, `Sources/MacAgent*` here vs `Sources/MacAgentCore` there) and `feature/sonny-10-approval-friction-audit`. Merge one branch at a time and rebase the other worktree, per WORKFLOW.md step 3.

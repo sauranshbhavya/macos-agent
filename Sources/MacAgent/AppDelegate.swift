@@ -6,7 +6,7 @@ import SwiftUI
 @MainActor
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
-    private let viewModel = AgentViewModel()
+    private let viewModel: AgentViewModel
     private lazy var windowCoordinator = AppWindowCoordinator(viewModel: viewModel)
     private lazy var widgetController = FloatingWidgetWindowController(viewModel: viewModel)
     private lazy var notificationService = SonnyNotificationService(
@@ -16,6 +16,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     )
     private var pushToTalkHotKey: PushToTalkHotKey?
     private var cancellables: Set<AnyCancellable> = []
+
+    /// Injectable purely so tests can drive the menu and hotkey entry points against a fixture
+    /// view model — `main.swift` still constructs the delegate with no arguments and gets the same
+    /// real, fully-defaulted `AgentViewModel` it always did. Nothing else about the delegate is
+    /// touched at construction time: every AppKit-owning collaborator below is `lazy`, so an
+    /// unlaunched delegate registers no status item, no hotkey, and no Combine subscriptions.
+    init(viewModel: AgentViewModel = AgentViewModel()) {
+        self.viewModel = viewModel
+        super.init()
+    }
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         registerBundledFonts()
@@ -43,11 +53,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         do {
             pushToTalkHotKey = try PushToTalkHotKey(
                 onPress: { [weak self] in
-                    self?.widgetController.show()
-                    self?.viewModel.beginPushToTalkVoice()
+                    self?.handlePushToTalkPress()
                 },
                 onRelease: { [weak self] in
-                    self?.viewModel.endPushToTalkVoice()
+                    self?.handlePushToTalkRelease()
                 }
             )
         } catch {
@@ -81,8 +90,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Command Center has no composer of its own anymore — quick actions like "New routine"/
     /// "Create workspace" pre-fill `viewModel.command` and need the widget to come forward so the
-    /// user can finish typing there. Independent of `notificationService`'s bundle-identity guard:
-    /// showing the widget works identically under `swift run`, unlike system notifications.
+    /// user can finish typing there. The status menu's "New Task" item and the push-to-talk hotkey
+    /// ride the same subscription (see `requestWidgetPresentation()`). Independent of
+    /// `notificationService`'s bundle-identity guard: showing the widget works identically under
+    /// `swift run`, unlike system notifications.
     private func observeWidgetPresentationRequests() {
         viewModel.$widgetPresentationRequest
             .dropFirst()
@@ -254,11 +265,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Just the two unambiguous actions for now — no "Recent"/usage section, since Sonny has no
     /// real equivalent to a chat-app's usage percentage and its actual analog (recent tasks) is a
     /// deliberate follow-up, not silently fabricated here.
-    private func makeStatusMenu() -> NSMenu {
+    func makeStatusMenu() -> NSMenu {
         let menu = NSMenu()
         menu.addItem(
             withTitle: "New Task",
-            action: #selector(showWidget),
+            action: #selector(requestWidgetPresentation),
             keyEquivalent: ""
         ).target = self
         menu.addItem(.separator())
@@ -276,8 +287,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         return menu
     }
 
-    @objc private func showWidget() {
-        widgetController.show()
+    /// The one way anything in the app asks for the floating widget by hand. It bumps the shared
+    /// counter rather than calling `widgetController.show()` directly, because `show()` only fronts
+    /// the panel — it cannot move keyboard focus, which lives in `FloatingWidgetView`'s own
+    /// `@FocusState`. The bump drives both halves at once: `observeWidgetPresentationRequests()`
+    /// turns it into the `show()` call, and `FloatingWidgetView`'s `onChange` puts the cursor in
+    /// the composer (expanding the compact capsule first, if it had collapsed). Calling `show()`
+    /// straight from the menu item is exactly why "New Task" read as doing nothing when the widget
+    /// was already on screen: the panel was re-fronted, and nothing else happened.
+    ///
+    /// `@objc` because the status menu item targets it by selector; Command Center's own row
+    /// actions bump `widgetPresentationRequest` directly for the same reason, so every hand-driven
+    /// entry point converges on one mechanism instead of each growing its own.
+    @objc func requestWidgetPresentation() {
+        viewModel.widgetPresentationRequest += 1
+    }
+
+    /// Split out of the `PushToTalkHotKey` closure so the hotkey shares the menu item's presentation
+    /// path verbatim, and so it is reachable from tests — a test process cannot register a real
+    /// Carbon hotkey to fire the closure for it. The presentation request is deliberately
+    /// unconditional and comes first: `beginPushToTalkVoice()` may refuse to record (no API key, a
+    /// run already in flight) and surface an error instead, and that error is only worth surfacing
+    /// if the widget is coming forward to show it.
+    func handlePushToTalkPress() {
+        requestWidgetPresentation()
+        viewModel.beginPushToTalkVoice()
+    }
+
+    func handlePushToTalkRelease() {
+        viewModel.endPushToTalkVoice()
     }
 
     @objc private func openCommandCenter() {
