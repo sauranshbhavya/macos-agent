@@ -34,10 +34,15 @@ Commands:
   comment <UUID|KEY|URL> <html-file>
                                     Append a comment to a work item
   comments <UUID|KEY|URL>           List a work item's comments (first 100)
+  modules                           List project modules (first 100)
+  module-create <name>              Create a module
+  module-add <module> <UUID|KEY|URL>
+                                    Add a work item to a module (module by name or UUID)
   url                               Print the configured Plane project URL
 
 Authentication uses PLANE_API_KEY when set, then macOS Keychain. API keys are
-secrets and must not be committed to this repository.
+secrets and must not be committed to this repository. The API allows 60 requests
+per minute — pace batch loops accordingly.
 EOF
 }
 
@@ -106,7 +111,7 @@ project_path() {
 extract_reference() {
   local input="$1"
   # A pasted Plane URL carries the PROJECT UUID in its path before the work item
-  # (.../projects/<project-uuid>/browse/SON-12, or legacy .../issues/<item-uuid>), so never
+  # (.../projects/<project-uuid>/browse/SONNY-12, or legacy .../issues/<item-uuid>), so never
   # grab the first UUID-shaped substring — take the segment after /browse/ or /issues/.
   if [[ "$input" =~ /(browse|issues)/([^/?#]+) ]]; then
     input="${BASH_REMATCH[2]}"
@@ -119,13 +124,13 @@ extract_reference() {
     printf '%s' "$input"
     return
   fi
-  die "expected a Plane work-item UUID, identifier such as SON-12, or issue URL"
+  die "expected a Plane work-item UUID, identifier such as SONNY-12, or issue URL"
 }
 
 pull_raw() {
   local reference
   reference="$(extract_reference "$1")"
-  # UUIDs use the project-scoped endpoint; SON-12-style identifiers use the separate
+  # UUIDs use the project-scoped endpoint; SONNY-12-style identifiers use the separate
   # workspace-level endpoint, which is the only one that accepts them.
   if [[ "$reference" =~ ^[0-9a-fA-F]{8}- ]]; then
     api_request GET "$(project_path)/work-items/${reference}/"
@@ -215,6 +220,49 @@ list_comments() {
   pretty_request GET "$(project_path)/work-items/${issue_id}/comments/?per_page=100"
 }
 
+resolve_module_id() {
+  local selector="$1"
+  if [[ "$selector" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]; then
+    printf '%s' "$selector"
+    return
+  fi
+  local modules
+  modules="$(api_request GET "$(project_path)/modules/?per_page=100")"
+  jq -er --arg selector "$selector" '
+    ($selector | ascii_downcase) as $normalized
+    | [.results[] | select((.name | ascii_downcase) == $normalized)]
+    | if length == 1 then .[0].id else error("expected exactly one matching module") end
+  ' <<<"$modules" || die "no unique module matched: $selector"
+}
+
+create_module() {
+  local name="$1"
+  PAYLOAD_FILE="$(mktemp)"
+  jq -n --arg name "$name" '{name: $name}' >"$PAYLOAD_FILE"
+  local response
+  if ! response="$(pretty_request POST "$(project_path)/modules/" "$PAYLOAD_FILE")"; then
+    printf '%s\n' "$response" >&2
+    return 1
+  fi
+  printf '%s\n' "$response"
+}
+
+add_to_module() {
+  local module_id issue_id
+  module_id="$(resolve_module_id "$1")"
+  issue_id="$(resolve_id "$2")"
+  PAYLOAD_FILE="$(mktemp)"
+  jq -n --arg issue "$issue_id" '{issues: [$issue]}' >"$PAYLOAD_FILE"
+  local response
+  # Attach endpoint is module-issues/ with {"issues": [...]}, verified live 2026-08-02 —
+  # the issues->work-items path rename did not reach it (module-work-items/ returns 404).
+  if ! response="$(pretty_request POST "$(project_path)/modules/${module_id}/module-issues/" "$PAYLOAD_FILE")"; then
+    printf '%s\n' "$response" >&2
+    return 1
+  fi
+  printf '%s\n' "$response"
+}
+
 main() {
   require_command curl
   require_command jq
@@ -259,6 +307,18 @@ main() {
     comments)
       [[ $# -eq 2 ]] || die "usage: scripts/plane comments <UUID|KEY|URL>"
       list_comments "$2"
+      ;;
+    modules)
+      [[ $# -eq 1 ]] || die "modules takes no arguments"
+      pretty_request GET "$(project_path)/modules/?per_page=100"
+      ;;
+    module-create)
+      [[ $# -eq 2 ]] || die "usage: scripts/plane module-create <name>"
+      create_module "$2"
+      ;;
+    module-add)
+      [[ $# -eq 3 ]] || die "usage: scripts/plane module-add <module> <UUID|KEY|URL>"
+      add_to_module "$2" "$3"
       ;;
     url)
       [[ $# -eq 1 ]] || die "url takes no arguments"
