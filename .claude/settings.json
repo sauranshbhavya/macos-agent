@@ -6,8 +6,6 @@
       "Bash(swift test *)"
     ],
     "deny": [
-      "Bash(git commit*)",
-      "Bash(git push*)",
       "Bash(rm -rf*)"
     ]
   },
