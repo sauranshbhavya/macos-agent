@@ -777,6 +777,17 @@ public final class AgentActionExecutor {
             // workspace open as egress printed "Data leaves device: yes" on the approval panel of
             // any plan carrying an apps-only workspace open, a claim nothing in that plan made
             // true.
+            //
+            // Do not read this `try?` by analogy with the `.runRoutine` one below: that branch is
+            // safe because `RunRoutineCapabilityAdapter.assessRisk` loads the routine with a plain
+            // `try` first, and `OpenWorkspaceCapabilityAdapter` has no `assessRisk` override at
+            // all, so there is no such guarantee here. What actually makes it safe is `prepare`,
+            // which runs `preview` before anything reaches this copy: the adapter's `preview`
+            // loads the workspace with a plain `try`, a name matching nothing becomes a
+            // clarification plan, and an unreadable store still throws. Neither failure mode
+            // survives to be silently answered "no" here on the `AgentRunner` path, the only path
+            // that renders this line. (`UnattendedTrustAdvisory` is the one caller that skips
+            // `prepare`, and it reads `effectiveTier` only, never `approvalCopy`.)
             guard let workspace = try? workspaceStore.workspace(named: step.workspaceName ?? "") else {
                 return false
             }
