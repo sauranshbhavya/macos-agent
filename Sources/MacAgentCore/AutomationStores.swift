@@ -108,12 +108,28 @@ public struct StoredWorkspace: Codable, Equatable, Sendable {
     public var apps: [String]
     public var urls: [String]
     public var teamType: WorkspaceTeamType?
+    /// Folders this workspace restricts file work to. Optional for exactly the reason spelled out
+    /// on `effectiveTeamType` below — a non-Optional property with a Swift-side default would throw
+    /// `keyNotFound` on every `workspaces.json` written before this field existed.
+    ///
+    /// Together with `apps` and `urls` this is the workspace's restriction scope. `apps`/`urls` are
+    /// reused rather than paired with parallel scope lists: two 95%-identical lists is a DRY
+    /// violation at the product level and a guaranteed source of "why did it prompt, it's right
+    /// there in my workspace."
+    public var fileLocations: [String]?
 
-    public init(name: String, apps: [String], urls: [String], teamType: WorkspaceTeamType? = nil) {
+    public init(
+        name: String,
+        apps: [String],
+        urls: [String],
+        teamType: WorkspaceTeamType? = nil,
+        fileLocations: [String]? = nil
+    ) {
         self.name = name
         self.apps = apps
         self.urls = urls
         self.teamType = teamType
+        self.fileLocations = fileLocations
     }
 
     /// `teamType` is Optional so legacy on-disk JSON missing the key still decodes (synthesized
@@ -122,6 +138,14 @@ public struct StoredWorkspace: Codable, Equatable, Sendable {
     /// calls `decode(_:forKey:)` and throws `keyNotFound` regardless of any default literal.
     public var effectiveTeamType: WorkspaceTeamType {
         teamType ?? .solo
+    }
+
+    /// File locations as every reader outside `WorkspaceStore.save` wants them. "No key on disk"
+    /// and "explicitly emptied" both mean this workspace restricts no folders — a `ScopeVerdict` of
+    /// `.unconstrained` either way. The nil/`[]` distinction is meaningful only to `save`, where nil
+    /// means "not talking about file locations" and `[]` means "clear them".
+    public var effectiveFileLocations: [String] {
+        fileLocations ?? []
     }
 }
 
@@ -385,9 +409,29 @@ public struct WorkspaceStore: @unchecked Sendable {
         }
     }
 
+    /// Creates a workspace, or redefines an existing one's contents.
+    ///
+    /// Carries forward the existing file locations whenever the incoming workspace leaves them nil,
+    /// the same merge-preserve `RoutineStore.save` applies to a schedule and run history — and for
+    /// a sharper reason. `CreateWorkspaceCapabilityAdapter` builds a fresh
+    /// `StoredWorkspace(name:apps:urls:)` on every save, so without this, re-creating a workspace by
+    /// natural language would silently delete its restriction scope. That overwrite does escalate to
+    /// tier 3, but what the user approves is *replacing the workspace's contents*; consent to
+    /// replace a launch bundle is not consent to drop a security boundary.
+    ///
+    /// nil means "I am not talking about file locations"; `[]` means "clear them".
+    ///
+    /// `teamType` is deliberately *not* merged here. It is a display badge rather than a boundary,
+    /// and preserving it would change user-visible behavior that SONNY-36 is explicitly required not
+    /// to change; the same drop-on-recreate bug for `teamType` is filed as SONNY-43.
     public func save(_ workspace: StoredWorkspace) throws {
         var workspaces = try loadAll()
-        workspaces[normalized(workspace.name)] = workspace
+        let key = normalized(workspace.name)
+        var merged = workspace
+        if let existing = workspaces[key] {
+            merged.fileLocations = workspace.fileLocations ?? existing.fileLocations
+        }
+        workspaces[key] = merged
         try write(workspaces)
     }
 

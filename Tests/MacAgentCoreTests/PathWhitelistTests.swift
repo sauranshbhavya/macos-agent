@@ -58,6 +58,60 @@ struct PathWhitelistTests {
         }
     }
 
+    /// `canonicalURL` + `contains` are exposed so a narrower boundary — a workspace's restriction
+    /// scope — reuses this whitelist's path arithmetic instead of running a second one. This pins
+    /// that they *are* the same arithmetic: for every shape that matters, the pair agrees with
+    /// `validateInsideWhitelist` about what is inside the root.
+    @Test
+    func theExposedContainmentAgreesWithValidateInsideWhitelistOnEveryShape() throws {
+        let root = try makeDirectory()
+        let outside = try makeDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: root)
+            try? FileManager.default.removeItem(at: outside)
+        }
+        let inside = root.appendingPathComponent("Client", isDirectory: true)
+        try FileManager.default.createDirectory(at: inside, withIntermediateDirectories: true)
+        let sibling = root.appendingPathComponent("ClientAlpha", isDirectory: true)
+        try FileManager.default.createDirectory(at: sibling, withIntermediateDirectories: true)
+        let link = inside.appendingPathComponent("escape")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
+
+        let whitelist = PathWhitelist(roots: [inside])
+        let candidates = [
+            inside.path,
+            inside.appendingPathComponent("notes.md").path,
+            inside.appendingPathComponent("nested/deep/notes.md").path,
+            sibling.appendingPathComponent("notes.md").path,
+            inside.appendingPathComponent("../ClientAlpha/notes.md").path,
+            link.appendingPathComponent("notes.md").path,
+            outside.path,
+            root.path
+        ]
+
+        for candidate in candidates {
+            let validated = (try? whitelist.validateInsideWhitelist(candidate)) != nil
+            let contained = PathWhitelist.contains(
+                root: PathWhitelist.canonicalURL(inside.path),
+                candidate: PathWhitelist.canonicalURL(candidate)
+            )
+            #expect(validated == contained, "disagreed about \(candidate)")
+        }
+    }
+
+    @Test
+    func containmentRejectsASiblingFolderSharingAPrefix() {
+        let root = URL(fileURLWithPath: "/tmp/scope/Client", isDirectory: true)
+
+        #expect(
+            PathWhitelist.contains(root: root, candidate: URL(fileURLWithPath: "/tmp/scope/Client/x.txt"))
+        )
+        #expect(PathWhitelist.contains(root: root, candidate: root))
+        #expect(
+            PathWhitelist.contains(root: root, candidate: URL(fileURLWithPath: "/tmp/scope/ClientAlpha/x.txt")) == false
+        )
+    }
+
     @Test
     func validatesOutputParentAndRejectsMissingParent() throws {
         let root = try makeDirectory()

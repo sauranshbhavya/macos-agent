@@ -84,8 +84,7 @@ public struct PathWhitelist: Sendable {
             throw PathValidationError.pathIsEmpty
         }
 
-        let url = Self.normalizedURL(Self.expandPath(trimmed))
-        let resolved = url.resolvingSymlinksInPath()
+        let resolved = Self.canonicalURL(trimmed)
         let allowed = roots.contains { root in
             Self.contains(root: root.resolvingSymlinksInPath(), candidate: resolved)
         }
@@ -130,6 +129,32 @@ public struct PathWhitelist: Sendable {
         return try defaultOutputFile(name: defaultName, extension: ext)
     }
 
+    /// The canonical form every containment check in this type compares: tilde and
+    /// relative-to-home expansion, standardization (which is what collapses `..`), then symlink
+    /// resolution.
+    ///
+    /// Public, together with `contains(root:candidate:)`, so a *narrower* boundary — a workspace's
+    /// restriction scope — can be evaluated with this whitelist's own path arithmetic instead of a
+    /// second one. Two path comparisons that disagree about `..` or a symlink is a security bug, not
+    /// a style one. Nothing here widens the whitelist: a path this resolves is still subject to
+    /// `validateInsideWhitelist` before any capability touches it.
+    public static func canonicalURL(_ rawPath: String) -> URL {
+        normalizedURL(expandPath(rawPath.trimmingCharacters(in: .whitespacesAndNewlines)))
+            .resolvingSymlinksInPath()
+    }
+
+    /// Containment as this whitelist defines it: equal, or a path component below. Deliberately a
+    /// `root + "/"` prefix test rather than a bare prefix — `/Documents/ClientAlpha` must not count
+    /// as inside `/Documents/Client`.
+    ///
+    /// Both sides are expected to be `canonicalURL` output already; passing a raw path here compares
+    /// unresolved text and is a mistake.
+    public static func contains(root: URL, candidate: URL) -> Bool {
+        let rootPath = root.standardizedFileURL.path
+        let candidatePath = candidate.standardizedFileURL.path
+        return candidatePath == rootPath || candidatePath.hasPrefix(rootPath + "/")
+    }
+
     private static func expandPath(_ rawPath: String) -> URL {
         let expanded = (rawPath as NSString).expandingTildeInPath
         if expanded.hasPrefix("/") {
@@ -149,12 +174,6 @@ public struct PathWhitelist: Sendable {
 
     private static func normalizedURL(_ url: URL) -> URL {
         url.standardizedFileURL
-    }
-
-    private static func contains(root: URL, candidate: URL) -> Bool {
-        let rootPath = root.standardizedFileURL.path
-        let candidatePath = candidate.standardizedFileURL.path
-        return candidatePath == rootPath || candidatePath.hasPrefix(rootPath + "/")
     }
 }
 
