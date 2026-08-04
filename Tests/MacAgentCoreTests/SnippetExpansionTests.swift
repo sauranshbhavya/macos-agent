@@ -144,6 +144,72 @@ struct SnippetExpansionTests {
         #expect(!request.approvalCopy.involvedResource.contains("Search:"))
     }
 
+    /// SONNY-31, H1. Re-saving a trigger with byte-identical text replaces nothing — the file ends
+    /// up holding exactly what it already held — so the escalation was describing a change that
+    /// does not happen. The cost was not a spurious prompt: a saved routine re-saves the same
+    /// snippet on every run, and tier 3 is what an unattended run structurally cannot satisfy, so
+    /// a scheduled snippet routine ran exactly once and was skipped forever after.
+    @Test
+    func resavingASnippetWithIdenticalTextDoesNotEscalate() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SnippetStore(fileURL: root.appendingPathComponent("snippets.json"))
+        try store.save(StoredSnippet(trigger: ";sig", expansion: "Best, Sonny"))
+        let executor = AgentActionExecutor(snippetStore: store, now: { Date(timeIntervalSince1970: 123) })
+        let runner = AgentRunner(planner: FailingPlanner(), executor: executor)
+        let resolver = InstantCommandResolver(snippetStore: store)
+
+        guard case .plan(let savePlan) = resolver.resolve(command: "snippet save ;sig = Best, Sonny") else {
+            Issue.record("Expected snippet save command to resolve locally.")
+            return
+        }
+
+        let prepared = try runner.prepare(plan: savePlan, source: .instantResolver)
+        let request = try runner.approvalRequest(for: prepared)
+
+        #expect(request.assessment.effectiveTier == .tier2)
+        #expect(request.assessment.escalations.isEmpty)
+        #expect(request.requirement == .lightweightConfirmation)
+
+        // And it is genuinely runnable at the tier an unattended run can carry — the gate is the
+        // thing that was broken, so assert through it rather than stopping at the assessment.
+        let result = try await runner.execute(prepared, approvalDecision: .approved(.tier2))
+        #expect(result.summary == "Saved snippet ;sig.")
+        #expect(try store.snippet(matchingTrigger: ";sig").expansion == "Best, Sonny")
+    }
+
+    /// The trimming half. `snippetSpec` trims the step's text and `SnippetStore.save` stores the
+    /// trimmed value, so a plan carrying trailing whitespace is still saving identical content.
+    /// Comparing raw step text against a stored trimmed value would re-open the same hole for any
+    /// routine whose saved step happens to end in a newline.
+    @Test
+    func resavingASnippetWhoseOnlyDifferenceIsSurroundingWhitespaceDoesNotEscalate() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = SnippetStore(fileURL: root.appendingPathComponent("snippets.json"))
+        try store.save(StoredSnippet(trigger: ";sig", expansion: "Best, Sonny"))
+        let executor = AgentActionExecutor(snippetStore: store, now: { Date(timeIntervalSince1970: 123) })
+        let runner = AgentRunner(planner: FailingPlanner(), executor: executor)
+        let plan = AgentPlan(
+            summary: "Save snippet ;sig.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "snippet",
+                    operation: .saveSnippet,
+                    description: "Save snippet ;sig.",
+                    searchQuery: ";sig",
+                    draftContent: "  Best, Sonny\n"
+                )
+            ]
+        )
+
+        let request = try runner.approvalRequest(for: try runner.prepare(plan: plan, source: .instantResolver))
+
+        #expect(request.assessment.effectiveTier == .tier2)
+        #expect(request.assessment.escalations.isEmpty)
+    }
+
     @Test
     func snippetSaveCommandClarifiesWhenTriggerOrExpansionIsMissing() {
         let resolver = InstantCommandResolver()

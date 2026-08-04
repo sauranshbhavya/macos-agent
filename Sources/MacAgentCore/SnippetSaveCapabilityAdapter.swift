@@ -31,9 +31,26 @@ public struct SnippetSaveCapabilityAdapter: CapabilityAdapter {
         ]
     }
 
+    /// Escalates when saving this snippet would replace *different* text — not merely when the
+    /// trigger exists.
+    ///
+    /// Re-saving byte-identical content is semantically a no-op: the file ends up holding exactly
+    /// what it already held, so "would be replaced" is not true of anything the user would
+    /// recognise as their snippet. The old existence-only check made a scheduled routine
+    /// containing a `save_snippet` step run exactly once — run one created the trigger, and every
+    /// run after that assessed tier 3, which an unattended run structurally cannot satisfy, so the
+    /// routine was skipped forever (SONNY-31).
+    ///
+    /// Compared against the trimmed spec expansion because that is what `execute` writes and what
+    /// `SnippetStore.save` stores — comparing raw step text against a stored trimmed value would
+    /// make a trailing newline in the plan look like a content change and re-open the same hole.
+    /// `updatedAt` is deliberately not part of the comparison: the timestamp moves on every save
+    /// by design, and treating that as a change would mean nothing was ever identical.
     public func assessRisk(plan: AgentPlan, context: CapabilityExecutionContext) throws -> CapabilityRiskAssessment {
         let spec = try snippetSpec(in: plan)
-        let escalations = try context.snippetStore.findExactTrigger(spec.trigger) != nil
+        let existing = try context.snippetStore.findExactTrigger(spec.trigger)
+        let replacesDifferentExpansion = existing.map { $0.expansion != spec.expansion } ?? false
+        let escalations = replacesDifferentExpansion
             ? [
                 CapabilityRiskEscalation(
                     fromTier: metadata.defaultRiskTier,
