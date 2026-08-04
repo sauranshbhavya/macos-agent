@@ -644,6 +644,106 @@ struct AgentActionExecutorTests {
         ])
     }
 
+    /// PR #25 review finding F1, first half. Segmenting fixed more than the collision escalations
+    /// the ticket named: because `defaultTier` is the max across segments, a *baseline* tier that
+    /// varies per step is now seen too. `InvokeShortcutCapabilityAdapter.assessRisk` demotes to
+    /// tier 1 for a Shortcut with a clean observed success and stays tier 2 otherwise, and it
+    /// picks its step with `.first(where:)` — so a chain whose first Shortcut is trusted used to
+    /// assess the whole plan at tier 1, which under the default policy is `.autoRun`. Both
+    /// Shortcuts then ran with no confirmation at all, including the one Sonny has never seen
+    /// succeed. This is a raised tier, not an escalation, so it asserts the empty escalations
+    /// list too: the mechanism matters, and a future change that delivered this through a
+    /// synthetic escalation instead should fail here rather than pass quietly.
+    @Test
+    func chainWhoseSecondShortcutIsUntrustedAssessesAtTheUntrustedTier() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let history = ShortcutRunHistoryStore(fileURL: root.appendingPathComponent("shortcuts-history.json"))
+        try history.recordSuccess(shortcutName: "Trusted Shortcut", at: Date(timeIntervalSince1970: 1_700_000_000))
+        let executor = makeExecutor(
+            root: root,
+            shortcutCatalog: FakeShortcutCatalog(names: ["Trusted Shortcut", "Untrusted Shortcut"]),
+            shortcutRunHistoryStore: history
+        )
+        let plan = AgentPlan(
+            summary: "Run both Shortcuts.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "shortcut-1", operation: .invokeShortcut, description: "Run the trusted Shortcut.", shortcutName: "Trusted Shortcut"),
+                AgentStep(id: "shortcut-2", operation: .invokeShortcut, description: "Run the untrusted Shortcut.", shortcutName: "Untrusted Shortcut")
+            ]
+        )
+
+        let assessment = try executor.assessRisk(plan: plan)
+
+        #expect(assessment.defaultTier == .tier2)
+        #expect(assessment.effectiveTier == .tier2)
+        #expect(assessment.approvalRequirement() == .lightweightConfirmation)
+        #expect(assessment.escalations.isEmpty)
+    }
+
+    /// PR #25 review finding F1, second half, and the highest-value behavior on this branch: a
+    /// whole nested plan used to be invisible to the gate. `RunRoutineCapabilityAdapter` resolves
+    /// its routine from the first `.runRoutine` step, so a chain running two saved routines
+    /// assessed the first one's steps and never called `assessNestedPlan` for the second at all —
+    /// the second routine's file collision, and every other condition inside it, simply did not
+    /// exist as far as approval was concerned, while `executeChain` ran it. Both aggregation rules
+    /// are load-bearing here: the max across segments carries tier 3 out of the second segment,
+    /// and the escalation union is what puts the reason in front of the user.
+    @Test
+    func chainWhoseSecondRoutineCarriesACollisionEscalatesAndNamesIt() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let existingDraft = root.appendingPathComponent("weekly.md")
+        try write("existing draft", to: existingDraft)
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try routineStore.save(
+            StoredRoutine(
+                name: "Standup",
+                steps: [
+                    AgentStep(id: "open", operation: .openURL, description: "Open the standup board.", targetURL: "https://example.com/standup")
+                ]
+            )
+        )
+        try routineStore.save(
+            StoredRoutine(
+                name: "Weekly Notes",
+                steps: [
+                    AgentStep(
+                        id: "draft",
+                        operation: .createLocalDraft,
+                        description: "Start this week's notes.",
+                        outputPath: existingDraft.path,
+                        draftTitle: "Weekly",
+                        draftContent: "Notes for this week."
+                    )
+                ]
+            )
+        )
+        let executor = makeExecutor(root: root, routineStore: routineStore)
+        let plan = AgentPlan(
+            summary: "Run both routines.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "run-1", operation: .runRoutine, description: "Run routine Standup.", routineName: "Standup"),
+                AgentStep(id: "run-2", operation: .runRoutine, description: "Run routine Weekly Notes.", routineName: "Weekly Notes")
+            ]
+        )
+
+        let assessment = try executor.assessRisk(plan: plan)
+
+        #expect(assessment.defaultTier == .tier2)
+        #expect(assessment.effectiveTier == .tier3)
+        #expect(assessment.approvalRequirement() == .explicitApproval)
+        #expect(assessment.escalations == [
+            CapabilityRiskEscalation(
+                fromTier: .tier2,
+                toTier: .tier3,
+                reason: "Draft output already exists at \(existingDraft.path)."
+            )
+        ])
+    }
+
     @Test
     func docxPreviewDestinationNamingMatchesInjectedConverter() throws {
         let root = try makeDirectory()
@@ -2196,6 +2296,11 @@ struct AgentActionExecutorTests {
         webPageLoader: PublicWebPageLoader? = nil,
         webSearchProvider: (any WebSearchProviding)? = nil,
         webResearchSynthesizer: (any WebResearchSynthesizing)? = nil,
+        // Defaulted to an empty fake, never the production `ProcessShortcutCatalog`: resolving a
+        // Shortcut name shells out to `shortcuts list`, and no test should be one typo away from
+        // enumerating the developer's real Shortcuts library.
+        shortcutCatalog: any ShortcutCatalogProviding = FakeShortcutCatalog(names: []),
+        shortcutRunHistoryStore: ShortcutRunHistoryStore? = nil,
         now: @escaping () -> Date = Date.init,
         hotKeyReady: @escaping () -> Bool = { true }
     ) -> AgentActionExecutor {
@@ -2218,6 +2323,9 @@ struct AgentActionExecutorTests {
             webPageLoader: webPageLoader,
             webSearchProvider: webSearchProvider,
             webResearchSynthesizer: webResearchSynthesizer,
+            shortcutCatalog: shortcutCatalog,
+            shortcutRunHistoryStore: shortcutRunHistoryStore
+                ?? ShortcutRunHistoryStore(fileURL: root.appendingPathComponent("shortcuts-history.json")),
             now: now,
             hotKeyReady: hotKeyReady
         )

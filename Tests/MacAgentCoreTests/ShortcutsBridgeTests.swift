@@ -229,7 +229,10 @@ struct ShortcutsBridgeTests {
     }
 }
 
-private struct FakeShortcutCatalog: ShortcutCatalogProviding {
+/// Internal rather than file-private: `AgentActionExecutorTests` needs the same fake to assess a
+/// chain of Shortcut steps, and the real catalog shells out to `shortcuts list` on every call, so
+/// a second copy of this would be a second thing to keep honest.
+struct FakeShortcutCatalog: ShortcutCatalogProviding {
     var names: [String]
 
     func shortcutNames() throws -> [String] {
