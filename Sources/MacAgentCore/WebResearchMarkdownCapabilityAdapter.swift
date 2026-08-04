@@ -61,18 +61,25 @@ public struct WebResearchMarkdownCapabilityAdapter: CapabilityAdapter {
         defaultRiskTier: .tier2
     )
 
+    /// The preset write and the research note are two different destinations, so a plan carrying
+    /// both needs both resolved. This used to resolve the first `.writeMarkdown` step and
+    /// *return*, which left the `.webToMarkdown` step of a Hacker-News-preset-then-research chain
+    /// with no resolved path at all — its output was neither previewed as a concrete path nor
+    /// checked for a collision, even though the run wrote it.
+    ///
+    /// Still one step of each kind, deliberately: `execute` resolves one preset spec or one
+    /// research spec from the first matching step, so resolving a *second* `.writeMarkdown` step
+    /// would advertise a destination nothing ever writes.
     public func resolveDefaultOutputs(in plan: AgentPlan, context: CapabilityExecutionContext) throws -> AgentPlan {
         var resolvedPlan = plan
         if let markdownIndex = resolvedPlan.steps.firstIndex(where: { $0.operation == .writeMarkdown }) {
             resolvedPlan.steps[markdownIndex].outputPath = try hackerNewsSpec(in: resolvedPlan, context: context).outputURL.path
-            return resolvedPlan
         }
 
-        guard let stepIndex = resolvedPlan.steps.firstIndex(where: { $0.operation == .webToMarkdown }) else {
-            return resolvedPlan
+        if let stepIndex = resolvedPlan.steps.firstIndex(where: { $0.operation == .webToMarkdown }) {
+            resolvedPlan.steps[stepIndex].outputPath = try webResearchSpec(in: resolvedPlan, context: context).outputURL.path
         }
 
-        resolvedPlan.steps[stepIndex].outputPath = try webResearchSpec(in: resolvedPlan, context: context).outputURL.path
         return resolvedPlan
     }
 
@@ -106,16 +113,15 @@ public struct WebResearchMarkdownCapabilityAdapter: CapabilityAdapter {
     }
 
     public func assessRisk(plan: AgentPlan, context: CapabilityExecutionContext) throws -> CapabilityRiskAssessment {
-        let outputURL = try outputURLForRiskAssessment(in: plan, context: context)
-        let escalations = context.fileManager.fileExists(atPath: outputURL.path)
-            ? [
+        let escalations = try outputURLsForRiskAssessment(in: plan, context: context)
+            .filter { context.fileManager.fileExists(atPath: $0.path) }
+            .map { outputURL in
                 CapabilityRiskEscalation(
                     fromTier: metadata.defaultRiskTier,
                     toTier: .tier3,
                     reason: "Markdown output already exists at \(outputURL.path)."
                 )
-            ]
-            : []
+            }
         return CapabilityRiskAssessment(defaultTier: metadata.defaultRiskTier, escalations: escalations)
     }
 
@@ -240,12 +246,32 @@ public struct WebResearchMarkdownCapabilityAdapter: CapabilityAdapter {
         }
     }
 
-    private func outputURLForRiskAssessment(in plan: AgentPlan, context: CapabilityExecutionContext) throws -> URL {
+    /// Every Markdown file this plan would write: the preset's, the research note's, or both.
+    ///
+    /// The `if`s used to be an either/or — "is this the Hacker News preset?" answered first and
+    /// returned the preset's path alone, so a plan carrying both never checked the research note's
+    /// output. `AgentActionExecutor` now assesses chains segment by segment and so hands this
+    /// adapter one kind at a time, which makes the both-kinds case unreachable from there; keeping
+    /// it correct here means a future change to how segments are cut (adding `.webToMarkdown` to
+    /// the preset's absorb list, say) cannot quietly restore the under-assessment.
+    ///
+    /// One URL per kind, matching what `execute` writes — a second `.writeMarkdown` step in the
+    /// same plan is dropped by `hackerNewsSpec`'s first-match pick, so assessing it would gate on
+    /// a file nothing ever writes.
+    private func outputURLsForRiskAssessment(
+        in plan: AgentPlan,
+        context: CapabilityExecutionContext
+    ) throws -> [URL] {
+        var outputURLs: [URL] = []
         if isHackerNewsPreset(plan) {
-            return try hackerNewsSpec(in: plan, context: context).outputURL
+            outputURLs.append(try hackerNewsSpec(in: plan, context: context).outputURL)
         }
 
-        return try webResearchSpec(in: plan, context: context).outputURL
+        if plan.steps.contains(where: { $0.operation == .webToMarkdown }) {
+            outputURLs.append(try webResearchSpec(in: plan, context: context).outputURL)
+        }
+
+        return outputURLs
     }
 
     @MainActor

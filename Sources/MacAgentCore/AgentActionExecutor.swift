@@ -268,20 +268,53 @@ public final class AgentActionExecutor {
 
     public func assessRisk(plan: AgentPlan) throws -> CapabilityRiskAssessment {
         let resolvedPlan = try resolveDefaultOutputs(in: plan)
-        let adapters = try capabilityAdapters(in: resolvedPlan)
-        let assessments = try adapters.map { adapter in
-            try adapter.assessRisk(plan: resolvedPlan, context: capabilityContext())
+        let context = capabilityContext()
+
+        var assessments: [CapabilityRiskAssessment] = []
+        var metadata: [CapabilityMetadata] = []
+        var seenCapabilityIDs: Set<String> = []
+
+        for segment in try assessmentSegments(in: resolvedPlan) {
+            for adapter in try capabilityAdapters(in: segment) {
+                assessments.append(try adapter.assessRisk(plan: segment, context: context))
+                // Deduplicated across the whole plan, in step order — segments preserve step
+                // order, so this is the same metadata list (and therefore the same approval copy)
+                // a single whole-plan `capabilityAdapters(in:)` call produced before segmenting.
+                if seenCapabilityIDs.insert(adapter.metadata.id).inserted {
+                    metadata.append(adapter.metadata)
+                }
+            }
         }
-        let metadata = adapters.map(\.metadata)
+
         let defaultTier = highestRiskTier(in: assessments.map(\.defaultTier))
         let effectiveTier = highestRiskTier(in: assessments.map(\.effectiveTier) + [defaultTier])
-        let escalations = assessments.flatMap(\.escalations)
         return CapabilityRiskAssessment(
             defaultTier: defaultTier,
             effectiveTier: effectiveTier,
             approvalCopy: approvalCopy(for: resolvedPlan, metadata: metadata, tier: effectiveTier),
-            escalations: escalations
+            escalations: unique(assessments.flatMap(\.escalations))
         )
+    }
+
+    /// The units risk assessment walks: exactly the units `preview` and `execute` hand to an
+    /// adapter. A chain is split with `segmentPlans(in:)` — the same segmentation
+    /// `previewChain`/`executeChain` use, not a parallel one — and every other plan goes to its
+    /// adapter whole, the way `previewCapability`/`executeCapability` do.
+    ///
+    /// Assessing a chain as one plan was the last plan-walking path in this executor that was not
+    /// segmented, and every adapter picks its step with `.first(where:)`. So a chain of two
+    /// `.createLocalDraft` steps executed both writes but assessed only the first: a second draft
+    /// overwrote an existing file with no collision escalation and no tier-3 gate.
+    ///
+    /// Segments are assessed *without* the previous-artifact path `previewChain`/`executeChain`
+    /// thread between segments, because the only two operations that consume it —
+    /// `.revealInFinder` and `.openGeneratedArtifact` — take the default tier-based assessment and
+    /// never read a path. Giving either one an `assessRisk` override means threading it here too.
+    private func assessmentSegments(in plan: AgentPlan) throws -> [AgentPlan] {
+        guard try workflow(in: plan) == .chain else {
+            return [plan]
+        }
+        return try segmentPlans(in: plan)
     }
 
     public func preview(plan: AgentPlan) throws -> [ActionPreview] {
@@ -846,6 +879,18 @@ public final class AgentActionExecutor {
         var result: [String] = []
         for value in values where seen.insert(value).inserted {
             result.append(value)
+        }
+        return result
+    }
+
+    /// Two segments that raise the identical escalation — two steps writing over the same existing
+    /// file — say one thing, and the approval panel joins every reason into one sentence, so a
+    /// repeat reads as a stutter. `CapabilityRiskEscalation` is Equatable but not Hashable and
+    /// these arrays are single digits, so a linear scan beats teaching the type to hash.
+    private func unique(_ escalations: [CapabilityRiskEscalation]) -> [CapabilityRiskEscalation] {
+        var result: [CapabilityRiskEscalation] = []
+        for escalation in escalations where !result.contains(escalation) {
+            result.append(escalation)
         }
         return result
     }
