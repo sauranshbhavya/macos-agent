@@ -45,7 +45,7 @@ struct WidgetApprovalExplainerTests {
     /// value, so rendering `undoDescription`, `actionDescription`, or `involvedResource` by mistake
     /// fails here instead of shipping a plausible-looking wrong sentence.
     @Test
-    func theSecondLineIsRiskReasonAndNotAnyOtherApprovalCopyField() {
+    func theSecondLineIsRiskReasonAndNotAnyOtherApprovalCopyField() throws {
         let request = makeRequest(
             actionDescription: "ACTION",
             riskReason: "REASON",
@@ -58,7 +58,11 @@ struct WidgetApprovalExplainerTests {
             isFirstApproval: true
         )
 
-        #expect(lines.count == 2)
+        // `try #require`, not `#expect`: `#expect` is non-fatal, so a regression that returns one
+        // line would record the count failure and then run straight into `lines[1]` and trap on
+        // "Index out of range", taking the rest of the suite's diagnostics down with it. The
+        // precondition has to actually stop this test for the index access below to be safe.
+        try #require(lines.count == 2)
         #expect(lines[1] == "REASON")
         #expect(!lines.contains("ACTION"))
         #expect(!lines.contains("RESOURCE"))
