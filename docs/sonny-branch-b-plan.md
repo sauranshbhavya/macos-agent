@@ -41,7 +41,9 @@ A workspace declares three resource sets. For any resource a plan touches, the v
 | `.unconstrained` | That kind is *not* configured on this workspace (empty list) | Nothing | No |
 | `.opaque` | The resource is not knowable from the plan — a Shortcut's internals, a search-driven fetch's real URLs | Nothing | No — and it poisons the whole plan's roll-up |
 
-### Why three values and not two
+### Why the empty-list case gets its own value
+
+The four-value split has two independent motivations. `.unconstrained` exists because an unconfigured resource kind is neither permission nor prohibition — argued immediately below. `.opaque` exists because some resources are not knowable at gate time at all — argued two subsections down, under "The guarantee is static and pre-execution." Neither reduces to the other, and dropping either one reintroduces a specific failure.
 
 Both two-valued readings fail, in opposite directions, and the failure is not theoretical — it is what every workspace on disk today would hit.
 
@@ -85,9 +87,9 @@ It is also the reason the `.opaque` verdict is necessary rather than optional. A
 
 ## 4. Resolving the recorded interaction flag
 
-The flag, verbatim from SONNY-12's comment:
+The flag, verbatim from SONNY-12's comment (its closing "(see SONNY-13)" pointer retained):
 
-> default-on scoping combined with branch C's decided in-scope tier-3 downgrade means users who never configured scope get relaxed tier-3 gating implicitly. Decide whether tier-3 relaxation requires explicit per-workspace opt-in even though scoping itself defaults on.
+> default-on scoping combined with branch C's decided in-scope tier-3 downgrade (see SONNY-13) means users who never configured scope get relaxed tier-3 gating implicitly. Decide whether tier-3 relaxation requires explicit per-workspace opt-in even though scoping itself defaults on.
 
 **Decided (user, 2026-08-04): no separate opt-in toggle. Three structural gates, each independently sufficient.**
 
@@ -149,7 +151,7 @@ The scope check is a **second walk over the same resolved plan**, running alongs
 | `PlanScopedResources` | `AgentStep -> [ScopedResource]` via an **exhaustive switch over `AgentOperation` with no `default:`**. |
 | `WorkspaceScopeEvaluator` | Walks the resolved plan, returns findings. Knows nothing about tiers. |
 
-**Why the switch has no default clause.** A `default: return []` is a silent hole for every capability added after this row — the exact failure this codebase already documents for the three nested-plan closures ("using a subset silently breaks nested risk assessment"). With no default, adding an `AgentOperation` case fails the build until someone classifies its resources. That compile error *is* the completeness guarantee.
+**Why the switch has no default clause.** A `default: return []` is a silent hole for every capability added after this row — the exact failure `.claude/rules/macagentcore-conventions.md` already documents for the three nested-plan closures, which it requires as "all three, not a subset, or nested risk silently doesn't get assessed." With no default, adding an `AgentOperation` case fails the build until someone classifies its resources. That compile error *is* the completeness guarantee.
 
 ### Threading the scope through
 
@@ -243,7 +245,7 @@ B1 (pure model and evaluator) touches none of those files and can start immediat
 |---|---|---|
 | 1 | **`WorkspaceStore.save` fully replaces the record**, unlike `RoutineStore.save` which merge-preserves `schedule`/`recentRunDates`. Re-creating a workspace by natural language would silently delete its boundary — and that path escalates to tier 3 *for replacing the workspace*, so the user consents to replacing contents, not to dropping a security boundary. Needs the same merge-preserve treatment. | `AutomationStores.swift:296-300` vs `:161-172` |
 | 2 | **New persisted fields must be `Optional`.** Synthesized `Decodable` calls `decode(_:forKey:)` for a non-Optional property even with a Swift-side default, and throws `keyNotFound` on every existing `workspaces.json`. | documented twice already: `AutomationStores.swift:11-14`, `:77-80` |
-| 3 | **`AgentPlan.requiresConfirmation` is dead** with respect to gating — written at ~15 sites, read nowhere but its own initializer. An implementer must not wire a scope flag through it and watch it silently do nothing. | `AgentPlan.swift:10` is the only read |
+| 3 | **`AgentPlan.requiresConfirmation` gates nothing** — 22 construction sites in `Sources/` (16 of them in `InstantCommandResolver` alone), and nothing anywhere branches on the value. It *is* read once outside its own initializer: `segmentPlan` copies it into every chain segment. That makes the trap worse, not better — a scope flag wired through it would visibly propagate into segments while still gating nothing, so it would look wired up. Do not use it. | `AgentPlan.swift:10` (init), `AgentActionExecutor.swift:990-996` (`segmentPlan`) |
 | 4 | **Power Mode is spec-only** — zero implementation anywhere in `Sources/`. §13.3's per-app "Allowed domains if browser" is not code this row can extend or collide with. | no match for `PowerMode` in `Sources/` or `Tests/` |
 | 5 | **Case sensitivity.** `PathWhitelist`'s containment is a case-sensitive prefix compare on a case-insensitive filesystem. Pre-existing, inherited rather than introduced — but scope matching multiplies its exposure, so it needs a decision and a test rather than silence. | `PathWhitelist.swift:154-158` |
 | 6 | **`CapabilityPermissionEnforcement` has exactly one case**, `.descriptiveOnly`. There is no existing "enforcement level" concept to extend — closing off a line of design an implementer might otherwise chase. | `CapabilityAdapter.swift:19-21` |
