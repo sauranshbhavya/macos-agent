@@ -13,6 +13,22 @@ Report findings back in the format in §8. Anything not explicitly called out as
 report" is fair game — UI mismatches, backend errors surfacing in the UI, silent failures, anything
 that just feels wrong even if you can't articulate why yet.
 
+## How to read a `confirmed <date>` (convention, added 2026-08-03)
+
+**A `confirmed <date>` is a snapshot of one moment, not a standing guarantee.** A row can be
+honestly confirmed and then quietly stop being true — a later branch regresses it, or the original
+check passed for a reason narrower than the row's wording implies. Because a checked row suppresses
+re-checks, a stale `[x]` is worse than no row at all.
+
+So: **when a confirmed row is later found broken, its history gets corrected in place — never
+silently re-checked.** Record the arc on the row itself: the original confirmation date, the date it
+was found broken, the ticket that fixed it, and the re-confirmation date. A row that reads
+`confirmed 2026-07-24` with no further history is a claim that it has been true continuously since
+then; if that isn't what happened, the row has to say so.
+
+The **"New Task"** clause of §6's three-menu-item row is the worked example — confirmed 2026-07-24,
+found broken 2026-08-01, fixed by SONNY-8 (PR #20), re-confirmed 2026-08-03.
+
 ## Status tracker — read this first
 
 Updated 2026-07-21, end of the first real testing round. This is the live "what's the state of
@@ -361,8 +377,14 @@ it feels confusing in practice, not just whether it's "technically correct."
       3-item menu both times (New Task / Open Sonny / Quit Sonny) — a previous bug made this
       right-click-only, worth explicitly re-confirming left-click works — **confirmed 2026-07-24**
 - [x] "New Task" opens/focuses the widget; "Open Sonny" opens/focuses Command Center; "Quit Sonny"
-      actually terminates the process (check Activity Monitor, not just that windows closed) —
-      **confirmed 2026-07-24**
+      actually terminates the process (check Activity Monitor, not just that windows closed).
+      "Open Sonny" and "Quit Sonny" — **confirmed 2026-07-24**. "New Task" — **confirmed
+      2026-07-24, found broken 2026-08-01** (the pre-SONNY-8 path, `AppDelegate.showWidget()` →
+      `widgetController.show()`, could not move keyboard focus at all, so the 2026-07-24 check
+      passed on the window coming forward and never on focus), **fixed by SONNY-8 (PR #20),
+      re-confirmed 2026-08-03** across all four cases: idle focus, auto-collapsed expand-then-focus,
+      hotkey, and non-disturbance of a running task. See the `confirmed <date>` convention at the
+      top of this file — this row is its worked example.
 - [x] Push-to-talk (Ctrl-Opt-Space) works both with Command Center frontmost *and* with some other
       app entirely frontmost — it's a global hotkey, test it from outside Sonny too — **confirmed
       2026-07-24**
