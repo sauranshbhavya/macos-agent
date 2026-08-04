@@ -1388,3 +1388,58 @@ Known limitations / deferred scope:
 Open questions (required, write "none" if true): none — every open item above is either a filed ticket contract or an explicitly recorded branch-C decision.
 
 Next branch: `feature/workspace-restriction-scope` (SONNY-36 first, which is unblocked immediately; SONNY-37 onward after SONNY-29 merges). This planning branch is docs-only and merges independently.
+
+### Branch: feature/sonny-31-unattended-escalation-handling
+Status: complete
+Date: 2026-08-04
+Tickets: SONNY-31 — a scheduled routine that saves a snippet ran exactly once and was skipped forever after; fixed at the source (an escalation that described a change that does not happen) and in the aftermath (an eternal skip becomes a one-shot pause that says why). Spawned no discovery tickets.
+Reviewed by: fresh session (per WORKFLOW.md step 7) — pending at time of writing. The implementing session mutation-checked all seven new behaviors individually against the full suite; results are on SONNY-31's closing comment.
+
+Spec sections covered: §10/§11 (risk and approval) — the snippet capability's escalation *condition* narrowed; no tier definition, no `RiskApprovalPolicy` mapping and no requirement mapping changed. Routine scheduling (branch 10) gains a paused state; its date math is untouched.
+Files changed:
+- `Sources/MacAgentCore/SnippetSaveCapabilityAdapter.swift`
+- `Sources/MacAgentCore/RoutineSchedule.swift`
+- `Sources/MacAgentCore/AutomationStores.swift`
+- `Sources/MacAgent/AgentViewModel.swift`
+- `Sources/MacAgent/CommandCenterView.swift`
+- `Sources/MacAgent/RoutineDetailView.swift`
+- `Tests/MacAgentCoreTests/SnippetExpansionTests.swift`
+- `Tests/MacAgentCoreTests/RoutineScheduleTests.swift`
+- `Tests/MacAgentTests/ScheduledRoutineRunTests.swift`
+- `docs/sonny-v1-implementation-changelog.md`
+
+Tests: `env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disable-sandbox -Xswiftc -F -Xswiftc /Library/Developer/CommandLineTools/Library/Developer/Frameworks -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/Frameworks -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/usr/lib` -> exit 0, **461 tests in 45 suites**, up from the 448 in 45 re-measured on `main` at `615d6b0` (SONNY-29 and the row-B planning PR both merged). `swift build` -> exit 0.
+
+Behavior added:
+- **H1 — re-saving a snippet with identical text no longer escalates.** `SnippetSaveCapabilityAdapter.assessRisk` escalated on the trigger merely *existing*; it now escalates only when the stored expansion differs from the step's. A saved routine re-saves the same snippet on every run, so the old condition made a scheduled snippet routine assess tier 3 from run two onward — the tier an unattended run structurally cannot satisfy.
+- **H2 — a refused scheduled run pauses the schedule instead of being skipped forever.** `RoutineSchedule` gains an Optional `pausedReason` and a `pause(reason:)`; `RoutineStore.pauseSchedule(routineNamed:reason:)` writes it; `AgentViewModel`'s `RiskApprovalError` catch calls it and posts one notice naming the real cause. Re-enabling through the existing row toggle clears the reason and re-anchors the catch-up baseline.
+- **The Routines row shows "Paused" and the routine detail view carries the reason.** The row's caption takes the slot `nextRunText` already leaves empty for any disabled schedule, in the warning colour the streak badge already uses.
+
+Behavior preserved (required, no blanket claims):
+- **The tier-3+ unattended backstop is byte-identical.** `AgentRunner` still re-assesses at execute time and still requires `approvedTier >= effectiveTier`; nothing in this branch touches it, `RiskApproval.swift`, `UnattendedTrustAdvisory.swift`, or `RoutineScheduler.swift`. The refused run in `aRoutineThatEscalatesToTierThreeIsRefusedByTheApprovalGate` is still refused — the snippet's stored text is still `"Old text"` afterwards.
+- **A snippet save that really would replace different text still escalates to tier 3, with the same message.** `resavingExistingSnippetTriggerEscalatesToTierThree` passes unmodified, including its `involvedResource == "Snippet: ;sig"` assertion.
+- **The user's own disable stays anonymous.** `setEnabled(false, now:)` records no reason, so a manually switched-off routine grows no "Sonny paused this" caption — pinned by `theUsersOwnDisableRecordsNoPauseReason` and by the row presentation test's user-disabled case.
+- **Every existing catch-up-anchor rule is unchanged**: enabling anchors, re-enabling re-anchors, an idempotent enable leaves the baseline alone, disabling keeps it. All four `RoutineScheduleTests` cases pass unmodified, and `pause` deliberately does not touch `lastRunAt`.
+- **Legacy `routines.json` still loads.** `pausedReason` is Optional for the same synthesized-`Decodable` reason as `schedule` and `recentRunDates`; pinned by a schedule-JSON-without-the-key decode test alongside the existing routine-JSON-without-`schedule` one.
+- **One existing test's assertion was deliberately changed, and only its message.** `aRoutineThatEscalatesToTierThreeIsRefusedByTheApprovalGate` asserted the notice contained "needs your explicit approval"; that copy no longer exists because the behavior it described no longer exists. The test now asserts the pause, the persisted reason, and that the tier-3 action still did not happen — strictly more than before. No test was deleted or weakened.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**"Exactly one notification" is an emergent property of pausing, not a counter — and writing it as a counter would have been the bug.** `scheduledRunNotice` is published once per attempt and `AppDelegate` mirrors it to a system notification; a disabled schedule produces no further attempts, so there is nothing left to post. A "have I already notified about this routine?" flag would have been a second source of truth for the same fact, able to drift out of sync with the schedule's actual state — and would have had to be persisted, invalidated on re-enable, and reasoned about on every other path that posts a notice.
+
+**All three `RiskApprovalError` cases pause, not only `.approvalRequired` — a deliberate widening of the ticket's literal wording.** `.previewOnly` (a preview-only tier-2 policy) and `.refused` (tier 4) are equally permanent for a run with nobody present to approve anything, and the catch block is already unified across all three. Pausing on one and leaving the other two on the skip-forever path would have kept this exact bug alive in two of the three branches that reach it, which no reasonable reading of the ticket's stated outcome wants.
+
+**The pause write must happen inside the store, not from a caller-held copy.** `performScheduledRun` calls `resolveOccurrence` — which advances `schedule.lastRunAt` past the occurrence — *before* the run, so a schedule read before that point and written back afterwards would silently undo the advance and put the occurrence back in play for the next tick. That is the forever-retry the pause exists to end, reintroduced by the fix for it. `RoutineStore.pauseSchedule` therefore does its own read-modify-write, exactly like `advanceScheduleBaseline` beside it. Pinned by a store test that advances the baseline and then pauses, asserting the baseline survives.
+
+**H1's comparison has to be against the *trimmed* expansion.** `snippetSpec` trims the step's text and `SnippetStore.save` stores the trimmed value, so comparing raw step text against a stored value would report a change for any saved routine whose snippet step happens to end in a newline — re-opening the identical hole for a subset of routines, in a way no obvious test would catch. `updatedAt` is deliberately excluded from the comparison: it moves on every save by design, so including it would mean nothing is ever identical.
+
+**Wireframe-fidelity exception, stated rather than silent (per CLAUDE.md's rule).** `11-MainAppRoutines.svg` specifies the row's right-hand slot as a next-run caption and specifies no paused state at all, because the wireframe predates a schedule that can pause itself. The exception is bounded to the smallest possible shape: the caption occupies a slot that is *already empty* in this state (`RoutineScheduleDisplay.nextRunText` returns nil for any disabled schedule), uses the row's existing warning token rather than a new one, and adds no line to a 56pt row with space for neither. The reason sentence lives in the routine detail view — a surface the ticket names, with room for prose. Pinned by asserting `nextRunText == nil` for the paused routine, so a future change that gives a disabled schedule a next-run caption collides with this test rather than silently stacking two captions in one slot.
+
+Known limitations / deferred scope:
+- **The general changed-content collision class remains module C input, unchanged.** H1 fixes the deterministic case — a routine re-saving byte-identical snippet text. A routine whose `.createLocalDraft`/`.createZip`/`.writeMarkdown` step carries an explicit non-timestamped `outputPath` still escalates on every run after the first, correctly (the file really does exist and really would be overwritten), and now pauses instead of skipping forever. That is the intended outcome for this branch, not an oversight: whether a routine should be allowed to overwrite its own prior output unattended is the product question module C owns.
+- **The system notification still respects the pre-existing surface-visible gate.** `AppDelegate` posts a notification for `scheduledRunNotice` only when no Sonny surface is on screen. "Exactly one notification" therefore means *at most* one; with Command Center open the user gets the in-app notice instead. That gate predates this branch and is deliberately left as found.
+- **A paused routine is discoverable only from the Routines list.** There is no aggregate "some routines need attention" indicator anywhere else in the app. Adding one would be a new UI surface, which the ticket explicitly rules out.
+
+Open questions (required, write "none" if true): none.
+
+Next branch: SONNY-24, the last ticket of this session's pre-assigned serial sequence (SONNY-29 → SONNY-31 → SONNY-24), on its own branch after this one merges — all three touch the executor/assessment area, so the sequence is serial through merge.
