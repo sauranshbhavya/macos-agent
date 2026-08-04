@@ -326,6 +326,82 @@ struct AgentActionExecutorTests {
         #expect(assessment.approvalCopy?.dataLeavesDevice == true)
     }
 
+    /// SONNY-10. `.openWorkspace` used to sit in the flat `dataEgressOperations` set, so *any*
+    /// workspace open claimed "Data leaves device: yes" on the approval panel. A workspace is
+    /// allowed to hold apps only (`CreateWorkspaceCapabilityAdapter` requires apps *or* URLs), and
+    /// launching local apps sends nothing anywhere — the claim was simply false for that shape.
+    /// Asserted through the real `assessRisk` copy rather than the private helper, because the
+    /// copy line is the only thing a user ever reads.
+    @Test
+    func openingAnAppsOnlyWorkspaceDoesNotClaimDataLeavesDevice() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try workspaceStore.save(StoredWorkspace(name: "Writing", apps: ["Safari", "Notes"], urls: []))
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+
+        let assessment = try executor.assessRisk(plan: openWorkspacePlan(name: "Writing"))
+
+        #expect(assessment.approvalCopy?.dataLeavesDevice == false)
+        #expect(assessment.effectiveTier == .tier1)
+    }
+
+    /// The other half of the same change: a workspace that really does carry URLs must still
+    /// report egress. Without this the fix could have been "always no", which is the same defect
+    /// pointing the other way.
+    @Test
+    func openingAWorkspaceCarryingURLsStillReportsDataLeavingDevice() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try workspaceStore.save(
+            StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://example.com/board"])
+        )
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+
+        let assessment = try executor.assessRisk(plan: openWorkspacePlan(name: "Research"))
+
+        #expect(assessment.approvalCopy?.dataLeavesDevice == true)
+    }
+
+    /// The reachable shape the misfire actually showed up in: an apps-only workspace open chained
+    /// with a tier-2 step. Alone, `.openWorkspace` is tier 1 and auto-runs, so the copy is never
+    /// rendered; it takes a co-occurring tier-2 step to raise the plan to an approval and put the
+    /// "Data leaves device" line in front of the user. Nothing in this plan touches the network.
+    @Test
+    func appsOnlyWorkspaceChainedWithALocalSaveDoesNotClaimDataLeavesDevice() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try workspaceStore.save(StoredWorkspace(name: "Writing", apps: ["Notes"], urls: []))
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+        let plan = AgentPlan(
+            summary: "Open my writing workspace and start a draft.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "open-workspace",
+                    operation: .openWorkspace,
+                    description: "Open workspace.",
+                    workspaceName: "Writing"
+                ),
+                AgentStep(
+                    id: "draft",
+                    operation: .createLocalDraft,
+                    description: "Create a local draft.",
+                    draftTitle: "Notes",
+                    draftContent: "Outline for today."
+                )
+            ]
+        )
+
+        let assessment = try executor.assessRisk(plan: plan)
+
+        #expect(assessment.effectiveTier == .tier2)
+        #expect(assessment.approvalRequirement().requiresUserApproval)
+        #expect(assessment.approvalCopy?.dataLeavesDevice == false)
+    }
+
     @Test
     func docxPreviewDestinationNamingMatchesInjectedConverter() throws {
         let root = try makeDirectory()

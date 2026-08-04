@@ -493,8 +493,11 @@ private struct WidgetPermissionPanel: View {
     let stepStatuses: [String: AgentStepStatus]
     let request: RiskApprovalRequest
     /// Branch 9 checkpoint 8, split 2026-07-24 (see `docs/sonny-founder-design-decisions.md`):
-    /// only the first-time explainer line ships here — the "curated example" half of the original
-    /// resolution is explicitly deferred, not built.
+    /// only the first-time explainer copy ships here — the "curated example" half of the original
+    /// resolution is explicitly deferred, not built. SONNY-10 extended that copy from one line to
+    /// the reassurance sentence plus this action's own `riskReason`; see
+    /// `AgentActivityPresentation.firstRunApprovalExplainerLines` for why, and for why the
+    /// steady-state panel is unchanged.
     let isFirstApproval: Bool
     let onAllow: () -> Void
     let onDeny: () -> Void
@@ -505,21 +508,29 @@ private struct WidgetPermissionPanel: View {
             .joined(separator: " ")
     }
 
+    private var firstRunExplainerLines: [String] {
+        AgentActivityPresentation.firstRunApprovalExplainerLines(
+            for: request,
+            isFirstApproval: isFirstApproval
+        )
+    }
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             WidgetExistingStepRows(plan: plan, stepStatuses: stepStatuses)
 
-            if isFirstApproval {
-                Text("Sonny always asks first for actions like this — you decide, every time.")
+            ForEach(Array(firstRunExplainerLines.enumerated()), id: \.offset) { _, line in
+                Text(line)
                     .font(WidgetType.captionSmall)
                     .foregroundStyle(WidgetTheme.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
             }
 
             // Why this action was escalated above its default tier — "the zip already exists",
             // "this snippet trigger would be replaced". Without it the panel asks for approval
             // on a raised tier while showing nothing about what raised it. Rendered as its own
             // line rather than folded into the resource line below, which is `lineLimit(1)` and
-            // would truncate these mid-sentence; the first-approval line above sets the
+            // would truncate these mid-sentence; the first-approval lines above set the
             // precedent for an explanatory line in this panel.
             if !escalationReasons.isEmpty {
                 Text(escalationReasons)

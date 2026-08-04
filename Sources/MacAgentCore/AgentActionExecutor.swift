@@ -722,6 +722,10 @@ public final class AgentActionExecutor {
         return names.isEmpty ? "Prepared Sonny action" : names.joined(separator: ", ")
     }
 
+    /// Operations that leave the device on *every* execution, whatever their step's parameters
+    /// say. An operation whose egress depends on saved content it merely names — a workspace, a
+    /// routine — cannot be answered by the operation alone and does not belong here; see
+    /// `stepLeavesDevice`.
     private static let dataEgressOperations: Set<AgentOperation> = [
         .openHackerNews,
         .fetchHNHeadlines,
@@ -729,7 +733,6 @@ public final class AgentActionExecutor {
         .openAppSearchURL,
         .openURL,
         .playMedia,
-        .openWorkspace,
         .invokeShortcut
     ]
 
@@ -756,21 +759,51 @@ public final class AgentActionExecutor {
     }
 
     private func dataLeavesDevice(in plan: AgentPlan) -> Bool {
-        plan.steps.contains { step in
-            if Self.dataEgressOperations.contains(step.operation) {
-                return true
-            }
-            guard step.operation == .runRoutine else {
+        plan.steps.contains { stepLeavesDevice($0) }
+    }
+
+    /// Whether one step sends anything off-device. Two operations name saved content rather than
+    /// carrying it, so the operation alone cannot answer for either: the workspace or routine has
+    /// to be loaded and looked at.
+    private func stepLeavesDevice(_ step: AgentStep) -> Bool {
+        if Self.dataEgressOperations.contains(step.operation) {
+            return true
+        }
+
+        switch step.operation {
+        case .openWorkspace:
+            // A workspace is apps *and/or* URLs — `CreateWorkspaceCapabilityAdapter` accepts one
+            // with apps only — and opening local apps sends nothing anywhere. Classifying every
+            // workspace open as egress printed "Data leaves device: yes" on the approval panel of
+            // any plan carrying an apps-only workspace open, a claim nothing in that plan made
+            // true.
+            //
+            // Do not read this `try?` by analogy with the `.runRoutine` one below: that branch is
+            // safe because `RunRoutineCapabilityAdapter.assessRisk` loads the routine with a plain
+            // `try` first, and `OpenWorkspaceCapabilityAdapter` has no `assessRisk` override at
+            // all, so there is no such guarantee here. What actually makes it safe is `prepare`,
+            // which runs `preview` before anything reaches this copy: the adapter's `preview`
+            // loads the workspace with a plain `try`, a name matching nothing becomes a
+            // clarification plan, and an unreadable store still throws. Neither failure mode
+            // survives to be silently answered "no" here on the `AgentRunner` path, the only path
+            // that renders this line. (`UnattendedTrustAdvisory` is the one caller that skips
+            // `prepare`, and it reads `effectiveTier` only, never `approvalCopy`.)
+            guard let workspace = try? workspaceStore.workspace(named: step.workspaceName ?? "") else {
                 return false
             }
+            return !workspace.urls.isEmpty
+        case .runRoutine:
             // A saved routine can wrap egress steps, so the outer .runRoutine step alone says
-            // nothing. Stored routines cannot themselves contain .runRoutine (rejected at save
-            // time), so one level is enough. A routine that fails to load surfaces through the
+            // nothing. Stored routines cannot themselves contain .runRoutine *or* .openWorkspace
+            // (both rejected at save time), so one level is enough and the nested scan needs no
+            // second lookup of its own. A routine that fails to load surfaces through the
             // adapter's assessRisk before this copy is built.
             guard let routine = try? routineStore.routine(named: step.routineName ?? "") else {
                 return false
             }
             return routine.steps.contains { Self.dataEgressOperations.contains($0.operation) }
+        default:
+            return false
         }
     }
 
