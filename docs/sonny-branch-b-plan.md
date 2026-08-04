@@ -51,7 +51,7 @@ Both two-valued readings fail, in opposite directions, and the failure is not th
 
 `.unconstrained` is the load-bearing case: it means "this workspace has said nothing about this kind of thing," which is neither permission nor prohibition. It produces zero new prompts and zero new relaxation. Every existing workspace behaves exactly as it does today until its owner configures something.
 
-An adversarial pass over the four founder decisions confirmed the three-valued model is load-bearing rather than fussy: `CreateWorkspaceCapabilityAdapter` requires apps *or* URLs, never both (`:81-85`), so **apps-only and URLs-only workspaces are normal, already-valid persisted states today.** Under a two-valued reading, every apps-only workspace would classify every web URL as out of scope by construction, and every URLs-only workspace would do the same to every app. Under this model both are simply `.unconstrained` on the kind they never declared.
+An adversarial pass over the four founder decisions confirmed the model is load-bearing rather than fussy: `CreateWorkspaceCapabilityAdapter` requires **at least one** of apps or URLs — `guard !apps.isEmpty || !urls.isEmpty` throws only when *both* are empty (`:81-85`) — so **apps-only, URLs-only, and both-populated workspaces are all normal, already-valid persisted states today.** Under a two-valued reading, every apps-only workspace would classify every web URL as out of scope by construction, and every URLs-only workspace would do the same to every app. Under this model both are simply `.unconstrained` on the kind they never declared.
 
 ### Derived clarification
 
@@ -219,6 +219,9 @@ Classification is **per operation, never per field** — and it must include res
 | `save_routine` | none | see the decision below |
 | `invoke_shortcut` | **opaque** | Sonny shells to `shortcuts run <name>` and cannot see inside. Never escalates on scope grounds, **never eligible for relaxation**, and poisons its plan's roll-up. |
 | `calculate` / `clipboard` / snippets / recent artifacts / permissions / `clarify` | none | local stores and pure computation only |
+| `unsupported` | none | Never reaches a resource: `AgentActionExecutor`'s `validateSupported` throws before execution. Classify it as none anyway — the switch has no `default:`, so it must be written explicitly, and "it can't run" is the reason, not an oversight. |
+
+That table covers all 30 `AgentOperation` cases (`AgentPlan.swift:94-124`, `CaseIterable`). If it ever covers fewer, the classifier will not compile — which is the point.
 
 **Open question inherited rather than invented.** `save_routine` folds its nested plan's escalations onto the save itself, even though saving writes only the routine file (SONNY-10's largest recorded finding; SONNY-33 reframes the copy). Scope asks the identical question: does a routine that *references* an out-of-workspace path put the *save* out of scope, or only the run? **Decided: only the run.** Saving a routine touches one file inside Sonny's own store. Row B classifies `save_routine`'s own resources as none, and lets the routine's steps be scoped when it actually runs. This keeps row B consistent with SONNY-33's decided direction instead of quietly contradicting it.
 
@@ -245,7 +248,7 @@ B1 (pure model and evaluator) touches none of those files and can start immediat
 | 5 | **Case sensitivity.** `PathWhitelist`'s containment is a case-sensitive prefix compare on a case-insensitive filesystem. Pre-existing, inherited rather than introduced — but scope matching multiplies its exposure, so it needs a decision and a test rather than silence. | `PathWhitelist.swift:154-158` |
 | 6 | **`CapabilityPermissionEnforcement` has exactly one case**, `.descriptiveOnly`. There is no existing "enforcement level" concept to extend — closing off a line of design an implementer might otherwise chase. | `CapabilityAdapter.swift:19-21` |
 | 7 | **Three app/URL touches bypass every existing allowlist.** `NativeMediaOpener` opens provider URIs through its own prefix check; `MicrosoftWordDocumentConverter` AppleScript-controls Word from a hardcoded path; `AppleScriptFinderContextReader` controls Finder. None resolves through `MacAppCatalog` or `SafeURL`. A field-driven classifier would report these plans as touching nothing. | `MediaPlaybackService.swift:985-1035`, `DocumentConverter.swift:31-100`, `FinderContextService.swift:38-77` |
-| 8 | **Apps-only and URLs-only workspaces are valid, normal states** — creation requires apps *or* URLs, never both. Any design that treats an empty list as "deny everything of this kind" breaks them on day one. | `CreateWorkspaceCapabilityAdapter.swift:81-85` |
+| 8 | **Apps-only and URLs-only workspaces are valid, normal states** — creation requires *at least one* of apps or URLs (`guard !apps.isEmpty \|\| !urls.isEmpty` throws only when both are empty), so all three combinations are reachable. Any design that treats an empty list as "deny everything of this kind" breaks the two single-dimension cases on day one. | `CreateWorkspaceCapabilityAdapter.swift:81-85` |
 
 ---
 
@@ -277,7 +280,19 @@ So: if row B ships no edit path, `fileLocations` can never be set, every file re
 
 ### Editing escalates on removal, not on widening
 
-`edit_workspace` is tier 2 (§11.1 lists "Change routine/workspace" as tier 2, and `CreateWorkspace` already is), escalating to tier 3 when an edit **removes** entries — matching all six existing escalation sites' "would be replaced / would be lost" pattern. **Rejected alternative, recorded:** escalating on *widening* instead. Widening does weaken the boundary, but the user typed the command asking for it, and putting explicit approval in front of normal setup taxes exactly the action the feature depends on.
+`edit_workspace` is tier 2 (§11.1 lists "Change routine/workspace" as tier 2, and `CreateWorkspace` already is), escalating to tier 3 when an edit **removes** entries. The nearest existing precedent is the replacement-escalation family, though the copy is less uniform than it looks: of the six existing escalation sites, only `CreateWorkspace`, `SaveRoutine` and `SnippetSave` say "already exists and would be replaced"; `CreateLocalDraft`, `LargestFilesZip` and `WebResearchMarkdown` say only "… output already exists at `<path>`". So there is no single phrase to copy — the requirement is that the reason names what is actually lost, not that it matches a template.
+
+**Rejected alternative, recorded:** escalating on *widening* instead. Widening does weaken the boundary, but the user typed the command asking for it, and putting explicit approval in front of normal setup taxes exactly the action the feature depends on.
+
+**Forward flag for branch C, not a closed decision.** That rejection rests on a *row-B* cost argument, and row B is the phase where being in scope buys nothing. Row C changes the trade: Gate 1 says relaxation is earned by listing a resource, so once relaxation is live, an ungated tier-2 edit that adds `~/Documents` to a workspace converts a large share of the filesystem into relaxation-eligible territory in one un-escalated step — the same hazard class the interaction flag was raised about, arriving through the edit path instead of the default path. **Branch C must revisit whether adding to scope deserves more than a lightweight confirmation once relaxation exists.** Gate 1 does not already cover this: it answers *which verdicts qualify* for relaxation, not whether the act of *creating* a qualifying verdict should itself be gated.
+
+### Removing the last entry of a kind is a different event from removing one of several
+
+This is the sharpest edge in the whole model, and the generic removal rule above does not catch it.
+
+Removing one of several entries leaves the kind configured: non-matching resources still resolve `.outOfScope` and still escalate. **Removing the last entry empties the list, and an empty list is `.unconstrained` — so that entire dimension silently stops escalating on anything.** The user consents to losing one folder and actually loses file-scope enforcement for the workspace.
+
+A test that removes one entry from a two-entry list satisfies a generic "removal escalates" criterion completely while never touching this case. So the flip needs its own requirement, its own acceptance criterion, and its own reason copy: **when a removal empties a kind, the prompt must say the dimension is no longer restricted, not name the entry being removed.** "Removed ~/Documents/ClientAlpha" and "this workspace will no longer restrict file locations at all" are different consents. SONNY-40 carries both halves.
 
 ---
 
