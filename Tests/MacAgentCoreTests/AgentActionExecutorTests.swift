@@ -746,8 +746,8 @@ struct AgentActionExecutorTests {
 
     // MARK: - SONNY-24: a routine binds its own browser
 
-    /// Order independence, the half that is not obvious. The founder decision (2026-08-04, Q5a) is
-    /// that the first browser-capable app *anywhere* in the routine binds every URL step, so a URL
+    /// Order independence, the half that is not obvious. The founder decision (2026-08-04) is that
+    /// the first browser-capable app *anywhere* in the routine binds every URL step, so a URL
     /// sequenced **before** the browser step still binds — the routine's browser is a property of
     /// the routine, not of what has run so far. An order-sensitive reading (option b) was declined
     /// precisely because it makes the same routine behave differently for a reason the user cannot
@@ -770,7 +770,7 @@ struct AgentActionExecutorTests {
         #expect(browserOpener.openedBrowsers == [MacApp(displayName: "Safari", bundleIdentifier: "com.apple.Safari")])
     }
 
-   /// Two browsers: the first in step order wins. Chrome first, Safari second, so a "last one
+    /// Two browsers: the first in step order wins. Chrome first, Safari second, so a "last one
     /// wins" implementation returns Safari and fails here.
     ///
     /// It does **not** exclude an alphabetical implementation — "Chrome" sorts before "Safari", so
@@ -836,6 +836,7 @@ struct AgentActionExecutorTests {
             ],
             browserOpener: browserOpener
         )
+        defer { fixture.cleanUp() }
         // `plannerProvider` rather than a fake planner type: this plan is built directly, so the
         // provider is never invoked, and the module already carries six duplicate `FailingPlanner`
         // definitions without this adding a seventh.
@@ -855,7 +856,8 @@ struct AgentActionExecutorTests {
 
     /// The routine's browser binds *every* URL the routine opens, not only its `open_url` steps —
     /// an app-search URL opened inside a routine that launched Safari belongs in Safari too. This
-    /// is the reading of "every URL open inside that routine" that the implementation took, so it
+    /// is the reading the implementation took of "every URL open inside that routine" — meaning
+    /// every URL opened on the injected browser-opener seam, which is where this adapter sits — so it
     /// is pinned rather than left as an accident of which adapter reads `preferredBrowser`.
     ///
     /// Its counterpart is already pinned elsewhere and must stay so: the *standalone* app-search
@@ -947,6 +949,11 @@ struct AgentActionExecutorTests {
     /// An executor plus the temp directory it owns. Returning the root is the point: the earlier
     /// shape returned only the executor, so no caller could delete the directory it had created and
     /// every one of these tests leaked one (PR #28, F7).
+    ///
+    /// Every caller must `defer { fixture.cleanUp() }`. The first pass at F7 added that line by
+    /// pattern-matching the call shape and so missed the one test that hands the executor to an
+    /// `AgentRunner` instead of calling it directly — which is why the claim is written here as a
+    /// requirement on callers rather than as a description of them.
     private struct RoutineFixture {
         let executor: AgentActionExecutor
         let root: URL
@@ -985,7 +992,8 @@ struct AgentActionExecutorTests {
     ///
     /// Not a shortcut — it is the only way to build a routine the save capability rejects, and
     /// `RoutineStore.save` really does accept one: it validates `schedule` and nothing else, which
-    /// is how nineteen existing test sites already write routines the adapter would refuse.
+    /// is how 52 call-site lines across 48 test functions in 11 files already write routines the
+    /// adapter would refuse.
     private func routineFixtureWrittenDirectlyToStore(
         named name: String,
         steps: [AgentStep],

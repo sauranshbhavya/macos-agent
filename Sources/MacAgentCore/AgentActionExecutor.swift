@@ -384,7 +384,8 @@ public final class AgentActionExecutor {
 
     /// Runs an already-approved plan.
     ///
-    /// `preferredBrowser` binds every URL this plan opens to one browser. It is threaded as a
+    /// `preferredBrowser` binds every URL this plan opens *on the injected browser-opener seam*
+    /// to one browser — not `.playMedia`, which opens on the media seam (SONNY-51). It is threaded as a
     /// parameter rather than held on the executor deliberately: `execute` suspends at every step,
     /// so executor-held state would be readable — and mutable — by any other main-actor task that
     /// interleaved, and a routine's browser could leak into a command the user ran meanwhile.
