@@ -854,8 +854,9 @@ struct AgentActionExecutorTests {
         #expect(browserOpener.openedBrowsers == [MacApp(displayName: "Safari", bundleIdentifier: "com.apple.Safari")])
     }
 
-    /// The routine's browser binds *every* URL the routine opens, not only its `open_url` steps —
-    /// an app-search URL opened inside a routine that launched Safari belongs in Safari too. This
+    /// The routine's browser binds URL opens on the injected browser-opener seam, not only its
+    /// `open_url` steps — an app-search URL opened inside a routine that launched Safari belongs in
+    /// Safari too. This
     /// is the reading the implementation took of "every URL open inside that routine" — meaning
     /// every URL opened on the injected browser-opener seam, which is where this adapter sits — so it
     /// is pinned rather than left as an accident of which adapter reads `preferredBrowser`.
