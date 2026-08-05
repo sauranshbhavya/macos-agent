@@ -2662,8 +2662,146 @@ struct AgentActionExecutorTests {
         // Asserted whole, not by substring: SONNY-9's doubled-period bug shipped straight through
         // four `contains`-style assertions.
         #expect(messages.contains("Skipping Microsoft Word — not an app Sonny can launch; it counts for workspace scope only."))
-        // Counts what opened, not what is listed — the summary must not contradict the log above it.
-        #expect(result.summary == "Opened workspace Drafting with 1 app(s) and 1 URL(s).")
+        // The summary counts what opened *and* names what did not. This is the only one of the three
+        // channels a user actually sees, so it carries the whole signal — an honest "1 app(s)" alone
+        // would leave them guessing which of the two listed apps started.
+        #expect(result.summary == "Opened workspace Drafting with 1 app(s) and 1 URL(s). Microsoft Word is scope-only and was not opened.")
+    }
+
+    /// The signal has to arrive somewhere a person looks. `ActionPreview` is rendered by nothing,
+    /// and neither is `AgentLogStore` (`AgentRunner`'s own comment says so, and nothing in
+    /// `MacAgent` reads `.events`) — `AgentRunResult.summary` is the one free-text channel an
+    /// adapter has that both surfaces render, so both workspace summaries carry the note.
+    @Test
+    func bothWorkspaceSummariesNameTheScopeOnlyAppsAndStaySilentWhenThereAreNone() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+
+        let scopeOnly = workspacePlans(
+            name: "Drafting",
+            apps: ["Safari", "Microsoft Word", "Figma"],
+            urls: ["https://github.com"]
+        )
+        let created = try await executor.execute(plan: scopeOnly.create) { _, _ in }
+        // The saved count is the full listed count — three apps really were saved. Which of them
+        // Sonny cannot open is what the note is for.
+        #expect(created.summary == "Saved workspace Drafting with 3 app(s) and 1 URL(s). Microsoft Word and Figma aren't apps Sonny can launch — counted for workspace scope only.")
+
+        let opened = try await executor.execute(plan: scopeOnly.open) { _, _ in }
+        #expect(opened.summary == "Opened workspace Drafting with 1 app(s) and 1 URL(s). Microsoft Word and Figma are scope-only and were not opened.")
+
+        // And an all-catalog workspace's summaries are byte-identical to what they were before any
+        // of this existed — the note appears only when it has something to say.
+        let allCatalog = workspacePlans(name: "Browsing", apps: ["Safari"], urls: ["https://github.com"])
+        let plainCreate = try await executor.execute(plan: allCatalog.create) { _, _ in }
+        let plainOpen = try await executor.execute(plan: allCatalog.open) { _, _ in }
+        #expect(plainCreate.summary == "Saved workspace Browsing with 1 app(s) and 1 URL(s).")
+        #expect(plainOpen.summary == "Opened workspace Browsing with 1 app(s) and 1 URL(s).")
+    }
+
+    /// The newly reachable state nothing pinned: every entry scope-only, so the run opens nothing.
+    /// Creation's only remaining guard is "at least one app or URL", so this workspace is trivially
+    /// creatable now.
+    ///
+    /// The summary keeps the ordinary format and lets the note explain the zero, rather than
+    /// branching into a separate "nothing to open" string — a second format is a second thing to
+    /// keep true, and a bare "with 0 app(s) and 0 URL(s)" is the part that would read as a failure
+    /// without the sentence after it.
+    @Test
+    func aWorkspaceWhoseEveryAppIsScopeOnlyOpensNothingAndSaysSo() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let appOpener = RecordingAppOpener()
+        let browserOpener = RecordingBrowserOpener()
+        let executor = makeExecutor(
+            root: root,
+            browserOpener: browserOpener,
+            appOpener: appOpener,
+            workspaceStore: workspaceStore
+        )
+        let plans = workspacePlans(name: "Drafting", apps: ["Microsoft Word"], urls: [])
+
+        _ = try await executor.execute(plan: plans.create) { _, _ in }
+        let preview = try #require(try executor.preview(plan: plans.open).first)
+        let result = try await executor.execute(plan: plans.open) { _, _ in }
+
+        #expect(preview.opens.isEmpty)
+        #expect(appOpener.openedBundleIDs.isEmpty)
+        #expect(browserOpener.openedURLs.isEmpty)
+        // Succeeds rather than throwing — a workspace of nothing but scope-only entries is a legal
+        // boundary, not a broken launcher.
+        #expect(result.summary == "Opened workspace Drafting with 0 app(s) and 0 URL(s). Microsoft Word is scope-only and was not opened.")
+    }
+
+    /// The adapter's own comment promises the skip is logged "between the entries around it", which
+    /// is what makes the log readable as a launch sequence. Nothing pinned it: the one test with a
+    /// sandwiched scope-only entry captured no messages, and the one that captured messages put the
+    /// entry last and asserted membership rather than position. Batching the skips into a second
+    /// pass would have kept both green.
+    @Test
+    func scopeOnlySkipsAreLoggedInTheWorkspacesOwnOrderNotBatchedAtTheEnd() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+        let plans = workspacePlans(
+            name: "Drafting",
+            apps: ["Safari", "Microsoft Word", "Notes"],
+            urls: []
+        )
+
+        _ = try await executor.execute(plan: plans.create) { _, _ in }
+        var messages: [String] = []
+        _ = try await executor.execute(plan: plans.open) { _, message in
+            messages.append(message)
+        }
+
+        // Whole sequence, in order — the skip sits where the entry sits.
+        #expect(messages == [
+            "Opening Safari",
+            "Skipping Microsoft Word — not an app Sonny can launch; it counts for workspace scope only.",
+            "Opening Notes",
+            "Opened workspace"
+        ])
+    }
+
+    /// Repeats and awkward names, both newly reachable: before this ticket any unresolvable name was
+    /// a hard failure, so neither could be stored at all.
+    ///
+    /// The comma case is the subtle one. With a plain `", "` join, one app named "Foo, Bar" and two
+    /// apps named "Foo" and "Bar" produce the identical sentence. The singular/plural verb plus the
+    /// "and" join tells them apart without quoting anything.
+    @Test
+    func theScopeOnlyNoteDeduplicatesRepeatsAndDoesNotBlurACommaInAName() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+
+        let repeated = workspacePlans(
+            name: "Repeats",
+            apps: ["Microsoft Word", "Microsoft Word"],
+            urls: []
+        )
+        let repeatedResult = try await executor.execute(plan: repeated.create) { _, _ in }
+        // Named once in the note; still two saved entries, so the count stays 2.
+        #expect(repeatedResult.summary == "Saved workspace Repeats with 2 app(s) and 0 URL(s). Microsoft Word isn't an app Sonny can launch — counted for workspace scope only.")
+
+        let oneCommaName = workspacePlans(name: "One Name", apps: ["Foo, Bar"], urls: [])
+        let oneResult = try await executor.execute(plan: oneCommaName.create) { _, _ in }
+        #expect(oneResult.summary == "Saved workspace One Name with 1 app(s) and 0 URL(s). Foo, Bar isn't an app Sonny can launch — counted for workspace scope only.")
+
+        let twoNames = workspacePlans(name: "Two Names", apps: ["Foo", "Bar"], urls: [])
+        let twoResult = try await executor.execute(plan: twoNames.create) { _, _ in }
+        #expect(twoResult.summary == "Saved workspace Two Names with 2 app(s) and 0 URL(s). Foo and Bar aren't apps Sonny can launch — counted for workspace scope only.")
+
+        // Three or more take the serial join, so the last name never merges into the one before it.
+        let threeNames = workspacePlans(name: "Three Names", apps: ["Foo", "Bar", "Baz"], urls: [])
+        let threeResult = try await executor.execute(plan: threeNames.create) { _, _ in }
+        #expect(threeResult.summary == "Saved workspace Three Names with 3 app(s) and 0 URL(s). Foo, Bar and Baz aren't apps Sonny can launch — counted for workspace scope only.")
     }
 
     /// The preview declares side effects, so it must not claim an open that cannot happen. The
@@ -2710,7 +2848,7 @@ struct AgentActionExecutorTests {
         #expect(noted.details == [
             "Apps: Safari, Microsoft Word, Figma",
             "URLs: none",
-            "Microsoft Word, Figma aren't apps Sonny can launch — counted for workspace scope only."
+            "Microsoft Word and Figma aren't apps Sonny can launch — counted for workspace scope only."
         ])
 
         // And on the channel the user actually sees: nothing in `MacAgent` renders an
@@ -2719,7 +2857,7 @@ struct AgentActionExecutorTests {
         _ = try await executor.execute(plan: withScopeOnly.create) { _, message in
             messages.append(message)
         }
-        #expect(messages.contains("Microsoft Word, Figma aren't apps Sonny can launch — counted for workspace scope only."))
+        #expect(messages.contains("Microsoft Word and Figma aren't apps Sonny can launch — counted for workspace scope only."))
 
         let allCatalog = workspacePlans(name: "Browsing", apps: ["Safari", "Chrome"], urls: [])
         let silent = try #require(try executor.preview(plan: allCatalog.create).first)

@@ -97,8 +97,20 @@ public struct OpenWorkspaceCapabilityAdapter: CapabilityAdapter {
         // Counts what was actually opened, not what the workspace lists. Identical to the old
         // `workspace.apps.count` for every workspace that can exist before this change, and the
         // honest number afterwards — "Opened … with 2 app(s)" when one of them was skipped for
-        // being scope-only is a summary that contradicts the act log directly above it.
-        let summary = "Opened workspace \(workspace.name) with \(apps.count) app(s) and \(workspace.urls.count) URL(s)."
+        // being scope-only is a summary that contradicts what happened.
+        //
+        // An honest count alone still leaves the user guessing *which* app did not start, so the
+        // names ride along. This is the only channel that reaches them: `ActionPreview` and the act
+        // log above are both rendered by nothing (see `AgentRunner`'s note on `AgentLogStore`),
+        // which is exactly why the count and the note live together here.
+        //
+        // A workspace whose every entry is scope-only reads "with 0 app(s) and 0 URL(s)" plus the
+        // note. Deliberately not special-cased into a separate "nothing to open" string: the note
+        // already explains the zero, and a second summary format is a second thing to keep true.
+        var summary = "Opened workspace \(workspace.name) with \(apps.count) app(s) and \(workspace.urls.count) URL(s)."
+        if let note = WorkspaceScopeOnlyApps.notOpenedNote(for: spec.scopeOnlyApps) {
+            summary += " " + note
+        }
         return AgentRunResult(plan: plan, previews: previews, summary: summary)
     }
 

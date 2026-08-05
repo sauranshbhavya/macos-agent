@@ -243,11 +243,11 @@ private let expectedDefaultPlannerDescription = """
   dry run: Preview the saved routine without executing its steps.
   examples: Run my morning setup routine
 - create_workspace: Create workspace launcher
-  description: Save a named workspace containing allowlisted apps and safe http/https URLs.
+  description: Save a named workspace containing the apps and safe http/https URLs the user names. An app does NOT have to be in the supported-apps list: include every app the user names, because a workspace's apps are also its restriction scope. An unsupported app is saved for scope only and simply is not opened when the workspace opens.
   required fields: workspaceName
   side effects: write local workspace file
   dry run: Show the workspace apps and URLs without saving.
-  examples: Create a workspace called research with Safari, VS Code, and https://github.com
+  examples: Create a workspace called research with Safari, VS Code, and https://github.com | Create a workspace called drafting with Microsoft Word and Safari
 - open_workspace: Open saved workspace
   description: Open every app and URL saved in a named workspace. Use only when the user names a workspace they have actually saved; do not infer a workspace name from vague activity phrasing such as "focus on writing" or "get into research mode" — ask a clarifying question instead.
   required fields: workspaceName

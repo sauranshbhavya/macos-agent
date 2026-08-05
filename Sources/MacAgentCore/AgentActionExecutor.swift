@@ -192,8 +192,12 @@ public final class AgentActionExecutor {
     /// clarification rather than a failure (spec §4A.7).
     ///
     /// Deliberately narrow: **only** a name that matches nothing becomes a clarification. A
-    /// missing/empty name, an unreadable store, a malformed plan, or an unresolvable app inside
-    /// a workspace that does exist all still throw exactly as before.
+    /// missing/empty name, an unreadable store, a malformed plan, or an unsafe URL inside a
+    /// workspace that does exist all still throw exactly as before.
+    ///
+    /// An *unresolvable app* inside an existing workspace used to be on that list and no longer is —
+    /// SONNY-44 decoupled scope listing from `MacAppCatalog`, so such an entry is skipped at open
+    /// time and the open succeeds. It is not a clarification either; it is simply not an error.
     ///
     /// Checks the *other* store first: "run hehe" when hehe is a saved workspace used to answer
     /// with a list of routine names while ignoring the exact-name workspace the user almost

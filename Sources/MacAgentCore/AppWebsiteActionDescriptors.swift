@@ -83,14 +83,18 @@ public enum AppWebsiteActionDescriptors {
     public static let openWorkspace = LocalActionDescriptor(
         capabilityID: "local.workspaces.open",
         displayName: "Open saved workspace",
-        description: "Open every allowlisted app and safe URL saved in a named workspace.",
+        description: "Open the supported apps and safe URLs saved in a named workspace.",
         supportedActions: [.openWorkspace],
         requiredPermissions: [
             CapabilityPermissionMetadata(requirement: .appOpening),
             CapabilityPermissionMetadata(requirement: .browserOpening)
         ],
         defaultRiskTier: .tier1,
-        fallbackBehavior: "Fail clearly when the workspace is missing or contains a disallowed app or unsafe URL."
+        // A workspace app outside `MacAppCatalog` is no longer a failure: scope listing was
+        // decoupled from the launch catalog (SONNY-44), so such an entry is skipped and the open
+        // succeeds. The other two failures are unchanged — a missing workspace has nothing to open,
+        // and `SafeURL` is a capability bound rather than a user-declared boundary.
+        fallbackBehavior: "Skip any saved app Sonny cannot launch and open the rest. Fail clearly when the workspace is missing or contains an unsafe URL."
     )
 
     public static let all: [LocalActionDescriptor] = [

@@ -10,17 +10,28 @@ public struct CreateWorkspaceCapabilityAdapter: CapabilityAdapter {
     public static let metadata = CapabilityMetadata(
         id: "local.workspaces.create",
         displayName: "Create workspace launcher",
-        description: "Save a named workspace of allowlisted apps and safe URLs.",
+        description: "Save a named workspace of apps and safe URLs.",
         operations: [.createWorkspace],
         plannerTools: [
             AgentTool(
                 operation: .createWorkspace,
                 name: "Create workspace launcher",
-                description: "Save a named workspace containing allowlisted apps and safe http/https URLs.",
+                // Reaches the model verbatim (`ToolRegistry.plannerDescription` ->
+                // `OpenAIPlanner.systemPrompt`), and natural-language creation is the *only* way to
+                // set a workspace's apps until SONNY-40 ships an edit path. This sentence used to
+                // say "allowlisted apps", which the same prompt then defines as the twelve-app
+                // supported list — so a model honouring it would drop "Microsoft Word" at the
+                // source and SONNY-37's escalation would stay exactly as unremediable as the
+                // 2026-08-05 decision exists to prevent. It has to say the opposite, explicitly,
+                // and the second example has to demonstrate it.
+                description: "Save a named workspace containing the apps and safe http/https URLs the user names. An app does NOT have to be in the supported-apps list: include every app the user names, because a workspace's apps are also its restriction scope. An unsupported app is saved for scope only and simply is not opened when the workspace opens.",
                 requiredFields: ["workspaceName"],
                 sideEffects: ["write local workspace file"],
                 dryRunBehavior: "Show the workspace apps and URLs without saving.",
-                examples: ["Create a workspace called research with Safari, VS Code, and https://github.com"]
+                examples: [
+                    "Create a workspace called research with Safari, VS Code, and https://github.com",
+                    "Create a workspace called drafting with Microsoft Word and Safari"
+                ]
             )
         ],
         requiredPermissions: [],
@@ -68,22 +79,31 @@ public struct CreateWorkspaceCapabilityAdapter: CapabilityAdapter {
         let previews = try preview(plan: plan, context: context)
         let spec = try workspaceCreateSpec(plan, context: context)
         let workspace = spec.workspace
-        // `ActionPreview.details` reaches no UI surface today — nothing in `MacAgent` renders an
-        // `ActionPreview` — so the preview note alone would be invisible in the real app. This is
-        // the same signal on the channel the user actually sees, following the established
-        // `log(.observe, "Skipped …")` shape (`WebResearchMarkdownCapabilityAdapter:155`,
-        // `OpenMediaResultCapabilityAdapter:210`): notable, not a failure. Deliberately *not* a
-        // `CapabilityRiskEscalation` — all six existing escalation sites raise a tier, and both
-        // approval panels label that line "what raised this above its default tier", so a
-        // same-tier entry would render an informational note in warning colour under a heading
-        // that would then be a lie.
+        // A diagnostic only. `AgentLogStore` has no renderer either — `AgentRunner`'s own comment on
+        // it says so, and nothing in `MacAgent` reads `.events` — so this line is for a developer
+        // reading a run, not for the user. The signal the user sees is folded into the summary
+        // below.
         if let note = WorkspaceScopeOnlyApps.scopeOnlyNote(for: spec.scopeOnlyApps) {
             log(.observe, note)
         }
         log(.act, "Saving workspace \(workspace.name)")
         try context.workspaceStore.save(workspace)
         log(.summarize, "Saved workspace")
-        let summary = "Saved workspace \(workspace.name) with \(workspace.apps.count) app(s) and \(workspace.urls.count) URL(s)."
+        // `AgentRunResult.summary` is the only free-text channel an adapter has that reaches a
+        // person: both surfaces render it (`FloatingWidgetView`'s result panel, and Command
+        // Center's). `ActionPreview.details` and the act log above are both rendered by nothing, so
+        // the note has to ride here or the ticket's "soft signal at creation" exists only in the
+        // model. Deliberately *not* a `CapabilityRiskEscalation` — all six existing escalation sites
+        // raise a tier, and both approval panels label that line as what raised this above its
+        // default tier, so a same-tier entry would render an informational note in warning colour
+        // under a heading that would then be false.
+        //
+        // The count stays the full listed count: two apps really were saved. Which of them is
+        // scope-only is what the note is for.
+        var summary = "Saved workspace \(workspace.name) with \(workspace.apps.count) app(s) and \(workspace.urls.count) URL(s)."
+        if let note = WorkspaceScopeOnlyApps.scopeOnlyNote(for: spec.scopeOnlyApps) {
+            summary += " " + note
+        }
         return AgentRunResult(plan: plan, previews: previews, summary: summary)
     }
 
