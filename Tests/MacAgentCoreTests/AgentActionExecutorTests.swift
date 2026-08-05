@@ -844,6 +844,37 @@ struct AgentActionExecutorTests {
         #expect(browserOpener.openedBrowsers == [MacApp(displayName: "Safari", bundleIdentifier: "com.apple.Safari")])
     }
 
+    /// The routine's browser binds *every* URL the routine opens, not only its `open_url` steps —
+    /// an app-search URL opened inside a routine that launched Safari belongs in Safari too. This
+    /// is the reading of "every URL open inside that routine" that the implementation took, so it
+    /// is pinned rather than left as an accident of which adapter reads `preferredBrowser`.
+    ///
+    /// Its counterpart is already pinned elsewhere and must stay so: the *standalone* app-search
+    /// URL sites assert `[nil]`, because a search URL with no routine around it is still an
+    /// ordinary open and keeps the system default.
+    @Test
+    func aRoutinesAppSearchURLStepAlsoBindsToTheRoutinesBrowser() async throws {
+        let browserOpener = RecordingBrowserOpener()
+        let executor = try await routineExecutor(
+            named: "Search In Safari",
+            steps: [
+                AgentStep(id: "open-safari", operation: .openApp, description: "Open Safari.", appName: "Safari"),
+                AgentStep(
+                    id: "search-github",
+                    operation: .openAppSearchURL,
+                    description: "Open search URL.",
+                    appName: "GitHub",
+                    searchQuery: "Swift concurrency"
+                )
+            ],
+            browserOpener: browserOpener
+        )
+
+        _ = try await executor.execute(plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Search In Safari")) { _, _ in }
+
+        #expect(browserOpener.openedBrowsers == [MacApp(displayName: "Safari", bundleIdentifier: "com.apple.Safari")])
+    }
+
     /// Saves a routine through the real save path, then returns an executor wired to the same
     /// stores — going through `save_routine` rather than writing the store directly so these tests
     /// exercise a routine that really passed `validateRoutineSteps`.
