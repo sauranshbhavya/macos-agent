@@ -279,6 +279,51 @@ struct WorkspaceScopeTests {
         )
     }
 
+    /// `get_finder_selection` names Finder and nothing else, and is opaque. The adapter reads
+    /// Finder's live selection and never looks at `step.inputPath` — it implements no
+    /// `resolveDefaultOutputs`, so nothing pins the selection onto the step before assessment
+    /// either. Reporting `inputPath` as a file resource would name a path the run ignores; treating
+    /// the step as knowable would let a plan that reads arbitrary selected files roll up relaxable.
+    @Test
+    func getFinderSelectionIsOpaqueAndIgnoresAnInputPathTheAdapterNeverReads() {
+        let step = AgentStep(
+            id: "selection",
+            operation: .getFinderSelection,
+            description: "Read the Finder selection.",
+            inputPath: "~/Documents/NotActuallyRead",
+            contextSource: .finderSelection
+        )
+
+        #expect(PlanScopedResources.isOpaque(step))
+        #expect(PlanScopedResources.resources(in: step) == [.app("Finder")])
+    }
+
+    /// The whole point of the previous test, at plan level: reading the Finder selection must not be
+    /// relaxable by association with resources that happen to match.
+    @Test
+    func aPlanReadingTheFinderSelectionNeverRollsUpInScope() {
+        let scope = makeScope(apps: ["Safari", "Finder"], urls: [])
+        let plan = AgentPlan(
+            summary: "Open Safari, then read the selection.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "a", operation: .openApp, description: "Open Safari.", appName: "Safari"),
+                AgentStep(
+                    id: "b",
+                    operation: .getFinderSelection,
+                    description: "Read the Finder selection.",
+                    contextSource: .finderSelection
+                )
+            ]
+        )
+
+        let evaluation = WorkspaceScopeEvaluator.evaluate(plan: plan, scope: scope)
+
+        // Finder itself is listed in this workspace, so every named resource matches.
+        #expect(evaluation.findings.filter { $0.verdict == .inScope }.count == 2)
+        #expect(evaluation.planVerdict == .opaque)
+    }
+
     @Test
     func playMediaReportsBothTheProviderAppAndTheProviderHost() {
         let appleMusic = AgentStep(
@@ -438,7 +483,8 @@ struct WorkspaceScopeTests {
             .openAppSearchURL: [.webDomain("github.com")],
             .openURL: [.webDomain("example.com")],
             .playMedia: [.app("Spotify"), .webDomain("open.spotify.com")],
-            .getFinderSelection: [.app("Finder"), input],
+            // No file resource: the adapter reads the live selection and never reads `inputPath`.
+            .getFinderSelection: [.app("Finder")],
             // `outputPath` wins over `inputPath`.
             .revealInFinder: [.app("Finder"), output],
             .openGeneratedArtifact: [output],
@@ -466,9 +512,14 @@ struct WorkspaceScopeTests {
                 classification.resources == expected[operation],
                 "\(operation.rawValue) classified as \(classification.resources)"
             )
-            // The probe fills every URL field, so `web_to_markdown` takes its direct-URL form here;
-            // `invoke_shortcut` is the only case opaque on its own operation alone.
-            #expect(classification.isOpaque == (operation == .invokeShortcut), "\(operation.rawValue)")
+            // The probe fills every URL and path field, so `web_to_markdown` takes its direct-URL
+            // form and the two chained-artifact operations name their targets — none of those three
+            // is opaque here. `get_finder_selection` is opaque whatever the step says, because the
+            // adapter reads none of it.
+            #expect(
+                classification.isOpaque == [.invokeShortcut, .getFinderSelection].contains(operation),
+                "\(operation.rawValue)"
+            )
         }
     }
 
@@ -497,17 +548,43 @@ struct WorkspaceScopeTests {
         #expect(PlanScopedResources.resources(in: open) == [.fileLocation("~/Documents/report.pdf")])
     }
 
-    /// When neither path field is set, the target is the artifact an earlier step in the same plan
-    /// produced — already classified from *that* step's output path, so naming nothing here is
-    /// correct rather than a gap. `open_generated_artifact` names no app either: Launch Services
+    /// With neither path field set, the target is filled in at execution by
+    /// `resolvePreviousArtifactPathIfNeeded` from the previous chain segment's actual writes — after
+    /// the gate closed — so the step is opaque. It still names Finder for the reveal form, because
+    /// that part is knowable. `open_generated_artifact` names no app in either form: Launch Services
     /// picks the handler by file type at run time.
     @Test
-    func aChainedArtifactStepWithNoPathsNamesOnlyWhatItReallyKnows() {
+    func aChainedArtifactStepWithNoPathsIsOpaqueAndNamesOnlyWhatItReallyKnows() {
         let reveal = AgentStep(id: "reveal", operation: .revealInFinder, description: "Reveal it.")
         let open = AgentStep(id: "open", operation: .openGeneratedArtifact, description: "Open it.")
 
         #expect(PlanScopedResources.resources(in: reveal) == [.app("Finder")])
+        #expect(PlanScopedResources.isOpaque(reveal))
         #expect(PlanScopedResources.resources(in: open).isEmpty)
+        #expect(PlanScopedResources.isOpaque(open))
+    }
+
+    /// The other half: opacity here is conditional on the step naming nothing, not a property of the
+    /// operation. A step that names its target is fully knowable, so "produce a file and open it"
+    /// stays relaxable when the file is inside the workspace.
+    @Test
+    func aChainedArtifactStepThatNamesItsTargetIsNotOpaque() {
+        let reveal = AgentStep(
+            id: "reveal",
+            operation: .revealInFinder,
+            description: "Reveal the report.",
+            outputPath: "~/Documents/report.pdf"
+        )
+        let openViaInputPath = AgentStep(
+            id: "open",
+            operation: .openGeneratedArtifact,
+            description: "Open the report.",
+            inputPath: "~/Documents/report.pdf"
+        )
+
+        #expect(PlanScopedResources.isOpaque(reveal) == false)
+        #expect(PlanScopedResources.isOpaque(openViaInputPath) == false)
+        #expect(PlanScopedResources.resources(in: openViaInputPath) == [.fileLocation("~/Documents/report.pdf")])
     }
 
     /// `switch_running_app` falls back to `searchQuery` when the planner gave no app name — the
@@ -558,6 +635,78 @@ struct WorkspaceScopeTests {
         #expect(scopeSaysInside == whitelistSaysInside)
         #expect(scope.verdict(for: .fileLocation(caseVariant)) == .outOfScope)
         #expect(scope.verdict(for: .fileLocation(root.appendingPathComponent("notes.md").path)) == .inScope)
+    }
+
+    // MARK: - Constants duplicated from adapter internals
+
+    /// Four of the classifier's constants are copies of values that live inside another type's
+    /// private implementation, so nothing in the type system fails if that implementation changes
+    /// its host or its AppleScript target — the classifier would go on scope-checking a host the app
+    /// no longer visits. They cannot be shared directly: the Hacker News URL is private to
+    /// `WebResearchMarkdownCapabilityAdapter`, which is on this ticket's never-touch list, and the
+    /// provider prefixes are private to `MediaPlaybackService`.
+    ///
+    /// So the binding is a source-text canary. It is blunt, but it is real: change the host in the
+    /// adapter and this reddens with a message naming the constant that needs updating. The one
+    /// duplicated value that does *not* need a canary is `open_app_search_url`'s host, because that
+    /// one is not duplicated at all — the classifier asks `AppSearchURLCatalog` for the real URL.
+    @Test
+    func theConstantsCopiedFromPrivateAdapterInternalsStillMatchTheirSource() throws {
+        let cases: [(constant: String, file: String, needle: String)] = [
+            (
+                PlanScopedResources.hackerNewsHost,
+                "WebResearchMarkdownCapabilityAdapter.swift",
+                "https://news.ycombinator.com"
+            ),
+            (
+                PlanScopedResources.providerHost(for: .appleMusic),
+                "MediaPlaybackService.swift",
+                "music://music.apple.com/"
+            ),
+            (
+                PlanScopedResources.providerHost(for: .spotify),
+                "MediaPlaybackService.swift",
+                "https://open.spotify.com/"
+            ),
+            (
+                PlanScopedResources.microsoftWordAppName,
+                "DocumentConverter.swift",
+                "tell application \"Microsoft Word\""
+            )
+        ]
+
+        for testCase in cases {
+            let source = try String(contentsOf: sourceFile(named: testCase.file), encoding: .utf8)
+            #expect(
+                source.contains(testCase.needle),
+                "\(testCase.file) no longer contains \(testCase.needle) — PlanScopedResources still says \(testCase.constant)"
+            )
+            #expect(
+                testCase.needle.contains(testCase.constant),
+                "\(testCase.constant) is no longer the value \(testCase.file) uses"
+            )
+        }
+    }
+
+    /// Finder is bound through real API rather than a canary on one side: the classifier's name has
+    /// to be the one `MacAppCatalog` resolves, or a workspace listing Finder would never match it,
+    /// and the catalog's identifier has to be the one the AppleScript actually addresses.
+    @Test
+    func theFinderConstantResolvesToTheBundleIdentifierTheAppleScriptAddresses() throws {
+        let finder = try MacAppCatalog.default.resolve(PlanScopedResources.finderAppName)
+        #expect(finder.bundleIdentifier == "com.apple.finder")
+
+        let source = try String(contentsOf: sourceFile(named: "FinderContextService.swift"), encoding: .utf8)
+        #expect(source.contains("tell application id \"com.apple.finder\""))
+    }
+
+    private func sourceFile(named name: String) -> URL {
+        // <package root>/Tests/MacAgentCoreTests/<this file>
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources/MacAgentCore/\(name)")
     }
 
     // MARK: - Plan roll-up
@@ -627,6 +776,50 @@ struct WorkspaceScopeTests {
         #expect(opaque.resource == nil)
         #expect(opaque.stepID == "c")
         #expect(evaluation.findings.filter { $0.verdict == .inScope }.count == 2)
+    }
+
+    /// A step can be opaque *and* carry knowable resources at the same time — a search-driven
+    /// research note has a knowable output file and unknowable sources. That combination is the one
+    /// the roll-up is most likely to lose: every other opaque test in this suite uses
+    /// `invoke_shortcut`, which carries no resources, so a roll-up that only noticed opacity on
+    /// resource-free steps would look completely correct.
+    ///
+    /// Mutation-checked: changing the evaluator's `if classification.isOpaque` to
+    /// `if classification.isOpaque && classification.resources.isEmpty` leaves the rest of the suite
+    /// green and fails only here.
+    @Test
+    func anOpaqueStepThatAlsoCarriesMatchingResourcesStillPoisonsTheRollUp() throws {
+        let fixture = try FileScopeFixture()
+        defer { fixture.tearDown() }
+        let notes = fixture.client.appendingPathComponent("research.md").path
+        let scope = fixture.scope(apps: ["Safari"], urls: [], fileLocations: [fixture.client.path])
+        let plan = AgentPlan(
+            summary: "Research the topic into the client folder.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "a", operation: .openApp, description: "Open Safari.", appName: "Safari"),
+                AgentStep(
+                    id: "b",
+                    operation: .webToMarkdown,
+                    description: "Research the topic.",
+                    outputPath: notes,
+                    searchQuery: "swift concurrency"
+                )
+            ]
+        )
+
+        let evaluation = WorkspaceScopeEvaluator.evaluate(plan: plan, scope: scope)
+
+        // Every knowable resource matches, so nothing else would stop a relaxation.
+        #expect(evaluation.findings.filter { $0.verdict == .inScope }.map(\.stepID) == ["a", "b"])
+        #expect(evaluation.outOfScopeFindings.isEmpty)
+
+        // And the plan is still not relaxable, because Sonny never saw which pages it will fetch.
+        let opaque = try #require(evaluation.findings.first { $0.verdict == .opaque })
+        #expect(opaque.stepID == "b")
+        #expect(opaque.resource == nil)
+        #expect(evaluation.planVerdict == .opaque)
+        #expect(evaluation.planVerdict != .inScope)
     }
 
     @Test

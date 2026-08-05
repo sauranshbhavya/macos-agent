@@ -59,11 +59,16 @@ struct PathWhitelistTests {
     }
 
     /// `canonicalURL` + `contains` are exposed so a narrower boundary — a workspace's restriction
-    /// scope — reuses this whitelist's path arithmetic instead of running a second one. This pins
-    /// that they *are* the same arithmetic: for every shape that matters, the pair agrees with
-    /// `validateInsideWhitelist` about what is inside the root.
+    /// scope — reuses this whitelist's path arithmetic instead of running a second one.
+    ///
+    /// The assertion that carries the weight is the **expected outcome** for each shape, not the
+    /// agreement between the two entry points: `validateInsideWhitelist` calls `canonicalURL` and
+    /// `contains` itself, so an agreement-only test would be `f(x) == f(x)` and would pass just as
+    /// happily if both were wrong together. The agreement check is kept as a second, weaker
+    /// assertion — it is what catches a future change that stops routing one path through the
+    /// shared helpers.
     @Test
-    func theExposedContainmentAgreesWithValidateInsideWhitelistOnEveryShape() throws {
+    func theExposedContainmentDecidesEveryPathShapeAndValidateInsideWhitelistAgrees() throws {
         let root = try makeDirectory()
         let outside = try makeDirectory()
         defer {
@@ -78,24 +83,27 @@ struct PathWhitelistTests {
         try FileManager.default.createSymbolicLink(at: link, withDestinationURL: outside)
 
         let whitelist = PathWhitelist(roots: [inside])
-        let candidates = [
-            inside.path,
-            inside.appendingPathComponent("notes.md").path,
-            inside.appendingPathComponent("nested/deep/notes.md").path,
-            sibling.appendingPathComponent("notes.md").path,
-            inside.appendingPathComponent("../ClientAlpha/notes.md").path,
-            link.appendingPathComponent("notes.md").path,
-            outside.path,
-            root.path
+        let cases: [(path: String, isInside: Bool, why: String)] = [
+            (inside.path, true, "the root itself"),
+            (inside.appendingPathComponent("notes.md").path, true, "a file directly inside"),
+            (inside.appendingPathComponent("nested/deep/notes.md").path, true, "a file nested below"),
+            (inside.path + "/", true, "the root with a trailing slash"),
+            (sibling.appendingPathComponent("notes.md").path, false, "a sibling folder sharing a prefix"),
+            (inside.appendingPathComponent("../ClientAlpha/notes.md").path, false, "parent traversal out"),
+            (link.path, false, "a symlink resolving outside"),
+            (outside.path, false, "an unrelated folder"),
+            (root.path, false, "the parent of the root")
         ]
 
-        for candidate in candidates {
-            let validated = (try? whitelist.validateInsideWhitelist(candidate)) != nil
+        for testCase in cases {
             let contained = PathWhitelist.contains(
                 root: PathWhitelist.canonicalURL(inside.path),
-                candidate: PathWhitelist.canonicalURL(candidate)
+                candidate: PathWhitelist.canonicalURL(testCase.path)
             )
-            #expect(validated == contained, "disagreed about \(candidate)")
+            #expect(contained == testCase.isInside, "wrong verdict for \(testCase.why): \(testCase.path)")
+
+            let validated = (try? whitelist.validateInsideWhitelist(testCase.path)) != nil
+            #expect(validated == contained, "entry points disagreed about \(testCase.why)")
         }
     }
 

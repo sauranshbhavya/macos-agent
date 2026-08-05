@@ -66,9 +66,18 @@ public enum ScopedResource: Equatable, Hashable, Sendable {
 
 /// A workspace entry that survived into the scope but can never match anything.
 ///
-/// Reported rather than dropped because a boundary that quietly does nothing is worse than no
-/// boundary: the configuration surface needs to be able to tell the user that the folder they typed
-/// is outside Sonny's writable area, or that the app they named is not one Sonny can open.
+/// Exactly three things become inert, and it is worth being precise because the list is shorter than
+/// it looks: a file location `PathWhitelist` rejects (the whole reason this type exists — scope
+/// narrows the global whitelist and never widens it), a URL `SafeURL` rejects or that carries no
+/// host, and a blank app name. An app name the catalog cannot resolve is **not** inert — it falls
+/// back to a normalized-name key and still matches, which is what keeps Microsoft Word and
+/// running-app switches inside scope checking at all.
+///
+/// Reported rather than dropped so that a boundary which quietly does nothing is at least
+/// observable. **Nothing consumes this yet** — no ticket in this module requires a surface for it,
+/// and this ticket ships no UI. It exists so the configuration work (SONNY-40's `edit_workspace`,
+/// SONNY-41's detail sheet) can warn at the point the boundary is typed rather than rediscovering
+/// the rule, and so a dropped entry is never mistaken for one that matched nothing.
 public struct WorkspaceScopeInertEntry: Equatable, Sendable {
     public let kind: ScopedResourceKind
     public let value: String

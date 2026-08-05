@@ -160,21 +160,32 @@ public enum PlanScopedResources {
 
         case .getFinderSelection:
             // Finder is implicit: the selection is read with `tell application id "com.apple.finder"`
-            // through `osascript`, with no `MacAppCatalog` resolution anywhere in the path. The
-            // selected items themselves are read live at execution and no plan field carries them.
-            return .knowable([.app(finderAppName)] + files(step.inputPath))
+            // through `osascript`, with no `MacAppCatalog` resolution anywhere in the path.
+            //
+            // Opaque, and no file resource at all. `FinderSelectionCapabilityAdapter` reads Finder's
+            // *live* selection through `FinderSelectionResolver.whitelistedSelection` and never looks
+            // at `step.inputPath`; it also implements no `resolveDefaultOutputs`, so nothing pins the
+            // selection onto the step before assessment either. (Only the zip and docx adapters call
+            // `pinningSelectedDirectoryInput`, for their own operations.) The files are therefore
+            // whatever the user has highlighted at execution time — anywhere in the whitelist — which
+            // is exactly what `.opaque` is for. Emitting `.fileLocation(step.inputPath)` would report
+            // a path the adapter ignores; treating the step as knowable would let a plan that reads
+            // arbitrary selected files roll up relaxable.
+            return StepScopedResources(resources: [.app(finderAppName)], isOpaque: true)
 
         case .revealInFinder:
-            // Same implicit Finder control. When both paths are nil the target is the artifact an
-            // earlier step in this same plan produced — already classified from *that* step's output
-            // path, so naming nothing here loses no coverage.
-            return .knowable([.app(finderAppName)] + files(step.outputPath ?? step.inputPath))
+            // Same implicit Finder control, and the same chained-artifact rule as
+            // `open_generated_artifact` below.
+            return chainedArtifact(step, alongside: [.app(finderAppName)])
 
         case .openGeneratedArtifact:
             // No app resource on purpose: the file is handed to `NSWorkspace.shared.open`, so Launch
-            // Services picks the handler by file type at run time. Naming a fixed app here would
-            // invent a resource. Same chained-artifact reasoning as `reveal_in_finder` for the paths.
-            return .knowable(files(step.outputPath ?? step.inputPath))
+            // Services picks the handler by file type at run time. Naming a fixed app would invent a
+            // resource, and marking the operation opaque over it would make every "produce a file
+            // and open it" plan permanently non-relaxable for a handler no workspace could ever
+            // list. The boundary is about destinations the plan chooses; the system's handler for a
+            // file already inside the boundary is not one.
+            return chainedArtifact(step, alongside: [])
 
         case .createLocalDraft:
             return .knowable(files(step.outputPath))
@@ -230,6 +241,26 @@ public enum PlanScopedResources {
             // "it cannot run" is the reason, not an oversight.
             return .none
         }
+    }
+
+    /// `reveal_in_finder` and `open_generated_artifact` name their target directly, or name nothing
+    /// and take whatever the previous chain segment produced.
+    ///
+    /// The path-less form is **opaque**, and the reason is narrower than "no field is set". The
+    /// chained target is filled in by `AgentActionExecutor.resolvePreviousArtifactPathIfNeeded`
+    /// during `previewChain`/`executeChain` — after the gate has already closed — from the previous
+    /// segment's `ActionPreview.writes` or its last run suggestion. Those are runtime values: the
+    /// docx converter's writes, for one, are destination paths derived from scanning a folder, not
+    /// anything a plan field carries. It is *usually* true that the produced file lands inside a
+    /// folder some earlier step already named, which is why this looked knowable at first — but that
+    /// is an inference about today's capabilities, and inferring a boundary is the failure mode this
+    /// whole classifier is shaped to refuse.
+    private static func chainedArtifact(
+        _ step: AgentStep,
+        alongside implicitApps: [ScopedResource]
+    ) -> StepScopedResources {
+        let named = files(step.outputPath ?? step.inputPath)
+        return StepScopedResources(resources: implicitApps + named, isOpaque: named.isEmpty)
     }
 
     private enum WebSources: Equatable {
