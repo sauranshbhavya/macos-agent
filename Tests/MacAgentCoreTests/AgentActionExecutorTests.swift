@@ -755,7 +755,7 @@ struct AgentActionExecutorTests {
     @Test
     func aURLStepSequencedBeforeTheBrowserStepStillBindsToTheRoutinesBrowser() async throws {
         let browserOpener = RecordingBrowserOpener()
-        let executor = try await routineExecutor(
+        let fixture = try await routineFixture(
             named: "Reversed",
             steps: [
                 AgentStep(id: "open-github", operation: .openURL, description: "Open GitHub.", targetURL: "https://github.com"),
@@ -763,18 +763,25 @@ struct AgentActionExecutorTests {
             ],
             browserOpener: browserOpener
         )
+        defer { fixture.cleanUp() }
 
-        _ = try await executor.execute(plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Reversed")) { _, _ in }
+        _ = try await fixture.executor.execute(plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Reversed")) { _, _ in }
 
         #expect(browserOpener.openedBrowsers == [MacApp(displayName: "Safari", bundleIdentifier: "com.apple.Safari")])
     }
 
-    /// Two browsers: the first in step order wins. Pinned with Chrome first and Safari second so a
-    /// "last one wins" or "alphabetical" implementation cannot pass — both would return Safari.
+   /// Two browsers: the first in step order wins. Chrome first, Safari second, so a "last one
+    /// wins" implementation returns Safari and fails here.
+    ///
+    /// It does **not** exclude an alphabetical implementation — "Chrome" sorts before "Safari", so
+    /// alphabetical returns the expected value and would pass. Step order and alphabetical order
+    /// agree for this pair; separating them needs a fixture whose first browser sorts later, and
+    /// the catalog carries only these two browsers today (PR #28, F6 — the earlier comment here
+    /// claimed both were excluded, which was simply false).
     @Test
     func aRoutineNamingTwoBrowsersBindsTheFirstOneInStepOrder() async throws {
         let browserOpener = RecordingBrowserOpener()
-        let executor = try await routineExecutor(
+        let fixture = try await routineFixture(
             named: "Both Browsers",
             steps: [
                 AgentStep(id: "open-chrome", operation: .openApp, description: "Open Chrome.", appName: "Chrome"),
@@ -783,8 +790,9 @@ struct AgentActionExecutorTests {
             ],
             browserOpener: browserOpener
         )
+        defer { fixture.cleanUp() }
 
-        _ = try await executor.execute(plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Both Browsers")) { _, _ in }
+        _ = try await fixture.executor.execute(plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Both Browsers")) { _, _ in }
 
         #expect(browserOpener.openedBrowsers == [MacApp(displayName: "Chrome", bundleIdentifier: "com.google.Chrome", aliases: ["Google Chrome"])])
     }
@@ -795,7 +803,7 @@ struct AgentActionExecutorTests {
     @Test
     func aRoutineWithNoBrowserStepStillUsesTheSystemDefault() async throws {
         let browserOpener = RecordingBrowserOpener()
-        let executor = try await routineExecutor(
+        let fixture = try await routineFixture(
             named: "Notes Only",
             steps: [
                 AgentStep(id: "open-notes", operation: .openApp, description: "Open Notes.", appName: "Notes"),
@@ -803,8 +811,9 @@ struct AgentActionExecutorTests {
             ],
             browserOpener: browserOpener
         )
+        defer { fixture.cleanUp() }
 
-        _ = try await executor.execute(plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Notes Only")) { _, _ in }
+        _ = try await fixture.executor.execute(plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Notes Only")) { _, _ in }
 
         #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com"])
         #expect(browserOpener.openedBrowsers == [nil])
@@ -819,7 +828,7 @@ struct AgentActionExecutorTests {
     @Test
     func anUnattendedRunOfTheSameRoutineBindsTheSameBrowser() async throws {
         let browserOpener = RecordingBrowserOpener()
-        let executor = try await routineExecutor(
+        let fixture = try await routineFixture(
             named: "Morning",
             steps: [
                 AgentStep(id: "open-safari", operation: .openApp, description: "Open Safari.", appName: "Safari"),
@@ -832,7 +841,7 @@ struct AgentActionExecutorTests {
         // definitions without this adding a seventh.
         let runner = AgentRunner(
             plannerProvider: { throw AgentExecutionError.emptyCommand },
-            executor: executor
+            executor: fixture.executor
         )
         let prepared = try runner.prepare(
             plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Morning"),
@@ -855,7 +864,7 @@ struct AgentActionExecutorTests {
     @Test
     func aRoutinesAppSearchURLStepAlsoBindsToTheRoutinesBrowser() async throws {
         let browserOpener = RecordingBrowserOpener()
-        let executor = try await routineExecutor(
+        let fixture = try await routineFixture(
             named: "Search In Safari",
             steps: [
                 AgentStep(id: "open-safari", operation: .openApp, description: "Open Safari.", appName: "Safari"),
@@ -869,28 +878,92 @@ struct AgentActionExecutorTests {
             ],
             browserOpener: browserOpener
         )
+        defer { fixture.cleanUp() }
 
-        _ = try await executor.execute(plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Search In Safari")) { _, _ in }
+        _ = try await fixture.executor.execute(plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Search In Safari")) { _, _ in }
 
         #expect(browserOpener.openedBrowsers == [MacApp(displayName: "Safari", bundleIdentifier: "com.apple.Safari")])
     }
 
-    /// Saves a routine through the real save path, then returns an executor wired to the same
-    /// stores — going through `save_routine` rather than writing the store directly so these tests
-    /// exercise a routine that really passed `validateRoutineSteps`.
-    private func routineExecutor(
+    /// PR #28, F2. The Hacker News open was the third adapter edited to read `preferredBrowser`,
+    /// and it was the only one whose edit nothing pinned: reverting it to the no-browser shorthand
+    /// left the whole suite green, because no test ran an HN step *inside a routine*. The
+    /// standalone HN guard proves the opposite direction — that a bare HN open stays on the system
+    /// default — and cannot substitute. Same justification the app-search pin already carries.
+    @Test
+    func aRoutinesHackerNewsStepAlsoBindsToTheRoutinesBrowser() async throws {
+        let browserOpener = RecordingBrowserOpener()
+        let fixture = try await routineFixture(
+            named: "Morning Reading",
+            steps: [
+                AgentStep(id: "open-safari", operation: .openApp, description: "Open Safari.", appName: "Safari"),
+                AgentStep(id: "open-hn", operation: .openHackerNews, description: "Open Hacker News.")
+            ],
+            browserOpener: browserOpener
+        )
+        defer { fixture.cleanUp() }
+
+        _ = try await fixture.executor.execute(plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Morning Reading")) { _, _ in }
+
+        #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://news.ycombinator.com"])
+        #expect(browserOpener.openedBrowsers == [MacApp(displayName: "Safari", bundleIdentifier: "com.apple.Safari")])
+    }
+
+    /// PR #28, F3. Browser resolution skips app names the catalog cannot resolve rather than
+    /// throwing, so that a stale app name fails when *its own step* runs instead of pre-empting
+    /// every step with a different error. That skip branch was unpinned, and the reviewer proved it
+    /// green when removed.
+    ///
+    /// Reaching it requires writing past `validateRoutineSteps`, which would reject this routine at
+    /// save time — which is exactly why the store-level write is used here, and exactly the
+    /// asymmetry recorded as a discovery ticket: `RoutineStore.save` validates schedules but not
+    /// steps, so a routine the save capability refuses can still reach the executor.
+    @Test
+    func anUnresolvableAppNameIsSkippedRatherThanBlockingBrowserResolution() async throws {
+        let browserOpener = RecordingBrowserOpener()
+        let fixture = try routineFixtureWrittenDirectlyToStore(
+            named: "Stale App",
+            steps: [
+                AgentStep(id: "open-safari", operation: .openApp, description: "Open Safari.", appName: "Safari"),
+                AgentStep(id: "open-github", operation: .openURL, description: "Open GitHub.", targetURL: "https://github.com"),
+                // Deliberately *after* the URL step. With the unknown app first, its own step throws
+                // before any URL opens and the assertions below pass vacuously on an empty array —
+                // which is how the first draft of this test proved nothing at all.
+                AgentStep(id: "open-ghost", operation: .openApp, description: "Open a retired app.", appName: "Ghostwriter 2003")
+            ],
+            browserOpener: browserOpener
+        )
+        defer { fixture.cleanUp() }
+
+        // The unknown step still fails when it runs, so the routine does not complete — but the URL
+        // before it has already opened, bound to Safari. Resolution throwing instead of skipping
+        // would take the whole run down before any step, leaving this array empty.
+        _ = try? await fixture.executor.execute(plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Stale App")) { _, _ in }
+
+        #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com"])
+        #expect(browserOpener.openedBrowsers == [MacApp(displayName: "Safari", bundleIdentifier: "com.apple.Safari")])
+    }
+
+    /// An executor plus the temp directory it owns. Returning the root is the point: the earlier
+    /// shape returned only the executor, so no caller could delete the directory it had created and
+    /// every one of these tests leaked one (PR #28, F7).
+    private struct RoutineFixture {
+        let executor: AgentActionExecutor
+        let root: URL
+
+        func cleanUp() {
+            try? FileManager.default.removeItem(at: root)
+        }
+    }
+
+    /// Saves a routine through the real `save_routine` path, so the fixture exercises a routine
+    /// that genuinely passed `validateRoutineSteps`.
+    private func routineFixture(
         named name: String,
         steps: [AgentStep],
         browserOpener: RecordingBrowserOpener
-    ) async throws -> AgentActionExecutor {
-        let root = try makeDirectory()
-        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
-        let executor = makeExecutor(
-            root: root,
-            browserOpener: browserOpener,
-            appOpener: RecordingAppOpener(),
-            routineStore: routineStore
-        )
+    ) async throws -> RoutineFixture {
+        let fixture = try makeRoutineFixture(browserOpener: browserOpener)
         let savePlan = AgentPlan(
             summary: "Teach routine.",
             requiresConfirmation: true,
@@ -904,8 +977,37 @@ struct AgentActionExecutorTests {
                 )
             ]
         )
-        _ = try await executor.execute(plan: savePlan) { _, _ in }
-        return executor
+        _ = try await fixture.executor.execute(plan: savePlan) { _, _ in }
+        return fixture
+    }
+
+    /// Writes the routine straight to the store, bypassing `validateRoutineSteps`.
+    ///
+    /// Not a shortcut — it is the only way to build a routine the save capability rejects, and
+    /// `RoutineStore.save` really does accept one: it validates `schedule` and nothing else, which
+    /// is how nineteen existing test sites already write routines the adapter would refuse.
+    private func routineFixtureWrittenDirectlyToStore(
+        named name: String,
+        steps: [AgentStep],
+        browserOpener: RecordingBrowserOpener
+    ) throws -> RoutineFixture {
+        let fixture = try makeRoutineFixture(browserOpener: browserOpener)
+        try RoutineStore(fileURL: fixture.root.appendingPathComponent("routines.json"))
+            .save(StoredRoutine(name: name, steps: steps))
+        return fixture
+    }
+
+    private func makeRoutineFixture(browserOpener: RecordingBrowserOpener) throws -> RoutineFixture {
+        let root = try makeDirectory()
+        return RoutineFixture(
+            executor: makeExecutor(
+                root: root,
+                browserOpener: browserOpener,
+                appOpener: RecordingAppOpener(),
+                routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+            ),
+            root: root
+        )
     }
 
     @Test
