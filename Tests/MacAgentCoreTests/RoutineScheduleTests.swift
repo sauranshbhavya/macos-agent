@@ -148,6 +148,46 @@ struct RoutineScheduleTests {
         #expect(schedule.lastRunAt == resumedAt)
     }
 
+    /// PR #27 review finding F9. `newlyCreated` assigns `pausedReason` *before* calling
+    /// `setEnabled`, so the one rule about clearing a pause lives in `setEnabled` and nowhere else.
+    /// That ordering was asserted as load-bearing in three places and pinned by none: moving the
+    /// assignment after the `setEnabled` call left the whole suite green, because the only
+    /// production caller that passes a reason (`commitScheduleDraft`) also passes the existing
+    /// schedule's `isEnabled`, and a schedule carrying a reason is always disabled — so the
+    /// enabled-plus-reason combination never reaches `newlyCreated` through the UI at all.
+    ///
+    /// Pinned here, at the level the ordering actually lives, rather than through a view-model path
+    /// that cannot reach it. Nothing is wrong with the defensive ordering; it just had no test.
+    @Test
+    func newlyCreatedClearsAPassedPauseReasonWhenItBuildsAnEnabledSchedule() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+        let enabled = RoutineSchedule.newlyCreated(
+            cadence: .daily,
+            hour: 9,
+            minute: 0,
+            isEnabled: true,
+            pausedReason: "Snippet trigger ;sig already exists and would be replaced.",
+            now: now
+        )
+        // Enabling clears the pause, whoever asks for it and by whichever door.
+        #expect(enabled.isEnabled)
+        #expect(enabled.pausedReason == nil)
+        #expect(enabled.lastRunAt == now)
+
+        let stillPaused = RoutineSchedule.newlyCreated(
+            cadence: .daily,
+            hour: 9,
+            minute: 0,
+            isEnabled: false,
+            pausedReason: "Snippet trigger ;sig already exists and would be replaced.",
+            now: now
+        )
+        // ...and staying disabled keeps it, which is what makes a schedule edit non-destructive.
+        #expect(stillPaused.isEnabled == false)
+        #expect(stillPaused.pausedReason == "Snippet trigger ;sig already exists and would be replaced.")
+    }
+
     /// The store-level sibling of the two above, and the one the view model actually calls.
     /// Verifies it writes through rather than mutating a copy, and that it leaves the baseline the
     /// scheduled-run path advanced moments earlier exactly where it was.

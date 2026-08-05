@@ -324,10 +324,18 @@ struct ScheduledRoutineRunTests {
     }
 
     /// The other direction, so the carry-over cannot degrade into "a pause can never be cleared":
-    /// an edit that also switches the schedule on still clears it, because `newlyCreated` routes
-    /// every path through the same `setEnabled`.
+    /// once a routine is resumed, editing it does not drag the old reason back in.
+    ///
+    /// Renamed per PR #27 review finding F9. It previously claimed to pin "an edit that also
+    /// switches the schedule back on clears the pause", which is not what it does and not
+    /// reachable from here: resuming happens first, so `commitScheduleDraft` sees a schedule whose
+    /// reason is already nil, and the enabled-plus-reason combination the old name described never
+    /// occurs on this path. The ordering inside `newlyCreated` that actually decides that case is
+    /// pinned where it lives, by `newlyCreatedClearsAPassedPauseReasonWhenItBuildsAnEnabledSchedule`
+    /// in `RoutineScheduleTests`. Resume-then-edit is still worth pinning on its own account — it
+    /// is the sequence a user fixing a paused routine actually performs.
     @Test
-    func editingAPausedRoutineWhileSwitchingItBackOnClearsThePause() async throws {
+    func editingARoutineAfterResumingItDoesNotBringItsOldPauseBack() async throws {
         let fixture = try makeFixture()
         defer { fixture.cleanUp() }
         try fixture.snippetStore.save(StoredSnippet(trigger: ";sig", expansion: "Old text"))
