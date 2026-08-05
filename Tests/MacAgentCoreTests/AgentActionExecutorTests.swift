@@ -744,6 +744,139 @@ struct AgentActionExecutorTests {
         ])
     }
 
+    // MARK: - SONNY-24: a routine binds its own browser
+
+    /// Order independence, the half that is not obvious. The founder decision (2026-08-04, Q5a) is
+    /// that the first browser-capable app *anywhere* in the routine binds every URL step, so a URL
+    /// sequenced **before** the browser step still binds — the routine's browser is a property of
+    /// the routine, not of what has run so far. An order-sensitive reading (option b) was declined
+    /// precisely because it makes the same routine behave differently for a reason the user cannot
+    /// see in the Routines list.
+    @Test
+    func aURLStepSequencedBeforeTheBrowserStepStillBindsToTheRoutinesBrowser() async throws {
+        let browserOpener = RecordingBrowserOpener()
+        let executor = try await routineExecutor(
+            named: "Reversed",
+            steps: [
+                AgentStep(id: "open-github", operation: .openURL, description: "Open GitHub.", targetURL: "https://github.com"),
+                AgentStep(id: "open-safari", operation: .openApp, description: "Open Safari.", appName: "Safari")
+            ],
+            browserOpener: browserOpener
+        )
+
+        _ = try await executor.execute(plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Reversed")) { _, _ in }
+
+        #expect(browserOpener.openedBrowsers == [MacApp(displayName: "Safari", bundleIdentifier: "com.apple.Safari")])
+    }
+
+    /// Two browsers: the first in step order wins. Pinned with Chrome first and Safari second so a
+    /// "last one wins" or "alphabetical" implementation cannot pass — both would return Safari.
+    @Test
+    func aRoutineNamingTwoBrowsersBindsTheFirstOneInStepOrder() async throws {
+        let browserOpener = RecordingBrowserOpener()
+        let executor = try await routineExecutor(
+            named: "Both Browsers",
+            steps: [
+                AgentStep(id: "open-chrome", operation: .openApp, description: "Open Chrome.", appName: "Chrome"),
+                AgentStep(id: "open-safari", operation: .openApp, description: "Open Safari.", appName: "Safari"),
+                AgentStep(id: "open-github", operation: .openURL, description: "Open GitHub.", targetURL: "https://github.com")
+            ],
+            browserOpener: browserOpener
+        )
+
+        _ = try await executor.execute(plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Both Browsers")) { _, _ in }
+
+        #expect(browserOpener.openedBrowsers == [MacApp(displayName: "Chrome", bundleIdentifier: "com.google.Chrome", aliases: ["Google Chrome"])])
+    }
+
+    /// A routine that opens an app which is not a browser must be completely unchanged — no
+    /// binding, system default, exactly as before this ticket. This is the guard against the fix
+    /// over-reaching into "any app the routine opens becomes its browser".
+    @Test
+    func aRoutineWithNoBrowserStepStillUsesTheSystemDefault() async throws {
+        let browserOpener = RecordingBrowserOpener()
+        let executor = try await routineExecutor(
+            named: "Notes Only",
+            steps: [
+                AgentStep(id: "open-notes", operation: .openApp, description: "Open Notes.", appName: "Notes"),
+                AgentStep(id: "open-github", operation: .openURL, description: "Open GitHub.", targetURL: "https://github.com")
+            ],
+            browserOpener: browserOpener
+        )
+
+        _ = try await executor.execute(plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Notes Only")) { _, _ in }
+
+        #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com"])
+        #expect(browserOpener.openedBrowsers == [nil])
+    }
+
+    /// Scheduled/unattended parity. A scheduled run executes exactly this plan literal — the
+    /// scheduler and the typed command share `RunRoutineCapabilityAdapter.plan(forRoutineNamed:)`
+    /// for that reason — through `AgentRunner.execute` carrying the only tier an unattended run can
+    /// ever hold, `.approved(.tier2)` (`AgentViewModel`'s scheduled path). Binding happens inside
+    /// the executor, below any notion of what triggered the run, so proving it here proves it for
+    /// the scheduler without reaching into the UI layer, which this ticket must not touch.
+    @Test
+    func anUnattendedRunOfTheSameRoutineBindsTheSameBrowser() async throws {
+        let browserOpener = RecordingBrowserOpener()
+        let executor = try await routineExecutor(
+            named: "Morning",
+            steps: [
+                AgentStep(id: "open-safari", operation: .openApp, description: "Open Safari.", appName: "Safari"),
+                AgentStep(id: "open-github", operation: .openURL, description: "Open GitHub.", targetURL: "https://github.com")
+            ],
+            browserOpener: browserOpener
+        )
+        // `plannerProvider` rather than a fake planner type: this plan is built directly, so the
+        // provider is never invoked, and the module already carries six duplicate `FailingPlanner`
+        // definitions without this adding a seventh.
+        let runner = AgentRunner(
+            plannerProvider: { throw AgentExecutionError.emptyCommand },
+            executor: executor
+        )
+        let prepared = try runner.prepare(
+            plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Morning"),
+            source: .instantResolver
+        )
+
+        _ = try await runner.execute(prepared, approvalDecision: .approved(.tier2))
+
+        #expect(browserOpener.openedBrowsers == [MacApp(displayName: "Safari", bundleIdentifier: "com.apple.Safari")])
+    }
+
+    /// Saves a routine through the real save path, then returns an executor wired to the same
+    /// stores — going through `save_routine` rather than writing the store directly so these tests
+    /// exercise a routine that really passed `validateRoutineSteps`.
+    private func routineExecutor(
+        named name: String,
+        steps: [AgentStep],
+        browserOpener: RecordingBrowserOpener
+    ) async throws -> AgentActionExecutor {
+        let root = try makeDirectory()
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        let executor = makeExecutor(
+            root: root,
+            browserOpener: browserOpener,
+            appOpener: RecordingAppOpener(),
+            routineStore: routineStore
+        )
+        let savePlan = AgentPlan(
+            summary: "Teach routine.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "save-routine",
+                    operation: .saveRoutine,
+                    description: "Save routine.",
+                    routineName: name,
+                    routineSteps: steps
+                )
+            ]
+        )
+        _ = try await executor.execute(plan: savePlan) { _, _ in }
+        return executor
+    }
+
     @Test
     func docxPreviewDestinationNamingMatchesInjectedConverter() throws {
         let root = try makeDirectory()
@@ -2022,10 +2155,12 @@ struct AgentActionExecutorTests {
 
         #expect(appOpener.openedBundleIDs == ["com.apple.Safari"])
         #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com"])
-        // Non-workspace caller: a routine's openURL step still goes to the system default browser
-        // even though this routine opens Safari first. This pins current behavior, not desired
-        // behavior — SONNY-24 holds the question of whether a routine should bind its own browser.
-        #expect(browserOpener.openedBrowsers == [nil])
+        // SONNY-24: the assertion the SONNY-9 review chain predicted would flip. This routine
+        // opens Safari, so its URL step now goes to Safari rather than the system default — the
+        // co-founder's original surprise, removed. The five *non-routine* callers that carry the
+        // same assertion must stay `[nil]`; if any of them flips too, the binding has leaked into
+        // the ordinary open-URL path, which is exactly the failure mode this ticket guards.
+        #expect(browserOpener.openedBrowsers == [MacApp(displayName: "Safari", bundleIdentifier: "com.apple.Safari")])
         #expect(result.summary == "Ran routine Mixed Launch. Opened the Safari app. Opened https://github.com.")
     }
 

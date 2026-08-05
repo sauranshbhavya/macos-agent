@@ -48,7 +48,7 @@ public struct OpenSafeURLCapabilityAdapter: CapabilityAdapter {
         let previews = try preview(plan: plan, context: context)
         let spec = try spec(in: plan)
         log(.act, "Opening \(spec.url.absoluteString)")
-        try await context.browserOpener.open(spec.url)
+        try await context.browserOpener.open(spec.url, using: context.preferredBrowser)
         log(.summarize, "Opened URL")
         return AgentRunResult(plan: plan, previews: previews, summary: "Opened \(spec.url.absoluteString).")
     }

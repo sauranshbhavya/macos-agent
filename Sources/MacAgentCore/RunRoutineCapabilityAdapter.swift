@@ -72,7 +72,7 @@ public struct RunRoutineCapabilityAdapter: CapabilityAdapter {
     ) async throws -> AgentRunResult {
         let routine = try routineRunSpec(plan, context: context)
         log(.act, "Running routine \(routine.name)")
-        let result = try await context.executeNestedPlan(routine.plan, log)
+        let result = try await context.executeNestedPlan(routine.plan, browser(for: routine, context: context), log)
         // Return the nested execution's real previews — re-deriving them here would re-resolve
         // default output paths (fresh timestamps) and report files that were never written.
         return AgentRunResult(
@@ -81,6 +81,34 @@ public struct RunRoutineCapabilityAdapter: CapabilityAdapter {
             summary: "Ran routine \(routine.name). \(result.summary)",
             suggestions: result.suggestions
         )
+    }
+
+    /// The routine's browser: the first browser-capable app among its own app-open steps, which
+    /// then binds *every* URL the routine opens regardless of step order.
+    ///
+    /// Byte-for-byte the workspace rule (`WorkspaceBrowserCatalog.firstBrowser(in:)`, reused rather
+    /// than reimplemented so there is one definition of "browser-capable"), deliberately so: a
+    /// routine that opens Safari and a workspace that lists Safari should behave the same way, and
+    /// two mental models for one behavior is the surprise SONNY-24 exists to remove. Order
+    /// independence is the decided semantic (founder decision 2026-08-04, Q5a) — a URL step
+    /// sequenced *before* the browser step still binds, and with two browsers the first in step
+    /// order wins.
+    ///
+    /// `nil` when the routine names no browser, which keeps the system-default behavior exactly.
+    ///
+    /// Unresolvable app names are skipped rather than thrown on: a routine step naming an app the
+    /// catalog no longer knows fails when *that step* executes, with its own error. Resolving the
+    /// browser must not pre-empt that with a different failure before any step has run.
+    ///
+    /// Only `.openApp` steps are considered. A nested workspace open cannot appear here at all —
+    /// `SaveRoutineCapabilityAdapter.validateRoutineSteps` rejects `.openWorkspace` (and
+    /// `.runRoutine`) at save time — so the question of a nested workspace's own browser winning
+    /// is structurally moot rather than merely unhandled.
+    private func browser(for routine: StoredRoutine, context: CapabilityExecutionContext) -> MacApp? {
+        let apps = routine.steps
+            .filter { $0.operation == .openApp }
+            .compactMap { try? context.appCatalog.resolve($0.appName) }
+        return WorkspaceBrowserCatalog.firstBrowser(in: apps)
     }
 
     private func headerPreview(for routine: StoredRoutine) -> ActionPreview {
