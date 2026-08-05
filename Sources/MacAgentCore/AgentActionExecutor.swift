@@ -382,8 +382,17 @@ public final class AgentActionExecutor {
         }
     }
 
+    /// Runs an already-approved plan.
+    ///
+    /// `preferredBrowser` binds every URL this plan opens *on the injected browser-opener seam*
+    /// to one browser — not `.playMedia`, which opens on the media seam (SONNY-51). It is threaded as a
+    /// parameter rather than held on the executor deliberately: `execute` suspends at every step,
+    /// so executor-held state would be readable — and mutable — by any other main-actor task that
+    /// interleaved, and a routine's browser could leak into a command the user ran meanwhile.
+    /// Only `RunRoutineCapabilityAdapter` passes a non-nil value, through `executeNestedPlan`.
     public func execute(
         plan: AgentPlan,
+        preferredBrowser: MacApp? = nil,
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
         let resolvedPlan = try resolveDefaultOutputs(in: plan)
@@ -393,55 +402,55 @@ public final class AgentActionExecutor {
         case .clarify:
             throw AgentExecutionError.missingClarificationQuestion
         case .largestFiles:
-            return try await executeCapability(for: .scanSelectLargestFiles, plan: resolvedPlan, log: log)
+            return try await executeCapability(for: .scanSelectLargestFiles, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .docx:
-            return try await executeCapability(for: .scanDocx, plan: resolvedPlan, log: log)
+            return try await executeCapability(for: .scanDocx, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .hackerNews:
-            return try await executeCapability(for: .openHackerNews, plan: resolvedPlan, log: log)
+            return try await executeCapability(for: .openHackerNews, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .webResearch:
-            return try await executeCapability(for: .webToMarkdown, plan: resolvedPlan, log: log)
+            return try await executeCapability(for: .webToMarkdown, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .openApp:
-            return try await executeCapability(for: .openApp, plan: resolvedPlan, log: log)
+            return try await executeCapability(for: .openApp, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .openAppSearchURL:
-            return try await executeCapability(for: .openAppSearchURL, plan: resolvedPlan, log: log)
+            return try await executeCapability(for: .openAppSearchURL, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .openURL:
-            return try await executeCapability(for: .openURL, plan: resolvedPlan, log: log)
+            return try await executeCapability(for: .openURL, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .openGeneratedArtifact:
-            return try await executeCapability(for: .openGeneratedArtifact, plan: resolvedPlan, log: log)
+            return try await executeCapability(for: .openGeneratedArtifact, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .createLocalDraft:
-            return try await executeCapability(for: .createLocalDraft, plan: resolvedPlan, log: log)
+            return try await executeCapability(for: .createLocalDraft, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .calculator:
-            return try await executeCapability(for: .calculateUtility, plan: resolvedPlan, log: log)
+            return try await executeCapability(for: .calculateUtility, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .clipboardHistory:
-            return try await executeCapability(for: .lookupClipboardHistory, plan: resolvedPlan, log: log)
+            return try await executeCapability(for: .lookupClipboardHistory, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .snippetSave:
-            return try await executeCapability(for: .saveSnippet, plan: resolvedPlan, log: log)
+            return try await executeCapability(for: .saveSnippet, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .snippetExpansion:
-            return try await executeCapability(for: .expandSnippet, plan: resolvedPlan, log: log)
+            return try await executeCapability(for: .expandSnippet, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .runningAppSwitch:
-            return try await executeCapability(for: .switchRunningApp, plan: resolvedPlan, log: log)
+            return try await executeCapability(for: .switchRunningApp, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .recentArtifacts:
-            return try await executeCapability(for: .lookupRecentArtifacts, plan: resolvedPlan, log: log)
+            return try await executeCapability(for: .lookupRecentArtifacts, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .mediaOpen:
-            return try await executeCapability(for: .playMedia, plan: resolvedPlan, log: log)
+            return try await executeCapability(for: .playMedia, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .finderSelection:
-            return try await executeCapability(for: .getFinderSelection, plan: resolvedPlan, log: log)
+            return try await executeCapability(for: .getFinderSelection, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .revealInFinder:
-            return try await executeCapability(for: .revealInFinder, plan: resolvedPlan, log: log)
+            return try await executeCapability(for: .revealInFinder, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .permissionReadiness:
-            return try await executeCapability(for: .showPermissionReadiness, plan: resolvedPlan, log: log)
+            return try await executeCapability(for: .showPermissionReadiness, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .saveRoutine:
-            return try await executeCapability(for: .saveRoutine, plan: resolvedPlan, log: log)
+            return try await executeCapability(for: .saveRoutine, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .runRoutine:
-            return try await executeCapability(for: .runRoutine, plan: resolvedPlan, log: log)
+            return try await executeCapability(for: .runRoutine, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .createWorkspace:
-            return try await executeCapability(for: .createWorkspace, plan: resolvedPlan, log: log)
+            return try await executeCapability(for: .createWorkspace, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .openWorkspace:
-            return try await executeCapability(for: .openWorkspace, plan: resolvedPlan, log: log)
+            return try await executeCapability(for: .openWorkspace, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .invokeShortcut:
-            return try await executeCapability(for: .invokeShortcut, plan: resolvedPlan, log: log)
+            return try await executeCapability(for: .invokeShortcut, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .chain:
-            return try await executeChain(resolvedPlan, log: log)
+            return try await executeChain(resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         }
     }
 
@@ -657,11 +666,12 @@ public final class AgentActionExecutor {
     private func executeCapability(
         for operation: AgentOperation,
         plan: AgentPlan,
+        preferredBrowser: MacApp?,
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
         try await capabilityRegistry
             .adapter(for: operation)
-            .execute(plan: plan, context: capabilityContext(), log: log)
+            .execute(plan: plan, context: capabilityContext(preferredBrowser: preferredBrowser), log: log)
     }
 
     private func capabilityAdapters(in plan: AgentPlan) throws -> [any CapabilityAdapter] {
@@ -895,7 +905,7 @@ public final class AgentActionExecutor {
         return result
     }
 
-    private func capabilityContext() -> CapabilityExecutionContext {
+    private func capabilityContext(preferredBrowser: MacApp? = nil) -> CapabilityExecutionContext {
         CapabilityExecutionContext(
             whitelist: whitelist,
             inventory: inventory,
@@ -927,6 +937,7 @@ public final class AgentActionExecutor {
             fileManager: fileManager,
             now: now,
             hotKeyReady: hotKeyReady,
+            preferredBrowser: preferredBrowser,
             assessNestedPlan: { [weak self] plan in
                 guard let self else {
                     throw AgentExecutionError.invalidPlan("Executor is unavailable for nested risk assessment.")
@@ -939,11 +950,11 @@ public final class AgentActionExecutor {
                 }
                 return try self.preview(plan: plan)
             },
-            executeNestedPlan: { [weak self] plan, log in
+            executeNestedPlan: { [weak self] plan, nestedBrowser, log in
                 guard let self else {
                     throw AgentExecutionError.invalidPlan("Executor is unavailable for nested execution.")
                 }
-                return try await self.execute(plan: plan, log: log)
+                return try await self.execute(plan: plan, preferredBrowser: nestedBrowser, log: log)
             }
         )
     }
@@ -966,6 +977,7 @@ public final class AgentActionExecutor {
 
     private func executeChain(
         _ plan: AgentPlan,
+        preferredBrowser: MacApp?,
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
         var summaries: [String] = []
@@ -975,7 +987,7 @@ public final class AgentActionExecutor {
 
         for segment in try segmentPlans(in: plan) {
             let resolved = resolvePreviousArtifactPathIfNeeded(in: segment, previousArtifactPath: previousArtifactPath)
-            let result = try await execute(plan: resolved, log: log)
+            let result = try await execute(plan: resolved, preferredBrowser: preferredBrowser, log: log)
             summaries.append(result.summary)
             suggestions.append(contentsOf: result.suggestions)
             // Accumulate each segment's real result previews — re-running previewChain after

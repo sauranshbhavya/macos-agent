@@ -1455,3 +1455,60 @@ Known limitations / deferred scope:
 Open questions (required, write "none" if true): none.
 
 Next branch: SONNY-24, the last ticket of this session's pre-assigned serial sequence (SONNY-29 → SONNY-31 → SONNY-24), on its own branch after this one merges — all three touch the executor/assessment area, so the sequence is serial through merge.
+
+### Branch: feature/sonny-24-routine-browser-binding
+Status: complete
+Date: 2026-08-05
+Tickets: SONNY-24 — a routine's URL steps now open in the routine's own browser, the way a workspace's URLs already did. Spawned no discovery tickets.
+Reviewed by: fresh session (per WORKFLOW.md step 7) on PR #28; eight findings, all closed before merge. Two were unpinned edits this branch shipped — the Hacker News adapter's read of `preferredBrowser` (F2, revertible with the suite green) and the unresolvable-app skip branch (F3) — both now pinned and mutation-checked. Two were false claims in this entry and in the code comments: "every URL the routine opens" ignored the media seam (F4), and "structurally moot" ignored that `RoutineStore.save` does not validate steps (F5). The rest were a mutation-table count measured before later tests existed (F1), a comment claiming a fixture excluded an implementation it does not (F6), a leaked temp directory (F7), and a founder-decision reference the repository could not resolve (F8).
+
+**Mutation counts are stated with the commit they were measured at, from this branch onward.** The table on SONNY-24 originally recorded the binding-revert mutation as failing 4 tests, measured at `1e5f13c`; the reviewer measured 5 at `ddf0da5`; it is 7 at `ead2c42`. Nothing regressed — each new pin adds a test that the same revert reddens. A count with no SHA beside it cannot be told apart from a stale one, which is the whole reason F1 was raisable.
+
+Spec sections covered: §6.9/§9.2-§9.3 territory (workspaces and routines as saved automations) — the routine half of the browser-targeting behavior SONNY-9 built for workspaces. No risk tier, approval mapping, or planner vocabulary changed.
+Files changed:
+- `Sources/MacAgentCore/CapabilityAdapter.swift` (`preferredBrowser` on the execution context, `ExecuteNestedPlan` signature)
+- `Sources/MacAgentCore/AgentActionExecutor.swift` (threading)
+- `Sources/MacAgentCore/RunRoutineCapabilityAdapter.swift` (browser resolution)
+- `Sources/MacAgentCore/OpenSafeURLCapabilityAdapter.swift`
+- `Sources/MacAgentCore/OpenAppSearchURLCapabilityAdapter.swift`
+- `Sources/MacAgentCore/WebResearchMarkdownCapabilityAdapter.swift`
+- `Tests/MacAgentCoreTests/AgentActionExecutorTests.swift`
+- `docs/sonny-v1-implementation-changelog.md`
+
+Tests: `env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disable-sandbox -Xswiftc -F -Xswiftc /Library/Developer/CommandLineTools/Library/Developer/Frameworks -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/Frameworks -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/usr/lib` -> exit 0, **471 tests in 45 suites**, up from the 464 in 45 re-measured on `main` at `0a33a03` (post-SONNY-31 merge). `swift build` -> exit 0.
+
+Behavior added:
+- **A routine's URL steps open in the routine's own browser.** `RunRoutineCapabilityAdapter` resolves the first browser-capable app among the routine's own `.openApp` steps and passes it into the nested execution; every URL that plan opens *on the injected browser-opener seam* goes there. "Open Safari → open github.com" now lands in Safari rather than the system default.
+- **Order-independent, first-wins**, per the founder decision of 2026-08-04 — the first browser-capable app anywhere in the routine binds all of its URL steps regardless of order; order-sensitive binding and a per-routine browser setting were both declined so a routine and a workspace stay one mental model. A URL step sequenced *before* the browser step still binds, and with two browsers the first in step order wins.
+- **The binding covers every URL the routine opens *on the injected browser-opener seam*** — `.openURL`, `.openAppSearchURL` and the Hacker News open, since all three read the same context field. **Not `.playMedia`**, which opens through `context.mediaOpener` and reaches `NSWorkspace.shared.open` directly (`MediaPlaybackService.swift:1015`), so a media step carrying an explicit `open.spotify.com`-style URL still lands in the system default browser. The unqualified "every URL the routine opens" was this entry's original claim and was too broad (PR #28, F4); the gap is filed as its own ticket.
+
+Behavior preserved (required, no blanket claims):
+- **The ordinary open-URL path is untouched, and this is the branch's central guard.** A plain "open github.com", a standalone app-search URL, and the Hacker News open all still go to the system default. Six pre-existing `openedBrowsers == [nil]` assertions (added by SONNY-9's F1 precisely to make this provable) stay `[nil]`, and each was re-proved live by forcing a browser into its own adapter: `OpenSafeURLCapabilityAdapter` → 2 red, `OpenAppSearchURLCapabilityAdapter` → 2 red, the Hacker News open → 1 red.
+- **The workspace path is byte-identical.** `OpenWorkspaceCapabilityAdapter` still resolves and passes its own browser explicitly; it never reads `preferredBrowser`. Its tests pass unmodified.
+- **A routine naming no browser is unchanged** — resolves `nil`, system default, pinned by `aRoutineWithNoBrowserStepStillUsesTheSystemDefault`.
+- **`WorkspaceBrowserOpener`'s fallback semantics are inherited, not forked.** An unresolvable or uninstalled browser still falls back to the default and logs; nothing in this branch touches that contract or `SafeURL` validation.
+- **Scheduled and manual runs behave identically**, pinned through `AgentRunner` at `.approved(.tier2)` — the only tier an unattended run can carry.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**The browser is a parameter, never executor state — and the reason generalizes to anything else threaded through `execute`.** The tempting shortcut is a `private var routineBrowser` on `AgentActionExecutor`, set around the nested call and restored in a `defer`. It is wrong for the same reason SONNY-31's caller-held schedule write was: `execute` is `async` and suspends at every step, so executor-held state is readable *and mutable* by any other main-actor task that interleaves — a scheduled routine's browser could leak into a command the user typed meanwhile, and the `defer` would restore a value the other task had already moved on from. Threading it costs 24 mechanical switch-arm edits and buys correctness by construction. **`@MainActor` serializes individual synchronous calls, not the span of an `async` function.**
+
+**Reuse of `WorkspaceBrowserCatalog.firstBrowser(in:)` is the point, not an implementation convenience.** Two definitions of "browser-capable" would drift the moment one gains Arc and the other does not, and the user-visible promise of this ticket is that a routine and a workspace behave the same way. The catalog's own doc comment already anticipated this ("adding one to the catalog makes it browser-aware in the same edit").
+
+**Unresolvable app names are skipped during resolution, deliberately.** `compactMap { try? … }` rather than `try`: a routine step naming an app the catalog no longer knows must fail when *that step* runs, with its own error, not be pre-empted by a different failure raised before any step has executed. Fail-fast here would also have been a behavior change beyond this ticket, since routines dispatch per step today.
+
+**One open question from the discovery note is unhandled rather than impossible, and the difference is a store-boundary asymmetry worth knowing.** It asked whether a nested workspace-open inside a routine should keep winning with its own browser. `SaveRoutineCapabilityAdapter.validateRoutineSteps` rejects `.openWorkspace` (and `.runRoutine`) — but that is the *save capability's* boundary, not the store's. `RoutineStore.save` validates `schedule` and nothing else, so a routine carrying either can be written straight to the store and reach the executor; 52 call-site lines across 48 test functions in 11 files already write routines that way (measured by PR #28's reviewer at `b31d7e2`; this entry's original "nineteen" came from a single narrow grep and was simply wrong), and this branch's own skip-branch test needs that door to exist. This entry originally called the question "structurally moot", which was wrong (PR #28, F5). The asymmetry — `RoutineSchedule.validate()` is enforced at the store's single choke point while step safety is enforced only one layer up — is filed as its own ticket.
+
+**The SONNY-9 review chain's assertion-flip prediction was exact, and it is the model for how to hand a scope guard forward.** That chain added six `[nil]` assertions *before* this ticket existed, having first proved by mutation that nothing pinned the "before" state. This branch's first test run then flipped exactly one of them — the routine site — with the other five green, which is precisely the signal the chain said would distinguish a correct fix from one leaking into the ordinary open-URL path. A ticket that pins the before-state for its own successor is worth copying.
+
+Known limitations / deferred scope:
+- **No per-routine browser setting** — option (c) at triage, declined. The browser is inferred from the routine's own steps, so a routine that opens no browser cannot be made to prefer one without adding an `.openApp` step.
+- **`.switchRunningApp` steps do not contribute a browser.** Only `.openApp` steps are scanned. Switching to an already-running Safari is arguably the same intent, but the ticket's wording is "app-open step" and widening it was not contracted; recorded rather than silently decided.
+- **A routine's browser does not reach a nested plan that a *capability* runs on its own** — there is no such path today (routines cannot nest), so this is a note for whoever adds one.
+- **`.playMedia` URL steps do not bind (SONNY-51).** They open on the media seam rather than the browser seam, so an explicit `open.spotify.com`-style URL in a routine still uses the system default. Filed rather than fixed: it needs the media seam to accept a browser preference, which is a different seam than this ticket contracted for.
+- **`RoutineStore.save` validates schedules but not steps (SONNY-52).** A routine the save capability rejects can still be written directly to the store and executed. Filed rather than fixed: tightening it would change what 52 call-site lines across 48 test functions in 11 files are allowed to write, which is more than a browser-binding ticket should decide.
+- **The routine-browser-binding decision is not yet in `docs/sonny-founder-design-decisions.md` (SONNY-53).** The decision is recorded on SONNY-24 and spelled out in `RunRoutineCapabilityAdapter`'s doc comment, but that document is where founder decisions are meant to live, and it currently has no entry for this one.
+
+Open questions (required, write "none" if true): none.
+
+Next branch: none. This closes the pre-assigned serial sequence SONNY-29 → SONNY-31 → SONNY-24; roadmap row B (`feature/workspace-restriction-scope`, SONNY-36 onward) is planned and unstarted.

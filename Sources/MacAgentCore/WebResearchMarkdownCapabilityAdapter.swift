@@ -283,7 +283,7 @@ public struct WebResearchMarkdownCapabilityAdapter: CapabilityAdapter {
         let previews = try preview(plan: plan, context: context)
         let spec = try hackerNewsSpec(in: plan, context: context)
         log(.act, "Opening Hacker News")
-        try await context.browserOpener.open(Self.hackerNewsURL)
+        try await context.browserOpener.open(Self.hackerNewsURL, using: context.preferredBrowser)
         log(.act, "Fetching top \(spec.count) headlines")
         let headlines = try await context.hackerNewsFetcher.topHeadlines(limit: spec.count)
         log(.observe, "Fetched \(headlines.count) headlines")

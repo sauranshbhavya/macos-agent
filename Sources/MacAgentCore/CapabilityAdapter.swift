@@ -118,7 +118,10 @@ public struct CapabilityMetadata: Equatable, Sendable {
 public struct CapabilityExecutionContext {
     public typealias AssessNestedPlan = @MainActor (AgentPlan) throws -> CapabilityRiskAssessment
     public typealias PreviewNestedPlan = @MainActor (AgentPlan) throws -> [ActionPreview]
-    public typealias ExecuteNestedPlan = @MainActor (AgentPlan, @escaping (AgentPhase, String) -> Void) async throws -> AgentRunResult
+    /// Runs a nested plan, optionally binding a browser for every URL it opens on the injected
+    /// browser-opener seam. `nil` means the
+    /// nested plan keeps the system default, which is what every caller except a routine passes.
+    public typealias ExecuteNestedPlan = @MainActor (AgentPlan, MacApp?, @escaping (AgentPhase, String) -> Void) async throws -> AgentRunResult
 
     public var whitelist: PathWhitelist
     public var inventory: FileInventory
@@ -153,6 +156,15 @@ public struct CapabilityExecutionContext {
     /// as `now` — the real value lives in the UI layer and changes after launch, so a snapshot
     /// or a hardcoded `true` would misreport an actual Control-Option-Space conflict.
     public var hotKeyReady: () -> Bool
+    /// The browser this execution should prefer for every URL it opens *on the injected
+    /// browser-opener seam*, or `nil` for the system default. `.playMedia` is on a different seam
+    /// and does not consult this (SONNY-51).
+    ///
+    /// Set only for the nested execution of a routine that names a browser-capable app among its
+    /// own steps (SONNY-24), mirroring what a workspace already does with its apps list. It is
+    /// `nil` for every top-level run, so a plain "open github.com" keeps going to the system
+    /// default browser — the ordinary path must not inherit a routine's preference.
+    public var preferredBrowser: MacApp?
     public var assessNestedPlan: AssessNestedPlan
     public var previewNestedPlan: PreviewNestedPlan
     public var executeNestedPlan: ExecuteNestedPlan
@@ -188,6 +200,7 @@ public struct CapabilityExecutionContext {
         fileManager: FileManager = .default,
         now: @escaping () -> Date = Date.init,
         hotKeyReady: @escaping () -> Bool = { true },
+        preferredBrowser: MacApp? = nil,
         assessNestedPlan: @escaping AssessNestedPlan,
         previewNestedPlan: @escaping PreviewNestedPlan,
         executeNestedPlan: @escaping ExecuteNestedPlan
@@ -222,6 +235,7 @@ public struct CapabilityExecutionContext {
         self.fileManager = fileManager
         self.now = now
         self.hotKeyReady = hotKeyReady
+        self.preferredBrowser = preferredBrowser
         self.assessNestedPlan = assessNestedPlan
         self.previewNestedPlan = previewNestedPlan
         self.executeNestedPlan = executeNestedPlan

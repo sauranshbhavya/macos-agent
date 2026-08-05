@@ -52,7 +52,7 @@ public struct OpenAppSearchURLCapabilityAdapter: CapabilityAdapter {
         let previews = try preview(plan: plan, context: context)
         let spec = try spec(in: plan, context: context)
         log(.act, "Opening \(spec.targetName) search for \(spec.query)")
-        try await context.browserOpener.open(spec.url)
+        try await context.browserOpener.open(spec.url, using: context.preferredBrowser)
         log(.summarize, "Opened search URL")
         return AgentRunResult(
             plan: plan,
