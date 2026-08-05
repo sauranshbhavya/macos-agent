@@ -260,6 +260,13 @@ public struct WorkspaceScope: Equatable, Sendable {
     /// scope checking entirely, which is the one outcome a boundary must never produce. The `bundle:`
     /// / `name:` prefixes keep a raw name that happens to look like a bundle identifier from
     /// colliding with a real one.
+    ///
+    /// The fallback folds through `MacAppCatalog.normalize` — the catalog's *own* normalization, not
+    /// the stores' `normalized(_:)`. The two differ: the stores fold case and diacritics, while the
+    /// catalog also strips spaces, hyphens and underscores. Using the weaker one here would make
+    /// "Microsoft Word" and "MicrosoftWord" different apps to workspace scope while being the same
+    /// app to `resolve`, which is the same class of divergence the shared `PathWhitelist` containment
+    /// exists to prevent for paths. One app-name normalization, both branches.
     private static func appKey(for rawName: String, catalog: MacAppCatalog) -> String? {
         let trimmed = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
@@ -268,7 +275,7 @@ public struct WorkspaceScope: Equatable, Sendable {
         if let app = try? catalog.resolve(trimmed) {
             return "bundle:" + app.bundleIdentifier
         }
-        return "name:" + normalized(trimmed)
+        return "name:" + MacAppCatalog.normalize(trimmed)
     }
 
     /// Lowercased, trailing DNS root dots removed, then a single leading `www.` removed. Applied to

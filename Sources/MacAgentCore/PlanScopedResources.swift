@@ -272,10 +272,19 @@ public enum PlanScopedResources {
         case searchQuery
     }
 
-    /// Mirrors `WebResearchMarkdownCapabilityAdapter.webResearchInput(in:)`'s priority exactly:
-    /// `sourceURLs` wins, then `targetURL`, then `searchQuery`. Only the third form is opaque —
-    /// with either URL field populated the search branch is unreachable and the step is fully
-    /// knowable.
+    /// Mirrors `WebResearchMarkdownCapabilityAdapter.webResearchInput(in:)`'s **priority order**
+    /// exactly: `sourceURLs` wins, then `targetURL`, then `searchQuery`, each trimmed and skipped
+    /// when empty. Only the third form is opaque — with either URL field populated the search branch
+    /// is unreachable and the step is fully knowable.
+    ///
+    /// What it deliberately does *not* mirror is the adapter's failure behavior on an invalid entry.
+    /// `webResearchInput` validates with a throwing `map`, so one bad URL in `sourceURLs` aborts the
+    /// whole step and the run touches nothing; `domain(fromURL:)` uses `try?` and keeps the valid
+    /// hosts. That makes this an over-report for that shape — a host is named that the run will not
+    /// visit — which is the safe direction (it escalates rather than blesses) and the same direction
+    /// this file takes everywhere else. Do not "fix" it by dropping the whole list on one bad entry:
+    /// a classifier that reports nothing when a plan is malformed is how a real resource goes
+    /// unchecked.
     private static func webSources(of step: AgentStep) -> WebSources {
         let listed = (step.sourceURLs ?? [])
             .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }

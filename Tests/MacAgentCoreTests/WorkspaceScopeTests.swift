@@ -43,6 +43,30 @@ struct WorkspaceScopeTests {
         #expect(scope.verdict(for: .app("Figma")) == .outOfScope)
     }
 
+    /// The catalog-unresolvable fallback folds through `MacAppCatalog.normalize`, so a name the
+    /// catalog does not know is still folded the way `resolve` would have folded it. With the stores'
+    /// weaker `normalized(_:)` — case and diacritics only — the spacing and punctuation variants
+    /// below would each be a *different app* to workspace scope while being the same app to every
+    /// other part of Sonny, which is the divergence the shared folding exists to prevent.
+    @Test
+    func theCatalogFallbackFoldsSpacingAndPunctuationTheSameWayTheCatalogItselfDoes() {
+        let scope = makeScope(apps: ["Microsoft Word"], urls: [])
+
+        #expect(scope.verdict(for: .app("MicrosoftWord")) == .inScope)
+        #expect(scope.verdict(for: .app("microsoft-word")) == .inScope)
+        #expect(scope.verdict(for: .app("micro soft word")) == .inScope)
+        // Still a real comparison, not a fold-everything-together: a different app stays out.
+        #expect(scope.verdict(for: .app("Microsoft Excel")) == .outOfScope)
+    }
+
+    /// Both sides go through the same fold, so the workspace side may be the odd spelling too.
+    @Test
+    func theCatalogFallbackFoldsTheStoredNameAndTheResourceNameAlike() {
+        let scope = makeScope(apps: ["microsoft_word"], urls: [])
+
+        #expect(scope.verdict(for: .app("Microsoft Word")) == .inScope)
+    }
+
     // MARK: - Domains
 
     @Test
@@ -358,6 +382,64 @@ struct WorkspaceScopeTests {
         )
 
         #expect(PlanScopedResources.resources(in: step) == [.webDomain("github.com")])
+    }
+
+    /// The placeholder-probe branch: `AppSearchURLCatalog.resolve` refuses an empty query, but every
+    /// template's host is fixed and query-independent, so a step missing its query is still probed
+    /// with a placeholder and still names the host it would have gone to. A step in this shape cannot
+    /// execute — the adapter throws the same `missingSearchQuery` — so naming the host over-reports in
+    /// the safe direction rather than leaving a configured domain unchecked.
+    @Test
+    func openAppSearchURLStillNamesItsTemplatesHostWhenTheStepCarriesNoQuery() {
+        let noQuery = AgentStep(
+            id: "search",
+            operation: .openAppSearchURL,
+            description: "Search GitHub.",
+            appName: "GitHub"
+        )
+        let blankQuery = AgentStep(
+            id: "search",
+            operation: .openAppSearchURL,
+            description: "Search GitHub.",
+            appName: "GitHub",
+            searchQuery: "   "
+        )
+
+        #expect(PlanScopedResources.resources(in: noQuery) == [.webDomain("github.com")])
+        #expect(PlanScopedResources.resources(in: blankQuery) == [.webDomain("github.com")])
+        // An unknown target still names nothing — the probe rescues a missing query, not a bad target.
+        #expect(
+            PlanScopedResources.resources(
+                in: AgentStep(
+                    id: "search",
+                    operation: .openAppSearchURL,
+                    description: "Search nowhere.",
+                    appName: "NotATemplate"
+                )
+            ).isEmpty
+        )
+    }
+
+    /// The one place `webSources` does *not* mirror the adapter, pinned so the doc comment saying so
+    /// stays true: the adapter validates `sourceURLs` with a throwing `map`, so one bad entry aborts
+    /// the whole step and the run touches nothing, while the classifier keeps the valid hosts. That
+    /// over-reports `docs.example.org` for a run that never happens — the safe direction, and the
+    /// opposite of the alternative, where a malformed plan would silently name no resources at all.
+    @Test
+    func webToMarkdownKeepsTheValidHostsWhenOneSourceURLIsRejected() {
+        let step = AgentStep(
+            id: "research",
+            operation: .webToMarkdown,
+            description: "Compare the pages.",
+            outputPath: "~/Documents/notes.md",
+            sourceURLs: ["https://docs.example.org/a", "http://localhost/private"]
+        )
+
+        #expect(
+            PlanScopedResources.resources(in: step)
+                == [.webDomain("docs.example.org"), .fileLocation("~/Documents/notes.md")]
+        )
+        #expect(PlanScopedResources.isOpaque(step) == false)
     }
 
     @Test
