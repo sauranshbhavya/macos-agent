@@ -1415,7 +1415,8 @@ struct AgentActionExecutorTests {
         let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
         let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
         try workspaceStore.save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://example.com"]))
-        try workspaceStore.save(StoredWorkspace(name: "Broken", apps: ["NotAnAllowlistedApp"], urls: []))
+        try workspaceStore.save(StoredWorkspace(name: "Scope Only", apps: ["NotAnAllowlistedApp"], urls: []))
+        try workspaceStore.save(StoredWorkspace(name: "Broken", apps: ["Safari"], urls: ["ftp://example.com"]))
         try routineStore.save(
             StoredRoutine(
                 name: "Morning Setup",
@@ -1441,9 +1442,18 @@ struct AgentActionExecutorTests {
             _ = try executor.prepare(plan: runRoutinePlan(name: "   "))
         }
 
-        // A workspace that exists but holds an app outside the allowlist is a real failure,
-        // not a "did you mean" — the user did name something real.
-        #expect(throws: MacAppCatalogError.self) {
+        // A workspace holding an app outside the launch catalog is no longer a failure at all.
+        // SONNY-44 decoupled scope listing from the catalog, so that entry is scope-only: it is
+        // skipped at open time and the open succeeds. (Before that decision this threw
+        // `MacAppCatalogError`, which is what made Microsoft Word unlistable.)
+        let scopeOnly = try executor.prepare(plan: openWorkspacePlan(name: "Scope Only"))
+        #expect(scopeOnly.clarificationQuestion == nil)
+        #expect(scopeOnly.plan.steps.map(\.operation) == [.openWorkspace])
+
+        // A workspace that exists but holds a URL `SafeURL` rejects is still a real failure, not a
+        // "did you mean" — the user did name something real. `SafeURL` is a capability bound rather
+        // than a user-declared boundary, and nothing decoupled it from anything.
+        #expect(throws: SafeURLError.unsupportedScheme("ftp")) {
             _ = try executor.prepare(plan: openWorkspacePlan(name: "Broken"))
         }
 
@@ -2529,6 +2539,264 @@ struct AgentActionExecutorTests {
         #expect(fallbackLogs.count == 1)
         #expect(fallbackLogs.first?.contains("Safari") == true)
         #expect(result.summary == "Opened workspace Research with 1 app(s) and 1 URL(s).")
+    }
+
+    // MARK: - Scope-only workspace apps (SONNY-44)
+
+    /// The headline of the 2026-08-05 decoupling decision: a workspace may list an app
+    /// `MacAppCatalog` does not carry. Before this, `create_workspace` validated every name through
+    /// the catalog's twelve entries and `MacAppCatalogError.appNotAllowed` made Microsoft Word
+    /// unlistable — which is what would have made every `convert_docx_to_pdf` inside an apps-listing
+    /// workspace escalate forever once SONNY-37 wires the verdict in.
+    @Test
+    func aWorkspaceCanListAnAppTheLaunchCatalogDoesNotCarry() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+        let plans = workspacePlans(
+            name: "Drafting",
+            apps: ["Safari", "Microsoft Word"],
+            urls: ["https://github.com"]
+        )
+
+        _ = try await executor.execute(plan: plans.create) { _, _ in }
+
+        // Persisted as typed, both entries alike — `docs/sonny-branch-b-plan.md` §7's storage rule.
+        // A stored name folded down to `MacAppCatalog.normalize`'s key form would read back as
+        // "microsoftword" in the list the user sees, and would buy nothing: `WorkspaceScope.appKey`
+        // folds both sides of every comparison through that normalizer anyway.
+        let stored = try workspaceStore.workspace(named: "Drafting")
+        #expect(stored.apps == ["Safari", "Microsoft Word"])
+        #expect(stored.urls == ["https://github.com"])
+    }
+
+    /// The acceptance criterion the whole ticket exists for, end to end through the real creation
+    /// path, the real store, and the real evaluator: a plan that drives Word is *in scope* for a
+    /// workspace that lists it.
+    ///
+    /// The second half is the mutation guard. Without it this test would pass just as happily if
+    /// `verdict(for:)` returned `.inScope` for everything — an identical workspace missing only the
+    /// Word entry must read `.outOfScope` for the identical plan.
+    @Test
+    func aStoredScopeOnlyAppIsInScopeForThePlanThatDrivesIt() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+
+        _ = try await executor.execute(
+            plan: workspacePlans(name: "Drafting", apps: ["Safari", "Microsoft Word"], urls: []).create
+        ) { _, _ in }
+        _ = try await executor.execute(
+            plan: workspacePlans(name: "Browsing", apps: ["Safari"], urls: []).create
+        ) { _, _ in }
+
+        // No plan field names Word — `DocumentConverter` AppleScript-drives it from a hardcoded
+        // path, and `PlanScopedResources` reports it implicitly.
+        let conversion = AgentPlan(
+            summary: "Convert the drafts.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "convert",
+                    operation: .convertDocxToPDF,
+                    description: "Convert the drafts.",
+                    inputPath: "~/Documents/Drafts",
+                    outputPath: "~/Documents/Drafts"
+                )
+            ]
+        )
+
+        let listsWord = WorkspaceScopeEvaluator.evaluate(
+            plan: conversion,
+            scope: WorkspaceScope(workspace: try workspaceStore.workspace(named: "Drafting"))
+        )
+        let wordFinding = try #require(
+            listsWord.findings.first { $0.resource == .app("Microsoft Word") }
+        )
+        #expect(wordFinding.verdict == .inScope)
+        #expect(listsWord.outOfScopeFindings.contains { $0.resource == .app("Microsoft Word") } == false)
+
+        let doesNotListWord = WorkspaceScopeEvaluator.evaluate(
+            plan: conversion,
+            scope: WorkspaceScope(workspace: try workspaceStore.workspace(named: "Browsing"))
+        )
+        let unlistedWordFinding = try #require(
+            doesNotListWord.findings.first { $0.resource == .app("Microsoft Word") }
+        )
+        #expect(unlistedWordFinding.verdict == .outOfScope)
+    }
+
+    /// Open-time handling, per the SONNY-9 precedent: the catalog apps launch, the scope-only entry
+    /// is logged and skipped, and the open itself succeeds. A workspace that fails to open because
+    /// it holds a name Sonny cannot launch would re-create the unremediable dead end from the other
+    /// direction.
+    @Test
+    func openingAWorkspaceLaunchesItsCatalogAppsAndSkipsAScopeOnlyEntryWithoutFailing() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let appOpener = RecordingAppOpener()
+        let browserOpener = RecordingBrowserOpener()
+        let executor = makeExecutor(
+            root: root,
+            browserOpener: browserOpener,
+            appOpener: appOpener,
+            workspaceStore: workspaceStore
+        )
+        let plans = workspacePlans(
+            name: "Drafting",
+            apps: ["Safari", "Microsoft Word"],
+            urls: ["https://github.com"]
+        )
+
+        _ = try await executor.execute(plan: plans.create) { _, _ in }
+        var messages: [String] = []
+        let result = try await executor.execute(plan: plans.open) { _, message in
+            messages.append(message)
+        }
+
+        #expect(appOpener.openedBundleIDs == ["com.apple.Safari"])
+        #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com"])
+        // Asserted whole, not by substring: SONNY-9's doubled-period bug shipped straight through
+        // four `contains`-style assertions.
+        #expect(messages.contains("Skipping Microsoft Word — not an app Sonny can launch; it counts for workspace scope only."))
+        // Counts what opened, not what is listed — the summary must not contradict the log above it.
+        #expect(result.summary == "Opened workspace Drafting with 1 app(s) and 1 URL(s).")
+    }
+
+    /// The preview declares side effects, so it must not claim an open that cannot happen. The
+    /// `details` line is the opposite case: it describes what the workspace *contains*, where a
+    /// scope-only entry genuinely belongs.
+    @Test
+    func theOpenPreviewDoesNotClaimItWillOpenAScopeOnlyApp() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+        let plans = workspacePlans(
+            name: "Drafting",
+            apps: ["Safari", "Microsoft Word"],
+            urls: ["https://github.com"]
+        )
+
+        _ = try await executor.execute(plan: plans.create) { _, _ in }
+        let preview = try #require(try executor.preview(plan: plans.open).first)
+
+        #expect(preview.opens == ["Safari", "https://github.com"])
+        #expect(preview.details.contains("Apps: Safari, Microsoft Word"))
+        #expect(preview.details.contains("Microsoft Word isn't an app Sonny can launch — counted for workspace scope only."))
+    }
+
+    /// The typo guard. It cannot tell "Microsft Word" from "Microsoft Word" — nothing can, once the
+    /// catalog is no longer the authority — so the entire mitigation is that the name is *said out
+    /// loud* at the moment it is typed rather than sitting silently inside a boundary. Both halves
+    /// are pinned: it appears when a name is scope-only, and it stays absent when every name
+    /// resolves.
+    @Test
+    func theScopeOnlyNoteNamesEveryUnlaunchableAppAndIsAbsentWhenEveryNameResolves() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+
+        let withScopeOnly = workspacePlans(
+            name: "Drafting",
+            apps: ["Safari", "Microsoft Word", "Figma"],
+            urls: []
+        )
+        let noted = try #require(try executor.preview(plan: withScopeOnly.create).first)
+        #expect(noted.details == [
+            "Apps: Safari, Microsoft Word, Figma",
+            "URLs: none",
+            "Microsoft Word, Figma aren't apps Sonny can launch — counted for workspace scope only."
+        ])
+
+        // And on the channel the user actually sees: nothing in `MacAgent` renders an
+        // `ActionPreview`, so the act log is where this reaches a real person.
+        var messages: [String] = []
+        _ = try await executor.execute(plan: withScopeOnly.create) { _, message in
+            messages.append(message)
+        }
+        #expect(messages.contains("Microsoft Word, Figma aren't apps Sonny can launch — counted for workspace scope only."))
+
+        let allCatalog = workspacePlans(name: "Browsing", apps: ["Safari", "Chrome"], urls: [])
+        let silent = try #require(try executor.preview(plan: allCatalog.create).first)
+        #expect(silent.details == ["Apps: Safari, Chrome", "URLs: none"])
+
+        var catalogMessages: [String] = []
+        _ = try await executor.execute(plan: allCatalog.create) { _, message in
+            catalogMessages.append(message)
+        }
+        #expect(catalogMessages.contains { $0.contains("workspace scope only") } == false)
+    }
+
+    /// A name the catalog cannot resolve is now fine; a *blank* one is still a hard failure. Without
+    /// this, dropping the catalog gate would let "" into an apps list, where `WorkspaceScope`
+    /// classifies it as an inert entry that can never match anything — a boundary that quietly does
+    /// nothing, which is the one outcome the scope model refuses to produce.
+    @Test
+    func aBlankWorkspaceAppNameIsStillRejected() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+        let plans = workspacePlans(name: "Drafting", apps: ["Safari", "   "], urls: [])
+
+        await #expect(throws: MacAppCatalogError.missingAppName) {
+            _ = try await executor.execute(plan: plans.create) { _, _ in }
+        }
+        #expect(throws: (any Error).self) {
+            _ = try workspaceStore.workspace(named: "Drafting")
+        }
+    }
+
+    /// Stored trimmed, so speech-to-text padding does not become part of the boundary the user reads
+    /// back. The fold beyond trimming stays where it already lives, in the evaluator.
+    @Test
+    func workspaceAppNamesAreStoredTrimmed() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+        let plans = workspacePlans(name: "Drafting", apps: ["  Microsoft Word  ", " Safari "], urls: [])
+
+        _ = try await executor.execute(plan: plans.create) { _, _ in }
+
+        #expect(try workspaceStore.workspace(named: "Drafting").apps == ["Microsoft Word", "Safari"])
+    }
+
+    /// A scope-only entry must not disturb SONNY-9's browser selection. "The workspace's browser" is
+    /// the first *browser* among the apps that can actually launch, and a skipped entry ahead of one
+    /// neither becomes the browser nor shifts which app does.
+    @Test
+    func aScopeOnlyEntryDoesNotChangeWhichBrowserAWorkspaceUses() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let appOpener = RecordingAppOpener()
+        let browserOpener = RecordingBrowserOpener()
+        let executor = makeExecutor(
+            root: root,
+            browserOpener: browserOpener,
+            appOpener: appOpener,
+            workspaceStore: workspaceStore
+        )
+        // Word first (skipped) and Notes ahead of Chrome (launchable, not a browser), so the answer
+        // is only Chrome if *both* rules hold: scope-only entries drop out of the candidate list,
+        // and the browser is the first browser rather than the first app.
+        let plans = workspacePlans(
+            name: "Drafting",
+            apps: ["Microsoft Word", "Notes", "Chrome"],
+            urls: ["https://github.com"]
+        )
+
+        _ = try await executor.execute(plan: plans.create) { _, _ in }
+        _ = try await executor.execute(plan: plans.open) { _, _ in }
+
+        #expect(appOpener.openedBundleIDs == ["com.apple.Notes", "com.google.Chrome"])
+        #expect(browserOpener.openedBrowsers.map { $0?.bundleIdentifier } == ["com.google.Chrome"])
     }
 
     private func workspacePlans(
