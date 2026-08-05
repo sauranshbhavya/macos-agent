@@ -113,6 +113,7 @@ public struct RoutineSchedule: Codable, Equatable, Sendable {
         dayOfMonth: Int? = nil,
         isEnabled: Bool = true,
         unattendedTrusted: Bool = false,
+        pausedReason: String? = nil,
         now: Date
     ) -> RoutineSchedule {
         var schedule = RoutineSchedule(
@@ -122,7 +123,12 @@ public struct RoutineSchedule: Codable, Equatable, Sendable {
             weekday: weekday,
             dayOfMonth: dayOfMonth,
             isEnabled: false,
-            unattendedTrusted: unattendedTrusted
+            unattendedTrusted: unattendedTrusted,
+            // Set before `setEnabled` deliberately, so the one rule about clearing a pause lives in
+            // one place: enabling clears it, staying disabled keeps it. A caller rebuilding an
+            // existing schedule (editing its run time) passes the old reason through here, and
+            // whether it survives is then decided by the same `setEnabled` every other path uses.
+            pausedReason: pausedReason
         )
         schedule.setEnabled(isEnabled, now: now)
         return schedule

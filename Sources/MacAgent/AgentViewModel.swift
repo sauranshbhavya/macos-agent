@@ -877,9 +877,17 @@ final class AgentViewModel: ObservableObject {
     /// just set. It is the same hazard creation has, reached through a different door. Anchoring at
     /// confirm time means a schedule always starts counting from the moment it became real.
     ///
-    /// `isEnabled` and `unattendedTrusted` carry over from the existing schedule: neither is part
-    /// of the draft, since both are separate decisions about a schedule rather than fields of one
-    /// being composed.
+    /// `isEnabled`, `unattendedTrusted` and `pausedReason` all carry over from the existing
+    /// schedule: none is part of the draft, since each is a separate decision about a schedule
+    /// rather than a field of one being composed.
+    ///
+    /// `pausedReason` carrying over matters more than it looks. Editing rebuilds the schedule from
+    /// scratch, so before SONNY-31's review this door silently dropped it: changing a paused
+    /// routine's run time left the routine switched off with the "Paused" caption and its
+    /// explanation gone, which is exactly the unexplained-dead-routine state pausing exists to
+    /// end, reached through the editor instead of the scheduler. Enabling remains the only thing
+    /// that clears a pause — `newlyCreated` routes this through the same `setEnabled` as every
+    /// other path, so an edit that also switches the schedule on still clears it.
     func commitScheduleDraft(
         for routine: StoredRoutine,
         cadence: RoutineCadence,
@@ -902,6 +910,7 @@ final class AgentViewModel: ObservableObject {
                 dayOfMonth: dayOfMonth,
                 isEnabled: existing?.isEnabled ?? true,
                 unattendedTrusted: existing?.unattendedTrusted ?? false,
+                pausedReason: existing?.pausedReason,
                 now: now
             ),
             to: routine.name
@@ -913,11 +922,14 @@ final class AgentViewModel: ObservableObject {
     /// Goes through `RoutineSchedule.setEnabled(_:now:)` rather than assigning `isEnabled`, because
     /// that is what re-anchors the catch-up baseline — enabling a 9am routine at 3pm must not read
     /// as "this morning was missed" and fire an immediate unattended run.
-    func setRoutineScheduleEnabled(_ routine: StoredRoutine, to isEnabled: Bool) {
+    /// Takes `now` for the same reason `commitScheduleDraft` and `checkScheduledRoutines` do: the
+    /// re-anchor this performs is the thing under test in the resume path, and a test that cannot
+    /// name the instant it anchored to has to compare against the wall clock.
+    func setRoutineScheduleEnabled(_ routine: StoredRoutine, to isEnabled: Bool, now: Date = Date()) {
         guard var schedule = routine.schedule else {
             return
         }
-        schedule.setEnabled(isEnabled, now: Date())
+        schedule.setEnabled(isEnabled, now: now)
         applySchedule(schedule, to: routine.name)
     }
 
@@ -1676,9 +1688,6 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
-    /// Marks an occurrence handled so the next tick moves past it. Applies to every outcome — ran,
-    /// refused, skipped, missed — because any of them leaving the baseline untouched would make the
-    /// scheduler retry the same occurrence every 30 seconds.
     /// Switches a routine's schedule off after an approval refusal and says so, once.
     ///
     /// "Exactly one notification" is not enforced by a counter here — it falls out of pausing.
@@ -1722,6 +1731,9 @@ final class AgentViewModel: ObservableObject {
         return escalationReasons.isEmpty ? request.approvalCopy.riskReason : escalationReasons
     }
 
+    /// Marks an occurrence handled so the next tick moves past it. Applies to every outcome — ran,
+    /// refused, skipped, missed — because any of them leaving the baseline untouched would make the
+    /// scheduler retry the same occurrence every 30 seconds.
     private func resolveOccurrence(for routineName: String, at occurrence: Date) {
         do {
             try routineStore.advanceScheduleBaseline(routineNamed: routineName, to: occurrence)
