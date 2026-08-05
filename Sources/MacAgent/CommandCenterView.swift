@@ -1694,11 +1694,16 @@ struct RoutineRowPresentation: Equatable {
     let nextRunText: String?
     let isEnabled: Bool
     let isScheduleable: Bool
+    /// Set when Sonny switched this routine's schedule off itself. The row shows that it needs
+    /// attention; the reason itself is long enough that it belongs in the detail view, where
+    /// there is room for a sentence.
+    let isPaused: Bool
 
     init(routine: StoredRoutine, now: Date) {
         name = routine.name
         isScheduleable = routine.schedule != nil
         isEnabled = routine.isScheduled
+        isPaused = routine.schedule?.pausedReason != nil
 
         // The wireframe's second line is the routine's cadence ("Daily", "Weekly · Mon"), not its
         // step list. An unscheduled routine has no cadence to show, so it keeps the step summary
@@ -1917,7 +1922,18 @@ private struct RoutineRow: View {
                     .accessibilityLabel("\(streak) run streak")
                 }
 
-                if let nextRun = presentation.nextRunText {
+                // One slot, two mutually exclusive occupants. `nextRunText` returns nil for a
+                // disabled schedule, and a paused schedule is disabled — so this fills a slot the
+                // wireframe leaves empty in exactly that state rather than adding a line to a row
+                // whose 56pt height has room for neither. Warning colour is the row's existing
+                // one, already carried by the streak badge; no new token.
+                if presentation.isPaused {
+                    Text("Paused")
+                        .font(SonnyType.caption)
+                        .foregroundStyle(SonnyTheme.warning)
+                        .lineLimit(1)
+                        .accessibilityLabel("Paused — needs your attention")
+                } else if let nextRun = presentation.nextRunText {
                     Text(nextRun)
                         .font(SonnyType.caption)
                         .foregroundStyle(SonnyTheme.muted)

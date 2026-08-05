@@ -63,6 +63,15 @@ public struct RoutineSchedule: Codable, Equatable, Sendable {
     /// for a missed run. Set by `setEnabled(_:now:)` on every off → on transition, never left nil
     /// while enabled — see that method for why that matters.
     public var lastRunAt: Date?
+    /// Why Sonny switched this schedule off by itself, in the user's words, or nil when the
+    /// schedule's state is the user's own doing.
+    ///
+    /// Non-nil implies `isEnabled == false`: the only writer is `pause(reason:)`, which disables,
+    /// and `setEnabled(true, now:)` clears it. Optional for the same decoding reason as `schedule`
+    /// and `recentRunDates` on `StoredRoutine` — synthesized `Decodable` calls `decodeIfPresent`
+    /// for an Optional property, so a routines.json written before this field existed still
+    /// decodes, where a non-Optional with a Swift-side default would throw `keyNotFound`.
+    public var pausedReason: String?
 
     public init(
         cadence: RoutineCadence,
@@ -72,7 +81,8 @@ public struct RoutineSchedule: Codable, Equatable, Sendable {
         dayOfMonth: Int? = nil,
         isEnabled: Bool = false,
         unattendedTrusted: Bool = false,
-        lastRunAt: Date? = nil
+        lastRunAt: Date? = nil,
+        pausedReason: String? = nil
     ) {
         self.cadence = cadence
         self.hour = hour
@@ -82,6 +92,7 @@ public struct RoutineSchedule: Codable, Equatable, Sendable {
         self.isEnabled = isEnabled
         self.unattendedTrusted = unattendedTrusted
         self.lastRunAt = lastRunAt
+        self.pausedReason = pausedReason
     }
 
     /// Builds a schedule for a routine that does not have one, with the catch-up baseline anchored.
@@ -102,6 +113,7 @@ public struct RoutineSchedule: Codable, Equatable, Sendable {
         dayOfMonth: Int? = nil,
         isEnabled: Bool = true,
         unattendedTrusted: Bool = false,
+        pausedReason: String? = nil,
         now: Date
     ) -> RoutineSchedule {
         var schedule = RoutineSchedule(
@@ -111,7 +123,12 @@ public struct RoutineSchedule: Codable, Equatable, Sendable {
             weekday: weekday,
             dayOfMonth: dayOfMonth,
             isEnabled: false,
-            unattendedTrusted: unattendedTrusted
+            unattendedTrusted: unattendedTrusted,
+            // Set before `setEnabled` deliberately, so the one rule about clearing a pause lives in
+            // one place: enabling clears it, staying disabled keeps it. A caller rebuilding an
+            // existing schedule (editing its run time) passes the old reason through here, and
+            // whether it survives is then decided by the same `setEnabled` every other path uses.
+            pausedReason: pausedReason
         )
         schedule.setEnabled(isEnabled, now: now)
         return schedule
@@ -152,12 +169,34 @@ public struct RoutineSchedule: Codable, Equatable, Sendable {
     /// leaves the baseline alone, or any incidental re-save would silently erase a pending
     /// catch-up window. Disabling keeps the old anchor rather than clearing it; the re-anchor on
     /// the way back on is what actually protects the window.
+    /// Turning a schedule on is also how the user acknowledges a pause, so it clears the reason.
+    /// Clearing on any `enabled == true` write rather than only on the transition means an
+    /// enabled schedule can never carry a stale "Sonny paused this" caption, whatever order the
+    /// writes arrive in.
     public mutating func setEnabled(_ enabled: Bool, now: Date) {
         let isTurningOn = enabled && !isEnabled
         isEnabled = enabled
+        if enabled {
+            pausedReason = nil
+        }
         if isTurningOn {
             lastRunAt = now
         }
+    }
+
+    /// Switches the schedule off because Sonny could not run it, recording why.
+    ///
+    /// Distinct from `setEnabled(false, now:)`, which is the user turning their own schedule off
+    /// and leaves no reason behind. The distinction is the whole point of the field: a routine the
+    /// user switched off needs no explanation, and a routine Sonny switched off is useless without
+    /// one.
+    ///
+    /// Deliberately leaves `lastRunAt` alone. The occurrence that triggered the pause has already
+    /// been resolved by the caller, and the re-anchor that matters happens on the way back on, in
+    /// `setEnabled`.
+    public mutating func pause(reason: String) {
+        isEnabled = false
+        pausedReason = reason
     }
 
     /// Checked at the single choke point every write goes through (`RoutineStore.save`), the same

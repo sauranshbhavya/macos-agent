@@ -877,9 +877,17 @@ final class AgentViewModel: ObservableObject {
     /// just set. It is the same hazard creation has, reached through a different door. Anchoring at
     /// confirm time means a schedule always starts counting from the moment it became real.
     ///
-    /// `isEnabled` and `unattendedTrusted` carry over from the existing schedule: neither is part
-    /// of the draft, since both are separate decisions about a schedule rather than fields of one
-    /// being composed.
+    /// `isEnabled`, `unattendedTrusted` and `pausedReason` all carry over from the existing
+    /// schedule: none is part of the draft, since each is a separate decision about a schedule
+    /// rather than a field of one being composed.
+    ///
+    /// `pausedReason` carrying over matters more than it looks. Editing rebuilds the schedule from
+    /// scratch, so before SONNY-31's review this door silently dropped it: changing a paused
+    /// routine's run time left the routine switched off with the "Paused" caption and its
+    /// explanation gone, which is exactly the unexplained-dead-routine state pausing exists to
+    /// end, reached through the editor instead of the scheduler. Enabling remains the only thing
+    /// that clears a pause — `newlyCreated` routes this through the same `setEnabled` as every
+    /// other path, so an edit that also switches the schedule on still clears it.
     func commitScheduleDraft(
         for routine: StoredRoutine,
         cadence: RoutineCadence,
@@ -902,6 +910,7 @@ final class AgentViewModel: ObservableObject {
                 dayOfMonth: dayOfMonth,
                 isEnabled: existing?.isEnabled ?? true,
                 unattendedTrusted: existing?.unattendedTrusted ?? false,
+                pausedReason: existing?.pausedReason,
                 now: now
             ),
             to: routine.name
@@ -913,11 +922,14 @@ final class AgentViewModel: ObservableObject {
     /// Goes through `RoutineSchedule.setEnabled(_:now:)` rather than assigning `isEnabled`, because
     /// that is what re-anchors the catch-up baseline — enabling a 9am routine at 3pm must not read
     /// as "this morning was missed" and fire an immediate unattended run.
-    func setRoutineScheduleEnabled(_ routine: StoredRoutine, to isEnabled: Bool) {
+    /// Takes `now` for the same reason `commitScheduleDraft` and `checkScheduledRoutines` do: the
+    /// re-anchor this performs is the thing under test in the resume path, and a test that cannot
+    /// name the instant it anchored to has to compare against the wall clock.
+    func setRoutineScheduleEnabled(_ routine: StoredRoutine, to isEnabled: Bool, now: Date = Date()) {
         guard var schedule = routine.schedule else {
             return
         }
-        schedule.setEnabled(isEnabled, now: Date())
+        schedule.setEnabled(isEnabled, now: now)
         applySchedule(schedule, to: routine.name)
     }
 
@@ -1618,9 +1630,24 @@ final class AgentViewModel: ObservableObject {
             // The tier-3+ backstop firing. `AgentRunner` re-assesses at execute time and requires
             // the approved tier to be at least the effective tier, so a tier-2 unattended approval
             // simply cannot satisfy a tier-3 plan — the refusal is structural, not a policy check
-            // written here that could drift out of sync with the real gate.
-            logStore.append(.summarize, "Scheduled run skipped: \(error.localizedDescription)")
-            scheduledRunNotice = "“\(name)” was not run because it needs your explicit approval this time. Run it yourself to review what it wants to do."
+            // written here that could drift out of sync with the real gate. The backstop itself is
+            // untouched by SONNY-31; what changed is only what happens afterwards.
+            //
+            // Pause rather than skip. Every condition that reaches here is sticky: a file that
+            // exists still exists tomorrow, a snippet whose text really did change still differs
+            // next week, a tier-4 plan is tier 4 forever. Leaving the schedule enabled meant the
+            // same refusal every single occurrence, each one posting the same notice that named no
+            // cause — the user learned only that Sonny had stopped, never why. One notification
+            // carrying the real reason, then silence, is the founder decision recorded on
+            // SONNY-31 (chosen over keep-skipping-with-notice and hold-the-approval).
+            //
+            // All three `RiskApprovalError` cases pause, not just `.approvalRequired`.
+            // `.previewOnly` (a preview-only tier-2 policy) and `.refused` (tier 4) are equally
+            // permanent for a run with nobody present to approve anything, and leaving either one
+            // on the old skip-forever path would keep this bug alive in two of the three branches
+            // that can reach it.
+            logStore.append(.summarize, "Scheduled run paused: \(error.localizedDescription)")
+            pauseSchedule(routineNamed: name, because: scheduledRunPauseCause(for: error))
         } catch {
             logStore.append(.summarize, "Scheduled run failed: \(error.localizedDescription)")
             recordScheduledTaskHistory(status: .failed, startedAt: startedAt)
@@ -1659,6 +1686,49 @@ final class AgentViewModel: ObservableObject {
                 "Sonny could not save this scheduled run to task history: \(error.localizedDescription)"
             )
         }
+    }
+
+    /// Switches a routine's schedule off after an approval refusal and says so, once.
+    ///
+    /// "Exactly one notification" is not enforced by a counter here — it falls out of pausing.
+    /// `scheduledRunNotice` is published once per attempt and `AppDelegate` mirrors it to a
+    /// notification; a disabled schedule produces no further attempts, so there is nothing left to
+    /// post. A counter would have been a second source of truth for the same fact.
+    ///
+    /// A failed pause write still notifies. The store failure gets its own surfacing through
+    /// `recordLocalStorageWriteFailure`, but suppressing the explanation as well would leave the
+    /// user with a routine that stopped working, no reason, and a storage banner that does not
+    /// mention the routine at all.
+    private func pauseSchedule(routineNamed name: String, because cause: String) {
+        do {
+            try routineStore.pauseSchedule(routineNamed: name, reason: cause)
+            refreshSavedItems()
+        } catch {
+            recordLocalStorageWriteFailure(
+                "Sonny could not pause this routine's schedule: \(error.localizedDescription)"
+            )
+        }
+        scheduledRunNotice = "“\(name)” needs your approval to run, so Sonny paused its schedule instead of skipping it every time. \(cause) Run it yourself to review, then switch its schedule back on."
+    }
+
+    /// The user-facing reason a scheduled run was refused.
+    ///
+    /// Prefers the escalation reasons, because they are the only part of an assessment that names
+    /// the *specific* condition — "Draft output already exists at …/weekly.md." is actionable in a
+    /// way "This may affect external services or overwrite/destructively change data." is not.
+    /// Falls back to the tier's generic risk reason when a refusal carries no escalations at all,
+    /// which is the shape of a plan sitting at a high baseline tier rather than one raised into it.
+    private func scheduledRunPauseCause(for error: RiskApprovalError) -> String {
+        let request: RiskApprovalRequest
+        switch error {
+        case .approvalRequired(let value), .previewOnly(let value), .refused(let value):
+            request = value
+        }
+
+        let escalationReasons = request.assessment.escalations
+            .map(\.reason)
+            .joined(separator: " ")
+        return escalationReasons.isEmpty ? request.approvalCopy.riskReason : escalationReasons
     }
 
     /// Marks an occurrence handled so the next tick moves past it. Applies to every outcome — ran,

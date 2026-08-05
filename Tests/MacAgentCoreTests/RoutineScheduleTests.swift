@@ -57,6 +57,174 @@ struct RoutineScheduleTests {
         #expect(decoded.schedule == schedule)
     }
 
+    /// SONNY-31 added `pausedReason`, so the same legacy question applies to it: a routines.json
+    /// written before this field existed has no key for it, and a non-Optional property would have
+    /// thrown `keyNotFound` on every load rather than defaulting. Written as a schedule *with*
+    /// every other key present, because the field this pins was added to `RoutineSchedule` — the
+    /// no-schedule-at-all case is already covered above and would not exercise this decode path.
+    @Test
+    func scheduleJSONWrittenBeforePausingStillDecodes() throws {
+        let legacy = """
+        {
+          "cadence": "daily",
+          "hour": 9,
+          "minute": 0,
+          "isEnabled": true,
+          "unattendedTrusted": true
+        }
+        """
+
+        let schedule = try JSONDecoder().decode(RoutineSchedule.self, from: Data(legacy.utf8))
+
+        #expect(schedule.pausedReason == nil)
+        #expect(schedule.isEnabled)
+        #expect(schedule.unattendedTrusted)
+        #expect(schedule.cadence == .daily)
+    }
+
+    @Test
+    func aPausedScheduleSurvivesAnEncodeDecodeRoundTrip() throws {
+        var schedule = RoutineSchedule(
+            cadence: .daily,
+            hour: 9,
+            minute: 0,
+            isEnabled: true,
+            unattendedTrusted: true,
+            lastRunAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+        schedule.pause(reason: "Draft output already exists at /tmp/weekly.md.")
+        let routine = StoredRoutine(name: "Morning", steps: [.fixture], schedule: schedule)
+
+        let decoded = try JSONDecoder().decode(StoredRoutine.self, from: JSONEncoder().encode(routine))
+
+        #expect(decoded.schedule?.pausedReason == "Draft output already exists at /tmp/weekly.md.")
+        #expect(decoded.schedule?.isEnabled == false)
+        #expect(decoded == routine)
+    }
+
+    // MARK: - Pausing (SONNY-31)
+
+    /// `pause` is not `setEnabled(false,)`: the field exists precisely to tell "the user switched
+    /// this off" apart from "Sonny switched this off, and here is why". It also must not disturb
+    /// the catch-up baseline — the occurrence that triggered the pause was already resolved by the
+    /// caller, and re-anchoring happens on the way back on.
+    @Test
+    func pausingDisablesTheScheduleRecordsWhyAndLeavesTheBaselineAlone() {
+        let anchored = Date(timeIntervalSince1970: 1_700_000_000)
+        var schedule = RoutineSchedule(cadence: .daily, hour: 9, minute: 0, isEnabled: true, lastRunAt: anchored)
+
+        schedule.pause(reason: "Snippet trigger ;sig already exists and would be replaced.")
+
+        #expect(schedule.isEnabled == false)
+        #expect(schedule.pausedReason == "Snippet trigger ;sig already exists and would be replaced.")
+        #expect(schedule.lastRunAt == anchored)
+    }
+
+    /// The user's own disable stays anonymous. If this ever recorded a reason, every manually
+    /// switched-off routine would grow a "Sonny paused this" caption it never earned.
+    @Test
+    func theUsersOwnDisableRecordsNoPauseReason() {
+        var schedule = RoutineSchedule(cadence: .daily, hour: 9, minute: 0, isEnabled: true)
+
+        schedule.setEnabled(false, now: Date(timeIntervalSince1970: 1_700_000_000))
+
+        #expect(schedule.isEnabled == false)
+        #expect(schedule.pausedReason == nil)
+    }
+
+    /// Re-enabling is the acknowledgement, so it clears the reason *and* re-anchors — a routine
+    /// paused for a fortnight must not treat that fortnight as a backlog the moment it comes back.
+    @Test
+    func reEnablingAPausedScheduleClearsTheReasonAndReAnchorsTheBaseline() {
+        let anchored = Date(timeIntervalSince1970: 1_700_000_000)
+        let resumedAt = anchored.addingTimeInterval(14 * 24 * 60 * 60)
+        var schedule = RoutineSchedule(cadence: .daily, hour: 9, minute: 0, isEnabled: true, lastRunAt: anchored)
+        schedule.pause(reason: "Zip output already exists at /tmp/a.zip.")
+
+        schedule.setEnabled(true, now: resumedAt)
+
+        #expect(schedule.isEnabled)
+        #expect(schedule.pausedReason == nil)
+        #expect(schedule.lastRunAt == resumedAt)
+    }
+
+    /// PR #27 review finding F9. `newlyCreated` assigns `pausedReason` *before* calling
+    /// `setEnabled`, so the one rule about clearing a pause lives in `setEnabled` and nowhere else.
+    /// That ordering was asserted as load-bearing in three places and pinned by none: moving the
+    /// assignment after the `setEnabled` call left the whole suite green, because the only
+    /// production caller that passes a reason (`commitScheduleDraft`) also passes the existing
+    /// schedule's `isEnabled`, and a schedule carrying a reason is always disabled — so the
+    /// enabled-plus-reason combination never reaches `newlyCreated` through the UI at all.
+    ///
+    /// Pinned here, at the level the ordering actually lives, rather than through a view-model path
+    /// that cannot reach it. Nothing is wrong with the defensive ordering; it just had no test.
+    @Test
+    func newlyCreatedClearsAPassedPauseReasonWhenItBuildsAnEnabledSchedule() {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+
+        let enabled = RoutineSchedule.newlyCreated(
+            cadence: .daily,
+            hour: 9,
+            minute: 0,
+            isEnabled: true,
+            pausedReason: "Snippet trigger ;sig already exists and would be replaced.",
+            now: now
+        )
+        // Enabling clears the pause, whoever asks for it and by whichever door.
+        #expect(enabled.isEnabled)
+        #expect(enabled.pausedReason == nil)
+        #expect(enabled.lastRunAt == now)
+
+        let stillPaused = RoutineSchedule.newlyCreated(
+            cadence: .daily,
+            hour: 9,
+            minute: 0,
+            isEnabled: false,
+            pausedReason: "Snippet trigger ;sig already exists and would be replaced.",
+            now: now
+        )
+        // ...and staying disabled keeps it, which is what makes a schedule edit non-destructive.
+        #expect(stillPaused.isEnabled == false)
+        #expect(stillPaused.pausedReason == "Snippet trigger ;sig already exists and would be replaced.")
+    }
+
+    /// The store-level sibling of the two above, and the one the view model actually calls.
+    /// Verifies it writes through rather than mutating a copy, and that it leaves the baseline the
+    /// scheduled-run path advanced moments earlier exactly where it was.
+    @Test
+    func pauseScheduleWritesThroughTheStoreWithoutDisturbingTheBaseline() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        let occurrence = Date(timeIntervalSince1970: 1_700_000_000)
+        var schedule = RoutineSchedule(cadence: .daily, hour: 9, minute: 0, unattendedTrusted: true)
+        schedule.setEnabled(true, now: occurrence.addingTimeInterval(-86_400))
+        try store.save(StoredRoutine(name: "Morning", steps: [.fixture], schedule: schedule))
+        try store.advanceScheduleBaseline(routineNamed: "Morning", to: occurrence)
+
+        try store.pauseSchedule(routineNamed: "Morning", reason: "Markdown output already exists at /tmp/hn.md.")
+
+        let saved = try store.routine(named: "Morning")
+        #expect(saved.schedule?.isEnabled == false)
+        #expect(saved.schedule?.pausedReason == "Markdown output already exists at /tmp/hn.md.")
+        #expect(saved.schedule?.lastRunAt == occurrence)
+        #expect(saved.schedule?.unattendedTrusted == true)
+    }
+
+    /// Same no-op-rather-than-throw contract `advanceScheduleBaseline` documents: a schedule can
+    /// legitimately be cleared between a run starting and this write landing.
+    @Test
+    func pausingARoutineWithNoScheduleDoesNothingRatherThanThrowing() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try store.save(StoredRoutine(name: "Morning", steps: [.fixture]))
+
+        try store.pauseSchedule(routineNamed: "Morning", reason: "Anything.")
+
+        #expect(try store.routine(named: "Morning").schedule == nil)
+    }
+
     // MARK: - The catch-up anchor
 
     /// The correctness requirement behind `lastRunAt`, not a nicety. Enabling a 9am daily routine

@@ -206,6 +206,27 @@ public struct RoutineStore: @unchecked Sendable {
         try write(routines)
     }
 
+    /// Switches a routine's schedule off because Sonny could not run it, recording why.
+    ///
+    /// A read-modify-write inside the store, like `advanceScheduleBaseline` above, rather than the
+    /// caller reading a schedule and handing back a whole replacement: the scheduled-run path
+    /// advances the catch-up baseline immediately before this runs, so a caller-held copy would be
+    /// one write stale and would silently undo that advance — putting the occurrence back in play
+    /// for the next tick, which is the forever-retry this pause exists to end.
+    ///
+    /// A no-op for a routine with no schedule, same as `advanceScheduleBaseline`: the schedule can
+    /// legitimately be cleared between the run starting and this write.
+    public func pauseSchedule(routineNamed rawName: String, reason: String) throws {
+        let key = try normalizedName(rawName, kind: "Routine")
+        var routines = try loadAll()
+        guard var routine = routines[key], routine.schedule != nil else {
+            return
+        }
+        routine.schedule?.pause(reason: reason)
+        routines[key] = routine
+        try write(routines)
+    }
+
     /// Appends a run timestamp to the routine's history, trimming to `recentRunDateLimit`.
     ///
     /// Deliberately does not touch `schedule?.lastRunAt`: a manual run is a real run for streak

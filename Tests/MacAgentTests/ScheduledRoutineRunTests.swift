@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Testing
 @testable import MacAgent
@@ -121,10 +122,286 @@ struct ScheduledRoutineRunTests {
         try await fixture.waitForIdle()
 
         let notice = try #require(fixture.viewModel.scheduledRunNotice)
-        #expect(notice.contains("needs your explicit approval"))
+        #expect(notice.contains("paused its schedule"))
+        // SONNY-31: the notice now names the actual cause. It previously said only that the run
+        // "needs your explicit approval this time", which told the user nothing about *what* — and
+        // said it again on every occurrence, forever.
+        #expect(notice.contains("Snippet trigger ;sig already exists and would be replaced."))
         // The tier-3 action really did not happen.
         #expect(try fixture.snippetStore.snippet(matchingTrigger: ";sig").expansion == "Old text")
         #expect(try fixture.routineStore.routine(named: "Morning").effectiveRecentRunDates.isEmpty)
+
+        // ...and the schedule is off, with the reason persisted for the row and detail view.
+        let schedule = try #require(fixture.routineStore.routine(named: "Morning").schedule)
+        #expect(schedule.isEnabled == false)
+        #expect(schedule.pausedReason == "Snippet trigger ;sig already exists and would be replaced.")
+        // The occurrence `resolveOccurrence` advanced past before the run survives the pause write.
+        // `RoutineStore.pauseSchedule` does its read-modify-write inside the store precisely so a
+        // caller-held copy taken before `try await runner.execute` cannot revert this across that
+        // suspension point; the store-level test pins the same fact, this is the only thing that
+        // pins it on the real path the view model takes.
+        #expect(schedule.lastRunAt == fixture.nineAM)
+    }
+
+    /// SONNY-31, H1, end to end through the real scheduler and the real gate — the headline
+    /// failure this ticket exists for. A routine that saves a snippet used to run exactly once:
+    /// run one created the trigger, and from run two on the plan assessed tier 3, which a
+    /// `.approved(.tier2)` unattended run structurally cannot satisfy.
+    @Test
+    func aScheduledSnippetRoutineStillRunsOnItsSecondOccurrence() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.saveRoutine(
+            unattendedTrusted: true,
+            steps: [
+                AgentStep(
+                    id: "snippet",
+                    operation: .saveSnippet,
+                    description: "Save snippet ;sig.",
+                    searchQuery: ";sig",
+                    draftContent: "Best, Sonny"
+                )
+            ]
+        )
+
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
+        try await fixture.waitForIdle()
+        #expect(try #require(fixture.viewModel.scheduledRunNotice).contains("ran on schedule"))
+        #expect(try fixture.snippetStore.snippet(matchingTrigger: ";sig").expansion == "Best, Sonny")
+        fixture.viewModel.scheduledRunNotice = nil
+
+        // Second occurrence, one day later — the run that used to be refused forever.
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM.addingTimeInterval(24 * 60 * 60))
+        try await fixture.waitForIdle()
+
+        #expect(try #require(fixture.viewModel.scheduledRunNotice).contains("ran on schedule"))
+        #expect(try fixture.routineStore.routine(named: "Morning").effectiveRecentRunDates.count == 2)
+        // Still enabled, nothing paused: the whole point is that there was nothing to refuse.
+        let schedule = try #require(fixture.routineStore.routine(named: "Morning").schedule)
+        #expect(schedule.isEnabled)
+        #expect(schedule.pausedReason == nil)
+    }
+
+    /// The other half of the pause: silence afterwards. Before SONNY-31 the schedule stayed on, so
+    /// every later occurrence produced the same causeless notice — one notification per day for a
+    /// routine that could never run. "Exactly one" is not enforced by a counter; it falls out of
+    /// there being no second attempt to report.
+    @Test
+    func aPausedScheduleMakesNoFurtherAttemptsAndPostsNoFurtherNotices() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.snippetStore.save(StoredSnippet(trigger: ";sig", expansion: "Old text"))
+        try fixture.saveRoutine(
+            unattendedTrusted: true,
+            steps: [
+                AgentStep(
+                    id: "snippet",
+                    operation: .saveSnippet,
+                    description: "Save snippet ;sig.",
+                    searchQuery: ";sig",
+                    draftContent: "New text"
+                )
+            ]
+        )
+
+        // Counted across the attempt, not merely observed at the end: "exactly one notification"
+        // is the whole promise, and a single non-nil read cannot tell one notice from three
+        // overwriting each other. `AppDelegate` posts one notification per non-nil emission, so
+        // emissions are the thing that has to be one.
+        var notices: [String] = []
+        let subscription = fixture.viewModel.$scheduledRunNotice
+            .compactMap { $0 }
+            .sink { notices.append($0) }
+        defer { subscription.cancel() }
+
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
+        try await fixture.waitForIdle()
+        #expect(notices.count == 1)
+        #expect(fixture.viewModel.scheduledRunNotice != nil)
+        fixture.viewModel.scheduledRunNotice = nil
+
+        // Two later ticks, one of them a full day on — an occurrence that would have been due.
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM.addingTimeInterval(60))
+        try await fixture.waitForIdle()
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM.addingTimeInterval(24 * 60 * 60))
+        try await fixture.waitForIdle()
+
+        #expect(fixture.viewModel.scheduledRunNotice == nil)
+        // Still one, a full day and two ticks later.
+        #expect(notices.count == 1)
+        #expect(try fixture.snippetStore.snippet(matchingTrigger: ";sig").expansion == "Old text")
+        #expect(try fixture.routineStore.routine(named: "Morning").effectiveRecentRunDates.isEmpty)
+    }
+
+    /// Resuming is the existing row toggle, and it must clear the pause *and* re-anchor. Without
+    /// the re-anchor, switching a routine paused a fortnight ago back on would read every day in
+    /// between as a missed occurrence.
+    @Test
+    func togglingAPausedScheduleBackOnClearsThePauseAndReAnchorsInsteadOfFiringACatchUp() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.snippetStore.save(StoredSnippet(trigger: ";sig", expansion: "Old text"))
+        try fixture.saveRoutine(
+            unattendedTrusted: true,
+            steps: [
+                AgentStep(
+                    id: "snippet",
+                    operation: .saveSnippet,
+                    description: "Save snippet ;sig.",
+                    searchQuery: ";sig",
+                    draftContent: "New text"
+                )
+            ]
+        )
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
+        try await fixture.waitForIdle()
+        fixture.viewModel.scheduledRunNotice = nil
+
+        let paused = try fixture.routineStore.routine(named: "Morning")
+        #expect(paused.schedule?.pausedReason != nil)
+        // A fortnight later, on the injected clock rather than the wall clock — the re-anchor is
+        // the thing under test, so the instant it anchors to has to be nameable.
+        let resumedAt = fixture.tenAM.addingTimeInterval(14 * 24 * 60 * 60)
+        fixture.viewModel.setRoutineScheduleEnabled(paused, to: true, now: resumedAt)
+
+        let resumed = try #require(fixture.routineStore.routine(named: "Morning").schedule)
+        #expect(resumed.isEnabled)
+        #expect(resumed.pausedReason == nil)
+        #expect(resumed.lastRunAt == resumedAt)
+
+        // Re-anchored to the moment of resuming, so none of the fortnight it spent paused is
+        // outstanding: a tick right after resuming must not fire a catch-up.
+        fixture.viewModel.checkScheduledRoutines(now: resumedAt.addingTimeInterval(60))
+        try await fixture.waitForIdle()
+        #expect(fixture.viewModel.scheduledRunNotice == nil)
+        #expect(try fixture.routineStore.routine(named: "Morning").effectiveRecentRunDates.isEmpty)
+    }
+
+    /// PR #27 review finding F1 — the defect, not a hardening. Editing a schedule rebuilds it
+    /// through `RoutineSchedule.newlyCreated`, which had no `pausedReason` parameter, so changing a
+    /// paused routine's run time silently dropped both the caption and the explanation: the
+    /// routine stayed switched off with nothing anywhere saying why. That is precisely the
+    /// unexplained-dead-routine state H2 exists to end, reached through the editor door instead of
+    /// the scheduler's.
+    @Test
+    func editingAPausedRoutinesRunTimeKeepsItPausedWithItsReason() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.snippetStore.save(StoredSnippet(trigger: ";sig", expansion: "Old text"))
+        try fixture.saveRoutine(
+            unattendedTrusted: true,
+            steps: [
+                AgentStep(
+                    id: "snippet",
+                    operation: .saveSnippet,
+                    description: "Save snippet ;sig.",
+                    searchQuery: ";sig",
+                    draftContent: "New text"
+                )
+            ]
+        )
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
+        try await fixture.waitForIdle()
+        let paused = try fixture.routineStore.routine(named: "Morning")
+        #expect(paused.schedule?.pausedReason != nil)
+
+        // Move it from 9:00 to 7:00 — the routine's own detail-view edit path.
+        fixture.viewModel.commitScheduleDraft(
+            for: paused,
+            cadence: .daily,
+            hour: 7,
+            minute: 0,
+            weekday: 2,
+            dayOfMonth: 1,
+            now: fixture.tenAM
+        )
+
+        let edited = try #require(fixture.routineStore.routine(named: "Morning").schedule)
+        #expect(edited.hour == 7)
+        #expect(edited.isEnabled == false)
+        #expect(edited.pausedReason == "Snippet trigger ;sig already exists and would be replaced.")
+        #expect(RoutineRowPresentation(routine: StoredRoutine(name: "Morning", steps: [], schedule: edited), now: fixture.tenAM).isPaused)
+    }
+
+    /// The other direction, so the carry-over cannot degrade into "a pause can never be cleared":
+    /// once a routine is resumed, editing it does not drag the old reason back in.
+    ///
+    /// Renamed per PR #27 review finding F9. It previously claimed to pin "an edit that also
+    /// switches the schedule back on clears the pause", which is not what it does and not
+    /// reachable from here: resuming happens first, so `commitScheduleDraft` sees a schedule whose
+    /// reason is already nil, and the enabled-plus-reason combination the old name described never
+    /// occurs on this path. The ordering inside `newlyCreated` that actually decides that case is
+    /// pinned where it lives, by `newlyCreatedClearsAPassedPauseReasonWhenItBuildsAnEnabledSchedule`
+    /// in `RoutineScheduleTests`. Resume-then-edit is still worth pinning on its own account — it
+    /// is the sequence a user fixing a paused routine actually performs.
+    @Test
+    func editingARoutineAfterResumingItDoesNotBringItsOldPauseBack() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.snippetStore.save(StoredSnippet(trigger: ";sig", expansion: "Old text"))
+        try fixture.saveRoutine(
+            unattendedTrusted: true,
+            steps: [
+                AgentStep(
+                    id: "snippet",
+                    operation: .saveSnippet,
+                    description: "Save snippet ;sig.",
+                    searchQuery: ";sig",
+                    draftContent: "New text"
+                )
+            ]
+        )
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
+        try await fixture.waitForIdle()
+
+        // Resume first, then edit — the order a user actually takes when fixing a paused routine.
+        let paused = try fixture.routineStore.routine(named: "Morning")
+        fixture.viewModel.setRoutineScheduleEnabled(paused, to: true, now: fixture.tenAM)
+        let resumed = try fixture.routineStore.routine(named: "Morning")
+        fixture.viewModel.commitScheduleDraft(
+            for: resumed,
+            cadence: .daily,
+            hour: 7,
+            minute: 0,
+            weekday: 2,
+            dayOfMonth: 1,
+            now: fixture.tenAM
+        )
+
+        let edited = try #require(fixture.routineStore.routine(named: "Morning").schedule)
+        #expect(edited.hour == 7)
+        #expect(edited.isEnabled)
+        #expect(edited.pausedReason == nil)
+        #expect(edited.unattendedTrusted)
+    }
+
+    /// The Routines row's needs-attention state, asserted through the presentation struct rather
+    /// than the view — this repo has no SwiftUI inspection harness, which is why presentation
+    /// logic lives in testable structs (the `AgentActivityPresentation` precedent).
+    @Test
+    func aPausedRoutineRowShowsNeedsAttentionWhileAUserDisabledOneDoesNot() throws {
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        var schedule = RoutineSchedule(cadence: .daily, hour: 9, minute: 0, unattendedTrusted: true)
+        schedule.setEnabled(true, now: now.addingTimeInterval(-86_400))
+        let enabled = StoredRoutine(name: "Morning", steps: [], schedule: schedule)
+
+        var pausedSchedule = schedule
+        pausedSchedule.pause(reason: "Snippet trigger ;sig already exists and would be replaced.")
+        let paused = StoredRoutine(name: "Morning", steps: [], schedule: pausedSchedule)
+
+        var userDisabledSchedule = schedule
+        userDisabledSchedule.setEnabled(false, now: now)
+        let userDisabled = StoredRoutine(name: "Morning", steps: [], schedule: userDisabledSchedule)
+
+        #expect(RoutineRowPresentation(routine: paused, now: now).isPaused)
+        // A schedule the user switched off themselves is not "needs attention" — it is what they
+        // asked for, and flagging it would make the real ones unfindable.
+        #expect(RoutineRowPresentation(routine: userDisabled, now: now).isPaused == false)
+        #expect(RoutineRowPresentation(routine: enabled, now: now).isPaused == false)
+        // The paused row's caption takes a slot that is empty anyway: `nextRunText` is nil for any
+        // disabled schedule, so nothing the wireframe specifies is displaced.
+        #expect(RoutineRowPresentation(routine: paused, now: now).nextRunText == nil)
+        #expect(RoutineRowPresentation(routine: enabled, now: now).nextRunText != nil)
     }
 
     /// A scheduled run must never interrupt or race a task already in flight.

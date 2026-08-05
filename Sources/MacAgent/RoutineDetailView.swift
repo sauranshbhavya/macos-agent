@@ -291,6 +291,17 @@ struct RoutineDetailView: View {
                 .font(RoutineDetailType.sectionLabel)
                 .foregroundStyle(RoutineDetailTheme.text)
 
+            // Why Sonny switched this schedule off, on the surface with room for a sentence — the
+            // Routines row only has space to say that something needs attention. Reuses
+            // `scheduleNote`'s type ramp with the warning colour so it reads as a state the user
+            // has to resolve rather than as another piece of guidance.
+            if let pausedReason = live.schedule?.pausedReason {
+                Text("Sonny paused this schedule: \(pausedReason) Switch it back on once you have reviewed it.")
+                    .font(RoutineDetailType.micro)
+                    .foregroundStyle(SonnyTheme.warning)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
             if let shown {
                 scheduleRow("Repeats") {
                     Picker("", selection: cadenceBinding(shown, now: now, calendar: calendar)) {
