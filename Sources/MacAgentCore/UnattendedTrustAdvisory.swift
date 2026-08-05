@@ -5,8 +5,10 @@ import Foundation
 ///
 /// Tier-3+ is never unattended-eligible regardless of the opt-in — `AgentRunner` re-assesses at
 /// execute time and requires the approved tier to be at least the effective tier, so a scheduled
-/// run carrying a tier-2 approval simply gets skipped. Without this advisory the user would be
-/// left with a routine that silently never runs, plus a recurring skip notice, and no idea why.
+/// run carrying a tier-2 approval cannot execute a tier-3 plan. As of SONNY-31 that refusal pauses
+/// the routine's schedule and posts one notice naming the cause, so the user does eventually find
+/// out why; this advisory is what tells them *before* the schedule they just set up switches
+/// itself off on its first firing.
 ///
 /// **Deliberately a warning, not a gate.** This is not the save-time tier gating that was
 /// considered and rejected for branch 10: that proposal blocked scheduling outright unless every
@@ -15,16 +17,17 @@ import Foundation
 ///
 /// **Deliberately best-effort, and the copy says so.** Tiers escalate dynamically from real
 /// conditions at run time — a zip whose output path already exists goes tier 2 → tier 3, a snippet
-/// save that would replace an existing trigger does the same — so a routine that reads tier 2 here
-/// can still be tier 3 when it fires. A clean result from this check is not a promise that the
-/// routine will run.
+/// save that would replace an existing trigger *with different text* does the same (identical text
+/// is a no-op and no longer escalates, per SONNY-31) — so a routine that reads tier 2 here can
+/// still be tier 3 when it fires, and pause itself then. A clean result from this check is not a
+/// promise that the routine will run.
 public enum UnattendedTrustAdvisory {
     /// Returns advisory copy when the routine currently assesses at tier 3+, otherwise nil.
     ///
     /// Never throws: a routine that cannot be assessed at all (missing, unreadable store, a step
     /// whose preview fails) yields no advisory rather than blocking the opt-in. The real backstop
-    /// is at execution time, not here, so a failure to pre-check costs a skip notice later — it
-    /// does not let anything unsafe through.
+    /// is at execution time, not here, so a failure to pre-check costs a paused schedule and its
+    /// notice later — it does not let anything unsafe through.
     @MainActor
     public static func warning(
         forRoutineNamed name: String,
@@ -38,9 +41,10 @@ public enum UnattendedTrustAdvisory {
             return nil
         }
         return """
-        “\(name)” currently needs your explicit approval to run, so scheduled runs will be skipped \
-        rather than run unattended. Sonny re-checks this every time it runs, so a routine that is \
-        fine today can still be skipped later — for example when a file it writes already exists.
+        “\(name)” currently needs your explicit approval to run, so Sonny will pause its schedule \
+        and tell you why rather than run it unattended. Sonny re-checks this every time it runs, so \
+        a routine that is fine today can still pause later — for example when a file it writes \
+        already exists.
         """
     }
 }

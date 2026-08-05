@@ -63,15 +63,18 @@ struct UnattendedTrustAdvisoryTests {
             UnattendedTrustAdvisory.warning(forRoutineNamed: "Signature refresh", executor: executor)
         )
         #expect(warning.contains("Signature refresh"))
-        #expect(warning.contains("skipped"))
+        // SONNY-31 changed what actually happens, so this pins the new outcome: a needs-approval
+        // scheduled run pauses the schedule with one notice, it is not skipped every occurrence.
+        #expect(warning.contains("pause"))
+        #expect(!warning.contains("skipped"))
         // The copy must not promise this is settled — tiers escalate from real run-time conditions,
         // so a clean check today is not a guarantee the routine will run tomorrow.
         #expect(warning.contains("re-checks"))
     }
 
     /// Best-effort by design: an unassessable routine yields no advisory rather than blocking the
-    /// opt-in. The real backstop is at execution time, so a failed pre-check costs a skip notice
-    /// later — it never lets anything unsafe through.
+    /// opt-in. The real backstop is at execution time, so a failed pre-check costs a paused
+    /// schedule and its notice later — it never lets anything unsafe through.
     @Test
     func anUnknownRoutineYieldsNoWarningRatherThanThrowing() throws {
         let root = try makeDirectory()
