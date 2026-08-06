@@ -270,14 +270,14 @@ struct QuickDispatchTests {
         )
 
         let prepared = try runner.prepare(plan: plan, source: .instantResolver)
-        let request = try runner.approvalRequest(for: prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
 
         #expect(request.assessment.effectiveTier == .tier2)
         #expect(request.requirement == .lightweightConfirmation)
         #expect(request.requirement != .autoRun)
 
         do {
-            _ = try await runner.execute(prepared)
+            _ = try await runner.execute(prepared, scope: .unscoped)
             Issue.record("Expected instant routine launch to pause for tier 2 approval.")
         } catch RiskApprovalError.approvalRequired(let approvalRequest) {
             #expect(approvalRequest.requirement == .lightweightConfirmation)
@@ -308,14 +308,14 @@ struct QuickDispatchTests {
         )
 
         let prepared = try runner.prepare(plan: plan, source: .instantResolver)
-        let request = try runner.approvalRequest(for: prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
 
         #expect(request.assessment.effectiveTier == .tier3)
         #expect(request.requirement == .explicitApproval)
         #expect(request.requirement != .autoRun)
 
         do {
-            _ = try await runner.execute(prepared)
+            _ = try await runner.execute(prepared, scope: .unscoped)
             Issue.record("Expected instant routine launch to pause for explicit tier 3 approval.")
         } catch RiskApprovalError.approvalRequired(let approvalRequest) {
             #expect(approvalRequest.requirement == .explicitApproval)
@@ -351,8 +351,8 @@ struct QuickDispatchTests {
         )
 
         let prepared = try runner.prepare(plan: plan, source: .instantResolver)
-        let request = try runner.approvalRequest(for: prepared)
-        let result = try await runner.execute(prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
+        let result = try await runner.execute(prepared, scope: .unscoped)
 
         #expect(request.assessment.effectiveTier == .tier1)
         #expect(request.requirement == .autoRun)

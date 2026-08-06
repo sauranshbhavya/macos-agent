@@ -41,7 +41,20 @@ public struct SaveRoutineCapabilityAdapter: CapabilityAdapter {
 
     public func assessRisk(plan: AgentPlan, context: CapabilityExecutionContext) throws -> CapabilityRiskAssessment {
         let spec = try routineSaveSpec(plan, context: context)
-        let nested = try context.assessNestedPlan(spec.routine.plan)
+        // `.unscoped`, deliberately, and this is the whole of the decision: **saving a routine is
+        // scope-neutral.** Saving touches one file inside Sonny's own store; the routine's steps are
+        // scoped when it actually runs, which is what `PlanScopedResources`' `.saveRoutine` case
+        // already says and why that classifier reports no resources for the operation. Forwarding
+        // the caller's scope here reintroduced exactly what the classifier declined, one layer up:
+        // "teach Sonny a routine that opens example.com" inside a workspace escalated to tier 3 and
+        // prompted about a URL nothing in the plan would open — a prompt with no action behind it,
+        // which is the kind that trains people to click through the ones that matter.
+        //
+        // The nested assessment is still needed for tier and escalations (a routine that would
+        // overwrite an existing file still raises the save), so it is the *scope* that is dropped
+        // here, not the assessment. Because it is unscoped, `nested.scopeVerdict` is `nil` and the
+        // rebuilt assessment below cannot ship a roll-up that contradicts its own escalations.
+        let nested = try context.assessNestedPlan(spec.routine.plan, .unscoped)
         let defaultTier = highestTier(metadata.defaultRiskTier, nested.defaultTier)
 
         var escalations = nested.escalations

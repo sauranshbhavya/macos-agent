@@ -56,7 +56,8 @@ public struct RunRoutineCapabilityAdapter: CapabilityAdapter {
 
     public func assessRisk(plan: AgentPlan, context: CapabilityExecutionContext) throws -> CapabilityRiskAssessment {
         let routine = try routineRunSpec(plan, context: context)
-        let nested = try context.assessNestedPlan(routine.plan)
+        // Forwarded: a routine's steps must not escape the boundary its caller is bound by.
+        let nested = try context.assessNestedPlan(routine.plan, context.taskScope)
         let defaultTier = highestTier(metadata.defaultRiskTier, nested.defaultTier)
         return CapabilityRiskAssessment(
             defaultTier: defaultTier,
@@ -64,9 +65,16 @@ public struct RunRoutineCapabilityAdapter: CapabilityAdapter {
             escalations: nested.escalations,
             // Forwarded, not dropped. The nested plan was assessed under the caller's own workspace
             // scope, so its roll-up is the only report of what the routine's steps touch — rebuilding
-            // this assessment without it would hand the executor `nil` and let a plan whose routine
-            // writes outside the boundary roll up `.inScope`. That value is exactly what row C would
-            // relax on, so the laundering hole would reopen one layer up from where it was closed.
+            // this assessment without it hands the executor `nil` and the outer fold then answers
+            // from the outer plan's own findings alone.
+            //
+            // What that produces depends on the plan's shape, and the dangerous shape is the mixed
+            // one. A plan whose *only* step is `run_routine` has no outer findings at all
+            // (`PlanScopedResources` classifies the operation as `.none`), so dropping this yields
+            // `.unconstrained` — wrong, but inert. Add one in-scope step beside it and dropping this
+            // yields **`.inScope`** on a plan whose routine writes outside the boundary, which is
+            // precisely the value row C relaxes on. Both shapes are pinned; the mixed one is the
+            // reason this line exists.
             scopeVerdict: nested.scopeVerdict
         )
     }

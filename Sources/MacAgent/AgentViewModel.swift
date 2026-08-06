@@ -447,7 +447,7 @@ final class AgentViewModel: ObservableObject {
                 return
             }
 
-            let request = try runner.approvalRequest(for: prepared, logAssessment: true)
+            let request = try runner.approvalRequest(for: prepared, logAssessment: true, scope: .unscoped)
             switch request.requirement {
             case .autoRun:
                 break
@@ -1275,7 +1275,8 @@ final class AgentViewModel: ObservableObject {
             preparedRun,
             approvalDecision: approvalDecision,
             confirmationMessage: confirmationMessage,
-            logRiskAssessment: logRiskAssessment
+            logRiskAssessment: logRiskAssessment,
+            scope: .unscoped
         )
         markAllSteps(.complete)
         // The task itself succeeded; a bookkeeping failure is a storage notice, not a task error.
@@ -1621,7 +1622,8 @@ final class AgentViewModel: ObservableObject {
             let result = try await runner.execute(
                 prepared,
                 approvalDecision: .approved(.tier2),
-                confirmationMessage: "Scheduled run approved by this routine's unattended-run setting"
+                confirmationMessage: "Scheduled run approved by this routine's unattended-run setting",
+                scope: .unscoped
             )
             recordScheduledRunInHistory(name: name, at: occurrence)
             recordScheduledTaskHistory(status: .completed, startedAt: startedAt)

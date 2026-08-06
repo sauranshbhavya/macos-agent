@@ -116,7 +116,20 @@ public struct CapabilityMetadata: Equatable, Sendable {
 }
 
 public struct CapabilityExecutionContext {
-    public typealias AssessNestedPlan = @MainActor (AgentPlan) throws -> CapabilityRiskAssessment
+    /// Assesses a nested plan under an **explicitly named** workspace scope.
+    ///
+    /// The scope is a parameter rather than something the closure captures because the two callers
+    /// need opposite answers, and the difference is a recorded product decision rather than an
+    /// implementation detail: `run_routine` forwards the caller's scope (a routine's steps must not
+    /// escape the boundary its caller is bound by), while `save_routine` passes `.unscoped` because
+    /// saving touches one file inside Sonny's own store and the routine's steps are scoped when it
+    /// actually runs — `PlanScopedResources`' `.saveRoutine` case states exactly that.
+    ///
+    /// Captured scope is what made that go wrong once already: a single captured value silently
+    /// applied `run_routine`'s rule to `save_routine` too, which produced a scope prompt naming a
+    /// URL nothing in the plan would open. With the scope in the signature a new nested-assess
+    /// caller cannot inherit either rule by accident — it has to write one down.
+    public typealias AssessNestedPlan = @MainActor (AgentPlan, TaskWorkspaceScope) throws -> CapabilityRiskAssessment
     public typealias PreviewNestedPlan = @MainActor (AgentPlan) throws -> [ActionPreview]
     /// Runs a nested plan, optionally binding a browser for every URL it opens on the injected
     /// browser-opener seam. `nil` means the
@@ -165,6 +178,10 @@ public struct CapabilityExecutionContext {
     /// `nil` for every top-level run, so a plain "open github.com" keeps going to the system
     /// default browser — the ordinary path must not inherit a routine's preference.
     public var preferredBrowser: MacApp?
+    /// The workspace scope the *current* assessment is running under, for a nested-assess caller
+    /// that needs to forward it. `.unscoped` for every preview and execute context — neither
+    /// assesses — and for every task not bound to a workspace.
+    public var taskScope: TaskWorkspaceScope
     public var assessNestedPlan: AssessNestedPlan
     public var previewNestedPlan: PreviewNestedPlan
     public var executeNestedPlan: ExecuteNestedPlan
@@ -201,6 +218,7 @@ public struct CapabilityExecutionContext {
         now: @escaping () -> Date = Date.init,
         hotKeyReady: @escaping () -> Bool = { true },
         preferredBrowser: MacApp? = nil,
+        taskScope: TaskWorkspaceScope = .unscoped,
         assessNestedPlan: @escaping AssessNestedPlan,
         previewNestedPlan: @escaping PreviewNestedPlan,
         executeNestedPlan: @escaping ExecuteNestedPlan
@@ -236,6 +254,7 @@ public struct CapabilityExecutionContext {
         self.now = now
         self.hotKeyReady = hotKeyReady
         self.preferredBrowser = preferredBrowser
+        self.taskScope = taskScope
         self.assessNestedPlan = assessNestedPlan
         self.previewNestedPlan = previewNestedPlan
         self.executeNestedPlan = executeNestedPlan

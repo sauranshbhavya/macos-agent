@@ -851,7 +851,7 @@ struct AgentActionExecutorTests {
             source: .instantResolver
         )
 
-        _ = try await runner.execute(prepared, approvalDecision: .approved(.tier2))
+        _ = try await runner.execute(prepared, approvalDecision: .approved(.tier2), scope: .unscoped)
 
         #expect(browserOpener.openedBrowsers == [MacApp(displayName: "Safari", bundleIdentifier: "com.apple.Safari")])
     }
@@ -3328,9 +3328,190 @@ struct AgentActionExecutorTests {
         #expect(assessment.escalations.contains {
             $0.reason == "example.com is not part of the Research workspace."
         })
-        // The roll-up has to travel back out of the nesting too. If it did not, a plan whose
-        // routine leaves the boundary would report `.inScope` — the value row C relaxes on.
+        // The roll-up has to travel back out of the nesting too. On *this* shape, losing the forward
+        // yields `.unconstrained` — the outer plan's only step is `run_routine`, which classifies as
+        // `.none`, so the fold falls to its bottom element. Wrong, but inert. The shape where losing
+        // it is dangerous is the mixed one below.
         #expect(assessment.scopeVerdict == .outOfScope)
+    }
+
+    /// The shape that makes the nested roll-up forward load-bearing rather than merely tidy.
+    ///
+    /// One in-scope step beside the leaky routine, so the *outer* plan's own findings roll up
+    /// `.inScope` on their own. Drop the forward and that is the answer the assessment ships —
+    /// `.inScope`, on a plan Sonny has just escalated for writing outside the boundary. Row C's
+    /// recorded rule is that in-scope tier 3 drops to a lightweight confirmation, so the first
+    /// consumer of this field would lighten the very prompt this ticket raised.
+    @Test
+    func aLeakyRoutineBesideAnInScopeStepStillRollsUpOutOfScope() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try routineStore.save(
+            StoredRoutine(
+                name: "Leaky",
+                steps: [
+                    AgentStep(
+                        id: "leak",
+                        operation: .openURL,
+                        description: "Open an unrelated site.",
+                        targetURL: "https://example.com/page"
+                    )
+                ]
+            )
+        )
+        let executor = makeExecutor(root: root, routineStore: routineStore)
+        let plan = AgentPlan(
+            summary: "Open GitHub, then run the routine.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "in-scope", operation: .openURL, description: "In scope.", targetURL: "https://github.com/sonny"),
+                AgentStep(id: "run", operation: .runRoutine, description: "Run the routine.", routineName: "Leaky")
+            ]
+        )
+        let scope = WorkspaceScope(
+            workspace: StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"])
+        )
+
+        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope))
+
+        #expect(assessment.scopeVerdict == .outOfScope)
+        #expect(assessment.escalations.contains {
+            $0.reason == "example.com is not part of the Research workspace."
+        })
+        #expect(assessment.effectiveTier == .tier3)
+    }
+
+    /// F1 — **saving a routine is scope-neutral.** `PlanScopedResources`' `.saveRoutine` case records
+    /// the rule: saving touches one file inside Sonny's own store, and the routine's steps are
+    /// scoped when it actually runs. Forwarding the caller's scope into the save's nested assessment
+    /// reintroduced exactly what that classifier declined, one layer up — "teach Sonny a routine
+    /// that opens example.com" inside a workspace escalated to tier 3 and prompted about a URL
+    /// nothing in the plan would open.
+    ///
+    /// Asserted on the whole assessment against the real unscoped one, so a spurious escalation, a
+    /// tier bump, or a roll-up appearing out of nowhere all fail.
+    @Test
+    func savingARoutineIsScopeNeutralAndAssessesIdenticallyUnderAnyScope() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root)
+        let plan = saveRoutinePlan(
+            name: "Teachable",
+            steps: [
+                AgentStep(
+                    id: "leak",
+                    operation: .openURL,
+                    description: "Open an unrelated site.",
+                    targetURL: "https://example.com/page"
+                )
+            ]
+        )
+        let scope = WorkspaceScope(
+            workspace: StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"])
+        )
+
+        let unscoped = try executor.assessRisk(plan: plan, scope: .unscoped)
+        #expect(unscoped.escalations.isEmpty)
+        #expect(unscoped.effectiveTier == .tier2)
+
+        var expected = unscoped
+        // `save_routine` contributes no findings of its own, so a plan containing only one rolls up
+        // the fold's bottom element. What must *not* appear is an escalation.
+        expected.scopeVerdict = .unconstrained
+
+        #expect(try executor.assessRisk(plan: plan, scope: .scoped(scope)) == expected)
+    }
+
+    /// The second F1 probe shape: the save sits beside a step that really is scope-relevant. The
+    /// sibling must be scoped normally while the save contributes nothing scope-wise, and the
+    /// roll-up must agree with the escalations shipped next to it — a `(tier3, .inScope)` pair, or
+    /// an `.inScope` roll-up on a plan carrying an out-of-scope reason, is the contradiction this
+    /// finding was about.
+    @Test
+    func aSaveRoutineBesideAnOutOfScopeStepEscalatesOnlyForTheSibling() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root)
+        let plan = AgentPlan(
+            summary: "Open a site, then teach a routine.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "out", operation: .openURL, description: "Out of scope.", targetURL: "https://elsewhere.example/page"),
+                AgentStep(
+                    id: "save",
+                    operation: .saveRoutine,
+                    description: "Teach a routine.",
+                    routineName: "Teachable",
+                    routineSteps: [
+                        AgentStep(
+                            id: "leak",
+                            operation: .openURL,
+                            description: "Open an unrelated site.",
+                            targetURL: "https://example.com/page"
+                        )
+                    ]
+                )
+            ]
+        )
+        let scope = WorkspaceScope(
+            workspace: StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"])
+        )
+
+        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope))
+
+        // Exactly one reason, and it is the sibling's own URL — never the routine's stored step.
+        #expect(assessment.escalations.map(\.reason) == [
+            "elsewhere.example is not part of the Research workspace."
+        ])
+        // And the roll-up agrees with it rather than contradicting it.
+        #expect(assessment.scopeVerdict == .outOfScope)
+        #expect(assessment.effectiveTier == .tier3)
+    }
+
+    /// F5 — a blank app name in a stored record must not render a subjectless sentence. The two
+    /// sides of the comparison disagree about it on purpose: `WorkspaceScope.init` records a blank
+    /// entry as inert, while `verdict(for: .app(""))` answers `.outOfScope` whenever the bound
+    /// workspace lists any app. Unfiltered, that produced " is not part of the Research workspace."
+    /// in the approval panel.
+    @Test
+    func aBlankAppNameInAStoredWorkspaceRecordNeverBecomesASubjectlessEscalation() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let bound = StoredWorkspace(name: "Research", apps: ["Safari"], urls: [])
+        try workspaceStore.save(bound)
+        // Written straight to the store: `WorkspaceStore.save` validates nothing about apps, which is
+        // exactly why this is reachable once SONNY-40/41 add record-writing surfaces.
+        try workspaceStore.save(StoredWorkspace(name: "Broken", apps: ["   ", "Slack"], urls: []))
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+
+        let assessment = try executor.assessRisk(
+            plan: openWorkspacePlan(name: "Broken"),
+            scope: .scoped(WorkspaceScope(workspace: bound))
+        )
+
+        // Slack still escalates; the blank entry contributes nothing at all.
+        #expect(assessment.escalations.map(\.reason) == [
+            "Slack is not part of the Research workspace."
+        ])
+        #expect(assessment.escalations.allSatisfy { !$0.reason.hasPrefix(" ") })
+    }
+
+    private func saveRoutinePlan(name: String, steps: [AgentStep]) -> AgentPlan {
+        AgentPlan(
+            summary: "Save routine.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "save-routine",
+                    operation: .saveRoutine,
+                    description: "Save routine.",
+                    routineName: name,
+                    routineSteps: steps
+                )
+            ]
+        )
     }
 
     /// AC4 — `open_workspace`'s resources come from the **stored record**, not the step. The step

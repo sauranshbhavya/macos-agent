@@ -379,7 +379,17 @@ public final class AgentActionExecutor {
         guard let record = try? workspaceStore.workspace(named: step.workspaceName ?? "") else {
             return []
         }
-        var resources: [ScopedResource] = record.apps.map { ScopedResource.app($0) }
+        // Blank app names are dropped for the same reason the URL branch below drops what `SafeURL`
+        // rejects, and the two must agree or the boundary contradicts itself: `WorkspaceScope.init`
+        // records a blank app name as *inert*, while `verdict(for: .app(""))` answers `.outOfScope`
+        // whenever the bound workspace lists any app. Mapping it through unfiltered therefore
+        // produced an escalation reading " is not part of the Research workspace." — a sentence with
+        // no subject — in the approval panel. `WorkspaceStore.save` validates nothing, and SONNY-40's
+        // edit path and SONNY-41's detail sheet are both about to add record-writing surfaces, so a
+        // record can genuinely carry one.
+        var resources: [ScopedResource] = record.apps
+            .filter { !$0.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty }
+            .map { ScopedResource.app($0) }
         for rawURL in record.urls {
             // A stored URL `SafeURL` rejects, or one with no host, contributes nothing — the same
             // treatment `WorkspaceScope` gives an inert entry on its own side of the comparison.
@@ -1114,11 +1124,12 @@ public final class AgentActionExecutor {
             now: now,
             hotKeyReady: hotKeyReady,
             preferredBrowser: preferredBrowser,
-            assessNestedPlan: { [weak self] plan in
+            taskScope: scope,
+            assessNestedPlan: { [weak self] plan, nestedScope in
                 guard let self else {
                     throw AgentExecutionError.invalidPlan("Executor is unavailable for nested risk assessment.")
                 }
-                return try self.assessRisk(plan: plan, scope: scope)
+                return try self.assessRisk(plan: plan, scope: nestedScope)
             },
             previewNestedPlan: { [weak self] plan in
                 guard let self else {
