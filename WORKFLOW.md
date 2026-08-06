@@ -32,6 +32,9 @@ implementer/reviewer agent rotation anymore. Instead:
 - **Implementing session** — one CLI session owns one ticket start to finish.
 - **Reviewing session** — a *fresh* session, with no implementer context, reviews the
   branch diff against the tickets before merge (see "Review" below).
+- **Coordinating session** (*the coordinator*, in steps 4 and 5) — adjudicates a review's
+  findings, writes the kickoff and fix prompts that launch other sessions, and records the
+  decisions those carry; it never implements or reviews a branch itself.
 - **The user** — approves plans, approves ticket content (batched per branch at planning
   time; sessions create their own discovery tickets per step 5, subject to user triage),
   assigns every ticket, does all manual and visual verification in the real app (no agent
@@ -309,8 +312,10 @@ ticket trivial; sessions never do.
 **When something fails after a ticket closed** — the flow above closes tickets before the
 PR opens, so late failures need an explicit path, not improvisation:
 
-- A reviewer finding *within* a ticket's scope: fix commits on the branch, plus a comment
-  on that ticket recording the finding and the fix. The ticket stays Completed.
+- A reviewer finding *within* a ticket's scope: the session that owns the ticket — its
+  implementing session, or the successor the user routes the round to — makes the fix
+  commits on the branch, plus a comment on that ticket recording the finding and the fix.
+  The ticket stays Completed.
 - A reviewer finding *outside* every ticket's scope (including anything that would breach
   a ticket's never-touch list): file a follow-up ticket referencing the original; fix it
   on this branch only if the user agrees it blocks the merge, otherwise it waits for its
