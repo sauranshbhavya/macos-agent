@@ -346,6 +346,92 @@ struct AgentRunnerTests {
         })
     }
 
+    /// AC11 (SONNY-37) — a scope escalation has to be its own logged trace event, not a silent
+    /// internal decision (spec §11.1A). `logRiskAssessment` already emits one `risk.escalated` per
+    /// escalation, so this asserts the wiring rather than adding any, and it asserts the *whole*
+    /// line: a `contains("risk.escalated")` check would pass on any escalation from any source and
+    /// prove nothing about scope.
+    ///
+    /// Also pins the gating half of this ticket's contract at the runner level: an out-of-scope plan
+    /// escalates the *assessment* to tier 3 and therefore reaches `.explicitApproval` through the
+    /// ordinary tier mapping. No scope branch was added to the requirement switch — scope changes
+    /// what is assessed, never how the gate reads it.
+    @Test
+    func anOutOfScopePlanEscalatesThroughTheOrdinaryGateAndLogsItsOwnRiskEvent() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let logStore = AgentLogStore()
+        let plan = AgentPlan(
+            summary: "Open a site.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "open",
+                    operation: .openURL,
+                    description: "Open an unrelated site.",
+                    targetURL: "https://example.com/page"
+                )
+            ]
+        )
+        let runner = AgentRunner(
+            planner: StaticPlanner(plan: plan),
+            executor: makeExecutor(root: root),
+            logStore: logStore
+        )
+        let scope = TaskWorkspaceScope.scoped(
+            WorkspaceScope(workspace: StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"]))
+        )
+
+        let prepared = try await runner.prepare(command: "Open example.com")
+        let request = try runner.approvalRequest(for: prepared, logAssessment: true, scope: scope)
+
+        #expect(request.assessment.effectiveTier == .tier3)
+        #expect(request.requirement == .explicitApproval)
+        #expect(request.assessment.scopeVerdict == .outOfScope)
+        #expect(logStore.events.contains { event in
+            event.phase == .risk
+                && event.message == "risk.escalated: Tier 1 -> Tier 3: example.com is not part of the Research workspace."
+        })
+        // The pre-existing summary event still fires alongside it, unchanged.
+        #expect(logStore.events.contains { event in
+            event.phase == .risk && event.message.hasPrefix("risk.assessed:")
+        })
+    }
+
+    /// The inverse, at the same level: an unscoped run of the identical plan must stay exactly as it
+    /// was — no scope escalation, no scope trace line, and the ordinary auto-run requirement.
+    @Test
+    func theSamePlanUnscopedLogsNoScopeEventAndKeepsItsOriginalRequirement() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let logStore = AgentLogStore()
+        let plan = AgentPlan(
+            summary: "Open a site.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "open",
+                    operation: .openURL,
+                    description: "Open an unrelated site.",
+                    targetURL: "https://example.com/page"
+                )
+            ]
+        )
+        let runner = AgentRunner(
+            planner: StaticPlanner(plan: plan),
+            executor: makeExecutor(root: root),
+            logStore: logStore
+        )
+
+        let prepared = try await runner.prepare(command: "Open example.com")
+        let request = try runner.approvalRequest(for: prepared, logAssessment: true)
+
+        #expect(request.assessment.scopeVerdict == nil)
+        #expect(request.assessment.escalations.isEmpty)
+        #expect(request.assessment.effectiveTier == .tier1)
+        #expect(logStore.events.allSatisfy { !$0.message.contains("not part of") })
+    }
+
     @Test
     func staleTierTwoApprovalDoesNotAuthorizeLaterTierThreeEscalation() async throws {
         let root = try makeDirectory()
