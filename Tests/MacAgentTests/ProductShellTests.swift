@@ -3,7 +3,12 @@ import Foundation
 import SwiftUI
 import Testing
 @testable import MacAgent
-import MacAgentCore
+// `@testable` rather than a plain import so this target can reach
+// `RoutineStore.saveBypassingStepValidation`, the module-internal test-only write path SONNY-52
+// added. Keeping that method internal is the point — nothing outside `MacAgentCore` may write a
+// routine the store would refuse, and a test target reaching in through `@testable` is not the
+// same thing as the app being able to.
+@testable import MacAgentCore
 
 @Suite(.serialized)
 @MainActor
@@ -404,7 +409,11 @@ struct ProductShellTests {
                 )
             ]
         )
-        try fixture.routineStore.save(routine)
+        // `.openWorkspace` is on `StoredRoutine.forbiddenStepOperations`, so `save` refuses this
+        // routine (SONNY-52). The behavior under test is what the *task record* says when a run
+        // descends into a routine that already contains one, which needs that state to exist on
+        // disk; the sanctioned bypass is how a test says so out loud.
+        try fixture.routineStore.saveBypassingStepValidation(routine)
         viewModel.refreshSavedItems()
 
         viewModel.command = "run morning setup"

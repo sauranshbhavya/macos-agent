@@ -103,20 +103,15 @@ public struct SaveRoutineCapabilityAdapter: CapabilityAdapter {
         return RoutineSaveSpec(routine: StoredRoutine(name: name, steps: routineSteps))
     }
 
+    /// The forbidden-operation list itself lives on `StoredRoutine`, not here, so that
+    /// `RoutineStore.save` enforces the identical rule at the write choke point — this adapter is
+    /// the door a *planner* comes through, not the only door (SONNY-52). What stays here is the
+    /// part only a capability can do: previewing the nested plan, which needs an execution context
+    /// the store has no access to, and which is why the store's check is a subset of this one
+    /// rather than a replacement for it.
     @MainActor
     private func validateRoutineSteps(_ steps: [AgentStep], context: CapabilityExecutionContext) throws {
-        for step in steps {
-            switch step.operation {
-            case .saveRoutine, .runRoutine, .createWorkspace, .openWorkspace, .clarify, .unsupported:
-                throw AutomationStoreError.unsafeRoutineStep(step.operation.rawValue)
-            default:
-                break
-            }
-
-            if let nested = step.routineSteps, !nested.isEmpty {
-                throw AutomationStoreError.unsafeRoutineStep("nested routineSteps")
-            }
-        }
+        try StoredRoutine.validateStepSafety(steps)
 
         _ = try context.previewNestedPlan(
             AgentPlan(summary: "Validate routine.", requiresConfirmation: true, steps: steps)
