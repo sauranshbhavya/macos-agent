@@ -61,7 +61,13 @@ public struct RunRoutineCapabilityAdapter: CapabilityAdapter {
         return CapabilityRiskAssessment(
             defaultTier: defaultTier,
             effectiveTier: highestTier(defaultTier, nested.effectiveTier),
-            escalations: nested.escalations
+            escalations: nested.escalations,
+            // Forwarded, not dropped. The nested plan was assessed under the caller's own workspace
+            // scope, so its roll-up is the only report of what the routine's steps touch — rebuilding
+            // this assessment without it would hand the executor `nil` and let a plan whose routine
+            // writes outside the boundary roll up `.inScope`. That value is exactly what row C would
+            // relax on, so the laundering hole would reopen one layer up from where it was closed.
+            scopeVerdict: nested.scopeVerdict
         )
     }
 

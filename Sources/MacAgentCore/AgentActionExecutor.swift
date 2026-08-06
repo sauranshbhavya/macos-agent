@@ -270,9 +270,24 @@ public final class AgentActionExecutor {
         )
     }
 
-    public func assessRisk(plan: AgentPlan) throws -> CapabilityRiskAssessment {
+    /// Read-only risk assessment for a plan, optionally bound to a workspace.
+    ///
+    /// `scope` is non-optional and non-defaulted on purpose — see `TaskWorkspaceScope`. Every call
+    /// site writes `.unscoped` deliberately or passes a real scope; none of them gets to be silent.
+    ///
+    /// Scope only ever **raises**. `effectiveTier` is computed as a maximum that now includes the
+    /// scope escalations' `toTier`, so nothing here can lower a tier — which four other things
+    /// depend on staying honest: the unattended gate (`approvedTier >= effectiveTier` against a
+    /// fixed `.approved(.tier2)`), the stale-approval re-check in `AgentRunner.execute`, the
+    /// `risk.assessed`/`risk.escalated` trace, and `UnattendedTrustAdvisory`, which reads
+    /// `effectiveTier` alone. No relaxation of any kind lives here; that is row C's, and the
+    /// `scopeVerdict` roll-up exists to give it a typed input rather than a re-derivation.
+    public func assessRisk(plan: AgentPlan, scope: TaskWorkspaceScope) throws -> CapabilityRiskAssessment {
         let resolvedPlan = try resolveDefaultOutputs(in: plan)
-        let context = capabilityContext()
+        // The same scope goes into the nested-plan closure, so a `run_routine` step's stored steps
+        // are evaluated under the boundary its caller is bound by. Without it, a routine is a
+        // laundering hole: its steps would escape the workspace the task naming it is inside.
+        let context = capabilityContext(scope: scope)
 
         var assessments: [CapabilityRiskAssessment] = []
         var metadata: [CapabilityMetadata] = []
@@ -291,13 +306,167 @@ public final class AgentActionExecutor {
         }
 
         let defaultTier = highestRiskTier(in: assessments.map(\.defaultTier))
-        let effectiveTier = highestRiskTier(in: assessments.map(\.effectiveTier) + [defaultTier])
+        // Evaluated over the whole resolved plan rather than per segment: the evaluator walks
+        // `plan.steps` itself, so a second step of the same operation is visible to it in a way it
+        // is not to an adapter picking its step with `.first(where:)`. Resolved, so a default output
+        // path pinned by `resolveDefaultOutputs` is the path actually compared.
+        let findings = scopeFindings(in: resolvedPlan, scope: scope)
+        let scopeEscalations = scopeEscalations(for: findings, scope: scope, fromTier: defaultTier)
+        let effectiveTier = highestRiskTier(
+            in: assessments.map(\.effectiveTier) + [defaultTier] + scopeEscalations.map(\.toTier)
+        )
         return CapabilityRiskAssessment(
             defaultTier: defaultTier,
             effectiveTier: effectiveTier,
             approvalCopy: approvalCopy(for: resolvedPlan, metadata: metadata, tier: effectiveTier),
-            escalations: unique(assessments.flatMap(\.escalations))
+            // Adapter escalations first, scope after, then the existing dedup — a scope escalation
+            // is an additional reason on the same prompt, never a replacement for one.
+            escalations: unique(assessments.flatMap(\.escalations) + scopeEscalations),
+            scopeVerdict: scopeVerdict(
+                findings: findings,
+                nested: assessments.compactMap(\.scopeVerdict),
+                scope: scope
+            )
         )
+    }
+
+    /// How many distinct out-of-scope resources the prompt names before it stops listing them.
+    ///
+    /// Three, matching `involvedResource(in:metadata:)`'s own `prefix(3)`. Both surfaces join every
+    /// escalation reason into one paragraph, so an unbounded list turns an "allow anyway?" prompt
+    /// into a wall the user scrolls past — and the decision a fifth hostname changes is none.
+    private static let scopeEscalationLimit = 3
+
+    /// Every resource the plan touches, with the bound workspace's verdict on each.
+    ///
+    /// Two sources, because one of them cannot come from the pure classifier. `PlanScopedResources`
+    /// answers for every operation from the step alone; `open_workspace`'s real resources are the
+    /// *stored* record's apps and URLs, which the classifier has no store to read. That half is
+    /// discharged here, at the call site where `workspaceStore` is already in hand, which is what
+    /// keeps the evaluator and its matching semantics untouched.
+    private func scopeFindings(in plan: AgentPlan, scope: TaskWorkspaceScope) -> [WorkspaceScopeFinding] {
+        guard let workspaceScope = scope.workspaceScope else {
+            return []
+        }
+        var findings = WorkspaceScopeEvaluator.evaluate(
+            plan: plan,
+            scope: workspaceScope,
+            searchURLCatalog: appSearchURLCatalog
+        ).findings
+        for step in plan.steps where step.operation == .openWorkspace {
+            findings.append(contentsOf: openWorkspaceFindings(for: step, scope: workspaceScope))
+        }
+        return findings
+    }
+
+    /// The stored apps and URLs of the workspace an `open_workspace` step names.
+    ///
+    /// A plan bound to workspace A that opens workspace B launches B's apps and URLs, and until this
+    /// existed nothing compared them against A — the same laundering hole `run_routine` has, through
+    /// a different door. `PlanScopedResources` classifies `open_workspace` as no resources of its
+    /// own deliberately, and that stays true: this adds the store-derived half without teaching the
+    /// pure classifier about a store.
+    ///
+    /// A step naming the *bound* workspace needs no special case — its apps and URLs are the scope's
+    /// own lists, so every resource resolves `.inScope` and no escalation is produced. An
+    /// unresolvable name yields no resources rather than an escalation: the run fails at execution
+    /// anyway, and a scope prompt for a workspace that does not exist would be a second, wrong
+    /// explanation of the same problem.
+    ///
+    /// Note these are the *stored* record's fields, not the step's: `open_workspace` steps carry no
+    /// `workspaceApps`/`workspaceURLs` at all — those belong to `create_workspace`.
+    private func openWorkspaceFindings(for step: AgentStep, scope: WorkspaceScope) -> [WorkspaceScopeFinding] {
+        guard let record = try? workspaceStore.workspace(named: step.workspaceName ?? "") else {
+            return []
+        }
+        var resources: [ScopedResource] = record.apps.map { ScopedResource.app($0) }
+        for rawURL in record.urls {
+            // A stored URL `SafeURL` rejects, or one with no host, contributes nothing — the same
+            // treatment `WorkspaceScope` gives an inert entry on its own side of the comparison.
+            guard let host = (try? SafeURL.validateWebURL(rawURL))?.host else {
+                continue
+            }
+            resources.append(.webDomain(host))
+        }
+        return resources.map { resource in
+            WorkspaceScopeFinding(
+                stepID: step.id,
+                operation: step.operation,
+                resource: resource,
+                verdict: scope.verdict(for: resource)
+            )
+        }
+    }
+
+    /// One escalation per distinct out-of-scope resource, capped.
+    ///
+    /// Deduplicated on the `ScopedResource` itself rather than on its rendered string, so two
+    /// genuinely different resources that happen to share a value stay two — and `Hashable`
+    /// conformance makes that a set insert rather than the linear scan `unique(_:)` does for
+    /// escalations.
+    ///
+    /// `fromTier` is the plan's own default tier rather than a hardcoded value, because that is what
+    /// this escalation is actually raising *from*. Out-of-scope goes to tier 3 rather than a smaller
+    /// bump: tier 2 and tier 3 render the same foreground panel (SONNY-10), so the visible cost is
+    /// the sentence itself, "explicit approval" is the tier whose semantics match an "allow anyway?"
+    /// prompt, and it makes the unattended behavior correct by default.
+    private func scopeEscalations(
+        for findings: [WorkspaceScopeFinding],
+        scope: TaskWorkspaceScope,
+        fromTier: CapabilityRiskTier
+    ) -> [CapabilityRiskEscalation] {
+        guard let workspaceScope = scope.workspaceScope else {
+            return []
+        }
+        var seen: Set<ScopedResource> = []
+        var ordered: [ScopedResource] = []
+        for finding in findings where finding.verdict == .outOfScope {
+            guard let resource = finding.resource, seen.insert(resource).inserted else {
+                continue
+            }
+            ordered.append(resource)
+        }
+        return ordered.prefix(Self.scopeEscalationLimit).map { resource in
+            CapabilityRiskEscalation(
+                fromTier: fromTier,
+                toTier: .tier3,
+                reason: "\(resource.value) is not part of the \(workspaceScope.workspaceName) workspace."
+            )
+        }
+    }
+
+    /// The plan-level roll-up, folding in whatever nested assessments reported.
+    ///
+    /// `nil` when unscoped — "no workspace was bound" is a different statement from any verdict.
+    ///
+    /// The precedence below is `WorkspaceScopeEvaluator.planVerdict`'s, restated over verdicts
+    /// rather than findings because a nested plan hands back a verdict and nothing else. Synthesizing
+    /// findings from those verdicts to reuse `planVerdict` directly was rejected: `WorkspaceScopeFinding`
+    /// documents `resource == nil` as meaning exactly `.opaque`, so a synthetic `.inScope` finding
+    /// with no resource would violate the type's own invariant to save four lines.
+    ///
+    /// Folding nested verdicts in at all is what stops a routine laundering the roll-up: without it
+    /// a plan whose routine writes outside the boundary reports `.inScope`, which is precisely the
+    /// input row C would relax on.
+    private func scopeVerdict(
+        findings: [WorkspaceScopeFinding],
+        nested: [ScopeVerdict],
+        scope: TaskWorkspaceScope
+    ) -> ScopeVerdict? {
+        guard scope.workspaceScope != nil else {
+            return nil
+        }
+        let verdicts = [WorkspaceScopeEvaluator.planVerdict(for: findings)] + nested
+        if verdicts.contains(.outOfScope) {
+            return .outOfScope
+        }
+        if verdicts.contains(.opaque) {
+            return .opaque
+        }
+        if verdicts.contains(.inScope) {
+            return .inScope
+        }
+        return .unconstrained
     }
 
     /// The units risk assessment walks: exactly the units `preview` and `execute` hand to an
@@ -619,37 +788,37 @@ public final class AgentActionExecutor {
         if resolvedPlan.steps.contains(where: { [.scanSelectLargestFiles, .createZip].contains($0.operation) }) {
             resolvedPlan = try capabilityRegistry
                 .adapter(for: .scanSelectLargestFiles)
-                .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext())
+                .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
         }
 
         if resolvedPlan.steps.contains(where: { [.scanDocx, .convertDocxToPDF].contains($0.operation) }) {
             resolvedPlan = try capabilityRegistry
                 .adapter(for: .scanDocx)
-                .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext())
+                .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
         }
 
         if let markdownIndex = resolvedPlan.steps.firstIndex(where: { $0.operation == .writeMarkdown }) {
             resolvedPlan = try capabilityRegistry
                 .adapter(for: resolvedPlan.steps[markdownIndex].operation)
-                .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext())
+                .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
         }
 
         if resolvedPlan.steps.contains(where: { $0.operation == .webToMarkdown }) {
             resolvedPlan = try capabilityRegistry
                 .adapter(for: .webToMarkdown)
-                .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext())
+                .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
         }
 
         if resolvedPlan.steps.contains(where: { $0.operation == .createLocalDraft }) {
             resolvedPlan = try capabilityRegistry
                 .adapter(for: .createLocalDraft)
-                .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext())
+                .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
         }
 
         if resolvedPlan.steps.contains(where: { $0.operation == .invokeShortcut }) {
             resolvedPlan = try capabilityRegistry
                 .adapter(for: .invokeShortcut)
-                .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext())
+                .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
         }
 
         return resolvedPlan
@@ -664,7 +833,7 @@ public final class AgentActionExecutor {
     private func previewCapability(for operation: AgentOperation, plan: AgentPlan) throws -> [ActionPreview] {
         try capabilityRegistry
             .adapter(for: operation)
-            .preview(plan: plan, context: capabilityContext())
+            .preview(plan: plan, context: capabilityContext(scope: .unscoped))
     }
 
     private func executeCapability(
@@ -675,7 +844,7 @@ public final class AgentActionExecutor {
     ) async throws -> AgentRunResult {
         try await capabilityRegistry
             .adapter(for: operation)
-            .execute(plan: plan, context: capabilityContext(preferredBrowser: preferredBrowser), log: log)
+            .execute(plan: plan, context: capabilityContext(preferredBrowser: preferredBrowser, scope: .unscoped), log: log)
     }
 
     private func capabilityAdapters(in plan: AgentPlan) throws -> [any CapabilityAdapter] {
@@ -909,7 +1078,10 @@ public final class AgentActionExecutor {
         return result
     }
 
-    private func capabilityContext(preferredBrowser: MacApp? = nil) -> CapabilityExecutionContext {
+    private func capabilityContext(
+        preferredBrowser: MacApp? = nil,
+        scope: TaskWorkspaceScope
+    ) -> CapabilityExecutionContext {
         CapabilityExecutionContext(
             whitelist: whitelist,
             inventory: inventory,
@@ -946,7 +1118,7 @@ public final class AgentActionExecutor {
                 guard let self else {
                     throw AgentExecutionError.invalidPlan("Executor is unavailable for nested risk assessment.")
                 }
-                return try self.assessRisk(plan: plan)
+                return try self.assessRisk(plan: plan, scope: scope)
             },
             previewNestedPlan: { [weak self] plan in
                 guard let self else {

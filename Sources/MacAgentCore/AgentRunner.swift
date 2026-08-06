@@ -86,11 +86,19 @@ public final class AgentRunner {
         return preparedRun
     }
 
+    /// `scope` is defaulted here and **not** in `AgentActionExecutor.assessRisk(plan:scope:)`, and
+    /// the asymmetry is deliberate rather than an inconsistency. The executor's parameter is the one
+    /// that decides whether a check runs, so it refuses to be silent. This one is a pass-through
+    /// whose callers live in `Sources/MacAgent/`, which this ticket must not touch; defaulting to
+    /// `.unscoped` keeps them compiling and preserves exactly today's behavior until SONNY-38 threads
+    /// the real binding through the view model. Nothing about the gating below changes — scope
+    /// changes the assessment, never the gate.
     public func approvalRequest(
         for preparedRun: PreparedAgentRun,
-        logAssessment: Bool = false
+        logAssessment: Bool = false,
+        scope: TaskWorkspaceScope = .unscoped
     ) throws -> RiskApprovalRequest {
-        let assessment = try executor.assessRisk(plan: preparedRun.plan)
+        let assessment = try executor.assessRisk(plan: preparedRun.plan, scope: scope)
         let request = RiskApprovalRequest(
             assessment: assessment,
             requirement: assessment.approvalRequirement(policy: approvalPolicy)
@@ -105,9 +113,10 @@ public final class AgentRunner {
         _ preparedRun: PreparedAgentRun,
         approvalDecision: RiskApprovalDecision = .notRequested,
         confirmationMessage: String = "Execution approved",
-        logRiskAssessment: Bool = true
+        logRiskAssessment: Bool = true,
+        scope: TaskWorkspaceScope = .unscoped
     ) async throws -> AgentRunResult {
-        let request = try approvalRequest(for: preparedRun, logAssessment: logRiskAssessment)
+        let request = try approvalRequest(for: preparedRun, logAssessment: logRiskAssessment, scope: scope)
         switch request.requirement {
         case .autoRun:
             break

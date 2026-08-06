@@ -192,17 +192,31 @@ public struct CapabilityRiskAssessment: Codable, Equatable, Sendable {
     public var effectiveTier: CapabilityRiskTier
     public var approvalCopy: RiskApprovalCopy?
     public var escalations: [CapabilityRiskEscalation]
+    /// The plan-level workspace-scope roll-up, or `nil` when the task was assessed `.unscoped`.
+    ///
+    /// **Nothing in this branch reads it to relax anything**, and that is the point: row C needs a
+    /// typed input rather than re-deriving scope from escalation strings. `nil` means "no workspace
+    /// was bound", which is not the same as `.unconstrained` ("a workspace was bound and says
+    /// nothing about this kind") — collapsing the two would hand row C a value it cannot act on
+    /// safely, since only one of them ever describes a real boundary.
+    ///
+    /// Optional and defaulted so every adapter's own `CapabilityRiskAssessment(...)` compiles
+    /// unchanged: an adapter assesses one segment and has no plan-level view, so `nil` there is the
+    /// honest answer rather than a forgotten one. The executor is the only thing that fills it in.
+    public var scopeVerdict: ScopeVerdict?
 
     public init(
         defaultTier: CapabilityRiskTier,
         effectiveTier: CapabilityRiskTier? = nil,
         approvalCopy: RiskApprovalCopy? = nil,
-        escalations: [CapabilityRiskEscalation] = []
+        escalations: [CapabilityRiskEscalation] = [],
+        scopeVerdict: ScopeVerdict? = nil
     ) {
         self.defaultTier = defaultTier
         self.effectiveTier = effectiveTier ?? Self.highestTier(defaultTier: defaultTier, escalations: escalations)
         self.approvalCopy = approvalCopy
         self.escalations = escalations
+        self.scopeVerdict = scopeVerdict
     }
 
     public func approvalRequirement(policy: RiskApprovalPolicy = .default) -> RiskApprovalRequirement {

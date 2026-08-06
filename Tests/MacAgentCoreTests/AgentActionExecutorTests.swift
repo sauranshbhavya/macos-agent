@@ -321,7 +321,7 @@ struct AgentActionExecutorTests {
             ]
         )
 
-        let assessment = try executor.assessRisk(plan: plan)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
 
         #expect(assessment.approvalCopy?.dataLeavesDevice == true)
     }
@@ -340,7 +340,7 @@ struct AgentActionExecutorTests {
         try workspaceStore.save(StoredWorkspace(name: "Writing", apps: ["Safari", "Notes"], urls: []))
         let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
 
-        let assessment = try executor.assessRisk(plan: openWorkspacePlan(name: "Writing"))
+        let assessment = try executor.assessRisk(plan: openWorkspacePlan(name: "Writing"), scope: .unscoped)
 
         #expect(assessment.approvalCopy?.dataLeavesDevice == false)
         #expect(assessment.effectiveTier == .tier1)
@@ -359,7 +359,7 @@ struct AgentActionExecutorTests {
         )
         let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
 
-        let assessment = try executor.assessRisk(plan: openWorkspacePlan(name: "Research"))
+        let assessment = try executor.assessRisk(plan: openWorkspacePlan(name: "Research"), scope: .unscoped)
 
         #expect(assessment.approvalCopy?.dataLeavesDevice == true)
     }
@@ -395,7 +395,7 @@ struct AgentActionExecutorTests {
             ]
         )
 
-        let assessment = try executor.assessRisk(plan: plan)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
 
         #expect(assessment.effectiveTier == .tier2)
         #expect(assessment.approvalRequirement().requiresUserApproval)
@@ -421,7 +421,7 @@ struct AgentActionExecutorTests {
         try write("existing draft", to: second)
         let executor = makeExecutor(root: root)
 
-        let assessment = try executor.assessRisk(plan: draftChainPlan(first: first, second: second))
+        let assessment = try executor.assessRisk(plan: draftChainPlan(first: first, second: second), scope: .unscoped)
 
         #expect(assessment.defaultTier == .tier2)
         #expect(assessment.effectiveTier == .tier3)
@@ -448,7 +448,8 @@ struct AgentActionExecutorTests {
             plan: draftChainPlan(
                 first: root.appendingPathComponent("a.md"),
                 second: root.appendingPathComponent("b.md")
-            )
+            ),
+            scope: .unscoped
         )
 
         #expect(assessment.effectiveTier == .tier2)
@@ -467,7 +468,7 @@ struct AgentActionExecutorTests {
         try write("existing draft", to: shared)
         let executor = makeExecutor(root: root)
 
-        let assessment = try executor.assessRisk(plan: draftChainPlan(first: shared, second: shared))
+        let assessment = try executor.assessRisk(plan: draftChainPlan(first: shared, second: shared), scope: .unscoped)
 
         #expect(assessment.effectiveTier == .tier3)
         #expect(assessment.escalations.count == 1)
@@ -500,7 +501,7 @@ struct AgentActionExecutorTests {
             ]
         )
 
-        let assessment = try executor.assessRisk(plan: plan)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
 
         #expect(assessment.effectiveTier == .tier3)
         #expect(assessment.escalations == [
@@ -529,7 +530,8 @@ struct AgentActionExecutorTests {
             plan: hackerNewsThenWebResearchPlan(
                 hackerNewsOutput: hackerNewsOutput.path,
                 webResearchOutput: webResearchOutput.path
-            )
+            ),
+            scope: .unscoped
         )
 
         #expect(assessment.effectiveTier == .tier3)
@@ -587,7 +589,7 @@ struct AgentActionExecutorTests {
             ]
         )
 
-        let assessment = try executor.assessRisk(plan: plan)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
 
         #expect(assessment.effectiveTier == .tier3)
         #expect(assessment.escalations.count == 1)
@@ -627,7 +629,7 @@ struct AgentActionExecutorTests {
             ]
         )
 
-        let assessment = try executor.assessRisk(plan: plan)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
 
         #expect(assessment.effectiveTier == .tier3)
         #expect(assessment.escalations == [
@@ -674,7 +676,7 @@ struct AgentActionExecutorTests {
             ]
         )
 
-        let assessment = try executor.assessRisk(plan: plan)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
 
         #expect(assessment.defaultTier == .tier2)
         #expect(assessment.effectiveTier == .tier2)
@@ -730,7 +732,7 @@ struct AgentActionExecutorTests {
             ]
         )
 
-        let assessment = try executor.assessRisk(plan: plan)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
 
         #expect(assessment.defaultTier == .tier2)
         #expect(assessment.effectiveTier == .tier3)
