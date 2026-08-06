@@ -1415,10 +1415,26 @@ final class AgentViewModel: ObservableObject {
             publishTaskUsageSummary()
             isRunning = false
             currentTask = nil
-            // Unconditional here, unlike `performStart`'s: reaching this point means the approval
-            // was answered, so every exit from it is terminal.
-            activeTaskScope = .unscoped
-            explicitWorkspaceBinding = nil
+            // Guarded exactly as `performStart`'s is, and for the same reason: reaching this point
+            // does *not* mean the task ended. `AgentRunner.execute` re-assesses on every call and
+            // throws `.approvalRequired` whenever the re-assessed tier exceeds the tier the user
+            // approved — the ordinary state-drift class, "the zip already exists" landing between
+            // the approval and the execution. The catch below re-arms `approvalRequest`, which is a
+            // second pause, not a terminal exit.
+            //
+            // Clearing there would hand the *second* approval's execution `.unscoped`: the run would
+            // still proceed (an unscoped re-assessment can only be lower, so the stale-approval
+            // guard still passes) but the workspace boundary would not be applied to it — no nested
+            // forwarding, no scope escalation in the trace. That is the same outcome-invisible shape
+            // as mutation B3, arriving on a real code path instead of a mutated one.
+            // `self.` is load-bearing: this function's own parameter is also called
+            // `approvalRequest` and is never nil, so an unqualified read here would shadow the
+            // published property and the guard would never fire — the clear would stay effectively
+            // unconditional while looking guarded.
+            if self.approvalRequest == nil {
+                activeTaskScope = .unscoped
+                explicitWorkspaceBinding = nil
+            }
         }
 
         do {

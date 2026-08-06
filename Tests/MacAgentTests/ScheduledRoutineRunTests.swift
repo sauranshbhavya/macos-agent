@@ -24,11 +24,24 @@ struct ScheduledRoutineRunTests {
     func aScheduledRunIsUnaffectedByAnySavedWorkspace() async throws {
         let fixture = try makeFixture()
         defer { fixture.cleanUp() }
-        // A workspace narrow enough that anything the routine touches would fall outside it, if the
-        // scheduled path bound to it at all.
+        // A workspace narrow enough that what this routine touches falls outside it — and a routine
+        // step that actually *carries* a scoped resource. The default fixture routine is a single
+        // `calculate_utility` step, which `PlanScopedResources` groups with the operations
+        // contributing no resources at all, so a scoped assessment of it is identical to an unscoped
+        // one and the assertion below could not fail whatever the scheduled path did.
         try WorkspaceStore(fileURL: fixture.root.appendingPathComponent("workspaces.json"))
             .save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"]))
-        try fixture.saveRoutine(unattendedTrusted: true)
+        try fixture.saveRoutine(
+            unattendedTrusted: true,
+            steps: [
+                AgentStep(
+                    id: "foreign",
+                    operation: .openURL,
+                    description: "Open a domain the workspace does not list.",
+                    targetURL: "https://example.com/page"
+                )
+            ]
+        )
 
         fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
         try await fixture.waitForIdle()

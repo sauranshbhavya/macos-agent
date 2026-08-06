@@ -545,7 +545,7 @@ private struct WidgetPermissionPanel: View {
             // same pass: no escalation is an error — each one explains why approval is being asked —
             // so the failure colour was wrong for all of them. It also leaves `errorGlyph` used
             // exclusively by genuine error states (the failed-step glyph at :430 and the
-            // storage-failure notice at :739), which is what makes "visually distinguishable from
+            // storage-failure notice at :754), which is what makes "visually distinguishable from
             // Sonny's error states" a checkable property rather than a claim.
             if !escalationReasons.isEmpty {
                 Text(escalationReasons)

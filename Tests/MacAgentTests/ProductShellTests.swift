@@ -337,29 +337,112 @@ struct ProductShellTests {
         #expect(viewModel.activeTaskScope == .unscoped)
     }
 
-    /// AC2's other two paths, asserted separately rather than folded into one: a failure and a
-    /// cancellation are different exits and a `defer` that cleared on only one of them would still
-    /// satisfy a single combined assertion.
+    /// AC2's failure path, asserted on its own. An earlier version used a command the instant
+    /// resolver could not handle, so it threw in the planner at `try OpenAIPlanner(...)` — *before*
+    /// scope resolution — and `activeTaskScope` was `.unscoped` throughout whether or not anything
+    /// cleared it. The task has to bind first and fail after.
+    ///
+    /// The failure lands in `performApproval`'s generic catch, which is the post-binding failure
+    /// actually reachable from a test: inside `performStart` the plan, the binding and the first
+    /// assessment all happen in one synchronous stretch, so there is no window to make an
+    /// already-bound task fail there. This pins `performApproval`'s clear — deleting it reddens
+    /// exactly this test. `performStart`'s own terminal clear is pinned separately by
+    /// `aSecondCommandAfterABoundTaskRunsUnscopedAndNeverInheritsTheBinding`, whose completion path
+    /// runs through the same guarded defer.
     @Test
-    func theBindingClearsOnFailure() async throws {
+    func theBindingClearsWhenABoundTaskFails() async throws {
         let fixture = try makeProductShellFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let viewModel = fixture.viewModel
         try fixture.workspaceStore.save(
             StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
         )
+        try fixture.routineStore.save(
+            StoredRoutine(
+                name: "Morning",
+                steps: [
+                    AgentStep(id: "a", operation: .openURL, description: "In scope.", targetURL: "https://github.com/sonny")
+                ]
+            )
+        )
         viewModel.refreshSavedItems()
 
-        // No API key in the test environment, so the planner path fails — a real failure exit.
-        viewModel.command = "do something unplannable in workspace Research"
+        viewModel.command = "run routine Morning"
+        viewModel.start(workspaceBinding: "Research")
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        // Bound, and paused on `run_routine`'s tier-2 confirmation — the premise, guarded.
+        #expect(viewModel.isAwaitingApproval)
+        #expect(viewModel.activeTaskScope != .unscoped)
+
+        // Now make the run fail after the binding exists: the routine it names is gone, so the
+        // re-assessment inside `execute` throws rather than escalating.
+        try fixture.routineStore.delete(routineNamed: "Morning")
+
         viewModel.start()
         try await waitForViewModelToBecomeIdle(viewModel)
 
         #expect(viewModel.errorMessage != nil)
+        #expect(!viewModel.isAwaitingApproval)
         #expect(viewModel.activeTaskScope == .unscoped)
     }
 
+    /// AC2's cancellation path — the third of the three separate assertions the criterion requires.
+    /// The clear it pins is the one whose own code comment calls it "the exact leak the rejected
+    /// persistent-active-workspace design was rejected for", and nothing pinned it before.
+    @Test
+    func theBindingClearsWhenABoundTaskIsCancelled() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        try fixture.workspaceStore.save(
+            StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        )
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Drafting", apps: ["Notes"], urls: []))
+        viewModel.refreshSavedItems()
+
+        viewModel.command = "open workspace Drafting"
+        viewModel.start(workspaceBinding: "Research")
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.isAwaitingApproval)
+        #expect(viewModel.activeTaskScope != .unscoped)
+
+        viewModel.cancelCurrentRun()
+
+        #expect(viewModel.activeTaskScope == .unscoped)
+    }
+
+    /// F6 — the other half of the unresolvable-name branch. A name that resolves to no stored record
+    /// must bind `.unscoped`, **not** a scoped-but-empty `WorkspaceScope`: an empty scope reports
+    /// `.unconstrained` for every kind and would read as "a workspace that restricts nothing" rather
+    /// than "no workspace at all". Only reachable through `start(workspaceBinding:)`, so it goes live
+    /// with B4's card dispatch.
+    @Test
+    func aBindingNamingAWorkspaceThatNoLongerExistsResolvesToUnscopedNotAnEmptyScope() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        viewModel.refreshSavedItems()
+
+        viewModel.command = "= 1 + 1"
+        viewModel.start(workspaceBinding: "DeletedSinceDispatch")
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.lastAssessedScope == .unscoped)
+        #expect(viewModel.lastAssessedScope != .scoped(
+            WorkspaceScope(workspace: StoredWorkspace(name: "DeletedSinceDispatch", apps: [], urls: []))
+        ))
+    }
+
     /// AC6 — a pending approval must not leave a binding behind when in-memory state is cleared.
+    ///
+    /// The fixture has to *actually pause*. An earlier version of this test ran "open workspace
+    /// Research" while bound to Research — in scope, so it produced no escalation, auto-ran to
+    /// completion, and had already cleared the binding before `deleteLocalData()` was ever called.
+    /// It could not fail. This binds to Research and opens Drafting, whose stored apps fall outside
+    /// Research, so the run escalates to tier 3 and genuinely sits awaiting approval. The state is
+    /// reachable in the app: `deleteLocalData` guards on `!isRunning`, not `!isAwaitingApproval`.
     @Test
     func clearingInMemoryStateWithAnApprovalPendingLeavesNoStaleBinding() async throws {
         let fixture = try makeProductShellFixture()
@@ -368,15 +451,80 @@ struct ProductShellTests {
         try fixture.workspaceStore.save(
             StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
         )
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Drafting", apps: ["Notes"], urls: []))
         viewModel.refreshSavedItems()
 
-        viewModel.command = "open workspace Research"
-        viewModel.start()
+        viewModel.command = "open workspace Drafting"
+        viewModel.start(workspaceBinding: "Research")
         try await waitForViewModelToBecomeIdle(viewModel)
+
+        // The premise, guarded rather than assumed — without this the assertion below is vacuous.
+        #expect(viewModel.isAwaitingApproval)
+        #expect(viewModel.activeTaskScope != .unscoped)
 
         viewModel.deleteLocalData()
 
         #expect(viewModel.activeTaskScope == .unscoped)
+    }
+
+    /// F1's regression test — a **re-armed** approval is a second pause, not a terminal exit, so the
+    /// binding must survive it.
+    ///
+    /// `AgentRunner.execute` re-assesses on every call and throws `.approvalRequired` when the
+    /// re-assessed tier exceeds the approved one — ordinary state drift landing between the approval
+    /// and the execution. Simulated here the way it really happens: the routine is rewritten in the
+    /// store while its approval sits pending, so the re-assessment sees an out-of-scope step the
+    /// first one did not.
+    ///
+    /// Under an unconditional clear the binding is gone by the time the second approval executes,
+    /// and nothing about the outcome changes — the run still proceeds, because an unscoped
+    /// re-assessment can only ever be lower than the scoped one it is compared against. Only the
+    /// binding itself shows it.
+    @Test
+    func aReArmedApprovalKeepsItsBindingBecauseARePauseIsNotATerminalExit() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let research = StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        try fixture.workspaceStore.save(research)
+        // In scope to begin with, so the first assessment is `run_routine`'s own tier 2.
+        try fixture.routineStore.save(
+            StoredRoutine(
+                name: "Morning",
+                steps: [
+                    AgentStep(id: "a", operation: .openURL, description: "In scope.", targetURL: "https://github.com/sonny")
+                ]
+            )
+        )
+        viewModel.refreshSavedItems()
+
+        viewModel.command = "run routine Morning"
+        viewModel.start(workspaceBinding: "Research")
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.isAwaitingApproval)
+        #expect(viewModel.approvalRequest?.assessment.effectiveTier == .tier2)
+        #expect(viewModel.activeTaskScope == .scoped(WorkspaceScope(workspace: research)))
+
+        // The drift: the routine now leaves the workspace, so re-assessment lands at tier 3 — above
+        // the tier 2 the user is about to approve.
+        try fixture.routineStore.save(
+            StoredRoutine(
+                name: "Morning",
+                steps: [
+                    AgentStep(id: "a", operation: .openURL, description: "Out of scope.", targetURL: "https://example.com/page")
+                ]
+            )
+        )
+
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        // Re-armed rather than executed...
+        #expect(viewModel.isAwaitingApproval)
+        #expect(viewModel.approvalRequest?.assessment.effectiveTier == .tier3)
+        // ...and the binding is still here, which is the whole finding.
+        #expect(viewModel.activeTaskScope == .scoped(WorkspaceScope(workspace: research)))
     }
 
     /// AC4 — the scope used at `approvalRequest` is the scope used inside `execute`.
