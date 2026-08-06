@@ -218,7 +218,13 @@ public struct CapabilityExecutionContext {
         now: @escaping () -> Date = Date.init,
         hotKeyReady: @escaping () -> Bool = { true },
         preferredBrowser: MacApp? = nil,
-        taskScope: TaskWorkspaceScope = .unscoped,
+        // Non-defaulted, on the same reasoning as `assessRisk(plan:scope:)` and both `AgentRunner`
+        // entry points, and for a failure that is one layer quieter than either: a second
+        // construction site omitting this would leave `taskScope` at `.unscoped`, which turns
+        // `run_routine`'s nested forward into a no-op — a routine's steps would stop being checked
+        // against the boundary its caller is bound by, with every test still green because the
+        // executor's own call site would be the only one passing a real scope.
+        taskScope: TaskWorkspaceScope,
         assessNestedPlan: @escaping AssessNestedPlan,
         previewNestedPlan: @escaping PreviewNestedPlan,
         executeNestedPlan: @escaping ExecuteNestedPlan

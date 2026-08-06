@@ -119,6 +119,38 @@ final class AgentViewModel: ObservableObject {
     /// `clarificationAutoExecute` — `submitClarification()`
     /// re-calls `start()`, which would otherwise silently reset origin to its default.
     private var clarificationOrigin: TaskOrigin = .commandCenter
+    /// The workspace this **in-flight task** is bound to, and the value handed to both
+    /// `AgentRunner.approvalRequest` and `AgentRunner.execute`.
+    ///
+    /// Per task, never a mode. The persistent "active workspace" concept was considered and
+    /// rejected (see the changelog's task-to-workspace-association entry, and the note at
+    /// `CommandCenterView.swift:381-384`) because it silently mis-tags unrelated one-off tasks and
+    /// leaks across surfaces — a voice command in the widget inheriting whatever workspace was last
+    /// open in Command Center. **The entire difference between this and the rejected design is
+    /// lifecycle**, so the lifecycle is written down rather than implied: set once per task in
+    /// `performStart` after the plan exists, held across an approval or clarification pause because
+    /// those are the same task resuming, and cleared at every terminal state.
+    /// `private(set)` internal rather than fully private, matching `activeTaskOrigin`: the lifecycle
+    /// *is* the feature here, so it has to be assertable. Nothing outside this type may set it.
+    private(set) var activeTaskScope: TaskWorkspaceScope = .unscoped
+    /// The scope the most recent task was *assessed* under, kept after `activeTaskScope` is cleared.
+    ///
+    /// `activeTaskScope` is the live binding and is `.unscoped` again the moment a task terminates,
+    /// which is correct but makes the value unobservable exactly when a test wants to check it. This
+    /// records what the run actually used. Not consumed by any view — it exists so the binding's
+    /// behaviour is assertable rather than inferred from a side effect.
+    private(set) var lastAssessedScope: TaskWorkspaceScope = .unscoped
+    /// A binding supplied by a dispatch that already knows its workspace — B4's workspace-card
+    /// action. Wins over the free-text path when both are present.
+    ///
+    /// `nil` means "no dispatch named one", which is honestly the case for every caller today and is
+    /// why this default is safe where a defaulted `scope:` would not be: `nil` does not switch a
+    /// check off, it hands the question to `WorkspaceTaskTagging` instead.
+    private var explicitWorkspaceBinding: String?
+    /// Preserves the explicit binding across a clarification pause, exactly as
+    /// `clarificationOrigin` preserves the origin — `submitClarification()` re-enters `start()`,
+    /// which would otherwise drop it.
+    private var clarificationWorkspaceBinding: String?
     /// Which surface's mic button started the in-progress recording — `toggleVoiceRecording()` is
     /// called identically from both Command Center's composer and the floating widget's own mic
     /// button, so this is set explicitly by the caller rather than inferred. Read back when voice
@@ -317,7 +349,13 @@ final class AgentViewModel: ObservableObject {
 
     /// - Parameter origin: Which surface is submitting this — see `TaskOrigin`. Defaults to
     ///   `.commandCenter`; the floating widget's own call sites pass `.widget` explicitly.
-    func start(autoExecute: Bool = false, origin: TaskOrigin = .commandCenter) {
+    /// - Parameter workspaceBinding: A workspace named by the dispatch itself rather than by the
+    ///   command text — B4's workspace-card action. Wins over the free-text match.
+    func start(
+        autoExecute: Bool = false,
+        origin: TaskOrigin = .commandCenter,
+        workspaceBinding: String? = nil
+    ) {
         if isAwaitingApproval {
             approvePendingRun()
             return
@@ -349,6 +387,7 @@ final class AgentViewModel: ObservableObject {
         // running" by the display below) long after the real submission had already moved on.
         command = ""
 
+        explicitWorkspaceBinding = workspaceBinding
         currentTask?.cancel()
         isRunning = true
         currentTask = Task {
@@ -387,10 +426,22 @@ final class AgentViewModel: ObservableObject {
             taskUsageSummary = .empty
         }
 
+        activeTaskScope = .unscoped
+
         defer {
             publishTaskUsageSummary()
             isRunning = false
             currentTask = nil
+            // Per-task, cleared at every terminal exit — and deliberately *not* when the task is
+            // merely paused. An approval or a clarification is the same task waiting on the user,
+            // and it has to resume under the scope it was assessed with; clearing here would let
+            // `performApproval` execute unscoped after the user approved a scoped assessment, which
+            // is the stale-approval mismatch scoped requirement 4 exists to prevent. Every other
+            // exit — completed, failed, cancelled, refused, preview-only — is terminal and clears.
+            if approvalRequest == nil && clarificationQuestion == nil {
+                activeTaskScope = .unscoped
+                explicitWorkspaceBinding = nil
+            }
         }
 
         let taskHistoryStartedAt = Date()
@@ -432,10 +483,19 @@ final class AgentViewModel: ObservableObject {
             plan = prepared.plan
             initializeStepStatuses(for: prepared.plan)
 
+            // Resolved once, after the plan exists and before the first assessment, so that both
+            // `approvalRequest` below and `execute` inside `executePreparedRun` see the same value.
+            // The plan matters: `WorkspaceTaskTagging` reads `open_workspace`/`create_workspace`
+            // steps' own `workspaceName` before it ever looks at the command text, which is how a
+            // workspace-card dispatch resolves without needing the explicit binding at all.
+            activeTaskScope = resolveTaskScope(command: submittedCommand, plan: prepared.plan)
+            lastAssessedScope = activeTaskScope
+
             if let question = prepared.clarificationQuestion {
                 clarificationQuestion = question
                 clarificationAutoExecute = autoExecute
                 clarificationOrigin = origin
+                clarificationWorkspaceBinding = explicitWorkspaceBinding
                 finalSummary = "Clarification needed before I can act."
                 logStore.append(.summarize, "Clarification needed: \(question)")
                 recordPriorTaskContext(
@@ -447,7 +507,7 @@ final class AgentViewModel: ObservableObject {
                 return
             }
 
-            let request = try runner.approvalRequest(for: prepared, logAssessment: true, scope: .unscoped)
+            let request = try runner.approvalRequest(for: prepared, logAssessment: true, scope: activeTaskScope)
             switch request.requirement {
             case .autoRun:
                 break
@@ -579,6 +639,11 @@ final class AgentViewModel: ObservableObject {
             markAllSteps(.canceled)
             finalSummary = "Approval canceled. No action was taken."
             logStore.append(.summarize, "Approval canceled by user")
+            // The pause ends here rather than resuming, so the binding dies with it. Without this
+            // the next command would inherit the cancelled task's workspace — the exact leak the
+            // rejected persistent-active-workspace design was rejected for.
+            activeTaskScope = .unscoped
+            explicitWorkspaceBinding = nil
             return
         }
 
@@ -677,11 +742,13 @@ final class AgentViewModel: ObservableObject {
         """
         let shouldAutoExecute = clarificationAutoExecute
         let shouldUseOrigin = clarificationOrigin
+        let shouldUseBinding = clarificationWorkspaceBinding
         clarificationAutoExecute = false
         clarificationOrigin = .commandCenter
+        clarificationWorkspaceBinding = nil
         clarificationQuestion = nil
         clarificationAnswer = ""
-        start(autoExecute: shouldAutoExecute, origin: shouldUseOrigin)
+        start(autoExecute: shouldAutoExecute, origin: shouldUseOrigin, workspaceBinding: shouldUseBinding)
     }
 
     /// - Parameter origin: Which surface's mic button this is — `toggleVoiceRecording()` is called
@@ -1048,6 +1115,9 @@ final class AgentViewModel: ObservableObject {
         clarificationQuestion = nil
         clarificationAnswer = ""
         clarificationAutoExecute = false
+        clarificationWorkspaceBinding = nil
+        activeTaskScope = .unscoped
+        explicitWorkspaceBinding = nil
         preparedRun = nil
         runner = nil
         pendingCommandForPriorTaskContext = nil
@@ -1263,6 +1333,36 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
+    /// Resolves which workspace this task is in, and loads it into a scope.
+    ///
+    /// Two signals, in a fixed order. An **explicit binding** from a dispatch that already knows its
+    /// workspace (B4's card action) wins; otherwise the name is resolved from the plan and command
+    /// by `WorkspaceTaskTagging`, reused exactly as it stands. That resolver already matches
+    /// `[the|my] workspace X` against real saved names using the stores' own case/diacritic folding,
+    /// with a documented leftmost-then-longest tie-break and deliberate non-`\b` boundary checks —
+    /// writing a second matcher here would give one concept two behaviours, which is how "why did it
+    /// tag that" bugs start. It is the same call `recordPriorTaskContext` already makes for task
+    /// history; the difference is purely *when*, and that is the whole ticket: history tags after a
+    /// task terminates, this runs before it is assessed.
+    ///
+    /// Returns `.unscoped` for a name that no longer resolves to a stored record — a workspace
+    /// deleted between dispatch and assessment binds to nothing rather than to an empty boundary,
+    /// because an empty `WorkspaceScope` would report `.unconstrained` for every kind and read as a
+    /// workspace that restricts nothing rather than as no workspace at all.
+    private func resolveTaskScope(command: String, plan: AgentPlan?) -> TaskWorkspaceScope {
+        let resolvedName = explicitWorkspaceBinding ?? WorkspaceTaskTagging.resolvedWorkspaceName(
+            command: command,
+            plan: plan,
+            routineStore: routineStore,
+            workspaceStore: workspaceStore
+        )
+        guard let resolvedName,
+              let record = try? workspaceStore.workspace(named: resolvedName) else {
+            return .unscoped
+        }
+        return .scoped(WorkspaceScope(workspace: record))
+    }
+
     private func executePreparedRun(
         preparedRun: PreparedAgentRun,
         runner: AgentRunner,
@@ -1276,7 +1376,10 @@ final class AgentViewModel: ObservableObject {
             approvalDecision: approvalDecision,
             confirmationMessage: confirmationMessage,
             logRiskAssessment: logRiskAssessment,
-            scope: .unscoped
+            // The same value the approval the user saw was built from. `execute` re-assesses fresh
+            // on every call, so a `.unscoped` here against a scoped `approvalRequest` would have the
+            // stale-approval guard comparing two different assessments.
+            scope: activeTaskScope
         )
         markAllSteps(.complete)
         // The task itself succeeded; a bookkeeping failure is a storage notice, not a task error.
@@ -1312,6 +1415,10 @@ final class AgentViewModel: ObservableObject {
             publishTaskUsageSummary()
             isRunning = false
             currentTask = nil
+            // Unconditional here, unlike `performStart`'s: reaching this point means the approval
+            // was answered, so every exit from it is terminal.
+            activeTaskScope = .unscoped
+            explicitWorkspaceBinding = nil
         }
 
         do {
@@ -1623,6 +1730,11 @@ final class AgentViewModel: ObservableObject {
                 prepared,
                 approvalDecision: .approved(.tier2),
                 confirmationMessage: "Scheduled run approved by this routine's unattended-run setting",
+                // `.unscoped` on purpose, not by omission. A scheduled run has no workspace binding
+                // available: `SaveRoutineCapabilityAdapter.validateRoutineSteps` rejects both
+                // `create_workspace` and `open_workspace` as routine steps, so a stored routine can
+                // never name a workspace, and nothing else in a scheduled run carries one — there is
+                // no command text a user typed and no dispatch that named one.
                 scope: .unscoped
             )
             recordScheduledRunInHistory(name: name, at: occurrence)

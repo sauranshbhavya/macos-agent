@@ -527,15 +527,30 @@ private struct WidgetPermissionPanel: View {
             }
 
             // Why this action was escalated above its default tier — "the zip already exists",
-            // "this snippet trigger would be replaced". Without it the panel asks for approval
-            // on a raised tier while showing nothing about what raised it. Rendered as its own
-            // line rather than folded into the resource line below, which is `lineLimit(1)` and
-            // would truncate these mid-sentence; the first-approval lines above set the
-            // precedent for an explanatory line in this panel.
+            // "this snippet trigger would be replaced", and since SONNY-37 "example.com is not
+            // part of the Research workspace." Without it the panel asks for approval on a raised
+            // tier while showing nothing about what raised it. Rendered as its own line rather
+            // than folded into the resource line below, which is `lineLimit(1)` and would truncate
+            // these mid-sentence; the first-approval lines above set the precedent for an
+            // explanatory line in this panel.
+            //
+            // **Amber, not error red** — founder design pass, 2026-08-06, SONNY-38 requirement 6.
+            // This line shipped in `WidgetTheme.errorGlyph`, so a workspace-scope prompt asked the
+            // user for permission in Sonny's failure colour: an "allow anyway?" question that
+            // looked like something had gone wrong. `secondaryCircular` is System B's amber and the
+            // counterpart of Command Center's `SonnyTheme.warning`, so the two approval surfaces no
+            // longer disagree about what an escalation looks like.
+            //
+            // Applied to every escalation reason rather than only the scope ones, decided in the
+            // same pass: no escalation is an error — each one explains why approval is being asked —
+            // so the failure colour was wrong for all of them. It also leaves `errorGlyph` used
+            // exclusively by genuine error states (the failed-step glyph at :430 and the
+            // storage-failure notice at :739), which is what makes "visually distinguishable from
+            // Sonny's error states" a checkable property rather than a claim.
             if !escalationReasons.isEmpty {
                 Text(escalationReasons)
                     .font(WidgetType.captionSmall)
-                    .foregroundStyle(WidgetTheme.errorGlyph)
+                    .foregroundStyle(WidgetTheme.secondaryCircular)
                     .fixedSize(horizontal: false, vertical: true)
             }
 

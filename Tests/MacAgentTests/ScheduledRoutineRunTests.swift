@@ -12,6 +12,36 @@ import MacAgentCore
 @Suite
 @MainActor
 struct ScheduledRoutineRunTests {
+    /// AC5 (SONNY-38) — a scheduled run's assessment is unaffected by any saved workspace.
+    ///
+    /// Scheduled runs pass `.unscoped` on purpose rather than by omission: a stored routine can
+    /// never name a workspace (`SaveRoutineCapabilityAdapter.validateRoutineSteps` rejects both
+    /// `create_workspace` and `open_workspace` as routine steps), there is no command text a user
+    /// typed, and no dispatch named one — so there is no binding available to resolve. This pins
+    /// that a workspace sitting in the store cannot change that: it runs identically, with no scope
+    /// escalation anywhere in its trace.
+    @Test
+    func aScheduledRunIsUnaffectedByAnySavedWorkspace() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        // A workspace narrow enough that anything the routine touches would fall outside it, if the
+        // scheduled path bound to it at all.
+        try WorkspaceStore(fileURL: fixture.root.appendingPathComponent("workspaces.json"))
+            .save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"]))
+        try fixture.saveRoutine(unattendedTrusted: true)
+
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
+        try await fixture.waitForIdle()
+
+        let notice = try #require(fixture.viewModel.scheduledRunNotice)
+        #expect(notice.contains("ran on schedule"))
+        // No scope escalation reached the trace, and none reached the notice.
+        #expect(fixture.viewModel.logStore.events.allSatisfy { !$0.message.contains("is not part of the") })
+        #expect(!notice.contains("is not part of the"))
+        // And the run left no binding behind on the shared view model.
+        #expect(fixture.viewModel.activeTaskScope == .unscoped)
+    }
+
     @Test
     func aTrustedRoutineRunsUnattendedAndRecordsItsRunEverywhere() async throws {
         let fixture = try makeFixture()
