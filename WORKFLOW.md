@@ -77,6 +77,13 @@ group). The module is the board-level grouping; the ticket's Branch: line names 
 git branch. No credentials, secret values, or personal data in Plane — ticket content is
 context for future sessions, not a secrets store.
 
+**A ticket's number is never predicted — read it back from the `sequence_id` the create
+call returns.** Plane assigns numbers at creation and reserves nothing in advance, so a
+`module-add`, a cross-reference, or a `state` call written against a guessed identifier
+silently targets whichever ticket really holds that number, and the API accepts every one
+of them. (Trigger: a hardcoded `SONNY-50` in a `module-add` issued before its create had
+returned, and a state change on a guessed number that demoted an already-Done ticket.)
+
 **Future branches get one planning ticket each, never pre-written implementation
 tickets.** A branch whose planning phase hasn't run cannot have an honest implementation
 contract yet, and a stub contract invites a session to implement from vibes. The planning
@@ -110,9 +117,10 @@ has documented consequences:
   to parallelize; to parallelize an unmarked pair, the analysis gets done and recorded on
   both tickets first.
 - **Each parallel session gets its own git worktree** (`claude --worktree <name>`, or
-  `git worktree add`), one worktree per ticket. Never two sessions in one checkout. A
-  worktree is a fresh checkout: budget a cold `swift build`, and don't share `.build/`
-  between worktrees.
+  `git worktree add`) — one per *session*, not one per ticket: a session pre-assigned a
+  sequence keeps the same worktree across every ticket in it, switching branches inside it
+  as each ticket's branch begins. Never two sessions in one checkout. A worktree is a fresh
+  checkout: budget a cold `swift build`, and don't share `.build/` between worktrees.
 - **Cap: 2–3 concurrent sessions.** Review bandwidth is the bottleneck, not execution.
   More parallel output than the user can genuinely review produces rubber-stamped merges.
 - **Only one session's build runs as the live app at a time.** Worktrees isolate code,
@@ -127,8 +135,15 @@ has documented consequences:
   session's own ticket branch** is covered by the same standing authorization as regular
   pushes — always `--force-with-lease`, never bare `--force`, and force-pushing any other
   branch (or anything on `main`) is never authorized.
-- **Remove the worktree when its ticket's branch merges** (`git worktree remove`), and
-  audit occasionally with `git worktree list`.
+- **Worktree lifecycle differs by role.** An implementing session's worktree lives for its
+  whole assigned ticket sequence and is removed once the last of those branches merges
+  (`git worktree remove`); audit occasionally with `git worktree list`. A reviewing
+  session's worktree is created *detached* at the SHA under review
+  (`git worktree add --detach <path> <sha>`), so the review reads a tree that cannot move
+  under it, and the user removes it after that terminal closes —
+  **a reviewer never removes its own worktree.** (Trigger: the SONNY-44 round-1 reviewer
+  removed the directory it was running in, and the session's stop hook then fired from a
+  path that no longer existed.)
 
 ## 4. Pull the ticket
 
@@ -136,6 +151,16 @@ Before changing code: `scripts/plane pull SONNY-12`, read the description *and a
 comments* — a previously blocked ticket's findings live there. Reconcile any difference
 between the ticket and later conversation before implementing. Do not silently expand
 scope; if the ticket is wrong or stale, say so and get it corrected first.
+
+**The prompt that launched the session is context; the description is the contract.** Where
+a kickoff or fix prompt conflicts with the pulled description, the description wins — a
+prompt is written quickly, from a coordinator's memory of the plan, and it is not the
+artifact the user approved. Say which way the conflict was resolved rather than resolving
+it silently. The one case that is not a judgment call is a contract conflicting with
+*itself*: a description whose requirements cannot all hold is a stop-and-report (step 5),
+not an invitation to pick the likelier reading. (Trigger: SONNY-37's kickoff framed the
+ticket as relaxing prompting when its description contracted the opposite, escalation-only
+behavior; the session built the description's version and was right to.)
 
 ## 5. Implement and verify
 
@@ -146,6 +171,8 @@ changelog's per-branch decisions, `.claude/rules/`). The v1 rigor bar is unchang
   `swift test` does not link.
 - **Evidence, not assertion.** A ticket is done when its acceptance criteria are
   demonstrated by test output and exit codes, not when the work "looks done."
+  `CLAUDE.md`'s claims-and-evidence conventions bind every claim made under this workflow —
+  a reviewer's and a coordinator's as much as an implementer's.
 - **Fix-in-branch rule:** any bug found during a branch's own testing is fixed in that
   branch before merge. Deferring one requires the user's explicit decision and a named
   landing spot, recorded on a ticket — never a silent backlog.
@@ -167,10 +194,21 @@ changelog's per-branch decisions, `.claude/rules/`). The v1 rigor bar is unchang
   is your work, not a discovery. When genuinely unsure which side of the line something
   sits on, ask in the ticket's comments and wait; never file-and-move-on to dodge in-scope
   work. The closing comment lists every ticket the work spawned.
+- **A never-touch exception is an intent-over-letter question, and the user's to answer.**
+  When the ticket's own stated outcome appears to require a file its never-touch list
+  forbids, stop before editing it: name the file and the exact change, and get explicit
+  user ratification recorded on the ticket, with discharge conditions narrow enough to be
+  checkable ("this file, copy only", "this file, one signature"). Everything else on the
+  list stands. Without that ratification the letter of the list wins — the item goes to the
+  ticket as a stop-and-report if the ticket's outcome genuinely depends on it, or becomes a
+  discovery ticket if it does not. (Precedent: SONNY-37's one-line signature propagation
+  into `UnattendedTrustAdvisory.swift`, and SONNY-31's copy-only amendment to the same file
+  — both asked for, both bounded to one file, both recorded on the ticket.)
 - Commits reference the ticket in the title (for example `fix(core): SONNY-12 ...`), follow
   the repo's commit format, and land on the ticket's branch. Standing authorization:
-  sessions commit and push to ticket branches without per-commit approval; opening a PR is
-  fine; **merging is the user's, always.**
+  implementing sessions commit and push to ticket branches without per-commit approval;
+  opening a PR is fine; **merging is the user's, always.** (Reviewing sessions are outside
+  this authorization entirely — step 7.)
 - The standing authorization is repo policy; the Claude Code permission system still
   prompts per session. The user approves git prompts with "always allow" at session start
   so the authorization is real in practice. A session whose git call is denied by the
@@ -214,6 +252,12 @@ architectural decisions and pitfalls; both, not either.
 name and its ticket identifiers — no implementer context. It hunts for problems rather
 than validating:
 
+- **Step 0, before any finding: state the head SHA under review.** `git fetch`, then
+  `git rev-parse origin/<branch>`, print it, and review that tree. If the remote head moves
+  before the findings are filed, stop and re-anchor at the new SHA rather than filing —
+  findings written against a tree that has moved are part already-fixed and part aimed at
+  code that no longer exists, and separating the two costs more than re-reading. (Trigger:
+  PR #26, where the reviewer's read and the implementer's push landed 14 seconds apart.)
 - Reads the full diff, and pulls every ticket's complete history *including closing
   comments* — verifying each comment's claims (files touched, decisions, evidence)
   against the real diff. A confident closing comment is a claim to check, not a fact.
@@ -228,8 +272,33 @@ than validating:
   implementers: the literal command run and the tail of its output (exit code, test
   counts). Its "all green" is a spot-checkable record, not an assertion to trust.
 
-Findings go back to the implementing session (or become fix commits on the branch) before
-merge.
+Findings go back to a session that owns the ticket — as ticket comments, as fix commits on
+the branch, or both — before merge.
+
+**Reviewers never implement, commit, or push.** A review produces findings; the fix belongs
+to a session that owns the ticket. So a fix prompt names the session it is meant for, and
+every post-close round — a re-check, a late finding, a manual-test failure — is routed by
+the user to exactly one session. (Trigger: two mis-pasted prompts landed fix instructions
+in reviewer terminals, which then implemented and pushed duplicate rounds of the same work.)
+
+**Review cycles are capped at three: the initial review, one fix round, one re-check.** The
+re-check is the last word. Anything still outstanding below the bar of user-visible impact
+or correctness — wording, test-name precision, a claim that is imprecise rather than wrong
+— is recorded on the ticket and left there, not carried into a fourth round. The cap bounds
+rounds of *review*, not the fix-in-branch rule: a defect found at any point is still fixed
+in the branch before merge. What the cap ends is the search for more. (Set by the user
+2026-08-05, after SONNY-44's review ran five rounds whose tail kept finding smaller things.)
+
+**Interim reviews are scaled to what the ticket touched.** A ticket may be reviewed as it
+closes rather than only at PR time, by a fresh session under the same rules. A
+behavior-touching ticket gets the full treatment above; a ticket whose diff is confined to
+documentation or user-facing strings gets a light pass — read the whole diff, check the
+closing comment's claims against it, and stop there, with no criterion-to-test mapping and
+no hand-tracing. Which one a ticket is comes off its diff, not off the implementing
+session's word for it. That is a depth setting, not a second rerun exemption: a strings-only
+diff still touches `Sources/`, and tests that assert copy really do break on it. The
+branch's own pre-merge review happens either way. (Same origin as the cap: SONNY-44's tail
+rounds ran the full treatment over changes that were entirely copy.)
 
 **Trivial fast path:** the user may tag a ticket trivial at creation — single file, small
 diff, no logic-branch changes (docs, copy, constants). A trivial ticket keeps the full
@@ -252,4 +321,6 @@ PR opens, so late failures need an explicit path, not improvisation:
   need not exist anymore — the ticket's comments are the handoff.
 
 Then: the user runs the aggregated manual checklist in the real packaged app, and merges.
-Delete the branch, remove the worktree, confirm the tickets' final states.
+Delete the branch, remove the worktree if its session's sequence ends here (step 3's
+lifecycle rule — a session with tickets still ahead of it keeps the same one), confirm the
+tickets' final states.
