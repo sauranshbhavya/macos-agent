@@ -217,6 +217,24 @@ struct TaskSectionPresentationTests {
     }
 
     @Test
+    func anExpandedSectionHandsBackTheGroupingsRecordsInOrder() throws {
+        let first = record("first", outcome: .completed, completedAt: Date(timeIntervalSince1970: 1_700_000_000))
+        let second = record("second", outcome: .completed, completedAt: Date(timeIntervalSince1970: 1_700_000_100))
+        let third = record("third", outcome: .completed, completedAt: Date(timeIntervalSince1970: 1_700_000_200))
+        let grouped = TaskHistoryGrouping.groupedByOutcome(records: [first, second, third])
+        let groupedRecords = try #require(grouped.first).records
+
+        let section = try #require(
+            TaskSectionPresentation.sections(for: grouped, collapse: TaskSectionCollapseState()).first
+        )
+
+        // Order is the grouping's, passed through untouched — no sort, no reverse, no filter.
+        #expect(section.visibleRecords == groupedRecords)
+        #expect(section.visibleRecords.map(\.command) == ["first", "second", "third"])
+        #expect(section.count == 3)
+    }
+
+    @Test
     func aCollapsedSectionKeepsItsCountButRendersNoRows() throws {
         let records = (0..<4).map { record("finished \($0)", outcome: .completed) }
         var collapse = TaskSectionCollapseState()
