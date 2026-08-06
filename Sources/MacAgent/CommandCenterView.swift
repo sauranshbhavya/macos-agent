@@ -374,6 +374,27 @@ private struct TasksFoundationView: View {
     /// Collapse state is seeded once, at view-identity creation, from the persisted preference —
     /// not reloaded in `onAppear`, which fires again every time the user switches back to this
     /// page and would throw away an in-session collapse if the write ever lagged.
+    ///
+    /// **Four lines of this page's collapse wiring are not covered by any test, and all four fail
+    /// silently.** `TaskSectionCollapsePresentation.swift` is fully pinned (twelve mutations, all
+    /// red), but this repository has no view-rendering tests and no view-inspection dependency, so
+    /// nothing catches a view that stops calling the type correctly. Enumerated so a green suite is
+    /// never read as full coverage — each was confirmed green-under-mutation by PR #31's reviewer:
+    ///
+    /// 1. `State(initialValue: collapseStore.load())` below — seed a fresh
+    ///    `TaskSectionCollapseState()` instead and nothing is ever *read back*.
+    /// 2. `collapseStore.save(collapseState)` in `toggleSection` — drop it and nothing is ever
+    ///    *written*. (1) and (2) each break the "persists across launches" criterion on their own.
+    /// 3. `count: section.count` in `TaskHistoryGroupedPanel` — swap it for
+    ///    `section.visibleRecords.count` and every collapsed section reads 0, breaking the
+    ///    separate "a collapsed header still shows its count" criterion.
+    /// 4. `disclosure:` on that same header — pass `nil` and Done/Failed/Canceled lose the chevron
+    ///    and stop being clickable at all, removing the feature from three of the four sections.
+    ///
+    /// What guards them is SONNY-49's manual-test checklist, not the suite: item 2 covers (1) and
+    /// (2), item 3 covers (3), item 1 covers (4). Adding a view-inspection dependency would pin
+    /// them and is deliberately not done here — that is an architectural decision reserved for the
+    /// user, not a ticket-level one.
     @State private var collapseState: TaskSectionCollapseState
     private let collapseStore: TaskSectionCollapseStore
 
@@ -475,7 +496,9 @@ private struct TasksFoundationView: View {
 
     /// The write is unconditional and immediate rather than debounced or deferred to `onDisappear`:
     /// a collapse the user makes and then quits on must survive, and one small array write per
-    /// click is not worth a coalescing mechanism.
+    /// click is not worth a coalescing mechanism. The `save` below is unpinned point (2) of the
+    /// four enumerated on `collapseState` above — removing it leaves the suite green and the
+    /// preference permanently unwritten.
     private func toggleSection(_ sectionID: String) {
         withAnimation(.easeInOut(duration: 0.18)) {
             collapseState.toggle(sectionID)
@@ -1322,15 +1345,27 @@ private struct InProgressTaskGroup: View {
                 disclosure: .init(isExpanded: isExpanded, toggle: onToggle)
             )
 
-            // Collapsing this one hides the running indicator, not the fact that something is
-            // running: the header's own count stays, and `CommandCenterAttentionPanel` below the
-            // scroll area still surfaces anything that actually needs the user (an approval, a
-            // clarification, a failure) regardless of what is folded away up here.
-            if isExpanded {
-                CommandCenterRunningIndicator(viewModel: viewModel)
-                    .padding(.horizontal, 30)
-                    .padding(.vertical, 12)
-            }
+            // Deliberately NOT gated on `isExpanded` (user decision, 2026-08-06, PR #31 review
+            // F1). This indicator carries the app's only cancel control for a plain running task:
+            // `cancelCurrentRun()` has exactly three call sites repo-wide, and the other two —
+            // `CommandCenterAttentionPanel`'s Deny and the widget's `onDeny` — fire only on an
+            // approval, so nothing else can stop a run that isn't waiting for one. The indicator
+            // convention exists precisely so a running task always shows something; a persisted
+            // collapse preference must not be able to silently remove this page's primary cancel
+            // affordance on every future run.
+            //
+            // Enumerated rather than summarized, because the earlier version of this comment
+            // subtracted without enumerating. What survives a collapsed "In Progress": the header
+            // and its count, this indicator's spinner, its "Running: <command>" /
+            // "Waiting for approval: <command>" text, and its Cancel button (itself gated on
+            // `viewModel.canCancel`). What collapse hides is the section's *task rows* — and this
+            // section has none today, so collapsing it currently changes nothing on screen beyond
+            // the chevron's rotation and the persisted preference. `CommandCenterAttentionPanel`
+            // sits outside the scroll area and self-gates, so approvals were never affected by
+            // this either way.
+            CommandCenterRunningIndicator(viewModel: viewModel)
+                .padding(.horizontal, 30)
+                .padding(.vertical, 12)
         }
     }
 }
@@ -1367,7 +1402,11 @@ private struct TaskHistoryGroupedPanel: View {
                     VStack(alignment: .leading, spacing: 0) {
                         // `section.count`, not `section.visibleRecords.count` — the count is the
                         // whole point of a collapsed header, so a task that completes while "Done"
-                        // is folded away still bumps the number the user can see.
+                        // is folded away still bumps the number the user can see. This line and
+                        // the `disclosure:` argument beneath it are unpinned points (3) and (4) of
+                        // the four enumerated on `TasksFoundationView.collapseState`: the wrong
+                        // count reads 0 on every collapsed section, and a `nil` disclosure removes
+                        // the chevron from Done/Failed/Canceled entirely. Both leave the suite green.
                         CommandCenterGroupHeader(
                             title: section.title,
                             count: section.count,
