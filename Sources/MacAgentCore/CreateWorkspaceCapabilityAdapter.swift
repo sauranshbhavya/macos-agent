@@ -90,10 +90,15 @@ public struct CreateWorkspaceCapabilityAdapter: CapabilityAdapter {
         try context.workspaceStore.save(workspace)
         log(.summarize, "Saved workspace")
         // `AgentRunResult.summary` is the only free-text channel an adapter has that reaches a
-        // person: both surfaces render it (`FloatingWidgetView`'s result panel, and Command
-        // Center's). `ActionPreview.details` and the act log above are both rendered by nothing, so
-        // the note has to ride here or the ticket's "soft signal at creation" exists only in the
-        // model. Deliberately *not* a `CapabilityRiskEscalation` — all six existing escalation sites
+        // person. Exactly one surface renders it — the floating widget's result panel
+        // (`WidgetResultPanel`, reached via `AgentViewModel.finalSummary`). Command Center renders
+        // no run summary at all: its attention panel has only permission/clarification/failure
+        // cases, and `CompletedTaskRecord` carries no summary field. One live surface is enough,
+        // and it is the sole command surface by design — but "both surfaces" would be the same
+        // unchecked claim about what is live that made the act log look like a fix.
+        // `ActionPreview.details` and the act log above are rendered by nothing at all, so the note
+        // has to ride here or the ticket's "soft signal at creation" exists only in the model.
+        // Deliberately *not* a `CapabilityRiskEscalation` — all six existing escalation sites
         // raise a tier, and both approval panels label that line as what raised this above its
         // default tier, so a same-tier entry would render an informational note in warning colour
         // under a heading that would then be false.

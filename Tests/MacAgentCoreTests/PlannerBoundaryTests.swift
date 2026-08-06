@@ -249,7 +249,7 @@ private let expectedDefaultPlannerDescription = """
   dry run: Show the workspace apps and URLs without saving.
   examples: Create a workspace called research with Safari, VS Code, and https://github.com | Create a workspace called drafting with Microsoft Word and Safari
 - open_workspace: Open saved workspace
-  description: Open every app and URL saved in a named workspace. Use only when the user names a workspace they have actually saved; do not infer a workspace name from vague activity phrasing such as "focus on writing" or "get into research mode" — ask a clarifying question instead.
+  description: Open the supported apps and URLs saved in a named workspace. Use only when the user names a workspace they have actually saved; do not infer a workspace name from vague activity phrasing such as "focus on writing" or "get into research mode" — ask a clarifying question instead.
   required fields: workspaceName
   side effects: open apps, open browser
   dry run: Show apps and URLs that would open.

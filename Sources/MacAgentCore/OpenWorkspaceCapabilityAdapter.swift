@@ -16,7 +16,14 @@ public struct OpenWorkspaceCapabilityAdapter: CapabilityAdapter {
             AgentTool(
                 operation: .openWorkspace,
                 name: "Open saved workspace",
-                description: "Open every app and URL saved in a named workspace. Use only when the user names a workspace they have actually saved; do not infer a workspace name from vague activity phrasing such as \"focus on writing\" or \"get into research mode\" — ask a clarifying question instead.",
+                // "Open every app" was true until SONNY-44 let a workspace list apps Sonny cannot
+                // launch; a scope-only entry is now skipped, so "every" overclaims. Unlike the
+                // descriptor strings fixed alongside it, this one reaches the model verbatim
+                // (`ToolRegistry.plannerDescription` -> `OpenAIPlanner.systemPrompt`). The skip
+                // itself is deliberately not spelled out: this description governs only *when* to
+                // emit `open_workspace`, which takes a workspace name and no app list, so the
+                // detail would cost prompt tokens and decide nothing.
+                description: "Open the supported apps and URLs saved in a named workspace. Use only when the user names a workspace they have actually saved; do not infer a workspace name from vague activity phrasing such as \"focus on writing\" or \"get into research mode\" — ask a clarifying question instead.",
                 requiredFields: ["workspaceName"],
                 sideEffects: ["open apps", "open browser"],
                 dryRunBehavior: "Show apps and URLs that would open.",
@@ -102,7 +109,12 @@ public struct OpenWorkspaceCapabilityAdapter: CapabilityAdapter {
         // An honest count alone still leaves the user guessing *which* app did not start, so the
         // names ride along. This is the only channel that reaches them: `ActionPreview` and the act
         // log above are both rendered by nothing (see `AgentRunner`'s note on `AgentLogStore`),
-        // which is exactly why the count and the note live together here.
+        // which is exactly why the count and the note live together here. The one surface that does
+        // render it is the floating widget's result panel — and only for a widget-originated run,
+        // since `hasVisibleWidgetPanel` gates `.result` on origin while Command Center renders no
+        // summary of its own. So an open driven from Command Center's Workspaces row shows this
+        // nowhere. Pre-existing and not specific to this note (it applies to every run summary
+        // equally), filed separately rather than worked around here.
         //
         // A workspace whose every entry is scope-only reads "with 0 app(s) and 0 URL(s)" plus the
         // note. Deliberately not special-cased into a separate "nothing to open" string: the note

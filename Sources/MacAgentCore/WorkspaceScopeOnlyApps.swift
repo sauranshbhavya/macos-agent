@@ -62,6 +62,12 @@ public enum WorkspaceScopeOnlyApps {
     /// `AgentLogStore` are rendered by nothing — see `AgentRunner.swift`'s own note on the latter),
     /// so without it the run reports "1 app(s)" and never says which of the two listed apps that
     /// was, or why.
+    ///
+    /// "Sees" means precisely one surface: the floating widget's result panel. Command Center
+    /// renders no run summary, and its origin gating means a workspace opened from its Workspaces
+    /// row shows this on no surface at all — pre-existing, applies to every run summary equally, and
+    /// filed separately. Stated exactly rather than as "both surfaces", because an unverified claim
+    /// about which surfaces are live is the specific mistake this note exists to undo.
     public static func notOpenedNote(for scopeOnlyNames: [String]) -> String? {
         guard let names = listed(scopeOnlyNames) else {
             return nil
