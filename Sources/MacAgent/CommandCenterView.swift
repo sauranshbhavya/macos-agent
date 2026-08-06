@@ -371,6 +371,17 @@ struct CommandCenterView: View {
 private struct TasksFoundationView: View {
     @ObservedObject var viewModel: AgentViewModel
     @State private var selectedLogEntry: TaskLogEntry?
+    /// Collapse state is seeded once, at view-identity creation, from the persisted preference —
+    /// not reloaded in `onAppear`, which fires again every time the user switches back to this
+    /// page and would throw away an in-session collapse if the write ever lagged.
+    @State private var collapseState: TaskSectionCollapseState
+    private let collapseStore: TaskSectionCollapseStore
+
+    init(viewModel: AgentViewModel, collapseStore: TaskSectionCollapseStore = TaskSectionCollapseStore()) {
+        self.viewModel = viewModel
+        self.collapseStore = collapseStore
+        _collapseState = State(initialValue: collapseStore.load())
+    }
 
     var body: some View {
         VStack(alignment: .leading, spacing: 18) {
@@ -399,11 +410,17 @@ private struct TasksFoundationView: View {
                     // rather than on any broader "has this task left traces" notion — once a
                     // run finishes it belongs in the Done/Canceled history below, not up here.
                     if viewModel.isRunning || viewModel.isAwaitingApproval {
-                        InProgressTaskGroup(viewModel: viewModel)
+                        InProgressTaskGroup(
+                            viewModel: viewModel,
+                            isExpanded: collapseState.isExpanded(TaskSectionCollapseState.inProgressSectionID),
+                            onToggle: { toggleSection(TaskSectionCollapseState.inProgressSectionID) }
+                        )
                     }
 
                     TaskHistoryGroupedPanel(
                         records: displayedRecords,
+                        collapseState: collapseState,
+                        onToggleSection: toggleSection,
                         onSelect: { selectedLogEntry = TaskLogEntry(record: $0) }
                     )
                     .padding(.bottom, 24)
@@ -454,6 +471,16 @@ private struct TasksFoundationView: View {
     /// itself is untouched, so Insights and everything else still sees the complete history.
     private var displayedRecords: [CompletedTaskRecord] {
         TaskHistoryDisplayWindow.withinWindow(viewModel.taskHistoryRecords, now: Date())
+    }
+
+    /// The write is unconditional and immediate rather than debounced or deferred to `onDisappear`:
+    /// a collapse the user makes and then quits on must survive, and one small array write per
+    /// click is not worth a coalescing mechanism.
+    private func toggleSection(_ sectionID: String) {
+        withAnimation(.easeInOut(duration: 0.18)) {
+            collapseState.toggle(sectionID)
+        }
+        collapseStore.save(collapseState)
     }
 }
 
@@ -1211,10 +1238,40 @@ private struct InsightsRecentActivityRow: View {
 /// regular-weight count, not one uniform muted string. Shared by every status group on this page,
 /// including the live "In Progress" group, so all of them look like one continuous list.
 private struct CommandCenterGroupHeader: View {
+    struct Disclosure {
+        let isExpanded: Bool
+        let toggle: () -> Void
+    }
+
     let title: String
     let count: Int
+    /// Makes the header a collapse toggle (SONNY-49). Set only by the Tasks page's status groups;
+    /// `nil` — the default, and what the Routines page's cadence groups still get — keeps the
+    /// header exactly what it was: a plain, non-interactive band with no chevron and no button
+    /// wrapper. The chevron sits on the *trailing* edge rather than before the title so the
+    /// wireframe's title/count position is untouched, and because both System A chevrons that
+    /// already exist (the sidebar profile row, the account menu's disclosure rows) are trailing.
+    var disclosure: Disclosure? = nil
 
     var body: some View {
+        if let disclosure {
+            Button(action: disclosure.toggle) {
+                band(disclosure: disclosure)
+                    .contentShape(Rectangle())
+            }
+            .buttonStyle(.plain)
+            .sonnyPointerCursor()
+            .sonnyHoverHighlight(cornerRadius: 0)
+            .accessibilityLabel("\(title), \(count)")
+            .accessibilityValue(disclosure.isExpanded ? "Expanded" : "Collapsed")
+            .accessibilityAddTraits(.isButton)
+            .accessibilityHint(disclosure.isExpanded ? "Collapses this section" : "Expands this section")
+        } else {
+            band(disclosure: nil)
+        }
+    }
+
+    private func band(disclosure: Disclosure?) -> some View {
         HStack(spacing: 6) {
             Text(title)
                 .font(SonnyType.itemTitle)
@@ -1222,6 +1279,19 @@ private struct CommandCenterGroupHeader: View {
             Text("\(count)")
                 .font(SonnyType.caption)
                 .foregroundStyle(SonnyTheme.muted)
+
+            if let disclosure {
+                // The `Spacer` is what makes the HStack greedy; without a disclosure the row stays
+                // content-sized and the outer `.frame(alignment: .leading)` left-aligns it exactly
+                // as before. One `chevron.right` rotated to point down when expanded, rather than
+                // swapping to `chevron.down`, so the transition is a rotation and not a glyph pop.
+                Spacer(minLength: 8)
+                Image(systemName: "chevron.right")
+                    .font(SonnyType.icon(9, weight: .semibold))
+                    .foregroundStyle(SonnyTheme.muted)
+                    .rotationEffect(.degrees(disclosure.isExpanded ? 90 : 0))
+                    .accessibilityHidden(true)
+            }
         }
         .padding(.leading, 30)
         .padding(.trailing, 24)
@@ -1241,24 +1311,41 @@ private struct CommandCenterGroupHeader: View {
 /// badge), so the count here is always 1 — this group only renders while something is active.
 private struct InProgressTaskGroup: View {
     @ObservedObject var viewModel: AgentViewModel
+    let isExpanded: Bool
+    let onToggle: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
-            CommandCenterGroupHeader(title: "In Progress", count: 1)
+            CommandCenterGroupHeader(
+                title: TaskSectionCollapseState.inProgressSectionID,
+                count: 1,
+                disclosure: .init(isExpanded: isExpanded, toggle: onToggle)
+            )
 
-            CommandCenterRunningIndicator(viewModel: viewModel)
-                .padding(.horizontal, 30)
-                .padding(.vertical, 12)
+            // Collapsing this one hides the running indicator, not the fact that something is
+            // running: the header's own count stays, and `CommandCenterAttentionPanel` below the
+            // scroll area still surfaces anything that actually needs the user (an approval, a
+            // clarification, a failure) regardless of what is folded away up here.
+            if isExpanded {
+                CommandCenterRunningIndicator(viewModel: viewModel)
+                    .padding(.horizontal, 30)
+                    .padding(.vertical, 12)
+            }
         }
     }
 }
 
 private struct TaskHistoryGroupedPanel: View {
     let records: [CompletedTaskRecord]
+    let collapseState: TaskSectionCollapseState
+    let onToggleSection: (String) -> Void
     let onSelect: (CompletedTaskRecord) -> Void
 
-    private var sections: [TaskHistorySection] {
-        TaskHistoryGrouping.groupedByOutcome(records: records)
+    private var sections: [TaskSectionPresentation] {
+        TaskSectionPresentation.sections(
+            for: TaskHistoryGrouping.groupedByOutcome(records: records),
+            collapse: collapseState
+        )
     }
 
     var body: some View {
@@ -1278,10 +1365,20 @@ private struct TaskHistoryGroupedPanel: View {
             VStack(alignment: .leading, spacing: 0) {
                 ForEach(sections) { section in
                     VStack(alignment: .leading, spacing: 0) {
-                        CommandCenterGroupHeader(title: section.title, count: section.records.count)
+                        // `section.count`, not `section.visibleRecords.count` — the count is the
+                        // whole point of a collapsed header, so a task that completes while "Done"
+                        // is folded away still bumps the number the user can see.
+                        CommandCenterGroupHeader(
+                            title: section.title,
+                            count: section.count,
+                            disclosure: .init(
+                                isExpanded: section.isExpanded,
+                                toggle: { onToggleSection(section.id) }
+                            )
+                        )
 
                         VStack(spacing: 0) {
-                            ForEach(section.records, id: \.startedAt) { record in
+                            ForEach(section.visibleRecords, id: \.startedAt) { record in
                                 TaskHistoryRow(record: record, onSelect: { onSelect(record) })
                             }
                         }
