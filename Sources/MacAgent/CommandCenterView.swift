@@ -1697,13 +1697,17 @@ struct RoutineRowPresentation: Equatable {
     /// Set when Sonny switched this routine's schedule off itself. The row shows that it needs
     /// attention; the reason itself is long enough that it belongs in the detail view, where
     /// there is room for a sentence.
+    ///
+    /// Reads `RoutineActivation` (SONNY-46), so this and `isEnabled` above cannot both be true —
+    /// a "Paused" caption on a routine that is still firing on time, suppressing the next-run
+    /// caption, is now unrepresentable in the model rather than merely unreachable in practice.
     let isPaused: Bool
 
     init(routine: StoredRoutine, now: Date) {
         name = routine.name
         isScheduleable = routine.schedule != nil
         isEnabled = routine.isScheduled
-        isPaused = routine.schedule?.pausedReason != nil
+        isPaused = routine.schedule?.isPausedBySonny == true
 
         // The wireframe's second line is the routine's cadence ("Daily", "Weekly · Mon"), not its
         // step list. An unscheduled routine has no cadence to show, so it keeps the step summary

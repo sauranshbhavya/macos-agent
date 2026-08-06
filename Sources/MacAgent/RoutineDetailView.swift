@@ -295,7 +295,11 @@ struct RoutineDetailView: View {
             // Routines row only has space to say that something needs attention. Reuses
             // `scheduleNote`'s type ramp with the warning colour so it reads as a state the user
             // has to resolve rather than as another piece of guidance.
-            if let pausedReason = live.schedule?.pausedReason {
+            //
+            // Matches `RoutineActivation` directly (SONNY-46) rather than testing a reason field
+            // for nil: the reason and the switched-off-ness are one value now, so this sentence
+            // cannot appear on a schedule that is still running.
+            if case .pausedBySonny(let pausedReason)? = live.schedule?.activation {
                 Text("Sonny paused this schedule: \(pausedReason) Switch it back on once you have reviewed it.")
                     .font(RoutineDetailType.micro)
                     .foregroundStyle(SonnyTheme.warning)
