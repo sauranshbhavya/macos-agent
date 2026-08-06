@@ -31,7 +31,11 @@ struct WorkspaceTaskTaggingTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
         let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
-        try routineStore.save(
+        // `.openWorkspace` is on `StoredRoutine.forbiddenStepOperations`, so `save` refuses this
+        // routine (SONNY-52) — and refusing it is right: the routine could never be authored. What
+        // is under test is the *resolver's* one-level descent into a routine that already contains
+        // one, so the sanctioned bypass is the accurate way to set that state up.
+        try routineStore.saveBypassingStepValidation(
             StoredRoutine(name: "Morning Setup", steps: [openWorkspaceStep(named: "Research")])
         )
         let plan = AgentPlan(

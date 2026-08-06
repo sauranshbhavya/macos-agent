@@ -37,6 +37,79 @@ public enum RoutineCadence: String, Codable, Equatable, Sendable, CaseIterable {
     }
 }
 
+/// Whether a schedule is on, and — when it is off — whose decision that was.
+///
+/// One value rather than the `isEnabled: Bool` + `pausedReason: String?` pair it replaces
+/// (SONNY-46). That pair carried a prose-only invariant, "a non-nil reason implies not enabled",
+/// which every caller honoured and nothing enforced: both fields were public vars with a public
+/// init parameter, and synthesized `Decodable` bypassed even that. The violating combination
+/// compiled, decoded, and *rendered* — `RoutineRowPresentation` and `RoutineDetailView` both derive
+/// "paused" from the reason alone, so an enabled schedule carrying a stale reason painted "Paused"
+/// and "Sonny paused this schedule" on a routine that was still firing on time, while suppressing
+/// the next-run caption that slot exists for. The row said the opposite of the truth.
+///
+/// As an enum the combination is not a bug to be caught, it is a value that cannot be written
+/// down. It is also the shape that would have made SONNY-31's F1 — a schedule rebuilt through a
+/// factory with no `pausedReason` parameter, silently dropping it — a compile error rather than a
+/// silent drop.
+public enum RoutineActivation: Equatable, Sendable {
+    /// Firing on schedule.
+    case enabled
+    /// Off because the user switched it off. Needs no explanation, and deliberately carries none:
+    /// attaching one would grow a "Sonny paused this" caption on every manually disabled routine.
+    case disabledByUser
+    /// Off because Sonny could not run it, in the user's words. Useless without the reason, which
+    /// is why the reason is part of the case rather than a field alongside it.
+    case pausedBySonny(reason: String)
+}
+
+/// Encoded as `{"state": "…"}` plus a `reason` for the paused case, rather than through the
+/// synthesized enum representation (`{"pausedBySonny": {"reason": "…"}}`). A `routines.json` is a
+/// file a person occasionally has to read while debugging a schedule, and the flat shape stays
+/// legible; it also keeps the payload stable if a case is ever renamed in Swift.
+///
+/// A `state` this build does not know throws rather than defaulting, and a `pausedBySonny` with no
+/// `reason` throws too — a paused state with no reason is precisely what this type exists to
+/// forbid, so silently inventing one would reintroduce the bug through the decoder. Per the store
+/// convention, a load that cannot decode is surfaced, never collapsed into empty state.
+extension RoutineActivation: Codable {
+    private enum CodingKeys: String, CodingKey {
+        case state
+        case reason
+    }
+
+    private enum State: String, Codable {
+        case enabled
+        case disabledByUser
+        case pausedBySonny
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        switch try container.decode(State.self, forKey: .state) {
+        case .enabled:
+            self = .enabled
+        case .disabledByUser:
+            self = .disabledByUser
+        case .pausedBySonny:
+            self = .pausedBySonny(reason: try container.decode(String.self, forKey: .reason))
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        switch self {
+        case .enabled:
+            try container.encode(State.enabled, forKey: .state)
+        case .disabledByUser:
+            try container.encode(State.disabledByUser, forKey: .state)
+        case .pausedBySonny(let reason):
+            try container.encode(State.pausedBySonny, forKey: .state)
+            try container.encode(reason, forKey: .reason)
+        }
+    }
+}
+
 /// When a saved routine runs on its own, and whether it is allowed to do so unattended.
 ///
 /// `unattendedTrusted` is the per-routine opt-in that lets a scheduled trigger bypass the tier-2
@@ -57,22 +130,45 @@ public struct RoutineSchedule: Codable, Equatable, Sendable {
     /// accepted here and resolved by the scheduler — "run this on the 31st" is a legitimate ask,
     /// not a reason to refuse the schedule.
     public var dayOfMonth: Int?
-    public var isEnabled: Bool
+    /// On, off by the user, or paused by Sonny with its reason — see `RoutineActivation` for why
+    /// this is one value rather than a `Bool` and a `String?`.
+    ///
+    /// `private(set)` so `setEnabled(_:now:)` and `pause(reason:)` stay the only mutators, which
+    /// is what keeps the catch-up-baseline re-anchoring in `setEnabled` unbypassable: assigning a
+    /// schedule "on" without going through it is the hazard `newlyCreated` exists to document.
+    public private(set) var activation: RoutineActivation
     public var unattendedTrusted: Bool
     /// The catch-up baseline: the scheduler treats occurrences after this instant as candidates
     /// for a missed run. Set by `setEnabled(_:now:)` on every off → on transition, never left nil
     /// while enabled — see that method for why that matters.
     public var lastRunAt: Date?
-    /// Why Sonny switched this schedule off by itself, in the user's words, or nil when the
-    /// schedule's state is the user's own doing.
-    ///
-    /// Non-nil implies `isEnabled == false`: the only writer is `pause(reason:)`, which disables,
-    /// and `setEnabled(true, now:)` clears it. Optional for the same decoding reason as `schedule`
-    /// and `recentRunDates` on `StoredRoutine` — synthesized `Decodable` calls `decodeIfPresent`
-    /// for an Optional property, so a routines.json written before this field existed still
-    /// decodes, where a non-Optional with a Swift-side default would throw `keyNotFound`.
-    public var pausedReason: String?
 
+    /// Firing on schedule. Derived, so "enabled" and "carrying a pause reason" cannot disagree.
+    public var isEnabled: Bool {
+        activation == .enabled
+    }
+
+    /// Why Sonny switched this schedule off by itself, in the user's words, or nil when the
+    /// schedule's state is the user's own doing. Non-nil implies `isEnabled == false` — now
+    /// structurally, because both read the same enum.
+    public var pausedReason: String? {
+        guard case .pausedBySonny(let reason) = activation else {
+            return nil
+        }
+        return reason
+    }
+
+    /// The presentation-facing form of the above: Sonny switched this off and the user has to
+    /// resolve it. Distinct from `!isEnabled`, which is also true for the user's own disable, and
+    /// safe to render as "Paused" precisely because it cannot be true of a running schedule.
+    public var isPausedBySonny: Bool {
+        pausedReason != nil
+    }
+
+    /// Takes `isEnabled` rather than a `RoutineActivation` on purpose: with no way to pass a pause
+    /// reason, the illegal enabled-and-paused combination has no door into the type at all.
+    /// A paused schedule is produced by `pause(reason:)` or `newlyCreated(pausedReason:)` — both
+    /// of which switch it off in the same motion, because that is what pausing means.
     public init(
         cadence: RoutineCadence,
         hour: Int,
@@ -81,18 +177,16 @@ public struct RoutineSchedule: Codable, Equatable, Sendable {
         dayOfMonth: Int? = nil,
         isEnabled: Bool = false,
         unattendedTrusted: Bool = false,
-        lastRunAt: Date? = nil,
-        pausedReason: String? = nil
+        lastRunAt: Date? = nil
     ) {
         self.cadence = cadence
         self.hour = hour
         self.minute = minute
         self.weekday = weekday
         self.dayOfMonth = dayOfMonth
-        self.isEnabled = isEnabled
+        self.activation = isEnabled ? .enabled : .disabledByUser
         self.unattendedTrusted = unattendedTrusted
         self.lastRunAt = lastRunAt
-        self.pausedReason = pausedReason
     }
 
     /// Builds a schedule for a routine that does not have one, with the catch-up baseline anchored.
@@ -123,13 +217,15 @@ public struct RoutineSchedule: Codable, Equatable, Sendable {
             weekday: weekday,
             dayOfMonth: dayOfMonth,
             isEnabled: false,
-            unattendedTrusted: unattendedTrusted,
-            // Set before `setEnabled` deliberately, so the one rule about clearing a pause lives in
-            // one place: enabling clears it, staying disabled keeps it. A caller rebuilding an
-            // existing schedule (editing its run time) passes the old reason through here, and
-            // whether it survives is then decided by the same `setEnabled` every other path uses.
-            pausedReason: pausedReason
+            unattendedTrusted: unattendedTrusted
         )
+        // Applied before `setEnabled` deliberately, so the one rule about clearing a pause lives in
+        // one place: enabling clears it, staying disabled keeps it. A caller rebuilding an
+        // existing schedule (editing its run time) passes the old reason through here, and whether
+        // it survives is then decided by the same `setEnabled` every other path uses.
+        if let pausedReason {
+            schedule.activation = .pausedBySonny(reason: pausedReason)
+        }
         schedule.setEnabled(isEnabled, now: now)
         return schedule
     }
@@ -175,9 +271,16 @@ public struct RoutineSchedule: Codable, Equatable, Sendable {
     /// writes arrive in.
     public mutating func setEnabled(_ enabled: Bool, now: Date) {
         let isTurningOn = enabled && !isEnabled
-        isEnabled = enabled
         if enabled {
-            pausedReason = nil
+            // Clearing the pause is not a special case of turning on — with one field it *is*
+            // turning on, which is the point of the fold.
+            activation = .enabled
+        } else if activation == .enabled {
+            // Only a running schedule becomes the user's own disable. A schedule that is already
+            // off stays exactly as it is, so an incidental "off" write can never overwrite why
+            // Sonny paused it with an anonymous user disable — which is what makes editing a
+            // paused routine's run time non-destructive.
+            activation = .disabledByUser
         }
         if isTurningOn {
             lastRunAt = now
@@ -195,8 +298,81 @@ public struct RoutineSchedule: Codable, Equatable, Sendable {
     /// been resolved by the caller, and the re-anchor that matters happens on the way back on, in
     /// `setEnabled`.
     public mutating func pause(reason: String) {
-        isEnabled = false
-        pausedReason = reason
+        activation = .pausedBySonny(reason: reason)
+    }
+
+    // MARK: - Persistence
+
+    /// Hand-written because SONNY-46 changed the encoded shape: `isEnabled` + `pausedReason`
+    /// became `activation`. Every `routines.json` on disk today carries the old pair, and this is
+    /// a store whose files are encrypted and already carry one legacy-plaintext migration — the
+    /// tolerant decode below is what keeps a user's existing routines from failing to load.
+    ///
+    /// The non-activation keys keep exactly the synthesized behaviour they had: `decode` for the
+    /// required ones (so a genuinely corrupt file still throws rather than quietly defaulting) and
+    /// `decodeIfPresent`/`encodeIfPresent` for the Optionals, which is what let `weekday`,
+    /// `dayOfMonth` and `lastRunAt` be added tolerantly in the first place.
+    private enum CodingKeys: String, CodingKey {
+        case cadence
+        case hour
+        case minute
+        case weekday
+        case dayOfMonth
+        case unattendedTrusted
+        case lastRunAt
+        case activation
+        /// Read-only. The two keys `activation` replaced; never written again.
+        case isEnabled
+        case pausedReason
+    }
+
+    public init(from decoder: Decoder) throws {
+        let container = try decoder.container(keyedBy: CodingKeys.self)
+        cadence = try container.decode(RoutineCadence.self, forKey: .cadence)
+        hour = try container.decode(Int.self, forKey: .hour)
+        minute = try container.decode(Int.self, forKey: .minute)
+        weekday = try container.decodeIfPresent(Int.self, forKey: .weekday)
+        dayOfMonth = try container.decodeIfPresent(Int.self, forKey: .dayOfMonth)
+        unattendedTrusted = try container.decode(Bool.self, forKey: .unattendedTrusted)
+        lastRunAt = try container.decodeIfPresent(Date.self, forKey: .lastRunAt)
+
+        if let activation = try container.decodeIfPresent(RoutineActivation.self, forKey: .activation) {
+            self.activation = activation
+            return
+        }
+
+        // Legacy two-field shape. `isEnabled` is decoded rather than defaulted because every file
+        // any previous build wrote has it — a file with neither key is corrupt, and throwing is
+        // what the synthesized decoder did before this change.
+        let wasEnabled = try container.decode(Bool.self, forKey: .isEnabled)
+        let legacyReason = try container.decodeIfPresent(String.self, forKey: .pausedReason)
+        switch (wasEnabled, legacyReason) {
+        case (true, _):
+            // The self-repair. An enabled schedule carrying a reason is the illegal state this
+            // fold removes, and it is on disk in exactly one way: hand-edited, or written by some
+            // future caller of the old public API. Enabled is the fact the scheduler acts on and
+            // the reason is the stale half, so the reason is dropped — the same answer
+            // `setEnabled(true, now:)` has always given, applied at the last door it can be.
+            // Deliberately not a decode failure: a display glitch must not cost a user their
+            // routines.
+            self.activation = .enabled
+        case (false, .some(let reason)):
+            self.activation = .pausedBySonny(reason: reason)
+        case (false, .none):
+            self.activation = .disabledByUser
+        }
+    }
+
+    public func encode(to encoder: Encoder) throws {
+        var container = encoder.container(keyedBy: CodingKeys.self)
+        try container.encode(cadence, forKey: .cadence)
+        try container.encode(hour, forKey: .hour)
+        try container.encode(minute, forKey: .minute)
+        try container.encodeIfPresent(weekday, forKey: .weekday)
+        try container.encodeIfPresent(dayOfMonth, forKey: .dayOfMonth)
+        try container.encode(unattendedTrusted, forKey: .unattendedTrusted)
+        try container.encodeIfPresent(lastRunAt, forKey: .lastRunAt)
+        try container.encode(activation, forKey: .activation)
     }
 
     /// Checked at the single choke point every write goes through (`RoutineStore.save`), the same

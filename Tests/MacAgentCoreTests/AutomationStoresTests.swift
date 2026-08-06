@@ -74,6 +74,186 @@ struct AutomationStoresTests {
         }
     }
 
+    // MARK: - Step safety at the store (SONNY-52)
+
+    /// The list itself, pinned literally rather than through the code that reads it.
+    ///
+    /// Every rejection test below drives off `StoredRoutine.forbiddenStepOperations`, so a test
+    /// that only looped the list would pass just as happily with an entry deleted from it — it
+    /// would simply stop testing that entry. This is the assertion that makes a deletion or a
+    /// silent addition fail, and the reason the per-operation tests below can be written as a loop
+    /// without being self-fulfilling.
+    @Test
+    func theForbiddenStepListIsExactlyTheSixOperationsRoutinesMayNotContain() {
+        #expect(
+            StoredRoutine.forbiddenStepOperations == [
+                .saveRoutine,
+                .runRoutine,
+                .createWorkspace,
+                .openWorkspace,
+                .clarify,
+                .unsupported
+            ]
+        )
+        // The complement matters as much as the membership: a rule that crept wider would refuse
+        // routines users legitimately author. These four are the everyday routine operations.
+        for operation in [AgentOperation.openApp, .openURL, .writeMarkdown, .createLocalDraft] {
+            #expect(StoredRoutine.forbiddenStepOperations.contains(operation) == false)
+        }
+    }
+
+    /// Each forbidden operation, rejected at the store rather than only at the save capability.
+    /// Before SONNY-52 every one of these writes succeeded: `RoutineStore.save` validated the
+    /// schedule and nothing else, so a routine the save capability refuses could be written
+    /// straight to disk and then executed.
+    @Test
+    func savingRejectsEveryForbiddenStepOperationWithTheOperationNamed() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+
+        for operation in StoredRoutine.forbiddenStepOperations {
+            let step = AgentStep(id: "bad", operation: operation, description: "Nope.")
+            #expect(throws: AutomationStoreError.unsafeRoutineStep(operation.rawValue)) {
+                try store.save(StoredRoutine(name: "Morning", steps: [step]))
+            }
+        }
+
+        // Nothing was written by any of them — a rejection that still left a partial file on disk
+        // would be a worse outcome than no check at all.
+        #expect(try store.loadAll().isEmpty)
+    }
+
+    /// A forbidden step buried behind legal ones is still rejected. Checking only `steps.first`
+    /// would pass every test above and miss the shape a real routine actually takes.
+    @Test
+    func savingRejectsAForbiddenStepThatIsNotTheFirstStep() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+
+        #expect(throws: AutomationStoreError.unsafeRoutineStep("run_routine")) {
+            try store.save(
+                StoredRoutine(
+                    name: "Morning",
+                    steps: [
+                        .fixture,
+                        AgentStep(id: "nested-run", operation: .runRoutine, description: "Run another routine.")
+                    ]
+                )
+            )
+        }
+    }
+
+    /// The save capability refuses nested `routineSteps` alongside the operation list, and both
+    /// halves of that rule now live in `StoredRoutine.validateStepSafety` — so the store refuses
+    /// them too. A routine holding routines is recursion the executor never agreed to walk.
+    @Test
+    func savingRejectsAStepCarryingNestedRoutineSteps() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+
+        #expect(throws: AutomationStoreError.unsafeRoutineStep("nested routineSteps")) {
+            try store.save(
+                StoredRoutine(
+                    name: "Morning",
+                    steps: [AgentStep(id: "wrap", operation: .openApp, description: "Wrap.", routineSteps: [.fixture])]
+                )
+            )
+        }
+        // An empty nested array is not a nested routine — refusing it would reject a shape the
+        // planner emits harmlessly, and the adapter has never refused it either.
+        try store.save(
+            StoredRoutine(
+                name: "Evening",
+                steps: [AgentStep(id: "wrap", operation: .openApp, description: "Wrap.", routineSteps: [])]
+            )
+        )
+        #expect(try store.routine(named: "Evening").steps.count == 1)
+    }
+
+    /// Steps are checked before the schedule, so a routine that is wrong in both ways is told
+    /// about the problem that makes it unsafe to *run* rather than the one that makes it unsafe to
+    /// *fire*. Pinned because the ordering is a decision, not an accident of line order.
+    @Test
+    func stepSafetyIsReportedAheadOfScheduleValidation() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+
+        #expect(throws: AutomationStoreError.unsafeRoutineStep("clarify")) {
+            try store.save(
+                StoredRoutine(
+                    name: "Morning",
+                    steps: [AgentStep(id: "ask", operation: .clarify, description: "Ask.")],
+                    // Invalid on its own: weekly with no weekday.
+                    schedule: RoutineSchedule(cadence: .weekly, hour: 9, minute: 0)
+                )
+            )
+        }
+    }
+
+    /// The sanctioned bypass writes what `save` refuses, and stays a *step*-safety bypass only —
+    /// an invalid schedule still throws, and the merge-on-nil behavior is still `save`'s. A bypass
+    /// that quietly skipped the rest of `save` would be a second write path, which is the thing
+    /// this ticket exists to remove.
+    @Test
+    func theSanctionedBypassWritesForbiddenStepsButStillValidatesTheSchedule() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        let forbidden = AgentStep(
+            id: "open-workspace",
+            operation: .openWorkspace,
+            description: "Open workspace",
+            workspaceName: "Research"
+        )
+
+        try store.saveBypassingStepValidation(StoredRoutine(name: "Morning", steps: [forbidden]))
+
+        #expect(try store.routine(named: "Morning").steps.map(\.operation) == [.openWorkspace])
+        #expect(throws: AutomationStoreError.invalidSchedule("A weekly routine needs a weekday.")) {
+            try store.saveBypassingStepValidation(
+                StoredRoutine(
+                    name: "Evening",
+                    steps: [forbidden],
+                    schedule: RoutineSchedule(cadence: .weekly, hour: 9, minute: 0)
+                )
+            )
+        }
+        // ...and it still merges rather than replacing: redefining the steps of a routine written
+        // this way keeps the schedule the earlier write gave it, exactly as `save` would.
+        try store.setSchedule(
+            routineNamed: "Morning",
+            to: RoutineSchedule(cadence: .daily, hour: 7, minute: 15)
+        )
+        try store.saveBypassingStepValidation(StoredRoutine(name: "Morning", steps: [forbidden, forbidden]))
+        #expect(try store.routine(named: "Morning").schedule?.hour == 7)
+    }
+
+    /// A legal routine is untouched by any of this — the check refuses a named set, it does not
+    /// narrow what a routine may do.
+    @Test
+    func savingAnOrdinaryRoutineIsUnaffectedByStepValidation() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+
+        try store.save(
+            StoredRoutine(
+                name: "Morning",
+                steps: [
+                    .fixture,
+                    AgentStep(id: "open-url", operation: .openURL, description: "Open GitHub.", targetURL: "https://github.com"),
+                    AgentStep(id: "draft", operation: .createLocalDraft, description: "Draft notes.")
+                ]
+            )
+        )
+
+        #expect(try store.routine(named: "Morning").steps.count == 3)
+    }
+
     private func makeDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("AutomationStoresTests-\(UUID().uuidString)", isDirectory: true)

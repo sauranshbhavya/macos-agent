@@ -54,6 +54,48 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
     /// Matches `RoutineStore`'s existing name-keyed dictionary and `RoutinesView`'s
     /// `ForEach(..., id: \.element.name)` — routine names are already the real identity here.
     public var id: String { name }
+
+    /// The operations a routine may never contain, defined once because two doors ask the same
+    /// question: `SaveRoutineCapabilityAdapter` refuses them while composing a routine out of a
+    /// planner's plan, and `RoutineStore.save` refuses them again at the write choke point every
+    /// routine goes through. One list rather than two matching switch statements, because two
+    /// copies become two different lists the first time either end is edited — and a rule enforced
+    /// at only one of two doors is precisely what left the store accepting routines the save
+    /// capability rejects (SONNY-52).
+    ///
+    /// The rule itself is unchanged from the save capability's original list. Routines are
+    /// declarative local plans, so they may not author or invoke other routines
+    /// (`.saveRoutine`, `.runRoutine`), may not create or open workspaces (`.createWorkspace`,
+    /// `.openWorkspace` — a scheduled routine deliberately has no workspace binding, see
+    /// `docs/sonny-founder-design-decisions.md`), may not ask a question a scheduled run has
+    /// nobody present to answer (`.clarify`), and may not persist the planner's own "I do not
+    /// know" as if it were a plan (`.unsupported`).
+    public static let forbiddenStepOperations: Set<AgentOperation> = [
+        .saveRoutine,
+        .runRoutine,
+        .createWorkspace,
+        .openWorkspace,
+        .clarify,
+        .unsupported
+    ]
+
+    /// The step-safety rule, in the one place both write doors call it.
+    ///
+    /// Rejects on the first offending step rather than collecting every problem: the caller shows
+    /// one clarification, and the operation named in it is the one the user has to change first.
+    /// Nested `routineSteps` are refused for the same reason `.runRoutine` is — a routine holding
+    /// routines is recursion the executor never agreed to walk.
+    static func validateStepSafety(_ steps: [AgentStep]) throws {
+        for step in steps {
+            if forbiddenStepOperations.contains(step.operation) {
+                throw AutomationStoreError.unsafeRoutineStep(step.operation.rawValue)
+            }
+
+            if let nested = step.routineSteps, !nested.isEmpty {
+                throw AutomationStoreError.unsafeRoutineStep("nested routineSteps")
+            }
+        }
+    }
 }
 
 public enum WorkspaceTeamType: String, Codable, Equatable, Sendable {
@@ -158,7 +200,36 @@ public struct RoutineStore: @unchecked Sendable {
     ///
     /// Use `setSchedule(routineNamed:to:)` to change or clear a schedule; passing nil here means
     /// "I am not talking about scheduling", not "remove it".
+    ///
+    /// Validates step safety as well as the schedule, so this is the choke-point guarantee for
+    /// both — the same reason `RoutineSchedule.validate()` is checked here rather than in `init`,
+    /// which `Decodable` bypasses. Steps first: a forbidden step makes a routine unsafe to *run*,
+    /// where an invalid schedule only makes it unsafe to *fire*, so the more consequential
+    /// rejection is the one a caller with both problems is told about.
     public func save(_ routine: StoredRoutine) throws {
+        try StoredRoutine.validateStepSafety(routine.steps)
+        try persist(merging: routine)
+    }
+
+    /// Test-only: the single sanctioned way to write a routine `save` would refuse on step safety.
+    ///
+    /// Executor tests need routines the save capability rejects, because what the executor does
+    /// when it meets one is itself behavior worth pinning — `AgentActionExecutorTests`'
+    /// `anUnresolvableAppNameIsSkippedRatherThanBlockingBrowserResolution` reaches a skip branch
+    /// that a legally-authored routine cannot reach at all. Until SONNY-52 that door was `save`
+    /// itself, which is exactly the gap this closes: an unchecked write path a real caller could
+    /// walk through without noticing it was doing anything unusual. Naming it, keeping it inside
+    /// the module and documenting it here turns the bypass into a deliberate, greppable exception
+    /// instead of the absence of a check.
+    ///
+    /// Bypasses *step* validation only — the schedule is still validated, and the merge-on-nil
+    /// behavior is `save`'s. Deliberately not `public`: nothing outside `MacAgentCore`, the app
+    /// target included, may write a routine the store would refuse.
+    func saveBypassingStepValidation(_ routine: StoredRoutine) throws {
+        try persist(merging: routine)
+    }
+
+    private func persist(merging routine: StoredRoutine) throws {
         try routine.schedule?.validate()
         var routines = try loadAll()
         let key = normalized(routine.name)

@@ -918,9 +918,12 @@ struct AgentActionExecutorTests {
     /// green when removed.
     ///
     /// Reaching it requires writing past `validateRoutineSteps`, which would reject this routine at
-    /// save time — which is exactly why the store-level write is used here, and exactly the
-    /// asymmetry recorded as a discovery ticket: `RoutineStore.save` validates schedules but not
-    /// steps, so a routine the save capability refuses can still reach the executor.
+    /// save time — which is exactly why the store-level write is used here. The rejection is
+    /// `previewNestedPlan`'s, not the forbidden-operation list's: every step below is a legal
+    /// routine operation, and "Ghostwriter 2003" is simply an app name the catalog cannot resolve.
+    /// So plain `save` is still the right door after SONNY-52 closed the forbidden-operation half
+    /// of that asymmetry; the half that remains open is deliberate, since no store can run a
+    /// capability's nested preview.
     @Test
     func anUnresolvableAppNameIsSkippedRatherThanBlockingBrowserResolution() async throws {
         let browserOpener = RecordingBrowserOpener()
@@ -989,12 +992,15 @@ struct AgentActionExecutorTests {
         return fixture
     }
 
-    /// Writes the routine straight to the store, bypassing `validateRoutineSteps`.
+    /// Writes the routine straight to the store, bypassing the save capability's own
+    /// `previewNestedPlan` check.
     ///
-    /// Not a shortcut — it is the only way to build a routine the save capability rejects, and
-    /// `RoutineStore.save` really does accept one: it validates `schedule` and nothing else, which
-    /// is how 52 call-site lines across 48 test functions in 11 files already write routines the
-    /// adapter would refuse.
+    /// Not a shortcut — it is the only way to build a routine the save capability rejects. It is
+    /// still plain `save`, and deliberately so: SONNY-52 moved the *forbidden-operation* list to
+    /// `RoutineStore.save`, so the store now refuses those, but the routines these fixtures need
+    /// are refused by `previewNestedPlan` (an app name the catalog cannot resolve), which no store
+    /// can evaluate without a capability execution context. A routine that carried a forbidden
+    /// operation would need `saveBypassingStepValidation` instead.
     private func routineFixtureWrittenDirectlyToStore(
         named name: String,
         steps: [AgentStep],
@@ -2238,6 +2244,83 @@ struct AgentActionExecutorTests {
 
         #expect(appOpener.openedBundleIDs == ["com.apple.Safari", "com.apple.Notes"])
         #expect(result.summary.contains("Ran routine Morning Setup."))
+    }
+
+    /// The save capability's half of SONNY-52. Its forbidden-operation list moved to
+    /// `StoredRoutine.forbiddenStepOperations` so `RoutineStore.save` could enforce the same rule,
+    /// and the contract for that move was that this end behaves identically — but no test asserted
+    /// this end's behavior at all before the move, so "unchanged" had nothing to be measured
+    /// against. These two pin it: the same error, naming the same operation, from the capability
+    /// the user actually reaches.
+    @Test
+    func savingARoutineThroughTheCapabilityStillRefusesEveryForbiddenOperation() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        let executor = makeExecutor(root: root, routineStore: routineStore)
+
+        for operation in StoredRoutine.forbiddenStepOperations {
+            let plan = AgentPlan(
+                summary: "Teach routine.",
+                requiresConfirmation: true,
+                steps: [
+                    AgentStep(
+                        id: "save-routine",
+                        operation: .saveRoutine,
+                        description: "Save routine.",
+                        routineName: "Morning Setup",
+                        routineSteps: [
+                            // A legal step first, so this also proves the capability scans past the
+                            // head of the list rather than checking only `routineSteps.first`.
+                            AgentStep(id: "open-safari", operation: .openApp, description: "Open Safari.", appName: "Safari"),
+                            AgentStep(id: "bad", operation: operation, description: "Nope.")
+                        ]
+                    )
+                ]
+            )
+
+            await #expect(throws: AutomationStoreError.unsafeRoutineStep(operation.rawValue)) {
+                _ = try await executor.execute(plan: plan) { _, _ in }
+            }
+        }
+
+        #expect(try routineStore.loadAll().isEmpty)
+    }
+
+    @Test
+    func savingARoutineThroughTheCapabilityStillRefusesNestedRoutineSteps() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        let executor = makeExecutor(root: root, routineStore: routineStore)
+        let plan = AgentPlan(
+            summary: "Teach routine.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "save-routine",
+                    operation: .saveRoutine,
+                    description: "Save routine.",
+                    routineName: "Morning Setup",
+                    routineSteps: [
+                        AgentStep(
+                            id: "wrap",
+                            operation: .openApp,
+                            description: "Open Safari.",
+                            appName: "Safari",
+                            routineSteps: [
+                                AgentStep(id: "open-notes", operation: .openApp, description: "Open Notes.", appName: "Notes")
+                            ]
+                        )
+                    ]
+                )
+            ]
+        )
+
+        await #expect(throws: AutomationStoreError.unsafeRoutineStep("nested routineSteps")) {
+            _ = try await executor.execute(plan: plan) { _, _ in }
+        }
+        #expect(try routineStore.loadAll().isEmpty)
     }
 
     @Test
