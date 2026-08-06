@@ -1622,3 +1622,54 @@ Known limitations / deferred scope:
 Open questions (required, write "none" if true): none.
 
 Next branch: none pre-assigned. Roadmap row B (`feature/workspace-restriction-scope`, SONNY-36 onward) is in flight in a parallel worktree and absorbs this branch by rebase after it merges, per the disjointness note recorded on both tickets.
+
+### Branch: feature/sonny-49-tasks-collapsible-sections
+Status: complete
+Date: 2026-08-06
+Tickets: SONNY-49 — the Command Center Tasks page's status sections collapse from a disclosure chevron on their headers, and stay collapsed across launches. Spawned no discovery tickets.
+Reviewed by: fresh session (per WORKFLOW.md step 7) — pending at the time this entry was written; the PR is open and the branch is not merged.
+
+Spec sections covered: none newly. This is a UI affordance on an existing page — no capability, risk tier, approval mapping, planner vocabulary, or stored data model changed. `CompletedTaskRecord`, `TaskHistoryStore`, and `TaskHistoryGrouping` are all untouched.
+Files changed:
+- `Sources/MacAgent/TaskSectionCollapsePresentation.swift` (new — `TaskSectionCollapseState`, `TaskSectionCollapseStore`, `TaskSectionPresentation`)
+- `Sources/MacAgent/CommandCenterView.swift` (Tasks page region only: `TasksFoundationView`, `InProgressTaskGroup`, `TaskHistoryGroupedPanel`, and an optional disclosure on the shared `CommandCenterGroupHeader`)
+- `Tests/MacAgentTests/TaskSectionCollapseTests.swift` (new)
+- `docs/sonny-founder-design-decisions.md`
+- `docs/sonny-v1-implementation-changelog.md`
+
+Tests: `env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disable-sandbox -Xswiftc -F -Xswiftc /Library/Developer/CommandLineTools/Library/Developer/Frameworks -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/Frameworks -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/usr/lib` -> exit 0, **490 tests in 48 suites**, up from the 471 in 45 re-measured on `main` at `ca4fbe4` before any of this branch's code existed. `swift build` -> exit 0.
+
+Behavior added:
+- **Every status section header on the Tasks page is a collapse toggle.** In Progress, Done, Failed and Canceled each carry a trailing `chevron.right` that rotates 90° when expanded; clicking anywhere on the header band folds the section away. The header gains the hover highlight and pointer cursor every other clickable System A row already has, plus a VoiceOver label/value/hint trio ("Done, 12" / "Expanded" / "Collapses this section").
+- **Collapse state survives quit and relaunch**, per section, through one plain-`UserDefaults` key (`com.sonny.preferences.tasksCollapsedSections`) holding a sorted array of collapsed section identifiers.
+- **A collapsed header still shows its full count.** A task completing while "Done" is folded away bumps the number without expanding the section.
+
+Behavior preserved (required, no blanket claims):
+- **The Routines page's cadence group headers are visually and structurally unchanged.** `CommandCenterGroupHeader`'s new `disclosure` parameter defaults to `nil`, the Routines call site was not edited, and the `nil` path renders the identical `HStack` with no `Spacer`, no chevron, no `Button` wrapper, and no added modifiers — the layout only becomes width-greedy when a disclosure supplies the `Spacer`.
+- **The Tasks page's empty state is untouched.** `TaskHistoryGroupedPanel` still short-circuits to "No completed tasks yet" when there are no records at all, before any section or chevron exists.
+- **The 90-day display window and the "In Progress" gating are unchanged.** `TaskHistoryDisplayWindow.withinWindow` still feeds the panel, and the live group still renders only while `isRunning || isAwaitingApproval`.
+- **Row behavior is unchanged.** `TaskHistoryRow` still opens `TaskLogDetailDialog` on click via the same `onSelect` closure; only the collection it iterates changed name (`section.visibleRecords`).
+- **Approval visibility is unaffected.** `CommandCenterAttentionPanel` sits below the scroll area and self-gates on its own state, so collapsing "In Progress" hides the running indicator and nothing else; the floating widget is unchanged.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**Wireframe-fidelity exception, stated rather than silent (per CLAUDE.md's rule).** `9-MainAppHomeScreen.svg` specifies the status groups as plain, non-interactive bands with no collapse affordance. The founder ask (Bhavya, 2026-08-05) is the authority, per the standing rule that founder decisions outrank a literal wireframe reading; the full decision record is in `docs/sonny-founder-design-decisions.md` under "Tasks page — collapsible status sections". The exception is bounded to the smallest possible shape: the chevron is the only addition, it is **trailing** so the wireframe's title/count position and every band measurement stay untouched, and its treatment is copied from the two System A chevrons that already exist (`SonnyType.icon(9, weight: .semibold)`, `SonnyTheme.muted`, trailing-aligned). One practical note for whoever verifies this: **the wireframe SVG exports are not tracked in this repository** — `find . -iname '*.svg'` returns nothing — so this claim rests on the ticket and on the existing in-code wireframe comments, not on a re-read of the file.
+
+**Persist the collapsed set, never the expanded set.** The default is "everything expanded," and only a collapsed-set representation makes an absent or empty preference mean exactly that. It matters more here than it looks: `TaskHistoryGrouping.groupedByOutcome` drops empty sections, so a section genuinely does not exist until it has a record, and an expanded-set representation would have to enumerate every section that could ever exist or silently collapse each new one the first time it appeared. The same reasoning is why an unknown identifier in the persisted array is carried harmlessly rather than treated as corruption.
+
+**The collapse preference deliberately does not live on `AgentViewModel`.** The two existing plain-`UserDefaults` preferences (`usePointerCursors`, `displayFullNames`) are there because both the widget and Command Center read them. Nothing outside this one page reads this one, so putting it on the shared view model would add `@Published` state with exactly one observer. `TaskSectionCollapseStore` is injected into `TasksFoundationView` instead, defaulted to `.standard`, which is also what makes the round-trip testable without constructing a whole view model. The rule that actually mattered — plain `UserDefaults`, not `LocalStorageEncryption`, for a cosmetic preference — is followed.
+
+**Seed `@State` in `init`, not in `onAppear`.** `TasksFoundationView.onAppear` already fires on every return to the page (it calls `refreshTaskHistory`), so loading the preference there would re-read defaults on every tab switch and, if a write ever lagged, discard an in-session collapse. `State(initialValue: collapseStore.load())` in a custom `init` seeds once per view identity and leaves the existing `TasksFoundationView(viewModel:)` call site unchanged.
+
+**`count` is a property of the section, not of what got rendered.** The count-while-collapsed requirement is one line away from being wrong — `section.visibleRecords.count` compiles and reads naturally and silently shows 0 on every collapsed section. Putting `count` on `TaskSectionPresentation` as `section.records.count`, independent of `isExpanded`, is what makes that mistake a test failure instead of a manual-QA discovery. Mutating it to follow the collapse state reddens 3 tests.
+
+**Mutation counts, measured at `687d531`** for the first eleven and at `4add873` for the twelfth (per the SONNY-24 precedent that a count with no SHA cannot be told apart from a stale one). Twelve mutations of `TaskSectionCollapsePresentation.swift`, each run against the full flagged suite, each red — distinct test functions reddened in brackets: invert `isExpanded` [12], `toggle` to a no-op [9], invert `setExpanded` [10], `load` ignoring the stored value [3], `save` writing nothing [3], `save` dropping `.sorted()` [1], a different `defaultsKey` string [1], `count` following the collapse state [3], collapse no longer hiding rows [3], `sections(for:collapse:)` ignoring the collapse state [3], the `inProgressSectionID` drifting from the header title it renders [3], and `visibleRecords` reversing the grouping's order [1].
+
+Known limitations / deferred scope:
+- **The view wiring itself is not test-pinned, only the presentation type is — and one specific line is the risk.** `TaskHistoryGroupedPanel` passes `count: section.count` to the header (`CommandCenterView.swift:1373`); swapping it to the visually near-identical `section.visibleRecords.count` would render "Done 0" on every collapsed section — violating this ticket's headline criterion — with the entire suite still green, because the presentation type's `count` stays correct no matter which field the view reads. The same holds for "the header actually calls `onToggleSection`" and "the chevron actually rotates". This is not a gap this branch could close: the repository has no view-rendering tests and no view-inspection dependency, adding one is an architectural decision rather than a ticket-level one, and no agent can drive the live app. What guards it instead is the comment sitting directly above that line and SONNY-49's third manual-test item, which is exactly this check. Recorded so a green suite is never mistaken for full coverage of the feature. (Raised by this branch's own pre-PR adversarial review pass; kept as a stated limitation rather than silently absorbed.)
+- **No "collapse all" / "expand all" affordance.** Not asked for; each section is toggled on its own.
+- **Collapse state is not shared with the floating widget** — the widget has no status sections, so there is nothing to share.
+
+Open questions (required, write "none" if true): none.
+
+Next branch: none assigned. This was a disjoint, founder-triaged UI improvement running beside roadmap row B (`feature/workspace-restriction-scope`, SONNY-36 → SONNY-44 → SONNY-37) and `feature/automation-store-hardening` (SONNY-52), both in flight in their own worktrees. **This branch started from `main` at `ca4fbe4` and was rebased onto `feb27c7`** — `feature/workflow-process-amendments` merged mid-implementation — per step 3's merge-one-at-a-time rule. That rebase's only conflict was this changelog's shared append point, resolved by keeping both entries; nothing under `Sources/` or `Tests/` conflicted, because that branch touched no code. The full suite was re-run after the rebase.
