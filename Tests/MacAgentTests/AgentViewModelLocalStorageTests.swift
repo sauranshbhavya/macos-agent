@@ -170,6 +170,19 @@ private func makeViewModel(root: URL, encryption: LocalStorageEncryption) throws
             encryption: encryption
         ),
         shortcutCatalog: EmptyShortcutCatalog(),
+        // Hermetic seams (fakes in ProductShellTests.swift, same test target). These tests execute
+        // real plans; their commands touch no side-effect seam *today*, but that is a property of
+        // the commands rather than of the fixture — this bug arrived exactly that way, when a
+        // routine fixture gained a URL step. Injected so hermeticity is structural.
+        browserOpener: HermeticBrowserOpener(),
+        appOpener: HermeticAppOpener(),
+        fileOpener: HermeticFileOpener(),
+        mediaOpener: HermeticMediaOpener(),
+        runningAppSwitcher: HermeticRunningAppSwitcher(),
+        shortcutInvoker: HermeticShortcutInvoker(),
+        finderContextReader: HermeticFinderContextReader(),
+        documentConverter: HermeticDocumentConverter(),
+        zipArchiver: HermeticZipArchiver(),
         shortcutRunHistoryStore: ShortcutRunHistoryStore(
             fileURL: root.appendingPathComponent("shortcuts-run-history.json"),
             encryption: encryption

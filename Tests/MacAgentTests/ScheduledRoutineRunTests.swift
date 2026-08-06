@@ -919,6 +919,10 @@ struct ScheduledRoutineRunTests {
     private struct Fixture {
         let root: URL
         let viewModel: AgentViewModel
+        /// Records what the scheduled run actually opened, so the fixture's hermeticity is
+        /// assertable rather than assumed.
+        let browserOpener: HermeticBrowserOpener
+        let appOpener: HermeticAppOpener
         let routineStore: RoutineStore
         let snippetStore: SnippetStore
         let taskHistoryStore: TaskHistoryStore
@@ -943,6 +947,8 @@ struct ScheduledRoutineRunTests {
             snippetStore = SnippetStore(fileURL: root.appendingPathComponent("snippets.json"))
             taskHistoryStore = TaskHistoryStore(fileURL: root.appendingPathComponent("task-history.json"))
 
+            browserOpener = HermeticBrowserOpener()
+            appOpener = HermeticAppOpener()
             let suiteName = "ScheduledRoutineRunTests-\(UUID().uuidString)"
             let userDefaults = try #require(UserDefaults(suiteName: suiteName))
             userDefaults.removePersistentDomain(forName: suiteName)
@@ -955,6 +961,18 @@ struct ScheduledRoutineRunTests {
                     fileURL: root.appendingPathComponent("recent-artifacts.json")
                 ),
                 shortcutCatalog: EmptyShortcutCatalog(),
+                // Hermetic seams (fakes defined in ProductShellTests.swift, same test target).
+                // This fixture executes real routine plans — since SONNY-38's AC5 test its routine
+                // opens a URL — so without these the scheduler drives the user's real browser.
+                browserOpener: browserOpener,
+                appOpener: appOpener,
+                fileOpener: HermeticFileOpener(),
+                mediaOpener: HermeticMediaOpener(),
+                runningAppSwitcher: HermeticRunningAppSwitcher(),
+                shortcutInvoker: HermeticShortcutInvoker(),
+                finderContextReader: HermeticFinderContextReader(),
+                documentConverter: HermeticDocumentConverter(),
+                zipArchiver: HermeticZipArchiver(),
                 shortcutRunHistoryStore: ShortcutRunHistoryStore(
                     fileURL: root.appendingPathComponent("shortcuts-run-history.json")
                 ),

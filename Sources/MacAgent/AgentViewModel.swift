@@ -99,6 +99,21 @@ final class AgentViewModel: ObservableObject {
     private let snippetStore: SnippetStore
     private let recentArtifactStore: RecentArtifactStore
     private let shortcutCatalog: any ShortcutCatalogProviding
+    // Every seam `AgentActionExecutor` exposes that reaches the real machine. Held here and
+    // forwarded in `makeExecutor()` so a test can supply fakes: before this, `makeExecutor` passed
+    // none of them, so each fell to its production default and any view-model test that *executed*
+    // a plan drove the real system — a user watching the suite run saw Safari launch and real URLs
+    // open in their browser. `AgentActionExecutor` already had every one of these as an injectable
+    // parameter; only this construction path was skipping them.
+    private let browserOpener: any BrowserOpening
+    private let appOpener: any AppOpening
+    private let fileOpener: any FileOpening
+    private let mediaOpener: any MediaOpening
+    private let runningAppSwitcher: any RunningAppSwitching
+    private let shortcutInvoker: any ShortcutInvoking
+    private let finderContextReader: any FinderContextReading
+    private let documentConverter: any DocumentConverting
+    private let zipArchiver: any ZipArchiving
     private let shortcutRunHistoryStore: ShortcutRunHistoryStore
     private let taskHistoryStore: TaskHistoryStore
     private let clipboardHistorySettingsStore: ClipboardHistorySettingsStore
@@ -233,6 +248,15 @@ final class AgentViewModel: ObservableObject {
         snippetStore: SnippetStore = SnippetStore(),
         recentArtifactStore: RecentArtifactStore = RecentArtifactStore(),
         shortcutCatalog: any ShortcutCatalogProviding = ProcessShortcutCatalog(),
+        browserOpener: any BrowserOpening = WorkspaceBrowserOpener(),
+        appOpener: any AppOpening = WorkspaceAppOpener(),
+        fileOpener: any FileOpening = WorkspaceFileOpener(),
+        mediaOpener: any MediaOpening = NativeMediaOpener(),
+        runningAppSwitcher: any RunningAppSwitching = WorkspaceRunningAppSwitcher(),
+        shortcutInvoker: any ShortcutInvoking = ProcessShortcutInvoker(),
+        finderContextReader: any FinderContextReading = AppleScriptFinderContextReader(),
+        documentConverter: any DocumentConverting = AutoDocumentConverter(),
+        zipArchiver: any ZipArchiving = ProcessZipArchiver(),
         shortcutRunHistoryStore: ShortcutRunHistoryStore = ShortcutRunHistoryStore(),
         taskHistoryStore: TaskHistoryStore = TaskHistoryStore(),
         clipboardHistorySettingsStore: ClipboardHistorySettingsStore = ClipboardHistorySettingsStore(),
@@ -253,6 +277,15 @@ final class AgentViewModel: ObservableObject {
         self.snippetStore = snippetStore
         self.recentArtifactStore = recentArtifactStore
         self.shortcutCatalog = shortcutCatalog
+        self.browserOpener = browserOpener
+        self.appOpener = appOpener
+        self.fileOpener = fileOpener
+        self.mediaOpener = mediaOpener
+        self.runningAppSwitcher = runningAppSwitcher
+        self.shortcutInvoker = shortcutInvoker
+        self.finderContextReader = finderContextReader
+        self.documentConverter = documentConverter
+        self.zipArchiver = zipArchiver
         self.shortcutRunHistoryStore = shortcutRunHistoryStore
         self.taskHistoryStore = taskHistoryStore
         self.clipboardHistorySettingsStore = clipboardHistorySettingsStore
@@ -1216,6 +1249,13 @@ final class AgentViewModel: ObservableObject {
 
     private func makeExecutor() -> AgentActionExecutor {
         AgentActionExecutor(
+            zipArchiver: zipArchiver,
+            documentConverter: documentConverter,
+            browserOpener: browserOpener,
+            appOpener: appOpener,
+            fileOpener: fileOpener,
+            mediaOpener: mediaOpener,
+            finderContextReader: finderContextReader,
             routineStore: routineStore,
             workspaceStore: workspaceStore,
             // `try?` is the degradation path, not error swallowing: construction only throws for
@@ -1225,8 +1265,10 @@ final class AgentViewModel: ObservableObject {
             webSearchProvider: try? TavilySearchProvider(),
             usageRecorder: taskUsageRecorder,
             snippetStore: snippetStore,
+            runningAppSwitcher: runningAppSwitcher,
             recentArtifactStore: recentArtifactStore,
             shortcutCatalog: shortcutCatalog,
+            shortcutInvoker: shortcutInvoker,
             shortcutRunHistoryStore: shortcutRunHistoryStore,
             hotKeyReady: { [weak self] in self?.voiceHotKeyReady ?? true }
         )

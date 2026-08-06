@@ -525,6 +525,17 @@ struct ProductShellTests {
         #expect(viewModel.approvalRequest?.assessment.effectiveTier == .tier3)
         // ...and the binding is still here, which is the whole finding.
         #expect(viewModel.activeTaskScope == .scoped(WorkspaceScope(workspace: research)))
+        // Nothing was opened while it sat re-armed — and this reads a fake, which is also the
+        // standing proof that this fixture never reaches the real browser.
+        #expect(fixture.browserOpener.openedURLs.isEmpty)
+
+        // Approving the second time really executes, through the injected seam.
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(!viewModel.isAwaitingApproval)
+        #expect(fixture.browserOpener.openedURLs.map(\.absoluteString) == ["https://example.com/page"])
+        #expect(viewModel.activeTaskScope == .unscoped)
     }
 
     /// AC4 — the scope used at `approvalRequest` is the scope used inside `execute`.
@@ -1174,7 +1185,9 @@ private func makeProductShellFixture() throws -> (
     workspaceStore: WorkspaceStore,
     taskHistoryStore: TaskHistoryStore,
     userDefaults: UserDefaults,
-    userDefaultsSuiteName: String
+    userDefaultsSuiteName: String,
+    browserOpener: HermeticBrowserOpener,
+    appOpener: HermeticAppOpener
 ) {
     let userDefaultsSuiteName = "ProductShellTests-\(UUID().uuidString)"
     let userDefaults = try #require(UserDefaults(suiteName: userDefaultsSuiteName))
@@ -1192,7 +1205,9 @@ private func makeProductShellFixture(
     workspaceStore: WorkspaceStore,
     taskHistoryStore: TaskHistoryStore,
     userDefaults: UserDefaults,
-    userDefaultsSuiteName: String
+    userDefaultsSuiteName: String,
+    browserOpener: HermeticBrowserOpener,
+    appOpener: HermeticAppOpener
 ) {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("ProductShellTests-\(UUID().uuidString)", isDirectory: true)
@@ -1217,6 +1232,9 @@ private func makeProductShellFixture(
         fileURL: root.appendingPathComponent("task-history.json"),
         encryption: encryption
     )
+    let browserOpener = HermeticBrowserOpener()
+    let appOpener = HermeticAppOpener()
+    let fileOpener = HermeticFileOpener()
     let viewModel = AgentViewModel(
         routineStore: routineStore,
         workspaceStore: workspaceStore,
@@ -1229,6 +1247,17 @@ private func makeProductShellFixture(
             encryption: encryption
         ),
         shortcutCatalog: ProductShellEmptyShortcutCatalog(),
+        // Hermetic seams — see the fakes at the bottom of this file. Without these the suite
+        // launches real apps and opens real URLs in the user's browser.
+        browserOpener: browserOpener,
+        appOpener: appOpener,
+        fileOpener: fileOpener,
+        mediaOpener: HermeticMediaOpener(),
+        runningAppSwitcher: HermeticRunningAppSwitcher(),
+        shortcutInvoker: HermeticShortcutInvoker(),
+        finderContextReader: HermeticFinderContextReader(),
+        documentConverter: HermeticDocumentConverter(),
+        zipArchiver: HermeticZipArchiver(),
         shortcutRunHistoryStore: ShortcutRunHistoryStore(
             fileURL: root.appendingPathComponent("shortcuts-run-history.json"),
             encryption: encryption
@@ -1249,7 +1278,7 @@ private func makeProductShellFixture(
         userDefaults: userDefaults
     )
     let suiteName = userDefaultsSuiteName ?? "ProductShellInjected-\(UUID().uuidString)"
-    return (viewModel, root, routineStore, workspaceStore, taskHistoryStore, userDefaults, suiteName)
+    return (viewModel, root, routineStore, workspaceStore, taskHistoryStore, userDefaults, suiteName, browserOpener, appOpener)
 }
 
 @MainActor
@@ -1301,4 +1330,79 @@ private final class ProductShellPasteboardReader: PasteboardReading {
     func stringValue() -> String? {
         nil
     }
+}
+
+// MARK: - Hermetic side-effect seams
+//
+// `AgentViewModel.makeExecutor()` used to construct `AgentActionExecutor` without any of its
+// side-effect services, so every one fell to its production default and any view-model test that
+// *executed* a plan drove the real machine — the suite genuinely launched Safari and opened
+// https://github.com and https://example.com/page in the user's browser. `AgentActionExecutor`
+// already accepted all nine as parameters; only the view-model construction path skipped them.
+//
+// These record rather than merely swallow, so a test that wants to assert what a run actually
+// opened can, and so a fixture that silently stopped being injected would show up as an empty
+// recording rather than as a browser window.
+
+@MainActor
+final class HermeticBrowserOpener: BrowserOpening {
+    private(set) var openedURLs: [URL] = []
+    private(set) var openedBrowsers: [MacApp?] = []
+    func open(_ url: URL, using browser: MacApp?) async throws {
+        openedURLs.append(url)
+        openedBrowsers.append(browser)
+    }
+}
+
+@MainActor
+final class HermeticAppOpener: AppOpening {
+    private(set) var openedBundleIDs: [String] = []
+    func open(bundleIdentifier: String) async throws {
+        openedBundleIDs.append(bundleIdentifier)
+    }
+}
+
+@MainActor
+final class HermeticFileOpener: FileOpening {
+    private(set) var openedFiles: [URL] = []
+    func openFile(_ url: URL) async throws {
+        openedFiles.append(url.standardizedFileURL)
+    }
+}
+
+@MainActor
+final class HermeticMediaOpener: MediaOpening {
+    private(set) var requests: [MediaPlaybackRequest] = []
+    func open(_ request: MediaPlaybackRequest) async throws -> String {
+        requests.append(request)
+        return "Played (fake)."
+    }
+}
+
+@MainActor
+final class HermeticRunningAppSwitcher: RunningAppSwitching {
+    private(set) var activated: [String] = []
+    func runningApps() -> [RunningApp] { [] }
+    func activate(bundleIdentifier: String) async throws { activated.append(bundleIdentifier) }
+}
+
+final class HermeticShortcutInvoker: ShortcutInvoking, @unchecked Sendable {
+    func invokeShortcut(name: String, input: String?) async throws -> ProcessResult {
+        ProcessResult(terminationStatus: 0, output: "")
+    }
+}
+
+final class HermeticFinderContextReader: FinderContextReading, @unchecked Sendable {
+    func selectedItems() throws -> [URL] { [] }
+}
+
+final class HermeticDocumentConverter: DocumentConverting, @unchecked Sendable {
+    var isAvailable: Bool { false }
+    var modeName: String { "fake" }
+    var usesMockNaming: Bool { true }
+    func convert(_ records: [DocxRecord], log: @escaping (String) -> Void) async throws -> [DocxRecord] { records }
+}
+
+final class HermeticZipArchiver: ZipArchiving, @unchecked Sendable {
+    func createArchive(sourceFolder: URL, files: [URL], outputURL: URL) async throws {}
 }
