@@ -304,6 +304,71 @@ struct RoutineActivationTests {
         #expect(loaded["morning"]?.schedule?.unattendedTrusted == true)
     }
 
+    /// The same four legacy shapes again, but **encrypted** — which is what a real install actually
+    /// has on disk.
+    ///
+    /// PR #30's review observed that the legacy coverage above runs on a *plaintext* fixture, so
+    /// the encrypted path through the hand-written decoder was reaching only the user's manual
+    /// item. That is the path every existing user takes on first launch after this branch merges:
+    /// their `routines.json` was written encrypted by an older build, and the legacy mapping has to
+    /// survive AES-GCM open *and* decode, not just decode. Adjudicated onto SONNY-46 as fix-round
+    /// material rather than left as a residual.
+    ///
+    /// The fixture goes through `LocalStorageEncryption.encode` — the same call the eight stores'
+    /// shared pattern uses to write — with a file-private fixed key manager, exactly as
+    /// `LocalStorageSecurityTests`, `ClipboardHistoryTests`, `AgentViewModelLocalStorageTests` and
+    /// `ProductShellTests` each already declare one. No new infrastructure, and hermetic: the key
+    /// is a literal, so the real login Keychain is never touched.
+    @Test
+    func anEncryptedLegacyRoutinesFileSurvivesDecryptAndDecodeWithEveryScheduleStateIntact() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("routines.json")
+        let encryption = LocalStorageEncryption(
+            keyManager: FixedRoutineActivationKeyManager(bytes: Data(repeating: 0x42, count: 32))
+        )
+        let pausedReason = "Draft output already exists at /tmp/weekly.md."
+        let staleReason = "Stale reason on a running schedule."
+        let legacy: [String: LegacyRoutineFixture] = [
+            "morning": LegacyRoutineFixture(name: "Morning", isEnabled: true, pausedReason: nil, at: Self.anchored),
+            "weekly": LegacyRoutineFixture(name: "Weekly", isEnabled: false, pausedReason: pausedReason, at: Self.anchored),
+            "evening": LegacyRoutineFixture(name: "Evening", isEnabled: false, pausedReason: nil, at: Self.anchored),
+            "corrupted": LegacyRoutineFixture(name: "Corrupted", isEnabled: true, pausedReason: staleReason, at: Self.anchored)
+        ]
+        try encryption.encode(legacy).write(to: url, options: .atomic)
+
+        // The fixture is genuinely ciphertext, not plaintext that happens to load. Without this the
+        // test could silently degrade into a second copy of the plaintext one above — which is the
+        // exact gap it was written to close.
+        let ciphertext = try Data(contentsOf: url)
+        #expect(ciphertext.starts(with: LocalStorageEncryption.fileHeader))
+        #expect(ciphertext.range(of: Data(staleReason.utf8)) == nil)
+        #expect(ciphertext.range(of: Data("isEnabled".utf8)) == nil)
+
+        let loaded = try RoutineStore(fileURL: url, encryption: encryption).loadAll()
+
+        #expect(loaded.count == 4)
+        #expect(loaded["morning"]?.schedule?.activation == .enabled)
+        #expect(loaded["weekly"]?.schedule?.activation == .pausedBySonny(reason: pausedReason))
+        #expect(loaded["weekly"]?.schedule?.pausedReason == pausedReason)
+        #expect(loaded["evening"]?.schedule?.activation == .disabledByUser)
+        // The self-repair, through decrypt as well as decode: the stale reason is gone and the
+        // routine is still running.
+        #expect(loaded["corrupted"]?.schedule?.activation == .enabled)
+        #expect(loaded["corrupted"]?.schedule?.pausedReason == nil)
+        #expect(loaded["corrupted"]?.schedule?.isPausedBySonny == false)
+        #expect(loaded["corrupted"]?.isScheduled == true)
+        // The rest of each record survived the round trip too.
+        #expect(loaded["morning"]?.steps.map(\.appName) == ["Safari"])
+        #expect(loaded["morning"]?.schedule?.lastRunAt == Self.anchored)
+        #expect(loaded["morning"]?.schedule?.hour == 9)
+        #expect(loaded["morning"]?.schedule?.unattendedTrusted == true)
+
+        // An already-encrypted file is not a legacy *plaintext* file, so loading it must not
+        // trigger the migration rewrite — the bytes are untouched.
+        #expect(try Data(contentsOf: url) == ciphertext)
+    }
+
     /// The other half: a file this build writes, read back by this build. Written through the real
     /// store rather than a bare encoder, so the encrypted-file path and `save`'s merge are both in
     /// the loop.
@@ -383,4 +448,45 @@ private extension AgentStep {
         description: "Open Safari.",
         appName: "Safari"
     )
+}
+
+/// A routine in the pre-SONNY-46 encoded shape, as an `Encodable` so it can be written through the
+/// real `LocalStorageEncryption`. The encoder that produced these files no longer exists, so the
+/// shape is declared here rather than generated by today's types — a fixture built from
+/// `RoutineSchedule` would emit `activation` and pin nothing.
+///
+/// `pausedReason` is Optional so synthesized `Encodable` omits the key entirely when nil, which is
+/// exactly what a schedule written before that field existed looks like on disk.
+private struct LegacyRoutineFixture: Encodable {
+    struct Schedule: Encodable {
+        let cadence = "daily"
+        let hour = 9
+        let minute = 0
+        let isEnabled: Bool
+        let unattendedTrusted = true
+        let lastRunAt: Date
+        let pausedReason: String?
+    }
+
+    let name: String
+    let steps: [AgentStep]
+    let schedule: Schedule
+
+    init(name: String, isEnabled: Bool, pausedReason: String?, at lastRunAt: Date) {
+        self.name = name
+        self.steps = [.fixture]
+        self.schedule = Schedule(isEnabled: isEnabled, lastRunAt: lastRunAt, pausedReason: pausedReason)
+    }
+}
+
+/// The same file-private fixed key manager `LocalStorageSecurityTests`, `ClipboardHistoryTests`,
+/// `AgentViewModelLocalStorageTests` and `ProductShellTests` each declare — one per test file is
+/// the established pattern here, not a variant. A literal key keeps the test hermetic and off the
+/// real login Keychain.
+private struct FixedRoutineActivationKeyManager: LocalStorageKeyManaging {
+    let bytes: Data
+
+    func keyData() throws -> Data {
+        bytes
+    }
 }
