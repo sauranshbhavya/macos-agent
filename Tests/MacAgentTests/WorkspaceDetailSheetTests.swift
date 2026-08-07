@@ -265,6 +265,40 @@ struct WorkspaceDetailSheetTests {
         #expect(presentation.fileLocations.entries[1].inertNote != nil)
     }
 
+    /// **The footnote follows the evaluator too, not the array count.**
+    ///
+    /// Added after a mutation battery: sourcing the footnote from raw array emptiness left the suite
+    /// green, because every existing fixture that had an unrestricted dimension also had an *empty*
+    /// one, so the two sources never disagreed. This fixture has no empty array anywhere and one
+    /// all-inert dimension, which is the only shape that tells them apart.
+    @Test
+    func theFootnoteFollowsTheEvaluatorEvenWhenNoListIsEmpty() throws {
+        let root = try makeSheetTestDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let whitelist = PathWhitelist(roots: [root])
+        let workspace = StoredWorkspace(
+            name: "Client Alpha",
+            apps: ["Safari"],
+            urls: ["https://example.com"],
+            fileLocations: ["/tmp/WorkspaceDetailSheetTests-FootnoteOnly"]
+        )
+        // Premise: nothing is empty, and exactly one dimension nonetheless restricts nothing.
+        #expect(workspace.apps.isEmpty == false)
+        #expect(workspace.urls.isEmpty == false)
+        #expect(workspace.effectiveFileLocations.isEmpty == false)
+
+        let presentation = WorkspaceDetailPresentation(
+            workspace: workspace,
+            taskHistoryRecords: [],
+            whitelist: whitelist
+        )
+
+        #expect(presentation.fileLocations.isRestricted == false)
+        #expect(presentation.apps.isRestricted)
+        #expect(presentation.urls.isRestricted)
+        #expect(presentation.unrestrictedFootnote != nil)
+    }
+
     /// The general statement the three cases above are instances of: for every dimension of every
     /// fixture, the sheet's answer equals the evaluator's. A predicate that drifted from the
     /// canonical lists in *any* direction fails here.
