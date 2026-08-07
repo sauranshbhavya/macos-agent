@@ -115,6 +115,28 @@ enum AgentActivityPresentation {
     ///
     /// Escalation reasons are deliberately not here: they are per-run facts, not first-run
     /// framing, and render in their own warning-colored line on every approval.
+    /// The widget's in-composer binding indicator: which workspace the next command belongs to.
+    ///
+    /// A pure function rather than copy authored in the view body, following
+    /// `firstRunApprovalExplainerLines`' precedent — this repo has no SwiftUI view-inspection
+    /// harness, so a sentence written inline in a `Text(...)` is untestable and can ship wrong.
+    ///
+    /// Deliberately says "in", not "active in" or "switched to": the binding is per task, and copy
+    /// implying a mode is how the rejected persistent-active-workspace design creeps back in.
+    static func workspaceBindingIndicatorText(workspaceName: String) -> String {
+        "In \(workspaceName)"
+    }
+
+    /// The accessibility label for the affordance that drops the binding again.
+    static func clearWorkspaceBindingLabel(workspaceName: String) -> String {
+        "Clear the \(workspaceName) workspace binding"
+    }
+
+    /// The workspace card's dispatch action title.
+    static func newTaskInWorkspaceLabel(workspaceName: String) -> String {
+        "New task in \(workspaceName)"
+    }
+
     static func firstRunApprovalExplainerLines(
         for request: RiskApprovalRequest,
         isFirstApproval: Bool

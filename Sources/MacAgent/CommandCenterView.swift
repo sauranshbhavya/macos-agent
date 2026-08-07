@@ -2159,6 +2159,7 @@ private struct WorkspacesView: View {
                                     ],
                                     isRunning: viewModel.isRunning || viewModel.isAwaitingApproval,
                                     open: { viewModel.openWorkspaceWidget(workspace) },
+                                    beginTaskHere: { viewModel.beginTaskInWorkspace(workspace) },
                                     markAsTeam: { viewModel.markWorkspaceAsTeam(workspace) },
                                     delete: { viewModel.deleteWorkspace(workspace) }
                                 )
@@ -2211,6 +2212,7 @@ private struct WorkspaceCard: View {
     let accent: Color
     let isRunning: Bool
     let open: () -> Void
+    let beginTaskHere: () -> Void
     let markAsTeam: () -> Void
     let delete: () -> Void
     @State private var showDeleteConfirmation = false
@@ -2274,6 +2276,20 @@ private struct WorkspaceCard: View {
                     // readable (manual pass, 2026-07-30).
                     Text("This deletes its saved apps and URLs. Past task history mentioning this workspace is not deleted.")
                 }
+
+                // The "started from its card" half of the founder binding decision. Sits beside
+                // Open rather than replacing or branching it — Open still runs the workspace in one
+                // click, this one starts nothing and hands the user a bound composer. Deliberately
+                // *not* an Open-vs-Switch branch or an "Active" badge: those are the rejected
+                // persistent-active-workspace wireframe elements and stay unbuilt.
+                Button(action: beginTaskHere) {
+                    Text("New task")
+                }
+                .buttonStyle(CommandCenterRowActionStyle())
+                .disabled(isRunning)
+                .accessibilityLabel(
+                    AgentActivityPresentation.newTaskInWorkspaceLabel(workspaceName: presentation.name)
+                )
 
                 Button(action: open) {
                     Text("Open")

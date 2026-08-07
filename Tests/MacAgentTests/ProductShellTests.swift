@@ -581,6 +581,158 @@ struct ProductShellTests {
         #expect(afterApproval == 2)
     }
 
+    // MARK: - "New task in this workspace" card dispatch (SONNY-39)
+
+    /// AC1 — the card action sets the binding and raises the widget. Asserted on the view model,
+    /// per this repo's rule that presentation logic needing a test leaves the view.
+    ///
+    /// AC2 is checkable in the same assertion: the summon is a `widgetPresentationRequest` bump,
+    /// not a `FloatingWidgetWindowController.show()` call. There is no direct controller call to
+    /// assert the absence of — the diff carries that — but the counter moving is the positive half.
+    @Test
+    func theCardDispatchBindsTheNextCommandAndRaisesTheWidget() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let research = StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        try fixture.workspaceStore.save(research)
+        viewModel.refreshSavedItems()
+        let requestsBefore = viewModel.widgetPresentationRequest
+
+        viewModel.beginTaskInWorkspace(research)
+
+        #expect(viewModel.pendingWorkspaceBinding == "Research")
+        #expect(viewModel.boundWorkspaceName == "Research")
+        #expect(viewModel.widgetPresentationRequest == requestsBefore + 1)
+        // An *empty* composer — the whole point is that the user types the task themselves, rather
+        // than the synthesized "Open my X workspace" string the Open button uses.
+        #expect(viewModel.command.isEmpty)
+        // And nothing started.
+        #expect(!viewModel.isRunning)
+        #expect(viewModel.plan == nil)
+    }
+
+    /// The dispatch flows through SONNY-38's existing explicit-binding slot rather than a second
+    /// path, so a command naming a *different* workspace still loses to the card — the precedence
+    /// rule is inherited, not re-implemented.
+    @Test
+    func aCardDispatchStillBeatsAConflictingWorkspaceNamedInTheCommand() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let drafting = StoredWorkspace(name: "Drafting", apps: ["Notes"], urls: [])
+        try fixture.workspaceStore.save(
+            StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        )
+        try fixture.workspaceStore.save(drafting)
+        viewModel.refreshSavedItems()
+
+        viewModel.beginTaskInWorkspace(drafting)
+        viewModel.command = "open workspace Research"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.lastAssessedScope == .scoped(WorkspaceScope(workspace: drafting)))
+    }
+
+    /// AC3 — clearing the binding leaves typed text alone. The two live on the same row, and a
+    /// clear that also wiped the composer would lose work the user had already done.
+    @Test
+    func clearingTheBindingLeavesTheComposerTextIntact() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let research = StoredWorkspace(name: "Research", apps: ["Safari"], urls: [])
+        try fixture.workspaceStore.save(research)
+        viewModel.refreshSavedItems()
+
+        viewModel.beginTaskInWorkspace(research)
+        viewModel.command = "half-written command"
+        viewModel.clearPendingWorkspaceBinding()
+
+        #expect(viewModel.pendingWorkspaceBinding == nil)
+        #expect(viewModel.boundWorkspaceName == nil)
+        #expect(viewModel.command == "half-written command")
+    }
+
+    /// AC4 — a bound composer with nothing typed submits nothing, and keeps its binding so the user
+    /// can carry on typing rather than having to click the card again.
+    @Test
+    func submittingAnEmptyCommandFromABoundComposerDoesNothingAndKeepsTheBinding() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let research = StoredWorkspace(name: "Research", apps: ["Safari"], urls: [])
+        try fixture.workspaceStore.save(research)
+        viewModel.refreshSavedItems()
+
+        viewModel.beginTaskInWorkspace(research)
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.plan == nil)
+        #expect(viewModel.lastAssessedScope == .unscoped)
+        #expect(viewModel.pendingWorkspaceBinding == "Research")
+    }
+
+    /// AC1's other half and manual item 3: the indicator is per task. It survives the hand-off from
+    /// the pending slot to the in-flight binding, and disappears when the task ends — it must never
+    /// become the rejected persistent "active workspace" mode.
+    @Test
+    func theBindingIndicatorSurvivesSubmitAndDisappearsWhenTheTaskEnds() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let research = StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        try fixture.workspaceStore.save(research)
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Drafting", apps: ["Notes"], urls: []))
+        viewModel.refreshSavedItems()
+
+        viewModel.beginTaskInWorkspace(research)
+        #expect(viewModel.boundWorkspaceName == "Research")
+
+        // A command that pauses on an approval, so there is a stable in-flight window to observe.
+        // Bound to Research, opening Drafting — whose stored app falls outside Research.
+        viewModel.command = "open workspace Drafting"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        // Mid-task: the pending slot has been consumed, so the indicator can only still be showing
+        // because it falls back to the *in-flight* binding. Without that fallback the chip vanishes
+        // the instant the user hits return, which is exactly when they most need to see it.
+        #expect(viewModel.isAwaitingApproval)
+        #expect(viewModel.pendingWorkspaceBinding == nil)
+        #expect(viewModel.boundWorkspaceName == "Research")
+        #expect(viewModel.lastAssessedScope == .scoped(WorkspaceScope(workspace: research)))
+
+        viewModel.cancelCurrentRun()
+
+        // ...and it is gone now that the task is over — per task, never a mode.
+        #expect(viewModel.boundWorkspaceName == nil)
+        #expect(viewModel.pendingWorkspaceBinding == nil)
+    }
+
+    /// AC6 — the existing Open action is unchanged, pinned rather than inspected. It still
+    /// synthesizes its own command and runs it in one click, and it leaves no pending binding
+    /// behind, because it is not the card dispatch.
+    @Test
+    func theExistingOpenActionIsUnchangedByTheNewCardDispatch() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let research = StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        try fixture.workspaceStore.save(research)
+        viewModel.refreshSavedItems()
+
+        viewModel.openWorkspaceWidget(research)
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.plan?.steps.first?.operation == .openWorkspace)
+        #expect(fixture.appOpener.openedBundleIDs == ["com.apple.Safari"])
+        #expect(fixture.browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com"])
+        #expect(viewModel.pendingWorkspaceBinding == nil)
+    }
+
     /// AC7 — precedence. Both signals present at once, naming **different** workspaces: the card
     /// binding wins. No other criterion exercises this, so the rule could be implemented backwards
     /// and every other test here would still pass.

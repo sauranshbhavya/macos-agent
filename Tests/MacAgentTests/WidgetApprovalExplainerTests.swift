@@ -144,3 +144,53 @@ private func makeRequest(
         requirement: .lightweightConfirmation
     )
 }
+
+/// SONNY-39. The workspace-binding copy, tested as pure functions for the same reason the approval
+/// explainer above is: this repo has no SwiftUI view-inspection harness, so a sentence authored
+/// inline in a `Text(...)` is untestable and can ship wrong.
+@Suite
+@MainActor
+struct WorkspaceBindingCopyTests {
+    /// Every fixture value is distinct and none of them is a substring of another, so a function
+    /// rendering the wrong field — or the right field through the wrong template — fails loudly
+    /// instead of shipping a plausible-looking wrong sentence.
+    private let workspaceName = "Quarterly Review"
+
+    @Test
+    func theIndicatorNamesTheWorkspaceAndSaysNothingAboutModes() {
+        let text = AgentActivityPresentation.workspaceBindingIndicatorText(workspaceName: workspaceName)
+
+        #expect(text == "In Quarterly Review")
+        // The wording is load-bearing, not decorative: "active", "switched" or "current" would
+        // describe the persistent-active-workspace design this branch deliberately rejected, and
+        // copy is how that idea creeps back in ahead of the code.
+        for moded in ["Active", "active", "Switched", "switched", "Current", "current", "Mode", "mode"] {
+            #expect(text.contains(moded) == false)
+        }
+    }
+
+    @Test
+    func theClearAffordanceLabelNamesTheWorkspaceItWouldClear() {
+        let label = AgentActivityPresentation.clearWorkspaceBindingLabel(workspaceName: workspaceName)
+
+        #expect(label == "Clear the Quarterly Review workspace binding")
+    }
+
+    @Test
+    func theCardActionLabelNamesTheWorkspaceTheTaskWouldStartIn() {
+        let label = AgentActivityPresentation.newTaskInWorkspaceLabel(workspaceName: workspaceName)
+
+        #expect(label == "New task in Quarterly Review")
+    }
+
+    /// The three are distinct sentences for three distinct surfaces. If two ever collapse into one
+    /// template, the surface that needed the other wording is the one that silently regresses.
+    @Test
+    func theThreeStringsAreDistinctFromEachOther() {
+        let indicator = AgentActivityPresentation.workspaceBindingIndicatorText(workspaceName: workspaceName)
+        let clear = AgentActivityPresentation.clearWorkspaceBindingLabel(workspaceName: workspaceName)
+        let card = AgentActivityPresentation.newTaskInWorkspaceLabel(workspaceName: workspaceName)
+
+        #expect(Set([indicator, clear, card]).count == 3)
+    }
+}

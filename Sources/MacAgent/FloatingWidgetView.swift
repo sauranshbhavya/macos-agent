@@ -251,8 +251,49 @@ struct FloatingWidgetView: View {
         viewModel.start(origin: .widget)
     }
 
+    /// The in-composer binding indicator and its clear affordance.
+    ///
+    /// System B tokens only — this is the widget, not a Command Center surface. Rendered *inside*
+    /// the composer row rather than as its own strip: the contract's own constraint is that no
+    /// indicator exists anywhere outside the in-flight composer, and a separate strip is the first
+    /// step toward the rejected persistent "Active" badge.
+    @ViewBuilder
+    private var workspaceBindingChip: some View {
+        if let name = viewModel.boundWorkspaceName {
+            HStack(spacing: 4) {
+                Text(AgentActivityPresentation.workspaceBindingIndicatorText(workspaceName: name))
+                    .font(WidgetType.captionSmall)
+                    .foregroundStyle(WidgetTheme.textFull)
+                    .lineLimit(1)
+
+                // Only offered before submitting. Once a task is in flight its scope is already
+                // assessed and answered; dropping it mid-run would leave the approval the user saw
+                // and the execution that follows it disagreeing about the boundary.
+                if !isTaskInFlight {
+                    Button {
+                        viewModel.clearPendingWorkspaceBinding()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(WidgetTheme.textMuted)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(
+                        AgentActivityPresentation.clearWorkspaceBindingLabel(workspaceName: name)
+                    )
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(WidgetTheme.neutralButtonFill)
+            .clipShape(Capsule())
+        }
+    }
+
     private var composerPill: some View {
         HStack(spacing: 10) {
+            workspaceBindingChip
+
             Image(systemName: "wand.and.stars.inverse")
                 .font(WidgetType.icon)
                 .foregroundStyle(.white.opacity(0.61))

@@ -155,6 +155,16 @@ final class AgentViewModel: ObservableObject {
     /// records what the run actually used. Not consumed by any view — it exists so the binding's
     /// behaviour is assertable rather than inferred from a side effect.
     private(set) var lastAssessedScope: TaskWorkspaceScope = .unscoped
+
+    /// The workspace the composer is currently bound to, for the widget's indicator — the in-flight
+    /// binding once a task is running, otherwise the one a card dispatch queued for the next
+    /// command. `nil` means unbound, and the indicator disappears.
+    var boundWorkspaceName: String? {
+        if case .scoped(let scope) = activeTaskScope {
+            return scope.workspaceName
+        }
+        return pendingWorkspaceBinding
+    }
     /// A binding supplied by a dispatch that already knows its workspace — B4's workspace-card
     /// action. Wins over the free-text path when both are present.
     ///
@@ -166,6 +176,18 @@ final class AgentViewModel: ObservableObject {
     /// `clarificationOrigin` preserves the origin — `submitClarification()` re-enters `start()`,
     /// which would otherwise drop it.
     private var clarificationWorkspaceBinding: String?
+    /// The workspace a card dispatch named for the **next** command, before one has been typed.
+    ///
+    /// A pre-dispatch slot, not a second lifecycle: `start()` consumes it into SONNY-38's
+    /// `explicitWorkspaceBinding` — the same slot the free-text path already loses to — and clears
+    /// it in the same breath, after which the binding is the in-flight one and clears where every
+    /// other terminal clear happens. `boundWorkspaceName` reads whichever of the two is live, so the
+    /// widget's indicator survives the hand-off without either value having to know about the other.
+    ///
+    /// Published because the widget renders it; deliberately *not* persisted and deliberately not
+    /// readable anywhere outside the in-flight composer — the rejected persistent-active-workspace
+    /// design is exactly what this must not become.
+    @Published var pendingWorkspaceBinding: String?
     /// Which surface's mic button started the in-progress recording — `toggleVoiceRecording()` is
     /// called identically from both Command Center's composer and the floating widget's own mic
     /// button, so this is set explicitly by the caller rather than inferred. Read back when voice
@@ -420,7 +442,12 @@ final class AgentViewModel: ObservableObject {
         // running" by the display below) long after the real submission had already moved on.
         command = ""
 
-        explicitWorkspaceBinding = workspaceBinding
+        // The card dispatch and the `workspaceBinding:` argument are one slot, not two paths: an
+        // argument wins if a caller supplies one, otherwise the pending card binding is consumed
+        // here. Either way it lands in `explicitWorkspaceBinding`, which is what SONNY-38 already
+        // pinned as beating a conflicting workspace named in the command text.
+        explicitWorkspaceBinding = workspaceBinding ?? pendingWorkspaceBinding
+        pendingWorkspaceBinding = nil
         currentTask?.cancel()
         isRunning = true
         currentTask = Task {
@@ -1066,6 +1093,30 @@ final class AgentViewModel: ObservableObject {
     func runRoutineWidget(_ routine: StoredRoutine) {
         command = "Run my \(routine.name) routine"
         start(autoExecute: true)
+    }
+
+    /// The workspace card's "New task here" action: bring the widget forward with an empty
+    /// composer, bound to this workspace.
+    ///
+    /// Distinct from `openWorkspaceWidget` below, which synthesizes a literal command and runs it.
+    /// This one starts nothing — it queues the binding and hands the user a cursor, which is the
+    /// half of the founder decision ("started from its card") that had no affordance at all.
+    ///
+    /// Summons through `widgetPresentationRequest`, never `FloatingWidgetWindowController.show()`:
+    /// SONNY-25 exists to remove the remaining direct callers and this must not add one.
+    func beginTaskInWorkspace(_ workspace: StoredWorkspace) {
+        pendingWorkspaceBinding = workspace.name
+        command = ""
+        widgetPresentationRequest += 1
+    }
+
+    /// Drops a queued card binding before anything has been submitted.
+    ///
+    /// Only ever clears the *pending* slot. A task already in flight keeps the scope it was
+    /// assessed under — un-scoping mid-run would mean the approval the user answered and the
+    /// execution that follows it disagreed about the boundary.
+    func clearPendingWorkspaceBinding() {
+        pendingWorkspaceBinding = nil
     }
 
     func openWorkspaceWidget(_ workspace: StoredWorkspace) {
