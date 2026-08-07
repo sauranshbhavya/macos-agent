@@ -112,14 +112,17 @@ extension RoutineActivation: Codable {
 
 /// When a saved routine runs on its own, and whether it is allowed to do so unattended.
 ///
-/// `unattendedTrusted` is the per-routine opt-in that lets a scheduled trigger bypass the tier-2
-/// gate a manual click keeps — running a saved routine is *itself* tier 2 by default, independent
-/// of its steps (`RunRoutineCapabilityAdapter.defaultRiskTier`), so without an explicit exception
-/// every scheduled run would simply stall waiting for an approval nobody is there to give. It is
-/// deliberately per-routine rather than a blanket policy, and it is never a tier-3+ exception:
-/// that backstop lives in `AgentRunner`, which re-assesses at execute time and requires the
-/// approved tier to be at least the effective tier, so an unattended run can only ever carry a
-/// tier-2 approval and structurally cannot execute a tier-3+ plan.
+/// `unattendedTrusted` is the per-routine trust opt-in that lets a run of this routine bypass the
+/// every-run tier-2 gate — originally scheduled triggers only, and manual dispatches too since
+/// SONNY-54 (the name predates that widening; it is a persisted coding key, so it keeps the old
+/// spelling). Running a saved routine is *itself* tier 2 by default, independent of its steps
+/// (`RunRoutineCapabilityAdapter.defaultRiskTier`), so without an explicit exception every
+/// scheduled run would simply stall waiting for an approval nobody is there to give, and every
+/// manual run would re-confirm on each invocation. It is deliberately per-routine rather than a
+/// blanket policy, and it is never a tier-3+ exception: that backstop lives in `AgentRunner`,
+/// which re-assesses at execute time and requires the approved tier to be at least the effective
+/// tier, so a trusted run can only ever carry a tier-2 approval and structurally cannot execute a
+/// tier-3+ plan.
 public struct RoutineSchedule: Codable, Equatable, Sendable {
     public var cadence: RoutineCadence
     public var hour: Int

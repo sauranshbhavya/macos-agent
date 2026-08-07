@@ -1,11 +1,13 @@
 import Foundation
 
-/// The heads-up shown when a user turns on unattended trust for a routine that, as it stands
-/// today, could never actually run unattended.
+/// The heads-up shown when a user turns on per-routine trust for a routine that, as it stands
+/// today, the grant could never actually cover.
 ///
-/// Tier-3+ is never unattended-eligible regardless of the opt-in — `AgentRunner` re-assesses at
-/// execute time and requires the approved tier to be at least the effective tier, so a scheduled
-/// run carrying a tier-2 approval cannot execute a tier-3 plan. As of SONNY-31 that refusal pauses
+/// Tier-3+ is never trust-eligible regardless of the opt-in — `AgentRunner` re-assesses at
+/// execute time and requires the approved tier to be at least the effective tier, so any trusted
+/// run carrying a tier-2 approval cannot execute a tier-3 plan. On a manual run that refusal
+/// simply prompts, exactly as an untrusted run would (SONNY-54). On a scheduled run, as of
+/// SONNY-31 the refusal pauses
 /// the routine's schedule and posts one notice naming the cause, so the user does eventually find
 /// out why; this advisory is what tells them *before* the schedule they just set up switches
 /// itself off on its first firing.
@@ -48,10 +50,10 @@ public enum UnattendedTrustAdvisory {
             return nil
         }
         return """
-        “\(name)” currently needs your explicit approval to run, so Sonny will pause its schedule \
-        and tell you why rather than run it unattended. Sonny re-checks this every time it runs, so \
-        a routine that is fine today can still pause later — for example when a file it writes \
-        already exists.
+        “\(name)” currently needs your explicit approval to run, so Sonny will still ask when you \
+        run it yourself, and will pause its schedule and tell you why rather than run it \
+        unattended. Sonny re-checks this every time it runs, so a routine that is fine today can \
+        still pause later — for example when a file it writes already exists.
         """
     }
 }

@@ -68,6 +68,9 @@ struct UnattendedTrustAdvisoryTests {
         // scheduled run pauses the schedule with one notice, it is not skipped every occurrence.
         #expect(warning.contains("pause"))
         #expect(!warning.contains("skipped"))
+        // SONNY-54 widened the grant to manual runs, so the advisory must say what tier 3+ means
+        // for that half too: the user still gets asked when they run it by hand.
+        #expect(warning.contains("still ask when you run it yourself"))
         // The copy must not promise this is settled — tiers escalate from real run-time conditions,
         // so a clean check today is not a guarantee the routine will run tomorrow.
         #expect(warning.contains("re-checks"))

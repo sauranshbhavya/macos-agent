@@ -628,6 +628,12 @@ final class AgentViewModel: ObservableObject {
         let priorContextForPlanner = priorTaskContextStore.currentContext()
         priorTaskContext = priorContextForPlanner
 
+        // The decision this run will execute under when the user's standing per-routine trust
+        // grant covers it (SONNY-54). Hoisted out of the `do` so the drift catch below can tell a
+        // trusted execution apart from the ordinary auto-run path, whose failure behavior it must
+        // not change.
+        var routineTrustApproval = RiskApprovalDecision.notRequested
+
         do {
             let executor = makeExecutor()
             let runner: AgentRunner
@@ -692,18 +698,31 @@ final class AgentViewModel: ObservableObject {
             case .autoRun:
                 break
             case .lightweightConfirmation, .explicitApproval:
-                approvalRequest = request
-                pendingCommandForPriorTaskContext = submittedCommand
-                pendingTaskHistoryStartedAt = taskHistoryStartedAt
-                finalSummary = "Approval needed before Sonny can act."
-                logStore.append(.confirm, "Approval required for \(request.assessment.effectiveTier.displayName)")
-                recordPriorTaskContext(
-                    command: submittedCommand,
-                    preparedRun: prepared,
-                    status: .approvalNeeded,
-                    summary: finalSummary
-                )
-                return
+                // SONNY-54: a routine the user marked trusted carries the same `.approved(.tier2)`
+                // decision on a manual run that its scheduled runs already carry — the toggle was
+                // always a per-routine trust grant, and presence is the safer case, not the riskier
+                // one. The tier comparison mirrors `AgentRunner.execute`'s own gate, which still
+                // re-assesses and enforces it structurally; this check only decides
+                // pause-versus-proceed, so a tier-3+ assessment pauses at this prompt exactly as it
+                // did before trust covered manual runs.
+                let trustDecision = manualRoutineTrustDecision(for: prepared.plan)
+                if case .approved(let trustedTier) = trustDecision,
+                   trustedTier.rawValue >= request.assessment.effectiveTier.rawValue {
+                    routineTrustApproval = trustDecision
+                } else {
+                    approvalRequest = request
+                    pendingCommandForPriorTaskContext = submittedCommand
+                    pendingTaskHistoryStartedAt = taskHistoryStartedAt
+                    finalSummary = "Approval needed before Sonny can act."
+                    logStore.append(.confirm, "Approval required for \(request.assessment.effectiveTier.displayName)")
+                    recordPriorTaskContext(
+                        command: submittedCommand,
+                        preparedRun: prepared,
+                        status: .approvalNeeded,
+                        summary: finalSummary
+                    )
+                    return
+                }
             case .previewOnly:
                 // Unreachable today: nothing in the app ever builds a `RiskApprovalPolicy` with
                 // `tier2Mode == .previewOnly`, so `AgentRunner` always uses `.default`. The case
@@ -737,11 +756,17 @@ final class AgentViewModel: ObservableObject {
                 return
             }
 
+            let autoApprovalMessage: String
+            if routineTrustApproval == .notRequested {
+                autoApprovalMessage = autoExecute ? "Voice command auto-approved execution" : "Typed command auto-approved execution"
+            } else {
+                autoApprovalMessage = "Manual run approved by this routine's trust setting"
+            }
             let result = try await executePreparedRun(
                 preparedRun: prepared,
                 runner: runner,
-                approvalDecision: .notRequested,
-                confirmationMessage: autoExecute ? "Voice command auto-approved execution" : "Typed command auto-approved execution",
+                approvalDecision: routineTrustApproval,
+                confirmationMessage: autoApprovalMessage,
                 logRiskAssessment: false
             )
             finalSummary = result.summary
@@ -754,6 +779,28 @@ final class AgentViewModel: ObservableObject {
                 startedAt: taskHistoryStartedAt
             )
             refreshSavedItems()
+        } catch RiskApprovalError.approvalRequired(let request) where routineTrustApproval != .notRequested {
+            // The trust grant stopped covering this run in the window between the assessment above
+            // and `AgentRunner.execute`'s own re-assessment — the state-drift class `performApproval`
+            // re-arms on ("the zip already exists" landing mid-flight). A manual run has a user
+            // present, so it prompts exactly as an untrusted run would rather than failing. The
+            // `where` clause keeps the ordinary auto-run path's drift behavior (the generic failure
+            // below) byte-identical: only an execution that actually carried the trust decision may
+            // re-arm here.
+            markAllSteps(.pending)
+            approvalRequest = request
+            pendingCommandForPriorTaskContext = submittedCommand
+            pendingTaskHistoryStartedAt = taskHistoryStartedAt
+            finalSummary = "Approval needed before Sonny can act."
+            logStore.append(.confirm, "Approval required for \(request.assessment.effectiveTier.displayName)")
+            if let preparedRun {
+                recordPriorTaskContext(
+                    command: submittedCommand,
+                    preparedRun: preparedRun,
+                    status: .approvalNeeded,
+                    summary: finalSummary
+                )
+            }
         } catch {
             if isCancellationError(error) {
                 markAllSteps(.canceled)
@@ -1196,12 +1243,15 @@ final class AgentViewModel: ObservableObject {
         applySchedule(schedule, to: routine.name)
     }
 
-    /// Turns the per-routine unattended-run opt-in on or off, returning advisory copy when the
-    /// routine currently assesses at tier 3+ and therefore could not run unattended anyway.
+    /// Turns the per-routine trust opt-in on or off — the grant that lets this routine's runs,
+    /// scheduled and manual alike (SONNY-54), carry a tier-2 approval instead of pausing to ask —
+    /// returning advisory copy when the routine currently assesses at tier 3+ and the grant
+    /// therefore cannot cover it anyway.
     ///
     /// The advisory is a heads-up, never a gate — blocking the opt-in here would be the save-time
     /// tier gating this branch explicitly rejected. It is also best-effort: tiers escalate from
-    /// real run-time conditions, so a routine that reads clean today can still be skipped later.
+    /// real run-time conditions, so a routine that reads clean today can still pause its schedule
+    /// (or prompt on a manual run) later.
     @discardableResult
     func setRoutineUnattendedTrust(_ routine: StoredRoutine, to isTrusted: Bool) -> String? {
         guard var schedule = routine.schedule else {
@@ -1213,6 +1263,37 @@ final class AgentViewModel: ObservableObject {
             return nil
         }
         return UnattendedTrustAdvisory.warning(forRoutineNamed: routine.name, executor: makeExecutor())
+    }
+
+    /// The approval decision a manual dispatch may carry on the user's standing per-routine trust
+    /// grant: `.approved(.tier2)` when the prepared plan is exactly the canonical single-step
+    /// run-routine shape and the named routine is trusted, `.notRequested` otherwise (SONNY-54).
+    ///
+    /// The routine is re-derived from the plan, never taken from a call site: the planner path
+    /// only ever holds the step's `routineName` string, and `runRoutineWidget` deliberately
+    /// round-trips through the same text command a user would type. The lookup goes through
+    /// `routineStore.routine(named:)` — the identical normalized lookup
+    /// `RunRoutineCapabilityAdapter` performs at execute time — so the routine this check reads
+    /// and the routine that actually runs cannot resolve differently. Every failure (no such
+    /// routine, unreadable store, missing name) yields `.notRequested`: a trust check that cannot
+    /// complete relaxes nothing.
+    ///
+    /// Single-step on purpose: the grant covers the routine's own saved steps, so a planner-built
+    /// plan wrapping `run_routine` alongside anything else keeps the full prompt — the extra steps
+    /// were never part of what the user marked trusted.
+    ///
+    /// Internal rather than private so tests can pin the shape rules directly — the planner is not
+    /// injectable at this level, so a mixed plan cannot be produced end-to-end in a test.
+    func manualRoutineTrustDecision(for plan: AgentPlan) -> RiskApprovalDecision {
+        guard plan.steps.count == 1,
+              let step = plan.steps.first,
+              step.operation == .runRoutine,
+              let routineName = step.routineName,
+              let routine = try? routineStore.routine(named: routineName),
+              routine.schedule?.unattendedTrusted == true else {
+            return .notRequested
+        }
+        return .approved(.tier2)
     }
 
     private func applySchedule(_ schedule: RoutineSchedule?, to routineName: String) {

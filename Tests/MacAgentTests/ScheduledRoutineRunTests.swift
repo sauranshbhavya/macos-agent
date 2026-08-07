@@ -686,6 +686,194 @@ struct ScheduledRoutineRunTests {
         #expect(try fixture.routineStore.routine(named: "Morning").schedule?.unattendedTrusted == true)
     }
 
+    // MARK: - Manual runs of a trusted routine (SONNY-54)
+
+    /// The headline behavior: a routine the user marked trusted runs by hand with no tier-2
+    /// prompt, carrying the same `.approved(.tier2)` decision its scheduled runs already carry —
+    /// and none of the *scheduled* run's bookkeeping. A manual run is the user's own task: it
+    /// reports through `finalSummary`, never through `scheduledRunNotice`, and it must not
+    /// advance the streak history or the catch-up baseline that belong to the schedule.
+    @Test
+    func aTrustedRoutineRunByHandSkipsTheTierTwoPrompt() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.saveRoutine(unattendedTrusted: true)
+        let routine = try fixture.routineStore.routine(named: "Morning")
+
+        fixture.viewModel.runRoutineWidget(routine)
+        try await fixture.waitForIdle()
+
+        // No pause at the approval, and the run really completed.
+        #expect(fixture.viewModel.approvalRequest == nil)
+        #expect(fixture.viewModel.isAwaitingApproval == false)
+        #expect(fixture.viewModel.finalSummary.contains("Ran routine Morning"))
+        #expect(fixture.viewModel.errorMessage == nil)
+        // It went through the trust decision, not the plain auto-run path a tier-0 command takes.
+        #expect(fixture.viewModel.logStore.events.contains {
+            $0.message == "Manual run approved by this routine's trust setting"
+        })
+        // No approval UI was involved, so the first-approval education state is untouched.
+        #expect(fixture.viewModel.hasCompletedFirstApproval == false)
+        // And nothing scheduled-side moved: no notice, no streak entry, no baseline advance.
+        #expect(fixture.viewModel.scheduledRunNotice == nil)
+        let saved = try fixture.routineStore.routine(named: "Morning")
+        #expect(saved.effectiveRecentRunDates.isEmpty)
+        #expect(saved.schedule?.lastRunAt == fixture.enabledAt)
+    }
+
+    /// Untrusted means unchanged: the same manual dispatch still pauses at the tier-2 prompt, and
+    /// approving it still runs the routine — the whole prompt-then-approve flow is byte-identical
+    /// to before trust covered manual runs.
+    @Test
+    func anUntrustedRoutineStillPromptsWhenRunByHandAndApprovingRunsIt() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.saveRoutine(unattendedTrusted: false)
+        let routine = try fixture.routineStore.routine(named: "Morning")
+
+        fixture.viewModel.runRoutineWidget(routine)
+        try await fixture.waitForIdle()
+
+        let request = try #require(fixture.viewModel.approvalRequest)
+        #expect(request.assessment.effectiveTier == .tier2)
+        #expect(fixture.viewModel.finalSummary == "Approval needed before Sonny can act.")
+        #expect(!fixture.viewModel.logStore.events.contains {
+            $0.message == "Manual run approved by this routine's trust setting"
+        })
+
+        fixture.viewModel.start()
+        try await fixture.waitForIdle()
+
+        #expect(fixture.viewModel.approvalRequest == nil)
+        #expect(fixture.viewModel.finalSummary.contains("Ran routine Morning"))
+    }
+
+    /// A routine with no schedule has no trust grant at all — `unattendedTrusted` lives on the
+    /// schedule, and this ticket deliberately added no new persisted state — so its manual runs
+    /// keep the full prompt.
+    @Test
+    func aRoutineWithoutAScheduleStillPromptsWhenRunByHand() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.routineStore.save(StoredRoutine(name: "Morning", steps: [fixture.inertStep]))
+        let routine = try fixture.routineStore.routine(named: "Morning")
+
+        fixture.viewModel.runRoutineWidget(routine)
+        try await fixture.waitForIdle()
+
+        #expect(fixture.viewModel.approvalRequest != nil)
+        #expect(fixture.viewModel.finalSummary == "Approval needed before Sonny can act.")
+    }
+
+    /// The tier-3+ backstop on the manual path, end to end: trust never covers an escalated
+    /// routine, so the run pauses at the explicit-approval prompt exactly as an untrusted one
+    /// would — and, unlike the scheduled path, it does *not* pause the schedule: SONNY-31's pause
+    /// is the answer to "nobody is present to approve", and somebody is. Approving then runs it.
+    @Test
+    func aTrustedTierThreeRoutineStillPromptsWhenRunByHand() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.snippetStore.save(StoredSnippet(trigger: ";sig", expansion: "Old text"))
+        try fixture.saveRoutine(
+            unattendedTrusted: true,
+            steps: [
+                AgentStep(
+                    id: "snippet",
+                    operation: .saveSnippet,
+                    description: "Save snippet ;sig.",
+                    searchQuery: ";sig",
+                    draftContent: "New text"
+                )
+            ]
+        )
+        let routine = try fixture.routineStore.routine(named: "Morning")
+
+        fixture.viewModel.runRoutineWidget(routine)
+        try await fixture.waitForIdle()
+
+        // Paused at the prompt, at the escalated tier — the trust grant did not stretch.
+        let request = try #require(fixture.viewModel.approvalRequest)
+        #expect(request.assessment.effectiveTier == .tier3)
+        // The tier-3 action really did not happen yet.
+        #expect(try fixture.snippetStore.snippet(matchingTrigger: ";sig").expansion == "Old text")
+        // And the manual prompt is not the unattended refusal: the schedule stays on, un-paused,
+        // with no scheduled-run notice posted.
+        let schedule = try #require(try fixture.routineStore.routine(named: "Morning").schedule)
+        #expect(schedule.isEnabled)
+        #expect(schedule.pausedReason == nil)
+        #expect(fixture.viewModel.scheduledRunNotice == nil)
+
+        fixture.viewModel.start()
+        try await fixture.waitForIdle()
+
+        #expect(try fixture.snippetStore.snippet(matchingTrigger: ";sig").expansion == "New text")
+    }
+
+    /// The trust decision's own shape rules, pinned directly — the planner is not injectable at
+    /// this level, so a mixed plan cannot be produced end to end. The grant covers exactly the
+    /// canonical single-step run-routine plan and nothing broader: wrap the routine beside any
+    /// other step and the full prompt stays, because those steps were never what the user trusted.
+    @Test
+    func theTrustDecisionCoversOnlyTheCanonicalSingleStepRunRoutinePlan() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.saveRoutine(unattendedTrusted: true)
+
+        let canonical = RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Morning")
+        #expect(fixture.viewModel.manualRoutineTrustDecision(for: canonical) == .approved(.tier2))
+
+        // The same lookup the adapter performs at execute time: normalized, so case differences
+        // in a planner-written name cannot make the check and the execution disagree.
+        let differentCase = RunRoutineCapabilityAdapter.plan(forRoutineNamed: "mOrNiNg")
+        #expect(fixture.viewModel.manualRoutineTrustDecision(for: differentCase) == .approved(.tier2))
+
+        let mixed = AgentPlan(
+            summary: "Run routine Morning, then calculate.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "run-routine",
+                    operation: .runRoutine,
+                    description: "Run saved routine Morning.",
+                    routineName: "Morning"
+                ),
+                fixture.inertStep
+            ]
+        )
+        #expect(fixture.viewModel.manualRoutineTrustDecision(for: mixed) == .notRequested)
+    }
+
+    /// Every unresolvable case fails closed to `.notRequested` — a trust check that cannot be
+    /// completed relaxes nothing.
+    @Test
+    func theTrustDecisionFailsClosedWhenTheRoutineCannotBeResolvedOrIsUntrusted() throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.saveRoutine(unattendedTrusted: false)
+
+        // Saved but untrusted.
+        let untrusted = RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Morning")
+        #expect(fixture.viewModel.manualRoutineTrustDecision(for: untrusted) == .notRequested)
+
+        // No such routine.
+        let ghost = RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Ghost")
+        #expect(fixture.viewModel.manualRoutineTrustDecision(for: ghost) == .notRequested)
+
+        // A run-routine step carrying no name at all.
+        let nameless = AgentPlan(
+            summary: "Run a routine.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "run-routine",
+                    operation: .runRoutine,
+                    description: "Run a saved routine."
+                )
+            ]
+        )
+        #expect(fixture.viewModel.manualRoutineTrustDecision(for: nameless) == .notRequested)
+    }
+
     // MARK: - Schedule authoring
 
     /// The whole point of checkpoint 5: before it, nothing in the app could bring a schedule into
