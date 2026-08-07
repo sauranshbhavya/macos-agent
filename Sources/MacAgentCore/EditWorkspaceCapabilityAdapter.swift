@@ -100,6 +100,9 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
         if details.isEmpty {
             details.append("No change: the workspace already matches this edit.")
         }
+        if let note = edit.scopeOnlyNote {
+            details.append(note)
+        }
         for note in edit.unmatchedRemovalNotes {
             details.append(note)
         }
@@ -260,6 +263,22 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
         /// Apps, URLs, file locations — in that fixed order, so the escalations and the summary read
         /// the same way every time.
         let lists: [EditedList]
+        /// The app names this edit adds that `MacAppCatalog` cannot resolve, read from
+        /// `WorkspaceScopeOnlyApps` rather than re-derived.
+        ///
+        /// SONNY-44's decoupling decision is "normalize on save plus a soft warning at
+        /// creation/**edit** time", and its note to this ticket said the edit path should read the
+        /// three behaviours from the shared rule rather than grow its own. Create and open both
+        /// disclose; adding an unlaunchable app through *this* path used to disclose nothing, so the
+        /// same addition told the user two different things depending on which door it came through.
+        /// Computed over `added`, not over the request: an app already listed adds nothing, so it
+        /// has nothing to disclose.
+        let scopeOnlyAdditions: [String]
+
+        /// The shared wording, or nil when every added app resolves.
+        var scopeOnlyNote: String? {
+            WorkspaceScopeOnlyApps.scopeOnlyNote(for: scopeOnlyAdditions)
+        }
 
         var unmatchedRemovalNotes: [String] {
             lists.compactMap { list in
@@ -289,6 +308,9 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
             }
             if sentences.count == 1 {
                 sentences.append("Nothing changed — the workspace already matched this edit.")
+            }
+            if let note = scopeOnlyNote {
+                sentences.append(note)
             }
             sentences.append(contentsOf: unmatchedRemovalNotes.map { $0 + "." })
             return sentences.joined(separator: " ")
@@ -418,7 +440,15 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
             )
         }
 
-        return WorkspaceEdit(stored: stored, updated: updated, lists: lists)
+        return WorkspaceEdit(
+            stored: stored,
+            updated: updated,
+            lists: lists,
+            scopeOnlyAdditions: WorkspaceScopeOnlyApps.names(
+                in: appArithmetic.added,
+                catalog: context.appCatalog
+            )
+        )
     }
 
     /// Whether a scope actually constrains a kind, read from the canonical lists `verdict(for:)`

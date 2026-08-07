@@ -1195,3 +1195,116 @@ private struct NoopAppOpener: AppOpening {
 private struct NoopFileOpener: FileOpening {
     func openFile(_ url: URL) async throws {}
 }
+
+/// SONNY-44's decoupling decision is "normalize on save plus a soft warning at creation/**edit**
+/// time", and its written note to SONNY-40 asked the edit path to read the behaviours from
+/// `WorkspaceScopeOnlyApps` rather than re-derive them. Create and open both disclosed; edit shipped
+/// without it, so the same addition told the user two different things depending on which door it
+/// came through.
+@Suite
+@MainActor
+struct EditWorkspaceScopeOnlyDisclosureTests {
+    @Test
+    func addingAnAppSonnyCannotLaunchCarriesTheScopeOnlyNoteInBothPreviewAndSummary() async throws {
+        let fixture = try ScopeOnlyFixture()
+        defer { fixture.tearDown() }
+        try fixture.store.save(StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: []))
+        let plan = ScopeOnlyFixture.addAppsPlan(["Microsoft Word"])
+
+        let previews = try fixture.executor.preview(plan: plan)
+        let result = try await fixture.executor.execute(plan: plan) { _, _ in }
+
+        // The exact wording the create path emits, from the one shared builder — asserted against
+        // that builder's own output so the two doors cannot drift to different sentences.
+        let expected = try #require(WorkspaceScopeOnlyApps.scopeOnlyNote(for: ["Microsoft Word"]))
+        #expect(expected == "Microsoft Word isn't an app Sonny can launch — counted for workspace scope only.")
+        #expect(previews.first?.details.contains(expected) == true)
+        #expect(result.summary.contains(expected))
+        // The app is still a real scope member — this is disclosure, never refusal.
+        #expect(try fixture.store.workspace(named: "Client Alpha").apps == ["Safari", "Microsoft Word"])
+    }
+
+    @Test
+    func addingAnAppSonnyCanLaunchCarriesNoNote() async throws {
+        let fixture = try ScopeOnlyFixture()
+        defer { fixture.tearDown() }
+        try fixture.store.save(StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: []))
+        let plan = ScopeOnlyFixture.addAppsPlan(["Notes"])
+
+        let previews = try fixture.executor.preview(plan: plan)
+        let result = try await fixture.executor.execute(plan: plan) { _, _ in }
+
+        #expect(previews.first?.details.allSatisfy { !$0.contains("scope only") } == true)
+        #expect(!result.summary.contains("scope only"))
+    }
+
+    /// An add that changes nothing discloses nothing: the note is computed over what the edit
+    /// actually added, not over what the step asked for.
+    @Test
+    func reAddingAnAppTheWorkspaceAlreadyListsCarriesNoNote() async throws {
+        let fixture = try ScopeOnlyFixture()
+        defer { fixture.tearDown() }
+        try fixture.store.save(
+            StoredWorkspace(name: "Client Alpha", apps: ["Safari", "Microsoft Word"], urls: [])
+        )
+
+        let result = try await fixture.executor.execute(
+            plan: ScopeOnlyFixture.addAppsPlan(["Microsoft Word"])
+        ) { _, _ in }
+
+        #expect(!result.summary.contains("scope only"))
+    }
+
+    @MainActor
+    private struct ScopeOnlyFixture {
+        let root: URL
+        let store: WorkspaceStore
+        let executor: AgentActionExecutor
+
+        init() throws {
+            root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("EditScopeOnlyTests-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+            executor = AgentActionExecutor(
+                whitelist: PathWhitelist(roots: [root]),
+                appOpener: ScopeOnlyNoopAppOpener(),
+                fileOpener: ScopeOnlyNoopFileOpener(),
+                routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
+                workspaceStore: store,
+                shortcutCatalog: FakeShortcutCatalog(names: []),
+                shortcutRunHistoryStore: ShortcutRunHistoryStore(
+                    fileURL: root.appendingPathComponent("shortcuts-history.json")
+                )
+            )
+        }
+
+        func tearDown() {
+            try? FileManager.default.removeItem(at: root)
+        }
+
+        static func addAppsPlan(_ apps: [String]) -> AgentPlan {
+            AgentPlan(
+                summary: "Edit workspace.",
+                requiresConfirmation: true,
+                steps: [
+                    AgentStep(
+                        id: "edit-workspace",
+                        operation: .editWorkspace,
+                        description: "Edit workspace.",
+                        workspaceName: "Client Alpha",
+                        workspaceApps: apps
+                    )
+                ]
+            )
+        }
+    }
+}
+
+private struct ScopeOnlyNoopAppOpener: AppOpening {
+    func open(bundleIdentifier: String) async throws {}
+}
+
+private struct ScopeOnlyNoopFileOpener: FileOpening {
+    func openFile(_ url: URL) async throws {}
+}

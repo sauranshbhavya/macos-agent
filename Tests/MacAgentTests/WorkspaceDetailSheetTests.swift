@@ -758,3 +758,134 @@ private final class SheetTestPasteboardReader: PasteboardReading {
         nil
     }
 }
+
+/// The clarification gate, in the family H1 opened for voice.
+///
+/// A clarification pause looks idle from outside — `performStart`'s defer clears `isRunning` and
+/// `approvalRequest` is nil — so any gate written as `isRunning || isAwaitingApproval` is live during
+/// exactly the state where a second dispatch destroys the first task's continuation. H1 closed the
+/// voice door; these close the sheet's and the cards'.
+@Suite
+@MainActor
+struct ClarificationGateTests {
+    /// **F3(b) — the dispatch guard.** Composing a scope edit during a pause is refused, and the
+    /// pending question survives byte-identical.
+    @Test
+    func composingAScopeEditDuringAClarificationPauseIsRefused() throws {
+        let harness = try ClarificationHarness()
+        defer { harness.tearDown() }
+        harness.viewModel.clarificationQuestion = "Which folder should I scan?"
+        harness.viewModel.command = ""
+
+        harness.viewModel.composeWorkspaceScopeEdit("In my Client Alpha workspace, add the app Notes")
+
+        #expect(harness.viewModel.clarificationQuestion == "Which folder should I scan?")
+        // The composed text never reached `command`, which is the property `submitClarification`
+        // interpolates the Q&A *around* — so the continuation cannot become a hybrid.
+        #expect(harness.viewModel.command == "")
+        #expect(harness.viewModel.widgetPresentationRequest == 0)
+    }
+
+    /// The consequence the guard exists for, asserted on the continuation itself: with the edit
+    /// refused, `submitClarification` builds a continuation carrying only the Q&A over an empty
+    /// command.
+    @Test
+    func theClarificationContinuationCannotCarryAComposedEdit() throws {
+        let harness = try ClarificationHarness()
+        defer { harness.tearDown() }
+        harness.viewModel.clarificationQuestion = "Which folder should I scan?"
+        harness.viewModel.command = ""
+
+        harness.viewModel.composeWorkspaceScopeEdit("In my Client Alpha workspace, remove the app Safari")
+        harness.viewModel.clarificationAnswer = "~/Documents"
+        harness.viewModel.submitClarification()
+
+        // Read from `lastCommand`, not `command`: `start` captures the submitted text and clears
+        // `command` synchronously, so the live property is empty by the time the call returns.
+        #expect(!harness.viewModel.lastCommand.contains("workspace"))
+        #expect(!harness.viewModel.lastCommand.contains("add the app"))
+        #expect(harness.viewModel.lastCommand.contains("Clarification question: Which folder should I scan?"))
+        #expect(harness.viewModel.lastCommand.contains("Clarification answer: ~/Documents"))
+        // Stronger than "does not contain the edit": the submitted text *begins* with the
+        // question, so nothing at all preceded it. `start` trims what it captures, which is why the
+        // literal's leading blank lines are absent here.
+        #expect(harness.viewModel.lastCommand.hasPrefix("Clarification question:"))
+    }
+
+    /// **F3(a) — the entry gate.** The sheet's and card's controls are gated on one shared term that
+    /// includes the pause, so a control that would refuse is not offered.
+    @Test
+    func theInFlightTermTreatsAClarificationPauseAsInFlight() throws {
+        let harness = try ClarificationHarness()
+        defer { harness.tearDown() }
+
+        #expect(harness.viewModel.isTaskInFlight == false)
+        harness.viewModel.clarificationQuestion = "Which folder?"
+        #expect(harness.viewModel.isTaskInFlight)
+        // Not merely "something is set" — the two older terms are still false, which is exactly why
+        // a gate missing the third term was live here.
+        #expect(harness.viewModel.isRunning == false)
+        #expect(harness.viewModel.isAwaitingApproval == false)
+    }
+
+    /// **F5 — the card actions' half of the same family**, closed at the dispatch choke point so one
+    /// term covers Open, Run now, the composer and anything added later.
+    @Test
+    func cardDispatchesDuringAClarificationPauseRefuseRatherThanDiscardTheAnswer() throws {
+        let harness = try ClarificationHarness()
+        defer { harness.tearDown() }
+        let workspace = StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: [])
+        try harness.store.save(workspace)
+        harness.viewModel.refreshSavedItems()
+        harness.viewModel.clarificationQuestion = "Which folder should I scan?"
+
+        harness.viewModel.openWorkspaceWidget(workspace)
+
+        // `openWorkspaceWidget` assigns `command` then calls `start`, which now refuses — so the
+        // paused question is still there to answer.
+        #expect(harness.viewModel.clarificationQuestion == "Which folder should I scan?")
+        #expect(harness.viewModel.isRunning == false)
+
+        harness.viewModel.runRoutineWidget(StoredRoutine(name: "Morning", steps: []))
+
+        #expect(harness.viewModel.clarificationQuestion == "Which folder should I scan?")
+        #expect(harness.viewModel.isRunning == false)
+    }
+
+    /// `canSubmit` is the seam, so the refusal holds for every dispatch rather than per surface —
+    /// and it does **not** block the continuation, because `submitClarification` clears the question
+    /// before re-entering `start`.
+    @Test
+    func theDispatchSeamRefusesWhilePausedAndStillAllowsTheContinuation() throws {
+        let harness = try ClarificationHarness()
+        defer { harness.tearDown() }
+        harness.viewModel.command = "Scan my Desktop"
+        #expect(harness.viewModel.canSubmit)
+
+        harness.viewModel.clarificationQuestion = "Which folder should I scan?"
+        #expect(harness.viewModel.canSubmit == false)
+
+        harness.viewModel.clarificationAnswer = "~/Documents"
+        harness.viewModel.submitClarification()
+        // The question is cleared by `submitClarification` itself, which is what keeps the seam from
+        // blocking the one dispatch that must pass.
+        #expect(harness.viewModel.clarificationQuestion == nil)
+    }
+
+    @MainActor
+    private struct ClarificationHarness {
+        let root: URL
+        let store: WorkspaceStore
+        let viewModel: AgentViewModel
+
+        init() throws {
+            root = try makeSheetTestDirectory()
+            store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+            viewModel = try makeSheetTestViewModel(root: root, workspaceStore: store)
+        }
+
+        func tearDown() {
+            try? FileManager.default.removeItem(at: root)
+        }
+    }
+}

@@ -17,9 +17,13 @@ import Foundation
 /// Widening `MacAppCatalog` instead was considered and declined: it would turn every future listing
 /// gap into a capability grant.
 ///
-/// Two call sites read this rule — `CreateWorkspaceCapabilityAdapter` (what may be listed) and
+/// Three call sites read this rule — `CreateWorkspaceCapabilityAdapter` and
+/// `EditWorkspaceCapabilityAdapter` (what may be listed, by either door) and
 /// `OpenWorkspaceCapabilityAdapter` (what actually launches). They live here together rather than as
-/// two `try? resolve` calls that can drift apart, and so the user-facing wording is written once.
+/// three `try? resolve` calls that can drift apart, and so the user-facing wording is written once.
+/// It said "two" until SONNY-40 added the edit path — a third way to put an app into a workspace —
+/// and shipped it without the disclosure, which is exactly the drift one shared rule exists to make
+/// impossible and a stale count made easy to miss.
 public enum WorkspaceScopeOnlyApps {
     /// The names `catalog` cannot resolve, in the order given, **including repeats**.
     ///

@@ -201,7 +201,11 @@ final class AgentViewModel: ObservableObject {
     /// The last command text actually submitted for real execution — tracked on the shared view
     /// model (not as widget-local UI state) so both the widget's own retry button and a system
     /// notification's "Retry" action, which fires from outside SwiftUI entirely, can resubmit it.
-    private var lastCommand = ""
+    /// `private(set)` rather than `private`: the setter stays inside this type, but the getter is
+    /// readable so a test can assert what a dispatch actually *submitted*. `start` clears `command`
+    /// synchronously right after capturing it, so the live property is empty by the time any caller
+    /// returns — this is the only observable record of the text a run was started with.
+    private(set) var lastCommand = ""
     private var isPushToTalkHotKeyDown = false
     private var pendingCommandForPriorTaskContext: String?
     private var pendingTaskHistoryStartedAt: Date?
@@ -337,11 +341,42 @@ final class AgentViewModel: ObservableObject {
         ProcessInfo.processInfo.environment["OPENAI_TRANSCRIBE_MODEL"] ?? "gpt-4o-mini-transcribe"
     }
 
+    /// True while a task occupies the app: running, waiting on an approval, or **paused on a
+    /// clarification the user has not answered**.
+    ///
+    /// The third term is the one that keeps getting left out. A clarification pause looks idle from
+    /// the outside — `performStart`'s defer sets `isRunning = false` and `approvalRequest` is nil —
+    /// so a gate written as `isRunning || isAwaitingApproval` is live during exactly the state where
+    /// a second dispatch destroys the first task's continuation.
+    ///
+    /// `FloatingWidgetView` computes this same expression privately. It is not consolidated here as
+    /// part of this change because that file is on SONNY-41's never-touch list; hoisting the
+    /// widget's copy onto this property is that file's owner's call, and the two agree today.
+    var isTaskInFlight: Bool {
+        isRunning || isAwaitingApproval || clarificationQuestion != nil
+    }
+
+    /// **The clarification term lives here, at the dispatch choke point, rather than on each
+    /// surface's button gate.**
+    ///
+    /// `start(...)` is the only route into `performStart`, and it is the only caller — so one term
+    /// here refuses every dispatch that would otherwise discard an unanswered clarification:
+    /// `openWorkspaceWidget`, `runRoutineWidget` (whose button lives in a different file entirely),
+    /// the composer submit, and any dispatch added later. The alternative — a term on each card gate
+    /// — is one copy per surface and a silent gap the first time a fourth card action is added,
+    /// which is how this reached the assembled head with the voice half closed and the card half
+    /// open.
+    ///
+    /// It does not break the continuation: `submitClarification` clears `clarificationQuestion`
+    /// *before* re-entering `start`, so answering proceeds exactly as it did. And it is what makes
+    /// `performStart`'s unconditional `clarificationQuestion = nil` unreachable by bypass rather
+    /// than merely unreached — every path to it now passes this guard.
     var canSubmit: Bool {
         if isAwaitingApproval {
             return !isRunning && preparedRun != nil && runner != nil
         }
-        return !isRunning && !isTranscribingVoice && !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return !isRunning && clarificationQuestion == nil && !isTranscribingVoice
+            && !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var canCancel: Bool {
@@ -1195,7 +1230,21 @@ final class AgentViewModel: ObservableObject {
     ///
     /// Summons through `widgetPresentationRequest`, never `FloatingWidgetWindowController.show()`:
     /// SONNY-25 exists to remove the remaining direct callers and this must not add one.
+    /// **Refuses while a clarification is open**, for the reason `dispatchTranscribedCommand`
+    /// records: the entry gate covers the buttons, this covers the timing.
+    ///
+    /// `composeWorkspaceScopeEdit` does not dispatch, so `canSubmit` never sees it — it writes
+    /// straight into `command`, which is the property `submitClarification` interpolates the pause's
+    /// question and answer *around*. Composing during a pause therefore produced a continuation that
+    /// was the unrelated edit text plus the Q&A, re-planned under the paused task's own captured
+    /// workspace binding, so an explicitly-bound task assessed the edit against the wrong
+    /// workspace's boundary. Nothing executed unapproved — but the assessment named the wrong
+    /// boundary, which is the property this branch exists to provide.
     func composeWorkspaceScopeEdit(_ command: String) {
+        guard clarificationQuestion == nil else {
+            logStore.append(.observe, "Workspace edit ignored while a clarification is open.")
+            return
+        }
         pendingWorkspaceBinding = nil
         self.command = command
         widgetPresentationRequest += 1

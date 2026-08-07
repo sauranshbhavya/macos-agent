@@ -2456,7 +2456,7 @@ private struct WorkspacesView: View {
                                     accent: CommandCenterPalette.workspaceAvatarColors[
                                         index % CommandCenterPalette.workspaceAvatarColors.count
                                     ],
-                                    isRunning: viewModel.isRunning || viewModel.isAwaitingApproval,
+                                    isTaskInFlight: viewModel.isTaskInFlight,
                                     open: { viewModel.openWorkspaceWidget(workspace) },
                                     beginTaskHere: { viewModel.beginTaskInWorkspace(workspace) },
                                     markAsTeam: { viewModel.markWorkspaceAsTeam(workspace) },
@@ -2509,7 +2509,7 @@ private struct WorkspacesView: View {
                     accent: CommandCenterPalette.workspaceAvatarColors[
                         accentIndex(for: workspace.name)
                     ],
-                    isRunning: viewModel.isRunning || viewModel.isAwaitingApproval,
+                    isTaskInFlight: viewModel.isTaskInFlight,
                     markAsTeam: { viewModel.markWorkspaceAsTeam(workspace) },
                     compose: { viewModel.composeWorkspaceScopeEdit($0) }
                 )
@@ -2580,7 +2580,7 @@ private struct WorkspaceDetailUnavailableView: View {
 private struct WorkspaceCard: View {
     let presentation: WorkspaceCardPresentation
     let accent: Color
-    let isRunning: Bool
+    let isTaskInFlight: Bool
     let open: () -> Void
     let beginTaskHere: () -> Void
     let markAsTeam: () -> Void
@@ -2633,7 +2633,7 @@ private struct WorkspaceCard: View {
                     Label("Delete", systemImage: "trash")
                 }
                 .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
-                .disabled(isRunning)
+                .disabled(isTaskInFlight)
                 .accessibilityLabel("Delete \(presentation.name)")
                 .help("Delete \(presentation.name)")
                 .confirmationDialog(
@@ -2660,7 +2660,7 @@ private struct WorkspaceCard: View {
                     Text("New task")
                 }
                 .buttonStyle(CommandCenterRowActionStyle())
-                .disabled(isRunning)
+                .disabled(isTaskInFlight)
                 .accessibilityLabel(
                     AgentActivityPresentation.newTaskInWorkspaceLabel(workspaceName: presentation.name)
                 )
@@ -2669,7 +2669,7 @@ private struct WorkspaceCard: View {
                     Text("Open")
                 }
                 .buttonStyle(CommandCenterRowActionStyle())
-                .disabled(isRunning)
+                .disabled(isTaskInFlight)
                 .accessibilityLabel("Open \(presentation.name)")
             }
         }
@@ -2752,7 +2752,7 @@ private struct WorkspaceCard: View {
 private struct WorkspaceDetailView: View {
     let presentation: WorkspaceDetailPresentation
     let accent: Color
-    let isRunning: Bool
+    let isTaskInFlight: Bool
     let markAsTeam: () -> Void
     let compose: (String) -> Void
     @Environment(\.dismiss) private var dismiss
@@ -2878,7 +2878,7 @@ private struct WorkspaceDetailView: View {
                     Label("Add", systemImage: "plus")
                 }
                 .buttonStyle(CommandCenterRowActionStyle())
-                .disabled(isRunning)
+                .disabled(isTaskInFlight)
                 .accessibilityLabel(section.addAccessibilityLabel)
             }
 
@@ -2951,7 +2951,7 @@ private struct WorkspaceDetailView: View {
                 Label("Remove", systemImage: "minus")
             }
             .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
-            .disabled(isRunning)
+            .disabled(isTaskInFlight)
             .accessibilityLabel(entry.removeAccessibilityLabel)
             .help(entry.sharedRemovalNote ?? entry.removeAccessibilityLabel)
         }
