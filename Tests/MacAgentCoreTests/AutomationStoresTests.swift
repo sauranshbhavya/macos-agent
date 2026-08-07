@@ -252,6 +252,8 @@ struct AutomationStoresTests {
         )
 
         #expect(try store.routine(named: "Morning").steps.count == 3)
+    }
+
     /// A `workspaces.json` written before file locations existed, hand-written rather than encoded
     /// from the current struct — a fixture built by encoding `StoredWorkspace` today would already
     /// carry the key and could never catch a missing-key regression on a real pre-existing file.
