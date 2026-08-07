@@ -24,6 +24,7 @@ public enum DefaultCapabilityAdapters {
             SaveRoutineCapabilityAdapter(),
             RunRoutineCapabilityAdapter(),
             CreateWorkspaceCapabilityAdapter(),
+            EditWorkspaceCapabilityAdapter(),
             OpenWorkspaceCapabilityAdapter(),
             InvokeShortcutCapabilityAdapter(),
             MetadataOnlyCapabilityAdapter(metadata: clarify)

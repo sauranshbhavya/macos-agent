@@ -84,12 +84,13 @@ struct AutomationStoresTests {
     /// silent addition fail, and the reason the per-operation tests below can be written as a loop
     /// without being self-fulfilling.
     @Test
-    func theForbiddenStepListIsExactlyTheSixOperationsRoutinesMayNotContain() {
+    func theForbiddenStepListIsExactlyTheSevenOperationsRoutinesMayNotContain() {
         #expect(
             StoredRoutine.forbiddenStepOperations == [
                 .saveRoutine,
                 .runRoutine,
                 .createWorkspace,
+                .editWorkspace,
                 .openWorkspace,
                 .clarify,
                 .unsupported
@@ -254,11 +255,161 @@ struct AutomationStoresTests {
         #expect(try store.routine(named: "Morning").steps.count == 3)
     }
 
+    /// A `workspaces.json` written before file locations existed, hand-written rather than encoded
+    /// from the current struct — a fixture built by encoding `StoredWorkspace` today would already
+    /// carry the key and could never catch a missing-key regression on a real pre-existing file.
+    @Test
+    func aWorkspacesFileWrittenBeforeFileLocationsExistedStillDecodes() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("workspaces.json")
+        let legacyJSON = """
+        {
+            "research": {
+                "name": "Research",
+                "apps": ["Safari"],
+                "urls": ["https://example.com/reference"],
+                "teamType": "solo"
+            }
+        }
+        """
+        try Data(legacyJSON.utf8).write(to: url, options: .atomic)
+        let store = WorkspaceStore(fileURL: url, encryption: fixedKeyEncryption())
+
+        let workspace = try store.workspace(named: "Research")
+
+        #expect(workspace.fileLocations == nil)
+        #expect(workspace.effectiveFileLocations == [])
+        #expect(workspace.apps == ["Safari"])
+    }
+
+    /// `CreateWorkspaceCapabilityAdapter` builds a fresh `StoredWorkspace(name:apps:urls:)` on every
+    /// save, so without merge-preserve, re-creating a workspace by natural language would silently
+    /// delete its restriction scope — a boundary the user never consented to dropping.
+    @Test
+    func savingAWorkspaceWithNilFileLocationsPreservesTheStoredOnes() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try store.save(
+            StoredWorkspace(
+                name: "Client Alpha",
+                apps: ["Safari"],
+                urls: [],
+                fileLocations: ["~/Documents/ClientAlpha"]
+            )
+        )
+
+        try store.save(StoredWorkspace(name: "Client Alpha", apps: ["Safari", "Notes"], urls: []))
+
+        let stored = try store.workspace(named: "Client Alpha")
+        #expect(stored.fileLocations == ["~/Documents/ClientAlpha"])
+        #expect(stored.apps == ["Safari", "Notes"])
+    }
+
+    /// SONNY-43, folded into SONNY-40. `CreateWorkspaceCapabilityAdapter` builds a fresh
+    /// `StoredWorkspace(name:apps:urls:)` with no team type at all, so before the merge a user who
+    /// said "create a workspace called Client Alpha with Safari" — a phrase about apps — silently
+    /// demoted a workspace they had marked as their team's back to solo.
+    @Test
+    func savingAWorkspaceWithNilTeamTypePreservesTheStoredOne() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try store.save(
+            StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: [], teamType: .team)
+        )
+
+        // Exactly what the natural-language re-create path constructs.
+        try store.save(StoredWorkspace(name: "Client Alpha", apps: ["Safari", "Notes"], urls: []))
+
+        let stored = try store.workspace(named: "Client Alpha")
+        #expect(stored.teamType == .team)
+        #expect(stored.effectiveTeamType == .team)
+        #expect(stored.apps == ["Safari", "Notes"])
+    }
+
+    /// The other half of `teamType`'s merge rule, and the reason it is a merge rather than an
+    /// unconditional carry-forward: a caller that *states* a team type still wins. Nothing demotes a
+    /// team workspace today, but a rule that could not express a demotion would be a one-way door.
+    @Test
+    func savingAWorkspaceWithAnExplicitTeamTypeReplacesTheStoredOne() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try store.save(
+            StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: [], teamType: .team)
+        )
+
+        try store.save(
+            StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: [], teamType: .solo)
+        )
+
+        #expect(try store.workspace(named: "Client Alpha").teamType == .solo)
+    }
+
+    /// The other half of the same contract: nil means "not talking about file locations", `[]` means
+    /// "clear them", so an edit path that empties the list is never silently ignored.
+    @Test
+    func savingAWorkspaceWithAnEmptyFileLocationsListClearsThem() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try store.save(
+            StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: [], fileLocations: ["~/Documents/ClientAlpha"])
+        )
+
+        try store.save(StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: [], fileLocations: []))
+
+        let stored = try store.workspace(named: "Client Alpha")
+        #expect(stored.fileLocations == [])
+        #expect(stored.effectiveFileLocations == [])
+    }
+
+    @Test
+    func savingAWorkspaceWithNewFileLocationsReplacesTheStoredOnes() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try store.save(
+            StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: [], fileLocations: ["~/Documents/Old"])
+        )
+
+        try store.save(
+            StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: [], fileLocations: ["~/Documents/New"])
+        )
+
+        #expect(try store.workspace(named: "Client Alpha").fileLocations == ["~/Documents/New"])
+    }
+
+    /// The merge only applies to a workspace that already exists — a brand-new one keeps whatever it
+    /// was created with, including nothing.
+    @Test
+    func savingANewWorkspaceWithNilFileLocationsLeavesThemUnset() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+
+        try store.save(StoredWorkspace(name: "Fresh", apps: ["Safari"], urls: []))
+
+        #expect(try store.workspace(named: "Fresh").fileLocations == nil)
+    }
+
     private func makeDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("AutomationStoresTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+
+    private func fixedKeyEncryption() -> LocalStorageEncryption {
+        LocalStorageEncryption(keyManager: FixedAutomationStoreKeyManager())
+    }
+}
+
+private struct FixedAutomationStoreKeyManager: LocalStorageKeyManaging {
+    func keyData() throws -> Data {
+        Data(repeating: 0x24, count: 32)
     }
 }
 

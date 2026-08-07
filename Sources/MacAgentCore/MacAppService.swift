@@ -69,7 +69,12 @@ public struct MacAppCatalog: Equatable, Sendable {
         apps.map(\.displayName).joined(separator: ", ")
     }
 
-    private static func normalize(_ value: String) -> String {
+    /// The one app-name normalization in this module. Internal rather than private so a name the
+    /// catalog *cannot* resolve is still folded the same way `resolve` would have folded it —
+    /// `WorkspaceScope.appKey`'s fallback is the only such caller. A second, weaker folding there
+    /// would make "Microsoft Word" and "MicrosoftWord" different apps to workspace scope while being
+    /// the same app to everything else.
+    static func normalize(_ value: String) -> String {
         value
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)

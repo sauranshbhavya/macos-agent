@@ -278,6 +278,706 @@ struct ProductShellTests {
         #expect(application.activationPolicy() == .accessory)
     }
 
+    // MARK: - Per-task workspace binding (SONNY-38)
+    //
+    // The binding is what makes the rejected persistent "active workspace" survivable, and the
+    // entire difference between the two designs is lifecycle — so the lifecycle is what these
+    // assert, not just the happy path.
+
+    /// AC1 — a command naming a saved workspace binds to it; one naming none does not.
+    @Test
+    func aCommandNamingASavedWorkspaceBindsToItAndOneNamingNoneDoesNot() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let record = StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        try fixture.workspaceStore.save(record)
+        viewModel.refreshSavedItems()
+
+        viewModel.command = "open workspace Research"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        // `lastAssessedScope` rather than `activeTaskScope`: the live binding is correctly
+        // `.unscoped` again by now, so the value the assessment actually used is what to check.
+        #expect(viewModel.lastAssessedScope == .scoped(WorkspaceScope(workspace: record)))
+
+        viewModel.command = "= 1 + 1"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.lastAssessedScope == .unscoped)
+    }
+
+    /// AC3 — **the test that protects the rejected persistent-active-workspace decision.** It is not
+    /// incidental coverage: a second command issued immediately after a bound task must run
+    /// unscoped, because inheriting the previous task's workspace is precisely the leak that design
+    /// was turned down for. If this ever passes only because the second command happens to name
+    /// nothing, it has stopped testing what it exists for.
+    @Test
+    func aSecondCommandAfterABoundTaskRunsUnscopedAndNeverInheritsTheBinding() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        try fixture.workspaceStore.save(
+            StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        )
+        viewModel.refreshSavedItems()
+
+        viewModel.command = "open workspace Research"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+        #expect(viewModel.activeTaskScope == .unscoped)  // AC2: cleared on completion.
+
+        viewModel.command = "= 2 + 2"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.lastAssessedScope == .unscoped)
+        #expect(viewModel.activeTaskScope == .unscoped)
+    }
+
+    /// AC2's failure path, asserted on its own. An earlier version used a command the instant
+    /// resolver could not handle, so it threw in the planner at `try OpenAIPlanner(...)` — *before*
+    /// scope resolution — and `activeTaskScope` was `.unscoped` throughout whether or not anything
+    /// cleared it. The task has to bind first and fail after.
+    ///
+    /// The failure lands in `performApproval`'s generic catch, which is the post-binding failure
+    /// actually reachable from a test: inside `performStart` the plan, the binding and the first
+    /// assessment all happen in one synchronous stretch, so there is no window to make an
+    /// already-bound task fail there. This pins `performApproval`'s clear — deleting it reddens
+    /// exactly this test. `performStart`'s own terminal clear is pinned separately by
+    /// `aSecondCommandAfterABoundTaskRunsUnscopedAndNeverInheritsTheBinding`, whose completion path
+    /// runs through the same guarded defer.
+    @Test
+    func theBindingClearsWhenABoundTaskFails() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        try fixture.workspaceStore.save(
+            StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        )
+        try fixture.routineStore.save(
+            StoredRoutine(
+                name: "Morning",
+                steps: [
+                    AgentStep(id: "a", operation: .openURL, description: "In scope.", targetURL: "https://github.com/sonny")
+                ]
+            )
+        )
+        viewModel.refreshSavedItems()
+
+        viewModel.command = "run routine Morning"
+        viewModel.start(workspaceBinding: "Research")
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        // Bound, and paused on `run_routine`'s tier-2 confirmation — the premise, guarded.
+        #expect(viewModel.isAwaitingApproval)
+        #expect(viewModel.activeTaskScope != .unscoped)
+
+        // Now make the run fail after the binding exists: the routine it names is gone, so the
+        // re-assessment inside `execute` throws rather than escalating.
+        try fixture.routineStore.delete(routineNamed: "Morning")
+
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.errorMessage != nil)
+        #expect(!viewModel.isAwaitingApproval)
+        #expect(viewModel.activeTaskScope == .unscoped)
+    }
+
+    /// AC2's cancellation path — the third of the three separate assertions the criterion requires.
+    /// The clear it pins is the one whose own code comment calls it "the exact leak the rejected
+    /// persistent-active-workspace design was rejected for", and nothing pinned it before.
+    @Test
+    func theBindingClearsWhenABoundTaskIsCancelled() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        try fixture.workspaceStore.save(
+            StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        )
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Drafting", apps: ["Notes"], urls: []))
+        viewModel.refreshSavedItems()
+
+        viewModel.command = "open workspace Drafting"
+        viewModel.start(workspaceBinding: "Research")
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.isAwaitingApproval)
+        #expect(viewModel.activeTaskScope != .unscoped)
+
+        viewModel.cancelCurrentRun()
+
+        #expect(viewModel.activeTaskScope == .unscoped)
+    }
+
+    /// F6 — the other half of the unresolvable-name branch. A name that resolves to no stored record
+    /// must bind `.unscoped`, **not** a scoped-but-empty `WorkspaceScope`: an empty scope reports
+    /// `.unconstrained` for every kind and would read as "a workspace that restricts nothing" rather
+    /// than "no workspace at all". Only reachable through `start(workspaceBinding:)`, so it goes live
+    /// with B4's card dispatch.
+    @Test
+    func aBindingNamingAWorkspaceThatNoLongerExistsResolvesToUnscopedNotAnEmptyScope() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        viewModel.refreshSavedItems()
+
+        viewModel.command = "= 1 + 1"
+        viewModel.start(workspaceBinding: "DeletedSinceDispatch")
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.lastAssessedScope == .unscoped)
+        #expect(viewModel.lastAssessedScope != .scoped(
+            WorkspaceScope(workspace: StoredWorkspace(name: "DeletedSinceDispatch", apps: [], urls: []))
+        ))
+    }
+
+    /// AC6 — a pending approval must not leave a binding behind when in-memory state is cleared.
+    ///
+    /// The fixture has to *actually pause*. An earlier version of this test ran "open workspace
+    /// Research" while bound to Research — in scope, so it produced no escalation, auto-ran to
+    /// completion, and had already cleared the binding before `deleteLocalData()` was ever called.
+    /// It could not fail. This binds to Research and opens Drafting, whose stored apps fall outside
+    /// Research, so the run escalates to tier 3 and genuinely sits awaiting approval. The state is
+    /// reachable in the app: `deleteLocalData` guards on `!isRunning`, not `!isAwaitingApproval`.
+    @Test
+    func clearingInMemoryStateWithAnApprovalPendingLeavesNoStaleBinding() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        try fixture.workspaceStore.save(
+            StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        )
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Drafting", apps: ["Notes"], urls: []))
+        viewModel.refreshSavedItems()
+
+        viewModel.command = "open workspace Drafting"
+        viewModel.start(workspaceBinding: "Research")
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        // The premise, guarded rather than assumed — without this the assertion below is vacuous.
+        #expect(viewModel.isAwaitingApproval)
+        #expect(viewModel.activeTaskScope != .unscoped)
+
+        viewModel.deleteLocalData()
+
+        #expect(viewModel.activeTaskScope == .unscoped)
+    }
+
+    /// F1's regression test — a **re-armed** approval is a second pause, not a terminal exit, so the
+    /// binding must survive it.
+    ///
+    /// `AgentRunner.execute` re-assesses on every call and throws `.approvalRequired` when the
+    /// re-assessed tier exceeds the approved one — ordinary state drift landing between the approval
+    /// and the execution. Simulated here the way it really happens: the routine is rewritten in the
+    /// store while its approval sits pending, so the re-assessment sees an out-of-scope step the
+    /// first one did not.
+    ///
+    /// Under an unconditional clear the binding is gone by the time the second approval executes,
+    /// and nothing about the outcome changes — the run still proceeds, because an unscoped
+    /// re-assessment can only ever be lower than the scoped one it is compared against. Only the
+    /// binding itself shows it.
+    @Test
+    func aReArmedApprovalKeepsItsBindingBecauseARePauseIsNotATerminalExit() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let research = StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        try fixture.workspaceStore.save(research)
+        // In scope to begin with, so the first assessment is `run_routine`'s own tier 2.
+        try fixture.routineStore.save(
+            StoredRoutine(
+                name: "Morning",
+                steps: [
+                    AgentStep(id: "a", operation: .openURL, description: "In scope.", targetURL: "https://github.com/sonny")
+                ]
+            )
+        )
+        viewModel.refreshSavedItems()
+
+        viewModel.command = "run routine Morning"
+        viewModel.start(workspaceBinding: "Research")
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.isAwaitingApproval)
+        #expect(viewModel.approvalRequest?.assessment.effectiveTier == .tier2)
+        #expect(viewModel.activeTaskScope == .scoped(WorkspaceScope(workspace: research)))
+
+        // The drift: the routine now leaves the workspace, so re-assessment lands at tier 3 — above
+        // the tier 2 the user is about to approve.
+        try fixture.routineStore.save(
+            StoredRoutine(
+                name: "Morning",
+                steps: [
+                    AgentStep(id: "a", operation: .openURL, description: "Out of scope.", targetURL: "https://example.com/page")
+                ]
+            )
+        )
+
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        // Re-armed rather than executed...
+        #expect(viewModel.isAwaitingApproval)
+        #expect(viewModel.approvalRequest?.assessment.effectiveTier == .tier3)
+        // ...and the binding is still here, which is the whole finding.
+        #expect(viewModel.activeTaskScope == .scoped(WorkspaceScope(workspace: research)))
+        // Nothing was opened while it sat re-armed — and this reads a fake, which is also the
+        // standing proof that this fixture never reaches the real browser.
+        #expect(fixture.browserOpener.openedURLs.isEmpty)
+
+        // Approving the second time really executes, through the injected seam.
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(!viewModel.isAwaitingApproval)
+        #expect(fixture.browserOpener.openedURLs.map(\.absoluteString) == ["https://example.com/page"])
+        #expect(viewModel.activeTaskScope == .unscoped)
+    }
+
+    /// AC4 — the scope used at `approvalRequest` is the scope used inside `execute`.
+    ///
+    /// This one needs the log to prove anything, and that is the point of the criterion. `execute`
+    /// re-assesses fresh; if it re-assessed `.unscoped` against a scoped approval, the run would
+    /// still succeed — the stale-approval guard compares an approved tier 3 against a now-lower
+    /// effective tier and passes — so **no outcome differs**. The only observable trace is that the
+    /// re-assessment logs its own `risk.escalated` line, and an unscoped one has no scope reason to
+    /// log.
+    ///
+    /// The fixture is the one shape that produces an out-of-scope escalation through the instant
+    /// path: bound to Research by an explicit dispatch, opening Drafting, whose own stored apps are
+    /// compared against Research and fall outside it.
+    @Test
+    func theScopeUsedAtApprovalIsTheSameScopeUsedInsideExecute() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        try fixture.workspaceStore.save(
+            StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        )
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Drafting", apps: ["Notes"], urls: []))
+        viewModel.refreshSavedItems()
+
+        viewModel.command = "open workspace Drafting"
+        viewModel.start(workspaceBinding: "Research")
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        // The scope really did fire: an out-of-scope escalation raised this to an approval.
+        #expect(viewModel.isAwaitingApproval)
+        let reason = "Notes is not part of the Research workspace."
+        #expect(viewModel.approvalRequest?.assessment.escalations.map(\.reason).contains(reason) == true)
+
+        let beforeApproval = viewModel.logStore.events.filter { $0.message.contains(reason) }.count
+        #expect(beforeApproval == 1)
+
+        // Approving re-enters `execute`, which assesses again and logs again.
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        let afterApproval = viewModel.logStore.events.filter { $0.message.contains(reason) }.count
+        #expect(afterApproval == 2)
+    }
+
+    // MARK: - "New task in this workspace" card dispatch (SONNY-39)
+
+    /// AC1 — the card action sets the binding and raises the widget. Asserted on the view model,
+    /// per this repo's rule that presentation logic needing a test leaves the view.
+    ///
+    /// AC2 is checkable in the same assertion: the summon is a `widgetPresentationRequest` bump,
+    /// not a `FloatingWidgetWindowController.show()` call. There is no direct controller call to
+    /// assert the absence of — the diff carries that — but the counter moving is the positive half.
+    @Test
+    func theCardDispatchBindsTheNextCommandAndRaisesTheWidget() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let research = StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        try fixture.workspaceStore.save(research)
+        viewModel.refreshSavedItems()
+        let requestsBefore = viewModel.widgetPresentationRequest
+
+        viewModel.beginTaskInWorkspace(research)
+
+        #expect(viewModel.pendingWorkspaceBinding == "Research")
+        #expect(viewModel.boundWorkspaceName == "Research")
+        #expect(viewModel.widgetPresentationRequest == requestsBefore + 1)
+        // An *empty* composer — the whole point is that the user types the task themselves, rather
+        // than the synthesized "Open my X workspace" string the Open button uses.
+        #expect(viewModel.command.isEmpty)
+        // And nothing started.
+        #expect(!viewModel.isRunning)
+        #expect(viewModel.plan == nil)
+    }
+
+    /// The dispatch flows through SONNY-38's existing explicit-binding slot rather than a second
+    /// path, so a command naming a *different* workspace still loses to the card — the precedence
+    /// rule is inherited, not re-implemented.
+    @Test
+    func aCardDispatchStillBeatsAConflictingWorkspaceNamedInTheCommand() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let drafting = StoredWorkspace(name: "Drafting", apps: ["Notes"], urls: [])
+        try fixture.workspaceStore.save(
+            StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        )
+        try fixture.workspaceStore.save(drafting)
+        viewModel.refreshSavedItems()
+
+        viewModel.beginTaskInWorkspace(drafting)
+        viewModel.command = "open workspace Research"
+        viewModel.start(origin: .widget, fromComposer: true)
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.lastAssessedScope == .scoped(WorkspaceScope(workspace: drafting)))
+    }
+
+    /// AC3 — clearing the binding leaves typed text alone. The two live on the same row, and a
+    /// clear that also wiped the composer would lose work the user had already done.
+    @Test
+    func clearingTheBindingLeavesTheComposerTextIntact() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let research = StoredWorkspace(name: "Research", apps: ["Safari"], urls: [])
+        try fixture.workspaceStore.save(research)
+        viewModel.refreshSavedItems()
+
+        viewModel.beginTaskInWorkspace(research)
+        viewModel.command = "half-written command"
+        viewModel.clearPendingWorkspaceBinding()
+
+        #expect(viewModel.pendingWorkspaceBinding == nil)
+        #expect(viewModel.boundWorkspaceName == nil)
+        #expect(viewModel.command == "half-written command")
+    }
+
+    /// AC4 — a bound composer with nothing typed submits nothing, and keeps its binding so the user
+    /// can carry on typing rather than having to click the card again.
+    @Test
+    func submittingAnEmptyCommandFromABoundComposerDoesNothingAndKeepsTheBinding() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let research = StoredWorkspace(name: "Research", apps: ["Safari"], urls: [])
+        try fixture.workspaceStore.save(research)
+        viewModel.refreshSavedItems()
+
+        viewModel.beginTaskInWorkspace(research)
+        viewModel.start(origin: .widget, fromComposer: true)
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.plan == nil)
+        #expect(viewModel.lastAssessedScope == .unscoped)
+        #expect(viewModel.pendingWorkspaceBinding == "Research")
+    }
+
+    /// AC1's other half and manual item 3: the indicator is per task. It survives the hand-off from
+    /// the pending slot to the in-flight binding, and disappears when the task ends — it must never
+    /// become the rejected persistent "active workspace" mode.
+    @Test
+    func theBindingIndicatorSurvivesSubmitAndDisappearsWhenTheTaskEnds() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let research = StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        try fixture.workspaceStore.save(research)
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Drafting", apps: ["Notes"], urls: []))
+        viewModel.refreshSavedItems()
+
+        viewModel.beginTaskInWorkspace(research)
+        #expect(viewModel.boundWorkspaceName == "Research")
+
+        // A command that pauses on an approval, so there is a stable in-flight window to observe.
+        // Bound to Research, opening Drafting — whose stored app falls outside Research.
+        viewModel.command = "open workspace Drafting"
+        viewModel.start(origin: .widget, fromComposer: true)
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        // Mid-task: the pending slot has been consumed, so the indicator can only still be showing
+        // because it falls back to the *in-flight* binding. Without that fallback the chip vanishes
+        // the instant the user hits return, which is exactly when they most need to see it.
+        #expect(viewModel.isAwaitingApproval)
+        #expect(viewModel.pendingWorkspaceBinding == nil)
+        #expect(viewModel.boundWorkspaceName == "Research")
+        #expect(viewModel.lastAssessedScope == .scoped(WorkspaceScope(workspace: research)))
+
+        viewModel.cancelCurrentRun()
+
+        // ...and it is gone now that the task is over — per task, never a mode.
+        #expect(viewModel.boundWorkspaceName == nil)
+        #expect(viewModel.pendingWorkspaceBinding == nil)
+    }
+
+    /// AC6 — the existing Open action is unchanged, pinned rather than inspected. It still
+    /// synthesizes its own command and runs it in one click, and it leaves no pending binding
+    /// behind, because it is not the card dispatch.
+    @Test
+    func theExistingOpenActionIsUnchangedByTheNewCardDispatch() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let research = StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        try fixture.workspaceStore.save(research)
+        viewModel.refreshSavedItems()
+
+        let drafting = StoredWorkspace(name: "Drafting", apps: ["Notes"], urls: [])
+        try fixture.workspaceStore.save(drafting)
+        viewModel.refreshSavedItems()
+
+        // The interaction the name claims, and the one that was actually broken: arm a card
+        // dispatch on a *different* workspace first. Before the fix, Open inherited it and opened
+        // Research under Drafting's boundary — a scope approval naming a workspace the user never
+        // mentioned, on the one-click action the contract says must be unchanged.
+        viewModel.beginTaskInWorkspace(drafting)
+        viewModel.openWorkspaceWidget(research)
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        // Open ran under its own plan-derived binding, never the pending one...
+        #expect(viewModel.lastAssessedScope == .scoped(WorkspaceScope(workspace: research)))
+        // ...so no scope prompt at all, and certainly none naming Drafting.
+        #expect(!viewModel.isAwaitingApproval)
+        #expect(viewModel.approvalRequest == nil)
+        // One click, exactly as before.
+        #expect(viewModel.plan?.steps.first?.operation == .openWorkspace)
+        #expect(fixture.appOpener.openedBundleIDs == ["com.apple.Safari"])
+        #expect(fixture.browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com"])
+        // And the abandoned arm is dead rather than waiting for the next victim.
+        #expect(viewModel.pendingWorkspaceBinding == nil)
+    }
+
+    /// F2's other inheriting entry point. `runRoutineWidget` is a Command Center row action, not a
+    /// composer dispatch, so an armed chip must neither scope it nor survive it.
+    @Test
+    func aRoutineRowActionNeitherInheritsNorSurvivesAnArmedCardBinding() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let drafting = StoredWorkspace(name: "Drafting", apps: ["Notes"], urls: [])
+        try fixture.workspaceStore.save(drafting)
+        try fixture.routineStore.save(
+            StoredRoutine(
+                name: "Morning",
+                steps: [AgentStep(id: "a", operation: .openURL, description: "Go.", targetURL: "https://github.com/sonny")]
+            )
+        )
+        viewModel.refreshSavedItems()
+
+        viewModel.beginTaskInWorkspace(drafting)
+        viewModel.runRoutineWidget(try fixture.routineStore.routine(named: "Morning"))
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.lastAssessedScope == .unscoped)
+        #expect(viewModel.pendingWorkspaceBinding == nil)
+    }
+
+    /// F4 — "delete all local data" must take the pending slot with everything else. The workspace
+    /// itself is gone by then; a chip still naming it, and a next command still binding to it, is
+    /// the same defect SONNY-38's review filed against this function one ticket earlier.
+    @Test
+    func clearingInMemoryStateAlsoDropsAnArmedCardBinding() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let research = StoredWorkspace(name: "Research", apps: ["Safari"], urls: [])
+        try fixture.workspaceStore.save(research)
+        viewModel.refreshSavedItems()
+
+        viewModel.beginTaskInWorkspace(research)
+        #expect(viewModel.pendingWorkspaceBinding == "Research")
+
+        viewModel.deleteLocalData()
+
+        #expect(viewModel.pendingWorkspaceBinding == nil)
+        #expect(viewModel.boundWorkspaceName == nil)
+    }
+
+    /// A retry is a re-dispatch of the last command, not a composer submission, so it must not pick
+    /// up an arm either — and the arm must not outlive it.
+    @Test
+    func aRetryNeitherInheritsNorSurvivesAnArmedCardBinding() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let drafting = StoredWorkspace(name: "Drafting", apps: ["Notes"], urls: [])
+        try fixture.workspaceStore.save(drafting)
+        viewModel.refreshSavedItems()
+
+        viewModel.command = "= 1 + 1"
+        viewModel.start(origin: .widget, fromComposer: true)
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        viewModel.beginTaskInWorkspace(drafting)
+        viewModel.retryLastCommand()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.lastAssessedScope == .unscoped)
+        #expect(viewModel.pendingWorkspaceBinding == nil)
+    }
+
+    /// Last-wins: arming a second card before submitting replaces the first rather than stacking.
+    @Test
+    func aSecondCardArmBeforeSubmitReplacesTheFirst() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let research = StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        let drafting = StoredWorkspace(name: "Drafting", apps: ["Notes"], urls: [])
+        try fixture.workspaceStore.save(research)
+        try fixture.workspaceStore.save(drafting)
+        viewModel.refreshSavedItems()
+
+        viewModel.beginTaskInWorkspace(research)
+        viewModel.beginTaskInWorkspace(drafting)
+        #expect(viewModel.boundWorkspaceName == "Drafting")
+
+        viewModel.command = "= 1 + 1"
+        viewModel.start(origin: .widget, fromComposer: true)
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.lastAssessedScope == .scoped(WorkspaceScope(workspace: drafting)))
+    }
+
+    /// H1(a) — the reviewer's PROBED-2/3 sequence, now unreproducible. A clarification pause holds
+    /// `activeTaskScope`, so the chip names the *paused* task's workspace while a card arm sits
+    /// invisible behind it. Voice was the one dispatch route with no clarification term, so it
+    /// consumed that arm and ran scoped to a workspace the chip never named.
+    ///
+    /// Driven at the level the tests actually reach — the same `start(autoExecute:origin:
+    /// fromComposer:)` the transcription completion issues. Stated per the D4 standard: the
+    /// `canUseVoice` half of the gate is **not** exercised here, because the fixture has no API key
+    /// so `canUseVoice` is already false for an unrelated reason; that half is readable, not
+    /// testable, and its proof is the declaration.
+    @Test
+    func voiceCannotConsumeAnArmWhileAClarificationIsPending() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let alpha = StoredWorkspace(name: "Alpha", apps: ["Safari"], urls: [])
+        let research = StoredWorkspace(name: "Research", apps: ["Notes"], urls: [])
+        try fixture.workspaceStore.save(alpha)
+        try fixture.workspaceStore.save(research)
+        viewModel.refreshSavedItems()
+
+        // A task bound to Alpha, paused on a real clarification.
+        viewModel.command = "="
+        viewModel.start(origin: .widget, workspaceBinding: "Alpha", fromComposer: true)
+        try await waitForViewModelToBecomeIdle(viewModel)
+        #expect(viewModel.clarificationQuestion != nil)
+        #expect(viewModel.boundWorkspaceName == "Alpha")
+
+        // A second workspace armed from its card — the button is live in this state, and the chip
+        // still says Alpha because `activeTaskScope` wins.
+        viewModel.beginTaskInWorkspace(research)
+        #expect(viewModel.boundWorkspaceName == "Alpha")
+        #expect(viewModel.pendingWorkspaceBinding == "Research")
+
+        // The dispatch the transcription completion issues. It must not run.
+        viewModel.dispatchTranscribedCommand("= 2 + 2")
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        // Nothing ran scoped to Research — the arm the chip never showed.
+        #expect(viewModel.lastAssessedScope != .scoped(WorkspaceScope(workspace: research)))
+    }
+
+    /// H1(b) — the paused task's unanswered clarification survives the attempted voice dispatch.
+    /// `performStart`'s per-task reset clears `clarificationQuestion` unconditionally, so a dispatch
+    /// that got through would have discarded the question with no notice at all.
+    @Test
+    func aPendingClarificationSurvivesAnAttemptedVoiceDispatch() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        viewModel.command = "="
+        viewModel.start(origin: .widget, fromComposer: true)
+        try await waitForViewModelToBecomeIdle(viewModel)
+        let question = try #require(viewModel.clarificationQuestion)
+
+        viewModel.dispatchTranscribedCommand("= 2 + 2")
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.clarificationQuestion == question)
+    }
+
+    /// R1 — deleting a workspace kills an arm naming it, so the chip can never promise a boundary
+    /// the run will not apply: `resolveTaskScope` returns `.unscoped` for a name the store no longer
+    /// has, so a surviving arm would render "In X" over an unscoped task.
+    @Test
+    func deletingAWorkspaceKillsAPendingArmThatNamesIt() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let research = StoredWorkspace(name: "Research", apps: ["Safari"], urls: [])
+        let drafting = StoredWorkspace(name: "Drafting", apps: ["Notes"], urls: [])
+        try fixture.workspaceStore.save(research)
+        try fixture.workspaceStore.save(drafting)
+        viewModel.refreshSavedItems()
+
+        viewModel.beginTaskInWorkspace(research)
+        viewModel.deleteWorkspace(research)
+
+        #expect(viewModel.pendingWorkspaceBinding == nil)
+        // The symmetric edge: no chip rendering a name the store no longer has.
+        #expect(viewModel.boundWorkspaceName == nil)
+
+        // And an arm naming a *different*, still-saved workspace is untouched.
+        viewModel.beginTaskInWorkspace(drafting)
+        viewModel.deleteWorkspace(research)
+        #expect(viewModel.pendingWorkspaceBinding == "Drafting")
+    }
+
+    /// R3 — a retry of a bound task keeps its workspace. Without this a command that raised a scope
+    /// prompt the first time runs silently the second, which is a relaxation. Inherited from
+    /// SONNY-38 rather than introduced by the card dispatch.
+    @Test
+    func aRetryOfABoundTaskKeepsTheOriginalWorkspaceScope() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let research = StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        try fixture.workspaceStore.save(research)
+        viewModel.refreshSavedItems()
+
+        viewModel.command = "= 1 + 1"
+        viewModel.start(origin: .widget, workspaceBinding: "Research", fromComposer: true)
+        try await waitForViewModelToBecomeIdle(viewModel)
+        #expect(viewModel.lastAssessedScope == .scoped(WorkspaceScope(workspace: research)))
+
+        viewModel.retryLastCommand()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.lastAssessedScope == .scoped(WorkspaceScope(workspace: research)))
+    }
+
+    /// AC7 — precedence. Both signals present at once, naming **different** workspaces: the card
+    /// binding wins. No other criterion exercises this, so the rule could be implemented backwards
+    /// and every other test here would still pass.
+    @Test
+    func anExplicitCardBindingWinsOverAConflictingWorkspaceNamedInTheCommand() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let card = StoredWorkspace(name: "Drafting", apps: ["Notes"], urls: [])
+        try fixture.workspaceStore.save(
+            StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        )
+        try fixture.workspaceStore.save(card)
+        viewModel.refreshSavedItems()
+
+        // The command text names Research; the dispatch names Drafting.
+        viewModel.command = "open workspace Research"
+        viewModel.start(workspaceBinding: "Drafting")
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.lastAssessedScope == .scoped(WorkspaceScope(workspace: card)))
+        #expect(viewModel.lastAssessedScope != .scoped(WorkspaceScope(workspace:
+            StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"]))))
+    }
+
     @Test
     func sharedViewModelRunsAnInstantCommandThroughTheExistingPipeline() async throws {
         let fixture = try makeProductShellFixture()
@@ -857,7 +1557,9 @@ private func makeProductShellFixture() throws -> (
     workspaceStore: WorkspaceStore,
     taskHistoryStore: TaskHistoryStore,
     userDefaults: UserDefaults,
-    userDefaultsSuiteName: String
+    userDefaultsSuiteName: String,
+    browserOpener: HermeticBrowserOpener,
+    appOpener: HermeticAppOpener
 ) {
     let userDefaultsSuiteName = "ProductShellTests-\(UUID().uuidString)"
     let userDefaults = try #require(UserDefaults(suiteName: userDefaultsSuiteName))
@@ -875,7 +1577,9 @@ private func makeProductShellFixture(
     workspaceStore: WorkspaceStore,
     taskHistoryStore: TaskHistoryStore,
     userDefaults: UserDefaults,
-    userDefaultsSuiteName: String
+    userDefaultsSuiteName: String,
+    browserOpener: HermeticBrowserOpener,
+    appOpener: HermeticAppOpener
 ) {
     let root = FileManager.default.temporaryDirectory
         .appendingPathComponent("ProductShellTests-\(UUID().uuidString)", isDirectory: true)
@@ -900,6 +1604,9 @@ private func makeProductShellFixture(
         fileURL: root.appendingPathComponent("task-history.json"),
         encryption: encryption
     )
+    let browserOpener = HermeticBrowserOpener()
+    let appOpener = HermeticAppOpener()
+    let fileOpener = HermeticFileOpener()
     let viewModel = AgentViewModel(
         routineStore: routineStore,
         workspaceStore: workspaceStore,
@@ -912,6 +1619,17 @@ private func makeProductShellFixture(
             encryption: encryption
         ),
         shortcutCatalog: ProductShellEmptyShortcutCatalog(),
+        // Hermetic seams — see the fakes at the bottom of this file. Without these the suite
+        // launches real apps and opens real URLs in the user's browser.
+        browserOpener: browserOpener,
+        appOpener: appOpener,
+        fileOpener: fileOpener,
+        mediaOpener: HermeticMediaOpener(),
+        runningAppSwitcher: HermeticRunningAppSwitcher(),
+        shortcutInvoker: HermeticShortcutInvoker(),
+        finderContextReader: HermeticFinderContextReader(),
+        documentConverter: HermeticDocumentConverter(),
+        zipArchiver: HermeticZipArchiver(),
         shortcutRunHistoryStore: ShortcutRunHistoryStore(
             fileURL: root.appendingPathComponent("shortcuts-run-history.json"),
             encryption: encryption
@@ -932,7 +1650,7 @@ private func makeProductShellFixture(
         userDefaults: userDefaults
     )
     let suiteName = userDefaultsSuiteName ?? "ProductShellInjected-\(UUID().uuidString)"
-    return (viewModel, root, routineStore, workspaceStore, taskHistoryStore, userDefaults, suiteName)
+    return (viewModel, root, routineStore, workspaceStore, taskHistoryStore, userDefaults, suiteName, browserOpener, appOpener)
 }
 
 @MainActor
@@ -984,4 +1702,79 @@ private final class ProductShellPasteboardReader: PasteboardReading {
     func stringValue() -> String? {
         nil
     }
+}
+
+// MARK: - Hermetic side-effect seams
+//
+// `AgentViewModel.makeExecutor()` used to construct `AgentActionExecutor` without any of its
+// side-effect services, so every one fell to its production default and any view-model test that
+// *executed* a plan drove the real machine — the suite genuinely launched Safari and opened
+// https://github.com and https://example.com/page in the user's browser. `AgentActionExecutor`
+// already accepted all nine as parameters; only the view-model construction path skipped them.
+//
+// These record rather than merely swallow, so a test that wants to assert what a run actually
+// opened can, and so a fixture that silently stopped being injected would show up as an empty
+// recording rather than as a browser window.
+
+@MainActor
+final class HermeticBrowserOpener: BrowserOpening {
+    private(set) var openedURLs: [URL] = []
+    private(set) var openedBrowsers: [MacApp?] = []
+    func open(_ url: URL, using browser: MacApp?) async throws {
+        openedURLs.append(url)
+        openedBrowsers.append(browser)
+    }
+}
+
+@MainActor
+final class HermeticAppOpener: AppOpening {
+    private(set) var openedBundleIDs: [String] = []
+    func open(bundleIdentifier: String) async throws {
+        openedBundleIDs.append(bundleIdentifier)
+    }
+}
+
+@MainActor
+final class HermeticFileOpener: FileOpening {
+    private(set) var openedFiles: [URL] = []
+    func openFile(_ url: URL) async throws {
+        openedFiles.append(url.standardizedFileURL)
+    }
+}
+
+@MainActor
+final class HermeticMediaOpener: MediaOpening {
+    private(set) var requests: [MediaPlaybackRequest] = []
+    func open(_ request: MediaPlaybackRequest) async throws -> String {
+        requests.append(request)
+        return "Played (fake)."
+    }
+}
+
+@MainActor
+final class HermeticRunningAppSwitcher: RunningAppSwitching {
+    private(set) var activated: [String] = []
+    func runningApps() -> [RunningApp] { [] }
+    func activate(bundleIdentifier: String) async throws { activated.append(bundleIdentifier) }
+}
+
+final class HermeticShortcutInvoker: ShortcutInvoking, @unchecked Sendable {
+    func invokeShortcut(name: String, input: String?) async throws -> ProcessResult {
+        ProcessResult(terminationStatus: 0, output: "")
+    }
+}
+
+final class HermeticFinderContextReader: FinderContextReading, @unchecked Sendable {
+    func selectedItems() throws -> [URL] { [] }
+}
+
+final class HermeticDocumentConverter: DocumentConverting, @unchecked Sendable {
+    var isAvailable: Bool { false }
+    var modeName: String { "fake" }
+    var usesMockNaming: Bool { true }
+    func convert(_ records: [DocxRecord], log: @escaping (String) -> Void) async throws -> [DocxRecord] { records }
+}
+
+final class HermeticZipArchiver: ZipArchiving, @unchecked Sendable {
+    func createArchive(sourceFolder: URL, files: [URL], outputURL: URL) async throws {}
 }

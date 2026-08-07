@@ -86,11 +86,28 @@ public final class AgentRunner {
         return preparedRun
     }
 
+    /// `scope` is non-defaulted here for the same reason it is on
+    /// `AgentActionExecutor.assessRisk(plan:scope:)`, and the reason is sharper at this layer than
+    /// at that one.
+    ///
+    /// **There are two entry points that independently assess, and the one that logs in production
+    /// is the easier one to miss.** `execute` calls `approvalRequest` again internally, so threading
+    /// a real scope at the `approvalRequest` call site while leaving `execute` defaulted would
+    /// produce a run that prompts the user with a tier-3 scope escalation, takes their approval, and
+    /// then re-assesses `.unscoped` — the gate still passes, because the approved tier exceeds the
+    /// now-lower effective tier, while the `risk.assessed`/`risk.escalated` trace records an
+    /// assessment with no scope escalation in it at all. Spec §11.1A's "escalation is its own logged
+    /// trace event" would hold in the tests and fail in the app: green tests, lying log.
+    ///
+    /// A default is what makes that failure silent, so there isn't one. SONNY-38 has to write a
+    /// scope at every site or the compiler stops it. Nothing about the gating below changes — scope
+    /// changes the assessment, never the gate.
     public func approvalRequest(
         for preparedRun: PreparedAgentRun,
-        logAssessment: Bool = false
+        logAssessment: Bool = false,
+        scope: TaskWorkspaceScope
     ) throws -> RiskApprovalRequest {
-        let assessment = try executor.assessRisk(plan: preparedRun.plan)
+        let assessment = try executor.assessRisk(plan: preparedRun.plan, scope: scope)
         let request = RiskApprovalRequest(
             assessment: assessment,
             requirement: assessment.approvalRequirement(policy: approvalPolicy)
@@ -105,9 +122,10 @@ public final class AgentRunner {
         _ preparedRun: PreparedAgentRun,
         approvalDecision: RiskApprovalDecision = .notRequested,
         confirmationMessage: String = "Execution approved",
-        logRiskAssessment: Bool = true
+        logRiskAssessment: Bool = true,
+        scope: TaskWorkspaceScope
     ) async throws -> AgentRunResult {
-        let request = try approvalRequest(for: preparedRun, logAssessment: logRiskAssessment)
+        let request = try approvalRequest(for: preparedRun, logAssessment: logRiskAssessment, scope: scope)
         switch request.requirement {
         case .autoRun:
             break

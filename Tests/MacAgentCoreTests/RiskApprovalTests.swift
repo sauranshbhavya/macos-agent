@@ -108,6 +108,9 @@ struct RiskApprovalTests {
             "local.routines.save": .tier2,
             "local.routines.run": .tier2,
             "local.workspaces.create": .tier2,
+            // Spec §11.1 lists "Change routine/workspace" as tier 2, and editing is the same class
+            // of change as creating. Removal raises it to tier 3 dynamically, in the adapter.
+            "local.workspaces.edit": .tier2,
             "local.shortcuts.invoke": .tier2
         ]
 

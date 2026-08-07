@@ -12,6 +12,8 @@ Last updated: 2026-07-03
 - **"Menu-bar popover" / "NSPopover"** (§4A.1, §6.3A, and elsewhere) described the *original* v1.0-era visual/interaction form for the agent cockpit. That form was redesigned into a Spotlight-style floating widget (originally branch 11, `feature/floating-command-widget`) — and the widget then went further still, becoming the *only* place to type or speak a command anywhere in the app (Command Center's own composer was deleted entirely, along with dry-run mode — see below). Wherever this spec says "menu-bar popover," read it as describing the *functional* requirement (command input, voice, task state, quick approvals, recent outputs, routine/workspace launch) — that requirement is still accurate and still the real bar — not the literal `NSPopover` implementation, which no longer exists. `docs/sonny-design-system-reference.md` and `docs/sonny-founder-design-decisions.md` are the authoritative current source for the widget's actual visual/interaction design.
 - **"Dry run"** appears in two genuinely different senses in this document, only one of which is stale. Each capability adapter's own `preview()`/dry-run *metadata* behavior (e.g. §14's capability schema listing "dry-run/preview behavior" as a per-capability field) is still real and unchanged — every adapter still generates a real preview shown before approval. What *is* gone: the whole-command "Dry Run" *toggle* that used to run an entire submitted command in a simulated, no-op mode end-to-end. That toggle, and the `dryRun`/`forceRealExecution` plumbing behind it, were deleted entirely during `feature/ui-ux-wireframe-fidelity` — every command just runs for real now, gated only by the existing risk-tier approval system. Don't scope future work around resurrecting it without a real product decision to do so.
 
+**Workspace restriction scope note, added 2026-08-07 — read before trusting §10.4's "If any layer rejects, the action must not execute" as a statement about workspace scope.** That sentence is correct and unchanged, but it is about **capability scope** — the operating bounds a capability declares for itself (§10.1's "App/folder/domain scope"), which are not user-editable and do hard-block. It is **not** about the workspace restriction scope shipped in `feature/workspace-restriction-scope`, which is a separate, user-declared layer sitting above it. Workspace scope **escalates and prompts; it never blocks** — and it can only ever narrow, never widen, so it can neither grant a capability bounds its declaration lacks nor extend `PathWhitelist`. A future session reading §10.4 alone would implement a hard block, which is the wrong thing. The distinction is now written into §10.4 itself; §6.9 defines the scope semantics (default-on per workspace, four-valued verdict, unconfigured means unconstrained rather than denied); §11.2 makes the verdict an input to the approval rules and records the two hard constraints on any future relaxation; §11.3 adds the out-of-scope reason to approval copy and the rule that escalation reasons are never rendered as errors; §9.2 adds the per-task workspace binding; §9.3 records that scope escalations ride `risk.escalated`. Where this spec's literal text and `docs/sonny-founder-design-decisions.md` conflict, the founder decisions win — this amendment closes the gap for this feature so that precedence no longer has to be relied on.
+
 This version merges a full review pass (spec-vs-code audit plus a product completeness pass) into the v1.1 document. Nothing was removed from v1 scope — the review explicitly preserved full spec scope, including all 8 Power Mode apps. Changes are additive/clarifying and marked inline with the section markers below. Read this changelog first if you already know v1.1.
 
 Resolved and folded in:
@@ -983,11 +985,22 @@ Required capabilities:
 - Attach routine to workspace.
 - Save browser/research workspace.
 - Save documents/folders to workspace.
-- Enterprise admins can restrict workspace URLs/apps.
+- Enterprise admins can restrict workspace URLs/apps — see "Restriction scope" below, where this sits as the stricter admin overlay.
 
 Example:
 
 - "Create a research workspace with Safari, VS Code, GitHub, and this folder."
+
+Restriction scope (added v1.2):
+
+A workspace's contents are also its **restriction scope**. The same app, URL and file-location lists that say what a workspace *opens* also say what a task bound to that workspace is expected to *touch*. One list serving both jobs is deliberate: two 95%-identical lists means users maintain both, and is a guaranteed source of "why did it prompt, it's right there in my workspace."
+
+- **On by default, per workspace.** There is no per-workspace enable switch to find and turn on. Listing a resource is the configuring act, and it is the only one.
+- **Out of scope escalates and prompts; it never blocks.** A task touching a resource its bound workspace does not list raises an approval naming both the resource and the workspace. The user can always allow it. Refusing outright is explicitly not the behavior — see §10.4 for why this does not contradict the hard-block rule there.
+- **An unconfigured resource kind is unconstrained, not denied.** A workspace that lists apps but no folders says nothing at all about folders, and file work in it behaves exactly as it does with no workspace. Reading an empty list as "nothing of this kind is allowed" is the opposite of the truth, and it is why the model is four-valued rather than two: `inScope` (matches an entry), `outOfScope` (the kind is configured and this matches nothing in it), `unconstrained` (the kind is not configured — neither permission nor prohibition), and `opaque` (the resource cannot be named before execution, e.g. a Shortcut's internals or the URLs a web search has yet to return). Both two-valued readings fail against workspaces that already exist: "empty denies everything" would escalate every file action on the day file scoping ships, and "empty allows everything" would blanket-bless the whole machine.
+- **Scope answers "right place", never "right severity".** A file inside your own workspace folder is still destroyed forever if deleted. Scope is an input to the approval rules (§11.2), never a replacement for the risk tier.
+- **The boundary must be visible.** "Show workspace contents" above is a restriction-scope requirement, not only a convenience: a boundary the user cannot look at is one they cannot trust or maintain, and once scope escalations start prompting, "why did it ask?" needs an answer they can go and read. Entries render verbatim, and an entry the evaluator cannot match must read as not in effect rather than as a live boundary.
+- **Enterprise admin restriction is a stricter overlay, not the same mechanism.** Admin policy (§6.15, §15.6) may still *deny*; user-declared workspace scope only *asks*. The two compose — admin denial is not softened by a user listing the resource.
 
 ### 6.10 Memory
 
@@ -1342,6 +1355,7 @@ Each task should have:
 - Trace events.
 - Retention policy.
 - Short-term follow-up correction context, bounded and expiring (§4A.8, §6.18, added v1.2) — distinct from long-term memory (§6.10).
+- Workspace binding, if any (§6.9, added v1.2) — which saved workspace this task's restriction scope is evaluated against. Resolved once per task, after the plan exists and before the first risk assessment, from a binding the dispatch supplied (a workspace-card action wins) or otherwise from the command text. **Per-task, never persistent:** it is held across an approval or clarification pause, because that is the same task resuming and it must resume under the scope it was assessed with, and it is cleared at every terminal state — completion, failure, cancellation, and a cancelled pending approval. A task that names no resolvable workspace is *unbound*, which is not the same as being bound to a workspace that restricts nothing.
 
 ### 9.3 Agent Trace Event Types
 
@@ -1354,7 +1368,7 @@ Recommended event types:
 - `plan.created`
 - `plan.revised`
 - `risk.assessed`
-- `risk.escalated` (added v1.2, see §11.1A)
+- `risk.escalated` (added v1.2, see §11.1A) — also carries workspace-scope escalations, which arrive through the same assessment path and are logged with the resource and workspace in the reason (§6.9, §11.3, added v1.2). Following §11.1A's own precedent: an escalation mechanism must be its own trace event, not a silent internal decision. The task's scope verdict travels on the assessment beside the tier, so the trail records *why* the tier moved, not only that it did.
 - `policy.checked`
 - `approval.requested`
 - `approval.granted`
@@ -1484,9 +1498,16 @@ Validation layers:
 - Enterprise policy validation.
 - Local client validation.
 - Risk validation, including dynamic escalation on observed side effects (§11.1A, added v1.2).
-- Scope validation.
+- Capability scope validation — the capability's own declared operating bounds (§10.1's "App/folder/domain scope").
 
 If any layer rejects, the action must not execute.
+
+Two different things are called "scope", and only one of them is a validation layer — workspace restriction scope is the other (§6.9, added v1.2):
+
+- **Capability scope** is the layer listed above. It is what the capability is *physically able* to do — an app opener can only open allowlisted apps, a file capability can only touch `PathWhitelist`. It is declared on the capability (§10.1), it is not user-editable, and it **hard-blocks**: the "If any layer rejects" rule above applies to it in full.
+- **Workspace restriction scope** (§6.9) is a *user-declared* layer sitting above capability scope. It is not a validation layer and does not appear in the list above. It **escalates and prompts** — it feeds a verdict into the approval rules (§11.2) and the approval copy (§11.3), and the user can always allow the action.
+
+The relationship is one-directional and must stay that way: **a workspace scope can only narrow, never widen.** It can never grant a capability bounds its own declaration does not have, and it can never extend `PathWhitelist`. An out-of-scope resource that capability scope rejects is still rejected; workspace scope never gets to override that answer. So the two coexist without contradiction — the hard-block sentence above is about what is possible, and workspace scope is about what the user meant.
 
 ### 10.5 Initial Capability Families
 
@@ -1631,6 +1652,15 @@ Voice and Power Mode:
 - Power Mode can auto-click/navigate tier 0/1 inside approved apps.
 - Power Mode must pause for tier 2/3 according to rules.
 
+Workspace scope verdict as an input (§6.9, added v1.2):
+
+The scope verdict for the task's bound workspace is an input to these rules alongside the tier. Today it is used in exactly one direction — **an `outOfScope` resource escalates to tier 3 and names what it found (§11.3).** Nothing relaxes on a verdict yet; relaxation is its own piece of work, and these two constraints on it are hard, recorded here because a session that never read this branch would otherwise re-derive them wrongly:
+
+- **Relaxation is a *requirement* override, never a tier change.** A future rule may map `(tier, verdict)` to a lighter approval requirement, but it must never lower the effective tier. Four things read that field and break if it lies: the unattended-run gate (an in-scope tier-3 action would execute on a schedule with nobody present — a "lightweight confirmation" requires a human, and an unattended run has none), the stale-approval re-check between approval and execution, the `risk.assessed`/`risk.escalated` trace (which would record a tier the engine never assessed), and the unattended-trust advisory (whose opt-in warning would stop firing for routines that need it).
+- **The in-scope tier-2 and tier-3 rules are one function of `(tier, verdict)`, never two chained rules.** If "in-scope tier 3 drops to lightweight confirmation" were implemented as a tier change (3 → 2), the tier-2 rule would then fire on the result and in-scope tier-3 actions would **silently auto-run**. This is the single most likely way scope-aware approval ships as a security regression.
+
+Two further properties this depends on: only `inScope` is ever eligible for relaxation — `unconstrained` (the kind is unconfigured) and `opaque` (Sonny cannot see the resource) never qualify, and collapsing `unconstrained` into `inScope` "for simplicity" silently grants relaxed gating to every user who never configured scope at all. And scope answers "right place", not "right severity" (§6.9): which tier-3 *causes* remain at explicit approval regardless of verdict is a separate decision, and a non-relaxable floor is expected for the genuinely irreversible ones (send, upload, delete, submit, purchase, share — §11.1).
+
 ### 11.3 User-Facing Approval Copy
 
 Approvals must show:
@@ -1640,6 +1670,9 @@ Approvals must show:
 - Which app/file/domain is involved.
 - Whether data leaves the device.
 - Whether action can be undone.
+- If the escalation came from workspace restriction scope: which resource is out of scope, and which workspace it is out of scope *for* (§6.9, added v1.2). Naming only one of the two is not enough — "example.com is not part of the Research workspace" is the shape, because the user has to be able to tell whether the answer is "allow this once" or "that is the wrong workspace."
+
+Escalation reasons are questions, not errors (added v1.2). Every escalation reason on an approval surface — scope or otherwise — explains why Sonny is *asking*, so none of them may be rendered in the error/failure treatment. Genuine failure states keep that treatment exclusively, so the two remain distinguishable at a glance. This applies to all escalation reasons uniformly rather than being tagged per kind: "output already exists and would be replaced" was never an error either.
 
 ## 12. Screen Intelligence
 

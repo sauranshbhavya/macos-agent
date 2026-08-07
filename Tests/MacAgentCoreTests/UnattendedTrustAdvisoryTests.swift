@@ -55,7 +55,8 @@ struct UnattendedTrustAdvisoryTests {
         // Guard the premise rather than assuming it: if this stops being tier 3, the test below
         // would pass vacuously for the wrong reason.
         let assessment = try executor.assessRisk(
-            plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Signature refresh")
+            plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Signature refresh"),
+            scope: .unscoped
         )
         #expect(assessment.effectiveTier == .tier3)
 

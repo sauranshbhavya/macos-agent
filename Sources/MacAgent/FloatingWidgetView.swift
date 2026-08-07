@@ -248,11 +248,52 @@ struct FloatingWidgetView: View {
         guard !text.isEmpty, !isTaskInFlight else { return }
         // `start()` itself now clears `command` centrally, synchronously, right after capturing
         // it — correct for every caller, not just this one.
-        viewModel.start(origin: .widget)
+        viewModel.start(origin: .widget, fromComposer: true)
+    }
+
+    /// The in-composer binding indicator and its clear affordance.
+    ///
+    /// System B tokens only — this is the widget, not a Command Center surface. Rendered *inside*
+    /// the composer row rather than as its own strip: the contract's own constraint is that no
+    /// indicator exists anywhere outside the in-flight composer, and a separate strip is the first
+    /// step toward the rejected persistent "Active" badge.
+    @ViewBuilder
+    private var workspaceBindingChip: some View {
+        if let name = viewModel.boundWorkspaceName {
+            HStack(spacing: 4) {
+                Text(AgentActivityPresentation.workspaceBindingIndicatorText(workspaceName: name))
+                    .font(WidgetType.captionSmall)
+                    .foregroundStyle(WidgetTheme.textFull)
+                    .lineLimit(1)
+
+                // Only offered before submitting. Once a task is in flight its scope is already
+                // assessed and answered; dropping it mid-run would leave the approval the user saw
+                // and the execution that follows it disagreeing about the boundary.
+                if !isTaskInFlight {
+                    Button {
+                        viewModel.clearPendingWorkspaceBinding()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(WidgetTheme.textMuted)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(
+                        AgentActivityPresentation.clearWorkspaceBindingLabel(workspaceName: name)
+                    )
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(WidgetTheme.neutralButtonFill)
+            .clipShape(Capsule())
+        }
     }
 
     private var composerPill: some View {
         HStack(spacing: 10) {
+            workspaceBindingChip
+
             Image(systemName: "wand.and.stars.inverse")
                 .font(WidgetType.icon)
                 .foregroundStyle(.white.opacity(0.61))
@@ -527,15 +568,30 @@ private struct WidgetPermissionPanel: View {
             }
 
             // Why this action was escalated above its default tier — "the zip already exists",
-            // "this snippet trigger would be replaced". Without it the panel asks for approval
-            // on a raised tier while showing nothing about what raised it. Rendered as its own
-            // line rather than folded into the resource line below, which is `lineLimit(1)` and
-            // would truncate these mid-sentence; the first-approval lines above set the
-            // precedent for an explanatory line in this panel.
+            // "this snippet trigger would be replaced", and since SONNY-37 "example.com is not
+            // part of the Research workspace." Without it the panel asks for approval on a raised
+            // tier while showing nothing about what raised it. Rendered as its own line rather
+            // than folded into the resource line below, which is `lineLimit(1)` and would truncate
+            // these mid-sentence; the first-approval lines above set the precedent for an
+            // explanatory line in this panel.
+            //
+            // **Amber, not error red** — founder design pass, 2026-08-06, SONNY-38 requirement 6.
+            // This line shipped in `WidgetTheme.errorGlyph`, so a workspace-scope prompt asked the
+            // user for permission in Sonny's failure colour: an "allow anyway?" question that
+            // looked like something had gone wrong. `secondaryCircular` is System B's amber and the
+            // counterpart of Command Center's `SonnyTheme.warning`, so the two approval surfaces no
+            // longer disagree about what an escalation looks like.
+            //
+            // Applied to every escalation reason rather than only the scope ones, decided in the
+            // same pass: no escalation is an error — each one explains why approval is being asked —
+            // so the failure colour was wrong for all of them. It also leaves `errorGlyph` used
+            // exclusively by genuine error states (the failed-step glyph at :430 and the
+            // storage-failure notice at :754), which is what makes "visually distinguishable from
+            // Sonny's error states" a checkable property rather than a claim.
             if !escalationReasons.isEmpty {
                 Text(escalationReasons)
                     .font(WidgetType.captionSmall)
-                    .foregroundStyle(WidgetTheme.errorGlyph)
+                    .foregroundStyle(WidgetTheme.secondaryCircular)
                     .fixedSize(horizontal: false, vertical: true)
             }
 

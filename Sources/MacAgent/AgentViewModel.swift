@@ -99,6 +99,21 @@ final class AgentViewModel: ObservableObject {
     private let snippetStore: SnippetStore
     private let recentArtifactStore: RecentArtifactStore
     private let shortcutCatalog: any ShortcutCatalogProviding
+    // Every seam `AgentActionExecutor` exposes that reaches the real machine. Held here and
+    // forwarded in `makeExecutor()` so a test can supply fakes: before this, `makeExecutor` passed
+    // none of them, so each fell to its production default and any view-model test that *executed*
+    // a plan drove the real system — a user watching the suite run saw Safari launch and real URLs
+    // open in their browser. `AgentActionExecutor` already had every one of these as an injectable
+    // parameter; only this construction path was skipping them.
+    private let browserOpener: any BrowserOpening
+    private let appOpener: any AppOpening
+    private let fileOpener: any FileOpening
+    private let mediaOpener: any MediaOpening
+    private let runningAppSwitcher: any RunningAppSwitching
+    private let shortcutInvoker: any ShortcutInvoking
+    private let finderContextReader: any FinderContextReading
+    private let documentConverter: any DocumentConverting
+    private let zipArchiver: any ZipArchiving
     private let shortcutRunHistoryStore: ShortcutRunHistoryStore
     private let taskHistoryStore: TaskHistoryStore
     private let clipboardHistorySettingsStore: ClipboardHistorySettingsStore
@@ -119,6 +134,65 @@ final class AgentViewModel: ObservableObject {
     /// `clarificationAutoExecute` — `submitClarification()`
     /// re-calls `start()`, which would otherwise silently reset origin to its default.
     private var clarificationOrigin: TaskOrigin = .commandCenter
+    /// The workspace this **in-flight task** is bound to, and the value handed to both
+    /// `AgentRunner.approvalRequest` and `AgentRunner.execute`.
+    ///
+    /// Per task, never a mode. The persistent "active workspace" concept was considered and
+    /// rejected (see the changelog's task-to-workspace-association entry, and the note at
+    /// `CommandCenterView.swift:381-384`) because it silently mis-tags unrelated one-off tasks and
+    /// leaks across surfaces — a voice command in the widget inheriting whatever workspace was last
+    /// open in Command Center. **The entire difference between this and the rejected design is
+    /// lifecycle**, so the lifecycle is written down rather than implied: set once per task in
+    /// `performStart` after the plan exists, held across an approval or clarification pause because
+    /// those are the same task resuming, and cleared at every terminal state.
+    /// `private(set)` internal rather than fully private, matching `activeTaskOrigin`: the lifecycle
+    /// *is* the feature here, so it has to be assertable. Nothing outside this type may set it.
+    /// `@Published` because the widget's binding chip renders off it through `boundWorkspaceName`.
+    /// It was `private(set) var` alone, and the chip's disappearance at task end worked only because
+    /// every `activeTaskScope = .unscoped` site happens to sit in the same synchronous scope as some
+    /// other published write (`isRunning`, `approvalRequest`). Nothing in the type system held that
+    /// pairing, so the chip's correctness was incidental.
+    @Published private(set) var activeTaskScope: TaskWorkspaceScope = .unscoped
+    /// The scope the most recent task was *assessed* under, kept after `activeTaskScope` is cleared.
+    ///
+    /// `activeTaskScope` is the live binding and is `.unscoped` again the moment a task terminates,
+    /// which is correct but makes the value unobservable exactly when a test wants to check it. This
+    /// records what the run actually used. Not consumed by any view — it exists so the binding's
+    /// behaviour is assertable rather than inferred from a side effect.
+    private(set) var lastAssessedScope: TaskWorkspaceScope = .unscoped
+
+    /// The workspace the composer is currently bound to, for the widget's indicator — the in-flight
+    /// binding once a task is running, otherwise the one a card dispatch queued for the next
+    /// command. `nil` means unbound, and the indicator disappears.
+    var boundWorkspaceName: String? {
+        if case .scoped(let scope) = activeTaskScope {
+            return scope.workspaceName
+        }
+        return pendingWorkspaceBinding
+    }
+    /// A binding supplied by a dispatch that already knows its workspace — B4's workspace-card
+    /// action. Wins over the free-text path when both are present.
+    ///
+    /// `nil` means "no dispatch named one", which is honestly the case for every caller today and is
+    /// why this default is safe where a defaulted `scope:` would not be: `nil` does not switch a
+    /// check off, it hands the question to `WorkspaceTaskTagging` instead.
+    private var explicitWorkspaceBinding: String?
+    /// Preserves the explicit binding across a clarification pause, exactly as
+    /// `clarificationOrigin` preserves the origin — `submitClarification()` re-enters `start()`,
+    /// which would otherwise drop it.
+    private var clarificationWorkspaceBinding: String?
+    /// The workspace a card dispatch named for the **next** command, before one has been typed.
+    ///
+    /// A pre-dispatch slot, not a second lifecycle: `start()` consumes it into SONNY-38's
+    /// `explicitWorkspaceBinding` — the same slot the free-text path already loses to — and clears
+    /// it in the same breath, after which the binding is the in-flight one and clears where every
+    /// other terminal clear happens. `boundWorkspaceName` reads whichever of the two is live, so the
+    /// widget's indicator survives the hand-off without either value having to know about the other.
+    ///
+    /// Published because the widget renders it; deliberately *not* persisted and deliberately not
+    /// readable anywhere outside the in-flight composer — the rejected persistent-active-workspace
+    /// design is exactly what this must not become.
+    @Published var pendingWorkspaceBinding: String?
     /// Which surface's mic button started the in-progress recording — `toggleVoiceRecording()` is
     /// called identically from both Command Center's composer and the floating widget's own mic
     /// button, so this is set explicitly by the caller rather than inferred. Read back when voice
@@ -127,7 +201,11 @@ final class AgentViewModel: ObservableObject {
     /// The last command text actually submitted for real execution — tracked on the shared view
     /// model (not as widget-local UI state) so both the widget's own retry button and a system
     /// notification's "Retry" action, which fires from outside SwiftUI entirely, can resubmit it.
-    private var lastCommand = ""
+    /// `private(set)` rather than `private`: the setter stays inside this type, but the getter is
+    /// readable so a test can assert what a dispatch actually *submitted*. `start` clears `command`
+    /// synchronously right after capturing it, so the live property is empty by the time any caller
+    /// returns — this is the only observable record of the text a run was started with.
+    private(set) var lastCommand = ""
     private var isPushToTalkHotKeyDown = false
     private var pendingCommandForPriorTaskContext: String?
     private var pendingTaskHistoryStartedAt: Date?
@@ -201,6 +279,15 @@ final class AgentViewModel: ObservableObject {
         snippetStore: SnippetStore = SnippetStore(),
         recentArtifactStore: RecentArtifactStore = RecentArtifactStore(),
         shortcutCatalog: any ShortcutCatalogProviding = ProcessShortcutCatalog(),
+        browserOpener: any BrowserOpening = WorkspaceBrowserOpener(),
+        appOpener: any AppOpening = WorkspaceAppOpener(),
+        fileOpener: any FileOpening = WorkspaceFileOpener(),
+        mediaOpener: any MediaOpening = NativeMediaOpener(),
+        runningAppSwitcher: any RunningAppSwitching = WorkspaceRunningAppSwitcher(),
+        shortcutInvoker: any ShortcutInvoking = ProcessShortcutInvoker(),
+        finderContextReader: any FinderContextReading = AppleScriptFinderContextReader(),
+        documentConverter: any DocumentConverting = AutoDocumentConverter(),
+        zipArchiver: any ZipArchiving = ProcessZipArchiver(),
         shortcutRunHistoryStore: ShortcutRunHistoryStore = ShortcutRunHistoryStore(),
         taskHistoryStore: TaskHistoryStore = TaskHistoryStore(),
         clipboardHistorySettingsStore: ClipboardHistorySettingsStore = ClipboardHistorySettingsStore(),
@@ -221,6 +308,15 @@ final class AgentViewModel: ObservableObject {
         self.snippetStore = snippetStore
         self.recentArtifactStore = recentArtifactStore
         self.shortcutCatalog = shortcutCatalog
+        self.browserOpener = browserOpener
+        self.appOpener = appOpener
+        self.fileOpener = fileOpener
+        self.mediaOpener = mediaOpener
+        self.runningAppSwitcher = runningAppSwitcher
+        self.shortcutInvoker = shortcutInvoker
+        self.finderContextReader = finderContextReader
+        self.documentConverter = documentConverter
+        self.zipArchiver = zipArchiver
         self.shortcutRunHistoryStore = shortcutRunHistoryStore
         self.taskHistoryStore = taskHistoryStore
         self.clipboardHistorySettingsStore = clipboardHistorySettingsStore
@@ -245,11 +341,96 @@ final class AgentViewModel: ObservableObject {
         ProcessInfo.processInfo.environment["OPENAI_TRANSCRIBE_MODEL"] ?? "gpt-4o-mini-transcribe"
     }
 
+    /// True while a task occupies the app: running, waiting on an approval, or **paused on a
+    /// clarification the user has not answered**.
+    ///
+    /// The third term is the one that keeps getting left out. A clarification pause looks idle from
+    /// the outside — `performStart`'s defer sets `isRunning = false` and `approvalRequest` is nil —
+    /// so a gate written as `isRunning || isAwaitingApproval` is live during exactly the state where
+    /// a second dispatch destroys the first task's continuation.
+    ///
+    /// `FloatingWidgetView` computes this same expression privately. It is not consolidated here as
+    /// part of this change because that file is on SONNY-41's never-touch list; hoisting the
+    /// widget's copy onto this property is that file's owner's call, and the two agree today.
+    var isTaskInFlight: Bool {
+        isRunning || isAwaitingApproval || clarificationQuestion != nil
+    }
+
+    /// Hands `start` a command on behalf of a *programmatic* caller, and guarantees that a refused
+    /// dispatch leaves no text behind.
+    ///
+    /// **The invariant: after any refused dispatch, a subsequent `submitClarification` interpolates
+    /// only the question and the answer.** `submitClarification` wraps its Q&A around whatever
+    /// `command` currently holds, so any caller that writes `command` and *then* gets refused turns
+    /// the next continuation into a hybrid — re-planned, under the paused task's own captured
+    /// binding, against the wrong workspace's boundary. Adding the clarification term to `canSubmit`
+    /// fixed the discard at every door and moved this residue to three of them.
+    ///
+    /// **One mechanism, chosen over moving each assignment above its guard.** A caller cannot
+    /// evaluate the real guard before assigning: `canSubmit`'s own emptiness term reads `command`,
+    /// so a pre-assignment check would have to be a *partial* copy of the rule at every call site —
+    /// the per-surface duplication that let this class reach the assembled head twice already.
+    /// Detecting the outcome needs no copy of the rule at all, and it covers refusal reasons nobody
+    /// has enumerated yet: `start` clears `command` synchronously the instant it accepts a dispatch,
+    /// so finding the text still there means the guard refused and the text is residue.
+    private func dispatch(
+        command commandText: String,
+        autoExecute: Bool = false,
+        origin: TaskOrigin = .commandCenter,
+        workspaceBinding: String? = nil,
+        fromComposer: Bool = false
+    ) {
+        command = commandText
+        start(
+            autoExecute: autoExecute,
+            origin: origin,
+            workspaceBinding: workspaceBinding,
+            fromComposer: fromComposer
+        )
+        guard command == commandText else {
+            return
+        }
+        command = ""
+    }
+
+    /// Fills the widget composer with a ready-made command and brings the widget forward, refusing
+    /// while a clarification is open.
+    ///
+    /// The compose half of the same invariant. These callers never reach `start`, so `dispatch`
+    /// cannot cover them — but they write `command` just the same, and a partial command
+    /// ("Create a workspace called ") left in a live pause corrupts the continuation exactly as a
+    /// refused dispatch would. Guard first, assign second, which is the ordering
+    /// `composeWorkspaceScopeEdit` already had and the reason it was the one door genuinely closed.
+    func composeCommand(_ commandText: String) {
+        guard clarificationQuestion == nil else {
+            logStore.append(.observe, "Composer prefill ignored while a clarification is open.")
+            return
+        }
+        command = commandText
+        widgetPresentationRequest += 1
+    }
+
+    /// **The clarification term lives here, at the dispatch choke point, rather than on each
+    /// surface's button gate.**
+    ///
+    /// `start(...)` is the only route into `performStart`, and it is the only caller — so one term
+    /// here refuses every dispatch that would otherwise discard an unanswered clarification:
+    /// `openWorkspaceWidget`, `runRoutineWidget` (whose button lives in a different file entirely),
+    /// the composer submit, and any dispatch added later. The alternative — a term on each card gate
+    /// — is one copy per surface and a silent gap the first time a fourth card action is added,
+    /// which is how this reached the assembled head with the voice half closed and the card half
+    /// open.
+    ///
+    /// It does not break the continuation: `submitClarification` clears `clarificationQuestion`
+    /// *before* re-entering `start`, so answering proceeds exactly as it did. And it is what makes
+    /// `performStart`'s unconditional `clarificationQuestion = nil` unreachable by bypass rather
+    /// than merely unreached — every path to it now passes this guard.
     var canSubmit: Bool {
         if isAwaitingApproval {
             return !isRunning && preparedRun != nil && runner != nil
         }
-        return !isRunning && !isTranscribingVoice && !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+        return !isRunning && clarificationQuestion == nil && !isTranscribingVoice
+            && !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     var canCancel: Bool {
@@ -257,7 +438,19 @@ final class AgentViewModel: ObservableObject {
     }
 
     var canUseVoice: Bool {
-        hasAPIKey && !isAwaitingApproval && !isRunning && !isPreparingVoiceRecording && !isTranscribingVoice
+        // `clarificationQuestion == nil` restores parity with the typed route, which
+        // `isTaskInFlight` has always blocked during a clarification pause. Voice lacking the same
+        // term was asymmetry by omission, and it was reachable: a clarification pause holds
+        // `activeTaskScope` (the same task is resuming), so the chip shows the *paused* task's
+        // workspace while a card arm sits invisible behind it — and both voice entry points
+        // dispatch with `origin: .widget`, so the transcription completion consumed that arm. The
+        // task then ran scoped to a workspace the chip never named, and the paused task's
+        // unanswered clarification was silently discarded by `performStart`'s per-task reset.
+        //
+        // Voice answering a clarification is a real feature and this does not foreclose it; it is a
+        // separate ticket, and the gate has to exist first.
+        hasAPIKey && clarificationQuestion == nil && !isAwaitingApproval && !isRunning
+            && !isPreparingVoiceRecording && !isTranscribingVoice
     }
 
     var isAwaitingApproval: Bool {
@@ -317,7 +510,19 @@ final class AgentViewModel: ObservableObject {
 
     /// - Parameter origin: Which surface is submitting this — see `TaskOrigin`. Defaults to
     ///   `.commandCenter`; the floating widget's own call sites pass `.widget` explicitly.
-    func start(autoExecute: Bool = false, origin: TaskOrigin = .commandCenter) {
+    /// - Parameter workspaceBinding: A workspace named by the dispatch itself rather than by the
+    ///   command text — B4's workspace-card action. Wins over the free-text match.
+    /// - Parameter fromComposer: Whether this dispatch is the widget composer submitting what the
+    ///   user typed or spoke into it. **Only a composer dispatch may consume a pending card
+    ///   binding**; every other entry point kills it instead. Defaults to `false` so a call site
+    ///   added later inherits the safe direction — a new dispatch that forgets to say anything
+    ///   drops the arm rather than silently scoping itself with it.
+    func start(
+        autoExecute: Bool = false,
+        origin: TaskOrigin = .commandCenter,
+        workspaceBinding: String? = nil,
+        fromComposer: Bool = false
+    ) {
         if isAwaitingApproval {
             approvePendingRun()
             return
@@ -349,6 +554,20 @@ final class AgentViewModel: ObservableObject {
         // running" by the display below) long after the real submission had already moved on.
         command = ""
 
+        // **A pending card binding may bind exactly one task: the next composer dispatch.**
+        //
+        // It used to be consumed by *any* `start()`, which meant an armed-but-never-submitted chip
+        // was inherited by the next Command Center row action — click "New task" on Drafting, get
+        // distracted, then click Open on Research, and Research opened under Drafting's boundary
+        // and raised a scope prompt naming a workspace the user never mentioned. A slot with one
+        // setter, two death paths and no abandonment path outlives the dispatch that created it.
+        //
+        // Now: a composer dispatch consumes it; every other dispatch kills it without inheriting.
+        // Either way it dies here, so it can never reach a second task. An explicit
+        // `workspaceBinding:` argument still wins over both, which is what keeps SONNY-38's
+        // precedence rule (card beats a workspace named in the command text) a single slot.
+        explicitWorkspaceBinding = workspaceBinding ?? (fromComposer ? pendingWorkspaceBinding : nil)
+        pendingWorkspaceBinding = nil
         currentTask?.cancel()
         isRunning = true
         currentTask = Task {
@@ -387,10 +606,22 @@ final class AgentViewModel: ObservableObject {
             taskUsageSummary = .empty
         }
 
+        activeTaskScope = .unscoped
+
         defer {
             publishTaskUsageSummary()
             isRunning = false
             currentTask = nil
+            // Per-task, cleared at every terminal exit — and deliberately *not* when the task is
+            // merely paused. An approval or a clarification is the same task waiting on the user,
+            // and it has to resume under the scope it was assessed with; clearing here would let
+            // `performApproval` execute unscoped after the user approved a scoped assessment, which
+            // is the stale-approval mismatch scoped requirement 4 exists to prevent. Every other
+            // exit — completed, failed, cancelled, refused, preview-only — is terminal and clears.
+            if approvalRequest == nil && clarificationQuestion == nil {
+                activeTaskScope = .unscoped
+                explicitWorkspaceBinding = nil
+            }
         }
 
         let taskHistoryStartedAt = Date()
@@ -432,10 +663,19 @@ final class AgentViewModel: ObservableObject {
             plan = prepared.plan
             initializeStepStatuses(for: prepared.plan)
 
+            // Resolved once, after the plan exists and before the first assessment, so that both
+            // `approvalRequest` below and `execute` inside `executePreparedRun` see the same value.
+            // The plan matters: `WorkspaceTaskTagging` reads `open_workspace`/`create_workspace`
+            // steps' own `workspaceName` before it ever looks at the command text, which is how a
+            // workspace-card dispatch resolves without needing the explicit binding at all.
+            activeTaskScope = resolveTaskScope(command: submittedCommand, plan: prepared.plan)
+            lastAssessedScope = activeTaskScope
+
             if let question = prepared.clarificationQuestion {
                 clarificationQuestion = question
                 clarificationAutoExecute = autoExecute
                 clarificationOrigin = origin
+                clarificationWorkspaceBinding = explicitWorkspaceBinding
                 finalSummary = "Clarification needed before I can act."
                 logStore.append(.summarize, "Clarification needed: \(question)")
                 recordPriorTaskContext(
@@ -447,7 +687,7 @@ final class AgentViewModel: ObservableObject {
                 return
             }
 
-            let request = try runner.approvalRequest(for: prepared, logAssessment: true)
+            let request = try runner.approvalRequest(for: prepared, logAssessment: true, scope: activeTaskScope)
             switch request.requirement {
             case .autoRun:
                 break
@@ -579,6 +819,11 @@ final class AgentViewModel: ObservableObject {
             markAllSteps(.canceled)
             finalSummary = "Approval canceled. No action was taken."
             logStore.append(.summarize, "Approval canceled by user")
+            // The pause ends here rather than resuming, so the binding dies with it. Without this
+            // the next command would inherit the cancelled task's workspace — the exact leak the
+            // rejected persistent-active-workspace design was rejected for.
+            activeTaskScope = .unscoped
+            explicitWorkspaceBinding = nil
             return
         }
 
@@ -646,11 +891,27 @@ final class AgentViewModel: ObservableObject {
     ///   the user pressed it, not an inheritance of the failed task's origin, so the caller states
     ///   it rather than it being inferred — same convention as `toggleVoiceRecording(origin:)`.
     func retryLastCommand(origin: TaskOrigin = .widget) {
-        guard !lastCommand.isEmpty, !isRunning, !isAwaitingApproval else {
+        // `clarificationQuestion == nil` for the same reason every other in-flight term here exists:
+        // a pause is a task the user has not finished answering, and retry is a *new* dispatch.
+        // Without it, the notification's Retry — which fires from outside SwiftUI, so no view gate
+        // can cover it — wrote the old command straight into a live pause.
+        guard !lastCommand.isEmpty, !isTaskInFlight else {
             return
         }
-        command = lastCommand
-        start(origin: origin)
+        // Carries the original run's workspace. `lastAssessedScope` is the post-terminal record of
+        // what the last task was assessed under and is deliberately never cleared, which is exactly
+        // what makes it readable here — by retry time the live binding is long gone. Without this a
+        // retry of a bound task runs unscoped, so a command that raised a scope prompt the first
+        // time runs silently the second: a relaxation, and the one thing this branch never does.
+        // Inherited from SONNY-38 rather than introduced here; fixed in-branch per fix-in-branch.
+        //
+        // Not `fromComposer`: a retry is a re-dispatch, so it still kills any card arm rather than
+        // consuming it — the explicit binding below wins over the arm either way.
+        var retryBinding: String?
+        if case .scoped(let scope) = lastAssessedScope {
+            retryBinding = scope.workspaceName
+        }
+        dispatch(command: lastCommand, origin: origin, workspaceBinding: retryBinding)
     }
 
     /// Submits the clarification answer as a **new** run, not a resume: this appends the Q&A to
@@ -677,11 +938,13 @@ final class AgentViewModel: ObservableObject {
         """
         let shouldAutoExecute = clarificationAutoExecute
         let shouldUseOrigin = clarificationOrigin
+        let shouldUseBinding = clarificationWorkspaceBinding
         clarificationAutoExecute = false
         clarificationOrigin = .commandCenter
+        clarificationWorkspaceBinding = nil
         clarificationQuestion = nil
         clarificationAnswer = ""
-        start(autoExecute: shouldAutoExecute, origin: shouldUseOrigin)
+        start(autoExecute: shouldAutoExecute, origin: shouldUseOrigin, workspaceBinding: shouldUseBinding)
     }
 
     /// - Parameter origin: Which surface's mic button this is — `toggleVoiceRecording()` is called
@@ -964,13 +1227,82 @@ final class AgentViewModel: ObservableObject {
     }
 
     func runRoutineWidget(_ routine: StoredRoutine) {
-        command = "Run my \(routine.name) routine"
-        start(autoExecute: true)
+        dispatch(command: "Run my \(routine.name) routine", autoExecute: true)
+    }
+
+    /// The workspace card's "New task here" action: bring the widget forward with an empty
+    /// composer, bound to this workspace.
+    ///
+    /// Distinct from `openWorkspaceWidget` below, which synthesizes a literal command and runs it.
+    /// This one starts nothing — it queues the binding and hands the user a cursor, which is the
+    /// half of the founder decision ("started from its card") that had no affordance at all.
+    ///
+    /// Summons through `widgetPresentationRequest`, never `FloatingWidgetWindowController.show()`:
+    /// SONNY-25 exists to remove the remaining direct callers and this must not add one.
+    func beginTaskInWorkspace(_ workspace: StoredWorkspace) {
+        pendingWorkspaceBinding = workspace.name
+        command = ""
+        widgetPresentationRequest += 1
+    }
+
+    /// Drops a queued card binding before anything has been submitted.
+    ///
+    /// Only ever clears the *pending* slot. A task already in flight keeps the scope it was
+    /// assessed under — un-scoping mid-run would mean the approval the user answered and the
+    /// execution that follows it disagreed about the boundary.
+    func clearPendingWorkspaceBinding() {
+        pendingWorkspaceBinding = nil
     }
 
     func openWorkspaceWidget(_ workspace: StoredWorkspace) {
-        command = "Open my \(workspace.name) workspace"
-        start(autoExecute: true)
+        dispatch(command: "Open my \(workspace.name) workspace", autoExecute: true)
+    }
+
+    /// Hands the widget composer a ready-made `edit_workspace` command from the detail sheet and
+    /// brings the widget forward.
+    ///
+    /// **Deliberately does not dispatch.** The alternative — `start(autoExecute: true)`, the way
+    /// `openWorkspaceWidget` runs its synthesized command — would send a boundary change straight
+    /// to the planner with no chance for the user to read it first. The approval would still fire
+    /// (nothing here can skip it), but the user would be approving an edit they never composed, and
+    /// a planner misreading of "remove the folder ~/Documents/X" is a boundary change nobody typed.
+    /// Pre-filling is `beginNewWorkspace`'s idiom and keeps the composed text in front of the user.
+    ///
+    /// It also writes nothing. Every scope mutation goes through `edit_workspace`, so the tier-2
+    /// add and tier-3 remove consents — including SONNY-40's "no longer restricts … at all" — are
+    /// exactly the ones the command line would raise. A store call here would be a second write
+    /// path that skips them.
+    ///
+    /// **Drops any armed card binding.** A scope edit composed from workspace B's sheet is a new
+    /// composition context, and the composer dispatch is the one dispatch permitted to consume a
+    /// pending arm — so leaving an arm from "New task here" on workspace A alive would run this edit
+    /// bound to A while its command edits B, under a chip naming A. A chip naming an unrelated
+    /// workspace over an edit command is exactly the confusion the arm rules exist to prevent, and
+    /// `start`'s own contract puts every non-composer entry point on the side of killing the arm
+    /// rather than inheriting it. `beginNewWorkspace` leaves the arm alive, but it hands over an
+    /// *incomplete* command the user is still composing; this one hands over a finished instruction
+    /// about a named workspace.
+    ///
+    /// Summons through `widgetPresentationRequest`, never `FloatingWidgetWindowController.show()`:
+    /// SONNY-25 exists to remove the remaining direct callers and this must not add one.
+    /// **Refuses while a clarification is open**, for the reason `dispatchTranscribedCommand`
+    /// records: the entry gate covers the buttons, this covers the timing.
+    ///
+    /// `composeWorkspaceScopeEdit` does not dispatch, so `canSubmit` never sees it — it writes
+    /// straight into `command`, which is the property `submitClarification` interpolates the pause's
+    /// question and answer *around*. Composing during a pause therefore produced a continuation that
+    /// was the unrelated edit text plus the Q&A, re-planned under the paused task's own captured
+    /// workspace binding, so an explicitly-bound task assessed the edit against the wrong
+    /// workspace's boundary. Nothing executed unapproved — but the assessment named the wrong
+    /// boundary, which is the property this branch exists to provide.
+    func composeWorkspaceScopeEdit(_ command: String) {
+        guard clarificationQuestion == nil else {
+            logStore.append(.observe, "Workspace edit ignored while a clarification is open.")
+            return
+        }
+        pendingWorkspaceBinding = nil
+        self.command = command
+        widgetPresentationRequest += 1
     }
 
     func markWorkspaceAsTeam(_ workspace: StoredWorkspace) {
@@ -1015,6 +1347,15 @@ final class AgentViewModel: ObservableObject {
         }
         do {
             try workspaceStore.delete(workspaceNamed: workspace.name)
+            // An arm naming this workspace dies with it. The chip must never promise a boundary the
+            // run will not apply: `resolveTaskScope` returns `.unscoped` for a name the store no
+            // longer has, so leaving the arm alive would render "In X" over a task that runs
+            // unscoped. Compared through the store's own folding rather than `==`, so the arm and
+            // the record are matched the same way every other lookup matches them.
+            if let armed = pendingWorkspaceBinding,
+               (try? workspaceStore.workspace(named: armed)) == nil {
+                pendingWorkspaceBinding = nil
+            }
             refreshSavedItems()
         } catch {
             setError("Could not delete workspace: \(error.localizedDescription)")
@@ -1048,6 +1389,13 @@ final class AgentViewModel: ObservableObject {
         clarificationQuestion = nil
         clarificationAnswer = ""
         clarificationAutoExecute = false
+        clarificationWorkspaceBinding = nil
+        activeTaskScope = .unscoped
+        explicitWorkspaceBinding = nil
+        // The pending card slot too. SONNY-38's review filed the identical finding against this
+        // same function for `explicitWorkspaceBinding`; a new binding field added one ticket later
+        // repeated it, which is why the enumeration above is written out rather than trusted.
+        pendingWorkspaceBinding = nil
         preparedRun = nil
         runner = nil
         pendingCommandForPriorTaskContext = nil
@@ -1146,6 +1494,13 @@ final class AgentViewModel: ObservableObject {
 
     private func makeExecutor() -> AgentActionExecutor {
         AgentActionExecutor(
+            zipArchiver: zipArchiver,
+            documentConverter: documentConverter,
+            browserOpener: browserOpener,
+            appOpener: appOpener,
+            fileOpener: fileOpener,
+            mediaOpener: mediaOpener,
+            finderContextReader: finderContextReader,
             routineStore: routineStore,
             workspaceStore: workspaceStore,
             // `try?` is the degradation path, not error swallowing: construction only throws for
@@ -1155,8 +1510,10 @@ final class AgentViewModel: ObservableObject {
             webSearchProvider: try? TavilySearchProvider(),
             usageRecorder: taskUsageRecorder,
             snippetStore: snippetStore,
+            runningAppSwitcher: runningAppSwitcher,
             recentArtifactStore: recentArtifactStore,
             shortcutCatalog: shortcutCatalog,
+            shortcutInvoker: shortcutInvoker,
             shortcutRunHistoryStore: shortcutRunHistoryStore,
             hotKeyReady: { [weak self] in self?.voiceHotKeyReady ?? true }
         )
@@ -1244,12 +1601,15 @@ final class AgentViewModel: ObservableObject {
             do {
                 let transcriber = try OpenAITranscriber(usageRecorder: taskUsageRecorder)
                 let result = try await transcriber.transcribe(audioFileURL: audioURL)
-                command = result.text
+                // Deliberately does *not* write `command` here. `dispatchTranscribedCommand` routes
+                // through `dispatch`, which assigns it and clears it again if the dispatch is
+                // refused — writing it first would reinstate exactly the residue this round removes,
+                // for a transcription that completed into a clarification pause.
                 finalSummary = ""
                 isTranscribingVoice = false
                 preserveUsageForNextStart = true
                 logStore.append(.observe, "Transcript ready. Sonny will act now.")
-                start(autoExecute: true, origin: voiceRecordingOrigin)
+                dispatchTranscribedCommand(result.text, origin: voiceRecordingOrigin)
             } catch {
                 isTranscribingVoice = false
                 // This is the bug that made the auto-clear timer feel broken: a failed
@@ -1261,6 +1621,65 @@ final class AgentViewModel: ObservableObject {
                 logStore.append(.summarize, "Transcription failed: \(error.localizedDescription)")
             }
         }
+    }
+
+    /// The dispatch a completed voice transcription issues — the one implementation, called by the
+    /// real completion above and driven directly by tests.
+    ///
+    /// Internal rather than private so it is reachable without a real transcriber and an API key,
+    /// which is what the live path needs. It is a seam, not a reimplementation: there is exactly one
+    /// copy of the guard and one `start(...)` call, so a test that exercises this exercises what
+    /// ships.
+    ///
+    /// **The guard is here as well as in `canUseVoice` for a reason, not by belt-and-braces habit.**
+    /// `canUseVoice` gates the *entry* points — the mic button and push-to-talk — but a
+    /// transcription already in flight when a clarification arrives would still land here. Refusing
+    /// at the dispatch makes the guarantee independent of that timing.
+    func dispatchTranscribedCommand(_ transcript: String, origin: TaskOrigin = .widget) {
+        guard clarificationQuestion == nil else {
+            logStore.append(.observe, "Voice command ignored while a clarification is open.")
+            return
+        }
+        // Voice submitted from the widget's own mic *is* the composer, with the chip visible; from
+        // anywhere else it is not. Routed through `dispatch` so a refusal for any *other* reason —
+        // a run that started between the transcription and this call — leaves no residue either;
+        // the guard above stays because it is the one this method's own contract names.
+        dispatch(
+            command: transcript,
+            autoExecute: true,
+            origin: origin,
+            fromComposer: origin == .widget
+        )
+    }
+
+    /// Resolves which workspace this task is in, and loads it into a scope.
+    ///
+    /// Two signals, in a fixed order. An **explicit binding** from a dispatch that already knows its
+    /// workspace (B4's card action) wins; otherwise the name is resolved from the plan and command
+    /// by `WorkspaceTaskTagging`, reused exactly as it stands. That resolver already matches
+    /// `[the|my] workspace X` against real saved names using the stores' own case/diacritic folding,
+    /// with a documented leftmost-then-longest tie-break and deliberate non-`\b` boundary checks —
+    /// writing a second matcher here would give one concept two behaviours, which is how "why did it
+    /// tag that" bugs start. It is the same call `recordPriorTaskContext` already makes for task
+    /// history; the difference is purely *when*, and that is the whole ticket: history tags after a
+    /// task terminates, this runs before it is assessed.
+    ///
+    /// Returns `.unscoped` for a name that no longer resolves to a stored record — a workspace
+    /// deleted between dispatch and assessment binds to nothing rather than to an empty boundary,
+    /// because an empty `WorkspaceScope` would report `.unconstrained` for every kind and read as a
+    /// workspace that restricts nothing rather than as no workspace at all.
+    private func resolveTaskScope(command: String, plan: AgentPlan?) -> TaskWorkspaceScope {
+        let resolvedName = explicitWorkspaceBinding ?? WorkspaceTaskTagging.resolvedWorkspaceName(
+            command: command,
+            plan: plan,
+            routineStore: routineStore,
+            workspaceStore: workspaceStore
+        )
+        guard let resolvedName,
+              let record = try? workspaceStore.workspace(named: resolvedName) else {
+            return .unscoped
+        }
+        return .scoped(WorkspaceScope(workspace: record))
     }
 
     private func executePreparedRun(
@@ -1275,7 +1694,11 @@ final class AgentViewModel: ObservableObject {
             preparedRun,
             approvalDecision: approvalDecision,
             confirmationMessage: confirmationMessage,
-            logRiskAssessment: logRiskAssessment
+            logRiskAssessment: logRiskAssessment,
+            // The same value the approval the user saw was built from. `execute` re-assesses fresh
+            // on every call, so a `.unscoped` here against a scoped `approvalRequest` would have the
+            // stale-approval guard comparing two different assessments.
+            scope: activeTaskScope
         )
         markAllSteps(.complete)
         // The task itself succeeded; a bookkeeping failure is a storage notice, not a task error.
@@ -1311,6 +1734,26 @@ final class AgentViewModel: ObservableObject {
             publishTaskUsageSummary()
             isRunning = false
             currentTask = nil
+            // Guarded exactly as `performStart`'s is, and for the same reason: reaching this point
+            // does *not* mean the task ended. `AgentRunner.execute` re-assesses on every call and
+            // throws `.approvalRequired` whenever the re-assessed tier exceeds the tier the user
+            // approved — the ordinary state-drift class, "the zip already exists" landing between
+            // the approval and the execution. The catch below re-arms `approvalRequest`, which is a
+            // second pause, not a terminal exit.
+            //
+            // Clearing there would hand the *second* approval's execution `.unscoped`: the run would
+            // still proceed (an unscoped re-assessment can only be lower, so the stale-approval
+            // guard still passes) but the workspace boundary would not be applied to it — no nested
+            // forwarding, no scope escalation in the trace. That is the same outcome-invisible shape
+            // as mutation B3, arriving on a real code path instead of a mutated one.
+            // `self.` is load-bearing: this function's own parameter is also called
+            // `approvalRequest` and is never nil, so an unqualified read here would shadow the
+            // published property and the guard would never fire — the clear would stay effectively
+            // unconditional while looking guarded.
+            if self.approvalRequest == nil {
+                activeTaskScope = .unscoped
+                explicitWorkspaceBinding = nil
+            }
         }
 
         do {
@@ -1621,7 +2064,13 @@ final class AgentViewModel: ObservableObject {
             let result = try await runner.execute(
                 prepared,
                 approvalDecision: .approved(.tier2),
-                confirmationMessage: "Scheduled run approved by this routine's unattended-run setting"
+                confirmationMessage: "Scheduled run approved by this routine's unattended-run setting",
+                // `.unscoped` on purpose, not by omission. A scheduled run has no workspace binding
+                // available: `SaveRoutineCapabilityAdapter.validateRoutineSteps` rejects both
+                // `create_workspace` and `open_workspace` as routine steps, so a stored routine can
+                // never name a workspace, and nothing else in a scheduled run carries one — there is
+                // no command text a user typed and no dispatch that named one.
+                scope: .unscoped
             )
             recordScheduledRunInHistory(name: name, at: occurrence)
             recordScheduledTaskHistory(status: .completed, startedAt: startedAt)

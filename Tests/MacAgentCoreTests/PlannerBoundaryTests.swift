@@ -49,6 +49,7 @@ struct PlannerBoundaryTests {
         - For teaching a routine, produce one save_routine step with routineName and routineSteps containing only registered non-routine steps. Do not put save_routine, run_routine, clarify, or unsupported inside routineSteps.
         - For running a saved routine, produce one run_routine step with routineName.
         - For creating a workspace, produce one create_workspace step with workspaceName, workspaceApps, and workspaceURLs. Use only explicitly named apps/URLs. If none are provided, ask a clarification question.
+        - For changing a workspace the user already saved, produce one edit_workspace step with workspaceName and only the fields the user asked to change: workspaceApps, workspaceURLs, workspaceFileLocations to add, and workspaceAppsToRemove, workspaceURLsToRemove, workspaceFileLocationsToRemove to remove. Never use create_workspace to change an existing workspace, and never put an item in both an add and a remove field.
         - For opening a saved workspace, produce one open_workspace step with workspaceName.
         - For running an existing Apple Shortcut, produce one invoke_shortcut step with shortcutName and optional shortcutInput when simple text input was explicitly supplied.
         - You may produce multi-step chained plans when the user asks for multiple supported actions. Keep steps in execution order.
@@ -98,6 +99,10 @@ struct PlannerBoundaryTests {
             "workspaceName",
             "workspaceApps",
             "workspaceURLs",
+            "workspaceFileLocations",
+            "workspaceAppsToRemove",
+            "workspaceURLsToRemove",
+            "workspaceFileLocationsToRemove",
             "sourceURLs",
             "searchQuery",
             "draftTitle",
@@ -243,13 +248,19 @@ private let expectedDefaultPlannerDescription = """
   dry run: Preview the saved routine without executing its steps.
   examples: Run my morning setup routine
 - create_workspace: Create workspace launcher
-  description: Save a named workspace containing allowlisted apps and safe http/https URLs.
+  description: Save a named workspace containing the apps and safe http/https URLs the user names. An app does NOT have to be in the supported-apps list: include every app the user names, because a workspace's apps are also its restriction scope. An unsupported app is saved for scope only and simply is not opened when the workspace opens.
   required fields: workspaceName
   side effects: write local workspace file
   dry run: Show the workspace apps and URLs without saving.
-  examples: Create a workspace called research with Safari, VS Code, and https://github.com
+  examples: Create a workspace called research with Safari, VS Code, and https://github.com | Create a workspace called drafting with Microsoft Word and Safari
+- edit_workspace: Edit workspace
+  description: Add or remove apps, safe http/https URLs, and folders on a workspace the user has already saved. A workspace's apps, URLs, and folders are also its restriction scope, so include every app the user names whether or not it is in the supported-apps list. Folders must be inside Desktop or Documents.
+  required fields: workspaceName
+  side effects: write local workspace file
+  dry run: Show the additions and removals without saving.
+  examples: Add ~/Documents/ClientAlpha to my Client Alpha workspace | Remove Slack from my research workspace
 - open_workspace: Open saved workspace
-  description: Open every app and URL saved in a named workspace. Use only when the user names a workspace they have actually saved; do not infer a workspace name from vague activity phrasing such as "focus on writing" or "get into research mode" — ask a clarifying question instead.
+  description: Open the supported apps and URLs saved in a named workspace. Use only when the user names a workspace they have actually saved; do not infer a workspace name from vague activity phrasing such as "focus on writing" or "get into research mode" — ask a clarifying question instead.
   required fields: workspaceName
   side effects: open apps, open browser
   dry run: Show apps and URLs that would open.

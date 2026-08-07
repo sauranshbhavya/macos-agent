@@ -272,4 +272,62 @@ struct AgentPlanDecoderTests {
             _ = try OpenAIResponseParser.outputText(from: Data("<html>502 Bad Gateway</html>".utf8))
         }
     }
+
+    /// Pins `AgentPlanDecoder.stepKeys` — a `private` allowlist that `decodeStrict` rejects anything
+    /// outside — against the four fields `edit_workspace` introduced.
+    ///
+    /// It is a second list, not the same one `PlannerBoundaryTests` already pins:
+    /// `AgentPlanSchema.stepRequiredKeys` is what the *model* is told to emit, `stepKeys` is what the
+    /// decoder will *accept*, and nothing couples them. They agree today, and they can drift apart
+    /// with the whole suite green — at which point a well-formed planner response for a real user
+    /// command dies at `unexpectedStepKey`, at runtime, with no test having failed. Decoding a plan
+    /// that actually carries all four keys is what makes that drift impossible in this direction.
+    @Test
+    func decodesAnEditWorkspacePlanCarryingEveryNewStepKey() throws {
+        let json = """
+        {
+          "summary": "Edit the Client Alpha workspace.",
+          "requiresConfirmation": true,
+          "steps": [
+            {
+              "id": "edit",
+              "operation": "edit_workspace",
+              "description": "Edit the workspace.",
+              "workspaceName": "Client Alpha",
+              "workspaceApps": ["Notes"],
+              "workspaceURLs": ["https://github.com"],
+              "workspaceFileLocations": ["~/Documents/ClientAlpha"],
+              "workspaceAppsToRemove": ["Slack"],
+              "workspaceURLsToRemove": ["https://example.com"],
+              "workspaceFileLocationsToRemove": ["~/Documents/Old"]
+            }
+          ]
+        }
+        """
+
+        let plan = try AgentPlanDecoder.decodeStrict(from: json)
+
+        let step = try #require(plan.steps.first)
+        #expect(step.operation == .editWorkspace)
+        #expect(step.workspaceName == "Client Alpha")
+        #expect(step.workspaceApps == ["Notes"])
+        #expect(step.workspaceURLs == ["https://github.com"])
+        #expect(step.workspaceFileLocations == ["~/Documents/ClientAlpha"])
+        #expect(step.workspaceAppsToRemove == ["Slack"])
+        #expect(step.workspaceURLsToRemove == ["https://example.com"])
+        #expect(step.workspaceFileLocationsToRemove == ["~/Documents/Old"])
+    }
+
+    /// The other half of the same allowlist: a key outside it is still rejected, so the test above
+    /// pins acceptance of exactly four new names rather than the removal of the check itself.
+    @Test
+    func aStepKeyOutsideTheAllowlistIsStillRejected() throws {
+        let json = """
+        {"summary":"X","requiresConfirmation":false,"steps":[{"id":"a","operation":"edit_workspace","description":"No","workspaceFolders":["~/Documents"]}]}
+        """
+
+        #expect(throws: AgentPlanDecodingError.unexpectedStepKey("workspaceFolders")) {
+            _ = try AgentPlanDecoder.decodeStrict(from: json)
+        }
+    }
 }

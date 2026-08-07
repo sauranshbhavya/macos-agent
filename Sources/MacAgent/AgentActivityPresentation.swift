@@ -63,6 +63,8 @@ enum AgentActivityPresentation {
             return "Run routine"
         case .createWorkspace:
             return "Create workspace"
+        case .editWorkspace:
+            return "Edit workspace"
         case .openWorkspace:
             return "Open workspace"
         case .clarify:
@@ -93,6 +95,28 @@ enum AgentActivityPresentation {
         case .summarize:
             return "checkmark.seal"
         }
+    }
+
+    /// The widget's in-composer binding indicator: which workspace the next command belongs to.
+    ///
+    /// A pure function rather than copy authored in the view body, following
+    /// `firstRunApprovalExplainerLines`' precedent — this repo has no SwiftUI view-inspection
+    /// harness, so a sentence written inline in a `Text(...)` is untestable and can ship wrong.
+    ///
+    /// Deliberately says "in", not "active in" or "switched to": the binding is per task, and copy
+    /// implying a mode is how the rejected persistent-active-workspace design creeps back in.
+    static func workspaceBindingIndicatorText(workspaceName: String) -> String {
+        "In \(workspaceName)"
+    }
+
+    /// The accessibility label for the affordance that drops the binding again.
+    static func clearWorkspaceBindingLabel(workspaceName: String) -> String {
+        "Clear the \(workspaceName) workspace binding"
+    }
+
+    /// The workspace card's dispatch action title.
+    static func newTaskInWorkspaceLabel(workspaceName: String) -> String {
+        "New task in \(workspaceName)"
     }
 
     /// The explanatory lines the floating widget's permission panel puts above its "Allow access

@@ -65,15 +65,26 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
     ///
     /// The rule itself is unchanged from the save capability's original list. Routines are
     /// declarative local plans, so they may not author or invoke other routines
-    /// (`.saveRoutine`, `.runRoutine`), may not create or open workspaces (`.createWorkspace`,
-    /// `.openWorkspace` — a scheduled routine deliberately has no workspace binding, see
-    /// `docs/sonny-founder-design-decisions.md`), may not ask a question a scheduled run has
-    /// nobody present to answer (`.clarify`), and may not persist the planner's own "I do not
-    /// know" as if it were a plan (`.unsupported`).
+    /// (`.saveRoutine`, `.runRoutine`), may not create, edit or open workspaces
+    /// (`.createWorkspace`, `.editWorkspace`, `.openWorkspace` — a scheduled routine deliberately
+    /// has no workspace binding, see `docs/sonny-founder-design-decisions.md`), may not ask a
+    /// question a scheduled run has nobody present to answer (`.clarify`), and may not persist the
+    /// planner's own "I do not know" as if it were a plan (`.unsupported`).
+    ///
+    /// **`.editWorkspace` is here because a `Set` cannot force the question the way an exhaustive
+    /// switch does.** `PlanScopedResources` refuses a `default:` clause precisely so a new
+    /// `AgentOperation` cannot be added without someone classifying it; membership in this set has
+    /// no such guard, so a new operation silently defaults to *permitted*. Left out, the hole would
+    /// have been one-directional but real: removing from a workspace escalates to tier 3, which an
+    /// unattended run structurally cannot satisfy, but *adding* stays tier 2, which it can — so a
+    /// scheduled routine could have widened a workspace's restriction scope with nobody present to
+    /// see it. That is the hazard SONNY-40's own row-C forward flag names, reached through the
+    /// scheduler instead of the command line.
     public static let forbiddenStepOperations: Set<AgentOperation> = [
         .saveRoutine,
         .runRoutine,
         .createWorkspace,
+        .editWorkspace,
         .openWorkspace,
         .clarify,
         .unsupported
@@ -108,12 +119,28 @@ public struct StoredWorkspace: Codable, Equatable, Sendable {
     public var apps: [String]
     public var urls: [String]
     public var teamType: WorkspaceTeamType?
+    /// Folders this workspace restricts file work to. Optional for exactly the reason spelled out
+    /// on `effectiveTeamType` below — a non-Optional property with a Swift-side default would throw
+    /// `keyNotFound` on every `workspaces.json` written before this field existed.
+    ///
+    /// Together with `apps` and `urls` this is the workspace's restriction scope. `apps`/`urls` are
+    /// reused rather than paired with parallel scope lists: two 95%-identical lists is a DRY
+    /// violation at the product level and a guaranteed source of "why did it prompt, it's right
+    /// there in my workspace."
+    public var fileLocations: [String]?
 
-    public init(name: String, apps: [String], urls: [String], teamType: WorkspaceTeamType? = nil) {
+    public init(
+        name: String,
+        apps: [String],
+        urls: [String],
+        teamType: WorkspaceTeamType? = nil,
+        fileLocations: [String]? = nil
+    ) {
         self.name = name
         self.apps = apps
         self.urls = urls
         self.teamType = teamType
+        self.fileLocations = fileLocations
     }
 
     /// `teamType` is Optional so legacy on-disk JSON missing the key still decodes (synthesized
@@ -122,6 +149,14 @@ public struct StoredWorkspace: Codable, Equatable, Sendable {
     /// calls `decode(_:forKey:)` and throws `keyNotFound` regardless of any default literal.
     public var effectiveTeamType: WorkspaceTeamType {
         teamType ?? .solo
+    }
+
+    /// File locations as every reader outside `WorkspaceStore.save` wants them. "No key on disk"
+    /// and "explicitly emptied" both mean this workspace restricts no folders — a `ScopeVerdict` of
+    /// `.unconstrained` either way. The nil/`[]` distinction is meaningful only to `save`, where nil
+    /// means "not talking about file locations" and `[]` means "clear them".
+    public var effectiveFileLocations: [String] {
+        fileLocations ?? []
     }
 }
 
@@ -385,9 +420,39 @@ public struct WorkspaceStore: @unchecked Sendable {
         }
     }
 
+    /// Creates a workspace, or redefines an existing one's contents.
+    ///
+    /// Carries forward the existing file locations whenever the incoming workspace leaves them nil,
+    /// the same merge-preserve `RoutineStore.save` applies to a schedule and run history — and for
+    /// a sharper reason. `CreateWorkspaceCapabilityAdapter` builds a fresh
+    /// `StoredWorkspace(name:apps:urls:)` on every save, so without this, re-creating a workspace by
+    /// natural language would silently delete its restriction scope. That overwrite does escalate to
+    /// tier 3, but what the user approves is *replacing the workspace's contents*; consent to
+    /// replace a launch bundle is not consent to drop a security boundary.
+    ///
+    /// nil means "I am not talking about file locations"; `[]` means "clear them".
+    ///
+    /// `teamType` merges on the same nil-means-silence rule (SONNY-43, folded into SONNY-40). It was
+    /// deliberately left unmerged while SONNY-36 shipped, on the argument that a display badge is not
+    /// a boundary — but the argument was about *risk*, not correctness, and the bug it left is plain:
+    /// `CreateWorkspaceCapabilityAdapter` builds `StoredWorkspace(name:apps:urls:)` with no team type
+    /// at all, so re-creating a workspace by natural language silently demoted a team workspace back
+    /// to solo. Nothing about "add Safari to my workspace" is consent to un-mark it as a team's.
+    ///
+    /// **These two are the whole merge, and the list is closed by enumeration rather than by
+    /// inspection.** `StoredWorkspace` stores exactly five things: `name` is the key a save is
+    /// addressed to, `apps` and `urls` are the contents a save exists to replace, and `teamType` and
+    /// `fileLocations` are the two a caller can decline to mention. A sixth field added later is a
+    /// silent-drop bug the moment it is not classified into one of those three groups.
     public func save(_ workspace: StoredWorkspace) throws {
         var workspaces = try loadAll()
-        workspaces[normalized(workspace.name)] = workspace
+        let key = normalized(workspace.name)
+        var merged = workspace
+        if let existing = workspaces[key] {
+            merged.fileLocations = workspace.fileLocations ?? existing.fileLocations
+            merged.teamType = workspace.teamType ?? existing.teamType
+        }
+        workspaces[key] = merged
         try write(workspaces)
     }
 

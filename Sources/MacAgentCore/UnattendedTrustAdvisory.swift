@@ -34,7 +34,14 @@ public enum UnattendedTrustAdvisory {
         executor: AgentActionExecutor
     ) -> String? {
         let plan = RunRoutineCapabilityAdapter.plan(forRoutineNamed: name)
-        guard let assessment = try? executor.assessRisk(plan: plan) else {
+        // `.unscoped` is the semantically correct value here, not merely the compiling one: this
+        // advisory pre-checks a routine from the routine's own settings surface, outside any task
+        // and therefore outside any workspace binding. Nothing about the advisory's behavior or
+        // copy changes — the assessment it reads is byte-identical to the one it read before scope
+        // existed. (SONNY-37; user-ratified narrow exception to that ticket's never-touch entry,
+        // which covers this file's behavior. Whether a *scheduled run's* pre-check should one day
+        // assess with the run's real scope is explicitly undecided and is flagged on the ticket.)
+        guard let assessment = try? executor.assessRisk(plan: plan, scope: .unscoped) else {
             return nil
         }
         guard assessment.effectiveTier.rawValue >= CapabilityRiskTier.tier3.rawValue else {

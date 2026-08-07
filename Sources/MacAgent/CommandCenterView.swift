@@ -1892,6 +1892,24 @@ struct WorkspaceAppIconPresentation: Equatable {
     }
 }
 
+/// How many completed tasks a workspace has, and how that reads.
+///
+/// Shared by the card and the detail sheet rather than computed twice: two surfaces disagreeing
+/// about what "3 tasks" counts is the kind of drift a user notices and cannot explain.
+enum WorkspaceTaskCount {
+    /// All-time, `.completed`-only (matching the Insights breakdown's own definition of "a real
+    /// task happened here") — not windowed to the breakdown's trailing 30 days, since this is a
+    /// simple running count, not a recent-trend chart, and the store's 10,000-record cap is
+    /// already generously large for this to matter at v1 scale.
+    static func count(forWorkspaceNamed name: String, in records: [CompletedTaskRecord]) -> Int {
+        records.filter { $0.outcomeStatus == .completed && $0.workspaceName == name }.count
+    }
+
+    static func text(_ count: Int) -> String {
+        "\(count) task\(count == 1 ? "" : "s")"
+    }
+}
+
 struct WorkspaceCardPresentation: Equatable {
     let name: String
     let effectiveTeamType: WorkspaceTeamType
@@ -1910,12 +1928,8 @@ struct WorkspaceCardPresentation: Equatable {
         name = workspace.name
         effectiveTeamType = workspace.effectiveTeamType
         isDefaultTeamType = workspace.teamType == nil
-        // All-time, `.completed`-only (matching the Insights breakdown's own definition of "a real
-        // task happened here") — not windowed to the breakdown's trailing 30 days, since this is a
-        // simple running count, not a recent-trend chart, and the store's 10,000-record cap is
-        // already generously large for this to matter at v1 scale.
-        taskCount = taskHistoryRecords.filter { $0.outcomeStatus == .completed && $0.workspaceName == workspace.name }.count
-        taskCountText = "\(taskCount) task\(taskCount == 1 ? "" : "s")"
+        taskCount = WorkspaceTaskCount.count(forWorkspaceNamed: workspace.name, in: taskHistoryRecords)
+        taskCountText = WorkspaceTaskCount.text(taskCount)
         appIcons = workspace.apps.map { WorkspaceAppIconPresentation(appName: $0, resolver: iconResolver) }
         urlsText = workspace.urls.isEmpty ? nil : workspace.urls.map(Self.shortURL).joined(separator: ", ")
     }
@@ -1925,6 +1939,279 @@ struct WorkspaceCardPresentation: Equatable {
             return rawValue
         }
         return host.replacingOccurrences(of: "www.", with: "", options: .anchored)
+    }
+}
+
+/// One stored scope entry, with the command that would remove it.
+///
+/// The command is built here rather than in the view body so that what every affordance actually
+/// sends is pinned by a pure test — this repo has no SwiftUI view-inspection harness, so anything
+/// composed inside a `body` is unassertable.
+struct WorkspaceScopeEntryPresentation: Equatable {
+    let value: String
+    let removeCommand: String
+    /// States the real removal unit, not a single-entry promise — see `removalUnits`.
+    let removeAccessibilityLabel: String
+    /// Non-nil when other stored entries leave with this one. Rendered *visibly*, because an
+    /// accessibility label alone tells a sighted user nothing before they tap.
+    let sharedRemovalNote: String?
+    /// Non-nil when `WorkspaceScope` classified this entry inert: it is stored, it is shown, and it
+    /// can never match anything. Carries the evaluator's own reason.
+    let inertNote: String?
+}
+
+/// One dimension of a workspace's boundary, as the detail sheet renders it.
+///
+/// **The empty case is the one that matters, and "empty" is the evaluator's word, not a count of
+/// stored strings.** `WorkspaceScope` reports `.unconstrained` whenever its *canonical* list is
+/// empty, and its own doc comment spells out that this includes the case where every entry the user
+/// configured turned out to be inert. Deriving this from `entries.isEmpty` — which this shipped with
+/// first — is the same two-notions-of-empty defect SONNY-40 removed from the consent path one commit
+/// earlier, reintroduced under a different name on the surface whose entire job is telling the user
+/// whether a dimension restricts. It is worse here than there: the user reads a dimension as
+/// restricting when nothing is, and the sheet withholds the one sentence that would say otherwise.
+struct WorkspaceScopeSectionPresentation: Equatable {
+    let title: String
+    /// Stored entries verbatim, in stored order. Deliberately *not* shortened the way the card
+    /// shortens a URL to its host: the card is a glance, this sheet is the one place the whole
+    /// boundary is meant to be inspectable, and an abbreviated entry is one the user cannot check
+    /// against the entry a consent prompt named.
+    let entries: [WorkspaceScopeEntryPresentation]
+    /// Whether this dimension constrains anything, read from `WorkspaceScope`'s canonical list.
+    /// **Not** `!entries.isEmpty`: a list of nothing but inert entries has rows and restricts
+    /// nothing.
+    let isRestricted: Bool
+    /// Non-nil exactly when `isRestricted` is false — including when there are rows to show.
+    let notRestrictedText: String?
+    /// A *completable prefix*, in `beginNewWorkspace`'s idiom, because the entry being added does
+    /// not exist yet for the sheet to name. The user finishes it in the widget composer.
+    let addCommand: String
+    let addAccessibilityLabel: String
+}
+
+/// Everything the workspace detail sheet renders, computed as data.
+///
+/// Net-new UI with no wireframe — `13-MainAppWorkspaces.svg` is a card grid only — built as the
+/// stated, reasoned exception recorded in `docs/sonny-branch-b-plan.md` §11 and
+/// `docs/sonny-founder-design-decisions.md`. **System A only**: liquid glass was tried for
+/// workspace surfaces and explicitly reverted as too distracting from content, so this does not
+/// inherit the routine-detail view's System-B-inside-System-A treatment.
+struct WorkspaceDetailPresentation: Equatable {
+    let name: String
+    let avatarInitial: String
+    let effectiveTeamType: WorkspaceTeamType
+    let isDefaultTeamType: Bool
+    let teamTypeText: String
+    let taskCount: Int
+    let taskCountText: String
+    let apps: WorkspaceScopeSectionPresentation
+    let urls: WorkspaceScopeSectionPresentation
+    let fileLocations: WorkspaceScopeSectionPresentation
+    /// A single line explaining what an unrestricted dimension means, shown once rather than
+    /// repeated under every empty list. Present only when at least one dimension is unrestricted —
+    /// a fully-configured workspace needs no explanation of a state it is not in.
+    let unrestrictedFootnote: String?
+
+    /// Fixed order — apps, URLs, file locations — matching the order `edit_workspace`'s consent
+    /// prompts report a mixed edit in, so the two surfaces read the same way round.
+    var sections: [WorkspaceScopeSectionPresentation] { [apps, urls, fileLocations] }
+
+    /// The accessibility label for the sheet's mark-as-team control, owned here rather than built in
+    /// the view body — its Add and Remove siblings are pure and tested, and this one was not.
+    let markAsTeamAccessibilityLabel: String
+
+    /// `catalog` and `whitelist` are injectable purely so a test can pin behaviour without depending
+    /// on what happens to be installed or on the real home directory. Production always takes the
+    /// defaults, which is what makes the sheet's answer and the evaluator's answer the same answer.
+    init(
+        workspace: StoredWorkspace,
+        taskHistoryRecords: [CompletedTaskRecord],
+        catalog: MacAppCatalog = .default,
+        whitelist: PathWhitelist = PathWhitelist()
+    ) {
+        name = workspace.name
+        avatarInitial = WorkspaceAvatarInitial.from(name: workspace.name)
+        effectiveTeamType = workspace.effectiveTeamType
+        isDefaultTeamType = workspace.teamType == nil
+        teamTypeText = workspace.effectiveTeamType == .team ? "Team workspace" : "Just you"
+        taskCount = WorkspaceTaskCount.count(forWorkspaceNamed: workspace.name, in: taskHistoryRecords)
+        taskCountText = WorkspaceTaskCount.text(taskCount)
+        markAsTeamAccessibilityLabel = "Mark \(workspace.name) as a team workspace"
+
+        // Built once, and it is the single source of truth for every "does this restrict anything"
+        // question below. `WorkspaceScopeInertEntry`'s own doc comment names this sheet as its
+        // intended consumer — "so a dropped entry is never mistaken for one that matched nothing".
+        let scope = WorkspaceScope(workspace: workspace, catalog: catalog, whitelist: whitelist)
+
+        apps = Self.section(
+            title: "Apps",
+            noun: "the app",
+            kind: .app,
+            values: workspace.apps,
+            workspaceName: workspace.name,
+            isRestricted: !scope.appKeys.isEmpty,
+            notRestrictedText: "Not restricted — this workspace does not limit which apps a task can use.",
+            scope: scope,
+            catalog: catalog,
+            whitelist: whitelist
+        )
+        urls = Self.section(
+            title: "URLs",
+            noun: "the URL",
+            kind: .webDomain,
+            values: workspace.urls,
+            workspaceName: workspace.name,
+            isRestricted: !scope.webDomains.isEmpty,
+            notRestrictedText: "Not restricted — this workspace does not limit which sites a task can open.",
+            scope: scope,
+            catalog: catalog,
+            whitelist: whitelist
+        )
+        // `effectiveFileLocations`, never the raw Optional: "no key on disk" and "explicitly
+        // emptied" are the same thing to every reader outside `WorkspaceStore.save`, and both mean
+        // this dimension restricts nothing.
+        fileLocations = Self.section(
+            title: "File locations",
+            noun: "the folder",
+            kind: .fileLocation,
+            values: workspace.effectiveFileLocations,
+            workspaceName: workspace.name,
+            isRestricted: !scope.fileRoots.isEmpty,
+            notRestrictedText: "Not restricted — this workspace does not limit which folders a task can touch.",
+            scope: scope,
+            catalog: catalog,
+            whitelist: whitelist
+        )
+        unrestrictedFootnote = [apps, urls, fileLocations].contains { !$0.isRestricted }
+            ? "An unrestricted list means this workspace says nothing about that kind of thing — Sonny neither "
+                + "limits it here nor treats it as specially allowed."
+            : nil
+    }
+
+    /// The sentence shown when an open sheet's workspace is no longer stored. Owned here for the
+    /// same reason as `markAsTeamAccessibilityLabel`.
+    static func unavailableText(name: String) -> String {
+        "“\(name)” is no longer saved."
+    }
+
+    private static func section(
+        title: String,
+        noun: String,
+        kind: ScopedResourceKind,
+        values: [String],
+        workspaceName: String,
+        isRestricted: Bool,
+        notRestrictedText: String,
+        scope: WorkspaceScope,
+        catalog: MacAppCatalog,
+        whitelist: PathWhitelist
+    ) -> WorkspaceScopeSectionPresentation {
+        let inertReasons = Dictionary(
+            scope.inertEntries.filter { $0.kind == kind }.map { ($0.value, $0.reason) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let units = removalUnits(kind: kind, values: values, catalog: catalog, whitelist: whitelist)
+
+        return WorkspaceScopeSectionPresentation(
+            title: title,
+            entries: values.indices.map { index in
+                let value = values[index]
+                let alsoRemoved = units[index]
+                return WorkspaceScopeEntryPresentation(
+                    value: value,
+                    removeCommand: "In my \(workspaceName) workspace, remove \(noun) \(value)",
+                    removeAccessibilityLabel: alsoRemoved.isEmpty
+                        ? "Remove \(value) from \(workspaceName)"
+                        : "Remove \(value) from \(workspaceName), which also removes "
+                            + alsoRemoved.joined(separator: ", "),
+                    sharedRemovalNote: alsoRemoved.isEmpty
+                        ? nil
+                        : "Removing this also removes \(alsoRemoved.joined(separator: ", ")).",
+                    // The evaluator's own words for *why*, never a paraphrase: a second explanation
+                    // of inertness is a second thing that can disagree with the classification it
+                    // is explaining.
+                    inertNote: inertReasons[value].map { "Not in effect — \($0)" }
+                )
+            },
+            isRestricted: isRestricted,
+            notRestrictedText: isRestricted ? nil : notRestrictedText,
+            // Trailing space is load-bearing: the composer opens with the caret after it so the
+            // user types only the entry.
+            addCommand: "In my \(workspaceName) workspace, add \(noun) ",
+            addAccessibilityLabel: "Add \(noun) to \(workspaceName)"
+        )
+    }
+
+    /// For each stored entry, the *other* stored entries that leave with it when it is removed.
+    ///
+    /// `edit_workspace` matches a removal request at a coarser grain than a row — by host for URLs,
+    /// by catalog key for apps — and the adapter's own comment says a workspace "may legitimately
+    /// hold both" URLs on one host, so several rows sharing one removal unit is an expected state.
+    /// A per-entry Remove button promising single-entry removal would be lying on the one surface
+    /// built to make the boundary trustworthy.
+    ///
+    /// Computed by asking the evaluator twice rather than by re-deriving its keys, which are not
+    /// visible outside `MacAgentCore` and must not be copied here. A scope built from entry A is
+    /// asked about entry B and vice versa, and only a **symmetric** match counts as one unit. One
+    /// direction alone would over-group: `verdict(for:)` is folder *containment* and a dot-suffix
+    /// host match, so `github.com` accepts `api.github.com` and `~/Documents` accepts
+    /// `~/Documents/X`, neither in reverse. Symmetry turns those deliberately asymmetric rules back
+    /// into the equality the adapter's removal matching actually uses.
+    private static func removalUnits(
+        kind: ScopedResourceKind,
+        values: [String],
+        catalog: MacAppCatalog,
+        whitelist: PathWhitelist
+    ) -> [[String]] {
+        let scopes = values.map { value in
+            WorkspaceScope(
+                workspace: singleEntryWorkspace(kind: kind, value: value),
+                catalog: catalog,
+                whitelist: whitelist
+            )
+        }
+        let resources = values.map { resource(kind: kind, value: $0) }
+
+        return values.indices.map { index in
+            values.indices.compactMap { other -> String? in
+                guard other != index,
+                      let mine = resources[index],
+                      let theirs = resources[other],
+                      scopes[index].verdict(for: theirs) == .inScope,
+                      scopes[other].verdict(for: mine) == .inScope else {
+                    return nil
+                }
+                return values[other]
+            }
+        }
+    }
+
+    private static func singleEntryWorkspace(kind: ScopedResourceKind, value: String) -> StoredWorkspace {
+        switch kind {
+        case .app:
+            return StoredWorkspace(name: "", apps: [value], urls: [])
+        case .webDomain:
+            return StoredWorkspace(name: "", apps: [], urls: [value])
+        case .fileLocation:
+            return StoredWorkspace(name: "", apps: [], urls: [], fileLocations: [value])
+        }
+    }
+
+    /// A stored entry as the resource the evaluator compares. URLs become their *host*, which is
+    /// what `WorkspaceScope` matches; an entry `SafeURL` rejects has no host, so it groups with
+    /// nothing — correctly, since it can never match anything either.
+    private static func resource(kind: ScopedResourceKind, value: String) -> ScopedResource? {
+        switch kind {
+        case .app:
+            return .app(value)
+        case .webDomain:
+            guard let host = (try? SafeURL.validateWebURL(value))?.host else {
+                return nil
+            }
+            return .webDomain(host)
+        case .fileLocation:
+            return .fileLocation(value)
+        }
     }
 }
 
@@ -2011,8 +2298,7 @@ private struct RoutinesView: View {
     // Command Center has no composer of its own — pre-fill the command and bring the widget
     // forward so the user finishes typing the routine name there.
     private func beginNewRoutine() {
-        viewModel.command = "Create a routine called "
-        viewModel.widgetPresentationRequest += 1
+        viewModel.composeCommand("Create a routine called ")
     }
 }
 
@@ -2119,6 +2405,18 @@ private struct RoutineRow: View {
 
 private struct WorkspacesView: View {
     @ObservedObject var viewModel: AgentViewModel
+    /// The *name*, not the record. `.sheet(item:)` captures its value, so holding a
+    /// `StoredWorkspace` would freeze the sheet against a snapshot taken when it opened — and this
+    /// sheet's whole job is showing a boundary the user is editing, so it has to re-render when the
+    /// edit lands. Looking the name up in `savedWorkspaces` on every render is what keeps it live.
+    @State private var selectedWorkspaceName: SelectedWorkspaceName?
+
+    private var selectedWorkspace: StoredWorkspace? {
+        guard let selectedWorkspaceName else {
+            return nil
+        }
+        return viewModel.savedWorkspaces.first { $0.name == selectedWorkspaceName.name }
+    }
 
     private let columns = [
         GridItem(.adaptive(minimum: 356, maximum: 356), spacing: 14, alignment: .top)
@@ -2157,10 +2455,14 @@ private struct WorkspacesView: View {
                                     accent: CommandCenterPalette.workspaceAvatarColors[
                                         index % CommandCenterPalette.workspaceAvatarColors.count
                                     ],
-                                    isRunning: viewModel.isRunning || viewModel.isAwaitingApproval,
+                                    isTaskInFlight: viewModel.isTaskInFlight,
                                     open: { viewModel.openWorkspaceWidget(workspace) },
+                                    beginTaskHere: { viewModel.beginTaskInWorkspace(workspace) },
                                     markAsTeam: { viewModel.markWorkspaceAsTeam(workspace) },
-                                    delete: { viewModel.deleteWorkspace(workspace) }
+                                    delete: { viewModel.deleteWorkspace(workspace) },
+                                    openDetail: {
+                                        selectedWorkspaceName = SelectedWorkspaceName(name: workspace.name)
+                                    }
                                 )
                             }
                         }
@@ -2193,26 +2495,95 @@ private struct WorkspacesView: View {
         .padding(.bottom, 18)
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
         .background(SonnyTheme.ink)
+        .sheet(item: $selectedWorkspaceName) { selected in
+            // Resolved from the live list, and dismissed rather than shown stale if the workspace
+            // is gone — deleting from underneath an open sheet is reachable, since delete is on the
+            // card behind it.
+            if let workspace = selectedWorkspace {
+                WorkspaceDetailView(
+                    presentation: WorkspaceDetailPresentation(
+                        workspace: workspace,
+                        taskHistoryRecords: viewModel.taskHistoryRecords
+                    ),
+                    accent: CommandCenterPalette.workspaceAvatarColors[
+                        accentIndex(for: workspace.name)
+                    ],
+                    isTaskInFlight: viewModel.isTaskInFlight,
+                    markAsTeam: { viewModel.markWorkspaceAsTeam(workspace) },
+                    compose: { viewModel.composeWorkspaceScopeEdit($0) }
+                )
+            } else {
+                // Structurally required — the live lookup is Optional — rather than a path anything
+                // reaches today: the only delete affordance is on the card this sheet covers, and
+                // no capability deletes a workspace. Rendering a sentence instead of nothing means
+                // that if a future delete path does open, the sheet says so rather than going
+                // blank; deliberately not an `onAppear` self-dismiss, which is state mutation
+                // during presentation for a case that cannot currently occur.
+                WorkspaceDetailUnavailableView(name: selected.name)
+            }
+        }
         .onAppear {
             viewModel.refreshTaskHistory()
         }
     }
 
+    /// The sheet's avatar has to be the colour the card already gave this workspace, and the card's
+    /// colour comes from its position in the grid — so the index is recovered by name rather than
+    /// captured, which would go stale the moment the list reorders under an open sheet.
+    private func accentIndex(for name: String) -> Int {
+        let position = viewModel.savedWorkspaces.firstIndex { $0.name == name } ?? 0
+        return position % CommandCenterPalette.workspaceAvatarColors.count
+    }
+
     // Command Center has no composer of its own — pre-fill the command and bring the widget
     // forward so the user finishes typing the workspace name there.
     private func beginNewWorkspace() {
-        viewModel.command = "Create a workspace called "
-        viewModel.widgetPresentationRequest += 1
+        viewModel.composeCommand("Create a workspace called ")
+    }
+}
+
+/// Identifiable wrapper so a workspace *name* can drive `.sheet(item:)`, for the same reason
+/// `TaskLogEntry` exists: the persisted model stays free of UI-layer conformances.
+private struct SelectedWorkspaceName: Identifiable {
+    let name: String
+    var id: String { name }
+}
+
+/// Shown when an open detail sheet's workspace is no longer in the store. System A, like the sheet
+/// it stands in for.
+private struct WorkspaceDetailUnavailableView: View {
+    let name: String
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(spacing: 12) {
+            Text(WorkspaceDetailPresentation.unavailableText(name: name))
+                .font(SonnyType.itemTitle)
+                .foregroundStyle(SonnyTheme.text)
+                .multilineTextAlignment(.center)
+
+            Button("Close") {
+                dismiss()
+            }
+            .buttonStyle(CommandCenterRowActionStyle())
+            .keyboardShortcut(.cancelAction)
+        }
+        .padding(28)
+        .frame(width: 460, height: 200)
+        .background(SonnyTheme.ink)
+        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
     }
 }
 
 private struct WorkspaceCard: View {
     let presentation: WorkspaceCardPresentation
     let accent: Color
-    let isRunning: Bool
+    let isTaskInFlight: Bool
     let open: () -> Void
+    let beginTaskHere: () -> Void
     let markAsTeam: () -> Void
     let delete: () -> Void
+    let openDetail: () -> Void
     @State private var showDeleteConfirmation = false
 
     var body: some View {
@@ -2246,18 +2617,21 @@ private struct WorkspaceCard: View {
             HStack {
                 WorkspaceAppIconStack(icons: presentation.appIcons, accent: accent)
                 Spacer()
-                // Labeled like the card's other controls, not icon-only — and deleting lives here
-                // on the card, unlike a routine's delete in its detail view, because the card *is*
-                // where a workspace's whole content already is: there is no detail view to open,
-                // and building one just to host a delete button would invent a surface to solve a
-                // placement problem.
+                // Labeled like the card's other controls, not icon-only. Delete stays *here* rather
+                // than moving into the detail sheet SONNY-41 added: the original reasoning was that
+                // building a detail view purely to host a delete button would invent a surface to
+                // solve a placement problem, and that argument survives its own premise changing. A
+                // detail view now exists — but it exists because a workspace's *boundary* is
+                // materially more content than a card can show, which is a reason delete never had.
+                // Moving delete into it would be the same invention in reverse: hiding a
+                // one-click destructive action one level deeper for symmetry alone.
                 Button {
                     showDeleteConfirmation = true
                 } label: {
                     Label("Delete", systemImage: "trash")
                 }
                 .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
-                .disabled(isRunning)
+                .disabled(isTaskInFlight)
                 .accessibilityLabel("Delete \(presentation.name)")
                 .help("Delete \(presentation.name)")
                 .confirmationDialog(
@@ -2275,11 +2649,25 @@ private struct WorkspaceCard: View {
                     Text("This deletes its saved apps and URLs. Past task history mentioning this workspace is not deleted.")
                 }
 
+                // The "started from its card" half of the founder binding decision. Sits beside
+                // Open rather than replacing or branching it — Open still runs the workspace in one
+                // click, this one starts nothing and hands the user a bound composer. Deliberately
+                // *not* an Open-vs-Switch branch or an "Active" badge: those are the rejected
+                // persistent-active-workspace wireframe elements and stay unbuilt.
+                Button(action: beginTaskHere) {
+                    Text("New task")
+                }
+                .buttonStyle(CommandCenterRowActionStyle())
+                .disabled(isTaskInFlight)
+                .accessibilityLabel(
+                    AgentActivityPresentation.newTaskInWorkspaceLabel(workspaceName: presentation.name)
+                )
+
                 Button(action: open) {
                     Text("Open")
                 }
                 .buttonStyle(CommandCenterRowActionStyle())
-                .disabled(isRunning)
+                .disabled(isTaskInFlight)
                 .accessibilityLabel("Open \(presentation.name)")
             }
         }
@@ -2296,6 +2684,16 @@ private struct WorkspaceCard: View {
                 .stroke(SonnyTheme.cardBorder, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.workspaceCard))
+        // Whole-card tap opens the detail sheet, matching the routine row's `openDetail` gesture.
+        // Applied *after* `.clipShape` so the hit area is the card's real rounded bounds, and it
+        // collides with none of the four controls above — a SwiftUI `Button` consumes its own tap
+        // before an ancestor gesture sees it, which is what keeps Delete, New task, Open and Mark
+        // as team working unchanged. Purely additive: no existing affordance moved or changed.
+        .contentShape(RoundedRectangle(cornerRadius: SonnyRadius.workspaceCard))
+        .onTapGesture(perform: openDetail)
+        .sonnyPointerCursor()
+        .accessibilityAddTraits(.isButton)
+        .accessibilityHint("Opens workspace details")
     }
 
     @ViewBuilder
@@ -2330,6 +2728,230 @@ private struct WorkspaceCard: View {
                     .accessibilityLabel("Mark \(presentation.name) as a team workspace")
                 }
             }
+        }
+    }
+}
+
+/// The workspace detail sheet: the surface that makes a boundary something the user can look at.
+///
+/// **System A throughout** — `SonnyTheme` / `SonnyType` / `SonnyRadius`, flat, opaque, Inter, zero
+/// shadows, no translucent material anywhere. It deliberately does *not* borrow the routine-detail
+/// view's System-B-inside-System-A treatment: liquid glass was tried for workspace surfaces and
+/// explicitly reverted as too visually distracting from content
+/// (`docs/sonny-founder-design-decisions.md`, Workspaces). The two token sets are not mixed here.
+///
+/// **Editing never writes from this view.** Every scope affordance hands the widget composer a
+/// ready-made `edit_workspace` command and brings the widget forward; the capability then raises
+/// its own consent — tier 2 to add, tier 3 to remove, with the two distinct removal reasons
+/// SONNY-40 built. Writing straight to the store from here would be a second write path with its
+/// own notions of matching and escalation, and would silently skip the approval the same edit
+/// raises from the command line. The one direct write on this sheet is *mark as team*, which is a
+/// display badge rather than a boundary and already has its own ratified store call.
+private struct WorkspaceDetailView: View {
+    let presentation: WorkspaceDetailPresentation
+    let accent: Color
+    let isTaskInFlight: Bool
+    let markAsTeam: () -> Void
+    let compose: (String) -> Void
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Spacer()
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(SonnyType.icon(11, weight: .semibold))
+                        .foregroundStyle(SonnyTheme.muted)
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .sonnyPointerCursor()
+                .sonnyHoverHighlight(cornerRadius: 12)
+                .accessibilityLabel("Close")
+                .keyboardShortcut(.cancelAction)
+            }
+            .padding(.horizontal, 14)
+            .padding(.top, 14)
+
+            header
+                .padding(.horizontal, 28)
+                .padding(.top, 4)
+                .padding(.bottom, 20)
+
+            SettingsDivider()
+                .padding(.horizontal, 28)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(presentation.sections.enumerated()), id: \.offset) { index, section in
+                        if index > 0 {
+                            SettingsDivider()
+                        }
+                        sectionView(section)
+                    }
+
+                    if let footnote = presentation.unrestrictedFootnote {
+                        SettingsDivider()
+                        Text(footnote)
+                            .font(SonnyType.micro)
+                            .foregroundStyle(SonnyTheme.muted)
+                            .fixedSize(horizontal: false, vertical: true)
+                            .frame(maxWidth: .infinity, alignment: .leading)
+                            .padding(.vertical, 14)
+                    }
+                }
+                .padding(.horizontal, 28)
+                .padding(.bottom, 20)
+            }
+        }
+        .frame(width: 460, height: 560, alignment: .top)
+        .background(SonnyTheme.ink)
+        .overlay(
+            RoundedRectangle(cornerRadius: SonnyRadius.container)
+                .stroke(SonnyTheme.border, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+    }
+
+    private var header: some View {
+        HStack(alignment: .center, spacing: 12) {
+            WorkspaceAvatar(name: presentation.name, color: accent)
+
+            VStack(alignment: .leading, spacing: 3) {
+                Text(presentation.name)
+                    .font(SonnyType.settingsContentTitle)
+                    .foregroundStyle(SonnyTheme.text)
+                    .lineLimit(2)
+
+                HStack(spacing: 4) {
+                    Text(presentation.teamTypeText)
+                        .font(SonnyType.caption)
+                        .foregroundStyle(SonnyTheme.muted)
+
+                    Text("·")
+                        .font(SonnyType.caption)
+                        .foregroundStyle(SonnyTheme.muted)
+
+                    Text(presentation.taskCountText)
+                        .font(SonnyType.caption)
+                        .foregroundStyle(SonnyTheme.muted)
+
+                    if presentation.isDefaultTeamType {
+                        Text("·")
+                            .font(SonnyType.caption)
+                            .foregroundStyle(SonnyTheme.muted)
+
+                        Button(action: markAsTeam) {
+                            Text("Mark as team")
+                                .font(SonnyType.caption)
+                                .foregroundStyle(SonnyTheme.accent)
+                        }
+                        .buttonStyle(.plain)
+                        .sonnyPointerCursor()
+                        .sonnyHoverHighlight(cornerRadius: 3)
+                        .accessibilityLabel(presentation.markAsTeamAccessibilityLabel)
+                    }
+                }
+            }
+
+            Spacer(minLength: 0)
+        }
+    }
+
+    private func sectionView(_ section: WorkspaceScopeSectionPresentation) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            // Label plus control, so it goes through the adaptive row rather than a fixed `HStack`
+            // — a narrow, non-fullscreen Command Center is the case a hand-rolled row breaks in.
+            SettingsAdaptiveControlRow {
+                Text(section.title)
+                    .font(SonnyType.itemTitle)
+                    .foregroundStyle(SonnyTheme.text)
+            } trailing: {
+                Button {
+                    compose(section.addCommand)
+                } label: {
+                    Label("Add", systemImage: "plus")
+                }
+                .buttonStyle(CommandCenterRowActionStyle())
+                .disabled(isTaskInFlight)
+                .accessibilityLabel(section.addAccessibilityLabel)
+            }
+
+            // Entries and the not-restricted sentence are *independent*, not an either/or. A
+            // dimension whose every entry is inert has rows to show and restricts nothing, and that
+            // is exactly the state where the user needs to see both — the rows, marked as not in
+            // effect, and the sentence saying the dimension is unrestricted.
+            if !section.entries.isEmpty {
+                VStack(alignment: .leading, spacing: 0) {
+                    // Offset-keyed rather than value-keyed: a legacy `workspaces.json` can hold the
+                    // same string twice, and a duplicate `id` silently drops rows.
+                    ForEach(Array(section.entries.enumerated()), id: \.offset) { _, entry in
+                        entryRow(entry)
+                    }
+                }
+            }
+
+            if let notRestrictedText = section.notRestrictedText {
+                Text(notRestrictedText)
+                    .font(SonnyType.caption)
+                    .foregroundStyle(SonnyTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.top, 4)
+    }
+
+    /// One stored entry, its removal control, and anything true about it that the value alone does
+    /// not say.
+    ///
+    /// The value is **not truncated**. The ticket's stated reason for rendering entries verbatim is
+    /// character-for-character checkability against the entry a consent prompt named, and an elided
+    /// middle defeats exactly that for long paths and long URLs — the entries where checking matters
+    /// most. Truncation is a convention elsewhere in this file, but elsewhere it is cosmetic. It
+    /// wraps instead, and is selectable so it can be copied and compared.
+    ///
+    /// `SettingsAdaptiveControlRow` rather than a hand-rolled `HStack`, per
+    /// `.claude/rules/macagent-ui-conventions.md`, matching the section header beside it.
+    private func entryRow(_ entry: WorkspaceScopeEntryPresentation) -> some View {
+        SettingsAdaptiveControlRow {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(entry.value)
+                    .font(SonnyType.caption)
+                    .foregroundStyle(SonnyTheme.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+
+                if let inertNote = entry.inertNote {
+                    Text(inertNote)
+                        .font(SonnyType.micro)
+                        .foregroundStyle(SonnyTheme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                if let sharedRemovalNote = entry.sharedRemovalNote {
+                    Text(sharedRemovalNote)
+                        .font(SonnyType.micro)
+                        .foregroundStyle(SonnyTheme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        } trailing: {
+            Button {
+                compose(entry.removeCommand)
+            } label: {
+                Label("Remove", systemImage: "minus")
+            }
+            .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
+            .disabled(isTaskInFlight)
+            .accessibilityLabel(entry.removeAccessibilityLabel)
+            .help(entry.sharedRemovalNote ?? entry.removeAccessibilityLabel)
         }
     }
 }

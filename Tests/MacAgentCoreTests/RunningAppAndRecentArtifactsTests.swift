@@ -49,11 +49,11 @@ struct RunningAppAndRecentArtifactsTests {
         #expect(prepared.previews.first?.title == "Switch running app")
         #expect(prepared.previews.first?.details.contains("App: Notion") == true)
 
-        let request = try runner.approvalRequest(for: prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
         #expect(request.assessment.effectiveTier == .tier1)
         #expect(request.requirement == .autoRun)
 
-        let result = try await runner.execute(prepared)
+        let result = try await runner.execute(prepared, scope: .unscoped)
         #expect(result.summary == "Switched to Notion.")
         #expect(switcher.activatedBundleIdentifiers == ["notion.id"])
     }
@@ -161,11 +161,11 @@ struct RunningAppAndRecentArtifactsTests {
         #expect(prepared.previews.first?.title == "Recent artifacts")
         #expect(prepared.previews.first?.details.contains { $0.contains("research-note.md") } == true)
 
-        let request = try runner.approvalRequest(for: prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
         #expect(request.assessment.effectiveTier == .tier0)
         #expect(request.requirement == .autoRun)
 
-        let result = try await runner.execute(prepared)
+        let result = try await runner.execute(prepared, scope: .unscoped)
         #expect(result.summary == "Found 1 recent artifact.")
     }
 
@@ -228,7 +228,7 @@ struct RunningAppAndRecentArtifactsTests {
         let prepared = try runner.prepare(plan: plan, source: .instantResolver)
         #expect(try store.loadAll().isEmpty)
 
-        let result = try await runner.execute(prepared, approvalDecision: .approved(.tier2))
+        let result = try await runner.execute(prepared, approvalDecision: .approved(.tier2), scope: .unscoped)
         #expect(result.summary == "Created local draft at \(output.path).")
         #expect(try store.loadAll().map(\.path) == [output.path])
         #expect(logStore.events.contains { $0.phase == .observe && $0.message == "Recorded 1 recent artifact" })

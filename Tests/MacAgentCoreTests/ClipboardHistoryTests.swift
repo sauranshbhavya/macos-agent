@@ -148,11 +148,11 @@ struct ClipboardHistoryTests {
         #expect(prepared.previews.first?.title == "Clipboard history")
         #expect(prepared.previews.first?.details.contains("Invoice 123") == true)
 
-        let request = try runner.approvalRequest(for: prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
         #expect(request.assessment.effectiveTier == .tier0)
         #expect(request.requirement == .autoRun)
 
-        let result = try await runner.execute(prepared)
+        let result = try await runner.execute(prepared, scope: .unscoped)
         #expect(result.summary == "Found 1 clipboard item.")
     }
 

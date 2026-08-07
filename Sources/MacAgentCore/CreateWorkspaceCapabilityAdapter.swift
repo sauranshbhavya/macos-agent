@@ -10,17 +10,28 @@ public struct CreateWorkspaceCapabilityAdapter: CapabilityAdapter {
     public static let metadata = CapabilityMetadata(
         id: "local.workspaces.create",
         displayName: "Create workspace launcher",
-        description: "Save a named workspace of allowlisted apps and safe URLs.",
+        description: "Save a named workspace of apps and safe URLs.",
         operations: [.createWorkspace],
         plannerTools: [
             AgentTool(
                 operation: .createWorkspace,
                 name: "Create workspace launcher",
-                description: "Save a named workspace containing allowlisted apps and safe http/https URLs.",
+                // Reaches the model verbatim (`ToolRegistry.plannerDescription` ->
+                // `OpenAIPlanner.systemPrompt`), and natural-language creation is the *only* way to
+                // set a workspace's apps until SONNY-40 ships an edit path. This sentence used to
+                // say "allowlisted apps", which the same prompt then defines as the twelve-app
+                // supported list — so a model honouring it would drop "Microsoft Word" at the
+                // source and SONNY-37's escalation would stay exactly as unremediable as the
+                // 2026-08-05 decision exists to prevent. It has to say the opposite, explicitly,
+                // and the second example has to demonstrate it.
+                description: "Save a named workspace containing the apps and safe http/https URLs the user names. An app does NOT have to be in the supported-apps list: include every app the user names, because a workspace's apps are also its restriction scope. An unsupported app is saved for scope only and simply is not opened when the workspace opens.",
                 requiredFields: ["workspaceName"],
                 sideEffects: ["write local workspace file"],
                 dryRunBehavior: "Show the workspace apps and URLs without saving.",
-                examples: ["Create a workspace called research with Safari, VS Code, and https://github.com"]
+                examples: [
+                    "Create a workspace called research with Safari, VS Code, and https://github.com",
+                    "Create a workspace called drafting with Microsoft Word and Safari"
+                ]
             )
         ],
         requiredPermissions: [],
@@ -28,21 +39,26 @@ public struct CreateWorkspaceCapabilityAdapter: CapabilityAdapter {
     )
 
     public func preview(plan: AgentPlan, context: CapabilityExecutionContext) throws -> [ActionPreview] {
-        let workspace = try workspaceCreateSpec(plan, context: context)
+        let spec = try workspaceCreateSpec(plan, context: context)
+        let workspace = spec.workspace
+        var details = [
+            "Apps: \(workspace.apps.isEmpty ? "none" : workspace.apps.joined(separator: ", "))",
+            "URLs: \(workspace.urls.isEmpty ? "none" : workspace.urls.joined(separator: ", "))"
+        ]
+        if let note = WorkspaceScopeOnlyApps.scopeOnlyNote(for: spec.scopeOnlyApps) {
+            details.append(note)
+        }
         return [
             ActionPreview(
                 title: "Save workspace \(workspace.name)",
-                details: [
-                    "Apps: \(workspace.apps.isEmpty ? "none" : workspace.apps.joined(separator: ", "))",
-                    "URLs: \(workspace.urls.isEmpty ? "none" : workspace.urls.joined(separator: ", "))"
-                ],
+                details: details,
                 writes: [context.workspaceStore.fileURL.path]
             )
         ]
     }
 
     public func assessRisk(plan: AgentPlan, context: CapabilityExecutionContext) throws -> CapabilityRiskAssessment {
-        let workspace = try workspaceCreateSpec(plan, context: context)
+        let workspace = try workspaceCreateSpec(plan, context: context).workspace
         let escalations = (try? context.workspaceStore.workspace(named: workspace.name)) != nil
             ? [
                 CapabilityRiskEscalation(
@@ -61,15 +77,52 @@ public struct CreateWorkspaceCapabilityAdapter: CapabilityAdapter {
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
         let previews = try preview(plan: plan, context: context)
-        let workspace = try workspaceCreateSpec(plan, context: context)
+        let spec = try workspaceCreateSpec(plan, context: context)
+        let workspace = spec.workspace
+        // A diagnostic only. `AgentLogStore` has no renderer either — `AgentRunner`'s own comment on
+        // it says so, and nothing in `MacAgent` reads `.events` — so this line is for a developer
+        // reading a run, not for the user. The signal the user sees is folded into the summary
+        // below.
+        if let note = WorkspaceScopeOnlyApps.scopeOnlyNote(for: spec.scopeOnlyApps) {
+            log(.observe, note)
+        }
         log(.act, "Saving workspace \(workspace.name)")
         try context.workspaceStore.save(workspace)
         log(.summarize, "Saved workspace")
-        let summary = "Saved workspace \(workspace.name) with \(workspace.apps.count) app(s) and \(workspace.urls.count) URL(s)."
+        // `AgentRunResult.summary` is the only free-text channel an adapter has that reaches a
+        // person. Exactly one surface renders it — the floating widget's result panel
+        // (`WidgetResultPanel`, reached via `AgentViewModel.finalSummary`). Command Center renders
+        // no run summary at all: its attention panel has only permission/clarification/failure
+        // cases, and `CompletedTaskRecord` carries no summary field. One live surface is enough,
+        // and it is the sole command surface by design — but "both surfaces" would be the same
+        // unchecked claim about what is live that made the act log look like a fix.
+        // `ActionPreview.details` and the act log above are rendered by nothing at all, so the note
+        // has to ride here or the ticket's "soft signal at creation" exists only in the model.
+        // Deliberately *not* a `CapabilityRiskEscalation` — all six existing escalation sites
+        // raise a tier, and both approval panels label that line as what raised this above its
+        // default tier, so a same-tier entry would render an informational note in warning colour
+        // under a heading that would then be false.
+        //
+        // The count stays the full listed count: two apps really were saved. Which of them is
+        // scope-only is what the note is for.
+        var summary = "Saved workspace \(workspace.name) with \(workspace.apps.count) app(s) and \(workspace.urls.count) URL(s)."
+        if let note = WorkspaceScopeOnlyApps.scopeOnlyNote(for: spec.scopeOnlyApps) {
+            summary += " " + note
+        }
         return AgentRunResult(plan: plan, previews: previews, summary: summary)
     }
 
-    private func workspaceCreateSpec(_ plan: AgentPlan, context: CapabilityExecutionContext) throws -> StoredWorkspace {
+    /// A workspace about to be saved, together with the names that will count for scope only.
+    private struct WorkspaceCreateSpec {
+        let workspace: StoredWorkspace
+        /// Listed names `MacAppCatalog` cannot resolve, in the order the user gave them.
+        let scopeOnlyApps: [String]
+    }
+
+    private func workspaceCreateSpec(
+        _ plan: AgentPlan,
+        context: CapabilityExecutionContext
+    ) throws -> WorkspaceCreateSpec {
         guard let step = plan.steps.first(where: { $0.operation == .createWorkspace }) else {
             throw AgentExecutionError.invalidPlan("create_workspace step is missing.")
         }
@@ -78,19 +131,43 @@ public struct CreateWorkspaceCapabilityAdapter: CapabilityAdapter {
             throw AutomationStoreError.missingName("Workspace")
         }
 
-        let apps = step.workspaceApps ?? []
+        let rawApps = step.workspaceApps ?? []
         let urls = step.workspaceURLs ?? []
-        guard !apps.isEmpty || !urls.isEmpty else {
+        guard !rawApps.isEmpty || !urls.isEmpty else {
             throw AutomationStoreError.emptyWorkspace
         }
 
-        for app in apps {
-            _ = try context.appCatalog.resolve(app)
+        // A name the catalog cannot resolve is no longer a hard failure (the 2026-08-05 decision) —
+        // but a *blank* one still is, and that distinction is the whole typo guard on the storage
+        // side. `catalog.resolve` used to throw `.missingAppName` for an empty string on the way to
+        // rejecting everything else; dropping the catalog gate without keeping this would let ""
+        // into an apps list, where `WorkspaceScope` classifies it as an inert entry that can never
+        // match anything — a boundary that quietly does nothing.
+        //
+        // Names are stored **trimmed and otherwise as typed**, which is `docs/sonny-branch-b-plan.md`
+        // §7's recorded storage rule ("Raw user string — `Chrome` and `Google Chrome` both persist
+        // as typed") kept intact for catalog and non-catalog names alike. Folding a stored name down
+        // to `MacAppCatalog.normalize`'s key form would persist "Microsoft Word" as "microsoftword"
+        // in the list the user reads back in B6's detail sheet, and would make non-catalog entries
+        // display differently from catalog ones for no matching benefit: `WorkspaceScope.appKey`
+        // already folds *both* sides of every comparison through that same normalizer, so matching
+        // is unaffected by which of the two forms is on disk. One normalizer, and it stays the
+        // evaluator's — this path adds none.
+        var apps: [String] = []
+        for rawApp in rawApps {
+            let trimmed = rawApp.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard !trimmed.isEmpty else {
+                throw MacAppCatalogError.missingAppName
+            }
+            apps.append(trimmed)
         }
         for url in urls {
             _ = try SafeURL.validateWebURL(url)
         }
 
-        return StoredWorkspace(name: name, apps: apps, urls: urls)
+        return WorkspaceCreateSpec(
+            workspace: StoredWorkspace(name: name, apps: apps, urls: urls),
+            scopeOnlyApps: WorkspaceScopeOnlyApps.names(in: apps, catalog: context.appCatalog)
+        )
     }
 }

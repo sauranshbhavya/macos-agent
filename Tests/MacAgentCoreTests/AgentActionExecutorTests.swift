@@ -321,7 +321,7 @@ struct AgentActionExecutorTests {
             ]
         )
 
-        let assessment = try executor.assessRisk(plan: plan)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
 
         #expect(assessment.approvalCopy?.dataLeavesDevice == true)
     }
@@ -340,7 +340,7 @@ struct AgentActionExecutorTests {
         try workspaceStore.save(StoredWorkspace(name: "Writing", apps: ["Safari", "Notes"], urls: []))
         let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
 
-        let assessment = try executor.assessRisk(plan: openWorkspacePlan(name: "Writing"))
+        let assessment = try executor.assessRisk(plan: openWorkspacePlan(name: "Writing"), scope: .unscoped)
 
         #expect(assessment.approvalCopy?.dataLeavesDevice == false)
         #expect(assessment.effectiveTier == .tier1)
@@ -359,7 +359,7 @@ struct AgentActionExecutorTests {
         )
         let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
 
-        let assessment = try executor.assessRisk(plan: openWorkspacePlan(name: "Research"))
+        let assessment = try executor.assessRisk(plan: openWorkspacePlan(name: "Research"), scope: .unscoped)
 
         #expect(assessment.approvalCopy?.dataLeavesDevice == true)
     }
@@ -395,7 +395,7 @@ struct AgentActionExecutorTests {
             ]
         )
 
-        let assessment = try executor.assessRisk(plan: plan)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
 
         #expect(assessment.effectiveTier == .tier2)
         #expect(assessment.approvalRequirement().requiresUserApproval)
@@ -421,7 +421,7 @@ struct AgentActionExecutorTests {
         try write("existing draft", to: second)
         let executor = makeExecutor(root: root)
 
-        let assessment = try executor.assessRisk(plan: draftChainPlan(first: first, second: second))
+        let assessment = try executor.assessRisk(plan: draftChainPlan(first: first, second: second), scope: .unscoped)
 
         #expect(assessment.defaultTier == .tier2)
         #expect(assessment.effectiveTier == .tier3)
@@ -448,7 +448,8 @@ struct AgentActionExecutorTests {
             plan: draftChainPlan(
                 first: root.appendingPathComponent("a.md"),
                 second: root.appendingPathComponent("b.md")
-            )
+            ),
+            scope: .unscoped
         )
 
         #expect(assessment.effectiveTier == .tier2)
@@ -467,7 +468,7 @@ struct AgentActionExecutorTests {
         try write("existing draft", to: shared)
         let executor = makeExecutor(root: root)
 
-        let assessment = try executor.assessRisk(plan: draftChainPlan(first: shared, second: shared))
+        let assessment = try executor.assessRisk(plan: draftChainPlan(first: shared, second: shared), scope: .unscoped)
 
         #expect(assessment.effectiveTier == .tier3)
         #expect(assessment.escalations.count == 1)
@@ -500,7 +501,7 @@ struct AgentActionExecutorTests {
             ]
         )
 
-        let assessment = try executor.assessRisk(plan: plan)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
 
         #expect(assessment.effectiveTier == .tier3)
         #expect(assessment.escalations == [
@@ -529,7 +530,8 @@ struct AgentActionExecutorTests {
             plan: hackerNewsThenWebResearchPlan(
                 hackerNewsOutput: hackerNewsOutput.path,
                 webResearchOutput: webResearchOutput.path
-            )
+            ),
+            scope: .unscoped
         )
 
         #expect(assessment.effectiveTier == .tier3)
@@ -587,7 +589,7 @@ struct AgentActionExecutorTests {
             ]
         )
 
-        let assessment = try executor.assessRisk(plan: plan)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
 
         #expect(assessment.effectiveTier == .tier3)
         #expect(assessment.escalations.count == 1)
@@ -627,7 +629,7 @@ struct AgentActionExecutorTests {
             ]
         )
 
-        let assessment = try executor.assessRisk(plan: plan)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
 
         #expect(assessment.effectiveTier == .tier3)
         #expect(assessment.escalations == [
@@ -674,7 +676,7 @@ struct AgentActionExecutorTests {
             ]
         )
 
-        let assessment = try executor.assessRisk(plan: plan)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
 
         #expect(assessment.defaultTier == .tier2)
         #expect(assessment.effectiveTier == .tier2)
@@ -730,7 +732,7 @@ struct AgentActionExecutorTests {
             ]
         )
 
-        let assessment = try executor.assessRisk(plan: plan)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
 
         #expect(assessment.defaultTier == .tier2)
         #expect(assessment.effectiveTier == .tier3)
@@ -849,7 +851,7 @@ struct AgentActionExecutorTests {
             source: .instantResolver
         )
 
-        _ = try await runner.execute(prepared, approvalDecision: .approved(.tier2))
+        _ = try await runner.execute(prepared, approvalDecision: .approved(.tier2), scope: .unscoped)
 
         #expect(browserOpener.openedBrowsers == [MacApp(displayName: "Safari", bundleIdentifier: "com.apple.Safari")])
     }
@@ -1415,7 +1417,8 @@ struct AgentActionExecutorTests {
         let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
         let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
         try workspaceStore.save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://example.com"]))
-        try workspaceStore.save(StoredWorkspace(name: "Broken", apps: ["NotAnAllowlistedApp"], urls: []))
+        try workspaceStore.save(StoredWorkspace(name: "Scope Only", apps: ["NotAnAllowlistedApp"], urls: []))
+        try workspaceStore.save(StoredWorkspace(name: "Broken", apps: ["Safari"], urls: ["ftp://example.com"]))
         try routineStore.save(
             StoredRoutine(
                 name: "Morning Setup",
@@ -1441,9 +1444,18 @@ struct AgentActionExecutorTests {
             _ = try executor.prepare(plan: runRoutinePlan(name: "   "))
         }
 
-        // A workspace that exists but holds an app outside the allowlist is a real failure,
-        // not a "did you mean" — the user did name something real.
-        #expect(throws: MacAppCatalogError.self) {
+        // A workspace holding an app outside the launch catalog is no longer a failure at all.
+        // SONNY-44 decoupled scope listing from the catalog, so that entry is scope-only: it is
+        // skipped at open time and the open succeeds. (Before that decision this threw
+        // `MacAppCatalogError`, which is what made Microsoft Word unlistable.)
+        let scopeOnly = try executor.prepare(plan: openWorkspacePlan(name: "Scope Only"))
+        #expect(scopeOnly.clarificationQuestion == nil)
+        #expect(scopeOnly.plan.steps.map(\.operation) == [.openWorkspace])
+
+        // A workspace that exists but holds a URL `SafeURL` rejects is still a real failure, not a
+        // "did you mean" — the user did name something real. `SafeURL` is a capability bound rather
+        // than a user-declared boundary, and nothing decoupled it from anything.
+        #expect(throws: SafeURLError.unsupportedScheme("ftp")) {
             _ = try executor.prepare(plan: openWorkspacePlan(name: "Broken"))
         }
 
@@ -2531,6 +2543,402 @@ struct AgentActionExecutorTests {
         #expect(result.summary == "Opened workspace Research with 1 app(s) and 1 URL(s).")
     }
 
+    // MARK: - Scope-only workspace apps (SONNY-44)
+
+    /// The headline of the 2026-08-05 decoupling decision: a workspace may list an app
+    /// `MacAppCatalog` does not carry. Before this, `create_workspace` validated every name through
+    /// the catalog's twelve entries and `MacAppCatalogError.appNotAllowed` made Microsoft Word
+    /// unlistable — which is what would have made every `convert_docx_to_pdf` inside an apps-listing
+    /// workspace escalate forever once SONNY-37 wires the verdict in.
+    @Test
+    func aWorkspaceCanListAnAppTheLaunchCatalogDoesNotCarry() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+        let plans = workspacePlans(
+            name: "Drafting",
+            apps: ["Safari", "Microsoft Word"],
+            urls: ["https://github.com"]
+        )
+
+        _ = try await executor.execute(plan: plans.create) { _, _ in }
+
+        // Persisted as typed, both entries alike — `docs/sonny-branch-b-plan.md` §7's storage rule.
+        // A stored name folded down to `MacAppCatalog.normalize`'s key form would read back as
+        // "microsoftword" in the list the user sees, and would buy nothing: `WorkspaceScope.appKey`
+        // folds both sides of every comparison through that normalizer anyway.
+        let stored = try workspaceStore.workspace(named: "Drafting")
+        #expect(stored.apps == ["Safari", "Microsoft Word"])
+        #expect(stored.urls == ["https://github.com"])
+    }
+
+    /// The acceptance criterion the whole ticket exists for, end to end through the real creation
+    /// path, the real store, and the real evaluator: a plan that drives Word is *in scope* for a
+    /// workspace that lists it.
+    ///
+    /// The second half is the mutation guard. Without it this test would pass just as happily if
+    /// `verdict(for:)` returned `.inScope` for everything — an identical workspace missing only the
+    /// Word entry must read `.outOfScope` for the identical plan.
+    @Test
+    func aStoredScopeOnlyAppIsInScopeForThePlanThatDrivesIt() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+
+        _ = try await executor.execute(
+            plan: workspacePlans(name: "Drafting", apps: ["Safari", "Microsoft Word"], urls: []).create
+        ) { _, _ in }
+        _ = try await executor.execute(
+            plan: workspacePlans(name: "Browsing", apps: ["Safari"], urls: []).create
+        ) { _, _ in }
+
+        // No plan field names Word — `DocumentConverter` AppleScript-drives it from a hardcoded
+        // path, and `PlanScopedResources` reports it implicitly.
+        let conversion = AgentPlan(
+            summary: "Convert the drafts.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "convert",
+                    operation: .convertDocxToPDF,
+                    description: "Convert the drafts.",
+                    inputPath: "~/Documents/Drafts",
+                    outputPath: "~/Documents/Drafts"
+                )
+            ]
+        )
+
+        let listsWord = WorkspaceScopeEvaluator.evaluate(
+            plan: conversion,
+            scope: WorkspaceScope(workspace: try workspaceStore.workspace(named: "Drafting"))
+        )
+        let wordFinding = try #require(
+            listsWord.findings.first { $0.resource == .app("Microsoft Word") }
+        )
+        #expect(wordFinding.verdict == .inScope)
+        #expect(listsWord.outOfScopeFindings.contains { $0.resource == .app("Microsoft Word") } == false)
+
+        let doesNotListWord = WorkspaceScopeEvaluator.evaluate(
+            plan: conversion,
+            scope: WorkspaceScope(workspace: try workspaceStore.workspace(named: "Browsing"))
+        )
+        let unlistedWordFinding = try #require(
+            doesNotListWord.findings.first { $0.resource == .app("Microsoft Word") }
+        )
+        #expect(unlistedWordFinding.verdict == .outOfScope)
+    }
+
+    /// Open-time handling, per the SONNY-9 precedent: the catalog apps launch, the scope-only entry
+    /// is logged and skipped, and the open itself succeeds. A workspace that fails to open because
+    /// it holds a name Sonny cannot launch would re-create the unremediable dead end from the other
+    /// direction.
+    @Test
+    func openingAWorkspaceLaunchesItsCatalogAppsAndSkipsAScopeOnlyEntryWithoutFailing() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let appOpener = RecordingAppOpener()
+        let browserOpener = RecordingBrowserOpener()
+        let executor = makeExecutor(
+            root: root,
+            browserOpener: browserOpener,
+            appOpener: appOpener,
+            workspaceStore: workspaceStore
+        )
+        let plans = workspacePlans(
+            name: "Drafting",
+            apps: ["Safari", "Microsoft Word"],
+            urls: ["https://github.com"]
+        )
+
+        _ = try await executor.execute(plan: plans.create) { _, _ in }
+        var messages: [String] = []
+        let result = try await executor.execute(plan: plans.open) { _, message in
+            messages.append(message)
+        }
+
+        #expect(appOpener.openedBundleIDs == ["com.apple.Safari"])
+        #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com"])
+        // Asserted whole, not by substring: SONNY-9's doubled-period bug shipped straight through
+        // four `contains`-style assertions.
+        #expect(messages.contains("Skipping Microsoft Word — not an app Sonny can launch; it counts for workspace scope only."))
+        // The summary counts what opened *and* names what did not. This is the only one of the three
+        // channels a user actually sees, so it carries the whole signal — an honest "1 app(s)" alone
+        // would leave them guessing which of the two listed apps started.
+        #expect(result.summary == "Opened workspace Drafting with 1 app(s) and 1 URL(s). Microsoft Word is scope-only and was not opened.")
+    }
+
+    /// The signal has to arrive somewhere a person looks. `ActionPreview` is rendered by nothing,
+    /// and neither is `AgentLogStore` (`AgentRunner`'s own comment says so, and nothing in
+    /// `MacAgent` reads `.events`) — `AgentRunResult.summary` is the one free-text channel an
+    /// adapter has that both surfaces render, so both workspace summaries carry the note.
+    @Test
+    func bothWorkspaceSummariesNameTheScopeOnlyAppsAndStaySilentWhenThereAreNone() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+
+        let scopeOnly = workspacePlans(
+            name: "Drafting",
+            apps: ["Safari", "Microsoft Word", "Figma"],
+            urls: ["https://github.com"]
+        )
+        let created = try await executor.execute(plan: scopeOnly.create) { _, _ in }
+        // The saved count is the full listed count — three apps really were saved. Which of them
+        // Sonny cannot open is what the note is for.
+        #expect(created.summary == "Saved workspace Drafting with 3 app(s) and 1 URL(s). Microsoft Word and Figma aren't apps Sonny can launch — counted for workspace scope only.")
+
+        let opened = try await executor.execute(plan: scopeOnly.open) { _, _ in }
+        #expect(opened.summary == "Opened workspace Drafting with 1 app(s) and 1 URL(s). Microsoft Word and Figma are scope-only and were not opened.")
+
+        // And an all-catalog workspace's summaries are byte-identical to what they were before any
+        // of this existed — the note appears only when it has something to say.
+        let allCatalog = workspacePlans(name: "Browsing", apps: ["Safari"], urls: ["https://github.com"])
+        let plainCreate = try await executor.execute(plan: allCatalog.create) { _, _ in }
+        let plainOpen = try await executor.execute(plan: allCatalog.open) { _, _ in }
+        #expect(plainCreate.summary == "Saved workspace Browsing with 1 app(s) and 1 URL(s).")
+        #expect(plainOpen.summary == "Opened workspace Browsing with 1 app(s) and 1 URL(s).")
+    }
+
+    /// The newly reachable state nothing pinned: every entry scope-only, so the run opens nothing.
+    /// Creation's only remaining guard is "at least one app or URL", so this workspace is trivially
+    /// creatable now.
+    ///
+    /// The summary keeps the ordinary format and lets the note explain the zero, rather than
+    /// branching into a separate "nothing to open" string — a second format is a second thing to
+    /// keep true, and a bare "with 0 app(s) and 0 URL(s)" is the part that would read as a failure
+    /// without the sentence after it.
+    @Test
+    func aWorkspaceWhoseEveryAppIsScopeOnlyOpensNothingAndSaysSo() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let appOpener = RecordingAppOpener()
+        let browserOpener = RecordingBrowserOpener()
+        let executor = makeExecutor(
+            root: root,
+            browserOpener: browserOpener,
+            appOpener: appOpener,
+            workspaceStore: workspaceStore
+        )
+        let plans = workspacePlans(name: "Drafting", apps: ["Microsoft Word"], urls: [])
+
+        _ = try await executor.execute(plan: plans.create) { _, _ in }
+        let preview = try #require(try executor.preview(plan: plans.open).first)
+        let result = try await executor.execute(plan: plans.open) { _, _ in }
+
+        #expect(preview.opens.isEmpty)
+        #expect(appOpener.openedBundleIDs.isEmpty)
+        #expect(browserOpener.openedURLs.isEmpty)
+        // Succeeds rather than throwing — a workspace of nothing but scope-only entries is a legal
+        // boundary, not a broken launcher.
+        #expect(result.summary == "Opened workspace Drafting with 0 app(s) and 0 URL(s). Microsoft Word is scope-only and was not opened.")
+    }
+
+    /// The adapter's own comment promises the skip is logged "between the entries around it", which
+    /// is what makes the log readable as a launch sequence. Nothing pinned it: the one test with a
+    /// sandwiched scope-only entry captured no messages, and the one that captured messages put the
+    /// entry last and asserted membership rather than position. Batching the skips into a second
+    /// pass would have kept both green.
+    @Test
+    func scopeOnlySkipsAreLoggedInTheWorkspacesOwnOrderNotBatchedAtTheEnd() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+        let plans = workspacePlans(
+            name: "Drafting",
+            apps: ["Safari", "Microsoft Word", "Notes"],
+            urls: []
+        )
+
+        _ = try await executor.execute(plan: plans.create) { _, _ in }
+        var messages: [String] = []
+        _ = try await executor.execute(plan: plans.open) { _, message in
+            messages.append(message)
+        }
+
+        // Whole sequence, in order — the skip sits where the entry sits.
+        #expect(messages == [
+            "Opening Safari",
+            "Skipping Microsoft Word — not an app Sonny can launch; it counts for workspace scope only.",
+            "Opening Notes",
+            "Opened workspace"
+        ])
+    }
+
+    /// Repeats and awkward names, both newly reachable: before this ticket any unresolvable name was
+    /// a hard failure, so neither could be stored at all.
+    ///
+    /// The comma case is the subtle one. With a plain `", "` join, one app named "Foo, Bar" and two
+    /// apps named "Foo" and "Bar" produce the identical sentence. The singular/plural verb plus the
+    /// "and" join tells them apart without quoting anything.
+    @Test
+    func theScopeOnlyNoteDeduplicatesRepeatsAndDoesNotBlurACommaInAName() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+
+        let repeated = workspacePlans(
+            name: "Repeats",
+            apps: ["Microsoft Word", "Microsoft Word"],
+            urls: []
+        )
+        let repeatedResult = try await executor.execute(plan: repeated.create) { _, _ in }
+        // Named once in the note; still two saved entries, so the count stays 2.
+        #expect(repeatedResult.summary == "Saved workspace Repeats with 2 app(s) and 0 URL(s). Microsoft Word isn't an app Sonny can launch — counted for workspace scope only.")
+
+        let oneCommaName = workspacePlans(name: "One Name", apps: ["Foo, Bar"], urls: [])
+        let oneResult = try await executor.execute(plan: oneCommaName.create) { _, _ in }
+        #expect(oneResult.summary == "Saved workspace One Name with 1 app(s) and 0 URL(s). Foo, Bar isn't an app Sonny can launch — counted for workspace scope only.")
+
+        let twoNames = workspacePlans(name: "Two Names", apps: ["Foo", "Bar"], urls: [])
+        let twoResult = try await executor.execute(plan: twoNames.create) { _, _ in }
+        #expect(twoResult.summary == "Saved workspace Two Names with 2 app(s) and 0 URL(s). Foo and Bar aren't apps Sonny can launch — counted for workspace scope only.")
+
+        // Three or more take the serial join, so the last name never merges into the one before it.
+        let threeNames = workspacePlans(name: "Three Names", apps: ["Foo", "Bar", "Baz"], urls: [])
+        let threeResult = try await executor.execute(plan: threeNames.create) { _, _ in }
+        #expect(threeResult.summary == "Saved workspace Three Names with 3 app(s) and 0 URL(s). Foo, Bar and Baz aren't apps Sonny can launch — counted for workspace scope only.")
+    }
+
+    /// The preview declares side effects, so it must not claim an open that cannot happen. The
+    /// `details` line is the opposite case: it describes what the workspace *contains*, where a
+    /// scope-only entry genuinely belongs.
+    @Test
+    func theOpenPreviewDoesNotClaimItWillOpenAScopeOnlyApp() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+        let plans = workspacePlans(
+            name: "Drafting",
+            apps: ["Safari", "Microsoft Word"],
+            urls: ["https://github.com"]
+        )
+
+        _ = try await executor.execute(plan: plans.create) { _, _ in }
+        let preview = try #require(try executor.preview(plan: plans.open).first)
+
+        #expect(preview.opens == ["Safari", "https://github.com"])
+        #expect(preview.details.contains("Apps: Safari, Microsoft Word"))
+        #expect(preview.details.contains("Microsoft Word isn't an app Sonny can launch — counted for workspace scope only."))
+    }
+
+    /// The typo guard. It cannot tell "Microsft Word" from "Microsoft Word" — nothing can, once the
+    /// catalog is no longer the authority — so the entire mitigation is that the name is *said out
+    /// loud* at the moment it is typed rather than sitting silently inside a boundary. Both halves
+    /// are pinned: it appears when a name is scope-only, and it stays absent when every name
+    /// resolves.
+    @Test
+    func theScopeOnlyNoteNamesEveryUnlaunchableAppAndIsAbsentWhenEveryNameResolves() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+
+        let withScopeOnly = workspacePlans(
+            name: "Drafting",
+            apps: ["Safari", "Microsoft Word", "Figma"],
+            urls: []
+        )
+        let noted = try #require(try executor.preview(plan: withScopeOnly.create).first)
+        #expect(noted.details == [
+            "Apps: Safari, Microsoft Word, Figma",
+            "URLs: none",
+            "Microsoft Word and Figma aren't apps Sonny can launch — counted for workspace scope only."
+        ])
+
+        // And on the channel the user actually sees: nothing in `MacAgent` renders an
+        // `ActionPreview`, so the act log is where this reaches a real person.
+        var messages: [String] = []
+        _ = try await executor.execute(plan: withScopeOnly.create) { _, message in
+            messages.append(message)
+        }
+        #expect(messages.contains("Microsoft Word and Figma aren't apps Sonny can launch — counted for workspace scope only."))
+
+        let allCatalog = workspacePlans(name: "Browsing", apps: ["Safari", "Chrome"], urls: [])
+        let silent = try #require(try executor.preview(plan: allCatalog.create).first)
+        #expect(silent.details == ["Apps: Safari, Chrome", "URLs: none"])
+
+        var catalogMessages: [String] = []
+        _ = try await executor.execute(plan: allCatalog.create) { _, message in
+            catalogMessages.append(message)
+        }
+        #expect(catalogMessages.contains { $0.contains("workspace scope only") } == false)
+    }
+
+    /// A name the catalog cannot resolve is now fine; a *blank* one is still a hard failure. Without
+    /// this, dropping the catalog gate would let "" into an apps list, where `WorkspaceScope`
+    /// classifies it as an inert entry that can never match anything — a boundary that quietly does
+    /// nothing, which is the one outcome the scope model refuses to produce.
+    @Test
+    func aBlankWorkspaceAppNameIsStillRejected() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+        let plans = workspacePlans(name: "Drafting", apps: ["Safari", "   "], urls: [])
+
+        await #expect(throws: MacAppCatalogError.missingAppName) {
+            _ = try await executor.execute(plan: plans.create) { _, _ in }
+        }
+        #expect(throws: (any Error).self) {
+            _ = try workspaceStore.workspace(named: "Drafting")
+        }
+    }
+
+    /// Stored trimmed, so speech-to-text padding does not become part of the boundary the user reads
+    /// back. The fold beyond trimming stays where it already lives, in the evaluator.
+    @Test
+    func workspaceAppNamesAreStoredTrimmed() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+        let plans = workspacePlans(name: "Drafting", apps: ["  Microsoft Word  ", " Safari "], urls: [])
+
+        _ = try await executor.execute(plan: plans.create) { _, _ in }
+
+        #expect(try workspaceStore.workspace(named: "Drafting").apps == ["Microsoft Word", "Safari"])
+    }
+
+    /// A scope-only entry must not disturb SONNY-9's browser selection. "The workspace's browser" is
+    /// the first *browser* among the apps that can actually launch, and a skipped entry ahead of one
+    /// neither becomes the browser nor shifts which app does.
+    @Test
+    func aScopeOnlyEntryDoesNotChangeWhichBrowserAWorkspaceUses() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let appOpener = RecordingAppOpener()
+        let browserOpener = RecordingBrowserOpener()
+        let executor = makeExecutor(
+            root: root,
+            browserOpener: browserOpener,
+            appOpener: appOpener,
+            workspaceStore: workspaceStore
+        )
+        // Word first (skipped) and Notes ahead of Chrome (launchable, not a browser), so the answer
+        // is only Chrome if *both* rules hold: scope-only entries drop out of the candidate list,
+        // and the browser is the first browser rather than the first app.
+        let plans = workspacePlans(
+            name: "Drafting",
+            apps: ["Microsoft Word", "Notes", "Chrome"],
+            urls: ["https://github.com"]
+        )
+
+        _ = try await executor.execute(plan: plans.create) { _, _ in }
+        _ = try await executor.execute(plan: plans.open) { _, _ in }
+
+        #expect(appOpener.openedBundleIDs == ["com.apple.Notes", "com.google.Chrome"])
+        #expect(browserOpener.openedBrowsers.map { $0?.bundleIdentifier } == ["com.google.Chrome"])
+    }
+
     private func workspacePlans(
         name: String,
         apps: [String],
@@ -2836,6 +3244,499 @@ struct AgentActionExecutorTests {
                 )
             ]
         )
+    }
+
+    // MARK: - Workspace scope wired into risk assessment (SONNY-37)
+    //
+    // Every escalation path below carries its inverse in the same file, and the inverses are the
+    // load-bearing half. A scope check that stops running fails *silently* — the symptom is a
+    // prompt that never fires, which no manual test stumbles on by accident — so each of these is
+    // mutation-checked in the dangerous direction: break the verdict handling and the test proving
+    // a prompt still fires must go red, not just the one proving it stays quiet.
+
+    /// AC1 — an in-scope resource changes nothing at all. Asserted on the whole assessment rather
+    /// than the tier, so an escalation appearing with an unchanged tier would still fail.
+    @Test
+    func anInScopeResourceUnderAScopedWorkspaceAssessesExactlyAsUnscoped() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root)
+        let plan = openURLPlan(url: "https://github.com/sonny")
+        let scope = WorkspaceScope(
+            workspace: StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"])
+        )
+
+        var expected = try executor.assessRisk(plan: plan, scope: .unscoped)
+        #expect(expected.scopeVerdict == nil)
+        // Everything except the new roll-up must be identical; the roll-up itself is asserted.
+        expected.scopeVerdict = .inScope
+
+        #expect(try executor.assessRisk(plan: plan, scope: .scoped(scope)) == expected)
+    }
+
+    /// AC2 — the escalation exists, reaches tier 3, and its reason names both the resource and the
+    /// workspace. Asserted on the literal string: "not empty" would pass for any wording.
+    @Test
+    func anOutOfScopeHostEscalatesToTierThreeAndNamesTheHostAndTheWorkspace() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root)
+        let plan = openURLPlan(url: "https://example.com/page")
+        let scope = WorkspaceScope(
+            workspace: StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"])
+        )
+
+        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope))
+
+        #expect(assessment.effectiveTier == .tier3)
+        #expect(assessment.escalations.count == 1)
+        #expect(assessment.escalations.first?.toTier == .tier3)
+        #expect(assessment.escalations.first?.reason == "example.com is not part of the Research workspace.")
+        #expect(assessment.scopeVerdict == .outOfScope)
+    }
+
+    /// AC3 — **the laundering hole.** A routine is a stored list of steps, so without the scope
+    /// forwarding into `assessNestedPlan` a task bound to a workspace could run a routine whose
+    /// steps write anywhere at all, and the boundary would report nothing. The routine's own step
+    /// is what is out of scope here; the plan names only the routine.
+    @Test
+    func aRoutineWhoseStepsLeaveTheWorkspaceEscalatesRatherThanLaunderingThroughTheNesting() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try routineStore.save(
+            StoredRoutine(
+                name: "Leaky",
+                steps: [
+                    AgentStep(
+                        id: "leak",
+                        operation: .openURL,
+                        description: "Open an unrelated site.",
+                        targetURL: "https://example.com/page"
+                    )
+                ]
+            )
+        )
+        let executor = makeExecutor(root: root, routineStore: routineStore)
+        let scope = WorkspaceScope(
+            workspace: StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"])
+        )
+
+        let assessment = try executor.assessRisk(plan: runRoutinePlan(name: "Leaky"), scope: .scoped(scope))
+
+        #expect(assessment.effectiveTier == .tier3)
+        #expect(assessment.escalations.contains {
+            $0.reason == "example.com is not part of the Research workspace."
+        })
+        // The roll-up has to travel back out of the nesting too. On *this* shape, losing the forward
+        // yields `.unconstrained` — the outer plan's only step is `run_routine`, which classifies as
+        // `.none`, so the fold falls to its bottom element. Wrong, but inert. The shape where losing
+        // it is dangerous is the mixed one below.
+        #expect(assessment.scopeVerdict == .outOfScope)
+    }
+
+    /// The shape that makes the nested roll-up forward load-bearing rather than merely tidy.
+    ///
+    /// One in-scope step beside the leaky routine, so the *outer* plan's own findings roll up
+    /// `.inScope` on their own. Drop the forward and that is the answer the assessment ships —
+    /// `.inScope`, on a plan Sonny has just escalated for writing outside the boundary. Row C's
+    /// recorded rule is that in-scope tier 3 drops to a lightweight confirmation, so the first
+    /// consumer of this field would lighten the very prompt this ticket raised.
+    @Test
+    func aLeakyRoutineBesideAnInScopeStepStillRollsUpOutOfScope() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try routineStore.save(
+            StoredRoutine(
+                name: "Leaky",
+                steps: [
+                    AgentStep(
+                        id: "leak",
+                        operation: .openURL,
+                        description: "Open an unrelated site.",
+                        targetURL: "https://example.com/page"
+                    )
+                ]
+            )
+        )
+        let executor = makeExecutor(root: root, routineStore: routineStore)
+        let plan = AgentPlan(
+            summary: "Open GitHub, then run the routine.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "in-scope", operation: .openURL, description: "In scope.", targetURL: "https://github.com/sonny"),
+                AgentStep(id: "run", operation: .runRoutine, description: "Run the routine.", routineName: "Leaky")
+            ]
+        )
+        let scope = WorkspaceScope(
+            workspace: StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"])
+        )
+
+        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope))
+
+        #expect(assessment.scopeVerdict == .outOfScope)
+        #expect(assessment.escalations.contains {
+            $0.reason == "example.com is not part of the Research workspace."
+        })
+        #expect(assessment.effectiveTier == .tier3)
+    }
+
+    /// F1 — **saving a routine is scope-neutral.** `PlanScopedResources`' `.saveRoutine` case records
+    /// the rule: saving touches one file inside Sonny's own store, and the routine's steps are
+    /// scoped when it actually runs. Forwarding the caller's scope into the save's nested assessment
+    /// reintroduced exactly what that classifier declined, one layer up — "teach Sonny a routine
+    /// that opens example.com" inside a workspace escalated to tier 3 and prompted about a URL
+    /// nothing in the plan would open.
+    ///
+    /// Asserted on the whole assessment against the real unscoped one, so a spurious escalation, a
+    /// tier bump, or a roll-up appearing out of nowhere all fail.
+    @Test
+    func savingARoutineIsScopeNeutralAndAssessesIdenticallyUnderAnyScope() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root)
+        let plan = saveRoutinePlan(
+            name: "Teachable",
+            steps: [
+                AgentStep(
+                    id: "leak",
+                    operation: .openURL,
+                    description: "Open an unrelated site.",
+                    targetURL: "https://example.com/page"
+                )
+            ]
+        )
+        let scope = WorkspaceScope(
+            workspace: StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"])
+        )
+
+        let unscoped = try executor.assessRisk(plan: plan, scope: .unscoped)
+        #expect(unscoped.escalations.isEmpty)
+        #expect(unscoped.effectiveTier == .tier2)
+
+        var expected = unscoped
+        // `save_routine` contributes no findings of its own, so a plan containing only one rolls up
+        // the fold's bottom element. What must *not* appear is an escalation.
+        expected.scopeVerdict = .unconstrained
+
+        #expect(try executor.assessRisk(plan: plan, scope: .scoped(scope)) == expected)
+    }
+
+    /// The second F1 probe shape: the save sits beside a step that really is scope-relevant. The
+    /// sibling must be scoped normally while the save contributes nothing scope-wise, and the
+    /// roll-up must agree with the escalations shipped next to it — a `(tier3, .inScope)` pair, or
+    /// an `.inScope` roll-up on a plan carrying an out-of-scope reason, is the contradiction this
+    /// finding was about.
+    @Test
+    func aSaveRoutineBesideAnOutOfScopeStepEscalatesOnlyForTheSibling() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root)
+        let plan = AgentPlan(
+            summary: "Open a site, then teach a routine.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "out", operation: .openURL, description: "Out of scope.", targetURL: "https://elsewhere.example/page"),
+                AgentStep(
+                    id: "save",
+                    operation: .saveRoutine,
+                    description: "Teach a routine.",
+                    routineName: "Teachable",
+                    routineSteps: [
+                        AgentStep(
+                            id: "leak",
+                            operation: .openURL,
+                            description: "Open an unrelated site.",
+                            targetURL: "https://example.com/page"
+                        )
+                    ]
+                )
+            ]
+        )
+        let scope = WorkspaceScope(
+            workspace: StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"])
+        )
+
+        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope))
+
+        // Exactly one reason, and it is the sibling's own URL — never the routine's stored step.
+        #expect(assessment.escalations.map(\.reason) == [
+            "elsewhere.example is not part of the Research workspace."
+        ])
+        // And the roll-up agrees with it rather than contradicting it.
+        #expect(assessment.scopeVerdict == .outOfScope)
+        #expect(assessment.effectiveTier == .tier3)
+    }
+
+    /// F5 — a blank app name in a stored record must not render a subjectless sentence. The two
+    /// sides of the comparison disagree about it on purpose: `WorkspaceScope.init` records a blank
+    /// entry as inert, while `verdict(for: .app(""))` answers `.outOfScope` whenever the bound
+    /// workspace lists any app. Unfiltered, that produced " is not part of the Research workspace."
+    /// in the approval panel.
+    @Test
+    func aBlankAppNameInAStoredWorkspaceRecordNeverBecomesASubjectlessEscalation() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let bound = StoredWorkspace(name: "Research", apps: ["Safari"], urls: [])
+        try workspaceStore.save(bound)
+        // Written straight to the store: `WorkspaceStore.save` validates nothing about apps, which is
+        // exactly why this is reachable once SONNY-40/41 add record-writing surfaces.
+        try workspaceStore.save(StoredWorkspace(name: "Broken", apps: ["   ", "Slack"], urls: []))
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+
+        let assessment = try executor.assessRisk(
+            plan: openWorkspacePlan(name: "Broken"),
+            scope: .scoped(WorkspaceScope(workspace: bound))
+        )
+
+        // Slack still escalates; the blank entry contributes nothing at all.
+        #expect(assessment.escalations.map(\.reason) == [
+            "Slack is not part of the Research workspace."
+        ])
+        #expect(assessment.escalations.allSatisfy { !$0.reason.hasPrefix(" ") })
+    }
+
+    private func saveRoutinePlan(name: String, steps: [AgentStep]) -> AgentPlan {
+        AgentPlan(
+            summary: "Save routine.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "save-routine",
+                    operation: .saveRoutine,
+                    description: "Save routine.",
+                    routineName: name,
+                    routineSteps: steps
+                )
+            ]
+        )
+    }
+
+    /// AC4 — `open_workspace`'s resources come from the **stored record**, not the step. The step
+    /// carries no `workspaceApps`/`workspaceURLs` at all (those are `create_workspace`'s fields), so
+    /// a test that populated the step would prove nothing.
+    @Test
+    func openingADifferentWorkspaceEscalatesOnThatRecordsOwnAppsAndURLs() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try workspaceStore.save(
+            StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        )
+        try workspaceStore.save(
+            StoredWorkspace(name: "Social", apps: ["Slack"], urls: ["https://example.com"])
+        )
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+        let scope = WorkspaceScope(
+            workspace: StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        )
+
+        let assessment = try executor.assessRisk(plan: openWorkspacePlan(name: "Social"), scope: .scoped(scope))
+
+        #expect(assessment.effectiveTier == .tier3)
+        #expect(assessment.escalations.map(\.reason) == [
+            "Slack is not part of the Research workspace.",
+            "example.com is not part of the Research workspace."
+        ])
+    }
+
+    /// AC4's mirror, and one of the inverses that matters most: opening the workspace you are
+    /// already inside is in scope by construction and must be completely silent.
+    @Test
+    func openingTheBoundWorkspaceItselfProducesNoScopeEscalationAtAll() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let record = StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        try workspaceStore.save(record)
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+
+        let assessment = try executor.assessRisk(
+            plan: openWorkspacePlan(name: "Research"),
+            scope: .scoped(WorkspaceScope(workspace: record))
+        )
+
+        #expect(assessment.escalations.isEmpty)
+        #expect(assessment.effectiveTier == .tier1)
+        #expect(assessment.scopeVerdict == .inScope)
+    }
+
+    /// A workspace name that resolves to nothing yields no resources rather than an escalation —
+    /// the run fails at execution anyway, and a scope prompt about a workspace that does not exist
+    /// would be a second, wrong explanation of the same problem.
+    @Test
+    func openingAWorkspaceThatDoesNotExistProducesNoScopeEscalation() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let record = StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        try workspaceStore.save(record)
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+
+        let assessment = try executor.assessRisk(
+            plan: openWorkspacePlan(name: "Nonexistent"),
+            scope: .scoped(WorkspaceScope(workspace: record))
+        )
+
+        #expect(assessment.escalations.isEmpty)
+        #expect(assessment.scopeVerdict == .unconstrained)
+    }
+
+    /// AC5 and AC9 together, because they are different states that must both come out unchanged
+    /// and only one of them is obvious. `.unscoped` is "no workspace bound". `.unconstrained` is a
+    /// workspace that simply says nothing about this kind — which is the state **every** stored
+    /// workspace is in for file locations today, so it is the most-exercised path this change will
+    /// ever take in production.
+    @Test
+    func neitherUnscopedNorAnUnconstrainedKindChangesTheAssessment() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root)
+        let plan = openURLPlan(url: "https://example.com/page")
+
+        let unscoped = try executor.assessRisk(plan: plan, scope: .unscoped)
+        #expect(unscoped.escalations.isEmpty)
+        #expect(unscoped.scopeVerdict == nil)
+
+        // Apps listed, no URLs — so the web-domain kind is unconfigured and this plan's only
+        // resource is compared against nothing.
+        let appsOnly = WorkspaceScope(
+            workspace: StoredWorkspace(name: "Research", apps: ["Safari"], urls: [])
+        )
+        var expected = unscoped
+        expected.scopeVerdict = .unconstrained
+
+        #expect(try executor.assessRisk(plan: plan, scope: .scoped(appsOnly)) == expected)
+    }
+
+    /// AC6 — scope raises and never lowers. A tier-3 fixture that is entirely in scope stays tier 3;
+    /// if a verdict could lower a tier, in-scope tier-3 work would run unattended with nobody
+    /// present, because the unattended gate compares against a fixed `.approved(.tier2)`.
+    @Test
+    func anInScopeTierThreeFixtureKeepsItsTierBecauseScopeNeverLowersOne() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let output = root.appendingPathComponent("draft.md")
+        try write("existing", to: output)
+        let executor = makeExecutor(root: root)
+        let plan = localDraftPlan(output: output)
+        // The whitelist has to be the test's own root, not the default one. `WorkspaceScope` walks
+        // its file locations through `PathWhitelist` and records anything outside it as *inert* —
+        // workspace scope narrows the global whitelist and never widens it — so a temp-dir path
+        // under the default (~/Desktop, ~/Documents) whitelist would be dropped, leaving the file
+        // kind `.unconstrained` and this test asserting nothing about in-scope behavior.
+        let scope = WorkspaceScope(
+            workspace: StoredWorkspace(
+                name: "Research",
+                apps: [],
+                urls: [],
+                fileLocations: [root.path]
+            ),
+            whitelist: PathWhitelist(roots: [root])
+        )
+
+        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope))
+
+        // Tier 3 from the pre-existing overwrite escalation, not from scope.
+        #expect(assessment.effectiveTier == .tier3)
+        #expect(assessment.scopeVerdict == .inScope)
+        #expect(assessment.escalations.count == 1)
+        #expect(assessment.escalations.first?.reason.contains("already exists") == true)
+        #expect(assessment.escalations.allSatisfy { !$0.reason.contains("not part of") })
+    }
+
+    /// AC7 — **the SONNY-29 proof.** Two steps of the same operation, only the second out of scope.
+    /// Every adapter picks its step with `.first(where:)`, so a scope check built on the
+    /// pre-segmentation shape would compare the first URL and never see the second.
+    @Test
+    func aSecondStepOfTheSameOperationIsStillScopeCheckedNotShadowedByTheFirst() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root)
+        let plan = AgentPlan(
+            summary: "Open two sites.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "a", operation: .openURL, description: "In scope.", targetURL: "https://github.com/sonny"),
+                AgentStep(id: "b", operation: .openURL, description: "Out of scope.", targetURL: "https://example.com/page")
+            ]
+        )
+        let scope = WorkspaceScope(
+            workspace: StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"])
+        )
+
+        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope))
+
+        #expect(assessment.escalations.map(\.reason) == ["example.com is not part of the Research workspace."])
+        #expect(assessment.effectiveTier == .tier3)
+    }
+
+    /// AC8 — an opaque step never escalates on scope grounds, because there is nothing to compare,
+    /// and it must never let its plan roll up `.inScope`: Sonny cannot see what a Shortcut touches,
+    /// so the plan it sits in can never earn a boundary it was never checked against.
+    @Test
+    func anOpaqueStepProducesNoEscalationAndBlocksAnInScopeRollUp() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root, shortcutCatalog: FakeShortcutCatalog(names: ["Trusted Shortcut"]))
+        let plan = AgentPlan(
+            summary: "Run a Shortcut.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "shortcut",
+                    operation: .invokeShortcut,
+                    description: "Run the Shortcut.",
+                    shortcutName: "Trusted Shortcut"
+                )
+            ]
+        )
+        let scope = WorkspaceScope(
+            workspace: StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"])
+        )
+
+        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope))
+
+        #expect(assessment.escalations.allSatisfy { !$0.reason.contains("not part of") })
+        #expect(assessment.scopeVerdict == .opaque)
+        #expect(assessment.scopeVerdict != .inScope)
+    }
+
+    /// AC10 — one escalation per *distinct* resource, and no more than the cap. The single-host test
+    /// above exercises neither rule: it has one resource and one escalation, so it would pass with
+    /// no dedup and no cap at all.
+    @Test
+    func repeatedAndSurplusOutOfScopeResourcesAreDeduplicatedAndCapped() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root)
+        let plan = AgentPlan(
+            summary: "Open several sites.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "a", operation: .openURL, description: "One.", targetURL: "https://one.example/page"),
+                AgentStep(id: "b", operation: .openURL, description: "One again.", targetURL: "https://one.example/other"),
+                AgentStep(id: "c", operation: .openURL, description: "Two.", targetURL: "https://two.example/page"),
+                AgentStep(id: "d", operation: .openURL, description: "Three.", targetURL: "https://three.example/page"),
+                AgentStep(id: "e", operation: .openURL, description: "Four.", targetURL: "https://four.example/page")
+            ]
+        )
+        let scope = WorkspaceScope(
+            workspace: StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"])
+        )
+
+        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope))
+
+        // Four distinct hosts across five steps, capped at three: the repeat collapses and the
+        // surplus is dropped, in first-seen order.
+        #expect(assessment.escalations.map(\.reason) == [
+            "one.example is not part of the Research workspace.",
+            "two.example is not part of the Research workspace.",
+            "three.example is not part of the Research workspace."
+        ])
+        #expect(assessment.effectiveTier == .tier3)
     }
 
     private func openWorkspacePlan(name: String?) -> AgentPlan {

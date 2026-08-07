@@ -69,11 +69,11 @@ struct InstantCommandResolverTests {
         #expect(prepared.previews.first?.title == "Calculate")
         #expect(prepared.previews.first?.details.contains("Result: 8") == true)
 
-        let request = try runner.approvalRequest(for: prepared, logAssessment: true)
+        let request = try runner.approvalRequest(for: prepared, logAssessment: true, scope: .unscoped)
         #expect(request.assessment.effectiveTier == .tier0)
         #expect(request.requirement == .autoRun)
 
-        let result = try await runner.execute(prepared, confirmationMessage: "Instant calculator auto-run")
+        let result = try await runner.execute(prepared, confirmationMessage: "Instant calculator auto-run", scope: .unscoped)
         #expect(result.summary == "2 + 2 * 3 = 8.")
         #expect(usageRecorder.snapshot().requestCount == 0)
         #expect(logStore.events.contains { $0.phase == .plan && $0.message == "Resolved command locally" })

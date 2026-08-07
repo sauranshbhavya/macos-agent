@@ -12,6 +12,49 @@ import MacAgentCore
 @Suite
 @MainActor
 struct ScheduledRoutineRunTests {
+    /// AC5 (SONNY-38) — a scheduled run's assessment is unaffected by any saved workspace.
+    ///
+    /// Scheduled runs pass `.unscoped` on purpose rather than by omission: a stored routine can
+    /// never name a workspace (`SaveRoutineCapabilityAdapter.validateRoutineSteps` rejects both
+    /// `create_workspace` and `open_workspace` as routine steps), there is no command text a user
+    /// typed, and no dispatch named one — so there is no binding available to resolve. This pins
+    /// that a workspace sitting in the store cannot change that: it runs identically, with no scope
+    /// escalation anywhere in its trace.
+    @Test
+    func aScheduledRunIsUnaffectedByAnySavedWorkspace() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        // A workspace narrow enough that what this routine touches falls outside it — and a routine
+        // step that actually *carries* a scoped resource. The default fixture routine is a single
+        // `calculate_utility` step, which `PlanScopedResources` groups with the operations
+        // contributing no resources at all, so a scoped assessment of it is identical to an unscoped
+        // one and the assertion below could not fail whatever the scheduled path did.
+        try WorkspaceStore(fileURL: fixture.root.appendingPathComponent("workspaces.json"))
+            .save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"]))
+        try fixture.saveRoutine(
+            unattendedTrusted: true,
+            steps: [
+                AgentStep(
+                    id: "foreign",
+                    operation: .openURL,
+                    description: "Open a domain the workspace does not list.",
+                    targetURL: "https://example.com/page"
+                )
+            ]
+        )
+
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
+        try await fixture.waitForIdle()
+
+        let notice = try #require(fixture.viewModel.scheduledRunNotice)
+        #expect(notice.contains("ran on schedule"))
+        // No scope escalation reached the trace, and none reached the notice.
+        #expect(fixture.viewModel.logStore.events.allSatisfy { !$0.message.contains("is not part of the") })
+        #expect(!notice.contains("is not part of the"))
+        // And the run left no binding behind on the shared view model.
+        #expect(fixture.viewModel.activeTaskScope == .unscoped)
+    }
+
     @Test
     func aTrustedRoutineRunsUnattendedAndRecordsItsRunEverywhere() async throws {
         let fixture = try makeFixture()
@@ -876,6 +919,10 @@ struct ScheduledRoutineRunTests {
     private struct Fixture {
         let root: URL
         let viewModel: AgentViewModel
+        /// Records what the scheduled run actually opened, so the fixture's hermeticity is
+        /// assertable rather than assumed.
+        let browserOpener: HermeticBrowserOpener
+        let appOpener: HermeticAppOpener
         let routineStore: RoutineStore
         let snippetStore: SnippetStore
         let taskHistoryStore: TaskHistoryStore
@@ -900,6 +947,8 @@ struct ScheduledRoutineRunTests {
             snippetStore = SnippetStore(fileURL: root.appendingPathComponent("snippets.json"))
             taskHistoryStore = TaskHistoryStore(fileURL: root.appendingPathComponent("task-history.json"))
 
+            browserOpener = HermeticBrowserOpener()
+            appOpener = HermeticAppOpener()
             let suiteName = "ScheduledRoutineRunTests-\(UUID().uuidString)"
             let userDefaults = try #require(UserDefaults(suiteName: suiteName))
             userDefaults.removePersistentDomain(forName: suiteName)
@@ -912,6 +961,18 @@ struct ScheduledRoutineRunTests {
                     fileURL: root.appendingPathComponent("recent-artifacts.json")
                 ),
                 shortcutCatalog: EmptyShortcutCatalog(),
+                // Hermetic seams (fakes defined in ProductShellTests.swift, same test target).
+                // This fixture executes real routine plans — since SONNY-38's AC5 test its routine
+                // opens a URL — so without these the scheduler drives the user's real browser.
+                browserOpener: browserOpener,
+                appOpener: appOpener,
+                fileOpener: HermeticFileOpener(),
+                mediaOpener: HermeticMediaOpener(),
+                runningAppSwitcher: HermeticRunningAppSwitcher(),
+                shortcutInvoker: HermeticShortcutInvoker(),
+                finderContextReader: HermeticFinderContextReader(),
+                documentConverter: HermeticDocumentConverter(),
+                zipArchiver: HermeticZipArchiver(),
                 shortcutRunHistoryStore: ShortcutRunHistoryStore(
                     fileURL: root.appendingPathComponent("shortcuts-run-history.json")
                 ),

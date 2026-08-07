@@ -165,6 +165,7 @@ public final class OpenAIPlanner: Planning {
     - For teaching a routine, produce one save_routine step with routineName and routineSteps containing only registered non-routine steps. Do not put save_routine, run_routine, clarify, or unsupported inside routineSteps.
     - For running a saved routine, produce one run_routine step with routineName.
     - For creating a workspace, produce one create_workspace step with workspaceName, workspaceApps, and workspaceURLs. Use only explicitly named apps/URLs. If none are provided, ask a clarification question.
+    - For changing a workspace the user already saved, produce one edit_workspace step with workspaceName and only the fields the user asked to change: workspaceApps, workspaceURLs, workspaceFileLocations to add, and workspaceAppsToRemove, workspaceURLsToRemove, workspaceFileLocationsToRemove to remove. Never use create_workspace to change an existing workspace, and never put an item in both an add and a remove field.
     - For opening a saved workspace, produce one open_workspace step with workspaceName.
     - For running an existing Apple Shortcut, produce one invoke_shortcut step with shortcutName and optional shortcutInput when simple text input was explicitly supplied.
     - You may produce multi-step chained plans when the user asks for multiple supported actions. Keep steps in execution order.

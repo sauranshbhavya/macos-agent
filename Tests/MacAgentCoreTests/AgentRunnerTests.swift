@@ -16,10 +16,11 @@ struct AgentRunnerTests {
         )
 
         let prepared = try await runner.prepare(command: "Open Safari")
-        let request = try runner.approvalRequest(for: prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
         let result = try await runner.execute(
             prepared,
-            confirmationMessage: "Typed command auto-approved execution"
+            confirmationMessage: "Typed command auto-approved execution",
+            scope: .unscoped
         )
 
         #expect(request.assessment.effectiveTier == .tier1)
@@ -39,10 +40,11 @@ struct AgentRunnerTests {
         )
 
         let prepared = try await runner.prepare(command: "Open GitHub")
-        let request = try runner.approvalRequest(for: prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
         let result = try await runner.execute(
             prepared,
-            confirmationMessage: "Voice command auto-approved execution"
+            confirmationMessage: "Voice command auto-approved execution",
+            scope: .unscoped
         )
 
         #expect(request.assessment.effectiveTier == .tier1)
@@ -64,8 +66,8 @@ struct AgentRunnerTests {
         )
 
         let prepared = try await runner.prepare(command: "Search GitHub for Swift concurrency")
-        let request = try runner.approvalRequest(for: prepared)
-        let result = try await runner.execute(prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
+        let result = try await runner.execute(prepared, scope: .unscoped)
 
         #expect(request.assessment.effectiveTier == .tier1)
         #expect(request.requirement == .autoRun)
@@ -89,8 +91,8 @@ struct AgentRunnerTests {
         )
 
         let prepared = try await runner.prepare(command: "Open the generated artifact")
-        let request = try runner.approvalRequest(for: prepared)
-        let result = try await runner.execute(prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
+        let result = try await runner.execute(prepared, scope: .unscoped)
 
         #expect(request.assessment.effectiveTier == .tier1)
         #expect(request.requirement == .autoRun)
@@ -108,8 +110,8 @@ struct AgentRunnerTests {
         )
 
         let prepared = try await runner.prepare(command: "Check Sonny permissions")
-        let request = try runner.approvalRequest(for: prepared)
-        let result = try await runner.execute(prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
+        let result = try await runner.execute(prepared, scope: .unscoped)
 
         #expect(request.assessment.effectiveTier == .tier0)
         #expect(request.requirement == .autoRun)
@@ -130,10 +132,10 @@ struct AgentRunnerTests {
         )
 
         let prepared = try await runner.prepare(command: "Zip the largest files")
-        let request = try runner.approvalRequest(for: prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
 
         do {
-            _ = try await runner.execute(prepared)
+            _ = try await runner.execute(prepared, scope: .unscoped)
             Issue.record("Expected tier 2 execution to require approval.")
         } catch RiskApprovalError.approvalRequired(let approvalRequest) {
             #expect(approvalRequest.requirement == .lightweightConfirmation)
@@ -150,7 +152,8 @@ struct AgentRunnerTests {
         _ = try await runner.execute(
             prepared,
             approvalDecision: .approved(request.assessment.effectiveTier),
-            confirmationMessage: "User approved Tier 2 action"
+            confirmationMessage: "User approved Tier 2 action",
+            scope: .unscoped
         )
 
         #expect(zipArchiver.createdArchives == [output])
@@ -183,7 +186,7 @@ struct AgentRunnerTests {
 
         let command = "use \(correctedFolder.path) instead"
         let prepared = try await runner.prepare(command: command, priorTaskContext: priorContext)
-        let request = try runner.approvalRequest(for: prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
 
         #expect(planner.receivedCommand == command)
         #expect(planner.receivedPriorTaskContext == priorContext)
@@ -192,7 +195,7 @@ struct AgentRunnerTests {
         #expect(request.requirement == .lightweightConfirmation)
 
         do {
-            _ = try await runner.execute(prepared)
+            _ = try await runner.execute(prepared, scope: .unscoped)
             Issue.record("Expected corrected tier 2 plan to require approval.")
         } catch RiskApprovalError.approvalRequired(let approvalRequest) {
             #expect(approvalRequest.assessment.effectiveTier == .tier2)
@@ -206,7 +209,8 @@ struct AgentRunnerTests {
         _ = try await runner.execute(
             prepared,
             approvalDecision: .approved(request.assessment.effectiveTier),
-            confirmationMessage: "User approved corrected Tier 2 action"
+            confirmationMessage: "User approved corrected Tier 2 action",
+            scope: .unscoped
         )
 
         #expect(zipArchiver.createdArchives == [output])
@@ -252,13 +256,14 @@ struct AgentRunnerTests {
         )
 
         let prepared = try await runner.prepare(command: "Open example")
-        let request = try runner.approvalRequest(for: prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
 
         do {
             _ = try await runner.execute(
                 prepared,
                 approvalDecision: .approved(.tier4),
-                confirmationMessage: "User approved Tier 4 action"
+                confirmationMessage: "User approved Tier 4 action",
+                scope: .unscoped
             )
             Issue.record("Expected tier 4 execution to be refused.")
         } catch RiskApprovalError.refused(let approvalRequest) {
@@ -304,7 +309,7 @@ struct AgentRunnerTests {
             ]
         )
 
-        let assessment = try executor.assessRisk(plan: plan)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
 
         #expect(assessment.defaultTier == .tier2)
         #expect(assessment.effectiveTier == .tier2)
@@ -329,7 +334,7 @@ struct AgentRunnerTests {
         )
 
         let prepared = try await runner.prepare(command: "Zip the largest files")
-        let request = try runner.approvalRequest(for: prepared, logAssessment: true)
+        let request = try runner.approvalRequest(for: prepared, logAssessment: true, scope: .unscoped)
 
         #expect(request.assessment.defaultTier == .tier2)
         #expect(request.assessment.effectiveTier == .tier3)
@@ -346,6 +351,92 @@ struct AgentRunnerTests {
         })
     }
 
+    /// AC11 (SONNY-37) — a scope escalation has to be its own logged trace event, not a silent
+    /// internal decision (spec §11.1A). `logRiskAssessment` already emits one `risk.escalated` per
+    /// escalation, so this asserts the wiring rather than adding any, and it asserts the *whole*
+    /// line: a `contains("risk.escalated")` check would pass on any escalation from any source and
+    /// prove nothing about scope.
+    ///
+    /// Also pins the gating half of this ticket's contract at the runner level: an out-of-scope plan
+    /// escalates the *assessment* to tier 3 and therefore reaches `.explicitApproval` through the
+    /// ordinary tier mapping. No scope branch was added to the requirement switch — scope changes
+    /// what is assessed, never how the gate reads it.
+    @Test
+    func anOutOfScopePlanEscalatesThroughTheOrdinaryGateAndLogsItsOwnRiskEvent() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let logStore = AgentLogStore()
+        let plan = AgentPlan(
+            summary: "Open a site.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "open",
+                    operation: .openURL,
+                    description: "Open an unrelated site.",
+                    targetURL: "https://example.com/page"
+                )
+            ]
+        )
+        let runner = AgentRunner(
+            planner: StaticPlanner(plan: plan),
+            executor: makeExecutor(root: root),
+            logStore: logStore
+        )
+        let scope = TaskWorkspaceScope.scoped(
+            WorkspaceScope(workspace: StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"]))
+        )
+
+        let prepared = try await runner.prepare(command: "Open example.com")
+        let request = try runner.approvalRequest(for: prepared, logAssessment: true, scope: scope)
+
+        #expect(request.assessment.effectiveTier == .tier3)
+        #expect(request.requirement == .explicitApproval)
+        #expect(request.assessment.scopeVerdict == .outOfScope)
+        #expect(logStore.events.contains { event in
+            event.phase == .risk
+                && event.message == "risk.escalated: Tier 1 -> Tier 3: example.com is not part of the Research workspace."
+        })
+        // The pre-existing summary event still fires alongside it, unchanged.
+        #expect(logStore.events.contains { event in
+            event.phase == .risk && event.message.hasPrefix("risk.assessed:")
+        })
+    }
+
+    /// The inverse, at the same level: an unscoped run of the identical plan must stay exactly as it
+    /// was — no scope escalation, no scope trace line, and the ordinary auto-run requirement.
+    @Test
+    func theSamePlanUnscopedLogsNoScopeEventAndKeepsItsOriginalRequirement() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let logStore = AgentLogStore()
+        let plan = AgentPlan(
+            summary: "Open a site.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "open",
+                    operation: .openURL,
+                    description: "Open an unrelated site.",
+                    targetURL: "https://example.com/page"
+                )
+            ]
+        )
+        let runner = AgentRunner(
+            planner: StaticPlanner(plan: plan),
+            executor: makeExecutor(root: root),
+            logStore: logStore
+        )
+
+        let prepared = try await runner.prepare(command: "Open example.com")
+        let request = try runner.approvalRequest(for: prepared, logAssessment: true, scope: .unscoped)
+
+        #expect(request.assessment.scopeVerdict == nil)
+        #expect(request.assessment.escalations.isEmpty)
+        #expect(request.assessment.effectiveTier == .tier1)
+        #expect(logStore.events.allSatisfy { !$0.message.contains("not part of") })
+    }
+
     @Test
     func staleTierTwoApprovalDoesNotAuthorizeLaterTierThreeEscalation() async throws {
         let root = try makeDirectory()
@@ -360,14 +451,15 @@ struct AgentRunnerTests {
         )
 
         let prepared = try await runner.prepare(command: "Zip the largest files")
-        let originalRequest = try runner.approvalRequest(for: prepared)
+        let originalRequest = try runner.approvalRequest(for: prepared, scope: .unscoped)
         try write("appeared after approval", to: output)
 
         do {
             _ = try await runner.execute(
                 prepared,
                 approvalDecision: .approved(originalRequest.assessment.effectiveTier),
-                confirmationMessage: "User approved Tier 2 action"
+                confirmationMessage: "User approved Tier 2 action",
+                scope: .unscoped
             )
             Issue.record("Expected later escalation to require a fresh approval.")
         } catch RiskApprovalError.approvalRequired(let newRequest) {
@@ -393,7 +485,7 @@ struct AgentRunnerTests {
         )
 
         let prepared = try await runner.prepare(command: "Save Hacker News to Markdown")
-        let request = try runner.approvalRequest(for: prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
 
         #expect(request.assessment.defaultTier == .tier2)
         #expect(request.assessment.effectiveTier == .tier3)
@@ -413,7 +505,7 @@ struct AgentRunnerTests {
         )
 
         let prepared = try await runner.prepare(command: "Summarize this article as Markdown")
-        let request = try runner.approvalRequest(for: prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
 
         #expect(request.assessment.defaultTier == .tier2)
         #expect(request.assessment.effectiveTier == .tier3)
@@ -434,7 +526,7 @@ struct AgentRunnerTests {
         )
 
         let prepared = try await runner.prepare(command: "Research Swift concurrency as Markdown")
-        let request = try runner.approvalRequest(for: prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
 
         #expect(request.assessment.defaultTier == .tier2)
         #expect(request.assessment.effectiveTier == .tier3)
@@ -456,7 +548,7 @@ struct AgentRunnerTests {
         )
 
         let prepared = try await runner.prepare(command: "Create a local draft")
-        let request = try runner.approvalRequest(for: prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
 
         #expect(request.assessment.defaultTier == .tier2)
         #expect(request.assessment.effectiveTier == .tier3)
@@ -477,7 +569,7 @@ struct AgentRunnerTests {
         )
 
         let prepared = try await runner.prepare(command: "Teach my morning setup")
-        let request = try runner.approvalRequest(for: prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
 
         #expect(request.assessment.effectiveTier == .tier3)
         #expect(request.requirement == .explicitApproval)
@@ -496,7 +588,7 @@ struct AgentRunnerTests {
         )
 
         let prepared = try await runner.prepare(command: "Create a research workspace")
-        let request = try runner.approvalRequest(for: prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
 
         #expect(request.assessment.effectiveTier == .tier3)
         #expect(request.requirement == .explicitApproval)
@@ -515,7 +607,7 @@ struct AgentRunnerTests {
         )
 
         let prepared = try await runner.prepare(command: "Convert DOCX files")
-        let request = try runner.approvalRequest(for: prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
 
         #expect(request.assessment.defaultTier == .tier2)
         #expect(request.assessment.effectiveTier == .tier2)
@@ -534,8 +626,8 @@ struct AgentRunnerTests {
         )
 
         let prepared = try await runner.prepare(command: "Open Bad Habit on Apple Music")
-        let request = try runner.approvalRequest(for: prepared)
-        let result = try await runner.execute(prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
+        let result = try await runner.execute(prepared, scope: .unscoped)
 
         #expect(request.assessment.effectiveTier == .tier1)
         #expect(request.assessment.escalations.isEmpty)
@@ -561,8 +653,8 @@ struct AgentRunnerTests {
         )
 
         let prepared = try await runner.prepare(command: "What is selected in Finder?")
-        let request = try runner.approvalRequest(for: prepared)
-        let result = try await runner.execute(prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
+        let result = try await runner.execute(prepared, scope: .unscoped)
 
         #expect(request.assessment.effectiveTier == .tier0)
         #expect(request.requirement == .autoRun)
@@ -580,10 +672,10 @@ struct AgentRunnerTests {
         )
 
         let prepared = try await runner.prepare(command: "Reveal the output in Finder")
-        let request = try runner.approvalRequest(for: prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
 
         do {
-            _ = try await runner.execute(prepared)
+            _ = try await runner.execute(prepared, scope: .unscoped)
             Issue.record("Expected reveal execution to reach the adapter and reject the missing path.")
         } catch PathValidationError.notFound(let path) {
             #expect(path == missingPath.path)
@@ -614,8 +706,8 @@ struct AgentRunnerTests {
         )
 
         let prepared = try await runner.prepare(command: "Open my research workspace")
-        let request = try runner.approvalRequest(for: prepared)
-        let result = try await runner.execute(prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
+        let result = try await runner.execute(prepared, scope: .unscoped)
 
         #expect(request.assessment.effectiveTier == .tier1)
         #expect(request.requirement == .autoRun)
@@ -639,10 +731,10 @@ struct AgentRunnerTests {
         )
 
         let prepared = try await runner.prepare(command: "Run my morning setup")
-        let request = try runner.approvalRequest(for: prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
 
         do {
-            _ = try await runner.execute(prepared)
+            _ = try await runner.execute(prepared, scope: .unscoped)
             Issue.record("Expected run routine to require approval.")
         } catch RiskApprovalError.approvalRequired(let approvalRequest) {
             #expect(approvalRequest.requirement == .lightweightConfirmation)
@@ -657,7 +749,8 @@ struct AgentRunnerTests {
 
         let result = try await runner.execute(
             prepared,
-            approvalDecision: .approved(request.assessment.effectiveTier)
+            approvalDecision: .approved(request.assessment.effectiveTier),
+            scope: .unscoped
         )
 
         #expect(appOpener.openedBundleIDs == ["com.apple.Safari"])
@@ -683,7 +776,7 @@ struct AgentRunnerTests {
         )
 
         let prepared = try await runner.prepare(command: "Run my archive routine")
-        let request = try runner.approvalRequest(for: prepared, logAssessment: true)
+        let request = try runner.approvalRequest(for: prepared, logAssessment: true, scope: .unscoped)
 
         #expect(request.assessment.defaultTier == .tier2)
         #expect(request.assessment.effectiveTier == .tier3)
@@ -703,7 +796,8 @@ struct AgentRunnerTests {
             _ = try await runner.execute(
                 prepared,
                 approvalDecision: .approved(.tier2),
-                confirmationMessage: "Stale approval"
+                confirmationMessage: "Stale approval",
+                scope: .unscoped
             )
             Issue.record("Expected nested routine escalation to require explicit approval.")
         } catch RiskApprovalError.approvalRequired(let approvalRequest) {
@@ -731,7 +825,7 @@ struct AgentRunnerTests {
         )
 
         let prepared = try await runner.prepare(command: "Teach Sonny a routine that zips the largest files")
-        let request = try runner.approvalRequest(for: prepared, logAssessment: true)
+        let request = try runner.approvalRequest(for: prepared, logAssessment: true, scope: .unscoped)
 
         #expect(request.assessment.defaultTier == .tier2)
         #expect(request.assessment.effectiveTier == .tier3)
@@ -748,7 +842,8 @@ struct AgentRunnerTests {
             _ = try await runner.execute(
                 prepared,
                 approvalDecision: .approved(.tier2),
-                confirmationMessage: "Stale approval"
+                confirmationMessage: "Stale approval",
+                scope: .unscoped
             )
             Issue.record("Expected nested save-routine escalation to require explicit approval.")
         } catch RiskApprovalError.approvalRequired(let approvalRequest) {
@@ -779,10 +874,10 @@ struct AgentRunnerTests {
         )
 
         let prepared = try await runner.prepare(command: "Zip the largest files and reveal the zip")
-        let request = try runner.approvalRequest(for: prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
 
         do {
-            _ = try await runner.execute(prepared)
+            _ = try await runner.execute(prepared, scope: .unscoped)
             Issue.record("Expected zip plus reveal chain to require one approval before any segment executes.")
         } catch RiskApprovalError.approvalRequired(let approvalRequest) {
             #expect(approvalRequest.assessment.effectiveTier == .tier2)
@@ -798,7 +893,8 @@ struct AgentRunnerTests {
 
         let result = try await runner.execute(
             prepared,
-            approvalDecision: .approved(request.assessment.effectiveTier)
+            approvalDecision: .approved(request.assessment.effectiveTier),
+            scope: .unscoped
         )
 
         #expect(zipArchiver.createdArchives == [output])

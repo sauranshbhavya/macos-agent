@@ -60,16 +60,16 @@ struct ShortcutsBridgeTests {
         let plan = shortcutPlan(name: "Morning Routine")
 
         let prepared = try runner.prepare(plan: plan, source: .instantResolver)
-        let firstRequest = try runner.approvalRequest(for: prepared)
+        let firstRequest = try runner.approvalRequest(for: prepared, scope: .unscoped)
         #expect(firstRequest.assessment.effectiveTier == .tier2)
         #expect(firstRequest.requirement == .lightweightConfirmation)
 
-        let result = try await runner.execute(prepared, approvalDecision: .approved(.tier2))
+        let result = try await runner.execute(prepared, approvalDecision: .approved(.tier2), scope: .unscoped)
         #expect(result.summary == "Ran Shortcut Morning Routine.")
         #expect(invoker.invocations.map(\.name) == ["Morning Routine"])
         #expect(try history.hasCleanObservedSuccess(for: "morning routine"))
 
-        let demotedRequest = try runner.approvalRequest(for: prepared)
+        let demotedRequest = try runner.approvalRequest(for: prepared, scope: .unscoped)
         #expect(demotedRequest.assessment.effectiveTier == .tier1)
         #expect(demotedRequest.requirement == .autoRun)
     }
@@ -94,12 +94,12 @@ struct ShortcutsBridgeTests {
         let plan = shortcutPlan(name: "Morning Routine")
 
         let prepared = try runner.prepare(plan: plan, source: .instantResolver)
-        let demotedRequest = try runner.approvalRequest(for: prepared)
+        let demotedRequest = try runner.approvalRequest(for: prepared, scope: .unscoped)
         #expect(demotedRequest.assessment.effectiveTier == .tier1)
         #expect(demotedRequest.requirement == .autoRun)
 
         do {
-            _ = try await runner.execute(prepared)
+            _ = try await runner.execute(prepared, scope: .unscoped)
             Issue.record("Expected failed Shortcut process to throw.")
         } catch ShortcutsBridgeError.invocationFailed(let name, let code, let output) {
             #expect(name == "Morning Routine")
@@ -110,7 +110,7 @@ struct ShortcutsBridgeTests {
         }
 
         #expect(try !history.hasCleanObservedSuccess(for: "Morning Routine"))
-        let resetRequest = try runner.approvalRequest(for: prepared)
+        let resetRequest = try runner.approvalRequest(for: prepared, scope: .unscoped)
         #expect(resetRequest.assessment.effectiveTier == .tier2)
         #expect(resetRequest.requirement == .lightweightConfirmation)
     }

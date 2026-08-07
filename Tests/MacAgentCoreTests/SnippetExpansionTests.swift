@@ -80,13 +80,13 @@ struct SnippetExpansionTests {
         let prepared = try runner.prepare(plan: savePlan, source: .instantResolver)
         #expect(prepared.previews.first?.title == "Save snippet")
 
-        let request = try runner.approvalRequest(for: prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
         #expect(request.assessment.effectiveTier == .tier2)
         #expect(request.requirement == .lightweightConfirmation)
         #expect(request.requirement != .autoRun)
 
         do {
-            _ = try await runner.execute(prepared)
+            _ = try await runner.execute(prepared, scope: .unscoped)
             Issue.record("Expected snippet save to pause for tier 2 approval.")
         } catch RiskApprovalError.approvalRequired(let approvalRequest) {
             #expect(approvalRequest.requirement == .lightweightConfirmation)
@@ -100,7 +100,8 @@ struct SnippetExpansionTests {
         let result = try await runner.execute(
             prepared,
             approvalDecision: .approved(.tier2),
-            confirmationMessage: "Test approved snippet save"
+            confirmationMessage: "Test approved snippet save",
+            scope: .unscoped
         )
         #expect(result.summary == "Saved snippet ;sig.")
         #expect(try store.snippet(matchingTrigger: ";sig").expansion == "Best, Sonny")
@@ -131,7 +132,7 @@ struct SnippetExpansionTests {
         }
 
         let prepared = try runner.prepare(plan: savePlan, source: .instantResolver)
-        let request = try runner.approvalRequest(for: prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
 
         #expect(request.assessment.effectiveTier == .tier3)
         #expect(request.requirement == .explicitApproval)
@@ -165,7 +166,7 @@ struct SnippetExpansionTests {
         }
 
         let prepared = try runner.prepare(plan: savePlan, source: .instantResolver)
-        let request = try runner.approvalRequest(for: prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
 
         #expect(request.assessment.effectiveTier == .tier2)
         #expect(request.assessment.escalations.isEmpty)
@@ -173,7 +174,7 @@ struct SnippetExpansionTests {
 
         // And it is genuinely runnable at the tier an unattended run can carry — the gate is the
         // thing that was broken, so assert through it rather than stopping at the assessment.
-        let result = try await runner.execute(prepared, approvalDecision: .approved(.tier2))
+        let result = try await runner.execute(prepared, approvalDecision: .approved(.tier2), scope: .unscoped)
         #expect(result.summary == "Saved snippet ;sig.")
         #expect(try store.snippet(matchingTrigger: ";sig").expansion == "Best, Sonny")
     }
@@ -204,7 +205,7 @@ struct SnippetExpansionTests {
             ]
         )
 
-        let request = try runner.approvalRequest(for: try runner.prepare(plan: plan, source: .instantResolver))
+        let request = try runner.approvalRequest(for: try runner.prepare(plan: plan, source: .instantResolver), scope: .unscoped)
 
         #expect(request.assessment.effectiveTier == .tier2)
         #expect(request.assessment.escalations.isEmpty)
@@ -248,11 +249,11 @@ struct SnippetExpansionTests {
         #expect(prepared.previews.first?.title == "Expand snippet")
         #expect(prepared.previews.first?.details.contains("Expansion: Best,\nSonny") == true)
 
-        let request = try runner.approvalRequest(for: prepared)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
         #expect(request.assessment.effectiveTier == .tier0)
         #expect(request.requirement == .autoRun)
 
-        let result = try await runner.execute(prepared)
+        let result = try await runner.execute(prepared, scope: .unscoped)
         #expect(result.summary == "Best,\nSonny")
     }
 
