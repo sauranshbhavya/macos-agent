@@ -1183,9 +1183,20 @@ final class AgentViewModel: ObservableObject {
     /// exactly the ones the command line would raise. A store call here would be a second write
     /// path that skips them.
     ///
+    /// **Drops any armed card binding.** A scope edit composed from workspace B's sheet is a new
+    /// composition context, and the composer dispatch is the one dispatch permitted to consume a
+    /// pending arm — so leaving an arm from "New task here" on workspace A alive would run this edit
+    /// bound to A while its command edits B, under a chip naming A. A chip naming an unrelated
+    /// workspace over an edit command is exactly the confusion the arm rules exist to prevent, and
+    /// `start`'s own contract puts every non-composer entry point on the side of killing the arm
+    /// rather than inheriting it. `beginNewWorkspace` leaves the arm alive, but it hands over an
+    /// *incomplete* command the user is still composing; this one hands over a finished instruction
+    /// about a named workspace.
+    ///
     /// Summons through `widgetPresentationRequest`, never `FloatingWidgetWindowController.show()`:
     /// SONNY-25 exists to remove the remaining direct callers and this must not add one.
     func composeWorkspaceScopeEdit(_ command: String) {
+        pendingWorkspaceBinding = nil
         self.command = command
         widgetPresentationRequest += 1
     }

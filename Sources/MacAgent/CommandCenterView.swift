@@ -1950,16 +1950,26 @@ struct WorkspaceCardPresentation: Equatable {
 struct WorkspaceScopeEntryPresentation: Equatable {
     let value: String
     let removeCommand: String
+    /// States the real removal unit, not a single-entry promise — see `removalUnits`.
     let removeAccessibilityLabel: String
+    /// Non-nil when other stored entries leave with this one. Rendered *visibly*, because an
+    /// accessibility label alone tells a sighted user nothing before they tap.
+    let sharedRemovalNote: String?
+    /// Non-nil when `WorkspaceScope` classified this entry inert: it is stored, it is shown, and it
+    /// can never match anything. Carries the evaluator's own reason.
+    let inertNote: String?
 }
 
 /// One dimension of a workspace's boundary, as the detail sheet renders it.
 ///
-/// **The empty case is the one that matters.** `WorkspaceScope` reads an empty list as
-/// `.unconstrained` — neither permission nor prohibition — and that reading is the whole reason
-/// default-on scope is safe. A user who opens this sheet and reads an empty Apps list as "no apps
-/// are allowed here" has learned the opposite of the truth, so an empty list gets a sentence saying
-/// *not restricted*, never a blank box.
+/// **The empty case is the one that matters, and "empty" is the evaluator's word, not a count of
+/// stored strings.** `WorkspaceScope` reports `.unconstrained` whenever its *canonical* list is
+/// empty, and its own doc comment spells out that this includes the case where every entry the user
+/// configured turned out to be inert. Deriving this from `entries.isEmpty` — which this shipped with
+/// first — is the same two-notions-of-empty defect SONNY-40 removed from the consent path one commit
+/// earlier, reintroduced under a different name on the surface whose entire job is telling the user
+/// whether a dimension restricts. It is worse here than there: the user reads a dimension as
+/// restricting when nothing is, and the sheet withholds the one sentence that would say otherwise.
 struct WorkspaceScopeSectionPresentation: Equatable {
     let title: String
     /// Stored entries verbatim, in stored order. Deliberately *not* shortened the way the card
@@ -1967,14 +1977,16 @@ struct WorkspaceScopeSectionPresentation: Equatable {
     /// boundary is meant to be inspectable, and an abbreviated entry is one the user cannot check
     /// against the entry a consent prompt named.
     let entries: [WorkspaceScopeEntryPresentation]
-    /// Non-nil exactly when `entries` is empty.
+    /// Whether this dimension constrains anything, read from `WorkspaceScope`'s canonical list.
+    /// **Not** `!entries.isEmpty`: a list of nothing but inert entries has rows and restricts
+    /// nothing.
+    let isRestricted: Bool
+    /// Non-nil exactly when `isRestricted` is false — including when there are rows to show.
     let notRestrictedText: String?
     /// A *completable prefix*, in `beginNewWorkspace`'s idiom, because the entry being added does
     /// not exist yet for the sheet to name. The user finishes it in the widget composer.
     let addCommand: String
     let addAccessibilityLabel: String
-
-    var isRestricted: Bool { !entries.isEmpty }
 }
 
 /// Everything the workspace detail sheet renders, computed as data.
@@ -2004,7 +2016,19 @@ struct WorkspaceDetailPresentation: Equatable {
     /// prompts report a mixed edit in, so the two surfaces read the same way round.
     var sections: [WorkspaceScopeSectionPresentation] { [apps, urls, fileLocations] }
 
-    init(workspace: StoredWorkspace, taskHistoryRecords: [CompletedTaskRecord]) {
+    /// The accessibility label for the sheet's mark-as-team control, owned here rather than built in
+    /// the view body — its Add and Remove siblings are pure and tested, and this one was not.
+    let markAsTeamAccessibilityLabel: String
+
+    /// `catalog` and `whitelist` are injectable purely so a test can pin behaviour without depending
+    /// on what happens to be installed or on the real home directory. Production always takes the
+    /// defaults, which is what makes the sheet's answer and the evaluator's answer the same answer.
+    init(
+        workspace: StoredWorkspace,
+        taskHistoryRecords: [CompletedTaskRecord],
+        catalog: MacAppCatalog = .default,
+        whitelist: PathWhitelist = PathWhitelist()
+    ) {
         name = workspace.name
         avatarInitial = WorkspaceAvatarInitial.from(name: workspace.name)
         effectiveTeamType = workspace.effectiveTeamType
@@ -2012,19 +2036,36 @@ struct WorkspaceDetailPresentation: Equatable {
         teamTypeText = workspace.effectiveTeamType == .team ? "Team workspace" : "Just you"
         taskCount = WorkspaceTaskCount.count(forWorkspaceNamed: workspace.name, in: taskHistoryRecords)
         taskCountText = WorkspaceTaskCount.text(taskCount)
+        markAsTeamAccessibilityLabel = "Mark \(workspace.name) as a team workspace"
+
+        // Built once, and it is the single source of truth for every "does this restrict anything"
+        // question below. `WorkspaceScopeInertEntry`'s own doc comment names this sheet as its
+        // intended consumer — "so a dropped entry is never mistaken for one that matched nothing".
+        let scope = WorkspaceScope(workspace: workspace, catalog: catalog, whitelist: whitelist)
+
         apps = Self.section(
             title: "Apps",
             noun: "the app",
+            kind: .app,
             values: workspace.apps,
             workspaceName: workspace.name,
-            notRestrictedText: "Not restricted — this workspace does not limit which apps a task can use."
+            isRestricted: !scope.appKeys.isEmpty,
+            notRestrictedText: "Not restricted — this workspace does not limit which apps a task can use.",
+            scope: scope,
+            catalog: catalog,
+            whitelist: whitelist
         )
         urls = Self.section(
             title: "URLs",
             noun: "the URL",
+            kind: .webDomain,
             values: workspace.urls,
             workspaceName: workspace.name,
-            notRestrictedText: "Not restricted — this workspace does not limit which sites a task can open."
+            isRestricted: !scope.webDomains.isEmpty,
+            notRestrictedText: "Not restricted — this workspace does not limit which sites a task can open.",
+            scope: scope,
+            catalog: catalog,
+            whitelist: whitelist
         )
         // `effectiveFileLocations`, never the raw Optional: "no key on disk" and "explicitly
         // emptied" are the same thing to every reader outside `WorkspaceStore.save`, and both mean
@@ -2032,9 +2073,14 @@ struct WorkspaceDetailPresentation: Equatable {
         fileLocations = Self.section(
             title: "File locations",
             noun: "the folder",
+            kind: .fileLocation,
             values: workspace.effectiveFileLocations,
             workspaceName: workspace.name,
-            notRestrictedText: "Not restricted — this workspace does not limit which folders a task can touch."
+            isRestricted: !scope.fileRoots.isEmpty,
+            notRestrictedText: "Not restricted — this workspace does not limit which folders a task can touch.",
+            scope: scope,
+            catalog: catalog,
+            whitelist: whitelist
         )
         unrestrictedFootnote = [apps, urls, fileLocations].contains { !$0.isRestricted }
             ? "An unrestricted list means this workspace says nothing about that kind of thing — Sonny neither "
@@ -2042,28 +2088,130 @@ struct WorkspaceDetailPresentation: Equatable {
             : nil
     }
 
+    /// The sentence shown when an open sheet's workspace is no longer stored. Owned here for the
+    /// same reason as `markAsTeamAccessibilityLabel`.
+    static func unavailableText(name: String) -> String {
+        "“\(name)” is no longer saved."
+    }
+
     private static func section(
         title: String,
         noun: String,
+        kind: ScopedResourceKind,
         values: [String],
         workspaceName: String,
-        notRestrictedText: String
+        isRestricted: Bool,
+        notRestrictedText: String,
+        scope: WorkspaceScope,
+        catalog: MacAppCatalog,
+        whitelist: PathWhitelist
     ) -> WorkspaceScopeSectionPresentation {
-        WorkspaceScopeSectionPresentation(
+        let inertReasons = Dictionary(
+            scope.inertEntries.filter { $0.kind == kind }.map { ($0.value, $0.reason) },
+            uniquingKeysWith: { first, _ in first }
+        )
+        let units = removalUnits(kind: kind, values: values, catalog: catalog, whitelist: whitelist)
+
+        return WorkspaceScopeSectionPresentation(
             title: title,
-            entries: values.map { value in
-                WorkspaceScopeEntryPresentation(
+            entries: values.indices.map { index in
+                let value = values[index]
+                let alsoRemoved = units[index]
+                return WorkspaceScopeEntryPresentation(
                     value: value,
                     removeCommand: "In my \(workspaceName) workspace, remove \(noun) \(value)",
-                    removeAccessibilityLabel: "Remove \(value) from \(workspaceName)"
+                    removeAccessibilityLabel: alsoRemoved.isEmpty
+                        ? "Remove \(value) from \(workspaceName)"
+                        : "Remove \(value) from \(workspaceName), which also removes "
+                            + alsoRemoved.joined(separator: ", "),
+                    sharedRemovalNote: alsoRemoved.isEmpty
+                        ? nil
+                        : "Removing this also removes \(alsoRemoved.joined(separator: ", ")).",
+                    // The evaluator's own words for *why*, never a paraphrase: a second explanation
+                    // of inertness is a second thing that can disagree with the classification it
+                    // is explaining.
+                    inertNote: inertReasons[value].map { "Not in effect — \($0)" }
                 )
             },
-            notRestrictedText: values.isEmpty ? notRestrictedText : nil,
+            isRestricted: isRestricted,
+            notRestrictedText: isRestricted ? nil : notRestrictedText,
             // Trailing space is load-bearing: the composer opens with the caret after it so the
             // user types only the entry.
             addCommand: "In my \(workspaceName) workspace, add \(noun) ",
             addAccessibilityLabel: "Add \(noun) to \(workspaceName)"
         )
+    }
+
+    /// For each stored entry, the *other* stored entries that leave with it when it is removed.
+    ///
+    /// `edit_workspace` matches a removal request at a coarser grain than a row — by host for URLs,
+    /// by catalog key for apps — and the adapter's own comment says a workspace "may legitimately
+    /// hold both" URLs on one host, so several rows sharing one removal unit is an expected state.
+    /// A per-entry Remove button promising single-entry removal would be lying on the one surface
+    /// built to make the boundary trustworthy.
+    ///
+    /// Computed by asking the evaluator twice rather than by re-deriving its keys, which are not
+    /// visible outside `MacAgentCore` and must not be copied here. A scope built from entry A is
+    /// asked about entry B and vice versa, and only a **symmetric** match counts as one unit. One
+    /// direction alone would over-group: `verdict(for:)` is folder *containment* and a dot-suffix
+    /// host match, so `github.com` accepts `api.github.com` and `~/Documents` accepts
+    /// `~/Documents/X`, neither in reverse. Symmetry turns those deliberately asymmetric rules back
+    /// into the equality the adapter's removal matching actually uses.
+    private static func removalUnits(
+        kind: ScopedResourceKind,
+        values: [String],
+        catalog: MacAppCatalog,
+        whitelist: PathWhitelist
+    ) -> [[String]] {
+        let scopes = values.map { value in
+            WorkspaceScope(
+                workspace: singleEntryWorkspace(kind: kind, value: value),
+                catalog: catalog,
+                whitelist: whitelist
+            )
+        }
+        let resources = values.map { resource(kind: kind, value: $0) }
+
+        return values.indices.map { index in
+            values.indices.compactMap { other -> String? in
+                guard other != index,
+                      let mine = resources[index],
+                      let theirs = resources[other],
+                      scopes[index].verdict(for: theirs) == .inScope,
+                      scopes[other].verdict(for: mine) == .inScope else {
+                    return nil
+                }
+                return values[other]
+            }
+        }
+    }
+
+    private static func singleEntryWorkspace(kind: ScopedResourceKind, value: String) -> StoredWorkspace {
+        switch kind {
+        case .app:
+            return StoredWorkspace(name: "", apps: [value], urls: [])
+        case .webDomain:
+            return StoredWorkspace(name: "", apps: [], urls: [value])
+        case .fileLocation:
+            return StoredWorkspace(name: "", apps: [], urls: [], fileLocations: [value])
+        }
+    }
+
+    /// A stored entry as the resource the evaluator compares. URLs become their *host*, which is
+    /// what `WorkspaceScope` matches; an entry `SafeURL` rejects has no host, so it groups with
+    /// nothing — correctly, since it can never match anything either.
+    private static func resource(kind: ScopedResourceKind, value: String) -> ScopedResource? {
+        switch kind {
+        case .app:
+            return .app(value)
+        case .webDomain:
+            guard let host = (try? SafeURL.validateWebURL(value))?.host else {
+                return nil
+            }
+            return .webDomain(host)
+        case .fileLocation:
+            return .fileLocation(value)
+        }
     }
 }
 
@@ -2411,7 +2559,7 @@ private struct WorkspaceDetailUnavailableView: View {
 
     var body: some View {
         VStack(spacing: 12) {
-            Text("“\(name)” is no longer saved.")
+            Text(WorkspaceDetailPresentation.unavailableText(name: name))
                 .font(SonnyType.itemTitle)
                 .foregroundStyle(SonnyTheme.text)
                 .multilineTextAlignment(.center)
@@ -2706,7 +2854,7 @@ private struct WorkspaceDetailView: View {
                         .buttonStyle(.plain)
                         .sonnyPointerCursor()
                         .sonnyHoverHighlight(cornerRadius: 3)
-                        .accessibilityLabel("Mark \(presentation.name) as a team workspace")
+                        .accessibilityLabel(presentation.markAsTeamAccessibilityLabel)
                     }
                 }
             }
@@ -2734,14 +2882,11 @@ private struct WorkspaceDetailView: View {
                 .accessibilityLabel(section.addAccessibilityLabel)
             }
 
-            if let notRestrictedText = section.notRestrictedText {
-                Text(notRestrictedText)
-                    .font(SonnyType.caption)
-                    .foregroundStyle(SonnyTheme.muted)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.bottom, 14)
-            } else {
+            // Entries and the not-restricted sentence are *independent*, not an either/or. A
+            // dimension whose every entry is inert has rows to show and restricts nothing, and that
+            // is exactly the state where the user needs to see both — the rows, marked as not in
+            // effect, and the sentence saying the dimension is unrestricted.
+            if !section.entries.isEmpty {
                 VStack(alignment: .leading, spacing: 0) {
                     // Offset-keyed rather than value-keyed: a legacy `workspaces.json` can hold the
                     // same string twice, and a duplicate `id` silently drops rows.
@@ -2749,22 +2894,57 @@ private struct WorkspaceDetailView: View {
                         entryRow(entry)
                     }
                 }
-                .padding(.bottom, 14)
+            }
+
+            if let notRestrictedText = section.notRestrictedText {
+                Text(notRestrictedText)
+                    .font(SonnyType.caption)
+                    .foregroundStyle(SonnyTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
         }
         .padding(.top, 4)
     }
 
+    /// One stored entry, its removal control, and anything true about it that the value alone does
+    /// not say.
+    ///
+    /// The value is **not truncated**. The ticket's stated reason for rendering entries verbatim is
+    /// character-for-character checkability against the entry a consent prompt named, and an elided
+    /// middle defeats exactly that for long paths and long URLs — the entries where checking matters
+    /// most. Truncation is a convention elsewhere in this file, but elsewhere it is cosmetic. It
+    /// wraps instead, and is selectable so it can be copied and compared.
+    ///
+    /// `SettingsAdaptiveControlRow` rather than a hand-rolled `HStack`, per
+    /// `.claude/rules/macagent-ui-conventions.md`, matching the section header beside it.
     private func entryRow(_ entry: WorkspaceScopeEntryPresentation) -> some View {
-        HStack(alignment: .center, spacing: 12) {
-            Text(entry.value)
-                .font(SonnyType.caption)
-                .foregroundStyle(SonnyTheme.text)
-                .lineLimit(1)
-                .truncationMode(.middle)
-                .frame(maxWidth: .infinity, alignment: .leading)
-                .help(entry.value)
+        SettingsAdaptiveControlRow {
+            VStack(alignment: .leading, spacing: 3) {
+                Text(entry.value)
+                    .font(SonnyType.caption)
+                    .foregroundStyle(SonnyTheme.text)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .textSelection(.enabled)
+                    .frame(maxWidth: .infinity, alignment: .leading)
 
+                if let inertNote = entry.inertNote {
+                    Text(inertNote)
+                        .font(SonnyType.micro)
+                        .foregroundStyle(SonnyTheme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+
+                if let sharedRemovalNote = entry.sharedRemovalNote {
+                    Text(sharedRemovalNote)
+                        .font(SonnyType.micro)
+                        .foregroundStyle(SonnyTheme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
+            }
+        } trailing: {
             Button {
                 compose(entry.removeCommand)
             } label: {
@@ -2773,8 +2953,8 @@ private struct WorkspaceDetailView: View {
             .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
             .disabled(isRunning)
             .accessibilityLabel(entry.removeAccessibilityLabel)
+            .help(entry.sharedRemovalNote ?? entry.removeAccessibilityLabel)
         }
-        .padding(.vertical, 7)
     }
 }
 
