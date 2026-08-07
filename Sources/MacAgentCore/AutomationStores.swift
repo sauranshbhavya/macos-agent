@@ -65,15 +65,26 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
     ///
     /// The rule itself is unchanged from the save capability's original list. Routines are
     /// declarative local plans, so they may not author or invoke other routines
-    /// (`.saveRoutine`, `.runRoutine`), may not create or open workspaces (`.createWorkspace`,
-    /// `.openWorkspace` — a scheduled routine deliberately has no workspace binding, see
-    /// `docs/sonny-founder-design-decisions.md`), may not ask a question a scheduled run has
-    /// nobody present to answer (`.clarify`), and may not persist the planner's own "I do not
-    /// know" as if it were a plan (`.unsupported`).
+    /// (`.saveRoutine`, `.runRoutine`), may not create, edit or open workspaces
+    /// (`.createWorkspace`, `.editWorkspace`, `.openWorkspace` — a scheduled routine deliberately
+    /// has no workspace binding, see `docs/sonny-founder-design-decisions.md`), may not ask a
+    /// question a scheduled run has nobody present to answer (`.clarify`), and may not persist the
+    /// planner's own "I do not know" as if it were a plan (`.unsupported`).
+    ///
+    /// **`.editWorkspace` is here because a `Set` cannot force the question the way an exhaustive
+    /// switch does.** `PlanScopedResources` refuses a `default:` clause precisely so a new
+    /// `AgentOperation` cannot be added without someone classifying it; membership in this set has
+    /// no such guard, so a new operation silently defaults to *permitted*. Left out, the hole would
+    /// have been one-directional but real: removing from a workspace escalates to tier 3, which an
+    /// unattended run structurally cannot satisfy, but *adding* stays tier 2, which it can — so a
+    /// scheduled routine could have widened a workspace's restriction scope with nobody present to
+    /// see it. That is the hazard SONNY-40's own row-C forward flag names, reached through the
+    /// scheduler instead of the command line.
     public static let forbiddenStepOperations: Set<AgentOperation> = [
         .saveRoutine,
         .runRoutine,
         .createWorkspace,
+        .editWorkspace,
         .openWorkspace,
         .clarify,
         .unsupported

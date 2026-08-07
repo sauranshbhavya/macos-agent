@@ -84,12 +84,13 @@ struct AutomationStoresTests {
     /// silent addition fail, and the reason the per-operation tests below can be written as a loop
     /// without being self-fulfilling.
     @Test
-    func theForbiddenStepListIsExactlyTheSixOperationsRoutinesMayNotContain() {
+    func theForbiddenStepListIsExactlyTheSevenOperationsRoutinesMayNotContain() {
         #expect(
             StoredRoutine.forbiddenStepOperations == [
                 .saveRoutine,
                 .runRoutine,
                 .createWorkspace,
+                .editWorkspace,
                 .openWorkspace,
                 .clarify,
                 .unsupported
