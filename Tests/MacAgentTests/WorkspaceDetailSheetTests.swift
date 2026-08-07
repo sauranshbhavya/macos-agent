@@ -75,6 +75,30 @@ struct WorkspaceDetailSheetTests {
         #expect(presentation.unrestrictedFootnote == nil)
     }
 
+    /// One task is "1 task", not "1 tasks".
+    ///
+    /// Added after a mutation battery: replacing the pluralisation with a bare "tasks" left the
+    /// whole suite green, because every existing assertion — the card's included — happened to use
+    /// a plural count. Sharing the rule between the card and the sheet made the gap visible, and
+    /// this closes it for both.
+    @Test
+    func theTaskCountReadsSingularForExactlyOneTask() {
+        let oneRecord = [
+            CompletedTaskRecord(command: "a", startedAt: .distantPast, completedAt: Date(), outcomeStatus: .completed, workspaceName: "Client Alpha")
+        ]
+
+        let presentation = WorkspaceDetailPresentation(
+            workspace: populatedWorkspace(),
+            taskHistoryRecords: oneRecord
+        )
+
+        #expect(presentation.taskCount == 1)
+        #expect(presentation.taskCountText == "1 task")
+        #expect(WorkspaceTaskCount.text(0) == "0 tasks")
+        #expect(WorkspaceTaskCount.text(1) == "1 task")
+        #expect(WorkspaceTaskCount.text(2) == "2 tasks")
+    }
+
     /// A file-locations list that was never written reads exactly like one that was emptied —
     /// `effectiveFileLocations`, not the raw Optional. The nil/`[]` distinction is meaningful only
     /// to `WorkspaceStore.save`.
@@ -197,6 +221,38 @@ struct WorkspaceDetailSheetTests {
         #expect(viewModel.isAwaitingApproval == false)
         // The boundary is untouched until the capability actually runs and is approved.
         #expect(try store.workspace(named: "Client Alpha") == before)
+    }
+
+    /// **The sheet's one direct write touches the badge and nothing else.**
+    ///
+    /// Added after a mutation battery: making `markWorkspaceAsTeam` clear the apps list left the
+    /// whole suite green. Nothing pinned that the one write reachable from this sheet leaves the
+    /// boundary alone — and a badge toggle silently wiping a workspace's scope is precisely the
+    /// class of loss this branch exists to prevent, arriving through the one mutation that is
+    /// allowed to skip the capability's consent because it is not supposed to be a boundary change.
+    @Test
+    func markingAsTeamChangesOnlyTheBadgeAndLeavesTheBoundaryIntact() throws {
+        let root = try makeSheetTestDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let viewModel = try makeSheetTestViewModel(root: root, workspaceStore: store)
+        let solo = StoredWorkspace(
+            name: "Client Alpha",
+            apps: ["Safari", "Microsoft Word"],
+            urls: ["https://github.com/acme"],
+            fileLocations: ["~/Documents/ClientAlpha"]
+        )
+        try store.save(solo)
+        viewModel.refreshSavedItems()
+
+        viewModel.markWorkspaceAsTeam(solo)
+
+        let stored = try store.workspace(named: "Client Alpha")
+        #expect(stored.teamType == .team)
+        #expect(stored.apps == ["Safari", "Microsoft Word"])
+        #expect(stored.urls == ["https://github.com/acme"])
+        #expect(stored.fileLocations == ["~/Documents/ClientAlpha"])
+        #expect(viewModel.errorMessage == nil)
     }
 
     // MARK: - Write failures
