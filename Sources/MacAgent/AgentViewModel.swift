@@ -1168,6 +1168,28 @@ final class AgentViewModel: ObservableObject {
         start(autoExecute: true)
     }
 
+    /// Hands the widget composer a ready-made `edit_workspace` command from the detail sheet and
+    /// brings the widget forward.
+    ///
+    /// **Deliberately does not dispatch.** The alternative — `start(autoExecute: true)`, the way
+    /// `openWorkspaceWidget` runs its synthesized command — would send a boundary change straight
+    /// to the planner with no chance for the user to read it first. The approval would still fire
+    /// (nothing here can skip it), but the user would be approving an edit they never composed, and
+    /// a planner misreading of "remove the folder ~/Documents/X" is a boundary change nobody typed.
+    /// Pre-filling is `beginNewWorkspace`'s idiom and keeps the composed text in front of the user.
+    ///
+    /// It also writes nothing. Every scope mutation goes through `edit_workspace`, so the tier-2
+    /// add and tier-3 remove consents — including SONNY-40's "no longer restricts … at all" — are
+    /// exactly the ones the command line would raise. A store call here would be a second write
+    /// path that skips them.
+    ///
+    /// Summons through `widgetPresentationRequest`, never `FloatingWidgetWindowController.show()`:
+    /// SONNY-25 exists to remove the remaining direct callers and this must not add one.
+    func composeWorkspaceScopeEdit(_ command: String) {
+        self.command = command
+        widgetPresentationRequest += 1
+    }
+
     func markWorkspaceAsTeam(_ workspace: StoredWorkspace) {
         var updated = workspace
         updated.teamType = .team
