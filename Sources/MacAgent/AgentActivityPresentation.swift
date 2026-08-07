@@ -95,26 +95,6 @@ enum AgentActivityPresentation {
         }
     }
 
-    /// The explanatory lines the floating widget's permission panel puts above its "Allow access
-    /// to …" row, in render order.
-    ///
-    /// Returns nothing once the user has resolved their first approval, so the steady-state panel
-    /// stays exactly what the wireframe specifies (`docs/sonny-design-system-reference.md:145` —
-    /// one "Allow access to [resource]" line plus two icon-only buttons, nothing else). The
-    /// first-run moment is the one sanctioned deviation: `docs/sonny-founder-design-decisions.md`'s
-    /// "Approval panel — first-run moment" asks for "first-time-specific framing on the panel
-    /// itself," which is what the reassurance sentence already shipped for on 2026-07-24.
-    ///
-    /// `riskReason` joins it (SONNY-10) because that shipped sentence explains Sonny's *policy* —
-    /// "we always ask" — without ever saying why *this* action was flagged, and the bar for this
-    /// moment is that a new user can tell what is being asked **and why**. Command Center already
-    /// renders `riskReason` for every approval via `RiskApprovalCopy.lines`; this only closes the
-    /// gap on the surface most users meet first. Shown bare rather than with `lines`' "Why this is
-    /// risky: " prefix — the widget's voice has no field labels ("Allow access to X"), and adding
-    /// one here would read as a second design language inside one panel.
-    ///
-    /// Escalation reasons are deliberately not here: they are per-run facts, not first-run
-    /// framing, and render in their own warning-colored line on every approval.
     /// The widget's in-composer binding indicator: which workspace the next command belongs to.
     ///
     /// A pure function rather than copy authored in the view body, following
@@ -137,6 +117,26 @@ enum AgentActivityPresentation {
         "New task in \(workspaceName)"
     }
 
+    /// The explanatory lines the floating widget's permission panel puts above its "Allow access
+    /// to …" row, in render order.
+    ///
+    /// Returns nothing once the user has resolved their first approval, so the steady-state panel
+    /// stays exactly what the wireframe specifies (`docs/sonny-design-system-reference.md:145` —
+    /// one "Allow access to [resource]" line plus two icon-only buttons, nothing else). The
+    /// first-run moment is the one sanctioned deviation: `docs/sonny-founder-design-decisions.md`'s
+    /// "Approval panel — first-run moment" asks for "first-time-specific framing on the panel
+    /// itself," which is what the reassurance sentence already shipped for on 2026-07-24.
+    ///
+    /// `riskReason` joins it (SONNY-10) because that shipped sentence explains Sonny's *policy* —
+    /// "we always ask" — without ever saying why *this* action was flagged, and the bar for this
+    /// moment is that a new user can tell what is being asked **and why**. Command Center already
+    /// renders `riskReason` for every approval via `RiskApprovalCopy.lines`; this only closes the
+    /// gap on the surface most users meet first. Shown bare rather than with `lines`' "Why this is
+    /// risky: " prefix — the widget's voice has no field labels ("Allow access to X"), and adding
+    /// one here would read as a second design language inside one panel.
+    ///
+    /// Escalation reasons are deliberately not here: they are per-run facts, not first-run
+    /// framing, and render in their own warning-colored line on every approval.
     static func firstRunApprovalExplainerLines(
         for request: RiskApprovalRequest,
         isFirstApproval: Bool

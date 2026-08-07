@@ -147,7 +147,12 @@ final class AgentViewModel: ObservableObject {
     /// those are the same task resuming, and cleared at every terminal state.
     /// `private(set)` internal rather than fully private, matching `activeTaskOrigin`: the lifecycle
     /// *is* the feature here, so it has to be assertable. Nothing outside this type may set it.
-    private(set) var activeTaskScope: TaskWorkspaceScope = .unscoped
+    /// `@Published` because the widget's binding chip renders off it through `boundWorkspaceName`.
+    /// It was `private(set) var` alone, and the chip's disappearance at task end worked only because
+    /// every `activeTaskScope = .unscoped` site happens to sit in the same synchronous scope as some
+    /// other published write (`isRunning`, `approvalRequest`). Nothing in the type system held that
+    /// pairing, so the chip's correctness was incidental.
+    @Published private(set) var activeTaskScope: TaskWorkspaceScope = .unscoped
     /// The scope the most recent task was *assessed* under, kept after `activeTaskScope` is cleared.
     ///
     /// `activeTaskScope` is the live binding and is `.unscoped` again the moment a task terminates,
@@ -406,10 +411,16 @@ final class AgentViewModel: ObservableObject {
     ///   `.commandCenter`; the floating widget's own call sites pass `.widget` explicitly.
     /// - Parameter workspaceBinding: A workspace named by the dispatch itself rather than by the
     ///   command text — B4's workspace-card action. Wins over the free-text match.
+    /// - Parameter fromComposer: Whether this dispatch is the widget composer submitting what the
+    ///   user typed or spoke into it. **Only a composer dispatch may consume a pending card
+    ///   binding**; every other entry point kills it instead. Defaults to `false` so a call site
+    ///   added later inherits the safe direction — a new dispatch that forgets to say anything
+    ///   drops the arm rather than silently scoping itself with it.
     func start(
         autoExecute: Bool = false,
         origin: TaskOrigin = .commandCenter,
-        workspaceBinding: String? = nil
+        workspaceBinding: String? = nil,
+        fromComposer: Bool = false
     ) {
         if isAwaitingApproval {
             approvePendingRun()
@@ -442,11 +453,19 @@ final class AgentViewModel: ObservableObject {
         // running" by the display below) long after the real submission had already moved on.
         command = ""
 
-        // The card dispatch and the `workspaceBinding:` argument are one slot, not two paths: an
-        // argument wins if a caller supplies one, otherwise the pending card binding is consumed
-        // here. Either way it lands in `explicitWorkspaceBinding`, which is what SONNY-38 already
-        // pinned as beating a conflicting workspace named in the command text.
-        explicitWorkspaceBinding = workspaceBinding ?? pendingWorkspaceBinding
+        // **A pending card binding may bind exactly one task: the next composer dispatch.**
+        //
+        // It used to be consumed by *any* `start()`, which meant an armed-but-never-submitted chip
+        // was inherited by the next Command Center row action — click "New task" on Drafting, get
+        // distracted, then click Open on Research, and Research opened under Drafting's boundary
+        // and raised a scope prompt naming a workspace the user never mentioned. A slot with one
+        // setter, two death paths and no abandonment path outlives the dispatch that created it.
+        //
+        // Now: a composer dispatch consumes it; every other dispatch kills it without inheriting.
+        // Either way it dies here, so it can never reach a second task. An explicit
+        // `workspaceBinding:` argument still wins over both, which is what keeps SONNY-38's
+        // precedence rule (card beats a workspace named in the command text) a single slot.
+        explicitWorkspaceBinding = workspaceBinding ?? (fromComposer ? pendingWorkspaceBinding : nil)
         pendingWorkspaceBinding = nil
         currentTask?.cancel()
         isRunning = true
@@ -1202,6 +1221,10 @@ final class AgentViewModel: ObservableObject {
         clarificationWorkspaceBinding = nil
         activeTaskScope = .unscoped
         explicitWorkspaceBinding = nil
+        // The pending card slot too. SONNY-38's review filed the identical finding against this
+        // same function for `explicitWorkspaceBinding`; a new binding field added one ticket later
+        // repeated it, which is why the enumeration above is written out rather than trusted.
+        pendingWorkspaceBinding = nil
         preparedRun = nil
         runner = nil
         pendingCommandForPriorTaskContext = nil
@@ -1412,7 +1435,13 @@ final class AgentViewModel: ObservableObject {
                 isTranscribingVoice = false
                 preserveUsageForNextStart = true
                 logStore.append(.observe, "Transcript ready. Sonny will act now.")
-                start(autoExecute: true, origin: voiceRecordingOrigin)
+                // Voice submitted from the widget's own mic *is* the composer, with the chip
+                // visible; from anywhere else it is not.
+                start(
+                    autoExecute: true,
+                    origin: voiceRecordingOrigin,
+                    fromComposer: voiceRecordingOrigin == .widget
+                )
             } catch {
                 isTranscribingVoice = false
                 // This is the bug that made the auto-clear timer feel broken: a failed

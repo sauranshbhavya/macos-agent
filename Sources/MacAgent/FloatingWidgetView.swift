@@ -248,7 +248,7 @@ struct FloatingWidgetView: View {
         guard !text.isEmpty, !isTaskInFlight else { return }
         // `start()` itself now clears `command` centrally, synchronously, right after capturing
         // it — correct for every caller, not just this one.
-        viewModel.start(origin: .widget)
+        viewModel.start(origin: .widget, fromComposer: true)
     }
 
     /// The in-composer binding indicator and its clear affordance.

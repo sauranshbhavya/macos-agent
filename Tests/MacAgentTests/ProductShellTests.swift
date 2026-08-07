@@ -629,7 +629,7 @@ struct ProductShellTests {
 
         viewModel.beginTaskInWorkspace(drafting)
         viewModel.command = "open workspace Research"
-        viewModel.start()
+        viewModel.start(origin: .widget, fromComposer: true)
         try await waitForViewModelToBecomeIdle(viewModel)
 
         #expect(viewModel.lastAssessedScope == .scoped(WorkspaceScope(workspace: drafting)))
@@ -667,7 +667,7 @@ struct ProductShellTests {
         viewModel.refreshSavedItems()
 
         viewModel.beginTaskInWorkspace(research)
-        viewModel.start()
+        viewModel.start(origin: .widget, fromComposer: true)
         try await waitForViewModelToBecomeIdle(viewModel)
 
         #expect(viewModel.plan == nil)
@@ -694,7 +694,7 @@ struct ProductShellTests {
         // A command that pauses on an approval, so there is a stable in-flight window to observe.
         // Bound to Research, opening Drafting — whose stored app falls outside Research.
         viewModel.command = "open workspace Drafting"
-        viewModel.start()
+        viewModel.start(origin: .widget, fromComposer: true)
         try await waitForViewModelToBecomeIdle(viewModel)
 
         // Mid-task: the pending slot has been consumed, so the indicator can only still be showing
@@ -724,13 +724,121 @@ struct ProductShellTests {
         try fixture.workspaceStore.save(research)
         viewModel.refreshSavedItems()
 
+        let drafting = StoredWorkspace(name: "Drafting", apps: ["Notes"], urls: [])
+        try fixture.workspaceStore.save(drafting)
+        viewModel.refreshSavedItems()
+
+        // The interaction the name claims, and the one that was actually broken: arm a card
+        // dispatch on a *different* workspace first. Before the fix, Open inherited it and opened
+        // Research under Drafting's boundary — a scope approval naming a workspace the user never
+        // mentioned, on the one-click action the contract says must be unchanged.
+        viewModel.beginTaskInWorkspace(drafting)
         viewModel.openWorkspaceWidget(research)
         try await waitForViewModelToBecomeIdle(viewModel)
 
+        // Open ran under its own plan-derived binding, never the pending one...
+        #expect(viewModel.lastAssessedScope == .scoped(WorkspaceScope(workspace: research)))
+        // ...so no scope prompt at all, and certainly none naming Drafting.
+        #expect(!viewModel.isAwaitingApproval)
+        #expect(viewModel.approvalRequest == nil)
+        // One click, exactly as before.
         #expect(viewModel.plan?.steps.first?.operation == .openWorkspace)
         #expect(fixture.appOpener.openedBundleIDs == ["com.apple.Safari"])
         #expect(fixture.browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com"])
+        // And the abandoned arm is dead rather than waiting for the next victim.
         #expect(viewModel.pendingWorkspaceBinding == nil)
+    }
+
+    /// F2's other inheriting entry point. `runRoutineWidget` is a Command Center row action, not a
+    /// composer dispatch, so an armed chip must neither scope it nor survive it.
+    @Test
+    func aRoutineRowActionNeitherInheritsNorSurvivesAnArmedCardBinding() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let drafting = StoredWorkspace(name: "Drafting", apps: ["Notes"], urls: [])
+        try fixture.workspaceStore.save(drafting)
+        try fixture.routineStore.save(
+            StoredRoutine(
+                name: "Morning",
+                steps: [AgentStep(id: "a", operation: .openURL, description: "Go.", targetURL: "https://github.com/sonny")]
+            )
+        )
+        viewModel.refreshSavedItems()
+
+        viewModel.beginTaskInWorkspace(drafting)
+        viewModel.runRoutineWidget(try fixture.routineStore.routine(named: "Morning"))
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.lastAssessedScope == .unscoped)
+        #expect(viewModel.pendingWorkspaceBinding == nil)
+    }
+
+    /// F4 — "delete all local data" must take the pending slot with everything else. The workspace
+    /// itself is gone by then; a chip still naming it, and a next command still binding to it, is
+    /// the same defect SONNY-38's review filed against this function one ticket earlier.
+    @Test
+    func clearingInMemoryStateAlsoDropsAnArmedCardBinding() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let research = StoredWorkspace(name: "Research", apps: ["Safari"], urls: [])
+        try fixture.workspaceStore.save(research)
+        viewModel.refreshSavedItems()
+
+        viewModel.beginTaskInWorkspace(research)
+        #expect(viewModel.pendingWorkspaceBinding == "Research")
+
+        viewModel.deleteLocalData()
+
+        #expect(viewModel.pendingWorkspaceBinding == nil)
+        #expect(viewModel.boundWorkspaceName == nil)
+    }
+
+    /// A retry is a re-dispatch of the last command, not a composer submission, so it must not pick
+    /// up an arm either — and the arm must not outlive it.
+    @Test
+    func aRetryNeitherInheritsNorSurvivesAnArmedCardBinding() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let drafting = StoredWorkspace(name: "Drafting", apps: ["Notes"], urls: [])
+        try fixture.workspaceStore.save(drafting)
+        viewModel.refreshSavedItems()
+
+        viewModel.command = "= 1 + 1"
+        viewModel.start(origin: .widget, fromComposer: true)
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        viewModel.beginTaskInWorkspace(drafting)
+        viewModel.retryLastCommand()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.lastAssessedScope == .unscoped)
+        #expect(viewModel.pendingWorkspaceBinding == nil)
+    }
+
+    /// Last-wins: arming a second card before submitting replaces the first rather than stacking.
+    @Test
+    func aSecondCardArmBeforeSubmitReplacesTheFirst() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let research = StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        let drafting = StoredWorkspace(name: "Drafting", apps: ["Notes"], urls: [])
+        try fixture.workspaceStore.save(research)
+        try fixture.workspaceStore.save(drafting)
+        viewModel.refreshSavedItems()
+
+        viewModel.beginTaskInWorkspace(research)
+        viewModel.beginTaskInWorkspace(drafting)
+        #expect(viewModel.boundWorkspaceName == "Drafting")
+
+        viewModel.command = "= 1 + 1"
+        viewModel.start(origin: .widget, fromComposer: true)
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.lastAssessedScope == .scoped(WorkspaceScope(workspace: drafting)))
     }
 
     /// AC7 — precedence. Both signals present at once, naming **different** workspaces: the card
