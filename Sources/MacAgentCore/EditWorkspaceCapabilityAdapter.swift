@@ -237,10 +237,20 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
         /// evaluator decides what counted, this type only carries the answer.
         let effectivelyRemoved: [String]
 
-        /// True when the removal leaves the dimension unconstrained: it was restricting something,
-        /// and now it is not.
+        /// True when the edit leaves the dimension unconstrained: it was restricting something, and
+        /// now it is not.
+        ///
+        /// **No removal term, and that is a proof rather than an omission.** Both earlier drafts
+        /// conjoined one — first `!removed.isEmpty`, then `!effectivelyRemoved.isEmpty` — and a
+        /// mutation battery showed the two interchangeable, which is the tell that neither was doing
+        /// anything. They cannot: `after` differs from `before` only by removals and additions;
+        /// additions can only grow a canonical list, and removing an entry the evaluator already
+        /// classified inert cannot shrink one, since an inert entry contributes to none. So
+        /// `beforeRestrictsKind && !afterRestrictsKind` already implies that something which *counted*
+        /// was removed — a redundant conjunct reads as a second condition and invites the next reader
+        /// to wonder which of the two is load-bearing.
         var removalEmptiesTheKind: Bool {
-            !effectivelyRemoved.isEmpty && beforeRestrictsKind && !afterRestrictsKind
+            beforeRestrictsKind && !afterRestrictsKind
         }
     }
 
