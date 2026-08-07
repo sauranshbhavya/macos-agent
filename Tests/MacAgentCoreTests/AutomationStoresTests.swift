@@ -306,6 +306,47 @@ struct AutomationStoresTests {
         #expect(stored.apps == ["Safari", "Notes"])
     }
 
+    /// SONNY-43, folded into SONNY-40. `CreateWorkspaceCapabilityAdapter` builds a fresh
+    /// `StoredWorkspace(name:apps:urls:)` with no team type at all, so before the merge a user who
+    /// said "create a workspace called Client Alpha with Safari" — a phrase about apps — silently
+    /// demoted a workspace they had marked as their team's back to solo.
+    @Test
+    func savingAWorkspaceWithNilTeamTypePreservesTheStoredOne() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try store.save(
+            StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: [], teamType: .team)
+        )
+
+        // Exactly what the natural-language re-create path constructs.
+        try store.save(StoredWorkspace(name: "Client Alpha", apps: ["Safari", "Notes"], urls: []))
+
+        let stored = try store.workspace(named: "Client Alpha")
+        #expect(stored.teamType == .team)
+        #expect(stored.effectiveTeamType == .team)
+        #expect(stored.apps == ["Safari", "Notes"])
+    }
+
+    /// The other half of `teamType`'s merge rule, and the reason it is a merge rather than an
+    /// unconditional carry-forward: a caller that *states* a team type still wins. Nothing demotes a
+    /// team workspace today, but a rule that could not express a demotion would be a one-way door.
+    @Test
+    func savingAWorkspaceWithAnExplicitTeamTypeReplacesTheStoredOne() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try store.save(
+            StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: [], teamType: .team)
+        )
+
+        try store.save(
+            StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: [], teamType: .solo)
+        )
+
+        #expect(try store.workspace(named: "Client Alpha").teamType == .solo)
+    }
+
     /// The other half of the same contract: nil means "not talking about file locations", `[]` means
     /// "clear them", so an edit path that empties the list is never silently ignored.
     @Test

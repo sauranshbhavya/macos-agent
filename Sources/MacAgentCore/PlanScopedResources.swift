@@ -180,11 +180,23 @@ public enum PlanScopedResources {
 
         case .openGeneratedArtifact:
             // No app resource on purpose: the file is handed to `NSWorkspace.shared.open`, so Launch
-            // Services picks the handler by file type at run time. Naming a fixed app would invent a
-            // resource, and marking the operation opaque over it would make every "produce a file
-            // and open it" plan permanently non-relaxable for a handler no workspace could ever
-            // list. The boundary is about destinations the plan chooses; the system's handler for a
-            // file already inside the boundary is not one.
+            // Services picks the handler by file type at run time. **The conclusion stands; one of
+            // its original supporting arguments does not.** This comment used to add that the
+            // handler was "a handler no workspace could ever list" — SONNY-44 decoupled scope
+            // listing from the twelve-app launch catalog, so a user *can* now list Preview or Quick
+            // Look, and that argument is dead in its own terms.
+            //
+            // What survives is the argument that was always doing the work, and it is sufficient on
+            // its own: a resource is an app the capability *drives*. Sonny AppleScript-controls
+            // Microsoft Word and Finder by name, so those are reported; here nobody chose the app —
+            // the user's own file-type defaults did — and the file being opened was already
+            // scope-checked. The boundary is about destinations the plan chooses; the system's
+            // handler for a file already inside the boundary is not one.
+            //
+            // **The dead argument is not licence to start reporting the handler.** Listability
+            // changed; who chose the app did not. Reporting it would also still cost what it always
+            // did — every "produce a file and open it" plan permanently non-relaxable — only now for
+            // a resource that is wrong rather than merely unremediable.
             return chainedArtifact(step, alongside: [])
 
         case .createLocalDraft:
@@ -203,9 +215,17 @@ public enum PlanScopedResources {
             // the step names the bound workspace, which is the common case.
             return .none
 
-        case .createWorkspace:
-            // `workspaceApps` / `workspaceURLs` are contents being *declared*, not resources being
-            // touched. Creating a workspace opens nothing.
+        case .createWorkspace, .editWorkspace:
+            // `workspaceApps` / `workspaceURLs` / `workspaceFileLocations` are contents being
+            // *declared*, not resources being touched. Creating or editing a workspace opens
+            // nothing, reads nothing, and writes only one file inside Sonny's own store.
+            //
+            // The edit half is worth stating rather than inferring, because it is the one operation
+            // whose plan fields are literally paths. Adding `~/Documents/ClientAlpha` to a workspace
+            // does not visit that folder — it writes the string into a list — and removing it does
+            // not visit it either. The folder becomes a resource when some *later* task in that
+            // workspace touches it, and that task's own steps are what get classified then. Naming
+            // it here would escalate configuring a boundary against the boundary being configured.
             return .none
 
         case .runRoutine:

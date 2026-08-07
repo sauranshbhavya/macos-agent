@@ -63,6 +63,8 @@ enum AgentActivityPresentation {
             return "Run routine"
         case .createWorkspace:
             return "Create workspace"
+        case .editWorkspace:
+            return "Edit workspace"
         case .openWorkspace:
             return "Open workspace"
         case .clarify:

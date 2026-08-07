@@ -267,7 +267,13 @@ public struct WorkspaceScope: Equatable, Sendable {
     /// "Microsoft Word" and "MicrosoftWord" different apps to workspace scope while being the same
     /// app to `resolve`, which is the same class of divergence the shared `PathWhitelist` containment
     /// exists to prevent for paths. One app-name normalization, both branches.
-    private static func appKey(for rawName: String, catalog: MacAppCatalog) -> String? {
+    ///
+    /// Module-visible rather than private for the same one-normalizer reason, and *only* that:
+    /// `EditWorkspaceCapabilityAdapter` has to decide which stored entry a "remove Chrome" request
+    /// names, and a second app-key function there would make "Chrome" and "Google Chrome" the same
+    /// app to the evaluator and different apps to the edit path — a removal that appeared to succeed
+    /// and left the app in scope. The matching semantics themselves are untouched.
+    static func appKey(for rawName: String, catalog: MacAppCatalog) -> String? {
         let trimmed = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return nil
@@ -280,7 +286,10 @@ public struct WorkspaceScope: Equatable, Sendable {
 
     /// Lowercased, trailing DNS root dots removed, then a single leading `www.` removed. Applied to
     /// both sides, so `https://github.com./x` cannot slip past a `github.com` entry.
-    private static func normalizedHost(_ rawHost: String) -> String? {
+    ///
+    /// Module-visible for the same reason as `appKey(for:catalog:)`: the edit path matches removal
+    /// requests against stored URLs by host, and it must be *this* host normalization.
+    static func normalizedHost(_ rawHost: String) -> String? {
         var host = rawHost
             .trimmingCharacters(in: .whitespacesAndNewlines)
             .lowercased()

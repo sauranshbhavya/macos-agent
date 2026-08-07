@@ -73,6 +73,8 @@ struct CapabilityRegistryTests {
         #expect(try registry.adapter(for: .runRoutine) is RunRoutineCapabilityAdapter)
         #expect(try registry.adapter(for: .createWorkspace).metadata.id == "local.workspaces.create")
         #expect(try registry.adapter(for: .createWorkspace) is CreateWorkspaceCapabilityAdapter)
+        #expect(try registry.adapter(for: .editWorkspace).metadata.id == "local.workspaces.edit")
+        #expect(try registry.adapter(for: .editWorkspace) is EditWorkspaceCapabilityAdapter)
         #expect(try registry.adapter(for: .openWorkspace).metadata.id == "local.workspaces.open")
         #expect(try registry.adapter(for: .openWorkspace) is OpenWorkspaceCapabilityAdapter)
         #expect(try registry.adapter(for: .invokeShortcut).metadata.id == "local.shortcuts.invoke")

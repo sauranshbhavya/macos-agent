@@ -546,8 +546,8 @@ struct WorkspaceScopeTests {
     /// the build until it is classified; this test is the other half — it fails when an existing
     /// case is *re*classified without anyone saying so.
     @Test
-    func everyAgentOperationIsClassifiedAndTheTableCoversAllThirtyCases() {
-        #expect(AgentOperation.allCases.count == 30)
+    func everyAgentOperationIsClassifiedAndTheTableCoversAllThirtyOneCases() {
+        #expect(AgentOperation.allCases.count == 31)
 
         let input = ScopedResource.fileLocation("~/Documents/Input")
         let output = ScopedResource.fileLocation("~/Documents/Output/out.md")
@@ -576,6 +576,9 @@ struct WorkspaceScopeTests {
             .saveRoutine: [],
             .runRoutine: [],
             .createWorkspace: [],
+            // Empty *despite* the probe carrying four workspace-edit fields, two of which are
+            // paths: declaring or un-declaring a boundary is not touching one.
+            .editWorkspace: [],
             .openWorkspace: [],
             .calculateUtility: [],
             .lookupClipboardHistory: [],
@@ -1076,6 +1079,14 @@ private extension AgentStep {
             workspaceName: "Research",
             workspaceApps: ["Safari"],
             workspaceURLs: ["https://github.com"],
+            // Populated for the same reason every other field is: `edit_workspace`'s add/remove
+            // fields are the only plan fields in the whole enum that carry *paths* while naming
+            // nothing the run touches. Left nil, `.editWorkspace: []` would pass trivially and a
+            // classifier that started reporting a declared folder as a resource would slip through.
+            workspaceFileLocations: ["~/Documents/Declared"],
+            workspaceAppsToRemove: ["Notes"],
+            workspaceURLsToRemove: ["https://example.org"],
+            workspaceFileLocationsToRemove: ["~/Documents/Dropped"],
             sourceURLs: ["https://docs.example.org/a"],
             searchQuery: "swift",
             draftTitle: "Draft",

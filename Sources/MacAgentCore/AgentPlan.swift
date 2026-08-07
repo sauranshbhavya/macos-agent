@@ -29,8 +29,21 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
     public var routineName: String?
     public var routineSteps: [AgentStep]?
     public var workspaceName: String?
+    /// Apps a workspace should contain. `create_workspace` reads it as the workspace's whole app
+    /// list; `edit_workspace` reads it as the apps to *add*. Reused rather than paired with a
+    /// `workspaceAppsToAdd` twin for the same reason the operation already decides what `appName`
+    /// and `searchQuery` mean elsewhere: the field carries a value, the operation carries the verb.
     public var workspaceApps: [String]?
+    /// URLs a workspace should contain — the whole list for `create_workspace`, the URLs to add for
+    /// `edit_workspace`. Same reuse as `workspaceApps`.
     public var workspaceURLs: [String]?
+    /// Folders to add to a workspace's restriction scope (`edit_workspace`). There is no
+    /// `create_workspace` half on purpose: creation names apps and URLs, and file locations are
+    /// configured afterwards by the edit path.
+    public var workspaceFileLocations: [String]?
+    public var workspaceAppsToRemove: [String]?
+    public var workspaceURLsToRemove: [String]?
+    public var workspaceFileLocationsToRemove: [String]?
     public var sourceURLs: [String]?
     public var searchQuery: String?
     public var draftTitle: String?
@@ -57,6 +70,10 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
         workspaceName: String? = nil,
         workspaceApps: [String]? = nil,
         workspaceURLs: [String]? = nil,
+        workspaceFileLocations: [String]? = nil,
+        workspaceAppsToRemove: [String]? = nil,
+        workspaceURLsToRemove: [String]? = nil,
+        workspaceFileLocationsToRemove: [String]? = nil,
         sourceURLs: [String]? = nil,
         searchQuery: String? = nil,
         draftTitle: String? = nil,
@@ -82,6 +99,10 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
         self.workspaceName = workspaceName
         self.workspaceApps = workspaceApps
         self.workspaceURLs = workspaceURLs
+        self.workspaceFileLocations = workspaceFileLocations
+        self.workspaceAppsToRemove = workspaceAppsToRemove
+        self.workspaceURLsToRemove = workspaceURLsToRemove
+        self.workspaceFileLocationsToRemove = workspaceFileLocationsToRemove
         self.sourceURLs = sourceURLs
         self.searchQuery = searchQuery
         self.draftTitle = draftTitle
@@ -110,6 +131,7 @@ public enum AgentOperation: String, Codable, CaseIterable, Sendable {
     case saveRoutine = "save_routine"
     case runRoutine = "run_routine"
     case createWorkspace = "create_workspace"
+    case editWorkspace = "edit_workspace"
     case openWorkspace = "open_workspace"
     case openGeneratedArtifact = "open_generated_artifact"
     case createLocalDraft = "create_local_draft"
@@ -203,6 +225,10 @@ public enum AgentPlanDecoder {
         "workspaceName",
         "workspaceApps",
         "workspaceURLs",
+        "workspaceFileLocations",
+        "workspaceAppsToRemove",
+        "workspaceURLsToRemove",
+        "workspaceFileLocationsToRemove",
         "sourceURLs",
         "searchQuery",
         "draftTitle",
@@ -299,6 +325,10 @@ public enum AgentPlanSchema {
         "workspaceName",
         "workspaceApps",
         "workspaceURLs",
+        "workspaceFileLocations",
+        "workspaceAppsToRemove",
+        "workspaceURLsToRemove",
+        "workspaceFileLocationsToRemove",
         "sourceURLs",
         "searchQuery",
         "draftTitle",
@@ -412,16 +442,36 @@ public enum AgentPlanSchema {
             ],
             "workspaceName": [
                 "type": ["string", "null"],
-                "description": "Workspace name for create_workspace or open_workspace, or null."
+                "description": "Workspace name for create_workspace, edit_workspace or open_workspace, or null."
             ],
             "workspaceApps": [
                 "type": ["array", "null"],
-                "description": "App names for create_workspace, or null.",
+                "description": "App names for create_workspace, or app names to add for edit_workspace, or null.",
                 "items": ["type": "string"]
             ],
             "workspaceURLs": [
                 "type": ["array", "null"],
-                "description": "HTTP/HTTPS URLs for create_workspace, or null.",
+                "description": "HTTP/HTTPS URLs for create_workspace, or URLs to add for edit_workspace, or null.",
+                "items": ["type": "string"]
+            ],
+            "workspaceFileLocations": [
+                "type": ["array", "null"],
+                "description": "Folder paths inside Desktop or Documents to add to a workspace for edit_workspace, or null.",
+                "items": ["type": "string"]
+            ],
+            "workspaceAppsToRemove": [
+                "type": ["array", "null"],
+                "description": "App names to remove from a workspace for edit_workspace, or null.",
+                "items": ["type": "string"]
+            ],
+            "workspaceURLsToRemove": [
+                "type": ["array", "null"],
+                "description": "URLs or site domains to remove from a workspace for edit_workspace, or null.",
+                "items": ["type": "string"]
+            ],
+            "workspaceFileLocationsToRemove": [
+                "type": ["array", "null"],
+                "description": "Folder paths to remove from a workspace for edit_workspace, or null.",
                 "items": ["type": "string"]
             ],
             "sourceURLs": [

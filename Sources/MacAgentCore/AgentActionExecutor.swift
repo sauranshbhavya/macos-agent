@@ -556,6 +556,8 @@ public final class AgentActionExecutor {
             return try previewCapability(for: .runRoutine, plan: plan)
         case .createWorkspace:
             return try previewCapability(for: .createWorkspace, plan: plan)
+        case .editWorkspace:
+            return try previewCapability(for: .editWorkspace, plan: plan)
         case .openWorkspace:
             return try previewCapability(for: .openWorkspace, plan: plan)
         case .invokeShortcut:
@@ -628,6 +630,8 @@ public final class AgentActionExecutor {
             return try await executeCapability(for: .runRoutine, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .createWorkspace:
             return try await executeCapability(for: .createWorkspace, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+        case .editWorkspace:
+            return try await executeCapability(for: .editWorkspace, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .openWorkspace:
             return try await executeCapability(for: .openWorkspace, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .invokeShortcut:
@@ -661,6 +665,7 @@ public final class AgentActionExecutor {
         case saveRoutine
         case runRoutine
         case createWorkspace
+        case editWorkspace
         case openWorkspace
         case invokeShortcut
         case chain
@@ -707,6 +712,7 @@ public final class AgentActionExecutor {
              .saveRoutine,
              .runRoutine,
              .createWorkspace,
+             .editWorkspace,
              .openWorkspace,
              .invokeShortcut:
             return true
@@ -768,6 +774,8 @@ public final class AgentActionExecutor {
             return .runRoutine
         case .createWorkspace:
             return .createWorkspace
+        case .editWorkspace:
+            return .editWorkspace
         case .openWorkspace:
             return .openWorkspace
         case .invokeShortcut:

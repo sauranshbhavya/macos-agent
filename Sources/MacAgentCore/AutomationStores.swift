@@ -421,15 +421,25 @@ public struct WorkspaceStore: @unchecked Sendable {
     ///
     /// nil means "I am not talking about file locations"; `[]` means "clear them".
     ///
-    /// `teamType` is deliberately *not* merged here. It is a display badge rather than a boundary,
-    /// and preserving it would change user-visible behavior that SONNY-36 is explicitly required not
-    /// to change; the same drop-on-recreate bug for `teamType` is filed as SONNY-43.
+    /// `teamType` merges on the same nil-means-silence rule (SONNY-43, folded into SONNY-40). It was
+    /// deliberately left unmerged while SONNY-36 shipped, on the argument that a display badge is not
+    /// a boundary — but the argument was about *risk*, not correctness, and the bug it left is plain:
+    /// `CreateWorkspaceCapabilityAdapter` builds `StoredWorkspace(name:apps:urls:)` with no team type
+    /// at all, so re-creating a workspace by natural language silently demoted a team workspace back
+    /// to solo. Nothing about "add Safari to my workspace" is consent to un-mark it as a team's.
+    ///
+    /// **These two are the whole merge, and the list is closed by enumeration rather than by
+    /// inspection.** `StoredWorkspace` stores exactly five things: `name` is the key a save is
+    /// addressed to, `apps` and `urls` are the contents a save exists to replace, and `teamType` and
+    /// `fileLocations` are the two a caller can decline to mention. A sixth field added later is a
+    /// silent-drop bug the moment it is not classified into one of those three groups.
     public func save(_ workspace: StoredWorkspace) throws {
         var workspaces = try loadAll()
         let key = normalized(workspace.name)
         var merged = workspace
         if let existing = workspaces[key] {
             merged.fileLocations = workspace.fileLocations ?? existing.fileLocations
+            merged.teamType = workspace.teamType ?? existing.teamType
         }
         workspaces[key] = merged
         try write(workspaces)
