@@ -110,25 +110,23 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
 
     /// The reason for a removal that leaves the kind configured. Names what is lost.
     ///
-    /// Worded as a change to the workspace's *list* rather than as a claim about the resulting
-    /// verdict, because the verdict claim is not always true: a workspace holding both `~/Documents`
-    /// and `~/Documents/ClientAlpha` still has the second path in scope through the first after the
-    /// second is removed. A reason that over-claims is worse than one that under-claims — the user is
-    /// approving on the strength of it.
+    /// Worded as a change to the workspace's *list*, never as a claim about the resulting verdict or
+    /// about what will stop happening, because both of those over-claim in reachable states and the
+    /// user is approving on the strength of this sentence. A workspace holding both `~/Documents` and
+    /// `~/Documents/ClientAlpha` still has the second path in scope through the first once the second
+    /// is removed, so "will no longer be in scope" would be false. And an app `MacAppCatalog` cannot
+    /// resolve is saved for scope only and **never opened** when the workspace opens
+    /// (`WorkspaceScopeOnlyApps`), so an earlier draft's "stops opening with the workspace" asserted
+    /// a behaviour change that cannot occur for exactly the apps SONNY-44 made listable. One wording
+    /// for all three kinds is what is left once both over-claims are removed — and it still does what
+    /// the criterion asks, because it names the entries.
     private static func entriesRemovedReason(
         workspaceName: String,
         kind: ScopedResourceKind,
         removed: [String]
     ) -> String {
-        let list = removed.joined(separator: ", ")
-        switch kind {
-        case .app, .webDomain:
-            return "Removes \(list) from workspace \(workspaceName)'s \(kind.pluralDisplayName). "
-                + "What is removed stops opening with the workspace and stops counting as part of it."
-        case .fileLocation:
-            return "Removes \(list) from workspace \(workspaceName)'s file locations. "
-                + "What is removed stops counting as part of it."
-        }
+        "Removes \(removed.joined(separator: ", ")) from workspace \(workspaceName)'s "
+            + "\(kind.pluralDisplayName). What is removed stops counting as part of this workspace."
     }
 
     /// The reason for a removal that empties the kind. States the dimension, never the entry.
@@ -169,11 +167,23 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
         /// an error: a mixed "add A, remove B" edit must not lose A because B was already gone, and
         /// a removal that quietly did nothing is the failure mode this branch exists to refuse.
         let unmatchedRemovals: [String]
+        /// Whether this kind restricted anything before the edit, and whether it still does after —
+        /// both read from `WorkspaceScope`'s **canonical** lists, never from the raw string count.
+        ///
+        /// The distinction is not pedantry. `WorkspaceScope` drops entries it cannot match into
+        /// `inertEntries` and leaves them out of `appKeys`/`webDomains`/`fileRoots`, and a kind whose
+        /// canonical list is empty is `.unconstrained` however many strings are still stored. A
+        /// removal that takes the last *working* entry while an inert one survives therefore empties
+        /// the dimension in every way the user experiences, while `after.isEmpty` — the obvious
+        /// check, and the one this shipped with first — says it did not and hands the approver the
+        /// milder consent. Asking the evaluator is the only way this cannot drift from it.
+        let beforeRestrictsKind: Bool
+        let afterRestrictsKind: Bool
 
-        /// True when the removal empties the dimension. `WorkspaceScope` reads an empty list as
-        /// `.unconstrained`, so this is the case where the workspace stops restricting the kind.
+        /// True when the removal leaves the dimension unconstrained: it was restricting something,
+        /// and now it is not.
         var removalEmptiesTheKind: Bool {
-            !removed.isEmpty && after.isEmpty
+            !removed.isEmpty && beforeRestrictsKind && !afterRestrictsKind
         }
     }
 
@@ -198,10 +208,10 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
             var sentences = ["Updated workspace \(stored.name)."]
             for list in lists {
                 if !list.added.isEmpty {
-                    sentences.append("Added \(list.added.count) \(list.kind.pluralDisplayName): \(list.added.joined(separator: ", ")).")
+                    sentences.append("Added \(list.kind.pluralDisplayName): \(list.added.joined(separator: ", ")).")
                 }
                 if !list.removed.isEmpty {
-                    sentences.append("Removed \(list.removed.count) \(list.kind.pluralDisplayName): \(list.removed.joined(separator: ", ")).")
+                    sentences.append("Removed \(list.kind.pluralDisplayName): \(list.removed.joined(separator: ", ")).")
                 }
                 // Repeated in the result, not only in the approval prompt: the prompt is read once
                 // under time pressure, and this is the sentence that explains why a later task in
@@ -222,8 +232,23 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
         _ plan: AgentPlan,
         context: CapabilityExecutionContext
     ) throws -> WorkspaceEdit {
-        guard let step = plan.steps.first(where: { $0.operation == .editWorkspace }) else {
+        let editSteps = plan.steps.filter { $0.operation == .editWorkspace }
+        guard let step = editSteps.first else {
             throw AgentExecutionError.invalidPlan("edit_workspace step is missing.")
+        }
+        // Refused rather than folded or quietly half-applied. Two edit steps assess against the same
+        // pre-execution store — `AgentRunner` gates once, up front, and `executeChain` deliberately
+        // never re-gates — so a plan removing one of two file locations per step would show two
+        // "one of several" prompts and still leave the dimension unconstrained. Folding them is not
+        // the alternative it looks like either, because two steps may name two different workspaces.
+        // One step already carries add and remove lists for all three kinds, and the planner is
+        // instructed to emit exactly one, so a second is a malformed plan and is named as one.
+        // `shouldChainWhenRepeated` keeps `.editWorkspace` unchained so this guard actually sees both
+        // steps; chained, each segment would arrive holding one.
+        guard editSteps.count == 1 else {
+            throw AgentExecutionError.invalidPlan(
+                "A plan may contain only one edit_workspace step. Put every change to a workspace in that step."
+            )
         }
         guard let rawName = step.workspaceName?.trimmingCharacters(in: .whitespacesAndNewlines),
               !rawName.isEmpty else {
@@ -262,56 +287,84 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
             )
         }
 
-        let appEdit = Self.editedList(
+        let appArithmetic = Self.listArithmetic(
             kind: .app,
             stored: stored.apps,
             additions: appAdditions,
             removalRequests: appRemovals,
             context: context
         )
-        let urlEdit = Self.editedList(
+        let urlArithmetic = Self.listArithmetic(
             kind: .webDomain,
             stored: stored.urls,
             additions: urlAdditions,
             removalRequests: urlRemovals,
             context: context
         )
-        let fileEdit = Self.editedList(
+        let fileArithmetic = Self.listArithmetic(
             kind: .fileLocation,
             stored: stored.effectiveFileLocations,
             additions: fileAdditions,
             removalRequests: fileRemovals,
             context: context
         )
-        let lists = [appEdit, urlEdit, fileEdit]
 
         // The same rule creation enforces, applied to the outcome rather than the request: a
         // workspace with neither apps nor URLs cannot be opened at all. Checked before anything is
         // written, so the refusal costs the user nothing.
-        guard !appEdit.after.isEmpty || !urlEdit.after.isEmpty else {
+        guard !appArithmetic.after.isEmpty || !urlArithmetic.after.isEmpty else {
             throw AutomationStoreError.emptyWorkspace
         }
 
-        return WorkspaceEdit(
-            stored: stored,
-            updated: StoredWorkspace(
-                // The *stored* display name, not the one the user typed. `WorkspaceStore` keys on a
-                // case- and diacritic-folded name, so saving "client alpha" back would silently
-                // rename the workspace the user reads as "Client Alpha" — and renaming is an
-                // explicit non-goal of this ticket.
-                name: stored.name,
-                apps: appEdit.after,
-                urls: urlEdit.after,
-                // Carried explicitly rather than left nil for `WorkspaceStore.save` to merge. The
-                // merge would preserve it either way, but an edit that states its whole outcome
-                // cannot be broken by a change one layer down.
-                teamType: stored.teamType,
-                // Always stated, never nil: nil means "not talking about file locations", and an
-                // edit that empties the list means it.
-                fileLocations: fileEdit.after
-            ),
-            lists: lists
+        let updated = StoredWorkspace(
+            // The *stored* display name, not the one the user typed. `WorkspaceStore` keys on a
+            // case- and diacritic-folded name, so saving "client alpha" back would silently rename
+            // the workspace the user reads as "Client Alpha" — and renaming is an explicit non-goal
+            // of this ticket.
+            name: stored.name,
+            apps: appArithmetic.after,
+            urls: urlArithmetic.after,
+            // Carried explicitly rather than left nil for `WorkspaceStore.save` to merge. The merge
+            // would preserve it either way, but an edit that states its whole outcome cannot be
+            // broken by a change one layer down.
+            teamType: stored.teamType,
+            // Always stated, never nil: nil means "not talking about file locations", and an edit
+            // that empties the list means it.
+            fileLocations: fileArithmetic.after
         )
+
+        // Both scopes built through the evaluator itself, with this context's own catalog and
+        // whitelist, so "does this kind still restrict anything" is answered by the same code that
+        // will answer it for every task in this workspace afterwards.
+        let beforeScope = WorkspaceScope(workspace: stored, catalog: context.appCatalog, whitelist: context.whitelist)
+        let afterScope = WorkspaceScope(workspace: updated, catalog: context.appCatalog, whitelist: context.whitelist)
+        let lists = [appArithmetic, urlArithmetic, fileArithmetic].map { arithmetic in
+            EditedList(
+                kind: arithmetic.kind,
+                before: arithmetic.before,
+                after: arithmetic.after,
+                removed: arithmetic.removed,
+                added: arithmetic.added,
+                unmatchedRemovals: arithmetic.unmatchedRemovals,
+                beforeRestrictsKind: Self.restricts(arithmetic.kind, in: beforeScope),
+                afterRestrictsKind: Self.restricts(arithmetic.kind, in: afterScope)
+            )
+        }
+
+        return WorkspaceEdit(stored: stored, updated: updated, lists: lists)
+    }
+
+    /// Whether a scope actually constrains a kind, read from the canonical lists `verdict(for:)`
+    /// itself checks rather than from the stored strings behind them.
+    private static func restricts(_ kind: ScopedResourceKind, in scope: WorkspaceScope) -> Bool {
+        switch kind {
+        case .app:
+            return !scope.appKeys.isEmpty
+        case .webDomain:
+            return !scope.webDomains.isEmpty
+        case .fileLocation:
+            return !scope.fileRoots.isEmpty
+        }
     }
 
     // MARK: - Validation of additions
@@ -389,11 +442,34 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
             // Two URLs on one host are two different pages the workspace opens, so a workspace may
             // legitimately hold both and only the *same* URL is a duplicate. This is the one kind
             // where entry identity and removal identity differ — see `removalMatchKey`.
+            //
+            // "The same URL" is not the same *string*, though, and `absoluteString` alone — what this
+            // returned first — says it is. Scheme and host are case-insensitive and a bare trailing
+            // slash is not a different page, so `HTTPS://GitHub.com/a` beside a stored
+            // `https://github.com/a` would have been listed twice. The host folds through the
+            // evaluator's own normalizer, which also settles `www.`; the rest of the URL is compared
+            // as written, because a *path* genuinely is case-significant.
             let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else {
                 return nil
             }
-            return (try? SafeURL.validateWebURL(trimmed))?.absoluteString ?? trimmed
+            guard let url = try? SafeURL.validateWebURL(trimmed),
+                  let host = url.host.flatMap(WorkspaceScope.normalizedHost) else {
+                // An entry `SafeURL` rejects has no host to fold; its own text is its identity, case
+                // folded so a variant of the same broken entry is still one entry.
+                return trimmed.lowercased()
+            }
+            var rest = url.path
+            if rest == "/" {
+                rest = ""
+            }
+            if let query = url.query {
+                rest += "?" + query
+            }
+            if let fragment = url.fragment {
+                rest += "#" + fragment
+            }
+            return host + rest
         case .app, .fileLocation:
             return removalMatchKey(raw, kind: kind, context: context)
         }
@@ -441,13 +517,27 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
         }
     }
 
-    private static func editedList(
+    /// One kind's before/after, before anything is known about whether the result still restricts.
+    ///
+    /// Split out from `EditedList` because the two restriction flags can only be answered by a
+    /// `WorkspaceScope` built from the *whole* updated workspace, which does not exist until all
+    /// three kinds have been through this.
+    struct ListArithmetic {
+        let kind: ScopedResourceKind
+        let before: [String]
+        let after: [String]
+        let removed: [String]
+        let added: [String]
+        let unmatchedRemovals: [String]
+    }
+
+    private static func listArithmetic(
         kind: ScopedResourceKind,
         stored: [String],
         additions: [String],
         removalRequests: [String],
         context: CapabilityExecutionContext
-    ) -> EditedList {
+    ) -> ListArithmetic {
         let requestedRemovalKeys = Set(
             removalRequests.compactMap { removalMatchKey($0, kind: kind, context: context) }
         )
@@ -489,7 +579,7 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
             return !storedRemovalKeys.contains(key)
         }
 
-        return EditedList(
+        return ListArithmetic(
             kind: kind,
             before: stored,
             after: after,

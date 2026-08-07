@@ -712,7 +712,6 @@ public final class AgentActionExecutor {
              .saveRoutine,
              .runRoutine,
              .createWorkspace,
-             .editWorkspace,
              .openWorkspace,
              .invokeShortcut:
             return true
@@ -721,6 +720,16 @@ public final class AgentActionExecutor {
              .docx,
              .hackerNews,
              .webResearch,
+             // Deliberately *not* chained when repeated, unlike its create/open siblings, and for a
+             // correctness reason rather than a grouping one. `segmentPlans` gives every
+             // `.editWorkspace` step its own segment, and `assessRisk` assesses every segment against
+             // the same pre-execution store snapshot while `executeChain` then writes between them —
+             // so two edit steps each taking one of a workspace's last two file locations would both
+             // assess as "one of several" and the dimension would end up unconstrained with neither
+             // prompt saying so. Keeping such a plan whole hands both steps to the adapter, which
+             // refuses a second one outright: one `edit_workspace` step already carries add and
+             // remove lists for all three kinds, so two are never needed.
+             .editWorkspace,
              .chain:
             return false
         }
@@ -1054,7 +1063,13 @@ public final class AgentActionExecutor {
             if plan.steps.contains(where: { $0.operation == .invokeShortcut }) {
                 return "Depends on the Shortcut; undo in the affected app or service if needed."
             }
-            if plan.steps.contains(where: { [.saveRoutine, .createWorkspace].contains($0.operation) }) {
+            // `.editWorkspace` belongs here for the same reason the other two do, and it is the
+            // *common* tier-2 case for that capability: adding to a workspace never escalates, so
+            // this is the sentence almost every workspace edit shows. Left out, it fell through to
+            // "Delete generated local files manually if needed." — an edit generates no files.
+            // A membership list, like `StoredRoutine.forbiddenStepOperations`, has no compiler guard
+            // forcing a new operation to be classified; both had to be found by hand.
+            if plan.steps.contains(where: { [.saveRoutine, .createWorkspace, .editWorkspace].contains($0.operation) }) {
                 return "Edit or replace the saved routine/workspace manually."
             }
             if plan.steps.contains(where: { $0.operation == .saveSnippet }) {
