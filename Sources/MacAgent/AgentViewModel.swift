@@ -349,7 +349,19 @@ final class AgentViewModel: ObservableObject {
     }
 
     var canUseVoice: Bool {
-        hasAPIKey && !isAwaitingApproval && !isRunning && !isPreparingVoiceRecording && !isTranscribingVoice
+        // `clarificationQuestion == nil` restores parity with the typed route, which
+        // `isTaskInFlight` has always blocked during a clarification pause. Voice lacking the same
+        // term was asymmetry by omission, and it was reachable: a clarification pause holds
+        // `activeTaskScope` (the same task is resuming), so the chip shows the *paused* task's
+        // workspace while a card arm sits invisible behind it — and both voice entry points
+        // dispatch with `origin: .widget`, so the transcription completion consumed that arm. The
+        // task then ran scoped to a workspace the chip never named, and the paused task's
+        // unanswered clarification was silently discarded by `performStart`'s per-task reset.
+        //
+        // Voice answering a clarification is a real feature and this does not foreclose it; it is a
+        // separate ticket, and the gate has to exist first.
+        hasAPIKey && clarificationQuestion == nil && !isAwaitingApproval && !isRunning
+            && !isPreparingVoiceRecording && !isTranscribingVoice
     }
 
     var isAwaitingApproval: Bool {
@@ -794,7 +806,20 @@ final class AgentViewModel: ObservableObject {
             return
         }
         command = lastCommand
-        start(origin: origin)
+        // Carries the original run's workspace. `lastAssessedScope` is the post-terminal record of
+        // what the last task was assessed under and is deliberately never cleared, which is exactly
+        // what makes it readable here — by retry time the live binding is long gone. Without this a
+        // retry of a bound task runs unscoped, so a command that raised a scope prompt the first
+        // time runs silently the second: a relaxation, and the one thing this branch never does.
+        // Inherited from SONNY-38 rather than introduced here; fixed in-branch per fix-in-branch.
+        //
+        // Not `fromComposer`: a retry is a re-dispatch, so it still kills any card arm rather than
+        // consuming it — the explicit binding below wins over the arm either way.
+        var retryBinding: String?
+        if case .scoped(let scope) = lastAssessedScope {
+            retryBinding = scope.workspaceName
+        }
+        start(origin: origin, workspaceBinding: retryBinding)
     }
 
     /// Submits the clarification answer as a **new** run, not a resume: this appends the Q&A to
@@ -1185,6 +1210,15 @@ final class AgentViewModel: ObservableObject {
         }
         do {
             try workspaceStore.delete(workspaceNamed: workspace.name)
+            // An arm naming this workspace dies with it. The chip must never promise a boundary the
+            // run will not apply: `resolveTaskScope` returns `.unscoped` for a name the store no
+            // longer has, so leaving the arm alive would render "In X" over a task that runs
+            // unscoped. Compared through the store's own folding rather than `==`, so the arm and
+            // the record are matched the same way every other lookup matches them.
+            if let armed = pendingWorkspaceBinding,
+               (try? workspaceStore.workspace(named: armed)) == nil {
+                pendingWorkspaceBinding = nil
+            }
             refreshSavedItems()
         } catch {
             setError("Could not delete workspace: \(error.localizedDescription)")
@@ -1435,13 +1469,7 @@ final class AgentViewModel: ObservableObject {
                 isTranscribingVoice = false
                 preserveUsageForNextStart = true
                 logStore.append(.observe, "Transcript ready. Sonny will act now.")
-                // Voice submitted from the widget's own mic *is* the composer, with the chip
-                // visible; from anywhere else it is not.
-                start(
-                    autoExecute: true,
-                    origin: voiceRecordingOrigin,
-                    fromComposer: voiceRecordingOrigin == .widget
-                )
+                dispatchTranscribedCommand(result.text, origin: voiceRecordingOrigin)
             } catch {
                 isTranscribingVoice = false
                 // This is the bug that made the auto-clear timer feel broken: a failed
@@ -1453,6 +1481,29 @@ final class AgentViewModel: ObservableObject {
                 logStore.append(.summarize, "Transcription failed: \(error.localizedDescription)")
             }
         }
+    }
+
+    /// The dispatch a completed voice transcription issues — the one implementation, called by the
+    /// real completion above and driven directly by tests.
+    ///
+    /// Internal rather than private so it is reachable without a real transcriber and an API key,
+    /// which is what the live path needs. It is a seam, not a reimplementation: there is exactly one
+    /// copy of the guard and one `start(...)` call, so a test that exercises this exercises what
+    /// ships.
+    ///
+    /// **The guard is here as well as in `canUseVoice` for a reason, not by belt-and-braces habit.**
+    /// `canUseVoice` gates the *entry* points — the mic button and push-to-talk — but a
+    /// transcription already in flight when a clarification arrives would still land here. Refusing
+    /// at the dispatch makes the guarantee independent of that timing.
+    func dispatchTranscribedCommand(_ transcript: String, origin: TaskOrigin = .widget) {
+        command = transcript
+        guard clarificationQuestion == nil else {
+            logStore.append(.observe, "Voice command ignored while a clarification is open.")
+            return
+        }
+        // Voice submitted from the widget's own mic *is* the composer, with the chip visible; from
+        // anywhere else it is not.
+        start(autoExecute: true, origin: origin, fromComposer: origin == .widget)
     }
 
     /// Resolves which workspace this task is in, and loads it into a scope.

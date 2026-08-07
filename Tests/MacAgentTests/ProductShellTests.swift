@@ -841,6 +841,118 @@ struct ProductShellTests {
         #expect(viewModel.lastAssessedScope == .scoped(WorkspaceScope(workspace: drafting)))
     }
 
+    /// H1(a) — the reviewer's PROBED-2/3 sequence, now unreproducible. A clarification pause holds
+    /// `activeTaskScope`, so the chip names the *paused* task's workspace while a card arm sits
+    /// invisible behind it. Voice was the one dispatch route with no clarification term, so it
+    /// consumed that arm and ran scoped to a workspace the chip never named.
+    ///
+    /// Driven at the level the tests actually reach — the same `start(autoExecute:origin:
+    /// fromComposer:)` the transcription completion issues. Stated per the D4 standard: the
+    /// `canUseVoice` half of the gate is **not** exercised here, because the fixture has no API key
+    /// so `canUseVoice` is already false for an unrelated reason; that half is readable, not
+    /// testable, and its proof is the declaration.
+    @Test
+    func voiceCannotConsumeAnArmWhileAClarificationIsPending() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let alpha = StoredWorkspace(name: "Alpha", apps: ["Safari"], urls: [])
+        let research = StoredWorkspace(name: "Research", apps: ["Notes"], urls: [])
+        try fixture.workspaceStore.save(alpha)
+        try fixture.workspaceStore.save(research)
+        viewModel.refreshSavedItems()
+
+        // A task bound to Alpha, paused on a real clarification.
+        viewModel.command = "="
+        viewModel.start(origin: .widget, workspaceBinding: "Alpha", fromComposer: true)
+        try await waitForViewModelToBecomeIdle(viewModel)
+        #expect(viewModel.clarificationQuestion != nil)
+        #expect(viewModel.boundWorkspaceName == "Alpha")
+
+        // A second workspace armed from its card — the button is live in this state, and the chip
+        // still says Alpha because `activeTaskScope` wins.
+        viewModel.beginTaskInWorkspace(research)
+        #expect(viewModel.boundWorkspaceName == "Alpha")
+        #expect(viewModel.pendingWorkspaceBinding == "Research")
+
+        // The dispatch the transcription completion issues. It must not run.
+        viewModel.dispatchTranscribedCommand("= 2 + 2")
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        // Nothing ran scoped to Research — the arm the chip never showed.
+        #expect(viewModel.lastAssessedScope != .scoped(WorkspaceScope(workspace: research)))
+    }
+
+    /// H1(b) — the paused task's unanswered clarification survives the attempted voice dispatch.
+    /// `performStart`'s per-task reset clears `clarificationQuestion` unconditionally, so a dispatch
+    /// that got through would have discarded the question with no notice at all.
+    @Test
+    func aPendingClarificationSurvivesAnAttemptedVoiceDispatch() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        viewModel.command = "="
+        viewModel.start(origin: .widget, fromComposer: true)
+        try await waitForViewModelToBecomeIdle(viewModel)
+        let question = try #require(viewModel.clarificationQuestion)
+
+        viewModel.dispatchTranscribedCommand("= 2 + 2")
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.clarificationQuestion == question)
+    }
+
+    /// R1 — deleting a workspace kills an arm naming it, so the chip can never promise a boundary
+    /// the run will not apply: `resolveTaskScope` returns `.unscoped` for a name the store no longer
+    /// has, so a surviving arm would render "In X" over an unscoped task.
+    @Test
+    func deletingAWorkspaceKillsAPendingArmThatNamesIt() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let research = StoredWorkspace(name: "Research", apps: ["Safari"], urls: [])
+        let drafting = StoredWorkspace(name: "Drafting", apps: ["Notes"], urls: [])
+        try fixture.workspaceStore.save(research)
+        try fixture.workspaceStore.save(drafting)
+        viewModel.refreshSavedItems()
+
+        viewModel.beginTaskInWorkspace(research)
+        viewModel.deleteWorkspace(research)
+
+        #expect(viewModel.pendingWorkspaceBinding == nil)
+        // The symmetric edge: no chip rendering a name the store no longer has.
+        #expect(viewModel.boundWorkspaceName == nil)
+
+        // And an arm naming a *different*, still-saved workspace is untouched.
+        viewModel.beginTaskInWorkspace(drafting)
+        viewModel.deleteWorkspace(research)
+        #expect(viewModel.pendingWorkspaceBinding == "Drafting")
+    }
+
+    /// R3 — a retry of a bound task keeps its workspace. Without this a command that raised a scope
+    /// prompt the first time runs silently the second, which is a relaxation. Inherited from
+    /// SONNY-38 rather than introduced by the card dispatch.
+    @Test
+    func aRetryOfABoundTaskKeepsTheOriginalWorkspaceScope() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let research = StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        try fixture.workspaceStore.save(research)
+        viewModel.refreshSavedItems()
+
+        viewModel.command = "= 1 + 1"
+        viewModel.start(origin: .widget, workspaceBinding: "Research", fromComposer: true)
+        try await waitForViewModelToBecomeIdle(viewModel)
+        #expect(viewModel.lastAssessedScope == .scoped(WorkspaceScope(workspace: research)))
+
+        viewModel.retryLastCommand()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.lastAssessedScope == .scoped(WorkspaceScope(workspace: research)))
+    }
+
     /// AC7 — precedence. Both signals present at once, naming **different** workspaces: the card
     /// binding wins. No other criterion exercises this, so the rule could be implemented backwards
     /// and every other test here would still pass.
