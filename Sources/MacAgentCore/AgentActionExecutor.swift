@@ -712,6 +712,15 @@ public final class AgentActionExecutor {
              .saveRoutine,
              .runRoutine,
              .createWorkspace,
+             // Chained when repeated, exactly like its create/open siblings, and that is now the
+             // *safe* setting rather than the lax one. A brief attempt to keep repeated edits
+             // unchained — so one adapter call could count them — bought nothing, because any third
+             // operation forces `.chain` regardless (`workflow(in:)` is an order-independent `Set`),
+             // and it broke the legitimate case: two edits of two *different* workspaces need one
+             // segment each, since a single step carries one `workspaceName`. The plan-shape rule
+             // moved to `EditWorkspaceCapabilityAdapter.resolveDefaultOutputs`, which sees the whole
+             // plan before segmentation and refuses only a second edit of the *same* workspace.
+             .editWorkspace,
              .openWorkspace,
              .invokeShortcut:
             return true
@@ -720,16 +729,6 @@ public final class AgentActionExecutor {
              .docx,
              .hackerNews,
              .webResearch,
-             // Deliberately *not* chained when repeated, unlike its create/open siblings, and for a
-             // correctness reason rather than a grouping one. `segmentPlans` gives every
-             // `.editWorkspace` step its own segment, and `assessRisk` assesses every segment against
-             // the same pre-execution store snapshot while `executeChain` then writes between them —
-             // so two edit steps each taking one of a workspace's last two file locations would both
-             // assess as "one of several" and the dimension would end up unconstrained with neither
-             // prompt saying so. Keeping such a plan whole hands both steps to the adapter, which
-             // refuses a second one outright: one `edit_workspace` step already carries add and
-             // remove lists for all three kinds, so two are never needed.
-             .editWorkspace,
              .chain:
             return false
         }
@@ -845,6 +844,17 @@ public final class AgentActionExecutor {
         if resolvedPlan.steps.contains(where: { $0.operation == .invokeShortcut }) {
             resolvedPlan = try capabilityRegistry
                 .adapter(for: .invokeShortcut)
+                .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
+        }
+
+        // Resolves no output of its own — it is here because this is the only place an adapter is
+        // handed the *whole* plan before `segmentPlans` splits it, and `edit_workspace`'s plan-shape
+        // rule (at most one edit per workspace) is unenforceable from inside a single-step segment.
+        // The three gates all pass through here: `prepare`, `assessRisk` and `execute` each resolve
+        // before doing anything else.
+        if resolvedPlan.steps.contains(where: { $0.operation == .editWorkspace }) {
+            resolvedPlan = try capabilityRegistry
+                .adapter(for: .editWorkspace)
                 .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
         }
 

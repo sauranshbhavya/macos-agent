@@ -32,16 +32,36 @@ struct EditWorkspaceTests {
     private static let removedOneOfSeveralFileLocationsReasonPrefix =
         "Removes "
 
+    /// The URL kind's pair, the third dimension. Held here rather than inline so the two can be
+    /// asserted different from each other, the same way the file-location pair is.
+    private static let urlsNoLongerRestrictedReason =
+        "Workspace Client Alpha will no longer restrict URLs at all: "
+        + "this removes the last entry from its URLs list."
+
+    private static let removedOneOfSeveralURLsReason =
+        "Removes https://github.com/a from workspace Client Alpha's URLs. "
+        + "What is removed stops counting as part of this workspace."
+
     // MARK: - Adding
 
     /// The end-to-end half of the B1 merge-preserve contract, and the first ticket where a user can
     /// actually lose a boundary: a file location added by voice has to survive the user re-creating
     /// the same workspace by voice.
+    ///
+    /// **`teamType` rides here too, and that is the point.** SONNY-43's own criterion is survival
+    /// across a *natural-language re-create*; the store-level regression asserts it against two
+    /// direct `store.save` calls and couples to the create path only by a comment saying that is what
+    /// the adapter builds. True today — but a change to `CreateWorkspaceCapabilityAdapter` that
+    /// started stating a team type would break preservation with that test still green. This drives
+    /// the real create adapter through the executor, so both merge-preserved fields are pinned at the
+    /// level the criterion actually states.
     @Test
     func addingAFileLocationPersistsAndSurvivesANaturalLanguageRecreate() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
-        try fixture.store.save(StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: []))
+        try fixture.store.save(
+            StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: [], teamType: .team)
+        )
         let folder = try fixture.makeFolder("ClientAlpha")
 
         _ = try await fixture.executor.execute(plan: Fixture.editPlan(addFileLocations: [folder.path])) { _, _ in }
@@ -49,11 +69,13 @@ struct EditWorkspaceTests {
         #expect(try fixture.store.workspace(named: "Client Alpha").fileLocations == [folder.path])
 
         // The natural-language re-create: `CreateWorkspaceCapabilityAdapter` builds a fresh
-        // `StoredWorkspace(name:apps:urls:)` with no file locations at all.
+        // `StoredWorkspace(name:apps:urls:)` with neither file locations nor a team type.
         _ = try await fixture.executor.execute(plan: Fixture.createPlan(apps: ["Safari", "Notes"])) { _, _ in }
 
         let recreated = try fixture.store.workspace(named: "Client Alpha")
         #expect(recreated.fileLocations == [folder.path])
+        #expect(recreated.teamType == .team)
+        #expect(recreated.effectiveTeamType == .team)
         #expect(recreated.apps == ["Safari", "Notes"])
     }
 
@@ -625,6 +647,121 @@ struct EditWorkspaceTests {
         #expect(evaluation.planVerdict == .unconstrained)
     }
 
+    // MARK: - The third kind's dimension pin
+
+    /// **The last-entry criterion, on URLs — the kind that had no pin at all.**
+    ///
+    /// Apps and file locations each had one, so mutating their arm of `restricts(_:in:)` died; the
+    /// `.webDomain` arm survived the whole suite, and what that mutant models is this branch's
+    /// headline failure: a workspace with apps *and* one URL, the user removes the URL, both
+    /// restriction flags read `appKeys` — non-empty either side — so the dimension goes
+    /// `.unconstrained` while the approver is handed the milder entry-naming consent.
+    ///
+    /// Both URL consents are pinned here on their literal strings and asserted different from each
+    /// other, which is the shape the file-location pair already had.
+    @Test
+    func removingTheLastURLSaysTheDimensionIsNoLongerRestricted() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        // Kept openable by its apps, so the empty-workspace guard is not what is under test.
+        try fixture.store.save(
+            StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: ["https://github.com/a"])
+        )
+        // Premise guard, so this cannot pass vacuously: the workspace really does restrict exactly
+        // one host before the edit.
+        #expect(try fixture.scope().webDomains == ["github.com"])
+
+        let assessment = try fixture.executor.assessRisk(
+            plan: Fixture.editPlan(removeURLs: ["github.com"]),
+            scope: .unscoped
+        )
+
+        #expect(assessment.effectiveTier == .tier3)
+        #expect(assessment.escalations.map(\.reason) == [Self.urlsNoLongerRestrictedReason])
+        // States the dimension, never the entry — the smaller consent the user is not being asked for.
+        #expect(!Self.urlsNoLongerRestrictedReason.contains("github.com"))
+        #expect(Self.urlsNoLongerRestrictedReason != Self.removedOneOfSeveralURLsReason)
+
+        _ = try await fixture.executor.execute(plan: Fixture.editPlan(removeURLs: ["github.com"])) { _, _ in }
+
+        let scope = try fixture.scope()
+        #expect(scope.verdict(for: .webDomain("github.com")) == .unconstrained)
+        #expect(scope.verdict(for: .webDomain("example.com")) == .unconstrained)
+        #expect(try fixture.store.workspace(named: "Client Alpha").urls.isEmpty)
+    }
+
+    // MARK: - Consent for an entry that never restricted anything
+
+    /// Removing an entry `WorkspaceScope` had already classified inert costs the user nothing, so it
+    /// must not ask for explicit approval on a sentence asserting a loss.
+    ///
+    /// The emptiness question was made evaluator-aware first; the escalation *trigger* was not, and
+    /// still diffed raw stored strings. Same single source of truth now: the evaluator decides what
+    /// counted, and a removal of something that never counted stays at the default tier.
+    @Test
+    func removingOnlyAnInertEntryDoesNotEscalateAndStillRemovesIt() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let working = try fixture.makeFolder("Working")
+        let inert = "/tmp/EditWorkspaceTests-Inert-NeverRestricted"
+        try fixture.store.save(
+            StoredWorkspace(
+                name: "Client Alpha",
+                apps: ["Safari"],
+                urls: [],
+                fileLocations: [working.path, inert]
+            )
+        )
+        #expect(try fixture.scope().inertEntries.map(\.value) == [inert])
+
+        let assessment = try fixture.executor.assessRisk(
+            plan: Fixture.editPlan(removeFileLocations: [inert]),
+            scope: .unscoped
+        )
+
+        #expect(assessment.effectiveTier == .tier2)
+        #expect(assessment.escalations.isEmpty)
+
+        // Enforcement is unchanged: the entry still leaves the stored list, and the dimension the
+        // working entry restricts is untouched.
+        _ = try await fixture.executor.execute(plan: Fixture.editPlan(removeFileLocations: [inert])) { _, _ in }
+        #expect(try fixture.store.workspace(named: "Client Alpha").fileLocations == [working.path])
+        #expect(try fixture.scope().verdict(for: .fileLocation(fixture.root.appendingPathComponent("Other").path))
+            == .outOfScope)
+    }
+
+    /// A removal that drops one working entry *and* one inert one names only the working entry —
+    /// the reason says what was lost, and nothing else.
+    @Test
+    func aMixedRemovalNamesOnlyTheEntryThatActuallyRestrictedSomething() throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let dropped = try fixture.makeFolder("Dropped")
+        let kept = try fixture.makeFolder("Kept")
+        let inert = "/tmp/EditWorkspaceTests-Inert-Mixed"
+        try fixture.store.save(
+            StoredWorkspace(
+                name: "Client Alpha",
+                apps: ["Safari"],
+                urls: [],
+                fileLocations: [dropped.path, kept.path, inert]
+            )
+        )
+
+        let assessment = try fixture.executor.assessRisk(
+            plan: Fixture.editPlan(removeFileLocations: [dropped.path, inert]),
+            scope: .unscoped
+        )
+
+        // `kept` survives, so this is a one-of-several removal, and the inert entry is absent from
+        // the reason even though it is absent from the stored list afterwards too.
+        #expect(assessment.effectiveTier == .tier3)
+        #expect(assessment.escalations.map(\.reason) == [
+            "Removes \(dropped.path) from workspace Client Alpha's file locations. "
+                + "What is removed stops counting as part of this workspace."
+        ])
+    }
+
     // MARK: - Gaps closed after the adversarial review
 
     /// The <code>.webDomain</code> escalation branch, asserted through <code>assessRisk</code> on the
@@ -649,10 +786,9 @@ struct EditWorkspaceTests {
         )
 
         #expect(assessment.effectiveTier == .tier3)
-        #expect(assessment.escalations.map(\.reason) == [
-            "Removes https://github.com/a from workspace Client Alpha's URLs. "
-                + "What is removed stops counting as part of this workspace."
-        ])
+        #expect(assessment.escalations.map(\.reason) == [Self.removedOneOfSeveralURLsReason])
+        // The kind stays configured, so a non-matching host is still refused rather than blessed.
+        #expect(try fixture.scope().verdict(for: .webDomain("github.com")) == .inScope)
     }
 
     /// The apps flavour of the dimension-emptied reason, and the empty-workspace guard's *other*
@@ -793,12 +929,23 @@ struct EditWorkspaceTests {
         #expect(stored.fileLocations == nil)
     }
 
-    /// Two edit steps would each be assessed against the same pre-execution store while executing
-    /// against each other's writes, so two "one of several" prompts could between them empty a
-    /// dimension with neither saying so. `AgentRunner` gates once by design and `executeChain` never
-    /// re-gates, so the plan shape is refused rather than the gate rebuilt.
-    @Test
-    func aPlanWithTwoEditWorkspaceStepsIsRefusedRatherThanAssessedAgainstAStaleSnapshot() async throws {
+    /// Two edits of one workspace are each assessed against the same pre-execution store while
+    /// executing against each other's writes, so two "one of several" consents can between them
+    /// empty a dimension with neither saying so. `AgentRunner` gates once by design and
+    /// `executeChain` never re-gates, so the plan shape is refused rather than the gate rebuilt.
+    ///
+    /// Three shapes, because the first version of this guard passed the first and failed the other
+    /// two. `workflow(in:)` is an order-independent `Set`, so any second distinct operation anywhere
+    /// sends the plan down `.chain` and every edit step arrives in a segment of its own —
+    /// **adjacency is irrelevant**, and a per-segment count can never see what it needs to reject.
+    @Test(arguments: [
+        ("pure pair", false, false),
+        ("pair plus a third operation, edits adjacent", true, false),
+        ("pair with the third operation between them", true, true)
+    ])
+    func everyPlanShapeEditingOneWorkspaceTwiceIsRefused(
+        shape: (name: String, includesThirdOperation: Bool, thirdOperationBetween: Bool)
+    ) async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
         let first = try fixture.makeFolder("First")
@@ -811,31 +958,92 @@ struct EditWorkspaceTests {
                 fileLocations: [first.path, second.path]
             )
         )
+        let openApp = AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")
+        var steps = [Fixture.editPlan(removeFileLocations: [first.path]).steps[0]]
+        if shape.includesThirdOperation, shape.thirdOperationBetween {
+            steps.append(openApp)
+        }
+        steps.append(Fixture.editStep(id: "edit-workspace-2", removeFileLocations: [second.path]))
+        if shape.includesThirdOperation, !shape.thirdOperationBetween {
+            steps.append(openApp)
+        }
+        let plan = AgentPlan(summary: "Edit workspace twice.", requiresConfirmation: true, steps: steps)
+        let expected = AgentExecutionError.invalidPlan(
+            "A plan may edit workspace Client Alpha only once. "
+                + "Put every change to one workspace in a single edit_workspace step."
+        )
+
+        #expect(throws: expected, "\(shape.name)") {
+            _ = try fixture.executor.assessRisk(plan: plan, scope: .unscoped)
+        }
+        await #expect(throws: expected, "\(shape.name)") {
+            _ = try await fixture.executor.execute(plan: plan) { _, _ in }
+        }
+        #expect(try fixture.store.workspace(named: "Client Alpha").fileLocations == [first.path, second.path])
+    }
+
+    /// The same guard must **not** fire across two workspaces, and refusing them was its own defect:
+    /// `AgentStep.workspaceName` is a single `String?`, so "add Notes to Work and remove Slack from
+    /// Research" cannot be put in one step, and the old message told the user to do the impossible.
+    ///
+    /// The hazard the guard exists for is entirely between two edits of *one* workspace — two
+    /// workspaces share no stored record, so each assessment is correct in isolation, which is what
+    /// the per-step escalations here assert.
+    @Test
+    func aPlanEditingTwoDifferentWorkspacesProceedsAndAssessesEachCorrectly() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        try fixture.store.save(StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: []))
+        try fixture.store.save(StoredWorkspace(name: "Research", apps: ["Safari", "Slack"], urls: []))
+        let plan = AgentPlan(
+            summary: "Edit two workspaces.",
+            requiresConfirmation: true,
+            steps: [
+                Fixture.editStep(id: "edit-1", workspaceName: "Client Alpha", addApps: ["Notes"]),
+                Fixture.editStep(id: "edit-2", workspaceName: "Research", removeApps: ["Slack"])
+            ]
+        )
+
+        // One escalation, from the removal half only — the addition half is correctly silent, which
+        // is what "each assessment is correct in isolation" means here.
+        let assessment = try fixture.executor.assessRisk(plan: plan, scope: .unscoped)
+        #expect(assessment.effectiveTier == .tier3)
+        #expect(assessment.escalations.map(\.reason) == [
+            "Removes Slack from workspace Research's apps. "
+                + "What is removed stops counting as part of this workspace."
+        ])
+
+        _ = try await fixture.executor.execute(plan: plan) { _, _ in }
+
+        #expect(try fixture.store.workspace(named: "Client Alpha").apps == ["Safari", "Notes"])
+        #expect(try fixture.store.workspace(named: "Research").apps == ["Safari"])
+    }
+
+    /// Case- and diacritic-folded, because that is what `WorkspaceStore` keys on: two steps naming
+    /// one workspace in two spellings are two edits of the same record on disk.
+    @Test
+    func twoEditStepsNamingTheSameWorkspaceInDifferentCasingAreStillRefused() throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        try fixture.store.save(StoredWorkspace(name: "Client Alpha", apps: ["Safari", "Notes"], urls: []))
         let plan = AgentPlan(
             summary: "Edit workspace twice.",
             requiresConfirmation: true,
             steps: [
-                Fixture.editPlan(removeFileLocations: [first.path]).steps[0],
-                AgentStep(
-                    id: "edit-workspace-2",
-                    operation: .editWorkspace,
-                    description: "Edit workspace.",
-                    workspaceName: "Client Alpha",
-                    workspaceFileLocationsToRemove: [second.path]
-                )
+                Fixture.editStep(id: "edit-1", workspaceName: "Client Alpha", removeApps: ["Notes"]),
+                Fixture.editStep(id: "edit-2", workspaceName: "client alpha", addApps: ["Mail"])
             ]
         )
-        let expected = AgentExecutionError.invalidPlan(
-            "A plan may contain only one edit_workspace step. Put every change to a workspace in that step."
-        )
 
-        #expect(throws: expected) {
+        // Named with the spelling of the step that collided, not the stored display name: this rule
+        // runs before any store load, and a resolve hook that read the store to prettify an error
+        // would be doing I/O for copy.
+        #expect(throws: AgentExecutionError.invalidPlan(
+            "A plan may edit workspace client alpha only once. "
+                + "Put every change to one workspace in a single edit_workspace step."
+        )) {
             _ = try fixture.executor.assessRisk(plan: plan, scope: .unscoped)
         }
-        await #expect(throws: expected) {
-            _ = try await fixture.executor.execute(plan: plan) { _, _ in }
-        }
-        #expect(try fixture.store.workspace(named: "Client Alpha").fileLocations == [first.path, second.path])
     }
 
     /// The approval panel's "Undo:" line. A tier-2 edit is the *common* case — adding never
@@ -906,6 +1114,30 @@ struct EditWorkspaceTests {
 
         func scope() throws -> WorkspaceScope {
             WorkspaceScope(workspace: try store.workspace(named: "Client Alpha"), whitelist: whitelist)
+        }
+
+        static func editStep(
+            id: String,
+            workspaceName: String = "Client Alpha",
+            addApps: [String]? = nil,
+            addURLs: [String]? = nil,
+            addFileLocations: [String]? = nil,
+            removeApps: [String]? = nil,
+            removeURLs: [String]? = nil,
+            removeFileLocations: [String]? = nil
+        ) -> AgentStep {
+            AgentStep(
+                id: id,
+                operation: .editWorkspace,
+                description: "Edit workspace.",
+                workspaceName: workspaceName,
+                workspaceApps: addApps,
+                workspaceURLs: addURLs,
+                workspaceFileLocations: addFileLocations,
+                workspaceAppsToRemove: removeApps,
+                workspaceURLsToRemove: removeURLs,
+                workspaceFileLocationsToRemove: removeFileLocations
+            )
         }
 
         static func editPlan(

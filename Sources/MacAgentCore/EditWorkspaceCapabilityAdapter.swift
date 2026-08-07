@@ -45,6 +45,47 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
         defaultRiskTier: .tier2
     )
 
+    /// Refuses a plan that edits the **same** workspace more than once, and lets a plan editing
+    /// *different* workspaces through.
+    ///
+    /// It lives here, in the one adapter hook handed the whole plan, because a per-segment count
+    /// structurally cannot see the shape it needs to reject. `workflow(in:)` builds an
+    /// order-independent `Set` of workflows, so *any* second distinct operation anywhere in the plan
+    /// — adjacent to the edits or not — sends it down `.chain`; `segmentPlans` then gives
+    /// `.editWorkspace` one segment per step, and every segment satisfies a count-of-one trivially.
+    /// The earlier guard sat in `workspaceEdit` and was defeated by exactly that: `[edit, edit,
+    /// open_app]` produced two "one of several" consents that between them emptied a dimension with
+    /// neither saying so.
+    ///
+    /// **Same workspace, not step count.** The hazard is entirely between two edits of *one*
+    /// workspace: `AgentRunner` gates once up front and `executeChain` never re-gates, so the second
+    /// edit is assessed against a store the first has not yet written to. Two edits of two different
+    /// workspaces share nothing and each assessment is correct in isolation — and refusing them was
+    /// its own defect, because `AgentStep.workspaceName` is a single `String?`, so "add Notes to Work
+    /// and remove Slack from Research" cannot be expressed in one step and the old message told the
+    /// user to do something impossible.
+    ///
+    /// Names are compared through the stores' own `normalized`, the folding `WorkspaceStore` keys on,
+    /// so "Client Alpha" and "client alpha" are one workspace here exactly as they are on disk.
+    public func resolveDefaultOutputs(in plan: AgentPlan, context: CapabilityExecutionContext) throws -> AgentPlan {
+        var seen: Set<String> = []
+        for step in plan.steps where step.operation == .editWorkspace {
+            let rawName = (step.workspaceName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
+            // A nameless step is not this rule's to reject — `workspaceEdit` raises the
+            // missing-name error, and stealing it here would report the wrong problem.
+            guard !rawName.isEmpty else {
+                continue
+            }
+            guard seen.insert(normalized(rawName)).inserted else {
+                throw AgentExecutionError.invalidPlan(
+                    "A plan may edit workspace \(rawName) only once. "
+                        + "Put every change to one workspace in a single edit_workspace step."
+                )
+            }
+        }
+        return plan
+    }
+
     public func preview(plan: AgentPlan, context: CapabilityExecutionContext) throws -> [ActionPreview] {
         let edit = try workspaceEdit(plan, context: context)
         var details: [String] = []
@@ -89,8 +130,15 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
     /// the two wordings and be wrong about the other.
     public func assessRisk(plan: AgentPlan, context: CapabilityExecutionContext) throws -> CapabilityRiskAssessment {
         let edit = try workspaceEdit(plan, context: context)
+        // Triggered on what was actually *lost*, not on what was dropped from a list. The two differ
+        // for an entry `WorkspaceScope` had already classified inert — a folder outside the
+        // whitelist, a URL `SafeURL` rejects, a blank app name. Such an entry never restricted
+        // anything, so removing it costs the user nothing, and asking for explicit approval on a
+        // sentence asserting a loss is the same over-claim the reason wording was already corrected
+        // for once. Same single source of truth as `removalEmptiesTheKind`: the evaluator decides
+        // what counted, this path only reads its answer.
         let escalations = edit.lists.compactMap { list -> CapabilityRiskEscalation? in
-            guard !list.removed.isEmpty else {
+            guard !list.effectivelyRemoved.isEmpty else {
                 return nil
             }
             return CapabilityRiskEscalation(
@@ -101,7 +149,7 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
                     : Self.entriesRemovedReason(
                         workspaceName: edit.stored.name,
                         kind: list.kind,
-                        removed: list.removed
+                        removed: list.effectivelyRemoved
                     )
             )
         }
@@ -179,11 +227,20 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
         /// milder consent. Asking the evaluator is the only way this cannot drift from it.
         let beforeRestrictsKind: Bool
         let afterRestrictsKind: Bool
+        /// The subset of `removed` that was actually restricting something before the edit — that
+        /// is, minus every entry `WorkspaceScope` had already put in `inertEntries`.
+        ///
+        /// `removed` is what leaves the stored list, and the summary and preview report that,
+        /// because it is what the user asked for and what happened. Consent is a different question:
+        /// an entry that never restricted anything cannot be lost, so it neither escalates nor gets
+        /// named in a reason claiming a loss. Same division of labour as the two flags above — the
+        /// evaluator decides what counted, this type only carries the answer.
+        let effectivelyRemoved: [String]
 
         /// True when the removal leaves the dimension unconstrained: it was restricting something,
         /// and now it is not.
         var removalEmptiesTheKind: Bool {
-            !removed.isEmpty && beforeRestrictsKind && !afterRestrictsKind
+            !effectivelyRemoved.isEmpty && beforeRestrictsKind && !afterRestrictsKind
         }
     }
 
@@ -232,23 +289,13 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
         _ plan: AgentPlan,
         context: CapabilityExecutionContext
     ) throws -> WorkspaceEdit {
-        let editSteps = plan.steps.filter { $0.operation == .editWorkspace }
-        guard let step = editSteps.first else {
+        // One step per call by construction: a plan whose steps are all edits chains into
+        // single-step segments, and the plan-shape rule that makes two edits of one workspace
+        // impossible lives in `resolveDefaultOutputs`, which is the only hook that can see it. No
+        // count guard here — it could never fire, and an unreachable guard is the thing a mutation
+        // battery already caught once on this adapter.
+        guard let step = plan.steps.first(where: { $0.operation == .editWorkspace }) else {
             throw AgentExecutionError.invalidPlan("edit_workspace step is missing.")
-        }
-        // Refused rather than folded or quietly half-applied. Two edit steps assess against the same
-        // pre-execution store — `AgentRunner` gates once, up front, and `executeChain` deliberately
-        // never re-gates — so a plan removing one of two file locations per step would show two
-        // "one of several" prompts and still leave the dimension unconstrained. Folding them is not
-        // the alternative it looks like either, because two steps may name two different workspaces.
-        // One step already carries add and remove lists for all three kinds, and the planner is
-        // instructed to emit exactly one, so a second is a malformed plan and is named as one.
-        // `shouldChainWhenRepeated` keeps `.editWorkspace` unchained so this guard actually sees both
-        // steps; chained, each segment would arrive holding one.
-        guard editSteps.count == 1 else {
-            throw AgentExecutionError.invalidPlan(
-                "A plan may contain only one edit_workspace step. Put every change to a workspace in that step."
-            )
         }
         guard let rawName = step.workspaceName?.trimmingCharacters(in: .whitespacesAndNewlines),
               !rawName.isEmpty else {
@@ -339,7 +386,16 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
         let beforeScope = WorkspaceScope(workspace: stored, catalog: context.appCatalog, whitelist: context.whitelist)
         let afterScope = WorkspaceScope(workspace: updated, catalog: context.appCatalog, whitelist: context.whitelist)
         let lists = [appArithmetic, urlArithmetic, fileArithmetic].map { arithmetic in
-            EditedList(
+            // Matched on the raw stored string, and safely so: `WorkspaceScopeInertEntry.value` is
+            // the entry verbatim as `WorkspaceScope` read it out of the stored record, and `removed`
+            // holds elements of that same stored array — both sides come from one list, so no
+            // normalization is involved and none could drift.
+            let inert = Set(
+                beforeScope.inertEntries
+                    .filter { $0.kind == arithmetic.kind }
+                    .map(\.value)
+            )
+            return EditedList(
                 kind: arithmetic.kind,
                 before: arithmetic.before,
                 after: arithmetic.after,
@@ -347,7 +403,8 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
                 added: arithmetic.added,
                 unmatchedRemovals: arithmetic.unmatchedRemovals,
                 beforeRestrictsKind: Self.restricts(arithmetic.kind, in: beforeScope),
-                afterRestrictsKind: Self.restricts(arithmetic.kind, in: afterScope)
+                afterRestrictsKind: Self.restricts(arithmetic.kind, in: afterScope),
+                effectivelyRemoved: arithmetic.removed.filter { !inert.contains($0) }
             )
         }
 
