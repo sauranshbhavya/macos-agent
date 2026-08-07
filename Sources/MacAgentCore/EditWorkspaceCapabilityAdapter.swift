@@ -414,14 +414,16 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
         _ raw: [String],
         whitelist: PathWhitelist
     ) throws -> [String] {
+        // No separate blank-path guard: `validateInsideWhitelist` trims and throws `.pathIsEmpty`
+        // itself, so one would be unreachable. Removed after a mutation battery caught it — deleting
+        // the guard left the suite green, which is what a second mechanism producing the identical
+        // error looks like, and the honest response is one mechanism rather than a second that can
+        // never fire. The blank-*app*-name guard next door is not redundant in the same way and
+        // stays: nothing downstream rejects one.
         var locations: [String] = []
         for rawPath in raw {
-            let trimmed = rawPath.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !trimmed.isEmpty else {
-                throw PathValidationError.pathIsEmpty
-            }
-            _ = try whitelist.validateInsideWhitelist(trimmed)
-            locations.append(trimmed)
+            _ = try whitelist.validateInsideWhitelist(rawPath)
+            locations.append(rawPath.trimmingCharacters(in: .whitespacesAndNewlines))
         }
         return locations
     }
