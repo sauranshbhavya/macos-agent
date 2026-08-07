@@ -1834,3 +1834,54 @@ Known limitations / deferred scope:
 Open questions (required, write "none" if true): whether step 7 should require a post-review update of every entry's Reviewed-by field, so the placeholder class cannot recur — raised by SONNY-61's description as an explicit out-of-scope question for triage, still open; SONNY-63's cap amendment did not touch it.
 
 Next branch: none from this session. PR #34 (`feature/routine-trust-manual-runs`, SONNY-54 → 58 → 59) is open in parallel; per the amended ruling on SONNY-60, whichever of PR #33/#34 merges second rebases this file's EOF keep-both — the expected, normal collision, not a breach.
+
+### Branch: feature/routine-trust-manual-runs
+Status: complete
+Date: 2026-08-07
+Tickets: SONNY-54 (per-routine trust covers manual runs — a trusted routine invoked by hand carries the same `.approved(.tier2)` decision its scheduled runs already carry, killing the every-run tier-2 prompt; untrusted routines and tier-3+ behavior unchanged)
+Reviewed by: pending at entry time — this entry is written before the PR opens, per WORKFLOW.md step 7; the fresh-session interim review follows.
+
+Spec sections covered: none newly — this widens branch 10's per-routine unattended-trust opt-in (spec §10/§11's tier definitions, the approval gate, and the tier-3+ backstop are all untouched; the never-touch list on SONNY-54 pins them).
+Files changed:
+- `Sources/MacAgent/AgentViewModel.swift`
+- `Sources/MacAgent/RoutineDetailView.swift`
+- `Sources/MacAgentCore/RoutineSchedule.swift` (doc comment only — this is the schedule *model*, not `RoutineScheduler.swift`, which has zero diff)
+- `Sources/MacAgentCore/UnattendedTrustAdvisory.swift` (copy + doc comment only)
+- `Tests/MacAgentCoreTests/UnattendedTrustAdvisoryTests.swift`
+- `Tests/MacAgentTests/ScheduledRoutineRunTests.swift`
+Tests: the exact flagged command from CLAUDE.md -> pass, **710 tests / 56 suites, exit 0, measured at `e6b0012`** (the branch's code head; baseline on `main` at `6af453c` measured by this session as 704 / 56, exit 0). Six tests added, zero removed or weakened.
+
+Behavior added:
+- **A trusted routine runs by hand with no tier-2 prompt.** `performStart` derives a trust decision from the prepared plan and, when `.approved(.tier2)` covers the assessed tier, executes without pausing — same decision value, same gate, same `activeTaskScope` the assessment used (never a hardcoded `.unscoped`; the scheduled path's is a different, documented fact).
+- **The toggle states its real scope.** Label is the founder-chosen wording verbatim (2026-08-06, Q5): "Trust this routine — runs tier-2 steps without asking, scheduled or manual." Caption: "Applies both to scheduled runs and runs you start yourself. Steps that need your explicit approval still ask first." The tier-3+ advisory now also says a manual run still asks.
+
+Behavior preserved (required, no blanket claims):
+- **Untrusted routines' manual runs are byte-identical.** The pause block moved into an `else` unedited (verified by diff), and `anUntrustedRoutineStillPromptsWhenRunByHandAndApprovingRunsIt` pins prompt-then-approve-then-runs end to end. A routine with no schedule has no trust grant and still prompts (`aRoutineWithoutAScheduleStillPromptsWhenRunByHand`, plus the pre-existing ProductShellTests pin, which passes unchanged).
+- **Tier-3+ on the manual path prompts exactly as before, and does not touch the schedule.** `aTrustedTierThreeRoutineStillPromptsWhenRunByHand` pins the escalated prompt at `.tier3`, the un-run tier-3 action, the un-paused schedule (SONNY-31's pause is the answer to "nobody is present"; somebody is), and the approve-then-run completion.
+- **The scheduled path is untouched entirely.** `performScheduledRun`, `checkScheduledRoutines`, `RoutineScheduler.swift`, the unattended backstop and SONNY-31's pause behavior all carry zero diff; every pre-existing ScheduledRoutineRunTests test passes unchanged.
+- **`AgentRunner.swift` gating and tier definitions: zero diff.**
+- **The ordinary non-routine auto-run path is byte-identical**, including its failure behavior on execute-time drift — the new drift catch is guarded `where routineTrustApproval != .notRequested`, so only an execution that actually carried the trust decision can re-arm.
+- **A trusted manual run is an ordinary manual task in every bookkeeping respect**: reports through `finalSummary` (never `scheduledRunNotice`), advances no streak history and no catch-up baseline, and leaves the first-approval education state (`hasCompletedFirstApproval`) untouched — all pinned in `aTrustedRoutineRunByHandSkipsTheTierTwoPrompt`.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**The trust decision is derived from the plan, through the store's own lookup — never from a call site.** `runRoutineWidget` holds the real `StoredRoutine` and deliberately throws it away (it round-trips through the same text command a user would type), and the planner path only ever holds a `routineName` string. So `manualRoutineTrustDecision(for:)` re-derives the routine from the plan's single `run_routine` step via `routineStore.routine(named:)` — the identical normalized (case/diacritic-insensitive) lookup `RunRoutineCapabilityAdapter.routineRunSpec` performs at execute time, so the routine the check reads and the routine that runs cannot resolve differently. Every unresolvable case — unknown name, nameless step, unreadable store — fails closed to `.notRequested`: a trust check that cannot complete relaxes nothing.
+
+**The grant covers exactly the canonical single-step run-routine plan.** A planner-built plan wrapping `run_routine` beside any other step keeps the full prompt: those steps were never what the user marked trusted. The planner is not injectable at the view-model level, so this shape rule is pinned by calling the (internal-not-private, for exactly this reason) decision function directly.
+
+**The view-model tier comparison is a courtesy pre-check; the enforcement is `AgentRunner`'s structural gate — and the mutation battery proved it.** Mutant M4 (comparison always-true) left all 92 ScheduledRoutineRunTests+ProductShellTests green *with correct user-visible behavior*: the trusted tier-3 run proceeded into `execute`, the gate threw, and the new drift catch re-armed the prompt. Recorded deliberately as backstop evidence, not as a test-quality gap — the comparison exists so the common tier-3-at-assessment case pauses cleanly before steps are marked running, not because anything relies on it for safety.
+
+**The drift catch is deterministically unreachable in-process, and its body is proven by the mutant, not by a test.** Between `performStart`'s assessment and `execute`'s re-assessment there is no main-actor suspension point, so no test can interleave a store rewrite there (ProductShellTests' re-arm test exploits the *approval pause* window, which the trusted path removes). The window is real for external state (a file appearing on disk mid-flight), so the catch stays; M4's run exercised its entire body on the real path.
+
+**Trust remains schedule-scoped — a deliberate consequence of "no new persisted state."** `unattendedTrusted` lives on `RoutineSchedule` (a persisted coding key; the name predates the widening and keeps its old spelling), the toggle renders only when a schedule exists, and `setRoutineUnattendedTrust` no-ops without one. A never-scheduled routine therefore cannot be trusted and always prompts.
+
+**Mutation-battery pattern hygiene: count before you mutate.** M1's first pattern (`routine.schedule?.unattendedTrusted == true else {`) matched twice — the helper *and* `checkScheduledRoutines`' scheduled-path guard — and would have mutated the never-touch scheduled gate; the mutate script's occurrence-count guard refused it, and the re-anchored pattern killed cleanly (17 issues across both suites). Battery: M1, M2, M3, M7, M9 (AgentViewModel) and M8 (advisory copy) all killed by named tests; M4 survived as designed, see above. Run against the committed tree at `e6b0012`, reverted per mutant.
+
+Known limitations / deferred scope:
+- **A routine without a schedule cannot be marked trusted** (above). Nobody has asked for it; if it becomes real, it is a data-model decision (trust on `StoredRoutine` itself) with its own consent-surface work, not a quick widening.
+- **`UnattendedTrustAdvisory.swift`'s copy amendment is recorded here openly**: one clause ("still ask when you run it yourself") plus its header comment, copy-only, in a file precedent-sensitive from SONNY-31/37's ratified amendments but *not* on SONNY-54's own never-touch list; the behavior (thresholds, `try?`, nil results) is byte-identical and its tests pin the new clause.
+- **The scheduled skip-notice's "Turn on unattended running for it" pointer was considered and left.** It never quoted the old label either, and the new label's "without asking" phrasing aligns at least as well; judged not a wart worth a ticket.
+
+Open questions (required, write "none" if true): none.
+
+Next branch: per the pre-assigned post-B sequence recorded on SONNY-54 (coordinator, 2026-08-07): SONNY-58, on the branch its own description names, after this branch merges.
