@@ -872,6 +872,124 @@ struct ClarificationGateTests {
         #expect(harness.viewModel.clarificationQuestion == nil)
     }
 
+    // MARK: - A refused dispatch leaves no residue (PR #32 cycle 3, H1)
+
+    /// **The invariant, stated once and asserted at every door: after any refused dispatch, a
+    /// subsequent `submitClarification` interpolates only the question and the answer.**
+    ///
+    /// `canSubmit`'s clarification term closed the *discard* everywhere, but four callers wrote
+    /// `command` before the refusal could fire and the refusal path returned without touching it —
+    /// so the fix traded a discarded answer for a corrupted continuation at three doors. These are
+    /// the reviewer's measured probe sequences turned into pins.
+    @Test(arguments: [
+        ("run now", "Run my Morning routine"),
+        ("retry", "Zip my Desktop"),
+        ("open workspace", "Open my Client Alpha workspace")
+    ])
+    func aRefusedDispatchLeavesNoResidueAndTheContinuationCarriesOnlyTheQandA(
+        probe: (name: String, dispatchText: String)
+    ) throws {
+        let harness = try ClarificationHarness()
+        defer { harness.tearDown() }
+        let workspace = StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: [])
+        try harness.store.save(workspace)
+        harness.viewModel.refreshSavedItems()
+
+        // `retry` needs a prior command to retry; `start` is the only thing that sets `lastCommand`.
+        if probe.name == "retry" {
+            harness.viewModel.command = probe.dispatchText
+            harness.viewModel.start()
+            #expect(harness.viewModel.lastCommand == probe.dispatchText, "\(probe.name) premise")
+            harness.viewModel.cancelCurrentRun()
+            harness.viewModel.isRunning = false
+        }
+
+        harness.viewModel.clarificationQuestion = "Which folder should I scan?"
+        harness.viewModel.command = ""
+
+        switch probe.name {
+        case "run now":
+            harness.viewModel.runRoutineWidget(StoredRoutine(name: "Morning", steps: []))
+        case "retry":
+            harness.viewModel.retryLastCommand()
+        default:
+            harness.viewModel.openWorkspaceWidget(workspace)
+        }
+
+        // The discard is still fixed — the question survives the refusal.
+        #expect(harness.viewModel.clarificationQuestion == "Which folder should I scan?", "\(probe.name) question")
+        // And the residue is gone: nothing the refused dispatch wrote is left behind.
+        #expect(harness.viewModel.command == "", "\(probe.name) residue")
+
+        harness.viewModel.clarificationAnswer = "~/Documents"
+        harness.viewModel.submitClarification()
+
+        // The continuation begins with the question, so nothing at all preceded it.
+        #expect(harness.viewModel.lastCommand.hasPrefix("Clarification question:"), "\(probe.name) continuation")
+        #expect(!harness.viewModel.lastCommand.contains(probe.dispatchText), "\(probe.name) no dispatch text")
+    }
+
+    /// The notification Retry path, asserted at the level it is honestly assertable.
+    ///
+    /// `AppDelegate` wires the system notification's Retry action to `retryLastCommand(origin:)` and
+    /// fires it from outside SwiftUI entirely, so no view gate can cover it and no test in this
+    /// target can post a real notification. What *is* assertable is the method that action calls,
+    /// with the same origin it passes — which is the whole of the behaviour, since the action's only
+    /// body is that call.
+    @Test
+    func theNotificationRetryPathRefusesDuringAPauseAndLeavesNoResidue() throws {
+        let harness = try ClarificationHarness()
+        defer { harness.tearDown() }
+        harness.viewModel.command = "Zip my Desktop"
+        harness.viewModel.start()
+        harness.viewModel.cancelCurrentRun()
+        harness.viewModel.isRunning = false
+        #expect(harness.viewModel.lastCommand == "Zip my Desktop")
+
+        harness.viewModel.clarificationQuestion = "Which folder should I scan?"
+        harness.viewModel.command = ""
+
+        harness.viewModel.retryLastCommand(origin: .widget)
+
+        #expect(harness.viewModel.clarificationQuestion == "Which folder should I scan?")
+        #expect(harness.viewModel.command == "")
+    }
+
+    /// The compose family's half of the same invariant. These never reach `start`, so the outcome
+    /// check cannot cover them — they guard before assigning instead.
+    @Test
+    func composerPrefillsDuringAPauseLeaveNoResidueEither() throws {
+        let harness = try ClarificationHarness()
+        defer { harness.tearDown() }
+        harness.viewModel.clarificationQuestion = "Which folder should I scan?"
+        harness.viewModel.command = ""
+
+        harness.viewModel.composeCommand("Create a workspace called ")
+
+        #expect(harness.viewModel.command == "")
+        #expect(harness.viewModel.clarificationQuestion == "Which folder should I scan?")
+
+        harness.viewModel.clarificationAnswer = "~/Documents"
+        harness.viewModel.submitClarification()
+        #expect(harness.viewModel.lastCommand.hasPrefix("Clarification question:"))
+        #expect(!harness.viewModel.lastCommand.contains("Create a workspace called"))
+    }
+
+    /// A dispatch that is *not* refused still works — the residue clear must not eat a real one.
+    @Test
+    func anAcceptedDispatchStillRunsAndIsRecorded() throws {
+        let harness = try ClarificationHarness()
+        defer { harness.tearDown() }
+        let workspace = StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: [])
+        try harness.store.save(workspace)
+        harness.viewModel.refreshSavedItems()
+
+        harness.viewModel.openWorkspaceWidget(workspace)
+
+        #expect(harness.viewModel.lastCommand == "Open my Client Alpha workspace")
+        harness.viewModel.cancelCurrentRun()
+    }
+
     @MainActor
     private struct ClarificationHarness {
         let root: URL

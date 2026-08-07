@@ -356,6 +356,60 @@ final class AgentViewModel: ObservableObject {
         isRunning || isAwaitingApproval || clarificationQuestion != nil
     }
 
+    /// Hands `start` a command on behalf of a *programmatic* caller, and guarantees that a refused
+    /// dispatch leaves no text behind.
+    ///
+    /// **The invariant: after any refused dispatch, a subsequent `submitClarification` interpolates
+    /// only the question and the answer.** `submitClarification` wraps its Q&A around whatever
+    /// `command` currently holds, so any caller that writes `command` and *then* gets refused turns
+    /// the next continuation into a hybrid — re-planned, under the paused task's own captured
+    /// binding, against the wrong workspace's boundary. Adding the clarification term to `canSubmit`
+    /// fixed the discard at every door and moved this residue to three of them.
+    ///
+    /// **One mechanism, chosen over moving each assignment above its guard.** A caller cannot
+    /// evaluate the real guard before assigning: `canSubmit`'s own emptiness term reads `command`,
+    /// so a pre-assignment check would have to be a *partial* copy of the rule at every call site —
+    /// the per-surface duplication that let this class reach the assembled head twice already.
+    /// Detecting the outcome needs no copy of the rule at all, and it covers refusal reasons nobody
+    /// has enumerated yet: `start` clears `command` synchronously the instant it accepts a dispatch,
+    /// so finding the text still there means the guard refused and the text is residue.
+    private func dispatch(
+        command commandText: String,
+        autoExecute: Bool = false,
+        origin: TaskOrigin = .commandCenter,
+        workspaceBinding: String? = nil,
+        fromComposer: Bool = false
+    ) {
+        command = commandText
+        start(
+            autoExecute: autoExecute,
+            origin: origin,
+            workspaceBinding: workspaceBinding,
+            fromComposer: fromComposer
+        )
+        guard command == commandText else {
+            return
+        }
+        command = ""
+    }
+
+    /// Fills the widget composer with a ready-made command and brings the widget forward, refusing
+    /// while a clarification is open.
+    ///
+    /// The compose half of the same invariant. These callers never reach `start`, so `dispatch`
+    /// cannot cover them — but they write `command` just the same, and a partial command
+    /// ("Create a workspace called ") left in a live pause corrupts the continuation exactly as a
+    /// refused dispatch would. Guard first, assign second, which is the ordering
+    /// `composeWorkspaceScopeEdit` already had and the reason it was the one door genuinely closed.
+    func composeCommand(_ commandText: String) {
+        guard clarificationQuestion == nil else {
+            logStore.append(.observe, "Composer prefill ignored while a clarification is open.")
+            return
+        }
+        command = commandText
+        widgetPresentationRequest += 1
+    }
+
     /// **The clarification term lives here, at the dispatch choke point, rather than on each
     /// surface's button gate.**
     ///
@@ -837,10 +891,13 @@ final class AgentViewModel: ObservableObject {
     ///   the user pressed it, not an inheritance of the failed task's origin, so the caller states
     ///   it rather than it being inferred — same convention as `toggleVoiceRecording(origin:)`.
     func retryLastCommand(origin: TaskOrigin = .widget) {
-        guard !lastCommand.isEmpty, !isRunning, !isAwaitingApproval else {
+        // `clarificationQuestion == nil` for the same reason every other in-flight term here exists:
+        // a pause is a task the user has not finished answering, and retry is a *new* dispatch.
+        // Without it, the notification's Retry — which fires from outside SwiftUI, so no view gate
+        // can cover it — wrote the old command straight into a live pause.
+        guard !lastCommand.isEmpty, !isTaskInFlight else {
             return
         }
-        command = lastCommand
         // Carries the original run's workspace. `lastAssessedScope` is the post-terminal record of
         // what the last task was assessed under and is deliberately never cleared, which is exactly
         // what makes it readable here — by retry time the live binding is long gone. Without this a
@@ -854,7 +911,7 @@ final class AgentViewModel: ObservableObject {
         if case .scoped(let scope) = lastAssessedScope {
             retryBinding = scope.workspaceName
         }
-        start(origin: origin, workspaceBinding: retryBinding)
+        dispatch(command: lastCommand, origin: origin, workspaceBinding: retryBinding)
     }
 
     /// Submits the clarification answer as a **new** run, not a resume: this appends the Q&A to
@@ -1170,8 +1227,7 @@ final class AgentViewModel: ObservableObject {
     }
 
     func runRoutineWidget(_ routine: StoredRoutine) {
-        command = "Run my \(routine.name) routine"
-        start(autoExecute: true)
+        dispatch(command: "Run my \(routine.name) routine", autoExecute: true)
     }
 
     /// The workspace card's "New task here" action: bring the widget forward with an empty
@@ -1199,8 +1255,7 @@ final class AgentViewModel: ObservableObject {
     }
 
     func openWorkspaceWidget(_ workspace: StoredWorkspace) {
-        command = "Open my \(workspace.name) workspace"
-        start(autoExecute: true)
+        dispatch(command: "Open my \(workspace.name) workspace", autoExecute: true)
     }
 
     /// Hands the widget composer a ready-made `edit_workspace` command from the detail sheet and
@@ -1546,7 +1601,10 @@ final class AgentViewModel: ObservableObject {
             do {
                 let transcriber = try OpenAITranscriber(usageRecorder: taskUsageRecorder)
                 let result = try await transcriber.transcribe(audioFileURL: audioURL)
-                command = result.text
+                // Deliberately does *not* write `command` here. `dispatchTranscribedCommand` routes
+                // through `dispatch`, which assigns it and clears it again if the dispatch is
+                // refused — writing it first would reinstate exactly the residue this round removes,
+                // for a transcription that completed into a clarification pause.
                 finalSummary = ""
                 isTranscribingVoice = false
                 preserveUsageForNextStart = true
@@ -1578,14 +1636,20 @@ final class AgentViewModel: ObservableObject {
     /// transcription already in flight when a clarification arrives would still land here. Refusing
     /// at the dispatch makes the guarantee independent of that timing.
     func dispatchTranscribedCommand(_ transcript: String, origin: TaskOrigin = .widget) {
-        command = transcript
         guard clarificationQuestion == nil else {
             logStore.append(.observe, "Voice command ignored while a clarification is open.")
             return
         }
         // Voice submitted from the widget's own mic *is* the composer, with the chip visible; from
-        // anywhere else it is not.
-        start(autoExecute: true, origin: origin, fromComposer: origin == .widget)
+        // anywhere else it is not. Routed through `dispatch` so a refusal for any *other* reason —
+        // a run that started between the transcription and this call — leaves no residue either;
+        // the guard above stays because it is the one this method's own contract names.
+        dispatch(
+            command: transcript,
+            autoExecute: true,
+            origin: origin,
+            fromComposer: origin == .widget
+        )
     }
 
     /// Resolves which workspace this task is in, and loads it into a scope.

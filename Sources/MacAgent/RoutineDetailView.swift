@@ -576,7 +576,10 @@ struct RoutineDetailView: View {
                 .clipShape(RoundedRectangle(cornerRadius: 8))
         }
         .buttonStyle(.plain)
-        .disabled(viewModel.isRunning || viewModel.isAwaitingApproval)
+        // The hoisted term, not a fourth hand-rolled copy: during a clarification pause the
+        // two-term version left this a live button that silently did nothing, and `dismiss()` below
+        // closed the sheet so the action read as accepted.
+        .disabled(viewModel.isTaskInFlight)
         .sonnyPointerCursor()
         .accessibilityLabel("Run \(live.name) now")
     }

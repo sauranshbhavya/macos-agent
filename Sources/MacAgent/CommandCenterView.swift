@@ -2298,8 +2298,7 @@ private struct RoutinesView: View {
     // Command Center has no composer of its own — pre-fill the command and bring the widget
     // forward so the user finishes typing the routine name there.
     private func beginNewRoutine() {
-        viewModel.command = "Create a routine called "
-        viewModel.widgetPresentationRequest += 1
+        viewModel.composeCommand("Create a routine called ")
     }
 }
 
@@ -2539,8 +2538,7 @@ private struct WorkspacesView: View {
     // Command Center has no composer of its own — pre-fill the command and bring the widget
     // forward so the user finishes typing the workspace name there.
     private func beginNewWorkspace() {
-        viewModel.command = "Create a workspace called "
-        viewModel.widgetPresentationRequest += 1
+        viewModel.composeCommand("Create a workspace called ")
     }
 }
 
