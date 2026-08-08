@@ -291,6 +291,23 @@ or correctness — wording, test-name precision, a claim that is imprecise rathe
 rounds of *review*, not the fix-in-branch rule: a defect found at any point is still fixed
 in the branch before merge. What the cap ends is the search for more. (Set by the user
 2026-08-05, after SONNY-44's review ran five rounds whose tail kept finding smaller things.)
+The cap is a ceiling, not a quota: three cycles are the most a review may run, never a
+number it must reach — a cycle runs only when the one before it leaves that cycle something
+to do.
+
+- A clean cycle 1 — no findings above the recorded-residual bar — ends the review. No fix
+  round, no re-check.
+- A fix round confined to records, docs, or mechanical edits is verified directly by the
+  coordinator — against the real diff, with the usual evidence bar — and the lane closes;
+  no third-cycle reviewer session.
+- The full cycle-3 re-check stays reserved for fix rounds that could themselves introduce
+  defects: production-code changes, test-integrity rebuilds (vacuous-test rewrites),
+  rebases carrying conflict resolutions.
+
+The ceiling itself does not move, and the fix-in-branch rule is untouched either way. This
+composes with the depth scaling below: depth scales to the diff, cycle count to what the
+cycles actually find. (Decided by the user 2026-08-06, after full third-cycle reviewer
+sessions ran over mechanical fix rounds on PRs #30 and #31.)
 
 **Interim reviews are scaled to what the ticket touched.** A ticket may be reviewed as it
 closes rather than only at PR time, by a fresh session under the same rules. A
