@@ -714,11 +714,20 @@ struct ScheduledRoutineRunTests {
         })
         // No approval UI was involved, so the first-approval education state is untouched.
         #expect(fixture.viewModel.hasCompletedFirstApproval == false)
-        // And nothing scheduled-side moved: no notice, no streak entry, no baseline advance.
+        // And nothing scheduled-side moved: no notice, no streak entry, no baseline advance —
+        // and the fifth scheduled-side write surface, task history, holds a manual record only.
+        // (`recordScheduledTaskHistory` is structurally unreachable from this path — gated on
+        // `scheduledRunDisplayCommand`, which only `performScheduledRun` sets — so this pins the
+        // enumeration rather than trusting it; PR #34 review, cycle 2, F3.)
         #expect(fixture.viewModel.scheduledRunNotice == nil)
         let saved = try fixture.routineStore.routine(named: "Morning")
         #expect(saved.effectiveRecentRunDates.isEmpty)
         #expect(saved.schedule?.lastRunAt == fixture.enabledAt)
+        let history = try fixture.taskHistoryStore.loadAll()
+        #expect(history.count == 1)
+        #expect(history.allSatisfy { $0.effectiveTrigger == .manual })
+        #expect(history.first?.command == "Run my Morning routine")
+        #expect(history.first?.outcomeStatus == .completed)
     }
 
     /// Untrusted means unchanged: the same manual dispatch still pauses at the tier-2 prompt, and
@@ -765,6 +774,47 @@ struct ScheduledRoutineRunTests {
         #expect(fixture.viewModel.finalSummary == "Approval needed before Sonny can act.")
     }
 
+    /// Coordinator ruling (PR #34 review cycle 2, F4, 2026-08-07): a disabled schedule with trust
+    /// still on covers manual runs — **intended**. Trust is the routine's standing consent;
+    /// disabling the schedule suspends *runs*, not consent, consistent with the label's
+    /// "scheduled or manual". Both directions pinned: the grant survives the schedule being
+    /// switched off, and revoking trust restores the prompt regardless of the schedule's state.
+    @Test
+    func aDisabledScheduleLeavesTheTrustGrantCoveringManualRuns() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        // Disabled by the user (the initializer's default activation), trusted.
+        try fixture.routineStore.save(
+            StoredRoutine(
+                name: "Morning",
+                steps: [fixture.inertStep],
+                schedule: RoutineSchedule(cadence: .daily, hour: 9, minute: 0, unattendedTrusted: true)
+            )
+        )
+        let routine = try fixture.routineStore.routine(named: "Morning")
+        // The premise, guarded rather than assumed.
+        #expect(routine.schedule?.isEnabled == false)
+        #expect(routine.schedule?.unattendedTrusted == true)
+
+        fixture.viewModel.runRoutineWidget(routine)
+        try await fixture.waitForIdle()
+
+        #expect(fixture.viewModel.approvalRequest == nil)
+        #expect(fixture.viewModel.finalSummary.contains("Ran routine Morning"))
+
+        // Revoking trust restores the prompt, schedule still off.
+        fixture.viewModel.setRoutineUnattendedTrust(routine, to: false)
+        let revoked = try fixture.routineStore.routine(named: "Morning")
+        #expect(revoked.schedule?.isEnabled == false)
+        #expect(revoked.schedule?.unattendedTrusted == false)
+
+        fixture.viewModel.runRoutineWidget(revoked)
+        try await fixture.waitForIdle()
+
+        #expect(fixture.viewModel.approvalRequest != nil)
+        #expect(fixture.viewModel.finalSummary == "Approval needed before Sonny can act.")
+    }
+
     /// The tier-3+ backstop on the manual path, end to end: trust never covers an escalated
     /// routine, so the run pauses at the explicit-approval prompt exactly as an untrusted one
     /// would — and, unlike the scheduled path, it does *not* pause the schedule: SONNY-31's pause
@@ -802,6 +852,12 @@ struct ScheduledRoutineRunTests {
         #expect(schedule.isEnabled)
         #expect(schedule.pausedReason == nil)
         #expect(fixture.viewModel.scheduledRunNotice == nil)
+        // Exactly one "Approval required" event: the view-model comparison paused before
+        // execution was ever attempted, rather than proceeding into `AgentRunner`'s gate and
+        // re-arming through the drift catch — that path logs the same line twice (the gate at
+        // refusal, the catch at re-arm). Pins the clean-pause property the changelog names as
+        // the comparison's purpose, and kills battery mutant M4 (PR #34 review, cycle 2, F1).
+        #expect(fixture.viewModel.logStore.events.filter { $0.message.hasPrefix("Approval required") }.count == 1)
 
         fixture.viewModel.start()
         try await fixture.waitForIdle()
