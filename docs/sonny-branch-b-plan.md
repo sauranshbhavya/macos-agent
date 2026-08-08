@@ -1,5 +1,7 @@
 # Branch B — Workspace Restriction Scope: Plan
 
+> **Frozen planning artifact** (coordinator ruling with user override standing, PR #35 review F3, 2026-08-08): this document is the rationale behind row B's contracts *as planned*, and is not retro-updated as later branches change the code — current state is authoritative in `docs/sonny-v1-implementation-changelog.md`. Where a row here describes superseded behavior (e.g. §7's `switch_running_app` matching row, superseded by SONNY-58's resolved-app pinning), it reads as history, not error.
+
 **The Plane tickets are the binding contracts. This document is the full planning rationale behind them.** Where a ticket and this doc disagree about *what to build*, the ticket wins; this doc exists so a session picking up any of those tickets can understand *why* the contract says what it says, and so the analysis that produced them is not lost when the tickets close.
 
 Produced by SONNY-12 (planning ticket for roadmap row B), 2026-08-04. Branch: `feature/workspace-restriction-scope`. Module: **B — workspace restriction scope**. Gates roadmap row C.
