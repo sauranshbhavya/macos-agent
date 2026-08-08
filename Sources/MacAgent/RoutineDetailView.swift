@@ -497,12 +497,13 @@ struct RoutineDetailView: View {
         }
     }
 
-    /// The per-routine unattended-run opt-in, deliberately here rather than on the Routines row.
+    /// The per-routine trust opt-in, deliberately here rather than on the Routines row.
     ///
     /// The row's trailing slot belongs to the schedule toggle per the wireframe, and there is no
     /// space for a second switch — but the real reason is that this is a consequential safety
-    /// decision (it lets a scheduled trigger bypass the tier-2 gate a manual click keeps), and it
-    /// deserves the context of the step list it is granting that permission over.
+    /// decision (it lets any run of this routine, scheduled or manual, bypass the tier-2 gate per
+    /// SONNY-54), and it deserves the context of the step list it is granting that permission
+    /// over. Label copy is the founder-chosen wording, verbatim (2026-08-06, Q5).
     @ViewBuilder
     private var unattendedTrustControl: some View {
         if live.schedule != nil {
@@ -512,10 +513,13 @@ struct RoutineDetailView: View {
                     set: { unattendedAdvisory = viewModel.setRoutineUnattendedTrust(live, to: $0) }
                 )) {
                     VStack(alignment: .leading, spacing: 2) {
-                        Text("Run without asking me")
+                        Text("Trust this routine — runs tier-2 steps without asking, scheduled or manual.")
                             .font(RoutineDetailType.sectionLabel)
                             .foregroundStyle(RoutineDetailTheme.text)
-                        Text("Lets this routine run on its schedule while you are away.")
+                            // Founder-verbatim label (2026-08-06, Q5) is a full sentence: let it
+                            // wrap rather than truncate in this fixed-width panel.
+                            .fixedSize(horizontal: false, vertical: true)
+                        Text("Applies both to scheduled runs and runs you start yourself. Steps that need your explicit approval still ask first.")
                             .font(RoutineDetailType.micro)
                             .foregroundStyle(RoutineDetailTheme.mutedText)
                             .fixedSize(horizontal: false, vertical: true)
