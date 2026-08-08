@@ -39,6 +39,13 @@ public enum ScopedResource: Equatable, Hashable, Sendable {
     /// A human app name as a user would type it — resolved through `MacAppCatalog` before matching,
     /// never compared raw.
     case app(String)
+    /// An app already resolved to its real running identity (SONNY-58): matched by bundle
+    /// identifier first, then by the uncataloged name-fallback key — never by catalog-resolving the
+    /// display name, which would hand any app that merely *calls itself* "Chrome" the cataloged
+    /// Chrome's scope membership. Built only from a pinned `switch_running_app` step, where the
+    /// bundle identifier is the ground truth and the display name exists for the user-facing
+    /// sentence.
+    case resolvedApp(bundleIdentifier: String, displayName: String)
     /// A host, not a full URL. Whoever builds the resource extracts the host; `WorkspaceScope` only
     /// normalizes it.
     case webDomain(String)
@@ -47,7 +54,7 @@ public enum ScopedResource: Equatable, Hashable, Sendable {
 
     public var kind: ScopedResourceKind {
         switch self {
-        case .app:
+        case .app, .resolvedApp:
             return .app
         case .webDomain:
             return .webDomain
@@ -56,10 +63,14 @@ public enum ScopedResource: Equatable, Hashable, Sendable {
         }
     }
 
+    /// The user-facing value — for a resolved app, the display name, so an escalation reads
+    /// "Xcode is not part of …" rather than naming a bundle identifier.
     public var value: String {
         switch self {
         case .app(let value), .webDomain(let value), .fileLocation(let value):
             return value
+        case .resolvedApp(_, let displayName):
+            return displayName
         }
     }
 }
@@ -210,6 +221,20 @@ public struct WorkspaceScope: Equatable, Sendable {
             }
             return appKeys.contains(key) ? .inScope : .outOfScope
 
+        case .resolvedApp(let bundleIdentifier, let displayName):
+            guard !appKeys.isEmpty else {
+                return .unconstrained
+            }
+            if appKeys.contains(Self.bundleKey(bundleIdentifier)) {
+                return .inScope
+            }
+            // The name half matches only stored entries the catalog could not resolve — a stored
+            // name the catalog knows produced a `bundle:` key above, never a `name:` key, so this
+            // cannot hand a resolved app the cataloged identity of whatever its display name
+            // happens to be. It is what keeps an uncataloged stored entry ("Xcode") matching the
+            // running Xcode, which is the same reason the name fallback exists in `appKey` at all.
+            return appKeys.contains(Self.nameFallbackKey(displayName)) ? .inScope : .outOfScope
+
         case .webDomain(let rawHost):
             guard !webDomains.isEmpty else {
                 return .unconstrained
@@ -279,9 +304,20 @@ public struct WorkspaceScope: Equatable, Sendable {
             return nil
         }
         if let app = try? catalog.resolve(trimmed) {
-            return "bundle:" + app.bundleIdentifier
+            return bundleKey(app.bundleIdentifier)
         }
-        return "name:" + MacAppCatalog.normalize(trimmed)
+        return nameFallbackKey(trimmed)
+    }
+
+    /// The two halves of `appKey`, split out so `verdict(for: .resolvedApp)` builds the identical
+    /// keys without duplicating the literals — a drifted prefix would silently unmatch every stored
+    /// entry of that half.
+    static func bundleKey(_ bundleIdentifier: String) -> String {
+        "bundle:" + bundleIdentifier
+    }
+
+    static func nameFallbackKey(_ rawName: String) -> String {
+        "name:" + MacAppCatalog.normalize(rawName)
     }
 
     /// Lowercased, trailing DNS root dots removed, then a single leading `www.` removed. Applied to

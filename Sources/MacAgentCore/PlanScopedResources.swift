@@ -203,9 +203,25 @@ public enum PlanScopedResources {
             return .knowable(files(step.outputPath))
 
         case .switchRunningApp:
-            // Matched against the *running* apps rather than the 12-app catalog, so the name here is
-            // often outside `MacAppCatalog` — which is exactly why app matching falls back to a
-            // normalized name instead of dropping what it cannot resolve.
+            // The pin is the resource (SONNY-58): `RunningAppSwitchCapabilityAdapter`'s resolve
+            // hook runs before every gate reads the plan, so by the time a verdict is computed the
+            // step carries the app that will actually be activated — and that identity, not the
+            // query string that found it, is what the boundary is answering for. This classifier
+            // stays pure: it reads the pin off the step's own fields, it does not resolve anything.
+            if let bundleIdentifier = step.resolvedBundleIdentifier {
+                return .knowable([
+                    .resolvedApp(
+                        bundleIdentifier: bundleIdentifier,
+                        displayName: step.resolvedAppName ?? bundleIdentifier
+                    )
+                ])
+            }
+            // Unpinned — resolution failed (the plan is already failing at that gate) or a caller
+            // skipped the resolve phase: the raw name, exactly as before the pin existed. Matched
+            // against the *running* apps rather than the 12-app catalog, so the name here is often
+            // outside `MacAppCatalog` — which is exactly why app matching falls back to a
+            // normalized name instead of dropping what it cannot resolve. Fail-closed: an
+            // unresolvable query never earns a verdict a resolved app would have to spend.
             return .knowable(apps(step.appName ?? step.searchQuery))
 
         case .openWorkspace:

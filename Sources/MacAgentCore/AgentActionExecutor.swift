@@ -847,6 +847,18 @@ public final class AgentActionExecutor {
                 .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
         }
 
+        // Resolves no output path — it pins the running app the query will actually activate, so
+        // that every gate downstream of this phase (the scope assessment above all) reads one
+        // identity rather than re-fuzzy-matching the query per gate (SONNY-58). Idempotent by the
+        // adapter's own pin-once rule, which matters here more than for the output-path resolvers:
+        // this function runs on every one of the three gates, and a re-resolution at execute time
+        // would be exactly the assessment-versus-execution divergence the pin exists to close.
+        if resolvedPlan.steps.contains(where: { $0.operation == .switchRunningApp }) {
+            resolvedPlan = try capabilityRegistry
+                .adapter(for: .switchRunningApp)
+                .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
+        }
+
         // Resolves no output of its own — it is here because this is the only place an adapter is
         // handed the *whole* plan before `segmentPlans` splits it, and `edit_workspace`'s plan-shape
         // rule (at most one edit per workspace) is unenforceable from inside a single-step segment.
@@ -947,7 +959,11 @@ public final class AgentActionExecutor {
         var resources: [String] = []
 
         for step in plan.steps {
-            appendIfPresent(step.appName, to: &resources)
+            // The pinned identity outranks the query that found it (SONNY-58): an approval line
+            // reading "chrom" about a switch that will activate Google Chrome names the wrong
+            // thing. Nil for every step the resolve phase does not pin, so everything else renders
+            // exactly as before.
+            appendIfPresent(step.resolvedAppName ?? step.appName, to: &resources)
             appendIfPresent(step.targetURL, to: &resources)
             if let sourceURLs = step.sourceURLs {
                 resources.append(contentsOf: sourceURLs)

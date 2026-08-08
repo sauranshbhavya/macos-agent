@@ -687,6 +687,96 @@ struct WorkspaceScopeTests {
         #expect(PlanScopedResources.resources(in: step) == [.app("Figma")])
     }
 
+    // MARK: - Resolved running-app binding (SONNY-58)
+
+    /// A pinned step classifies the app that will actually be activated — the resolved identity,
+    /// never the query string that found it. An unpinned step keeps the raw-name classification,
+    /// which is the fail-closed direction: a query that never resolved earns nothing a resolved
+    /// app would have to spend.
+    @Test
+    func aPinnedSwitchStepClassifiesTheResolvedAppAndAnUnpinnedOneTheRawQuery() {
+        let pinned = AgentStep(
+            id: "switch",
+            operation: .switchRunningApp,
+            description: "Switch to code.",
+            appName: "code",
+            resolvedAppName: "Xcode",
+            resolvedBundleIdentifier: "com.apple.dt.Xcode"
+        )
+        #expect(PlanScopedResources.resources(in: pinned) == [
+            .resolvedApp(bundleIdentifier: "com.apple.dt.Xcode", displayName: "Xcode")
+        ])
+
+        let unpinned = AgentStep(
+            id: "switch",
+            operation: .switchRunningApp,
+            description: "Switch to code.",
+            appName: "code"
+        )
+        #expect(PlanScopedResources.resources(in: unpinned) == [.app("code")])
+    }
+
+    /// Bundle identifier first: a workspace listing a cataloged app matches the resolved running
+    /// app by its real bundle id, whatever the query looked like — and an app with a different
+    /// bundle id stays out, whatever the query looked like.
+    @Test
+    func aResolvedAppMatchesTheWorkspaceByBundleIdentifier() {
+        let scope = WorkspaceScope(workspace: StoredWorkspace(name: "Work", apps: ["Chrome"], urls: []))
+
+        #expect(
+            scope.verdict(for: .resolvedApp(bundleIdentifier: "com.google.Chrome", displayName: "Google Chrome"))
+                == .inScope
+        )
+        #expect(
+            scope.verdict(for: .resolvedApp(bundleIdentifier: "com.apple.dt.Xcode", displayName: "Xcode"))
+                == .outOfScope
+        )
+    }
+
+    /// The name fallback covers what the catalog cannot: a stored "Xcode" produced a `name:` key,
+    /// and the resolved running Xcode matches it — the same reason the fallback exists in `appKey`.
+    @Test
+    func aResolvedUncatalogedAppMatchesTheWorkspacesNameFallbackKey() {
+        let scope = WorkspaceScope(workspace: StoredWorkspace(name: "Dev", apps: ["Xcode"], urls: []))
+
+        #expect(
+            scope.verdict(for: .resolvedApp(bundleIdentifier: "com.apple.dt.Xcode", displayName: "Xcode"))
+                == .inScope
+        )
+    }
+
+    /// The anti-imposter property the resolved case exists for: its name half never
+    /// catalog-resolves, so an app that merely *calls itself* "Chrome" cannot spend the cataloged
+    /// Chrome's membership — the stored "Chrome" produced a `bundle:` key, and the imposter's
+    /// bundle id does not match it.
+    @Test
+    func anImposterSharingACatalogedDisplayNameStaysOutOfScope() {
+        let scope = WorkspaceScope(workspace: StoredWorkspace(name: "Work", apps: ["Chrome"], urls: []))
+
+        #expect(
+            scope.verdict(for: .resolvedApp(bundleIdentifier: "com.imposter.chrome", displayName: "Chrome"))
+                == .outOfScope
+        )
+    }
+
+    /// The unconstrained and rendering halves: a workspace configuring no apps constrains no
+    /// resolved app, and the user-facing value is the display name so an escalation reads as a
+    /// sentence about an app, never about a bundle identifier.
+    @Test
+    func aResolvedAppIsUnconstrainedWithoutAppEntriesAndRendersItsDisplayName() {
+        let scope = WorkspaceScope(
+            workspace: StoredWorkspace(name: "Open", apps: [], urls: ["https://github.com"])
+        )
+        let resource = ScopedResource.resolvedApp(
+            bundleIdentifier: "com.apple.dt.Xcode",
+            displayName: "Xcode"
+        )
+
+        #expect(scope.verdict(for: resource) == .unconstrained)
+        #expect(resource.value == "Xcode")
+        #expect(resource.kind == .app)
+    }
+
     /// A resource whose own identifier is blank cannot match anything, and a configured kind must
     /// not quietly wave it through.
     @Test

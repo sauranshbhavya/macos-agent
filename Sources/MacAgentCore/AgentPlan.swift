@@ -50,6 +50,16 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
     public var draftContent: String?
     public var shortcutName: String?
     public var shortcutInput: String?
+    /// The running app a `switch_running_app` step will actually activate, pinned exactly once by
+    /// `RunningAppSwitchCapabilityAdapter.resolveDefaultOutputs` — the resolve phase every executor
+    /// gate (`prepare`, `assessRisk`, `execute`) runs before doing anything else (SONNY-58). Nil
+    /// until that phase runs; never emitted by the planner (the operation is schema-excluded) or
+    /// the instant resolver. Once set, the pin is the identity: scope classifies it, the preview
+    /// names it, and execution activates it or fails — nothing re-resolves the query.
+    public var resolvedAppName: String?
+    /// The pinned app's bundle identifier — the half of the pin execution activates by and scope
+    /// matching compares first. Written together with `resolvedAppName`, never separately.
+    public var resolvedBundleIdentifier: String?
 
     public init(
         id: String,
@@ -79,7 +89,9 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
         draftTitle: String? = nil,
         draftContent: String? = nil,
         shortcutName: String? = nil,
-        shortcutInput: String? = nil
+        shortcutInput: String? = nil,
+        resolvedAppName: String? = nil,
+        resolvedBundleIdentifier: String? = nil
     ) {
         self.id = id
         self.operation = operation
@@ -109,6 +121,8 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
         self.draftContent = draftContent
         self.shortcutName = shortcutName
         self.shortcutInput = shortcutInput
+        self.resolvedAppName = resolvedAppName
+        self.resolvedBundleIdentifier = resolvedBundleIdentifier
     }
 }
 
