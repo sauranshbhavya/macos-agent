@@ -565,6 +565,89 @@ reference, not a source").
 
 ---
 
+## E. Founder-ratified decisions (2026-08-08)
+
+The founder answered every decision in §D. Recorded here as the durable outcome — §D is the menu,
+this is the choice. Where an answer refined or reversed an earlier one, the reconciliation is stated.
+
+**E1 — Planner default posture (D1c): production A/B.** Ship OpenAI as default and Cerebras as a live
+A/B alternative; never flip the default to Cerebras until the benchmark (E11) shows plan-quality and
+output-format parity.
+
+**E2 — Provider architecture (D2a): formalize the router now.** Land the open-weights planner behind a
+provider-agnostic router (or a client-side stand-in), not as a second hardcoded branch in
+`performStart` — the shape spec §16.5 already mandates.
+
+**E3 — Vision consent shape (D3a → refined): one capability, not per-click plan steps.** The vision
+loop is a single capability. This keeps D3(a)'s structural simplicity but **supersedes its
+"one coarse gate, no mid-loop pauses" reading** — the founder's E4 answer adds selective mid-loop
+pauses inside that one capability.
+
+**E4 — When Sonny pauses mid-session (D4): pause on consequential actions only.**
+- Ordinary clicks/typing (navigate, search): auto-run, no prompt.
+- Affects someone outside our system (e.g. send a message): a lightweight **confirmation**.
+- Destructive (e.g. delete an issue): explicit **approval**.
+This maps onto the existing tiers (0/1 auto-run, 2 confirm, 3 approve). **The hard part, named
+plainly:** Sonny must recognize *before* it acts that a button sends or deletes — a runtime judgment
+the vision model makes, and it can be wrong both ways (miss a real Send button, or over-nag). Its
+accuracy is the single most safety-critical number the E11 benchmark must measure.
+
+**E5 — Fallback-on-unsupported (D5a): silent auto-fallback.** When the planner can't fully do a
+command, Sonny automatically proposes vision (no separate "enable vision" step). The user still gets
+one up-front approval before it acts — that approval is what keeps it "through the engine." E6 is what
+makes this safe.
+
+**E6 — Vision-control allowlist (D6c): per-app user consent; terminals never controllable.** Sonny can
+only vision-control apps the user has specifically allowed; terminals (iTerm2/Terminal) are never
+eligible. This directly defuses the iTerm2 incident that silent auto-fallback (E5) would otherwise
+risk. Resolves SONNY-66's mechanism as per-app consent.
+
+**E7 — Unattended vision (D7): never.** Explicit refusal in the scheduled path plus the existing
+tier-2 ceiling; adopt spec §13.1 auto-pause on lock / sleep / idle.
+
+**E8 — Roadmap (D8): split.** Pull the screen-*seeing* + transparency infra forward (row 14); keep
+screen-*acting* as rescoped Power Mode (row 18), gated behind the safety infra.
+
+**E9 — Data egress + two modes (D9).**
+- **Two product modes:**
+  - **Normal mode** — low friction: E4's pausing rules; does *not* show screenshots before sending;
+    keeps an **after-the-fact log** of what was sent (preserves the "Data Sent to AI" differentiator
+    at no added friction).
+  - **Safe mode** — a **global** Sonny setting (gates *all* tasks, not just vision): asks before every
+    action and shows each screenshot before it is sent.
+- **The "data leaves device: yes/no" label is removed from all normal surfaces** and appears only
+  inside Safe mode. This reshapes **SONNY-32**: its job becomes removing the label from normal
+  surfaces, not fixing its honesty on them.
+- **Auto-blur secrets before sending: yes** (best-effort, stated as best-effort).
+- **Block on-screen hijack text: yes** (screen text is untrusted; Sonny never obeys instructions found
+  on screen).
+- **Deliberate spec change:** normal mode not showing screenshots before sending overrides spec
+  §14.4A's pre-send rule for tier-2+ actions — recorded as a conscious amendment, not a slip.
+
+**E10 — Screenshot provider (D10a): Cerebras (no-retention) only; never Google's free tier.**
+Re-verify gemma-4-31b's preview-vs-GA status and deprecation risk before depending on it.
+
+**E11 — Measurement (D11): build a benchmark for both models.** A benchmark testing the coordinator
+(planner) model and the vision model. No Cerebras-as-default until it passes; the A/B (E1) is this
+measurement run live.
+
+**E12 — Sequencing (D12): cleanup first, in order, before any vision.**
+1. Unpause **SONNY-59**, land it (unblocks SONNY-13).
+2. Fix planner-vocabulary bugs **SONNY-68 + SONNY-48**.
+3. Build shared plumbing **SONNY-64** (pre-built-plan dispatch).
+4. Clear the bug cluster **SONNY-28 / 30 / 34 / 35**.
+All of the above implemented **and merged** before vision work begins.
+
+**E13 — Spike disposition (D13): rework, never merge as-is, and last.** The spike (draft PR #36) never
+merges. After E12's cleanup is implemented and merged, the vision feature is built for real — using the
+spike's code as a starting reference, reworked to route through the risk engine with test coverage. The
+founder explicitly expects heavy rework ("it was never good enough").
+
+**Not created by this session:** the implementation and future-branch planning tickets for the planner
+track (E1/E2/E11) and the vision track (E8's rows 14/18; E4/E5/E6/E9's modes and consent) are deferred
+until E12's cleanup lands, per E13's sequencing. The roadmap-table edit for E8's split is a
+founder-authorized follow-up, not made by this planning session.
+
 ## Appendix — how this plan was produced
 
 Seven parallel research agents (model sonnet, effort high, per `CLAUDE.md`) over: the experiment
