@@ -26,9 +26,11 @@ public struct StepScopedResources: Equatable, Sendable {
 /// touches implicitly with no plan field naming them at all. A field-driven classifier would report
 /// four real kinds of touch as touching nothing: `convert_docx_to_pdf` AppleScript-controls Microsoft
 /// Word from a hardcoded path, the two Finder operations AppleScript-control Finder, a
-/// selection-driven scan/zip/docx step AppleScript-controls Finder to find the folder it runs
-/// against (`finderSelectionApp(in:)`), and `play_media` opens provider URIs through its own prefix
-/// check — none of which resolves through `MacAppCatalog` or `SafeURL`.
+/// selection-driven step of any of the **four** operations that resolve a folder from the Finder
+/// selection — `scan_select_largest_files`, `create_zip`, `scan_docx` *and* `convert_docx_to_pdf` —
+/// AppleScript-controls Finder to find the folder it runs against (`finderSelectionApp(in:)`), and
+/// `play_media` opens provider URIs through its own prefix check — none of which resolves through
+/// `MacAppCatalog` or `SafeURL`.
 public enum PlanScopedResources {
     /// Hacker News' front page, opened by the preset in `WebResearchMarkdownCapabilityAdapter`
     /// (`hackerNewsURL`, opened via `context.browserOpener`). Duplicated as a host here because that
@@ -307,26 +309,37 @@ public enum PlanScopedResources {
     /// **Keyed on `contextSource` alone, deliberately — not on "and no `inputPath` was supplied".**
     /// By the time any gate classifies a step, `AgentActionExecutor.resolveDefaultOutputs` has
     /// already run `FinderSelectionResolver.pinningSelectedDirectoryInput`, which writes the
-    /// resolved folder into `inputPath` on every matching step; all three gates (`prepare`,
-    /// `assessRisk`, `execute`) resolve before doing anything else, and `assessNestedPlan` reaches
-    /// `assessRisk` too, so a routine's steps are resolved as well. A populated `inputPath` is
-    /// therefore evidence the selection *was* read, not evidence it was not — and a classifier that
-    /// also required an empty one would fire on no real plan while still passing unit tests built
-    /// from unresolved steps.
+    /// resolved folder into `inputPath` on every matching step. Classification is reached only
+    /// through `assessRisk`, whose literal first statement is that resolve (`execute`'s is too;
+    /// `prepare` answers a clarification off the raw plan first and can return without resolving,
+    /// which is harmless precisely because nothing classifies from there), and `assessNestedPlan`
+    /// recurses into `assessRisk`, so a routine's steps are resolved as well. A populated
+    /// `inputPath` is therefore evidence the selection *was* read, not evidence it was not — and a
+    /// classifier that also required an empty one would fire on no real plan while still passing
+    /// unit tests built from unresolved steps.
     ///
-    /// What that costs is the step carrying both a real `inputPath` and `contextSource`, where
-    /// `selectedDirectoryPath` returns the supplied path and never talks to Finder. Reporting Finder
-    /// there over-reports, in the direction this file takes everywhere else — `convert_docx_to_pdf`
-    /// reports Word even when the converter falls back to its mock, because over-reporting escalates
-    /// and under-reporting silently blesses. The planner is told to leave `inputPath` null whenever
-    /// it sets `contextSource` (`OpenAIPlanner`'s Finder-context rule), so that shape is not one it
-    /// is asked to emit.
+    /// **What that costs, stated as the class it actually is.** Any step reaching classification
+    /// with both `contextSource` and a non-empty `inputPath` names Finder even when
+    /// `selectedDirectoryPath` returned the supplied path at `:20-23` and never talked to Finder.
+    /// The reachable form of that is **cross-step, not per-step**:
+    /// `pinningSelectedDirectoryInput` pools the plan's matching steps, taking `primary` from the
+    /// first non-empty `inputPath` among them (`:60-63`) and `contextSource` from the first non-nil
+    /// among them (`:64`) — independently. So a scan carrying an explicit path with no
+    /// `contextSource`, beside a zip carrying `contextSource` with no path, resolves from the scan's
+    /// path with zero Finder contact, back-fills it into the zip (`:77-80`), and the zip is reported
+    /// as driving Finder. Both steps individually satisfy `OpenAIPlanner`'s Finder-context rule
+    /// (`OpenAIPlanner.swift:162`), so per-step planner compliance does **not** bound this — an
+    /// earlier version of this comment claimed it did, and that claim was wrong. What does bound it
+    /// is direction: the error is always an extra escalation, never a silent blessing, which is the
+    /// direction this file takes everywhere else (`convert_docx_to_pdf` reports Word even when the
+    /// converter falls back to its mock). Making the report exact belongs to the resolver, which is
+    /// the only place that knows whether Finder was contacted — filed as SONNY-73, deliberately not
+    /// done here: this classifier is pure and cannot observe it.
     ///
     /// Reported per step rather than per plan because that is all a step-scoped classifier can see.
-    /// `pinningSelectedDirectoryInput` reads the selection once for the whole plan, taking
-    /// `contextSource` from the first matching step that carries one, so in a mixed plan the step
-    /// that declares itself selection-driven is the one that names Finder. The plan-level roll-up is
-    /// a maximum, so the verdict is the same either way.
+    /// The selection is read once for the whole plan, so in a mixed plan the step that declares
+    /// itself selection-driven is the one that names Finder. The plan-level roll-up is a maximum, so
+    /// the verdict is the same either way.
     private static func finderSelectionApp(in step: AgentStep) -> [ScopedResource] {
         step.contextSource == .finderSelection ? [.app(finderAppName)] : []
     }
