@@ -383,21 +383,56 @@ public struct InstantCommandResolver: Sendable {
     /// acts on elsewhere — the scoped switch this makes reachable is the case SONNY-58's
     /// verdict-binding was built for.
     ///
-    /// The article and " app" trims run for every switch phrasing, clause or not: "switch to the
-    /// Notes app" behaving differently from "switch to the Notes app in workspace X" is the kind of
-    /// split that only reads as a bug. Neither trim touches the guard's own rejections — only
-    /// articles are removed, never the prepositions ("on", "to", "in", "at") that keep "focus on
-    /// writing my essay" out of running-app matching, and the "mode" suffix rule is untouched.
+    /// **The ordering contract, which the first version of this function got wrong.**
+    ///
+    /// `looksLikeRunningAppName` is the sole authority on whether a candidate names an app, and the
+    /// only word it may never see is a word belonging to a recognised workspace clause. The first
+    /// version also stripped a leading article unconditionally, which quietly disabled two of the
+    /// guard's eight leading stop words — `the` and `my` — on this path, and the phrasings that
+    /// rejection existed to protect are workspace-opening ones: "switch to my Research workspace"
+    /// and "switch to the workspace Switch" reached the planner's `open_workspace` rule before
+    /// SONNY-68 and were captured as doomed app queries after it (PR #39 review, cycle 1, F1).
+    ///
+    /// So: **with no clause recognised, this function must leave the remainder alone.** The guard
+    /// then sees exactly what it saw before this ticket existed, and every one of its rejections —
+    /// all eight leading stop words, the three-word ceiling, the "mode" suffix — behaves identically.
+    /// `PlannerBoundaryTests` is not where that is checked; `SwitchInWorkspaceRoutingTests`'
+    /// base-parity table is, case by case, with the measurement at `48d0150` recorded beside each.
+    ///
+    /// **With a clause recognised, one normalisation is allowed, and it is a naming form rather
+    /// than an article rule.** A residue of the shape `[the|my] NAME app` names an app: the trailing
+    /// noun is what says so, which is why the article may come off in that shape and only in it.
+    /// "the code app in the workspace Switch" is the recorded observation 2, and it resolves; "my
+    /// essay in the workspace Switch" has no such noun, keeps its leading stop word, and is refused
+    /// by the guard exactly as its clause-free form is. A clause-carrying phrasing could not reach
+    /// the resolver at all before this ticket — the clause put every one of them past the ceiling —
+    /// so nothing here can regress a phrasing that used to work.
+    ///
+    /// Edge punctuation comes off both ends first, on either path. A typed full stop used to strand
+    /// itself in the query — "switch to code in the workspace Switch." asked to activate `code .`,
+    /// and the bare "switch to chrome." asked for `chrome.` long before this ticket — and the
+    /// matcher normalises spaces but not punctuation, so both failed by name. This is the one place
+    /// the no-clause path is deliberately *not* byte-identical to `48d0150`: it fixes that older
+    /// kind too (PR #39 review, cycle 1, F3).
     private func runningAppCandidate(from remainder: String) -> String {
-        var candidate = remainder
-        if let clause = WorkspaceTaskTagging.workspaceClause(in: candidate, workspaceStore: workspaceStore) {
-            candidate = clause.remainingCommand
+        let cleaned = edgePunctuationTrimmed(remainder)
+        guard let clause = WorkspaceTaskTagging.workspaceClause(in: cleaned, workspaceStore: workspaceStore) else {
+            return cleaned
         }
-        candidate = strippedLaunchArticle(candidate)
-        if candidate.lowercased().hasSuffix(" app") {
-            candidate = String(candidate.dropLast(" app".count))
+        let residue = edgePunctuationTrimmed(clause.remainingCommand)
+        guard residue.lowercased().hasSuffix(" app") else {
+            return residue
         }
-        return candidate.trimmingCharacters(in: .whitespacesAndNewlines)
+        return edgePunctuationTrimmed(strippedLaunchArticle(String(residue.dropLast(" app".count))))
+    }
+
+    /// Punctuation and whitespace at either end of a candidate, removed before it is judged or
+    /// matched. Interior punctuation is left alone: "zoom.us" is a real bundle-ish name and
+    /// `RunningAppMatcher` matches on it.
+    private func edgePunctuationTrimmed(_ value: String) -> String {
+        value.trimmingCharacters(
+            in: CharacterSet.punctuationCharacters.union(.whitespacesAndNewlines)
+        )
     }
 
     /// Heuristic guard so the broad verbs ("focus", "activate", bare "switch") only claim

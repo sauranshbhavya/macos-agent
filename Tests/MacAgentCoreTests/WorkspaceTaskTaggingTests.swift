@@ -255,6 +255,97 @@ struct WorkspaceTaskTaggingTests {
         #expect(WorkspaceTaskTagging.workspaceClause(in: "Zoom in my Nowhere workspace", workspaceStore: workspaceStore) == nil)
     }
 
+    /// **`FoldedText`'s whole reason for existing, which had no test until the review said so**
+    /// (PR #39 review, cycle 1, F7). A character whose folded form is longer than itself breaks any
+    /// scheme that assumes a folded offset is an original offset: "ß" folds to "ss", the "ﬁ"
+    /// ligature to "fi", "İ" to "i". The clause must still be cut at the right place in the
+    /// caller's own characters, and the text either side must come back untouched.
+    @Test
+    func aClauseIsCutCorrectlyAroundCharactersWhoseFoldedFormIsLonger() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try workspaceStore.save(StoredWorkspace(name: "Straße", apps: ["Safari"], urls: []))
+        try workspaceStore.save(StoredWorkspace(name: "Oﬃce", apps: ["Safari"], urls: []))
+        try workspaceStore.save(StoredWorkspace(name: "İstanbul", apps: ["Safari"], urls: []))
+
+        let sharp = WorkspaceTaskTagging.workspaceClause(
+            in: "please switch to code in the workspace Straße right now",
+            workspaceStore: workspaceStore
+        )
+        #expect(sharp?.workspaceName == "Straße")
+        #expect(sharp?.remainingCommand == "please switch to code right now")
+
+        // Matched through the fold from the other side too: the typed form differs from the saved
+        // one, and the canonical saved name is what comes back.
+        let transliterated = WorkspaceTaskTagging.workspaceClause(
+            in: "switch to code in the workspace Strasse",
+            workspaceStore: workspaceStore
+        )
+        #expect(transliterated?.workspaceName == "Straße")
+        #expect(transliterated?.remainingCommand == "switch to code")
+
+        let ligature = WorkspaceTaskTagging.workspaceClause(
+            in: "switch to code in my Office workspace now",
+            workspaceStore: workspaceStore
+        )
+        #expect(ligature?.workspaceName == "Oﬃce")
+        #expect(ligature?.remainingCommand == "switch to code now")
+
+        let dottedCapital = WorkspaceTaskTagging.workspaceClause(
+            in: "switch to code in the workspace Istanbul",
+            workspaceStore: workspaceStore
+        )
+        #expect(dottedCapital?.workspaceName == "İstanbul")
+        #expect(dottedCapital?.remainingCommand == "switch to code")
+    }
+
+    /// The leftmost/longest tie-break, under the *new* word order — both existing tie-break tests
+    /// use only the old one (PR #39 review, cycle 1, F7).
+    @Test
+    func theTieBreakHoldsInTheNameBeforeNounOrderToo() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try workspaceStore.save(StoredWorkspace(name: "Client", apps: ["Safari"], urls: []))
+        try workspaceStore.save(StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: []))
+
+        #expect(
+            WorkspaceTaskTagging.workspaceClause(in: "zip the files in my Client Alpha workspace", workspaceStore: workspaceStore)?
+                .workspaceName == "Client Alpha"
+        )
+        #expect(
+            WorkspaceTaskTagging.workspaceClause(in: "zip the files in my Client workspace", workspaceStore: workspaceStore)?
+                .workspaceName == "Client"
+        )
+    }
+
+    /// A saved name that contains the phrase's own noun. Both orders have to survive it, and the
+    /// subtraction has to take the whole clause rather than stopping at the first "workspace" it
+    /// sees (PR #39 review, cycle 1, F7).
+    @Test
+    func aWorkspaceNamedAfterTheNounStillBindsAndIsStillSubtractedWhole() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try workspaceStore.save(StoredWorkspace(name: "Workspace Alpha", apps: ["Safari"], urls: []))
+        try workspaceStore.save(StoredWorkspace(name: "Beta Workspace", apps: ["Safari"], urls: []))
+
+        let leading = WorkspaceTaskTagging.workspaceClause(
+            in: "switch to code in my Workspace Alpha workspace",
+            workspaceStore: workspaceStore
+        )
+        #expect(leading?.workspaceName == "Workspace Alpha")
+        #expect(leading?.remainingCommand == "switch to code")
+
+        let trailing = WorkspaceTaskTagging.workspaceClause(
+            in: "switch to code in the workspace Beta Workspace",
+            workspaceStore: workspaceStore
+        )
+        #expect(trailing?.workspaceName == "Beta Workspace")
+        #expect(trailing?.remainingCommand == "switch to code")
+    }
+
     /// The boundary guard survives the second word order. "within workspace Client Alpha" contains
     /// a literal "in" from "with-IN", and neither alternative may match through it.
     @Test

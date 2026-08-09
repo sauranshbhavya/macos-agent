@@ -42,7 +42,7 @@ struct PlannerBoundaryTests {
         - For creating a local draft, produce one create_local_draft step with draftTitle, draftContent, and optional outputPath. Do not automate Notes, Mail, Calendar, or any app UI.
         - For opening a generated local artifact after a writing step, add open_generated_artifact with outputPath null so the executor can open the previous produced artifact.
         - For saving a text snippet, produce one save_snippet step with searchQuery holding the trigger and draftContent holding the text it expands to. Use only a trigger and text the user supplied; if either is missing, ask a clarification question. This step may also be nested inside save_routine.
-        - For bringing an app that is already running to the front, produce one switch_running_app step with appName holding only the app the user named. A phrase such as "in my research workspace" says where the task belongs, not what to change: never turn a switch, focus, or bring-to-front request into edit_workspace, create_workspace, or open_workspace. Use open_app instead only when the user asked to open or launch an app that may not be running.
+        - For bringing an app that is already running to the front, produce one switch_running_app step with appName holding only the app the user named. A phrase such as "in my research workspace" says where the task belongs, not what to change: never turn a request to switch or focus on an app into edit_workspace or create_workspace. When the thing the user asks to switch or focus on is itself a saved workspace rather than an app, that is an open_workspace request instead. Use open_app when the user asked to open or launch an app that may not be running.
         - For song or album requests, produce one play_media step with mediaProvider, mediaTitle, optional mediaArtist, and targetURL only if the user supplied an exact Apple Music or Spotify result URI. The local executor tries provider-aware playback first, then falls back to opening the provider result or search.
         - If a song or album request is missing the provider or title, ask a clarification question.
         - For Finder context phrases such as "selected folder", "selected files", "this Finder selection", or "the folder selected in Finder", set contextSource to finder_selection and leave inputPath null.
@@ -135,6 +135,33 @@ struct PlannerBoundaryTests {
         let nestedProperties = try #require(nestedItems["properties"] as? [String: Any])
         let nestedRoutineSteps = try #require(nestedProperties["routineSteps"] as? [String: Any])
         #expect(nestedRoutineSteps["type"] as? String == "null")
+    }
+
+    /// **Both directions of the switch rule, pinned separately from the golden** (PR #39 review,
+    /// cycle 1, F1).
+    ///
+    /// The rule was written to stop one misroute and, as first worded, closed the opposite reading
+    /// too: "never turn a switch, focus, or bring-to-front request into … open_workspace" forbids
+    /// the one correct plan for "switch me to my Research workspace", where the thing named *is* a
+    /// workspace. The intent was then shut at both ends — the resolver captured the phrasing (F1's
+    /// blocker) and the planner was told not to express it.
+    ///
+    /// The golden already pins the sentence character for character, so this test is not about the
+    /// text. It is about the two obligations being separable: an edit that quietly drops either one
+    /// while rewriting the sentence should fail here with a name that says which half went.
+    @Test
+    func theSwitchRuleForbidsTheMisrouteWithoutForbiddingAGenuineWorkspaceOpen() {
+        let prompt = OpenAIPlanner.systemPrompt(toolRegistry: .default)
+
+        // Direction 1 — the misroute this ticket exists to close.
+        #expect(prompt.contains("never turn a request to switch or focus on an app into edit_workspace or create_workspace"))
+        // Direction 2 — the reading that must stay available.
+        #expect(prompt.contains("is itself a saved workspace rather than an app, that is an open_workspace request"))
+        // And the rule must not re-forbid it by naming open_workspace among the operations a switch
+        // request may never become.
+        #expect(!prompt.contains("into edit_workspace, create_workspace, or open_workspace"))
+        // The standalone open_workspace rule is untouched and still there for the planner to use.
+        #expect(prompt.contains("For opening a saved workspace, produce one open_workspace step with workspaceName."))
     }
 
     /// **The agreement that was true by accident until SONNY-68 pinned it.**

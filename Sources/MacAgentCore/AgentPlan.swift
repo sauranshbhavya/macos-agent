@@ -450,7 +450,7 @@ public enum AgentPlanSchema {
             ],
             "appName": [
                 "type": ["string", "null"],
-                "description": "Human app name for open_app actions, or null."
+                "description": "Human app name for open_app or switch_running_app actions, or null."
             ],
             "question": [
                 "type": ["string", "null"],

@@ -13,13 +13,13 @@ public enum WorkspaceTaskTagging {
     /// recognizer that binds the task's scope from it (SONNY-68). The invariant that buys: a word
     /// the resolver drops from the query is never a word Sonny then ignores — it is exactly the
     /// phrase `resolveTaskScope` consumes as the workspace binding.
-    public struct WorkspaceClause: Equatable, Sendable {
+    struct WorkspaceClause: Equatable, Sendable {
         /// The saved workspace's canonical name, not the raw typed text.
-        public var workspaceName: String
+        var workspaceName: String
         /// The command with the clause removed, original casing preserved.
-        public var remainingCommand: String
+        var remainingCommand: String
 
-        public init(workspaceName: String, remainingCommand: String) {
+        init(workspaceName: String, remainingCommand: String) {
             self.workspaceName = workspaceName
             self.remainingCommand = remainingCommand
         }
@@ -89,7 +89,7 @@ public enum WorkspaceTaskTagging {
     /// Switch workspace" named a workspace Sonny never saw. Recognizing the second order can only
     /// *add* an escalation — an unscoped task escalates for no boundary at all, and a scoped one
     /// escalates when a resource sits outside it — so widening what binds never widens what runs.
-    public static func workspaceClause(in command: String, workspaceStore: WorkspaceStore) -> WorkspaceClause? {
+    static func workspaceClause(in command: String, workspaceStore: WorkspaceStore) -> WorkspaceClause? {
         // Every pattern below contains the literal word "workspace", so a command without it cannot
         // match whatever is saved — worth checking before reading and decrypting the store, since
         // this runs on the instant-resolver path for every switch phrasing as well as once per task.
@@ -192,18 +192,18 @@ public enum WorkspaceTaskTagging {
     /// before "workspace", from "with-IN", which would otherwise spuriously match).
     private static func firstValidPhraseMatchRange(
         forFoldedWorkspaceName foldedName: String,
-        in normalizedCommand: String
+        in foldedCommand: String
     ) -> Range<String.Index>? {
         let escapedName = NSRegularExpression.escapedPattern(for: foldedName)
         let pattern = "in\\s+(?:the\\s+|my\\s+)?(?:workspace\\s+\(escapedName)|\(escapedName)\\s+workspace)"
         guard let regex = try? NSRegularExpression(pattern: pattern) else {
             return nil
         }
-        let nsRange = NSRange(normalizedCommand.startIndex..., in: normalizedCommand)
-        for match in regex.matches(in: normalizedCommand, options: [], range: nsRange) {
-            guard let range = Range(match.range, in: normalizedCommand),
-                  hasValidBoundary(before: range.lowerBound, in: normalizedCommand),
-                  hasValidBoundary(after: range.upperBound, in: normalizedCommand) else {
+        let nsRange = NSRange(foldedCommand.startIndex..., in: foldedCommand)
+        for match in regex.matches(in: foldedCommand, options: [], range: nsRange) {
+            guard let range = Range(match.range, in: foldedCommand),
+                  hasValidBoundary(before: range.lowerBound, in: foldedCommand),
+                  hasValidBoundary(after: range.upperBound, in: foldedCommand) else {
                 continue
             }
             return range

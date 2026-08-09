@@ -59,6 +59,12 @@ struct SwitchInWorkspaceRoutingTests {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
 
+        // The command as recorded, lower-case.
+        try fixture.assertSwitchPlan(for: "Switch to zoom in my Switch workspace", appName: "zoom")
+        // A re-cased variant, because a lower-case input cannot tell preserved casing apart from
+        // lower-casing — the folded text the clause is matched in is lower-case throughout, so the
+        // query surviving with a capital is what proves the index map hands back the caller's own
+        // characters.
         try fixture.assertSwitchPlan(for: "Switch to Zoom in my Switch workspace", appName: "Zoom")
     }
 
@@ -120,19 +126,131 @@ struct SwitchInWorkspaceRoutingTests {
         #expect(fixture.resolver.resolve(command: "switch to code in the workspace Nowhere") == nil)
     }
 
-    /// The phrasings that already worked keep working, asserted rather than assumed: bare queries
-    /// still resolve, a bare verb still clarifies, and the two guards that keep non-app objects off
-    /// the running-app matcher are untouched. The article trim removes articles only — never the
-    /// prepositions that make "focus on …" a sentence rather than an app name.
+    /// **The base-parity table: every rejection the guard makes, measured at `48d0150` and required
+    /// to be identical here.**
+    ///
+    /// This exists because the first version of the fix broke exactly this and nothing caught it.
+    /// An unconditional article trim ran ahead of the guard and disabled two of its eight leading
+    /// stop words — `the` and `my` — so nine measured phrasings that fell through to the planner at
+    /// base were captured as doomed app queries instead. The worst of them are workspace-opening
+    /// asks, which is this ticket's own subject matter: "switch to my Research workspace" reached
+    /// the planner's `open_workspace` rule before SONNY-68 and must still reach it.
+    ///
+    /// Every command below returned `nil` at `48d0150` (measured with a temporary probe against the
+    /// real resolver in a detached worktree at that SHA), with the single stated exception. The
+    /// contract that makes this hold structurally rather than by luck: with no workspace clause
+    /// recognised, `runningAppCandidate` returns the remainder untouched apart from edge
+    /// punctuation, so the guard sees what it always saw.
     @Test
-    func theExistingResolverBehaviourIsUnchangedByTheClauseAndArticleTrims() throws {
+    func everyGuardRejectionBehavesExactlyAsItDidAtTheBaseCommit() throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+
+        // All eight leading stop words, one command each. Base: nil, every one.
+        for command in [
+            "focus on writing my essay",   // on
+            "switch to to do list",        // to
+            "switch to in tray",           // in
+            "switch to at work",           // at
+            "switch to the Notes app",     // the
+            "switch to a browser",         // a
+            "switch to an editor",         // an
+            "focus my essay"               // my
+        ] {
+            #expect(fixture.resolver.resolve(command: command) == nil, "\(command) must still fall to the planner.")
+        }
+
+        // The other two guard rules, unchanged. Base: nil, both.
+        #expect(fixture.resolver.resolve(command: "activate dark mode") == nil)
+        #expect(fixture.resolver.resolve(command: "switch to one two three four") == nil)
+
+        // The nine workspace-opening phrasings the review measured. Base: nil for the first eight;
+        // the ninth was claimed at base and is deliberately left alone, since changing it would be
+        // a divergence of its own rather than a restoration.
+        for command in [
+            "switch to the workspace Switch",
+            "switch to my Research workspace",
+            "switch to the Research workspace",
+            "switch to my Switch workspace",
+            "focus the Research workspace",
+            "activate my Research workspace",
+            "switch to the workspace",
+            "switch to my workspace",
+            "switch to my mail"
+        ] {
+            #expect(fixture.resolver.resolve(command: command) == nil, "\(command) must still fall to the planner.")
+        }
+        // Base: switch_running_app("Research workspace") — pre-existing, and pre-existing is what it
+        // stays. Asserted so a later widening cannot quietly claim this was always the intent.
+        try fixture.assertSwitchPlan(for: "switch to Research workspace", appName: "Research workspace")
+
+        // A clause-carrying residue gets no special licence either: the clause comes off, and what
+        // is left is judged by the same guard, leading stop word and all.
+        #expect(fixture.resolver.resolve(command: "switch to my essay in the workspace Switch") == nil)
+        #expect(fixture.resolver.resolve(command: "focus on code in my Switch workspace") == nil)
+        #expect(fixture.resolver.resolve(command: "switch to in the workspace Switch") == nil)
+    }
+
+    /// New behaviour, named as new (PR #39 review, cycle 1, F2). Each of these returned `nil` at
+    /// `48d0150`; none of them is a preserved case, and asserting them inside a test named for
+    /// unchanged behaviour is what the review caught.
+    ///
+    /// The naming form, not an article rule: a clause-carrying residue shaped `[the|my] NAME app`
+    /// resolves to NAME, because the trailing noun is what declares the phrase names an app.
+    /// Without the clause the same words are refused — which is the base-parity row above for
+    /// "switch to the Notes app", and the reason this normalisation cannot leak into the guard.
+    @Test
+    func theAppNamingFormIsRecognisedOnlyInsideAClauseCarryingCommand() throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+
+        try fixture.assertSwitchPlan(for: "switch to the code app in the workspace Switch", appName: "code")
+        try fixture.assertSwitchPlan(for: "switch to the Notes app in my Switch workspace", appName: "Notes")
+        try fixture.assertSwitchPlan(for: "switch to code app in the workspace Switch", appName: "code")
+
+        // Base: nil. Head: still nil — the clause-free form of the same words.
+        #expect(fixture.resolver.resolve(command: "switch to the code app") == nil)
+    }
+
+    /// New behaviour (PR #39 review, cycle 1, F3): edge punctuation comes off the candidate, so a
+    /// typed full stop no longer strands itself in the query.
+    ///
+    /// The clause-carrying shapes are newly reachable — they could not reach the resolver at all
+    /// before this ticket — but **the bare form was already broken at `48d0150`**, where
+    /// "switch to chrome." resolved to `appName "chrome."` and then failed by name because
+    /// `RunningAppMatcher.normalize` folds spaces and not punctuation. That older kind is fixed
+    /// here too; it is the one place this branch deliberately diverges from base on a clause-free
+    /// command.
+    @Test
+    func edgePunctuationIsStrippedFromTheQueryOnBothTheBareAndClauseCarryingShapes() throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+
+        // Base: switch_running_app("chrome.") — claimed, then doomed at the matcher.
+        try fixture.assertSwitchPlan(for: "switch to chrome.", appName: "chrome")
+
+        // Base: nil for all four; the headline command is the one the manual checklist asks the
+        // user to type, so a typed full stop is a realistic way to fail it.
+        try fixture.assertSwitchPlan(for: "switch to code in the workspace Switch.", appName: "code")
+        try fixture.assertSwitchPlan(for: "switch to code in the workspace Switch!", appName: "code")
+        try fixture.assertSwitchPlan(for: "switch to code, in the workspace Switch", appName: "code")
+        try fixture.assertSwitchPlan(for: "switch to code (in the workspace Switch)", appName: "code")
+
+        // Interior punctuation is left alone — it is part of real names.
+        try fixture.assertSwitchPlan(for: "switch to zoom.us", appName: "zoom.us")
+    }
+
+    /// The phrasings that already resolved keep resolving, and the quick-dispatch precedence ahead
+    /// of the running-app prefixes is unchanged. Base: each of these resolved identically at
+    /// `48d0150`.
+    @Test
+    func thePhrasingsThatAlreadyResolvedAreUntouched() throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
 
         try fixture.assertSwitchPlan(for: "switch to chrom", appName: "chrom")
         try fixture.assertSwitchPlan(for: "switch to fin", appName: "fin")
         try fixture.assertSwitchPlan(for: "switch to Safari", appName: "Safari")
-        try fixture.assertSwitchPlan(for: "switch to the Notes app", appName: "Notes")
 
         // Quick dispatch still wins ahead of the running-app prefixes, and this fixture is the
         // sharpest case of it: the workspace really is named "Switch", so the bare word is an exact
@@ -146,10 +264,6 @@ struct SwitchInWorkspaceRoutingTests {
         }
         #expect(bareVerbPlan.steps.map(\.operation) == [.openWorkspace])
         #expect(bareVerbPlan.steps[0].workspaceName == "Switch")
-
-        #expect(fixture.resolver.resolve(command: "focus on writing my essay") == nil)
-        #expect(fixture.resolver.resolve(command: "activate dark mode") == nil)
-        #expect(fixture.resolver.resolve(command: "focus on my essay in the workspace Switch") == nil)
     }
 
     /// The scoped switch this makes reachable, through the executor rather than the resolver alone:
@@ -221,11 +335,15 @@ struct SwitchInWorkspaceRoutingTests {
     // MARK: - Fixture
 
     private struct Fixture {
+        /// Verbatim, as recovered from the task-history record on SONNY-68 — the fourth entry is
+        /// lower-case "zoom" because that is what was typed, and the comment recovering it exists
+        /// precisely to correct an earlier recollection error (PR #39 review, cycle 1, F6). A
+        /// re-cased variant is asserted separately, where casing is the thing under test.
         static let recordedMisroutes = [
             "switch to code in the workspace Switch",
             "switch to the code app in the workspace Switch",
             "switch to xcod in the workspace Switch",
-            "Switch to Zoom in my Switch workspace"
+            "Switch to zoom in my Switch workspace"
         ]
 
         let root: URL
