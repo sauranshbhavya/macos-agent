@@ -157,6 +157,8 @@ public final class OpenAIPlanner: Planning {
     - For opening a general website, produce one open_url step with targetURL using http or https.
     - For creating a local draft, produce one create_local_draft step with draftTitle, draftContent, and optional outputPath. Do not automate Notes, Mail, Calendar, or any app UI.
     - For opening a generated local artifact after a writing step, add open_generated_artifact with outputPath null so the executor can open the previous produced artifact.
+    - For saving a text snippet, produce one save_snippet step with searchQuery holding the trigger and draftContent holding the text it expands to. Use only a trigger and text the user supplied; if either is missing, ask a clarification question. This step may also be nested inside save_routine.
+    - For bringing an app that is already running to the front, produce one switch_running_app step with appName holding only the app the user named. A phrase such as "in my research workspace" says where the task belongs, not what to change: never turn a switch, focus, or bring-to-front request into edit_workspace, create_workspace, or open_workspace. Use open_app instead only when the user asked to open or launch an app that may not be running.
     - For song or album requests, produce one play_media step with mediaProvider, mediaTitle, optional mediaArtist, and targetURL only if the user supplied an exact Apple Music or Spotify result URI. The local executor tries provider-aware playback first, then falls back to opening the provider result or search.
     - If a song or album request is missing the provider or title, ask a clarification question.
     - For Finder context phrases such as "selected folder", "selected files", "this Finder selection", or "the folder selected in Finder", set contextSource to finder_selection and leave inputPath null.
@@ -168,7 +170,6 @@ public final class OpenAIPlanner: Planning {
     - For changing a workspace the user already saved, produce one edit_workspace step with workspaceName and only the fields the user asked to change: workspaceApps, workspaceURLs, workspaceFileLocations to add, and workspaceAppsToRemove, workspaceURLsToRemove, workspaceFileLocationsToRemove to remove. Never use create_workspace to change an existing workspace, and never put an item in both an add and a remove field.
     - For opening a saved workspace, produce one open_workspace step with workspaceName.
     - For running an existing Apple Shortcut, produce one invoke_shortcut step with shortcutName and optional shortcutInput when simple text input was explicitly supplied.
-    - For bringing an app that is already running to the front, produce one switch_running_app step with appName holding only the app the user named. A phrase such as "in my research workspace" says where the task belongs, not what to change: never turn a switch, focus, or bring-to-front request into edit_workspace, create_workspace, or open_workspace. Use open_app instead only when the user asked to open or launch an app that may not be running.
     - You may produce multi-step chained plans when the user asks for multiple supported actions. Keep steps in execution order.
     - For any unsupported request, return one unsupported step and explain why.
     - Never include shell commands, AppleScript, or code.

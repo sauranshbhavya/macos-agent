@@ -41,6 +41,8 @@ struct PlannerBoundaryTests {
         - For opening a general website, produce one open_url step with targetURL using http or https.
         - For creating a local draft, produce one create_local_draft step with draftTitle, draftContent, and optional outputPath. Do not automate Notes, Mail, Calendar, or any app UI.
         - For opening a generated local artifact after a writing step, add open_generated_artifact with outputPath null so the executor can open the previous produced artifact.
+        - For saving a text snippet, produce one save_snippet step with searchQuery holding the trigger and draftContent holding the text it expands to. Use only a trigger and text the user supplied; if either is missing, ask a clarification question. This step may also be nested inside save_routine.
+        - For bringing an app that is already running to the front, produce one switch_running_app step with appName holding only the app the user named. A phrase such as "in my research workspace" says where the task belongs, not what to change: never turn a switch, focus, or bring-to-front request into edit_workspace, create_workspace, or open_workspace. Use open_app instead only when the user asked to open or launch an app that may not be running.
         - For song or album requests, produce one play_media step with mediaProvider, mediaTitle, optional mediaArtist, and targetURL only if the user supplied an exact Apple Music or Spotify result URI. The local executor tries provider-aware playback first, then falls back to opening the provider result or search.
         - If a song or album request is missing the provider or title, ask a clarification question.
         - For Finder context phrases such as "selected folder", "selected files", "this Finder selection", or "the folder selected in Finder", set contextSource to finder_selection and leave inputPath null.
@@ -52,7 +54,6 @@ struct PlannerBoundaryTests {
         - For changing a workspace the user already saved, produce one edit_workspace step with workspaceName and only the fields the user asked to change: workspaceApps, workspaceURLs, workspaceFileLocations to add, and workspaceAppsToRemove, workspaceURLsToRemove, workspaceFileLocationsToRemove to remove. Never use create_workspace to change an existing workspace, and never put an item in both an add and a remove field.
         - For opening a saved workspace, produce one open_workspace step with workspaceName.
         - For running an existing Apple Shortcut, produce one invoke_shortcut step with shortcutName and optional shortcutInput when simple text input was explicitly supplied.
-        - For bringing an app that is already running to the front, produce one switch_running_app step with appName holding only the app the user named. A phrase such as "in my research workspace" says where the task belongs, not what to change: never turn a switch, focus, or bring-to-front request into edit_workspace, create_workspace, or open_workspace. Use open_app instead only when the user asked to open or launch an app that may not be running.
         - You may produce multi-step chained plans when the user asks for multiple supported actions. Keep steps in execution order.
         - For any unsupported request, return one unsupported step and explain why.
         - Never include shell commands, AppleScript, or code.
@@ -119,12 +120,14 @@ struct PlannerBoundaryTests {
         #expect(!(operation["enum"] as? [String] ?? []).contains(AgentOperation.calculateUtility.rawValue))
         #expect(!(operation["enum"] as? [String] ?? []).contains(AgentOperation.lookupClipboardHistory.rawValue))
         #expect(!(operation["enum"] as? [String] ?? []).contains(AgentOperation.expandSnippet.rawValue))
-        #expect(!(operation["enum"] as? [String] ?? []).contains(AgentOperation.saveSnippet.rawValue))
         #expect(!(operation["enum"] as? [String] ?? []).contains(AgentOperation.lookupRecentArtifacts.rawValue))
         #expect((operation["enum"] as? [String] ?? []).contains(AgentOperation.invokeShortcut.rawValue))
         // SONNY-68: in the schema on purpose. Its absence was what left a switch phrasing the
         // instant resolver declined with no truthful operation to become.
         #expect((operation["enum"] as? [String] ?? []).contains(AgentOperation.switchRunningApp.rawValue))
+        // SONNY-48: in the schema on purpose, and the nested enum is the same one — which is the
+        // point, since the shape that was unauthorable is a save_snippet step inside a routine.
+        #expect((operation["enum"] as? [String] ?? []).contains(AgentOperation.saveSnippet.rawValue))
 
         let routineSteps = try #require(stepProperties["routineSteps"] as? [String: Any])
         #expect(routineSteps["type"] as? [String] == ["array", "null"])
@@ -162,7 +165,6 @@ struct PlannerBoundaryTests {
             .calculateUtility,
             .lookupClipboardHistory,
             .expandSnippet,
-            .saveSnippet,
             .lookupRecentArtifacts
         ])
 
@@ -182,7 +184,6 @@ struct PlannerBoundaryTests {
             .calculateUtility: "calc 2 + 2",
             .lookupClipboardHistory: "clipboard history",
             .expandSnippet: ";sig",
-            .saveSnippet: "snippet save ;bye = Talk soon",
             .lookupRecentArtifacts: "recent artifacts"
         ]
         #expect(Set(frontDoors.keys) == excluded)
@@ -194,16 +195,25 @@ struct PlannerBoundaryTests {
             #expect(plan.steps.map(\.operation) == [operation], "\(command) must resolve to \(operation.rawValue).")
         }
 
-        // The operation that left the exclusion set: planner-visible and resolver-reachable at
-        // once, which is the point — the resolver answers the common phrasings instantly and the
-        // planner has a truthful word for the rest.
-        #expect(!excluded.contains(.switchRunningApp))
-        #expect(emptyToolOperations.contains(.switchRunningApp) == false)
+        // The two operations that left the exclusion set: planner-visible and resolver-reachable at
+        // once, which is the point — the resolver answers the fixed command shapes instantly and
+        // the planner has a truthful word for everything else. Leaving the set is not leaving the
+        // resolver, and asserting both halves is what stops a later change from quietly trading one
+        // door for the other.
+        for operation in [AgentOperation.switchRunningApp, .saveSnippet] {
+            #expect(!excluded.contains(operation))
+            #expect(!emptyToolOperations.contains(operation))
+        }
         guard case .plan(let switchPlan)? = resolver.resolve(command: "switch to Notion") else {
             Issue.record("switch_running_app must stay reachable through the instant resolver.")
             return
         }
         #expect(switchPlan.steps.map(\.operation) == [.switchRunningApp])
+        guard case .plan(let savePlan)? = resolver.resolve(command: "snippet save ;bye = Talk soon") else {
+            Issue.record("save_snippet must stay reachable through the instant resolver.")
+            return
+        }
+        #expect(savePlan.steps.map(\.operation) == [.saveSnippet])
     }
 }
 
@@ -286,6 +296,12 @@ private let expectedDefaultPlannerDescription = """
   side effects: write file
   dry run: Show the draft file path without writing it.
   examples: Create a local draft called Follow-up with this text
+- save_snippet: Save snippet
+  description: Save a text snippet under a short trigger, so typing the trigger later expands to the text. Put the trigger in searchQuery and the text in draftContent. Use only the trigger and text the user actually supplied; if either is missing, ask a clarification question instead of inventing one. This is also the step to nest inside save_routine when a routine should save a snippet.
+  required fields: searchQuery, draftContent
+  side effects: write local snippet file
+  dry run: Show the trigger and expansion without saving.
+  examples: Save a snippet ;sig that expands to my email signature | Teach Sonny a routine called onboarding that saves my welcome snippet
 - switch_running_app: Switch to a running app
   description: Bring an app that is already running to the front. Launches nothing: if the named app is not running the step fails by name instead of opening it. Use for switch/focus/bring-to-front phrasings, including ones that also name a workspace; use open_app when the user asked to open or launch an app that may not be running.
   required fields: appName
