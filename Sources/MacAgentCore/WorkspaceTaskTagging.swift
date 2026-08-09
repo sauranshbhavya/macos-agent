@@ -6,6 +6,25 @@ import Foundation
 /// workspace — never on an implicit/ambiguous signal. This is deliberately conservative: no
 /// persistent active-workspace concept, no guessing.
 public enum WorkspaceTaskTagging {
+    /// An explicit workspace clause found in a command, and what the command says once it is
+    /// removed.
+    ///
+    /// Exists so the instant resolver can subtract the clause from an app query using the *same*
+    /// recognizer that binds the task's scope from it (SONNY-68). The invariant that buys: a word
+    /// the resolver drops from the query is never a word Sonny then ignores — it is exactly the
+    /// phrase `resolveTaskScope` consumes as the workspace binding.
+    public struct WorkspaceClause: Equatable, Sendable {
+        /// The saved workspace's canonical name, not the raw typed text.
+        public var workspaceName: String
+        /// The command with the clause removed, original casing preserved.
+        public var remainingCommand: String
+
+        public init(workspaceName: String, remainingCommand: String) {
+            self.workspaceName = workspaceName
+            self.remainingCommand = remainingCommand
+        }
+    }
+
     public static func resolvedWorkspaceName(
         command: String,
         plan: AgentPlan?,
@@ -47,38 +66,118 @@ public enum WorkspaceTaskTagging {
         return nil
     }
 
-    /// Matches an explicit "in workspace X" / "in the workspace X" / "in my workspace X" phrase
-    /// against real saved workspace names only — never tags on a name that isn't actually saved.
-    /// Both sides are run through `normalized(_:)` (the same case/diacritic-insensitive folding
-    /// `WorkspaceStore`/`RoutineStore` already use for name lookups elsewhere in this file) rather
-    /// than a second, regex-only case-insensitivity scheme, so "café" and "Cafe" match here the
-    /// same way they'd match as a saved workspace name anywhere else. Tie-break: the leftmost
-    /// phrase match in the command wins; when two candidate names would match starting at the
-    /// exact same position (one is a prefix of the other, e.g. "Client" vs. "Client Alpha"), the
-    /// longer name wins at that position.
     private static func freeTextWorkspaceName(in command: String, workspaceStore: WorkspaceStore) -> String? {
-        guard let workspaces = try? workspaceStore.loadAll(), !workspaces.isEmpty else {
+        workspaceClause(in: command, workspaceStore: workspaceStore)?.workspaceName
+    }
+
+    /// Matches an explicit "in workspace X" / "in the workspace X" / "in my workspace X" phrase —
+    /// or the same phrase with the name ahead of the noun, "in my X workspace" — against real saved
+    /// workspace names only, never tagging on a name that isn't actually saved.
+    ///
+    /// Both sides are folded case/diacritic-insensitively (the same folding `WorkspaceStore`/
+    /// `RoutineStore` use for name lookups) rather than through a second, regex-only
+    /// case-insensitivity scheme, so "café" and "Cafe" match here the same way they'd match as a
+    /// saved workspace name anywhere else. The folding is built one character at a time alongside
+    /// an index map, so a match found in the folded text can be subtracted from the *original*
+    /// command with its casing intact — `normalized(_:)`'s whole-string fold gives no way back to
+    /// the caller's text. Tie-break: the leftmost phrase match in the command wins; when two
+    /// candidate names would match starting at the exact same position (one is a prefix of the
+    /// other, e.g. "Client" vs. "Client Alpha"), the longer name wins at that position.
+    ///
+    /// **Both word orders are recognized because the resolver subtracts exactly what this binds.**
+    /// Before SONNY-68 only "in [the|my] workspace X" bound a scope, so "switch to zoom in my
+    /// Switch workspace" named a workspace Sonny never saw. Recognizing the second order can only
+    /// *add* an escalation — an unscoped task escalates for no boundary at all, and a scoped one
+    /// escalates when a resource sits outside it — so widening what binds never widens what runs.
+    public static func workspaceClause(in command: String, workspaceStore: WorkspaceStore) -> WorkspaceClause? {
+        // Every pattern below contains the literal word "workspace", so a command without it cannot
+        // match whatever is saved — worth checking before reading and decrypting the store, since
+        // this runs on the instant-resolver path for every switch phrasing as well as once per task.
+        guard command.range(of: "workspace", options: [.caseInsensitive, .diacriticInsensitive]) != nil,
+              let workspaces = try? workspaceStore.loadAll(),
+              !workspaces.isEmpty else {
             return nil
         }
-        let normalizedCommand = normalized(command)
+        let trimmedCommand = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        let folded = FoldedText(trimmedCommand)
 
-        var best: (start: String.Index, name: String)?
+        var best: (range: Range<String.Index>, name: String, nameLength: Int)?
         for workspace in workspaces.values {
-            let normalizedName = normalized(workspace.name)
-            guard let range = firstValidPhraseMatchRange(forNormalizedWorkspaceName: normalizedName, in: normalizedCommand) else {
+            let foldedName = FoldedText.fold(workspace.name)
+            guard let range = firstValidPhraseMatchRange(forFoldedWorkspaceName: foldedName, in: folded.text) else {
                 continue
             }
+            let isBetter: Bool
             if let current = best {
-                if range.lowerBound < current.start {
-                    best = (range.lowerBound, workspace.name)
-                } else if range.lowerBound == current.start, normalizedName.count > normalized(current.name).count {
-                    best = (range.lowerBound, workspace.name)
-                }
+                isBetter = range.lowerBound < current.range.lowerBound
+                    || (range.lowerBound == current.range.lowerBound && foldedName.count > current.nameLength)
             } else {
-                best = (range.lowerBound, workspace.name)
+                isBetter = true
+            }
+            if isBetter {
+                best = (range, workspace.name, foldedName.count)
             }
         }
-        return best?.name
+
+        guard let best else {
+            return nil
+        }
+        return WorkspaceClause(
+            workspaceName: best.name,
+            remainingCommand: folded.originalTextRemoving(best.range, from: trimmedCommand)
+        )
+    }
+
+    /// A case/diacritic-folded copy of a string plus, for every folded character, the index of the
+    /// original character it came from. Folding one character at a time keeps the two sides of a
+    /// match in step even when a character's folded form is not the same length as the character
+    /// itself, which a whole-string fold silently loses.
+    private struct FoldedText {
+        var text: String
+        /// One entry per character of `text`, holding that character's source index in the original.
+        private var sourceIndices: [String.Index]
+
+        init(_ original: String) {
+            var text = ""
+            var sourceIndices: [String.Index] = []
+            var index = original.startIndex
+            while index < original.endIndex {
+                let folded = Self.fold(original[index])
+                text += folded
+                sourceIndices.append(contentsOf: Array(repeating: index, count: folded.count))
+                index = original.index(after: index)
+            }
+            self.text = text
+            self.sourceIndices = sourceIndices
+        }
+
+        /// The folded text alone, for the pattern side of a match, which needs no index map back
+        /// into anything. Character-by-character through the same `fold` the map is built from, so
+        /// the two sides of a comparison can never fold differently.
+        static func fold(_ original: String) -> String {
+            original.reduce(into: "") { partial, character in
+                partial += fold(character)
+            }
+        }
+
+        private static func fold(_ character: Character) -> String {
+            String(character)
+                .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+                .lowercased()
+        }
+
+        /// Cuts the original characters that produced `foldedRange` out of `original`, joining what
+        /// survives on either side with a single space so removing a mid-sentence clause does not
+        /// leave a double one.
+        func originalTextRemoving(_ foldedRange: Range<String.Index>, from original: String) -> String {
+            let lowerOffset = text.distance(from: text.startIndex, to: foldedRange.lowerBound)
+            let upperOffset = text.distance(from: text.startIndex, to: foldedRange.upperBound)
+            let start = lowerOffset < sourceIndices.count ? sourceIndices[lowerOffset] : original.endIndex
+            let end = upperOffset < sourceIndices.count ? sourceIndices[upperOffset] : original.endIndex
+            let prefix = String(original[..<start]).trimmingCharacters(in: .whitespacesAndNewlines)
+            let suffix = String(original[end...]).trimmingCharacters(in: .whitespacesAndNewlines)
+            return [prefix, suffix].filter { !$0.isEmpty }.joined(separator: " ")
+        }
     }
 
     /// Deliberately does not use `\b` for boundaries — `\b` requires a word/non-word character
@@ -92,11 +191,11 @@ public enum WorkspaceTaskTagging {
     /// inside an unrelated word ("within workspace Client Alpha" contains a literal "in" right
     /// before "workspace", from "with-IN", which would otherwise spuriously match).
     private static func firstValidPhraseMatchRange(
-        forNormalizedWorkspaceName normalizedName: String,
+        forFoldedWorkspaceName foldedName: String,
         in normalizedCommand: String
     ) -> Range<String.Index>? {
-        let escapedName = NSRegularExpression.escapedPattern(for: normalizedName)
-        let pattern = "in\\s+(?:the\\s+|my\\s+)?workspace\\s+\(escapedName)"
+        let escapedName = NSRegularExpression.escapedPattern(for: foldedName)
+        let pattern = "in\\s+(?:the\\s+|my\\s+)?(?:workspace\\s+\(escapedName)|\(escapedName)\\s+workspace)"
         guard let regex = try? NSRegularExpression(pattern: pattern) else {
             return nil
         }

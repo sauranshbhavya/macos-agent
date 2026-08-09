@@ -162,12 +162,13 @@ public final class OpenAIPlanner: Planning {
     - For Finder context phrases such as "selected folder", "selected files", "this Finder selection", or "the folder selected in Finder", set contextSource to finder_selection and leave inputPath null.
     - For "reveal the result/zip/markdown/PDFs in Finder" after a writing step, add reveal_in_finder with outputPath null so the executor can reveal the previous produced artifact.
     - For permission/readiness requests, produce one show_permission_readiness step.
-    - For teaching a routine, produce one save_routine step with routineName and routineSteps containing only registered non-routine steps. Do not put save_routine, run_routine, clarify, or unsupported inside routineSteps.
+    - For teaching a routine, produce one save_routine step with routineName and routineSteps containing only registered non-routine steps. Do not put save_routine, run_routine, switch_running_app, clarify, or unsupported inside routineSteps.
     - For running a saved routine, produce one run_routine step with routineName.
     - For creating a workspace, produce one create_workspace step with workspaceName, workspaceApps, and workspaceURLs. Use only explicitly named apps/URLs. If none are provided, ask a clarification question.
     - For changing a workspace the user already saved, produce one edit_workspace step with workspaceName and only the fields the user asked to change: workspaceApps, workspaceURLs, workspaceFileLocations to add, and workspaceAppsToRemove, workspaceURLsToRemove, workspaceFileLocationsToRemove to remove. Never use create_workspace to change an existing workspace, and never put an item in both an add and a remove field.
     - For opening a saved workspace, produce one open_workspace step with workspaceName.
     - For running an existing Apple Shortcut, produce one invoke_shortcut step with shortcutName and optional shortcutInput when simple text input was explicitly supplied.
+    - For bringing an app that is already running to the front, produce one switch_running_app step with appName holding only the app the user named. A phrase such as "in my research workspace" says where the task belongs, not what to change: never turn a switch, focus, or bring-to-front request into edit_workspace, create_workspace, or open_workspace. Use open_app instead only when the user asked to open or launch an app that may not be running.
     - You may produce multi-step chained plans when the user asks for multiple supported actions. Keep steps in execution order.
     - For any unsupported request, return one unsupported step and explain why.
     - Never include shell commands, AppleScript, or code.

@@ -363,10 +363,41 @@ public struct InstantCommandResolver: Sendable {
             if lowered.hasPrefix("\(prefix) ") {
                 let remainder = String(command.dropFirst(prefix.count))
                     .trimmingCharacters(in: .whitespacesAndNewlines)
-                return looksLikeRunningAppName(remainder) ? remainder : nil
+                let candidate = runningAppCandidate(from: remainder)
+                return looksLikeRunningAppName(candidate) ? candidate : nil
             }
         }
         return nil
+    }
+
+    /// Narrows the post-verb remainder to the part that actually names an app, before the
+    /// plausibility guard reads it (SONNY-68).
+    ///
+    /// The remainder used to be handed to `looksLikeRunningAppName` whole, so a workspace clause —
+    /// "switch to code **in the workspace Switch**" — pushed every such phrasing past the
+    /// three-word ceiling and out of the resolver, into a planner with no app-switch operation,
+    /// which absorbed the intent into the nearest-sounding one it did have: `edit_workspace`, a
+    /// destructive boundary edit nobody typed. The clause is not noise, which is why it is
+    /// subtracted rather than tolerated: `WorkspaceTaskTagging` recognises it as the phrase that
+    /// binds the *task's* workspace scope, so the words removed here are exactly the words Sonny
+    /// acts on elsewhere — the scoped switch this makes reachable is the case SONNY-58's
+    /// verdict-binding was built for.
+    ///
+    /// The article and " app" trims run for every switch phrasing, clause or not: "switch to the
+    /// Notes app" behaving differently from "switch to the Notes app in workspace X" is the kind of
+    /// split that only reads as a bug. Neither trim touches the guard's own rejections — only
+    /// articles are removed, never the prepositions ("on", "to", "in", "at") that keep "focus on
+    /// writing my essay" out of running-app matching, and the "mode" suffix rule is untouched.
+    private func runningAppCandidate(from remainder: String) -> String {
+        var candidate = remainder
+        if let clause = WorkspaceTaskTagging.workspaceClause(in: candidate, workspaceStore: workspaceStore) {
+            candidate = clause.remainingCommand
+        }
+        candidate = strippedLaunchArticle(candidate)
+        if candidate.lowercased().hasSuffix(" app") {
+            candidate = String(candidate.dropLast(" app".count))
+        }
+        return candidate.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     /// Heuristic guard so the broad verbs ("focus", "activate", bare "switch") only claim

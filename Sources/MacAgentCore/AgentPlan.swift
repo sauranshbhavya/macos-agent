@@ -159,6 +159,22 @@ public enum AgentOperation: String, Codable, CaseIterable, Sendable {
     case clarify
     case unsupported
 
+    /// The operations the planner's JSON schema may name.
+    ///
+    /// An operation is excluded here **only** when the instant resolver is the whole of its front
+    /// door — the five below are recognised locally from fixed command shapes, never modelled, so
+    /// putting them in the schema would buy nothing but prompt surface. That agreement (excluded ⇔
+    /// declared by an adapter with no planner tools ⇔ reachable through the instant resolver) is
+    /// asserted by `PlannerBoundaryTests`; before SONNY-68 it was only incidentally true.
+    ///
+    /// `switchRunningApp` used to sit in this list and no longer does. Exclusion was not a decision
+    /// about the operation's safety, it was an assumption that the resolver claimed every switch
+    /// phrasing — and it did not: anything the resolver declined fell to a planner with no word for
+    /// the intent, which spent it on whichever operation the sentence vaguely fit, `edit_workspace`
+    /// included (SONNY-68). Giving the planner the truthful word is what stops a focus command from
+    /// being absorbed by a destructive one; the resolver still answers the common phrasings without
+    /// a round trip. It stays out of routines all the same — see
+    /// `StoredRoutine.forbiddenStepOperations`.
     public static var plannerVisibleCases: [AgentOperation] {
         allCases.filter { operation in
             switch operation {
@@ -166,7 +182,6 @@ public enum AgentOperation: String, Codable, CaseIterable, Sendable {
                  .lookupClipboardHistory,
                  .expandSnippet,
                  .saveSnippet,
-                 .switchRunningApp,
                  .lookupRecentArtifacts:
                 return false
             default:
