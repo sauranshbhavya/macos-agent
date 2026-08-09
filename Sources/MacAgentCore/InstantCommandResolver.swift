@@ -363,10 +363,76 @@ public struct InstantCommandResolver: Sendable {
             if lowered.hasPrefix("\(prefix) ") {
                 let remainder = String(command.dropFirst(prefix.count))
                     .trimmingCharacters(in: .whitespacesAndNewlines)
-                return looksLikeRunningAppName(remainder) ? remainder : nil
+                let candidate = runningAppCandidate(from: remainder)
+                return looksLikeRunningAppName(candidate) ? candidate : nil
             }
         }
         return nil
+    }
+
+    /// Narrows the post-verb remainder to the part that actually names an app, before the
+    /// plausibility guard reads it (SONNY-68).
+    ///
+    /// The remainder used to be handed to `looksLikeRunningAppName` whole, so a workspace clause —
+    /// "switch to code **in the workspace Switch**" — pushed every such phrasing past the
+    /// three-word ceiling and out of the resolver, into a planner with no app-switch operation,
+    /// which absorbed the intent into the nearest-sounding one it did have: `edit_workspace`, a
+    /// destructive boundary edit nobody typed. The clause is not noise, which is why it is
+    /// subtracted rather than tolerated: `WorkspaceTaskTagging` recognises it as the phrase that
+    /// binds the *task's* workspace scope, so the words removed here are exactly the words Sonny
+    /// acts on elsewhere — the scoped switch this makes reachable is the case SONNY-58's
+    /// verdict-binding was built for.
+    ///
+    /// **The ordering contract, which the first version of this function got wrong.**
+    ///
+    /// `looksLikeRunningAppName` is the sole authority on whether a candidate names an app, and the
+    /// only word it may never see is a word belonging to a recognised workspace clause. The first
+    /// version also stripped a leading article unconditionally, which quietly disabled two of the
+    /// guard's eight leading stop words — `the` and `my` — on this path, and the phrasings that
+    /// rejection existed to protect are workspace-opening ones: "switch to my Research workspace"
+    /// and "switch to the workspace Switch" reached the planner's `open_workspace` rule before
+    /// SONNY-68 and were captured as doomed app queries after it (PR #39 review, cycle 1, F1).
+    ///
+    /// So: **with no clause recognised, this function must leave the remainder alone.** The guard
+    /// then sees exactly what it saw before this ticket existed, and every one of its rejections —
+    /// all eight leading stop words, the three-word ceiling, the "mode" suffix — behaves identically.
+    /// `PlannerBoundaryTests` is not where that is checked; `SwitchInWorkspaceRoutingTests`'
+    /// base-parity table is, case by case, with the measurement at `48d0150` recorded beside each.
+    ///
+    /// **With a clause recognised, one normalisation is allowed, and it is a naming form rather
+    /// than an article rule.** A residue of the shape `[the|my] NAME app` names an app: the trailing
+    /// noun is what says so, which is why the article may come off in that shape and only in it.
+    /// "the code app in the workspace Switch" is the recorded observation 2, and it resolves; "my
+    /// essay in the workspace Switch" has no such noun, keeps its leading stop word, and is refused
+    /// by the guard exactly as its clause-free form is. A clause-carrying phrasing could not reach
+    /// the resolver at all before this ticket — the clause put every one of them past the ceiling —
+    /// so nothing here can regress a phrasing that used to work.
+    ///
+    /// Edge punctuation comes off both ends first, on either path. A typed full stop used to strand
+    /// itself in the query — "switch to code in the workspace Switch." asked to activate `code .`,
+    /// and the bare "switch to chrome." asked for `chrome.` long before this ticket — and the
+    /// matcher normalises spaces but not punctuation, so both failed by name. This is the one place
+    /// the no-clause path is deliberately *not* byte-identical to `48d0150`: it fixes that older
+    /// kind too (PR #39 review, cycle 1, F3).
+    private func runningAppCandidate(from remainder: String) -> String {
+        let cleaned = edgePunctuationTrimmed(remainder)
+        guard let clause = WorkspaceTaskTagging.workspaceClause(in: cleaned, workspaceStore: workspaceStore) else {
+            return cleaned
+        }
+        let residue = edgePunctuationTrimmed(clause.remainingCommand)
+        guard residue.lowercased().hasSuffix(" app") else {
+            return residue
+        }
+        return edgePunctuationTrimmed(strippedLaunchArticle(String(residue.dropLast(" app".count))))
+    }
+
+    /// Punctuation and whitespace at either end of a candidate, removed before it is judged or
+    /// matched. Interior punctuation is left alone: "zoom.us" is a real bundle-ish name and
+    /// `RunningAppMatcher` matches on it.
+    private func edgePunctuationTrimmed(_ value: String) -> String {
+        value.trimmingCharacters(
+            in: CharacterSet.punctuationCharacters.union(.whitespacesAndNewlines)
+        )
     }
 
     /// Heuristic guard so the broad verbs ("focus", "activate", bare "switch") only claim

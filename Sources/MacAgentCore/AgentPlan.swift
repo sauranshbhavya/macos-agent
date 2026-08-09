@@ -159,14 +159,38 @@ public enum AgentOperation: String, Codable, CaseIterable, Sendable {
     case clarify
     case unsupported
 
+    /// The operations the planner's JSON schema may name.
+    ///
+    /// An operation is excluded here **only** when the instant resolver is the whole of its front
+    /// door — the four below are recognised locally from fixed command shapes, never modelled, so
+    /// putting them in the schema would buy nothing but prompt surface. That agreement (excluded ⇔
+    /// declared by an adapter with no planner tools ⇔ reachable through the instant resolver) is
+    /// asserted by `PlannerBoundaryTests`; before SONNY-68 it was only incidentally true.
+    ///
+    /// `saveSnippet` left the list in SONNY-48, and for a reason narrower than "snippets should be
+    /// plannable": `StoredRoutine.forbiddenStepOperations` permits a snippet step inside a routine,
+    /// and `SnippetSaveCapabilityAdapter.assessRisk` was written specifically so a *scheduled*
+    /// routine carrying one does not escalate itself into never running again (SONNY-31) — a
+    /// behaviour that no product path could reach, because `save_routine` is authored through the
+    /// planner and the planner had no snippet word. Excluding it made the core's permission a
+    /// promise nothing could collect on. `expandSnippet` stays excluded on purpose: its execution
+    /// returns the expansion as the run summary and types nothing anywhere, so inside a routine it
+    /// would produce text with no consumer.
+    ///
+    /// `switchRunningApp` used to sit in this list and no longer does. Exclusion was not a decision
+    /// about the operation's safety, it was an assumption that the resolver claimed every switch
+    /// phrasing — and it did not: anything the resolver declined fell to a planner with no word for
+    /// the intent, which spent it on whichever operation the sentence vaguely fit, `edit_workspace`
+    /// included (SONNY-68). Giving the planner the truthful word is what stops a focus command from
+    /// being absorbed by a destructive one; the resolver still answers the common phrasings without
+    /// a round trip. It stays out of routines all the same — see
+    /// `StoredRoutine.forbiddenStepOperations`.
     public static var plannerVisibleCases: [AgentOperation] {
         allCases.filter { operation in
             switch operation {
             case .calculateUtility,
                  .lookupClipboardHistory,
                  .expandSnippet,
-                 .saveSnippet,
-                 .switchRunningApp,
                  .lookupRecentArtifacts:
                 return false
             default:
@@ -426,7 +450,7 @@ public enum AgentPlanSchema {
             ],
             "appName": [
                 "type": ["string", "null"],
-                "description": "Human app name for open_app actions, or null."
+                "description": "Human app name for open_app or switch_running_app actions, or null."
             ],
             "question": [
                 "type": ["string", "null"],
@@ -495,7 +519,7 @@ public enum AgentPlanSchema {
             ],
             "searchQuery": [
                 "type": ["string", "null"],
-                "description": "Topic or web search query for web_to_markdown research notes, or null."
+                "description": "Topic or web search query for web_to_markdown research notes, the snippet trigger for save_snippet, or null."
             ],
             "draftTitle": [
                 "type": ["string", "null"],
@@ -503,7 +527,7 @@ public enum AgentPlanSchema {
             ],
             "draftContent": [
                 "type": ["string", "null"],
-                "description": "User-provided body content for create_local_draft Markdown drafts, or null."
+                "description": "User-provided body content for create_local_draft Markdown drafts, the expansion text for save_snippet, or null."
             ],
             "shortcutName": [
                 "type": ["string", "null"],

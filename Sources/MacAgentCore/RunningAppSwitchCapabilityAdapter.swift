@@ -12,7 +12,21 @@ public struct RunningAppSwitchCapabilityAdapter: CapabilityAdapter {
         displayName: "Switch running app",
         description: "Bring an already-running regular macOS app to the front without launching new apps.",
         operations: [.switchRunningApp],
-        plannerTools: [],
+        plannerTools: [
+            AgentTool(
+                operation: .switchRunningApp,
+                name: "Switch to a running app",
+                description: "Bring an app that is already running to the front. Launches nothing: if the named app is not running the step fails by name instead of opening it. Use for switch/focus/bring-to-front phrasings, including ones that also name a workspace; use open_app when the user asked to open or launch an app that may not be running.",
+                requiredFields: ["appName"],
+                sideEffects: ["bring a running app to the front"],
+                dryRunBehavior: "Show the running app that would come to the front.",
+                examples: [
+                    "Switch to Chrome",
+                    "Bring me back to Slack",
+                    "Focus VS Code in my Client Alpha workspace"
+                ]
+            )
+        ],
         requiredPermissions: [
             CapabilityPermissionMetadata(requirement: .appOpening)
         ],
