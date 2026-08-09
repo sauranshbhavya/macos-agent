@@ -3739,6 +3739,102 @@ struct AgentActionExecutorTests {
         #expect(assessment.effectiveTier == .tier3)
     }
 
+    /// SONNY-59 — **the shape the whole ticket is about, asserted end to end.**
+    ///
+    /// The plan names no folder at all: it comes from the Finder selection, which the resolve phase
+    /// reads over Apple Events and pins onto both steps *before* this same `assessRisk` call
+    /// classifies anything. The workspace lists the folder, so the pinned path is in scope and the
+    /// only thing left to escalate on is the Finder control itself — the consequence the founder
+    /// accepted on 2026-08-06 ("selection-driven zips/scans escalate in apps-configured workspaces
+    /// that do not list Finder").
+    ///
+    /// `reader.callCount == 1` is what makes this a real proof rather than a restatement of the unit
+    /// test: it shows the selection genuinely *was* read inside this call, so the step Finder is
+    /// reported for is the pinned one. A classifier keyed on "`contextSource` **and** no `inputPath`"
+    /// reports nothing here — the pin filled `inputPath` in two lines earlier — while still passing
+    /// every classifier test written from an unresolved step. This test is the one that would go red.
+    @Test
+    func aSelectionDrivenZipEscalatesOnFinderEvenThoughTheResolvePhaseAlreadyPinnedTheFolder() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("Client", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+        let reader = SequenceFinderContextReader(responses: [[folder]])
+        let executor = makeExecutor(root: root, finderContextReader: reader)
+        let scope = WorkspaceScope(
+            workspace: StoredWorkspace(
+                name: "Client Alpha",
+                apps: ["Safari"],
+                urls: [],
+                fileLocations: [folder.path]
+            ),
+            whitelist: PathWhitelist(roots: [root])
+        )
+
+        let assessment = try executor.assessRisk(plan: selectionDrivenZipPlan(), scope: .scoped(scope))
+
+        #expect(reader.callCount == 1)
+        #expect(assessment.escalations.map(\.reason) == ["Finder is not part of the Client Alpha workspace."])
+        #expect(assessment.escalations.first?.toTier == .tier3)
+        #expect(assessment.effectiveTier == .tier3)
+        #expect(assessment.scopeVerdict == .outOfScope)
+    }
+
+    /// The counter-pin: the same plan against a workspace that *does* list Finder. Without it, the
+    /// test above passes for a classifier that escalates selection-driven zips for any reason at all
+    /// — a bug that would make the feature unusable in exactly the workspaces it is meant for.
+    @Test
+    func aSelectionDrivenZipStaysInScopeInAWorkspaceThatListsFinder() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("Client", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+
+        let executor = makeExecutor(
+            root: root,
+            finderContextReader: FakeFinderContextReader(selection: [folder])
+        )
+        let scope = WorkspaceScope(
+            workspace: StoredWorkspace(
+                name: "Client Alpha",
+                apps: ["Safari", "Finder"],
+                urls: [],
+                fileLocations: [folder.path]
+            ),
+            whitelist: PathWhitelist(roots: [root])
+        )
+
+        let assessment = try executor.assessRisk(plan: selectionDrivenZipPlan(), scope: .scoped(scope))
+
+        #expect(assessment.escalations.isEmpty)
+        #expect(assessment.effectiveTier == .tier2)
+        #expect(assessment.scopeVerdict == .inScope)
+    }
+
+    /// A scan/zip pair carrying no `inputPath` at all — the folder is whatever is selected in Finder.
+    private func selectionDrivenZipPlan() -> AgentPlan {
+        AgentPlan(
+            summary: "Zip the largest files in the selected folder.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "scan",
+                    operation: .scanSelectLargestFiles,
+                    description: "Scan the selected folder.",
+                    count: 1,
+                    contextSource: .finderSelection
+                ),
+                AgentStep(
+                    id: "zip",
+                    operation: .createZip,
+                    description: "Zip the selected folder.",
+                    contextSource: .finderSelection
+                )
+            ]
+        )
+    }
+
     private func openWorkspacePlan(name: String?) -> AgentPlan {
         AgentPlan(
             summary: "Open workspace.",

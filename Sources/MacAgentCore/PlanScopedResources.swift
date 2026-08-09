@@ -24,10 +24,11 @@ public struct StepScopedResources: Equatable, Sendable {
 ///
 /// Classification is **per operation, never per field**, and it includes resources the operation
 /// touches implicitly with no plan field naming them at all. A field-driven classifier would report
-/// three real capabilities as touching nothing: `convert_docx_to_pdf` AppleScript-controls Microsoft
-/// Word from a hardcoded path, the two Finder operations AppleScript-control Finder, and
-/// `play_media` opens provider URIs through its own prefix check — none of which resolves through
-/// `MacAppCatalog` or `SafeURL`.
+/// four real kinds of touch as touching nothing: `convert_docx_to_pdf` AppleScript-controls Microsoft
+/// Word from a hardcoded path, the two Finder operations AppleScript-control Finder, a
+/// selection-driven scan/zip/docx step AppleScript-controls Finder to find the folder it runs
+/// against (`finderSelectionApp(in:)`), and `play_media` opens provider URIs through its own prefix
+/// check — none of which resolves through `MacAppCatalog` or `SafeURL`.
 public enum PlanScopedResources {
     /// Hacker News' front page, opened by the preset in `WebResearchMarkdownCapabilityAdapter`
     /// (`hackerNewsURL`, opened via `context.browserOpener`). Duplicated as a host here because that
@@ -101,8 +102,9 @@ public enum PlanScopedResources {
         case .scanSelectLargestFiles, .createZip, .scanDocx:
             // A source folder read and a destination written or checked. The folder may have been
             // pinned from the Finder selection by `resolveDefaultOutputs` before assessment runs, so
-            // by this point it is a real path either way.
-            return .knowable(files(step.inputPath, step.outputPath))
+            // by this point it is a real path either way — and when it was, Finder was driven to
+            // find it, which is what `finderSelectionApp(in:)` reports (SONNY-59).
+            return .knowable(finderSelectionApp(in: step) + files(step.inputPath, step.outputPath))
 
         case .convertDocxToPDF:
             // Microsoft Word is implicit: `DocumentConverter` AppleScript-controls it from a
@@ -110,7 +112,18 @@ public enum PlanScopedResources {
             // `appName` field on the step. (When Word is not installed the converter falls back to a
             // mock that touches no app; reporting Word anyway is the safe direction — over-reporting
             // escalates, under-reporting silently blesses.)
-            return .knowable(files(step.inputPath, step.outputPath) + [.app(microsoftWordAppName)])
+            //
+            // Finder is implicit here for the same reason it is on the scan/zip trio above, and this
+            // case is on the list for a reason narrower than "it is a file operation":
+            // `DocxConversionCapabilityAdapter` pins `[.scanDocx, .convertDocxToPDF]` and its `spec`
+            // falls back to `convertStep?.contextSource`, so a convert step is a real selection
+            // reader — including on its own, since a plan carrying only this operation still routes
+            // to that adapter (`AgentActionExecutor.workflow(for:)`).
+            return .knowable(
+                finderSelectionApp(in: step)
+                    + files(step.inputPath, step.outputPath)
+                    + [.app(microsoftWordAppName)]
+            )
 
         case .openHackerNews, .fetchHNHeadlines:
             return .knowable([.webDomain(hackerNewsHost)])
@@ -277,6 +290,45 @@ public enum PlanScopedResources {
             // "it cannot run" is the reason, not an oversight.
             return .none
         }
+    }
+
+    /// Finder, when a file operation gets its folder from the Finder selection instead of a plan
+    /// field (SONNY-59).
+    ///
+    /// `scan_select_largest_files`, `create_zip`, `scan_docx` and `convert_docx_to_pdf` all resolve
+    /// their folder through `FinderSelectionResolver`, which reads the live selection with
+    /// `tell application id "com.apple.finder"` through `osascript`
+    /// (`AppleScriptFinderContextReader.selectedItems`). That is the same implicit app touch this
+    /// file already reports for `get_finder_selection` and `reveal_in_finder`, arriving through a
+    /// different door, and the founder decision of 2026-08-06 accepts its consequence: a
+    /// selection-driven zip or scan now escalates in any apps-configured workspace that does not
+    /// list Finder.
+    ///
+    /// **Keyed on `contextSource` alone, deliberately — not on "and no `inputPath` was supplied".**
+    /// By the time any gate classifies a step, `AgentActionExecutor.resolveDefaultOutputs` has
+    /// already run `FinderSelectionResolver.pinningSelectedDirectoryInput`, which writes the
+    /// resolved folder into `inputPath` on every matching step; all three gates (`prepare`,
+    /// `assessRisk`, `execute`) resolve before doing anything else, and `assessNestedPlan` reaches
+    /// `assessRisk` too, so a routine's steps are resolved as well. A populated `inputPath` is
+    /// therefore evidence the selection *was* read, not evidence it was not — and a classifier that
+    /// also required an empty one would fire on no real plan while still passing unit tests built
+    /// from unresolved steps.
+    ///
+    /// What that costs is the step carrying both a real `inputPath` and `contextSource`, where
+    /// `selectedDirectoryPath` returns the supplied path and never talks to Finder. Reporting Finder
+    /// there over-reports, in the direction this file takes everywhere else — `convert_docx_to_pdf`
+    /// reports Word even when the converter falls back to its mock, because over-reporting escalates
+    /// and under-reporting silently blesses. The planner is told to leave `inputPath` null whenever
+    /// it sets `contextSource` (`OpenAIPlanner`'s Finder-context rule), so that shape is not one it
+    /// is asked to emit.
+    ///
+    /// Reported per step rather than per plan because that is all a step-scoped classifier can see.
+    /// `pinningSelectedDirectoryInput` reads the selection once for the whole plan, taking
+    /// `contextSource` from the first matching step that carries one, so in a mixed plan the step
+    /// that declares itself selection-driven is the one that names Finder. The plan-level roll-up is
+    /// a maximum, so the verdict is the same either way.
+    private static func finderSelectionApp(in step: AgentStep) -> [ScopedResource] {
+        step.contextSource == .finderSelection ? [.app(finderAppName)] : []
     }
 
     /// `reveal_in_finder` and `open_generated_artifact` name their target directly, or name nothing
