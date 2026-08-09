@@ -12,6 +12,12 @@ public struct SnippetExpansionCapabilityAdapter: CapabilityAdapter {
         displayName: "Snippet expansion",
         description: "Expand an exact local snippet trigger without calling the model planner.",
         operations: [.expandSnippet],
+        // Deliberately empty, and deliberately still empty after SONNY-48 gave `save_snippet` a
+        // tool: expansion has no planner-shaped use. `execute` returns the snippet's text as the
+        // run summary and types it nowhere, so a planned or routine-nested expansion produces text
+        // with no consumer. The front door is the instant resolver's exact-trigger match, and
+        // `PlannerBoundaryTests` asserts that door stays open for exactly the operations excluded
+        // from the planner's schema — so this emptiness is checked, not merely intended.
         plannerTools: [],
         requiredPermissions: [],
         defaultRiskTier: .tier0

@@ -41,12 +41,14 @@ struct PlannerBoundaryTests {
         - For opening a general website, produce one open_url step with targetURL using http or https.
         - For creating a local draft, produce one create_local_draft step with draftTitle, draftContent, and optional outputPath. Do not automate Notes, Mail, Calendar, or any app UI.
         - For opening a generated local artifact after a writing step, add open_generated_artifact with outputPath null so the executor can open the previous produced artifact.
+        - For saving a text snippet, produce one save_snippet step with searchQuery holding the trigger and draftContent holding the text it expands to. Use only a trigger and text the user supplied; if either is missing, ask a clarification question. This step may also be nested inside save_routine.
+        - For bringing an app that is already running to the front, produce one switch_running_app step with appName holding only the app the user named. A phrase such as "in my research workspace" says where the task belongs, not what to change: never turn a request to switch or focus on an app into edit_workspace or create_workspace. When the thing the user asks to switch or focus on is itself a saved workspace rather than an app, that is an open_workspace request instead. Use open_app when the user asked to open or launch an app that may not be running.
         - For song or album requests, produce one play_media step with mediaProvider, mediaTitle, optional mediaArtist, and targetURL only if the user supplied an exact Apple Music or Spotify result URI. The local executor tries provider-aware playback first, then falls back to opening the provider result or search.
         - If a song or album request is missing the provider or title, ask a clarification question.
         - For Finder context phrases such as "selected folder", "selected files", "this Finder selection", or "the folder selected in Finder", set contextSource to finder_selection and leave inputPath null.
         - For "reveal the result/zip/markdown/PDFs in Finder" after a writing step, add reveal_in_finder with outputPath null so the executor can reveal the previous produced artifact.
         - For permission/readiness requests, produce one show_permission_readiness step.
-        - For teaching a routine, produce one save_routine step with routineName and routineSteps containing only registered non-routine steps. Do not put save_routine, run_routine, clarify, or unsupported inside routineSteps.
+        - For teaching a routine, produce one save_routine step with routineName and routineSteps containing only registered non-routine steps. Do not put save_routine, run_routine, switch_running_app, clarify, or unsupported inside routineSteps.
         - For running a saved routine, produce one run_routine step with routineName.
         - For creating a workspace, produce one create_workspace step with workspaceName, workspaceApps, and workspaceURLs. Use only explicitly named apps/URLs. If none are provided, ask a clarification question.
         - For changing a workspace the user already saved, produce one edit_workspace step with workspaceName and only the fields the user asked to change: workspaceApps, workspaceURLs, workspaceFileLocations to add, and workspaceAppsToRemove, workspaceURLsToRemove, workspaceFileLocationsToRemove to remove. Never use create_workspace to change an existing workspace, and never put an item in both an add and a remove field.
@@ -118,10 +120,14 @@ struct PlannerBoundaryTests {
         #expect(!(operation["enum"] as? [String] ?? []).contains(AgentOperation.calculateUtility.rawValue))
         #expect(!(operation["enum"] as? [String] ?? []).contains(AgentOperation.lookupClipboardHistory.rawValue))
         #expect(!(operation["enum"] as? [String] ?? []).contains(AgentOperation.expandSnippet.rawValue))
-        #expect(!(operation["enum"] as? [String] ?? []).contains(AgentOperation.saveSnippet.rawValue))
-        #expect(!(operation["enum"] as? [String] ?? []).contains(AgentOperation.switchRunningApp.rawValue))
         #expect(!(operation["enum"] as? [String] ?? []).contains(AgentOperation.lookupRecentArtifacts.rawValue))
         #expect((operation["enum"] as? [String] ?? []).contains(AgentOperation.invokeShortcut.rawValue))
+        // SONNY-68: in the schema on purpose. Its absence was what left a switch phrasing the
+        // instant resolver declined with no truthful operation to become.
+        #expect((operation["enum"] as? [String] ?? []).contains(AgentOperation.switchRunningApp.rawValue))
+        // SONNY-48: in the schema on purpose, and the nested enum is the same one — which is the
+        // point, since the shape that was unauthorable is a save_snippet step inside a routine.
+        #expect((operation["enum"] as? [String] ?? []).contains(AgentOperation.saveSnippet.rawValue))
 
         let routineSteps = try #require(stepProperties["routineSteps"] as? [String: Any])
         #expect(routineSteps["type"] as? [String] == ["array", "null"])
@@ -129,6 +135,112 @@ struct PlannerBoundaryTests {
         let nestedProperties = try #require(nestedItems["properties"] as? [String: Any])
         let nestedRoutineSteps = try #require(nestedProperties["routineSteps"] as? [String: Any])
         #expect(nestedRoutineSteps["type"] as? String == "null")
+    }
+
+    /// **Both directions of the switch rule, pinned separately from the golden** (PR #39 review,
+    /// cycle 1, F1).
+    ///
+    /// The rule was written to stop one misroute and, as first worded, closed the opposite reading
+    /// too: "never turn a switch, focus, or bring-to-front request into … open_workspace" forbids
+    /// the one correct plan for "switch me to my Research workspace", where the thing named *is* a
+    /// workspace. The intent was then shut at both ends — the resolver captured the phrasing (F1's
+    /// blocker) and the planner was told not to express it.
+    ///
+    /// The golden already pins the sentence character for character, so this test is not about the
+    /// text. It is about the two obligations being separable: an edit that quietly drops either one
+    /// while rewriting the sentence should fail here with a name that says which half went.
+    @Test
+    func theSwitchRuleForbidsTheMisrouteWithoutForbiddingAGenuineWorkspaceOpen() {
+        let prompt = OpenAIPlanner.systemPrompt(toolRegistry: .default)
+
+        // Direction 1 — the misroute this ticket exists to close.
+        #expect(prompt.contains("never turn a request to switch or focus on an app into edit_workspace or create_workspace"))
+        // Direction 2 — the reading that must stay available.
+        #expect(prompt.contains("is itself a saved workspace rather than an app, that is an open_workspace request"))
+        // And the rule must not re-forbid it by naming open_workspace among the operations a switch
+        // request may never become.
+        #expect(!prompt.contains("into edit_workspace, create_workspace, or open_workspace"))
+        // The standalone open_workspace rule is untouched and still there for the planner to use.
+        #expect(prompt.contains("For opening a saved workspace, produce one open_workspace step with workspaceName."))
+    }
+
+    /// **The agreement that was true by accident until SONNY-68 pinned it.**
+    ///
+    /// The planner's vocabulary is defined in two places that never referred to each other: the
+    /// schema's exclusion list (`AgentOperation.plannerVisibleCases`) and the per-adapter
+    /// `plannerTools` arrays that build the prompt. They happened to name the same operations, and
+    /// nothing said they had to — so an operation could be dropped from one and left in the other,
+    /// producing either a tool the schema forbids or an enum value the prompt never describes.
+    ///
+    /// Excluding an operation is only defensible when something *else* reaches it, which is the
+    /// third leg: every excluded operation must be reachable through the instant resolver. That is
+    /// the leg SONNY-68's defect broke — `switch_running_app` was excluded on the assumption the
+    /// resolver claimed every switch phrasing, and the phrasings it declined had nowhere truthful
+    /// to go. The commands below are the actual front doors, so a resolver change that closed one
+    /// fails here rather than silently stranding an operation.
+    @Test
+    func plannerExclusionsAgreeWithEmptyToolAdaptersAndWithInstantResolverCoverage() throws {
+        let excluded = Set(AgentOperation.allCases).subtracting(AgentOperation.plannerVisibleCases)
+        let emptyToolOperations = Set(
+            CapabilityRegistry.default.metadata
+                .filter { $0.plannerTools.isEmpty }
+                .flatMap(\.operations)
+        )
+
+        #expect(excluded == emptyToolOperations)
+        #expect(excluded == [
+            .calculateUtility,
+            .lookupClipboardHistory,
+            .expandSnippet,
+            .lookupRecentArtifacts
+        ])
+
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("PlannerBoundaryTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let snippetStore = SnippetStore(fileURL: root.appendingPathComponent("snippets.json"))
+        try snippetStore.save(StoredSnippet(trigger: ";sig", expansion: "Sent from Sonny"))
+        let resolver = InstantCommandResolver(
+            snippetStore: snippetStore,
+            routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
+            workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        )
+
+        let frontDoors: [AgentOperation: String] = [
+            .calculateUtility: "calc 2 + 2",
+            .lookupClipboardHistory: "clipboard history",
+            .expandSnippet: ";sig",
+            .lookupRecentArtifacts: "recent artifacts"
+        ]
+        #expect(Set(frontDoors.keys) == excluded)
+        for (operation, command) in frontDoors {
+            guard case .plan(let plan)? = resolver.resolve(command: command) else {
+                Issue.record("\(operation.rawValue) has no instant-resolver front door: \(command) did not resolve.")
+                continue
+            }
+            #expect(plan.steps.map(\.operation) == [operation], "\(command) must resolve to \(operation.rawValue).")
+        }
+
+        // The two operations that left the exclusion set: planner-visible and resolver-reachable at
+        // once, which is the point — the resolver answers the fixed command shapes instantly and
+        // the planner has a truthful word for everything else. Leaving the set is not leaving the
+        // resolver, and asserting both halves is what stops a later change from quietly trading one
+        // door for the other.
+        for operation in [AgentOperation.switchRunningApp, .saveSnippet] {
+            #expect(!excluded.contains(operation))
+            #expect(!emptyToolOperations.contains(operation))
+        }
+        guard case .plan(let switchPlan)? = resolver.resolve(command: "switch to Notion") else {
+            Issue.record("switch_running_app must stay reachable through the instant resolver.")
+            return
+        }
+        #expect(switchPlan.steps.map(\.operation) == [.switchRunningApp])
+        guard case .plan(let savePlan)? = resolver.resolve(command: "snippet save ;bye = Talk soon") else {
+            Issue.record("save_snippet must stay reachable through the instant resolver.")
+            return
+        }
+        #expect(savePlan.steps.map(\.operation) == [.saveSnippet])
     }
 }
 
@@ -211,6 +323,18 @@ private let expectedDefaultPlannerDescription = """
   side effects: write file
   dry run: Show the draft file path without writing it.
   examples: Create a local draft called Follow-up with this text
+- save_snippet: Save snippet
+  description: Save a text snippet under a short trigger, so typing the trigger later expands to the text. Put the trigger in searchQuery and the text in draftContent. Use only the trigger and text the user actually supplied; if either is missing, ask a clarification question instead of inventing one. This is also the step to nest inside save_routine when a routine should save a snippet.
+  required fields: searchQuery, draftContent
+  side effects: write local snippet file
+  dry run: Show the trigger and expansion without saving.
+  examples: Save a snippet ;sig that expands to my email signature | Teach Sonny a routine called onboarding that saves my welcome snippet
+- switch_running_app: Switch to a running app
+  description: Bring an app that is already running to the front. Launches nothing: if the named app is not running the step fails by name instead of opening it. Use for switch/focus/bring-to-front phrasings, including ones that also name a workspace; use open_app when the user asked to open or launch an app that may not be running.
+  required fields: appName
+  side effects: bring a running app to the front
+  dry run: Show the running app that would come to the front.
+  examples: Switch to Chrome | Bring me back to Slack | Focus VS Code in my Client Alpha workspace
 - play_media: Play or open music
   description: Try to play a requested song or album in Apple Music or Spotify through the provider playback seam. If playback is unavailable, open the exact provider result URI when supplied, or open the provider search/result fallback.
   required fields: mediaProvider, mediaTitle

@@ -1738,7 +1738,8 @@ final class AgentViewModel: ObservableObject {
     /// Two signals, in a fixed order. An **explicit binding** from a dispatch that already knows its
     /// workspace (B4's card action) wins; otherwise the name is resolved from the plan and command
     /// by `WorkspaceTaskTagging`, reused exactly as it stands. That resolver already matches
-    /// `[the|my] workspace X` against real saved names using the stores' own case/diacritic folding,
+    /// `in [the|my] workspace X` — and, since SONNY-68, `in [the|my] X workspace` — against real
+    /// saved names using the stores' own case/diacritic folding,
     /// with a documented leftmost-then-longest tie-break and deliberate non-`\b` boundary checks —
     /// writing a second matcher here would give one concept two behaviours, which is how "why did it
     /// tag that" bugs start. It is the same call `recordPriorTaskContext` already makes for task
