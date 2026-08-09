@@ -348,6 +348,143 @@ struct WorkspaceScopeTests {
         #expect(evaluation.planVerdict == .opaque)
     }
 
+    /// SONNY-59. The four operations that resolve their folder through `FinderSelectionResolver`
+    /// drive Finder over Apple Events to find it, exactly as `get_finder_selection` does, so a
+    /// selection-driven step names Finder alongside its paths.
+    ///
+    /// Asserted as **exact arrays for both forms of every one of the four**, because either half
+    /// alone is a passing test for a broken classifier: pinning only the selection-driven form
+    /// passes for a case that names Finder unconditionally (which would escalate every zip of an
+    /// explicitly-named folder), and pinning only the plain form passes for the classifier as it
+    /// stood before this ticket.
+    @Test
+    func theSelectionDrivenFileOperationsNameFinderAndOnlyWhenTheStepIsSelectionDriven() {
+        let selectionDriven: [AgentOperation: [ScopedResource]] = [
+            .scanSelectLargestFiles: [.app("Finder"), .fileLocation("~/Documents/Client")],
+            .createZip: [.app("Finder"), .fileLocation("~/Documents/Client")],
+            .scanDocx: [.app("Finder"), .fileLocation("~/Documents/Client")],
+            .convertDocxToPDF: [
+                .app("Finder"),
+                .fileLocation("~/Documents/Client"),
+                .app("Microsoft Word")
+            ]
+        ]
+
+        for (operation, expected) in selectionDriven {
+            // The folder the resolver pinned onto the step, which is the shape every gate really
+            // sees — `inputPath` is populated *because* Finder was read, never instead of it.
+            let pinned = AgentStep(
+                id: "pinned",
+                operation: operation,
+                description: "Work on the selected folder.",
+                inputPath: "~/Documents/Client",
+                contextSource: .finderSelection
+            )
+            #expect(PlanScopedResources.resources(in: pinned) == expected, "\(operation.rawValue)")
+            // Naming a folder is still knowable work: the escalation this adds is about Finder, and
+            // making these steps opaque instead would poison every plan containing one.
+            #expect(PlanScopedResources.isOpaque(pinned) == false, "\(operation.rawValue)")
+
+            let namedFolder = AgentStep(
+                id: "named",
+                operation: operation,
+                description: "Work on a named folder.",
+                inputPath: "~/Documents/Client"
+            )
+            #expect(
+                PlanScopedResources.resources(in: namedFolder) == expected.filter { $0 != .app("Finder") },
+                "\(operation.rawValue)"
+            )
+        }
+    }
+
+    /// The unresolved form of the same steps — no `inputPath` yet, because nothing has pinned one.
+    /// Finder is named from `contextSource` alone, so the classifier answers the same question
+    /// before and after the resolve phase rather than depending on which side of it the caller sits.
+    @Test
+    func aSelectionDrivenStepNamesFinderBeforeAnythingHasPinnedItsFolder() {
+        let unpinned = AgentStep(
+            id: "scan",
+            operation: .scanSelectLargestFiles,
+            description: "Scan the selected folder.",
+            count: 3,
+            contextSource: .finderSelection
+        )
+
+        #expect(PlanScopedResources.resources(in: unpinned) == [.app("Finder")])
+        #expect(PlanScopedResources.isOpaque(unpinned) == false)
+    }
+
+    /// `contextSource` is only read by the four operations whose adapters resolve a folder through
+    /// it. A step of any other operation carrying the field names exactly what it named before —
+    /// spot-checked here on the two that already name Finder for their own reasons, so a classifier
+    /// that started keying on `contextSource` globally would double-report on one and invent a
+    /// resource on the other.
+    @Test
+    func contextSourceOnAnOperationThatNeverResolvesAFolderChangesNothing() {
+        let reveal = AgentStep(
+            id: "reveal",
+            operation: .revealInFinder,
+            description: "Reveal the report.",
+            outputPath: "~/Documents/report.pdf",
+            contextSource: .finderSelection
+        )
+        let openArtifact = AgentStep(
+            id: "open",
+            operation: .openGeneratedArtifact,
+            description: "Open the report.",
+            outputPath: "~/Documents/report.pdf",
+            contextSource: .finderSelection
+        )
+
+        #expect(
+            PlanScopedResources.resources(in: reveal) == [.app("Finder"), .fileLocation("~/Documents/report.pdf")]
+        )
+        #expect(PlanScopedResources.resources(in: openArtifact) == [.fileLocation("~/Documents/report.pdf")])
+    }
+
+    /// Attribution, at plan level. `pinningSelectedDirectoryInput` reads the selection once for the
+    /// whole plan, taking `contextSource` from the first matching step that carries one and pinning
+    /// the result onto every matching step — so a plan where only the scan declares itself
+    /// selection-driven still has both steps working from the selection. The step-scoped classifier
+    /// names Finder on the declaring step, once, and the plan-level verdict is the same either way.
+    /// Asserted so the "once, on the step that declares it" half is a decision on the record rather
+    /// than an accident of which step happened to be first.
+    @Test
+    func aMixedSelectionDrivenPlanNamesFinderOnceOnTheStepThatDeclaresIt() {
+        let scope = makeScope(apps: ["Safari"], urls: [])
+        let plan = AgentPlan(
+            summary: "Zip the largest files in the selected folder.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "scan",
+                    operation: .scanSelectLargestFiles,
+                    description: "Scan the selected folder.",
+                    inputPath: "~/Documents/Client",
+                    contextSource: .finderSelection
+                ),
+                AgentStep(
+                    id: "zip",
+                    operation: .createZip,
+                    description: "Zip it.",
+                    inputPath: "~/Documents/Client",
+                    outputPath: "~/Documents/Client/largest.zip"
+                )
+            ]
+        )
+
+        let evaluation = WorkspaceScopeEvaluator.evaluate(plan: plan, scope: scope)
+
+        let finderFindings = evaluation.findings.filter { $0.resource == .app("Finder") }
+        #expect(finderFindings.map(\.stepID) == ["scan"])
+        #expect(finderFindings.map(\.verdict) == [.outOfScope])
+        #expect(finderFindings.map(\.operation) == [.scanSelectLargestFiles])
+        // Nothing became opaque: the folder is still a named, knowable resource.
+        #expect(evaluation.findings.allSatisfy { $0.verdict != .opaque })
+        #expect(evaluation.planVerdict == .outOfScope)
+    }
+
     @Test
     func playMediaReportsBothTheProviderAppAndTheProviderHost() {
         let appleMusic = AgentStep(
@@ -551,11 +688,14 @@ struct WorkspaceScopeTests {
 
         let input = ScopedResource.fileLocation("~/Documents/Input")
         let output = ScopedResource.fileLocation("~/Documents/Output/out.md")
+        // The probe sets `contextSource: .finderSelection`, so the four operations that resolve
+        // their folder through `FinderSelectionResolver` name Finder here (SONNY-59). Every other
+        // row is unchanged by that field, which is the point of the probe carrying it for all 31.
         let expected: [AgentOperation: [ScopedResource]] = [
-            .scanSelectLargestFiles: [input, output],
-            .createZip: [input, output],
-            .scanDocx: [input, output],
-            .convertDocxToPDF: [input, output, .app("Microsoft Word")],
+            .scanSelectLargestFiles: [.app("Finder"), input, output],
+            .createZip: [.app("Finder"), input, output],
+            .scanDocx: [.app("Finder"), input, output],
+            .convertDocxToPDF: [.app("Finder"), input, output, .app("Microsoft Word")],
             .openHackerNews: [.webDomain("news.ycombinator.com")],
             .fetchHNHeadlines: [.webDomain("news.ycombinator.com")],
             .writeMarkdown: [.webDomain("news.ycombinator.com"), output],
