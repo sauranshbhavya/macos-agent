@@ -12,6 +12,22 @@ honesty: every load-bearing claim carries file:line at a SHA, or a ticket/doc ci
 `CLAUDE.md`'s claims-and-evidence rules. Where the experiment's own ticket comments make a claim, the
 claim was checked against the code and any discrepancy is called out.
 
+**Corrected 2026-08-09 by PR #37's light pre-merge pass (fix round at `3ae568d`).** The review found
+no defect in the analysis, and confirmed the merge-base pitfall (§1), the impact matrix's coverage of
+all twenty named tickets (§C), and the risk-engine and planner-seam grounding (§A, §B) against
+source. Ten claim-accuracy defects were corrected in place: **E5**'s decision-letter label, which
+tagged the ratified consent-gated behavior with the one option §B4 calls categorically wrong;
+**E9**'s spec-deviation record, which named §6.13 for a line §11.3 actually mandates; five citation
+errors (§A1's case count, §A2's provider-decision section label and spike line number, §A4's
+`plannerDescription` type, §B5's readiness-row quote, §1's per-file delta) and two count/quotation
+nits (§1's extra-file count, §B3's spec-line quote). One review nit was itself wrong and is recorded
+rather than applied: §A1's `AgentPlan.swift:408` is correct at `99f2fd2`, the SHA this section cites —
+the reviewing agent read at `58e8cf5`, where the experiment branch's pre-SONNY-54/58 copy of that file
+puts the same construct at `:394`. §A1 now states its anchor SHA explicitly so the next reader does not
+repeat the mistake. One scope change followed:
+**SONNY-72** was filed so E11's planner-half gate has a real owner (see E11). Nothing in §A–§D's
+reasoning or §E's ratified substance changed — only what the document claims about its sources.
+
 ---
 
 ## 0. The mandate and the two hard constraints
@@ -41,9 +57,10 @@ Two success axes to map every recommendation to: **architecture quality** and **
 The complete experiment diff is **8 files, 1231 insertions(+), 6 deletions(-)** — measured at the
 branch's real merge-base, not against current `main`. This matters: the experiment forked from
 `6af453c` (Merge PR #32, workspace-restriction-scope), *before* SONNY-54, SONNY-58 and the
-SONNY-60/61/63 docs batch merged. A naive `git diff 99f2fd2..58e8cf5` shows ~16 extra files and
-935 deletions that are pure stale-main noise — every one of those 16 files is byte-identical between
-`6af453c` and `58e8cf5`. The experiment removed no routine-trust or scope logic. **Read the diff as
+SONNY-60/61/63 docs batch merged. A naive `git diff 99f2fd2..58e8cf5` shows 17 extra files and
+935 deletions that are pure stale-main noise — every one of those 17 files is byte-identical between
+`6af453c` and `58e8cf5` (enumerated and blob-hash-compared, PR #37 review). The experiment removed
+no routine-trust or scope logic. **Read the diff as
 `git diff 6af453c..58e8cf5`.**
 
 The eight files:
@@ -53,7 +70,7 @@ The eight files:
 | `CerebrasPlanner.swift` (new, 176 lines) | A `Planning` conformance speaking Chat Completions to `api.cerebras.ai`, `gpt-oss-120b`, selected by `SONNY_PLANNER=cerebras`. |
 | `VisionActionLoop.swift` (new, 826 lines) | The spike's core: screenshot → Gemma → CGEvent click/type, 10-iteration cap. |
 | `PlannerComparison.swift` (new, 58 lines) | Headless `SONNY_PLANNER_COMPARE` harness printing side-by-side plans. |
-| `AgentViewModel.swift` (+150/−6) | Vision-debug intercept, planner selection, unsupported-remainder split. |
+| `AgentViewModel.swift` (+145/−5) | Vision-debug intercept, planner selection, unsupported-remainder split. |
 | `main.swift` (+12) | The compare-harness entry hook. |
 | `OpenAIPlanner.swift` (+12) | The experiment-gated decomposition prompt suffix. |
 | `MacAppService.swift` (+1) | Discord added to `MacAppCatalog`. |
@@ -112,10 +129,12 @@ yet.** This plan says which numbers gate which decisions rather than pretending 
 
 `Planning` is a one-method protocol (`OpenAIPlanner.swift:4-6`); the production conformance is
 `OpenAIPlanner`, constructed at exactly one site — `AgentViewModel.performStart`, gated behind the
-instant resolver returning `nil` (`AgentViewModel.swift:654`). `AgentOperation` has 30 cases;
+instant resolver returning `nil` (`AgentViewModel.swift:654`). `AgentOperation` has 31 cases;
 `plannerVisibleCases` filters out 6 (`calculateUtility`, `lookupClipboardHistory`, `expandSnippet`,
-`saveSnippet`, `switchRunningApp`, `lookupRecentArtifacts` — `AgentPlan.swift:162-175`), and that
-filtered set is the literal JSON-schema `enum` the planner may emit (`AgentPlan.swift:408`). The
+`saveSnippet`, `switchRunningApp`, `lookupRecentArtifacts` — `AgentPlan.swift:162-175`), leaving 25,
+and that filtered set is the literal JSON-schema `enum` the planner may emit (`AgentPlan.swift:408` at
+`99f2fd2` — the same construct is at `:394` on the experiment branch, whose `AgentPlan.swift` is the
+pre-SONNY-54/58 copy; every line citation in this section is at `99f2fd2`). The
 schema serializes to ~9.3 KB with 25 nullable-union properties — corroborating the experiment's
 ~9.2 KB / 25-union figure.
 
@@ -127,12 +146,18 @@ is no generic translation layer above `Planning`). The experiment's `CerebrasPla
 ### A2. The provider-architecture question is where this decision really lives
 
 The spike adds Cerebras as a *second hardcoded client-side branch* in `performStart`
-(`AgentViewModel.swift:654`, `SONNY_PLANNER=cerebras`). The spec already has an opinion about exactly
-this shape. §16.5 (Model Provider Proxy) and §11.1's provider decision resolve v1 to "OpenAI ships
-first, Anthropic added second, **both behind a provider-agnostic router interface designed in from
-day one so the backend never hardcodes one vendor's request/response shape the way the current
-prototype's `OpenAIPlanner` hardcodes OpenAI's Responses API shape**" (spec §16.5:2141, §11.1:1404).
-BYOK is explicitly skipped (§7.9).
+(`AgentViewModel.swift:662-666` at `58e8cf5`; the same function's pre-existing single-planner site is
+`:654` on `main` at `99f2fd2`, cited in §A1). The spec already has an opinion about exactly this
+shape. Two sections resolve v1 to the same answer. §9.4 (Model Routing) states it in full: "OpenAI
+ships as the primary provider (already integrated in the prototype), with Anthropic added as a second
+provider behind a provider-agnostic router interface from day one — even before a second provider is
+actually wired up, **so the backend never hardcodes one vendor's request/response shape the way the
+current prototype's `OpenAIPlanner` hardcodes OpenAI's Responses API shape**" (spec §9.4:1404). §16.5
+(Model Provider Proxy) restates it as the provider decision — "OpenAI ships first (already
+integrated), Anthropic added second, both behind a provider-agnostic router interface designed in
+from day one so the backend never hardcodes one vendor's API shape" (spec §16.5:2141) — and adds the
+proxy's own requirements: provider credentials never ship to the client, model routing controlled
+server-side. BYOK is explicitly skipped (§7.9).
 
 Two things follow, and they pull in different directions:
 
@@ -184,9 +209,11 @@ fallback-capable alternative behind a provider-agnostic router. (Recommended.)**
 
 ### A4. A new planner is a chance to fix the vocabulary architecture, not port its holes
 
-The planner's emit-vocabulary is `CapabilityRegistry.plannerDescription` =
-`adapters.flatMap(\.metadata.plannerTools)`, interpolated into the shared system prompt both planners
-use. Three vocabulary defects are live in the queue, and all three are **planner-agnostic** — a
+The planner's emit-vocabulary is `CapabilityRegistry.tools` =
+`adapters.flatMap(\.metadata.plannerTools)` (`CapabilityAdapter.swift:386-388`), wrapped as
+`ToolRegistry.default` and rendered by `ToolRegistry.plannerDescription`
+(`ToolRegistry.swift:40`), which is interpolated into the shared system prompt both planners use
+(`OpenAIPlanner.swift:134`). Three vocabulary defects are live in the queue, and all three are **planner-agnostic** — a
 Cerebras swap inherits every one unless the architecture is fixed:
 
 - **SONNY-48:** snippet operations declare `plannerTools: []` (`SnippetSaveCapabilityAdapter.swift:15`),
@@ -233,6 +260,12 @@ command set (not an ad-hoc 3):
 Recommendation: **no default-planner change ships until #1 shows parity and #2 shows an acceptable
 rejection rate.** Until then, Option C's "OpenAI default, open-weights alternative behind the router"
 is the honest state.
+
+> **Owner, added post-ratification (PR #37 fix round, 2026-08-09).** These four measurements are
+> **SONNY-72**'s contract — the planner half of E11's benchmark, filed at the coordinator's ruling so
+> the planner-default gate has a real owner rather than resting on SONNY-69's still-owed findings
+> comment. SONNY-72 also settles what §D11 left open: the session that claims it proposes the fixed
+> command set for the user to confirm before any number is reported.
 
 ---
 
@@ -345,8 +378,9 @@ all reusing machinery that already exists:
 
 The spike's split — supported steps run the normal gated path, then the vision loop takes the
 remainder in the app the last opening step surfaced — is a genuinely good pattern, and it is the spec
-principle "generalize current app/URL opening without pretending to support arbitrary app automation"
-(spec line 463) done right: use precise, previewable, gated adapters where they exist; fall to vision
+principle "Generalize current app/URL opening without pretending to support arbitrary app automation
+**yet**." (spec line 463 — the "yet" is the spec's own, framing this as the pre-major-release
+position rather than a permanent one) done right: use precise, previewable, gated adapters where they exist; fall to vision
 only for what they can't express. As product architecture it needs two changes from the spike:
 
 - **The split is consented as one surface, not silently auto-run.** The spike sets
@@ -382,8 +416,10 @@ never continue unattended, and require the Mac unlocked + a visible HUD for any 
 ### B5. TCC onboarding
 
 Screen Recording and Accessibility are **System-Settings-only grants** and today are **preflight-only,
-never requested** (`PermissionReadinessService.swift:73-88`): the readiness rows literally say "Not
-required yet; future tools would need this." No prompting call
+never requested** (`PermissionReadinessService.swift:73-88`): each readiness row's un-granted detail
+string says the capability is not needed yet — verbatim, `"Not required yet; future UI-control tools
+would need Accessibility."` (`:79`) and `"Not required yet; future screen-aware tools would need
+Screen Recording."` (`:87`). No prompting call
 (`CGRequestScreenCaptureAccess`/`AXIsProcessTrustedWithOptions`) and no screen-capture/AX-control API
 exists anywhere in `Sources/` (capabilities report, exhaustive grep). What vision needs:
 
@@ -414,8 +450,12 @@ Today only a one-line `dataLeavesDevice` boolean exists (`RiskApproval.swift:102
 unbuilt. What vision requires, from the spec's own rules:
 
 - **`dataLeavesDevice` must be true and honest** for every vision session (the spike records *nothing*
-  and bypasses the boolean). SONNY-32 already documents that the disclosure is audited one-directionally
-  and can render a false "no" — that bidirectional-honesty fix becomes a launch blocker here (§C).
+  and bypasses the boolean). Its mandate is **§11.3** — "Whether data leaves the device" is one of five
+  required lines of approval copy (spec `:1671`), rendered by `RiskApprovalCopy.lines`
+  (`RiskApproval.swift:119-127`), not by the §6.13 inspector. SONNY-32 already documents that the
+  disclosure is audited one-directionally and can render a false "no" — that bidirectional-honesty fix
+  becomes a launch blocker here (§C). E9 later resolves this differently and, in doing so, deviates
+  from §11.3; see E9's second deliberate spec change.
 - **Pre-send content preview (§14.4A).** For full-screen captures and any tier-2+ action, the inspector
   must show the exact context bundle *before* it leaves the device — a vision session is tier-3 and
   sends screenshots, so "what Sonny saw" must be a pre-send gate, not a post-hoc log.
@@ -592,10 +632,14 @@ plainly:** Sonny must recognize *before* it acts that a button sends or deletes 
 the vision model makes, and it can be wrong both ways (miss a real Send button, or over-nag). Its
 accuracy is the single most safety-critical number the E11 benchmark must measure.
 
-**E5 — Fallback-on-unsupported (D5a): silent auto-fallback.** When the planner can't fully do a
-command, Sonny automatically proposes vision (no separate "enable vision" step). The user still gets
-one up-front approval before it acts — that approval is what keeps it "through the engine." E6 is what
-makes this safe.
+**E5 — Fallback-on-unsupported (D5a → refined): auto-proposed, approved once.** When the planner
+can't fully do a command, Sonny automatically proposes vision (no separate "enable vision" step) —
+that automatic *trigger* is what D5(a) buys, and it is the friction D5(b)'s per-session opt-in would
+have cost. But this **supersedes D5(a)'s "silent, no per-run consent" reading**, which is the spike's
+behavior §B4 calls categorically wrong and names as how the iTerm2 incident happened: the user still
+gets one up-front approval of the envelope before anything fires, which is D5(b)'s consent, and that
+approval is what keeps it "through the engine." The ratified shape is (a)'s trigger with (b)'s
+consent — neither option as written. E6 is what makes it safe.
 
 **E6 — Vision-control allowlist (D6c): per-app user consent; terminals never controllable.** Sonny can
 only vision-control apps the user has specifically allowed; terminals (iTerm2/Terminal) are never
@@ -621,8 +665,22 @@ screen-*acting* as rescoped Power Mode (row 18), gated behind the safety infra.
 - **Auto-blur secrets before sending: yes** (best-effort, stated as best-effort).
 - **Block on-screen hijack text: yes** (screen text is untrusted; Sonny never obeys instructions found
   on screen).
-- **Deliberate spec change:** normal mode not showing screenshots before sending overrides spec
-  §14.4A's pre-send rule for tier-2+ actions — recorded as a conscious amendment, not a slip.
+- **Two deliberate spec changes, both the founder's call, recorded as conscious amendments rather
+  than slips** (section attributions corrected by the PR #37 review — the label's mandate is §11.3's,
+  not §6.13's):
+  - **§14.4A (timing).** Normal mode not showing screenshots before sending overrides §14.4A's
+    pre-send rule for full-screen captures and tier-2+ actions, moving that pre-send gate into Safe
+    mode. §6.13's own timing paragraph states the same rule by cross-reference, so this is one
+    deviation, not two. §14.5's content checklist is unaffected — it is timing-agnostic and delegates
+    the *when* outward, so a Normal-mode post-hoc log must still carry every item on it.
+  - **§11.3 (approval copy).** Spec §11.3 "User-Facing Approval Copy" (`:1671`) makes "Whether data
+    leaves the device" one of five *mandatory* lines on every approval surface, and
+    `RiskApprovalCopy.lines` (`RiskApproval.swift:119-127`) renders exactly those five, `Data leaves
+    device: yes/no` among them. E4 keeps Normal mode's tier-2 confirmations and tier-3 approvals, so
+    removing that line "from all normal surfaces" removes a §11.3 mandate from live approval
+    surfaces — the deviation this decision actually makes. §6.13 (Data Sent To AI Inspector) never
+    contained the line; its ten content items are inspector contents, and its involvement here is
+    only the timing paragraph folded into §14.4A above.
 
 **E10 — Screenshot provider (D10a): Cerebras (no-retention) only; never Google's free tier.**
 Re-verify gemma-4-31b's preview-vs-GA status and deprecation risk before depending on it.
@@ -630,6 +688,23 @@ Re-verify gemma-4-31b's preview-vs-GA status and deprecation risk before dependi
 **E11 — Measurement (D11): build a benchmark for both models.** A benchmark testing the coordinator
 (planner) model and the vision model. No Cerebras-as-default until it passes; the A/B (E1) is this
 measurement run live.
+
+> **The two halves have separate owners, recorded post-ratification (PR #37 fix round, 2026-08-09) —
+> neither ticket absorbs the other.**
+> - **Vision half → SONNY-70** (existing, Backlog): screenshot reading + action-coordinate accuracy
+>   over a labeled offline fixture set, deliberately scoped to the vision model only ("no multi-model
+>   leaderboard" is its own non-goal). It is the gate on the **action half** — E4's
+>   "recognize before clicking that this button sends or deletes" is the safety-critical number it
+>   must establish, and no vision-action ships until it clears.
+> - **Planner half → SONNY-72** (filed by this fix round, Backlog, untriaged): plan-quality parity,
+>   structured-output rejection rate with a live nullable-union re-check, end-to-end latency, and the
+>   reliability envelope (§A5). It is the gate on the **planner-default question** — E1's "never flip
+>   the default to Cerebras without proof." SONNY-70 produces no plan-quality number and structurally
+>   cannot discharge this gate.
+>
+> SONNY-70 was filed as throwaway experiment tooling; using its numbers as a v1 ship gate is a
+> promotion of its role that a session picking it up cold must be told about — recorded on that ticket
+> by this fix round rather than left implicit here.
 
 **E12 — Sequencing (D12): cleanup first, in order, before any vision.**
 1. Unpause **SONNY-59**, land it (unblocks SONNY-13).
@@ -643,7 +718,10 @@ merges. After E12's cleanup is implemented and merged, the vision feature is bui
 spike's code as a starting reference, reworked to route through the risk engine with test coverage. The
 founder explicitly expects heavy rework ("it was never good enough").
 
-**Not created by this session:** the implementation and future-branch planning tickets for the planner
+**Not created by this session** (one exception, added by the PR #37 fix round: **SONNY-72**, the
+planner-parity benchmark — a measurement gate with no implementation contract, filed at the
+coordinator's ruling because E11's planner half otherwise had no owner; see E11)**:** the
+implementation and future-branch planning tickets for the planner
 track (E1/E2/E11) and the vision track (E8's rows 14/18; E4/E5/E6/E9's modes and consent) are deferred
 until E12's cleanup lands, per E13's sequencing. The roadmap-table edit for E8's split is a
 founder-authorized follow-up, not made by this planning session.
