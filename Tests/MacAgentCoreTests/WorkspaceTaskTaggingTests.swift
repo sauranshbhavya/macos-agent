@@ -269,6 +269,24 @@ struct WorkspaceTaskTaggingTests {
         try workspaceStore.save(StoredWorkspace(name: "Oﬃce", apps: ["Safari"], urls: []))
         try workspaceStore.save(StoredWorkspace(name: "İstanbul", apps: ["Safari"], urls: []))
 
+        // **The expansion has to sit *before* the clause for this to be a real test.** A multi-byte
+        // fold after the match only shifts the cut's far edge by one, and the whitespace trim
+        // absorbs that — a naive one-entry-per-character map passes. Put it in the text that must
+        // survive and the same map cuts a character off the wrong side, which is visible.
+        try workspaceStore.save(StoredWorkspace(name: "Alpha", apps: ["Safari"], urls: []))
+        let expansionBeforeTheClause = WorkspaceTaskTagging.workspaceClause(
+            in: "switch to Straße in the workspace Alpha",
+            workspaceStore: workspaceStore
+        )
+        #expect(expansionBeforeTheClause?.workspaceName == "Alpha")
+        #expect(expansionBeforeTheClause?.remainingCommand == "switch to Straße")
+
+        let ligatureBeforeTheClause = WorkspaceTaskTagging.workspaceClause(
+            in: "switch to Oﬃce in my Alpha workspace",
+            workspaceStore: workspaceStore
+        )
+        #expect(ligatureBeforeTheClause?.remainingCommand == "switch to Oﬃce")
+
         let sharp = WorkspaceTaskTagging.workspaceClause(
             in: "please switch to code in the workspace Straße right now",
             workspaceStore: workspaceStore
