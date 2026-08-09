@@ -12,7 +12,20 @@ public struct SnippetSaveCapabilityAdapter: CapabilityAdapter {
         displayName: "Save snippet",
         description: "Save an exact local snippet trigger without calling the model planner.",
         operations: [.saveSnippet],
-        plannerTools: [],
+        plannerTools: [
+            AgentTool(
+                operation: .saveSnippet,
+                name: "Save snippet",
+                description: "Save a text snippet under a short trigger, so typing the trigger later expands to the text. Put the trigger in searchQuery and the text in draftContent. Use only the trigger and text the user actually supplied; if either is missing, ask a clarification question instead of inventing one. This is also the step to nest inside save_routine when a routine should save a snippet.",
+                requiredFields: ["searchQuery", "draftContent"],
+                sideEffects: ["write local snippet file"],
+                dryRunBehavior: "Show the trigger and expansion without saving.",
+                examples: [
+                    "Save a snippet ;sig that expands to my email signature",
+                    "Teach Sonny a routine called onboarding that saves my welcome snippet"
+                ]
+            )
+        ],
         requiredPermissions: [],
         defaultRiskTier: .tier2
     )

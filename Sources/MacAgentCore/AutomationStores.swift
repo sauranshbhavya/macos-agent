@@ -93,6 +93,17 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
     /// Until a nested plan has a shared prepared form, a routine carrying this operation cannot be
     /// honest about what it is going to bring forward. Nothing is lost by saying so: routines could
     /// not carry it through any product path before this ticket either.
+    ///
+    /// **What this list permits is not the same question as what a routine can be authored to
+    /// contain**, and reading it as if it were is a mistake this file has already caused once.
+    /// Routines are authored through `save_routine`, which the planner emits, so an operation the
+    /// planner has no tool for is permitted here and unreachable in practice — SONNY-31's contract
+    /// was written on the opposite reading, and `SnippetSaveCapabilityAdapter.assessRisk` was built
+    /// for a scheduled snippet routine no product path could produce (SONNY-48). `save_snippet` is
+    /// authorable as of that ticket. The one remaining gap is `expand_snippet`, permitted here and
+    /// deliberately given no planner tool because expansion returns text nothing consumes — see the
+    /// comment on `SnippetExpansionCapabilityAdapter.metadata`. Anything else absent from this list
+    /// is emittable by the planner; `PlannerBoundaryTests` is where that correspondence is checked.
     public static let forbiddenStepOperations: Set<AgentOperation> = [
         .saveRoutine,
         .runRoutine,
