@@ -196,6 +196,80 @@ struct WorkspaceTaskTaggingTests {
         #expect(resolved == "Research")
     }
 
+    // MARK: - The clause as a subtractable phrase (SONNY-68)
+
+    /// The second word order, which bound nothing before this ticket. "in my Switch workspace" is
+    /// how the fourth recorded misroute was typed, and the tagger's regex only knew
+    /// "in [the|my] workspace X" — so that command named a workspace Sonny could not see, and its
+    /// scope silently did not exist.
+    @Test
+    func aNameBeforeTheNounBindsTheSameWorkspaceAsANameAfterIt() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try workspaceStore.save(StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: []))
+
+        for command in [
+            "zip the largest files in workspace Client Alpha",
+            "zip the largest files in the workspace Client Alpha",
+            "zip the largest files in my workspace Client Alpha",
+            "zip the largest files in my Client Alpha workspace",
+            "zip the largest files in the Client Alpha workspace",
+            "zip the largest files in Client Alpha workspace"
+        ] {
+            #expect(
+                WorkspaceTaskTagging.workspaceClause(in: command, workspaceStore: workspaceStore)?.workspaceName
+                    == "Client Alpha",
+                "\(command) should bind Client Alpha."
+            )
+        }
+    }
+
+    /// What the resolver subtracts: the clause, and nothing else. The canonical saved name comes
+    /// back regardless of how it was typed, and the surviving text keeps the caller's own casing —
+    /// an app query lowercased on the way through would put the wrong words in the summary the user
+    /// reads.
+    @Test
+    func theClauseIsRemovedWithTheRestOfTheCommandLeftExactlyAsTyped() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try workspaceStore.save(StoredWorkspace(name: "Switch", apps: ["Chrome"], urls: []))
+
+        let trailing = WorkspaceTaskTagging.workspaceClause(
+            in: "Zoom in my SWITCH workspace",
+            workspaceStore: workspaceStore
+        )
+        #expect(trailing?.workspaceName == "Switch")
+        #expect(trailing?.remainingCommand == "Zoom")
+
+        // Mid-sentence removal must not leave the double space that cutting a phrase out normally
+        // produces.
+        let embedded = WorkspaceTaskTagging.workspaceClause(
+            in: "Zoom in the workspace Switch now",
+            workspaceStore: workspaceStore
+        )
+        #expect(embedded?.remainingCommand == "Zoom now")
+
+        // A name that is not saved is not a clause, so there is nothing to subtract.
+        #expect(WorkspaceTaskTagging.workspaceClause(in: "Zoom in my Nowhere workspace", workspaceStore: workspaceStore) == nil)
+    }
+
+    /// The boundary guard survives the second word order. "within workspace Client Alpha" contains
+    /// a literal "in" from "with-IN", and neither alternative may match through it.
+    @Test
+    func theSecondWordOrderDoesNotWeakenThePhraseBoundaryGuard() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try workspaceStore.save(StoredWorkspace(name: "Client", apps: ["Safari"], urls: []))
+
+        #expect(WorkspaceTaskTagging.workspaceClause(in: "search within workspace Client for the invoice", workspaceStore: workspaceStore) == nil)
+        // A shorter name matching only as a prefix of a longer word is still rejected on the
+        // trailing side, in the new order as well as the old.
+        #expect(WorkspaceTaskTagging.workspaceClause(in: "look in my Clientele workspace", workspaceStore: workspaceStore) == nil)
+    }
+
     private func openWorkspaceStep(named workspaceName: String) -> AgentStep {
         AgentStep(
             id: "open-workspace",

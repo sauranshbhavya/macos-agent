@@ -80,12 +80,26 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
     /// scheduled routine could have widened a workspace's restriction scope with nobody present to
     /// see it. That is the hazard SONNY-40's own row-C forward flag names, reached through the
     /// scheduler instead of the command line.
+    ///
+    /// **`.switchRunningApp` is here to hold a guarantee still, not to take a capability away.**
+    /// It became planner-emittable in SONNY-68, and every operation the planner can emit at the top
+    /// level it can also emit inside `routineSteps` — the nested schema shares the same enum. That
+    /// would have made a real divergence reachable for the first time: `RunRoutineCapabilityAdapter`
+    /// rebuilds the nested plan from the store separately for each gate (`routineRunSpec` is called
+    /// again from `preview`, `assessRisk` and `execute`), so a nested switch step is resolved and
+    /// pinned twice, independently, and the app the assessment classified need not be the app
+    /// execution activates. At the top level that cannot happen — `AgentRunner` threads one
+    /// `preparedRun.plan` through both gates, which is exactly what makes SONNY-58's pin total.
+    /// Until a nested plan has a shared prepared form, a routine carrying this operation cannot be
+    /// honest about what it is going to bring forward. Nothing is lost by saying so: routines could
+    /// not carry it through any product path before this ticket either.
     public static let forbiddenStepOperations: Set<AgentOperation> = [
         .saveRoutine,
         .runRoutine,
         .createWorkspace,
         .editWorkspace,
         .openWorkspace,
+        .switchRunningApp,
         .clarify,
         .unsupported
     ]
