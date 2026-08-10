@@ -373,24 +373,78 @@ final class AgentViewModel: ObservableObject {
     /// Detecting the outcome needs no copy of the rule at all, and it covers refusal reasons nobody
     /// has enumerated yet: `start` clears `command` synchronously the instant it accepts a dispatch,
     /// so finding the text still there means the guard refused and the text is residue.
+    ///
+    /// **A programmatic dispatch is never an approval.** `start()`'s first branch turns a call made
+    /// while `isAwaitingApproval` into `approvePendingRun()` — correct for the composer's Send
+    /// button, which is the control the widget relabels for exactly that job, and wrong for every
+    /// caller here, none of which is that button.
+    ///
+    /// **The five doors, enumerated, because a guard in a shared helper is a claim about all of
+    /// them** — and the first version of this comment named two:
+    /// - `dispatchTranscribedCommand` — **the one with the most at stake.** `canUseVoice` blocks
+    ///   *starting* a recording while an approval is pending, but an approval can land during the
+    ///   recording or the transcription, and the finished transcript then went straight into
+    ///   `start()`. A sentence the user spoke about something else would have landed as a silent
+    ///   *allow* on whatever tier-3 action was waiting.
+    /// - `openWorkspaceWidget`, `runRoutineWidget` — behaviour-changed, neither gated for this
+    ///   before. `runRoutineWidget`'s button lives in `RoutineDetailView`, a different file.
+    /// - `dispatchWorkspaceScopeEdit` — the sheet's door, the one this ticket built.
+    /// - `retryLastCommand` — **unaffected.** Its own `!isTaskInFlight` guard is a strict superset
+    ///   of this one and fires before `dispatch` is reached.
+    ///
+    /// **What makes it reachable is timing, not an unattended run.** An earlier telling of this said
+    /// a scheduled routine raises approvals with nobody watching; it does not. `performScheduledRun`
+    /// executes with `approvalDecision: .approved(.tier2)` and routes every `RiskApprovalError` to
+    /// `pauseSchedule` plus a notice — SONNY-31's ratified notify-and-pause design — so it never
+    /// writes `approvalRequest` at all. The real routes are both in the foreground: any run a user
+    /// started pausing at its approval (`performStart`), and `performApproval`'s stale-approval
+    /// re-arm when a re-assessment lands higher than the tier already approved. Either can arrive
+    /// between a render and a tap, which is all this needs — a cheap structural guard on a trust
+    /// boundary does not need an exotic trigger, and claiming one it does not have made the guard
+    /// look better-motivated than the evidence supports. (PR #40 review, F4.)
+    ///
+    /// The guard is here, at the one helper every programmatic caller shares, rather than as a
+    /// fifth copy on a fifth button.
+    ///
+    /// - Returns: whether the dispatch was accepted, so a caller can tell a refusal apart from a
+    ///   submission without re-deriving `canSubmit`'s rule.
+    @discardableResult
     private func dispatch(
         command commandText: String,
         autoExecute: Bool = false,
         origin: TaskOrigin = .commandCenter,
         workspaceBinding: String? = nil,
-        fromComposer: Bool = false
-    ) {
+        fromComposer: Bool = false,
+        prebuiltPlan: AgentPlan? = nil
+    ) -> Bool {
+        guard !isAwaitingApproval else {
+            logStore.append(.observe, "Not started: an approval is still waiting for your answer.")
+            return false
+        }
         command = commandText
         start(
             autoExecute: autoExecute,
             origin: origin,
             workspaceBinding: workspaceBinding,
-            fromComposer: fromComposer
+            fromComposer: fromComposer,
+            prebuiltPlan: prebuiltPlan
         )
         guard command == commandText else {
-            return
+            return true
         }
         command = ""
+        // Every refused dispatch leaves a trace, at the one place every programmatic door passes
+        // through. Three of the five doors logged a refusal of their own and two did not — voice
+        // being the one that mattered, since it discards this result and its caller had already
+        // announced that Sonny was about to act. A per-door copy is what produced that gap; this is
+        // the same choke-point argument the clarification term is placed by.
+        //
+        // Cause-neutral on purpose. `canSubmit` refuses for a running task, an open clarification, a
+        // transcription in flight, and an empty command — and the last of those already has its own
+        // user-facing error from `start`. A line naming one cause would be wrong for the others,
+        // which is the defect the sheet's own removed message had. (PR #40 review, F5.)
+        logStore.append(.observe, "Not started: Sonny was not ready to begin another task.")
+        return false
     }
 
     /// Fills the widget composer with a ready-made command and brings the widget forward, refusing
@@ -399,8 +453,10 @@ final class AgentViewModel: ObservableObject {
     /// The compose half of the same invariant. These callers never reach `start`, so `dispatch`
     /// cannot cover them — but they write `command` just the same, and a partial command
     /// ("Create a workspace called ") left in a live pause corrupts the continuation exactly as a
-    /// refused dispatch would. Guard first, assign second, which is the ordering
-    /// `composeWorkspaceScopeEdit` already had and the reason it was the one door genuinely closed.
+    /// refused dispatch would. Guard first, assign second — the ordering the sheet's own
+    /// `composeWorkspaceScopeEdit` had, which was the one door genuinely closed at the time. That
+    /// function is gone as of SONNY-64 (the sheet dispatches now), so this is the last door of that
+    /// shape left, and the ordering is its own reason rather than a sibling's precedent.
     func composeCommand(_ commandText: String) {
         guard clarificationQuestion == nil else {
             logStore.append(.observe, "Composer prefill ignored while a clarification is open.")
@@ -455,6 +511,28 @@ final class AgentViewModel: ObservableObject {
 
     var isAwaitingApproval: Bool {
         approvalRequest != nil
+    }
+
+    /// Where the plan of the **most recently prepared** run came from, or `nil` when there is none.
+    /// SONNY-64's origin signal, as the rest of the app sees it.
+    ///
+    /// "Most recently prepared", not "in flight": `performStart` clears `preparedRun` when the next
+    /// run begins and `cancelCurrentRun` clears it on cancel, but a run that *completes* leaves it
+    /// set, so this keeps describing that run until another starts. Stated exactly because the
+    /// reader who matters is row C, which will consult it while a run is being assessed — where the
+    /// two readings coincide — and a doc claiming a narrower lifetime than the property has is the
+    /// kind of thing that gets believed at the one call site where it is false.
+    ///
+    /// Derived from `preparedRun` rather than kept in its own slot, deliberately. A second stored
+    /// property would need adding to `performStart`'s per-task reset, to the terminal `defer`, and
+    /// to `clearInMemoryLocalDataState`'s hand-written enumeration — and that enumeration has been
+    /// missed twice on this class already (`explicitWorkspaceBinding`, then `pendingWorkspaceBinding`
+    /// one ticket later). A slot that cannot go stale is worth more here than a saved property read.
+    ///
+    /// Read-only on purpose: row C will consume this, and nothing may set it. The only writer is
+    /// `AgentRunner.prepare`.
+    var activeTaskPlanSource: PreparedPlanSource? {
+        preparedRun?.source
     }
 
     var activeTaskCount: Int {
@@ -517,11 +595,19 @@ final class AgentViewModel: ObservableObject {
     ///   binding**; every other entry point kills it instead. Defaults to `false` so a call site
     ///   added later inherits the safe direction — a new dispatch that forgets to say anything
     ///   drops the arm rather than silently scoping itself with it.
+    /// - Parameter prebuiltPlan: An exact plan a screen already constructed — SONNY-64. Supplying it
+    ///   replaces *planning only*: the run skips both the instant resolver and the planner and
+    ///   executes this plan verbatim, then rejoins the identical path at `prepare`, so the
+    ///   assessment, the gate, the approval prompt, the events, and the history row are the ones the
+    ///   equivalent typed command would have produced. It is not a way past anything, and there is
+    ///   nowhere in this function or the next where it could become one — the only thing it changes
+    ///   is who wrote the plan.
     func start(
         autoExecute: Bool = false,
         origin: TaskOrigin = .commandCenter,
         workspaceBinding: String? = nil,
-        fromComposer: Bool = false
+        fromComposer: Bool = false,
+        prebuiltPlan: AgentPlan? = nil
     ) {
         if isAwaitingApproval {
             approvePendingRun()
@@ -571,7 +657,12 @@ final class AgentViewModel: ObservableObject {
         currentTask?.cancel()
         isRunning = true
         currentTask = Task {
-            await performStart(submittedCommand: submittedCommand, autoExecute: autoExecute, origin: origin)
+            await performStart(
+                submittedCommand: submittedCommand,
+                autoExecute: autoExecute,
+                origin: origin,
+                prebuiltPlan: prebuiltPlan
+            )
         }
     }
 
@@ -585,7 +676,12 @@ final class AgentViewModel: ObservableObject {
         error is CancellationError || (error as? URLError)?.code == .cancelled
     }
 
-    private func performStart(submittedCommand: String, autoExecute: Bool, origin: TaskOrigin) async {
+    private func performStart(
+        submittedCommand: String,
+        autoExecute: Bool,
+        origin: TaskOrigin,
+        prebuiltPlan: AgentPlan? = nil
+    ) async {
         activeTaskOrigin = origin
         errorMessage = nil
         finalSummary = ""
@@ -639,7 +735,24 @@ final class AgentViewModel: ObservableObject {
             let runner: AgentRunner
             let prepared: PreparedAgentRun
 
-            if let resolution = makeInstantCommandResolver().resolve(command: submittedCommand) {
+            // **First, and it has to be first.** The two branches below both start from
+            // `submittedCommand` — the resolver pattern-matches it, and anything it does not match
+            // falls through to `try OpenAIPlanner(...)`. A pre-built plan's command text is a
+            // *label* for history and the running indicator, not an instruction, and the resolver
+            // has no pattern for a workspace edit anyway; letting it reach either branch would send
+            // a plan the screen already built to the planner to be re-derived from a sentence — the
+            // exact round-trip this ticket removes, reintroduced one layer down and invisible,
+            // because the run would still work. Ordering is the enforcement: there is no path from
+            // here to a planner while `prebuiltPlan` is non-nil.
+            if let prebuiltPlan {
+                runner = AgentRunner(
+                    planner: InstantOnlyFallbackPlanner(),
+                    executor: executor,
+                    logStore: logStore,
+                    recentArtifactStore: recentArtifactStore
+                )
+                prepared = try runner.prepare(plan: prebuiltPlan, source: .directUserAction)
+            } else if let resolution = makeInstantCommandResolver().resolve(command: submittedCommand) {
                 runner = AgentRunner(
                     planner: InstantOnlyFallbackPlanner(),
                     executor: executor,
@@ -758,7 +871,17 @@ final class AgentViewModel: ObservableObject {
 
             let autoApprovalMessage: String
             if routineTrustApproval == .notRequested {
-                autoApprovalMessage = autoExecute ? "Voice command auto-approved execution" : "Typed command auto-approved execution"
+                // Read off the prepared run's own source rather than off `autoExecute`, which
+                // describes how the *text* arrived and says nothing true about a run that had no
+                // text to arrive. Unreachable for `edit_workspace`, whose floor is tier 2 and which
+                // therefore always pauses before this line — but this path is shared plumbing now
+                // (§B1's vision envelope is the next caller), and "unreachable today" is how a
+                // knowingly-wrong string survives to the day it is reachable.
+                if prepared.source == .directUserAction {
+                    autoApprovalMessage = "Screen-built action auto-approved execution"
+                } else {
+                    autoApprovalMessage = autoExecute ? "Voice command auto-approved execution" : "Typed command auto-approved execution"
+                }
             } else {
                 autoApprovalMessage = "Manual run approved by this routine's trust setting"
             }
@@ -1339,51 +1462,74 @@ final class AgentViewModel: ObservableObject {
         dispatch(command: "Open my \(workspace.name) workspace", autoExecute: true)
     }
 
-    /// Hands the widget composer a ready-made `edit_workspace` command from the detail sheet and
-    /// brings the widget forward.
+    /// Submits one boundary change the workspace detail sheet already knows exactly — SONNY-64.
     ///
-    /// **Deliberately does not dispatch.** The alternative — `start(autoExecute: true)`, the way
-    /// `openWorkspaceWidget` runs its synthesized command — would send a boundary change straight
-    /// to the planner with no chance for the user to read it first. The approval would still fire
-    /// (nothing here can skip it), but the user would be approving an edit they never composed, and
-    /// a planner misreading of "remove the folder ~/Documents/X" is a boundary change nobody typed.
-    /// Pre-filling is `beginNewWorkspace`'s idiom and keeps the composed text in front of the user.
+    /// **This dispatches where its predecessor composed, and that is the whole ticket.** Until now
+    /// the sheet handed the widget composer a ready-made sentence and stopped, because
+    /// `AgentViewModel` had no way to run a plan that a screen had built: the only routes to
+    /// execution started from text, so "run this edit" meant "have the planner read this sentence
+    /// back", and a planner misreading of *remove the folder ~/Documents/X* is a boundary change
+    /// nobody typed. The pre-built path removes the reading step instead of trusting it. What the
+    /// user approves is now, exactly and provably, what the row said.
     ///
-    /// It also writes nothing. Every scope mutation goes through `edit_workspace`, so the tier-2
-    /// add and tier-3 remove consents — including SONNY-40's "no longer restricts … at all" — are
-    /// exactly the ones the command line would raise. A store call here would be a second write
-    /// path that skips them.
+    /// **It still writes nothing itself.** Every scope mutation goes through `edit_workspace`, so
+    /// the tier-2 add and tier-3 remove consents — including SONNY-40's "no longer restricts … at
+    /// all" — are the ones the command line raises, unchanged and unshortened. A store call here
+    /// would be the second write path SONNY-41 adjudicated against; the sheet's one direct write is
+    /// still `markWorkspaceAsTeam`, a display badge rather than a boundary.
     ///
-    /// **Drops any armed card binding.** A scope edit composed from workspace B's sheet is a new
-    /// composition context, and the composer dispatch is the one dispatch permitted to consume a
-    /// pending arm — so leaving an arm from "New task here" on workspace A alive would run this edit
-    /// bound to A while its command edits B, under a chip naming A. A chip naming an unrelated
-    /// workspace over an edit command is exactly the confusion the arm rules exist to prevent, and
-    /// `start`'s own contract puts every non-composer entry point on the side of killing the arm
-    /// rather than inheriting it. `beginNewWorkspace` leaves the arm alive, but it hands over an
-    /// *incomplete* command the user is still composing; this one hands over a finished instruction
-    /// about a named workspace.
+    /// **It is not `fromComposer`, so an accepted dispatch kills any armed card binding** rather than
+    /// inheriting one. An edit dispatched from workspace B's sheet while "New task here" is armed on
+    /// workspace A would otherwise run bound to A while editing B, under a chip naming A. `start`
+    /// does the killing; it is named here because the reason is this function's, not `start`'s.
     ///
-    /// Summons through `widgetPresentationRequest`, never `FloatingWidgetWindowController.show()`:
-    /// SONNY-25 exists to remove the remaining direct callers and this must not add one.
-    /// **Refuses while a clarification is open**, for the reason `dispatchTranscribedCommand`
-    /// records: the entry gate covers the buttons, this covers the timing.
+    /// A *refused* dispatch leaves the arm alone, and that is the correct rule rather than a gap in
+    /// this one. The arm's contract is that it binds the next composer dispatch, and a refusal means
+    /// no dispatch happened — so the user's earlier "New task here on A" is still unconsumed and
+    /// still what they asked for. Killing it here would silently discard an intent because an
+    /// unrelated button was pressed at an unlucky moment.
     ///
-    /// `composeWorkspaceScopeEdit` does not dispatch, so `canSubmit` never sees it — it writes
-    /// straight into `command`, which is the property `submitClarification` interpolates the pause's
-    /// question and answer *around*. Composing during a pause therefore produced a continuation that
-    /// was the unrelated edit text plus the Q&A, re-planned under the paused task's own captured
-    /// workspace binding, so an explicitly-bound task assessed the edit against the wrong
-    /// workspace's boundary. Nothing executed unapproved — but the assessment named the wrong
-    /// boundary, which is the property this branch exists to provide.
-    func composeWorkspaceScopeEdit(_ command: String) {
-        guard clarificationQuestion == nil else {
-            logStore.append(.observe, "Workspace edit ignored while a clarification is open.")
-            return
+    /// The arm is not hidden, but it is not necessarily on screen at the moment of the refusal
+    /// either: `boundWorkspaceName` prefers the *in-flight* task's binding and falls back to the
+    /// arm, so while the task that caused the refusal is still live the chip names that task's
+    /// workspace and the arm reappears once it clears. Written out because "the arm stays visible"
+    /// is the tempting summary and it is wrong for exactly the window this path runs in.
+    ///
+    /// **Refusals.** The clarification-pause door and the already-running door are both inherited
+    /// rather than re-implemented: this goes through `dispatch`, so `canSubmit`'s terms apply to it
+    /// exactly as they apply to the composer's own Send. That is deliberate — H1's lesson was that
+    /// a per-surface copy of the rule is a gap waiting for the next surface, and a fourth copy here
+    /// would be the fourth chance to write it slightly differently. The log line is the part that is
+    /// this function's own, because a button that appears to do nothing needs a reason recorded
+    /// somewhere.
+    ///
+    /// **Summons the widget on success, through `widgetPresentationRequest` and never
+    /// `FloatingWidgetWindowController.show()`** (SONNY-25). Not decoration: `edit_workspace` starts
+    /// at tier 2, so *every* edit from this sheet pauses for approval, and the sheet is a modal over
+    /// the very page whose `CommandCenterAttentionPanel` would otherwise show it. The floating
+    /// widget is a separate window and is the one surface a modal cannot cover, so without this the
+    /// user would be left holding an approval with nowhere to answer it.
+    /// - Returns: whether the edit was submitted. The picker keeps itself open on `false` rather
+    ///   than closing over a refusal — its controls are disabled while a task is in flight, so a
+    ///   refusal here means the state changed between the render and the click, and dismissing would
+    ///   leave the user with a dialog that closed and an edit that never happened.
+    @discardableResult
+    func dispatchWorkspaceScopeEdit(_ edit: WorkspaceScopeEditDispatch) -> Bool {
+        let accepted = dispatch(
+            command: edit.displayCommand,
+            prebuiltPlan: EditWorkspaceCapabilityAdapter.plan(for: edit.request)
+        )
+        guard accepted else {
+            // No message of its own any more: `dispatch` records the refusal for every door, and
+            // this one's wording claimed "another task needs you", which is true of a pending
+            // approval or an open clarification and false of a plain in-flight run where nothing
+            // needs the user at all. One accurate line beats a specific inaccurate one. (PR #40
+            // review, cycle 1 — the recorded observation, fixed while F5 was open in the same
+            // function.)
+            return false
         }
-        pendingWorkspaceBinding = nil
-        self.command = command
         widgetPresentationRequest += 1
+        return true
     }
 
     func markWorkspaceAsTeam(_ workspace: StoredWorkspace) {
@@ -1689,7 +1835,12 @@ final class AgentViewModel: ObservableObject {
                 finalSummary = ""
                 isTranscribingVoice = false
                 preserveUsageForNextStart = true
-                logStore.append(.observe, "Transcript ready. Sonny will act now.")
+                // States only what is known here. "Sonny will act now" was written *before* the
+                // dispatch and was contradicted by it whenever the dispatch was refused — a
+                // transcription that completed into a pending approval left the spoken words gone,
+                // no error set, and this sentence as the last thing said about them. What happens
+                // next is `dispatch`'s to record, and it now does, on every door. (PR #40 review, F5.)
+                logStore.append(.observe, "Transcript ready.")
                 dispatchTranscribedCommand(result.text, origin: voiceRecordingOrigin)
             } catch {
                 isTranscribingVoice = false

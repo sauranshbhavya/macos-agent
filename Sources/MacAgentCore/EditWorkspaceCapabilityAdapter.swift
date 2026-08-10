@@ -1,5 +1,37 @@
 import Foundation
 
+/// One boundary change, described exactly, by something that already knows precisely what it wants
+/// — a screen the user clicked, not a sentence anything had to interpret.
+///
+/// One entry, one dimension, one direction, on purpose. The picker's affordances are each a single
+/// act, and a request that could express more than one would need its own rules for what
+/// `edit_workspace` already decides (a plan may edit a workspace only once, so "add A and remove B"
+/// has to be one step, not two) — rules that would then be a second place those rules live.
+/// Batching, if it is ever wanted, extends this type deliberately; it does not fall out of a shape
+/// that was permissive by accident.
+public struct WorkspaceScopeEditRequest: Equatable, Sendable {
+    public enum Action: String, Equatable, Sendable {
+        case add
+        case remove
+    }
+
+    public var workspaceName: String
+    public var kind: ScopedResourceKind
+    /// For an addition, the entry to store. For a removal, **the tapped row's stored value** — which
+    /// the adapter then folds to its own removal key, so everything sharing that key goes with it.
+    /// That coarseness is the honest thing rather than a leak: it is exactly what the typed command
+    /// does today, and the sheet discloses it in the row's shared-removal note before the tap.
+    public var value: String
+    public var action: Action
+
+    public init(workspaceName: String, kind: ScopedResourceKind, value: String, action: Action) {
+        self.workspaceName = workspaceName
+        self.kind = kind
+        self.value = value
+        self.action = action
+    }
+}
+
 /// Adds and removes the three things a workspace's restriction scope is made of.
 ///
 /// Until this capability existed a workspace could only be *created*, so `fileLocations` had no way
@@ -44,6 +76,53 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
         requiredPermissions: [],
         defaultRiskTier: .tier2
     )
+
+    /// The exact plan a screen dispatches for one boundary change — the same plan the planner would
+    /// have had to produce from the equivalent typed sentence, built without asking it.
+    ///
+    /// **It grants nothing.** Every consent this capability raises is computed downstream, from the
+    /// plan and the store, by `assessRisk` — the tier-2 default for an addition, the tier-3
+    /// escalation for a removal, the distinct dimension-emptying reason, the silence for an entry
+    /// that was already inert. None of that is expressible here and none of it is passed in, so a
+    /// plan built by this function reaches the gate carrying exactly what a planner-built one
+    /// carries: the requested change, and nothing about how it should be judged. That is the whole
+    /// reason a pre-built plan is safe to allow — this factory is a scribe, not an authority.
+    ///
+    /// `requiresConfirmation: true` matches what the change is, not what the gate does with it: the
+    /// gate reads the assessed tier and never this field.
+    public static func plan(for request: WorkspaceScopeEditRequest) -> AgentPlan {
+        let sentence: String
+        switch request.action {
+        case .add:
+            sentence = "Add \(request.value) to workspace \(request.workspaceName)."
+        case .remove:
+            sentence = "Remove \(request.value) from workspace \(request.workspaceName)."
+        }
+        var step = AgentStep(
+            id: "edit-workspace",
+            operation: .editWorkspace,
+            description: sentence,
+            workspaceName: request.workspaceName
+        )
+        // Written as one assignment per (kind, action) pair rather than through a shared helper, so
+        // that the field a given request lands in is readable here and pinned by a test per pair.
+        // Six one-line branches beat one clever mapping whose mistakes are invisible.
+        switch (request.kind, request.action) {
+        case (.app, .add):
+            step.workspaceApps = [request.value]
+        case (.app, .remove):
+            step.workspaceAppsToRemove = [request.value]
+        case (.webDomain, .add):
+            step.workspaceURLs = [request.value]
+        case (.webDomain, .remove):
+            step.workspaceURLsToRemove = [request.value]
+        case (.fileLocation, .add):
+            step.workspaceFileLocations = [request.value]
+        case (.fileLocation, .remove):
+            step.workspaceFileLocationsToRemove = [request.value]
+        }
+        return AgentPlan(summary: sentence, requiresConfirmation: true, steps: [step])
+    }
 
     /// Refuses a plan that edits the **same** workspace more than once, and lets a plan editing
     /// *different* workspaces through.
@@ -588,9 +667,55 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
         kind: ScopedResourceKind,
         context: CapabilityExecutionContext
     ) -> String? {
+        removalMatchKey(raw, kind: kind, catalog: context.appCatalog)
+    }
+
+    /// For each stored entry, the *other* stored entries that a removal naming it would take with
+    /// it. Index-aligned with `values`.
+    ///
+    /// **Public so that the surface which shows a Remove button and the code that performs the
+    /// removal are answering with the same function, not with two that agree in the cases anyone
+    /// tested.** The detail sheet used to compute this by probing `WorkspaceScope.verdict(for:)`
+    /// symmetrically, because these keys were not visible outside this module — a careful
+    /// reconstruction that matched for every entry the evaluator considers live, and silently
+    /// under-reported for every entry it does not. A lone inert entry makes its own single-entry
+    /// scope `.unconstrained`, so the probe could never return `.inScope` for it, so two inert
+    /// entries that fold to one key here — `~/Downloads/Alpha` and `~/Downloads/Alpha/`, both
+    /// outside the whitelist — were drawn as independent rows whose Remove buttons promised to take
+    /// one and took both (recorded as SONNY-41 R-1, never fixed; SONNY-42 turned out to be
+    /// docs-only). Exporting the real answer removes the second mechanism rather than teaching it
+    /// about one more case.
+    ///
+    /// `whitelist` is not a parameter because no branch of `removalMatchKey` consults one: a stored
+    /// location outside the whitelist is inert but still removable, which is deliberate — refusing
+    /// to name it would make it the one entry a user could never delete.
+    public static func removalUnits(
+        kind: ScopedResourceKind,
+        values: [String],
+        catalog: MacAppCatalog = .default
+    ) -> [[String]] {
+        let keys = values.map { removalMatchKey($0, kind: kind, catalog: catalog) }
+        return values.indices.map { index in
+            // A `nil` key belongs to no unit and takes nothing with it — `listArithmetic` skips
+            // exactly those entries when it applies a removal, so reporting them as grouped would
+            // claim a deletion that cannot happen.
+            guard let mine = keys[index] else {
+                return []
+            }
+            return values.indices.compactMap { other in
+                other != index && keys[other] == mine ? values[other] : nil
+            }
+        }
+    }
+
+    private static func removalMatchKey(
+        _ raw: String,
+        kind: ScopedResourceKind,
+        catalog: MacAppCatalog
+    ) -> String? {
         switch kind {
         case .app:
-            return WorkspaceScope.appKey(for: raw, catalog: context.appCatalog)
+            return WorkspaceScope.appKey(for: raw, catalog: catalog)
 
         case .webDomain:
             // Hosts on both sides, not full URLs, and for two independent reasons. A removal that
