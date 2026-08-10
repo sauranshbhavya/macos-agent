@@ -594,9 +594,14 @@ struct WorkspaceDetailSheetTests {
         let slack = try #require(
             picker.categories.flatMap(\.entries).first { $0.name == "Slack" }
         )
-        viewModel.dispatchWorkspaceScopeEdit(slack.dispatch)
+        // The return value is the picker's dismissal signal — it closes only on `true`, so a
+        // dispatch that succeeded while reporting otherwise would leave the dialog stacked over the
+        // approval it just raised. Asserted after a mutation battery: inverting this return left the
+        // whole suite green.
+        let accepted = viewModel.dispatchWorkspaceScopeEdit(slack.dispatch)
         try await waitForSheetViewModelToBecomeIdle(viewModel)
 
+        #expect(accepted)
         #expect(viewModel.isAwaitingApproval)
         let request = try #require(viewModel.approvalRequest)
         #expect(request.assessment.effectiveTier == .tier2)
