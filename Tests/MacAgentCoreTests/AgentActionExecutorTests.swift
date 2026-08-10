@@ -404,8 +404,8 @@ struct AgentActionExecutorTests {
 
     // MARK: - SONNY-29: chain-segmented risk assessment
 
-    /// SONNY-29's concrete failure. `.createLocalDraft` is in `shouldChainWhenRepeated`'s true
-    /// list, so two draft steps become a `.chain` and `executeChain` writes both — but `assessRisk`
+    /// SONNY-29's concrete failure. Two draft steps are two units, so they become a `.chain` and
+    /// `executeChain` writes both — but `assessRisk`
     /// used to hand the whole plan to the draft adapter exactly once, and the adapter picks its
     /// step with `.first(where:)`. Only the first draft was ever checked, so the second overwrote
     /// an existing file at tier 2, with no collision escalation and no explicit-approval gate.
@@ -475,11 +475,16 @@ struct AgentActionExecutorTests {
         #expect(assessment.escalations.first?.reason == "Draft output already exists at \(shared.path).")
     }
 
-    /// The same defect in the zip capability. `[scan, zip]` on its own is not a chain — repeated
-    /// `.largestFiles` steps do not chain, so only one zip is executed *and* assessed, which is
-    /// consistent. It takes a chain (here, an `.openApp` step between the two pairs) for
-    /// `executeChain` to really create both archives; before segmenting, only the first pair's
-    /// output was ever checked for a collision.
+    /// The same defect in the zip capability, in the shape SONNY-29 could reach: an `.openApp` step
+    /// between the two pairs makes the plan a chain, so `executeChain` really creates both archives
+    /// while — before segmenting — only the first pair's output was ever checked for a collision.
+    ///
+    /// The interposed step is no longer what makes this a chain. When this test was written, a
+    /// *bare* `[scan, zip, scan, zip]` was not a chain at all: only the first pair executed, so only
+    /// the first pair being assessed was at least self-consistent. SONNY-34 ended that — both pairs
+    /// now execute and both are assessed, pinned by
+    /// `theSecondPairOfARepeatedLargestFilesPlanIsRiskAssessedForItsOwnCollision`. This test keeps
+    /// its own value as the mixed-chain variant of the same guarantee.
     @Test
     func secondZipSegmentInAChainEscalatesWhenItsOwnOutputAlreadyExists() throws {
         let root = try makeDirectory()
@@ -744,6 +749,279 @@ struct AgentActionExecutorTests {
                 reason: "Draft output already exists at \(existingDraft.path)."
             )
         ])
+    }
+
+    // MARK: - SONNY-34: every unit of a repeated non-chaining workflow executes
+    //
+    // Before this, a plan whose steps all mapped to one of the five workflows that absorb several
+    // steps into one adapter call — `.clarify`, `.largestFiles`, `.docx`, `.hackerNews`,
+    // `.webResearch` — was handed to that adapter exactly once, and every adapter picks its step
+    // with `.first(where:)`. Everything after the first occurrence was dropped with no error, no
+    // log line, and no mention in the summary, while the run reported success. Each test below
+    // fails loudly on a revert, because each asserts the *second* unit's concrete side effect.
+
+    /// SONNY-34's headline failure, verbatim: "zip the 3 largest files in A and the 3 largest in
+    /// B". Both pairs map to `.largestFiles`, so before this the plan was not a chain, one adapter
+    /// call selected scan(A) and zip(a), and `b.zip` was never created — while the summary named
+    /// `a.zip` as a success.
+    ///
+    /// Asserted on the archives' real contents rather than on their existence: `CapturingZipArchiver`
+    /// records only the last call, so proving *both* ran means proving each archive was built from
+    /// its own folder's file. That is also what would catch the subtler wrong fix, where both units
+    /// run but the second re-uses the first unit's resolved folder.
+    @Test
+    func bothZipPairsOfARepeatedLargestFilesPlanCreateTheirOwnArchive() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folderA = root.appendingPathComponent("A", isDirectory: true)
+        let folderB = root.appendingPathComponent("B", isDirectory: true)
+        try FileManager.default.createDirectory(at: folderA, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: folderB, withIntermediateDirectories: true)
+        try write(String(repeating: "a", count: 2048), to: folderA.appendingPathComponent("from-a.txt"))
+        try write(String(repeating: "b", count: 2048), to: folderB.appendingPathComponent("from-b.txt"))
+        let zipA = root.appendingPathComponent("a.zip")
+        let zipB = root.appendingPathComponent("b.zip")
+        let executor = makeExecutor(root: root)
+
+        let result = try await executor.execute(
+            plan: twoLargestFilesPairsPlan(folderA: folderA, zipA: zipA, folderB: folderB, zipB: zipB)
+        ) { _, _ in }
+
+        #expect(FileManager.default.fileExists(atPath: zipA.path))
+        #expect(FileManager.default.fileExists(atPath: zipB.path))
+        // Compared as whole arrays rather than by index: a revert leaves one preview, and
+        // subscripting it would trap the whole test process instead of failing this one test.
+        #expect(result.previews.map(\.writes) == [[zipA.path], [zipB.path]])
+        let scannedFiles = result.previews.map { $0.details.joined(separator: " ") }
+        #expect(scannedFiles.first?.contains("from-a.txt") == true)
+        #expect(scannedFiles.last?.contains("from-b.txt") == true)
+        #expect(result.summary.contains("Created a.zip"))
+        #expect(result.summary.contains("Created b.zip"))
+    }
+
+    /// The assessment half of the same plan, and the reason this matters beyond wasted work: the
+    /// second pair's output collision could not raise anything, because the second pair did not
+    /// exist as far as any gate was concerned. `assessRisk` walks the units the executor runs, so
+    /// making the second pair run is what makes it assessable.
+    @Test
+    func theSecondPairOfARepeatedLargestFilesPlanIsRiskAssessedForItsOwnCollision() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folderA = root.appendingPathComponent("A", isDirectory: true)
+        let folderB = root.appendingPathComponent("B", isDirectory: true)
+        try FileManager.default.createDirectory(at: folderA, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: folderB, withIntermediateDirectories: true)
+        try write(String(repeating: "a", count: 2048), to: folderA.appendingPathComponent("from-a.txt"))
+        try write(String(repeating: "b", count: 2048), to: folderB.appendingPathComponent("from-b.txt"))
+        let zipA = root.appendingPathComponent("a.zip")
+        let zipB = root.appendingPathComponent("b.zip")
+        try write("existing zip", to: zipB)
+        let executor = makeExecutor(root: root)
+
+        let assessment = try executor.assessRisk(
+            plan: twoLargestFilesPairsPlan(folderA: folderA, zipA: zipA, folderB: folderB, zipB: zipB),
+            scope: .unscoped
+        )
+
+        #expect(assessment.effectiveTier == .tier3)
+        #expect(assessment.approvalRequirement() == .explicitApproval)
+        #expect(assessment.escalations == [
+            CapabilityRiskEscalation(
+                fromTier: .tier2,
+                toTier: .tier3,
+                reason: "Zip output already exists at \(zipB.path)."
+            )
+        ])
+    }
+
+    /// The same shape in the DOCX capability. Two `[scan_docx, convert_docx_to_pdf]` pairs over two
+    /// folders converted only the first folder's documents.
+    @Test
+    func bothDocxPairsOfARepeatedConversionPlanConvertTheirOwnFolder() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folderA = root.appendingPathComponent("A", isDirectory: true)
+        let folderB = root.appendingPathComponent("B", isDirectory: true)
+        try FileManager.default.createDirectory(at: folderA, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: folderB, withIntermediateDirectories: true)
+        try write("docx-a", to: folderA.appendingPathComponent("a.docx"))
+        try write("docx-b", to: folderB.appendingPathComponent("b.docx"))
+        let executor = makeExecutor(root: root, documentConverter: FakeDocumentConverter())
+        let plan = AgentPlan(
+            summary: "Convert the Word documents in both folders.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "scan-a", operation: .scanDocx, description: "Scan A.", inputPath: folderA.path),
+                AgentStep(id: "convert-a", operation: .convertDocxToPDF, description: "Convert A.", inputPath: folderA.path),
+                AgentStep(id: "scan-b", operation: .scanDocx, description: "Scan B.", inputPath: folderB.path),
+                AgentStep(id: "convert-b", operation: .convertDocxToPDF, description: "Convert B.", inputPath: folderB.path)
+            ]
+        )
+
+        _ = try await executor.execute(plan: plan) { _, _ in }
+
+        #expect(FileManager.default.fileExists(atPath: folderA.appendingPathComponent("a.pdf").path))
+        #expect(FileManager.default.fileExists(atPath: folderB.appendingPathComponent("b.pdf").path))
+    }
+
+    /// The same shape in the web-research capability. Two `.webToMarkdown` steps fetched and wrote
+    /// one note; the second source was never fetched at all.
+    @Test
+    func bothWebResearchStepsOfARepeatedPlanFetchAndWriteTheirOwnNote() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let firstSource = URL(string: "https://example.com/first")!
+        let secondSource = URL(string: "https://example.com/second")!
+        let firstOutput = root.appendingPathComponent("first.md")
+        let secondOutput = root.appendingPathComponent("second.md")
+        let pageLoader = webPageLoader(pages: [
+            firstSource.absoluteString: readablePage(url: firstSource, title: "First Article"),
+            secondSource.absoluteString: readablePage(url: secondSource, title: "Second Article")
+        ])
+        let synthesizer = StaticWebResearchSynthesizer(
+            note: WebResearchNote(title: "Note", summary: "A summary.", keyPoints: [], citations: [])
+        )
+        let executor = makeExecutor(root: root, webPageLoader: pageLoader, webResearchSynthesizer: synthesizer)
+        let plan = AgentPlan(
+            summary: "Summarize both articles.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "research-1",
+                    operation: .webToMarkdown,
+                    description: "Summarize the first article.",
+                    outputPath: firstOutput.path,
+                    targetURL: firstSource.absoluteString
+                ),
+                AgentStep(
+                    id: "research-2",
+                    operation: .webToMarkdown,
+                    description: "Summarize the second article.",
+                    outputPath: secondOutput.path,
+                    targetURL: secondSource.absoluteString
+                )
+            ]
+        )
+
+        _ = try await executor.execute(plan: plan) { _, _ in }
+
+        #expect(try String(contentsOf: firstOutput).contains("[First Article](https://example.com/first)"))
+        #expect(try String(contentsOf: secondOutput).contains("[Second Article](https://example.com/second)"))
+        #expect(synthesizer.prompts.count == 2)
+    }
+
+    /// A repeated clarification is the one repeat that must not become a chain: a clarification is
+    /// a question asked instead of acting, and `execute` refuses the workflow outright. Answering
+    /// with the first question while a second went unasked is the same silent drop, so it is
+    /// rejected with the error a clarification mixed with real work already gets.
+    @Test
+    func aPlanWithTwoClarificationStepsIsRejectedRatherThanAnsweringOnlyTheFirst() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root)
+        let plan = AgentPlan(
+            summary: "Ask twice.",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(id: "ask-1", operation: .clarify, description: "Ask which folder.", question: "Which folder?"),
+                AgentStep(id: "ask-2", operation: .clarify, description: "Ask which file.", question: "Which file?")
+            ]
+        )
+
+        #expect(throws: AgentExecutionError.invalidPlan("Clarification must be the only planned step.")) {
+            try executor.prepare(plan: plan)
+        }
+    }
+
+    /// No-drift, and the load-bearing half of the rewrite. `[scan, zip]` reads across both steps
+    /// inside one adapter call, so it must stay **one** unit — splitting it would scan with no zip
+    /// destination and then zip with no scanned folder. A unit-counting classifier that counted
+    /// steps instead of units would break exactly here.
+    @Test
+    func aSingleScanAndZipPairIsStillOneUnitProducingOneArchive() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(String(repeating: "x", count: 2048), to: root.appendingPathComponent("large.txt"))
+        let output = root.appendingPathComponent("largest.zip")
+        let executor = makeExecutor(root: root)
+
+        let result = try await executor.execute(plan: largestPlan(root: root, output: output)) { _, _ in }
+
+        #expect(result.previews.map(\.writes) == [[output.path]])
+        #expect(result.summary == "Created largest.zip with 1 largest files from \(root.path).")
+    }
+
+    /// The same no-drift guarantee for the three-step Hacker News preset, which absorbs three
+    /// distinct operations into one unit.
+    @Test
+    func theHackerNewsPresetIsStillOneUnitWritingOneMarkdownFile() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let output = root.appendingPathComponent("hn.md")
+        let executor = makeExecutor(root: root)
+
+        let result = try await executor.execute(plan: hnPlan(output: output)) { _, _ in }
+
+        #expect(result.previews.count == 1)
+        #expect(result.summary == "Saved 5 Hacker News headlines to \(output.path).")
+    }
+
+    /// A run led by a *later* member of its workflow is one unit too. The old segmentation was
+    /// anchored at `.openHackerNews` alone, so a preset plan that omits the browser-open step —
+    /// `[fetch_hn_headlines, write_markdown]`, which `WebResearchMarkdownCapabilityAdapter` reads
+    /// as one preset — would have been cut into two units the adapter never services separately.
+    /// Pinning it here is what stops the classifier rewrite from turning one write into two.
+    @Test
+    func aHackerNewsFetchAndWriteWithNoOpenStepIsStillOneUnit() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let output = root.appendingPathComponent("hn.md")
+        let executor = makeExecutor(root: root)
+        let plan = AgentPlan(
+            summary: "Save the Hacker News headlines.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "fetch", operation: .fetchHNHeadlines, description: "Fetch headlines.", count: 5),
+                AgentStep(id: "write", operation: .writeMarkdown, description: "Write Markdown.", outputPath: output.path, count: 5)
+            ]
+        )
+
+        let result = try await executor.execute(plan: plan) { _, _ in }
+
+        #expect(result.previews.count == 1)
+        #expect(result.summary == "Saved 5 Hacker News headlines to \(output.path).")
+    }
+
+    /// And the converse: a duplicate operation inside one workflow's run ends the unit. Two
+    /// `.fetch_hn_headlines` steps are two presets, because `hackerNewsSpec` reads one fetch step
+    /// per call and would otherwise drop the second — the same first-match drop, one operation
+    /// deeper than the plan-level one.
+    @Test
+    func aDuplicateOperationInsideOneWorkflowsRunStartsANewUnit() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let firstOutput = root.appendingPathComponent("hn-1.md")
+        let secondOutput = root.appendingPathComponent("hn-2.md")
+        let executor = makeExecutor(root: root)
+        let plan = AgentPlan(
+            summary: "Save two headline digests.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "fetch-1", operation: .fetchHNHeadlines, description: "Fetch headlines.", count: 5),
+                AgentStep(id: "write-1", operation: .writeMarkdown, description: "Write the first digest.", outputPath: firstOutput.path, count: 5),
+                AgentStep(id: "fetch-2", operation: .fetchHNHeadlines, description: "Fetch headlines again.", count: 3),
+                AgentStep(id: "write-2", operation: .writeMarkdown, description: "Write the second digest.", outputPath: secondOutput.path, count: 3)
+            ]
+        )
+
+        let result = try await executor.execute(plan: plan) { _, _ in }
+
+        #expect(result.previews.count == 2)
+        #expect(FileManager.default.fileExists(atPath: firstOutput.path))
+        #expect(FileManager.default.fileExists(atPath: secondOutput.path))
+        // The second unit's own `count` is honoured — proof it was serviced by its own steps
+        // rather than by a re-run of the first unit's.
+        #expect(result.summary == "Saved 5 Hacker News headlines to \(firstOutput.path). Saved 3 Hacker News headlines to \(secondOutput.path).")
     }
 
     // MARK: - SONNY-24: a routine binds its own browser
@@ -3123,9 +3401,25 @@ struct AgentActionExecutorTests {
         )
     }
 
+    /// Two complete `[scan_select_largest_files, create_zip]` pairs over two folders, with nothing
+    /// between them — SONNY-34's headline plan shape. Explicit destinations, so the plan says
+    /// unambiguously that two archives were asked for.
+    private func twoLargestFilesPairsPlan(folderA: URL, zipA: URL, folderB: URL, zipB: URL) -> AgentPlan {
+        AgentPlan(
+            summary: "Zip the largest files in both folders.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "scan-a", operation: .scanSelectLargestFiles, description: "Scan A.", inputPath: folderA.path, count: 3),
+                AgentStep(id: "zip-a", operation: .createZip, description: "Zip A.", inputPath: folderA.path, outputPath: zipA.path, count: 3),
+                AgentStep(id: "scan-b", operation: .scanSelectLargestFiles, description: "Scan B.", inputPath: folderB.path, count: 3),
+                AgentStep(id: "zip-b", operation: .createZip, description: "Zip B.", inputPath: folderB.path, outputPath: zipB.path, count: 3)
+            ]
+        )
+    }
+
     /// Two `.createLocalDraft` steps with explicit, independent destinations — the plan
     /// "draft a note at a.md and another at b.md" produces. Both steps really execute
-    /// (`shouldChainWhenRepeated` chains repeated drafts), so both have to be assessed.
+    /// (a draft step is its own unit, so two of them chain), so both have to be assessed.
     private func draftChainPlan(first: URL, second: URL) -> AgentPlan {
         AgentPlan(
             summary: "Draft two notes.",
