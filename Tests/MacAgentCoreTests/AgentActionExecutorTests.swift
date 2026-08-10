@@ -1024,6 +1024,201 @@ struct AgentActionExecutorTests {
         #expect(result.summary == "Saved 5 Hacker News headlines to \(firstOutput.path). Saved 3 Hacker News headlines to \(secondOutput.path).")
     }
 
+    // MARK: - SONNY-35: every unit resolves its own default output path
+    //
+    // `resolveDefaultOutputs` called each adapter once with the whole plan, and adapters resolve
+    // with `.first(where:)`, so every occurrence after the first kept `outputPath == nil` in the
+    // prepared plan. Two consequences, and both are pinned below: the preview and the approval
+    // copy's "Involves:" line named one file while the run wrote two, and an unresolved default was
+    // re-derived independently at assessment time and again at execution time — so the path the
+    // risk engine checked for a collision was not the path that got written.
+
+    /// The prepared plan has to name every file the run will write. Two drafts with distinct titles
+    /// and no destinations: before this, `prepared.plan.steps[1].outputPath` was nil and the preview
+    /// listed one write.
+    @Test
+    func bothDraftsInAChainResolveTheirOwnDefaultDestination() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let executor = makeExecutor(root: root, now: { stamp })
+
+        let prepared = try executor.prepare(plan: untitledDraftChainPlan(firstTitle: "Alpha", secondTitle: "Beta"))
+
+        let firstPath = try #require(prepared.plan.steps.first?.outputPath)
+        let secondPath = try #require(prepared.plan.steps.last?.outputPath)
+        #expect(firstPath.hasSuffix("/draft-alpha-\(Timestamp.fileSafe(stamp)).md"))
+        #expect(secondPath.hasSuffix("/draft-beta-\(Timestamp.fileSafe(stamp)).md"))
+        #expect(prepared.previews.flatMap(\.writes).sorted() == [firstPath, secondPath].sorted())
+    }
+
+    /// Resolving both is not enough on its own: two drafts the planner gives no titles both derive
+    /// their name from the shared plan summary, and `Timestamp.fileSafe` is second-resolution, so
+    /// the two generated names are byte-identical and the second write destroys the first. A
+    /// generated destination that an earlier step of the same plan already claimed is suffixed.
+    @Test
+    func twoDraftsGeneratingTheSameDefaultNameResolveToDistinctFiles() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let executor = makeExecutor(root: root, now: { stamp })
+
+        let prepared = try executor.prepare(plan: untitledDraftChainPlan(firstTitle: nil, secondTitle: nil))
+        _ = try await executor.execute(plan: prepared.plan) { _, _ in }
+
+        let firstPath = try #require(prepared.plan.steps.first?.outputPath)
+        let secondPath = try #require(prepared.plan.steps.last?.outputPath)
+        #expect(firstPath.hasSuffix("/draft-draft-two-notes-\(Timestamp.fileSafe(stamp)).md"))
+        #expect(secondPath.hasSuffix("/draft-draft-two-notes-\(Timestamp.fileSafe(stamp))-2.md"))
+        #expect(try String(contentsOf: URL(fileURLWithPath: firstPath)).contains("First note."))
+        #expect(try String(contentsOf: URL(fileURLWithPath: secondPath)).contains("Second note."))
+    }
+
+    /// The disambiguated path is the one the risk engine checks. A file already sitting at the
+    /// second draft's suffixed destination raises the collision escalation naming that exact path —
+    /// which also proves the suffixing does not sidestep the escalation: it only avoids the plan
+    /// colliding with *itself*, never with what is on disk.
+    @Test
+    func theDisambiguatedSecondDraftPathIsTheOneRiskAssessmentChecks() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let occupied = root.appendingPathComponent("draft-draft-two-notes-\(Timestamp.fileSafe(stamp))-2.md")
+        try write("existing draft", to: occupied)
+        let executor = makeExecutor(root: root, now: { stamp })
+
+        let assessment = try executor.assessRisk(
+            plan: untitledDraftChainPlan(firstTitle: nil, secondTitle: nil),
+            scope: .unscoped
+        )
+
+        #expect(assessment.effectiveTier == .tier3)
+        #expect(assessment.escalations == [
+            CapabilityRiskEscalation(
+                fromTier: .tier2,
+                toTier: .tier3,
+                reason: "Draft output already exists at \(occupied.path)."
+            )
+        ])
+    }
+
+    /// A destination the plan named itself is never renamed, even when two steps name the same one.
+    /// Writing somewhere other than where a plan explicitly said to would be a worse failure than
+    /// the collision, and the existing-file case already has its own escalation.
+    @Test
+    func twoDraftsExplicitlyNamingOneDestinationAreLeftExactlyAsWritten() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let shared = root.appendingPathComponent("shared.md")
+        let executor = makeExecutor(root: root)
+
+        let prepared = try executor.prepare(plan: draftChainPlan(first: shared, second: shared))
+
+        #expect(prepared.plan.steps.first?.outputPath == shared.path)
+        #expect(prepared.plan.steps.last?.outputPath == shared.path)
+    }
+
+    /// The half of SONNY-35 that could not have been fixed inside the adapter. A second
+    /// `create_zip` with no destination defaults to a name inside **its own** pair's scan folder;
+    /// an adapter handed the whole plan reads the first scan step for both and would answer with
+    /// folder A twice.
+    @Test
+    func theSecondZipUnitsDefaultDestinationComesFromItsOwnScanFolder() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folderA = root.appendingPathComponent("A", isDirectory: true)
+        let folderB = root.appendingPathComponent("B", isDirectory: true)
+        try FileManager.default.createDirectory(at: folderA, withIntermediateDirectories: true)
+        try FileManager.default.createDirectory(at: folderB, withIntermediateDirectories: true)
+        try write(String(repeating: "a", count: 2048), to: folderA.appendingPathComponent("from-a.txt"))
+        try write(String(repeating: "b", count: 2048), to: folderB.appendingPathComponent("from-b.txt"))
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let executor = makeExecutor(root: root, now: { stamp })
+        let plan = AgentPlan(
+            summary: "Zip the largest files in both folders.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "scan-a", operation: .scanSelectLargestFiles, description: "Scan A.", inputPath: folderA.path, count: 3),
+                AgentStep(id: "zip-a", operation: .createZip, description: "Zip A.", inputPath: folderA.path, count: 3),
+                AgentStep(id: "scan-b", operation: .scanSelectLargestFiles, description: "Scan B.", inputPath: folderB.path, count: 3),
+                AgentStep(id: "zip-b", operation: .createZip, description: "Zip B.", inputPath: folderB.path, count: 3)
+            ]
+        )
+
+        let prepared = try executor.prepare(plan: plan)
+
+        let name = "largest-files-\(Timestamp.fileSafe(stamp)).zip"
+        #expect(prepared.plan.steps[1].outputPath == folderA.appendingPathComponent(name).path)
+        #expect(prepared.plan.steps[3].outputPath == folderB.appendingPathComponent(name).path)
+    }
+
+    /// Two `web_to_markdown` steps with no destinations generate the same default name in the same
+    /// second, so without suffixing the second note overwrites the first and the run reports two
+    /// saves of one file. Asserted on each file's contents, because two files both containing the
+    /// second article would satisfy a bare existence check.
+    @Test
+    func twoWebResearchStepsWithNoDestinationsWriteTwoDistinctNotes() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let firstSource = URL(string: "https://example.com/first")!
+        let secondSource = URL(string: "https://example.com/second")!
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let pageLoader = webPageLoader(pages: [
+            firstSource.absoluteString: readablePage(url: firstSource, title: "First Article"),
+            secondSource.absoluteString: readablePage(url: secondSource, title: "Second Article")
+        ])
+        let executor = makeExecutor(
+            root: root,
+            webPageLoader: pageLoader,
+            webResearchSynthesizer: StaticWebResearchSynthesizer(
+                note: WebResearchNote(title: "Note", summary: "A summary.", keyPoints: [], citations: [])
+            ),
+            now: { stamp }
+        )
+        let plan = AgentPlan(
+            summary: "Summarize both articles.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "research-1", operation: .webToMarkdown, description: "Summarize the first article.", targetURL: firstSource.absoluteString),
+                AgentStep(id: "research-2", operation: .webToMarkdown, description: "Summarize the second article.", targetURL: secondSource.absoluteString)
+            ]
+        )
+
+        let prepared = try executor.prepare(plan: plan)
+        _ = try await executor.execute(plan: prepared.plan) { _, _ in }
+
+        let firstPath = try #require(prepared.plan.steps.first?.outputPath)
+        let secondPath = try #require(prepared.plan.steps.last?.outputPath)
+        #expect(firstPath.hasSuffix("/web-research-\(Timestamp.fileSafe(stamp)).md"))
+        #expect(secondPath.hasSuffix("/web-research-\(Timestamp.fileSafe(stamp))-2.md"))
+        #expect(try String(contentsOf: URL(fileURLWithPath: firstPath)).contains("https://example.com/first"))
+        #expect(try String(contentsOf: URL(fileURLWithPath: secondPath)).contains("https://example.com/second"))
+    }
+
+    /// The assessment-versus-execution half, with a clock that moves. `TickingClock` mints a new
+    /// timestamp on every read, so a destination re-derived after the prepared plan was built lands
+    /// somewhere else entirely: the run writes a file nothing assessed, previewed, or named on the
+    /// approval panel. Every file the run creates has to be one the prepared plan already named.
+    @Test
+    func aChainWritesOnlyFilesThePreparedPlanAlreadyNamed() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let clock = TickingClock()
+        let executor = makeExecutor(root: root, now: { clock.next() })
+
+        let prepared = try executor.prepare(plan: untitledDraftChainPlan(firstTitle: nil, secondTitle: nil))
+        _ = try await executor.execute(plan: prepared.plan) { _, _ in }
+
+        let promised = Set(prepared.plan.steps.compactMap(\.outputPath))
+        let written = Set(
+            try FileManager.default.contentsOfDirectory(atPath: root.path)
+                .filter { $0.hasPrefix("draft-") }
+                .map { root.appendingPathComponent($0).path }
+        )
+        #expect(promised.count == 2)
+        #expect(written == promised)
+    }
+
     // MARK: - SONNY-24: a routine binds its own browser
 
     /// Order independence, the half that is not obvious. The founder decision (2026-08-04) is that
@@ -3396,6 +3591,32 @@ struct AgentActionExecutorTests {
                     inputPath: root.path,
                     outputPath: output.path,
                     count: 3
+                )
+            ]
+        )
+    }
+
+    /// Two `.createLocalDraft` steps with **no** destinations — "draft a note about X and another
+    /// about Y", the plan SONNY-35 describes. Titles are a parameter because whether the planner
+    /// supplies them is exactly what decides whether the two generated names collide.
+    private func untitledDraftChainPlan(firstTitle: String?, secondTitle: String?) -> AgentPlan {
+        AgentPlan(
+            summary: "Draft two notes.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "draft-1",
+                    operation: .createLocalDraft,
+                    description: "Create the first draft.",
+                    draftTitle: firstTitle,
+                    draftContent: "First note."
+                ),
+                AgentStep(
+                    id: "draft-2",
+                    operation: .createLocalDraft,
+                    description: "Create the second draft.",
+                    draftTitle: secondTitle,
+                    draftContent: "Second note."
                 )
             ]
         )
