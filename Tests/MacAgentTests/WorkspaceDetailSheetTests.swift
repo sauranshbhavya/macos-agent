@@ -684,13 +684,123 @@ struct WorkspaceDetailSheetTests {
         #expect(try store.workspace(named: "Client Alpha").apps == ["Safari", "Slack"])
     }
 
-    /// **The same guard, through a door this ticket did not build.**
+    /// **The voice door — the one with the most at stake, and the one the branch never named.**
+    ///
+    /// `canUseVoice` blocks *starting* a recording while an approval is pending, but an approval can
+    /// land during the recording or the transcription. Before this guard existed, the finished
+    /// transcript went into `start()`, whose first branch is `approvePendingRun()` — so a sentence
+    /// the user spoke about something else entirely would have landed as a silent **allow** on
+    /// whatever tier-3 action was waiting. Nothing about the spoken words would have appeared
+    /// anywhere; the approval would simply have been granted.
+    ///
+    /// Driven through `dispatchTranscribedCommand`, which exists as a seam for exactly this — one
+    /// copy of the guard, one `start(...)` call, no transcriber and no API key required. The pending
+    /// approval is a *different* workspace's removal, so an accidental allow is visible in the store
+    /// rather than only in a flag.
+    @Test
+    func aVoiceDispatchWhileAnApprovalIsPendingIsRefusedRatherThanTreatedAsAnAllow() async throws {
+        let root = try makeSheetTestDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let viewModel = try makeSheetTestViewModel(root: root, workspaceStore: store)
+        let research = StoredWorkspace(name: "Research", apps: ["Safari", "Notes"], urls: [])
+        try store.save(research)
+        viewModel.refreshSavedItems()
+
+        let sheet = WorkspaceDetailPresentation(workspace: research, taskHistoryRecords: [])
+        viewModel.dispatchWorkspaceScopeEdit(sheet.apps.entries[1].removeDispatch)
+        try await waitForSheetViewModelToBecomeIdle(viewModel)
+        #expect(viewModel.isAwaitingApproval)
+        let pendingPlan = viewModel.plan
+
+        viewModel.dispatchTranscribedCommand("what is the weather today", origin: .widget)
+        try await waitForSheetViewModelToBecomeIdle(viewModel)
+
+        // The removal is still waiting to be answered, and Notes is still in Research.
+        #expect(viewModel.isAwaitingApproval)
+        #expect(viewModel.plan == pendingPlan)
+        #expect(try store.workspace(named: "Research").apps == ["Safari", "Notes"])
+        // The spoken words did not become the next command either — the residue guard cleared them.
+        #expect(viewModel.command == "")
+        // And the refusal is on the record, which is the half F5 was about: the voice path used to
+        // announce "Sonny will act now" and then drop the transcript with nothing said afterwards.
+        #expect(viewModel.logStore.events.contains {
+            $0.message == "Not started: an approval is still waiting for your answer."
+        })
+    }
+
+    /// **The routine door.** `runRoutineWidget`'s button lives in `RoutineDetailView`, a different
+    /// file entirely — which is precisely the argument for a shared guard, and precisely why it
+    /// needs its own test rather than inheriting the sheet's.
+    @Test
+    func aRoutineDispatchWhileAnApprovalIsPendingIsRefusedRatherThanTreatedAsAnAllow() async throws {
+        let root = try makeSheetTestDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let viewModel = try makeSheetTestViewModel(root: root, workspaceStore: store)
+        let research = StoredWorkspace(name: "Research", apps: ["Safari", "Notes"], urls: [])
+        try store.save(research)
+        viewModel.refreshSavedItems()
+
+        let sheet = WorkspaceDetailPresentation(workspace: research, taskHistoryRecords: [])
+        viewModel.dispatchWorkspaceScopeEdit(sheet.apps.entries[1].removeDispatch)
+        try await waitForSheetViewModelToBecomeIdle(viewModel)
+        #expect(viewModel.isAwaitingApproval)
+        let pendingPlan = viewModel.plan
+
+        viewModel.runRoutineWidget(StoredRoutine(name: "Morning", steps: []))
+        try await waitForSheetViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.isAwaitingApproval)
+        #expect(viewModel.plan == pendingPlan)
+        #expect(try store.workspace(named: "Research").apps == ["Safari", "Notes"])
+    }
+
+    /// **The retry door, which the guard does *not* change** — recorded so the enumeration is
+    /// complete rather than selective.
+    ///
+    /// `retryLastCommand` carries its own `!isTaskInFlight` guard, which is a strict superset of
+    /// `isAwaitingApproval`, and it fires before `dispatch` is reached. The new guard is therefore
+    /// unreachable through this door. Asserted anyway: "this caller is unaffected" is a claim about
+    /// a shared helper's blast radius, and the point of enumerating five doors is that each answer
+    /// is checked rather than assumed.
+    @Test
+    func aRetryWhileAnApprovalIsPendingIsRefusedByItsOwnOlderGuard() async throws {
+        let root = try makeSheetTestDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let viewModel = try makeSheetTestViewModel(root: root, workspaceStore: store)
+        let research = StoredWorkspace(name: "Research", apps: ["Safari", "Notes"], urls: [])
+        try store.save(research)
+        viewModel.refreshSavedItems()
+
+        let sheet = WorkspaceDetailPresentation(workspace: research, taskHistoryRecords: [])
+        viewModel.dispatchWorkspaceScopeEdit(sheet.apps.entries[1].removeDispatch)
+        try await waitForSheetViewModelToBecomeIdle(viewModel)
+        #expect(viewModel.isAwaitingApproval)
+        let pendingPlan = viewModel.plan
+
+        viewModel.retryLastCommand()
+        try await waitForSheetViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.isAwaitingApproval)
+        #expect(viewModel.plan == pendingPlan)
+        #expect(try store.workspace(named: "Research").apps == ["Safari", "Notes"])
+        // Refused by `retryLastCommand`'s own guard, so `dispatch` was never entered and its
+        // refusal line was never written. That is what makes this door's answer "unaffected"
+        // rather than "also covered".
+        #expect(viewModel.logStore.events.contains {
+            $0.message == "Not started: an approval is still waiting for your answer."
+        } == false)
+    }
+
+    /// **The workspace-card door.**
     ///
     /// The refusal lives in the shared `dispatch` helper rather than on the sheet's button, so it
     /// covers `openWorkspaceWidget` and `runRoutineWidget` too — neither of which had one. That is
     /// the whole argument for putting it there, and this repo's H1 precedent is that "structurally
     /// covered" is a claim worth a test per door: a later change narrowing the guard to the
-    /// pre-built path only would otherwise break these two silently.
+    /// pre-built path only would otherwise break these silently.
     @Test
     func aWorkspaceCardDispatchWhileAnApprovalIsPendingIsAlsoRefusedRatherThanTreatedAsAnAllow() async throws {
         let root = try makeSheetTestDirectory()

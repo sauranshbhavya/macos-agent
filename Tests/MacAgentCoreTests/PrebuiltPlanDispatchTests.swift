@@ -194,6 +194,52 @@ struct PrebuiltPlanDispatchTests {
         #expect(request.assessment.escalations.isEmpty)
     }
 
+    /// **The fourth consent shape: removing an entry that never restricted anything does not
+    /// escalate at all.**
+    ///
+    /// Its three siblings above cover the tier-2 addition and both tier-3 removals; this one had
+    /// coverage on the typed path only (`EditWorkspaceTests`), so the branch met its own
+    /// one-test-per-shape bar for three of four. It is the shape most worth having here, because the
+    /// inert entry is exactly what the sheet used to get wrong: an entry `WorkspaceScope` has
+    /// already dropped costs the user nothing to remove, so asking for explicit approval on a
+    /// sentence asserting a loss would be an over-claim — and the *disclosure* about which rows
+    /// leave with it is what SONNY-41's R-1 was.
+    ///
+    /// A second, live location survives the edit, so the dimension is not emptied and the
+    /// emptying consent is not what is being tested here. (PR #40 review, F6.)
+    @Test
+    func aScreenBuiltRemovalOfAnAlreadyInertEntryDoesNotEscalate() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        try fixture.store.save(
+            StoredWorkspace(
+                name: "Client Alpha",
+                apps: ["Safari"],
+                urls: [],
+                // The first is outside the whitelist, so the evaluator classifies it inert; the
+                // second is inside it and keeps the dimension restricting.
+                fileLocations: ["~/Downloads/Alpha", fixture.insideWhitelist]
+            )
+        )
+
+        let plan = EditWorkspaceCapabilityAdapter.plan(
+            for: WorkspaceScopeEditRequest(
+                workspaceName: "Client Alpha",
+                kind: .fileLocation,
+                value: "~/Downloads/Alpha",
+                action: .remove
+            )
+        )
+        let runner = AgentRunner(planner: UnusedPlanner(), executor: fixture.executor)
+        let prepared = try runner.prepare(plan: plan, source: .directUserAction)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
+
+        // Tier 2, not 3, and no escalation reason naming a loss that did not happen.
+        #expect(request.assessment.effectiveTier == .tier2)
+        #expect(request.requirement == .lightweightConfirmation)
+        #expect(request.assessment.escalations.isEmpty)
+    }
+
     // MARK: - The origin, and why a planner cannot claim it
 
     /// `prepare(plan:source:)` stamps what the caller says; `prepare(command:)` stamps `.planner`

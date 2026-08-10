@@ -397,6 +397,7 @@ final class AgentViewModel: ObservableObject {
         prebuiltPlan: AgentPlan? = nil
     ) -> Bool {
         guard !isAwaitingApproval else {
+            logStore.append(.observe, "Not started: an approval is still waiting for your answer.")
             return false
         }
         command = commandText
@@ -411,6 +412,17 @@ final class AgentViewModel: ObservableObject {
             return true
         }
         command = ""
+        // Every refused dispatch leaves a trace, at the one place every programmatic door passes
+        // through. Three of the five doors logged a refusal of their own and two did not — voice
+        // being the one that mattered, since it discards this result and its caller had already
+        // announced that Sonny was about to act. A per-door copy is what produced that gap; this is
+        // the same choke-point argument the clarification term is placed by.
+        //
+        // Cause-neutral on purpose. `canSubmit` refuses for a running task, an open clarification, a
+        // transcription in flight, and an empty command — and the last of those already has its own
+        // user-facing error from `start`. A line naming one cause would be wrong for the others,
+        // which is the defect the sheet's own removed message had. (PR #40 review, F5.)
+        logStore.append(.observe, "Not started: Sonny was not ready to begin another task.")
         return false
     }
 
@@ -1485,7 +1497,12 @@ final class AgentViewModel: ObservableObject {
             prebuiltPlan: EditWorkspaceCapabilityAdapter.plan(for: edit.request)
         )
         guard accepted else {
-            logStore.append(.observe, "Workspace edit ignored while another task needs you.")
+            // No message of its own any more: `dispatch` records the refusal for every door, and
+            // this one's wording claimed "another task needs you", which is true of a pending
+            // approval or an open clarification and false of a plain in-flight run where nothing
+            // needs the user at all. One accurate line beats a specific inaccurate one. (PR #40
+            // review, cycle 1 — the recorded observation, fixed while F5 was open in the same
+            // function.)
             return false
         }
         widgetPresentationRequest += 1
@@ -1795,7 +1812,12 @@ final class AgentViewModel: ObservableObject {
                 finalSummary = ""
                 isTranscribingVoice = false
                 preserveUsageForNextStart = true
-                logStore.append(.observe, "Transcript ready. Sonny will act now.")
+                // States only what is known here. "Sonny will act now" was written *before* the
+                // dispatch and was contradicted by it whenever the dispatch was refused — a
+                // transcription that completed into a pending approval left the spoken words gone,
+                // no error set, and this sentence as the last thing said about them. What happens
+                // next is `dispatch`'s to record, and it now does, on every door. (PR #40 review, F5.)
+                logStore.append(.observe, "Transcript ready.")
                 dispatchTranscribedCommand(result.text, origin: voiceRecordingOrigin)
             } catch {
                 isTranscribingVoice = false
