@@ -2052,7 +2052,6 @@ struct WorkspaceDetailPresentation: Equatable {
 
         apps = Self.section(
             title: "Apps",
-            noun: "the app",
             kind: .app,
             values: workspace.apps,
             workspaceName: workspace.name,
@@ -2064,7 +2063,6 @@ struct WorkspaceDetailPresentation: Equatable {
         )
         urls = Self.section(
             title: "URLs",
-            noun: "the URL",
             kind: .webDomain,
             values: workspace.urls,
             workspaceName: workspace.name,
@@ -2079,7 +2077,6 @@ struct WorkspaceDetailPresentation: Equatable {
         // this dimension restricts nothing.
         fileLocations = Self.section(
             title: "File locations",
-            noun: "the folder",
             kind: .fileLocation,
             values: workspace.effectiveFileLocations,
             workspaceName: workspace.name,
@@ -2103,7 +2100,6 @@ struct WorkspaceDetailPresentation: Equatable {
 
     private static func section(
         title: String,
-        noun: String,
         kind: ScopedResourceKind,
         values: [String],
         workspaceName: String,
@@ -2150,7 +2146,9 @@ struct WorkspaceDetailPresentation: Equatable {
             isRestricted: isRestricted,
             notRestrictedText: isRestricted ? nil : notRestrictedText,
             kind: kind,
-            addAccessibilityLabel: "Add \(noun) to \(workspaceName)"
+            // The same noun the dispatch's own sentence uses, from the same function. Two literals
+            // for one word is how a label and the command it describes start disagreeing.
+            addAccessibilityLabel: "Add \(WorkspaceScopeEditCommand.noun(for: kind)) to \(workspaceName)"
         )
     }
 
