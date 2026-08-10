@@ -1356,6 +1356,128 @@ struct AgentActionExecutorTests {
         #expect(try String(contentsOf: destination).contains("Mock PDF placeholder"))
     }
 
+    // MARK: - SONNY-30: an unreadable store cannot pass for an empty one
+    //
+    // `CreateWorkspaceCapabilityAdapter` and `SaveRoutineCapabilityAdapter` decided "does this name
+    // already exist?" with `(try? store.thing(named:)) != nil`, which answers the same for a store
+    // that failed to decrypt as for one that simply has no such name. The consequence is the wrong
+    // direction of wrong: the tier-3 "already exists and would be replaced" escalation vanishes for
+    // exactly the user whose store is broken, and they approve a routine-looking tier-2 save with
+    // real saved content in play. `EditWorkspaceTests` pins the same rule for the sibling that
+    // always got it right; these two are that adapter's missing counterparts.
+
+    /// A `workspaces.json` that cannot be decrypted has to surface as a failure, not as "no
+    /// workspace by that name". Asserted as "threw, and not with an `AutomationStoreError`" — the
+    /// enum has no load-failure case, so a `.missingWorkspace` escaping here would mean the
+    /// distinction was lost again somewhere between the store and the adapter.
+    @Test
+    func aCorruptWorkspaceStoreSurfacesRatherThanSuppressingTheReplacementEscalation() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try corruptStore(at: root.appendingPathComponent("workspaces.json"))
+        let executor = makeExecutor(root: root)
+
+        var thrown: Error?
+        do {
+            _ = try executor.assessRisk(plan: createWorkspacePlan(named: "Research"), scope: .unscoped)
+        } catch {
+            thrown = error
+        }
+
+        let error = try #require(thrown)
+        #expect(!(error is AutomationStoreError))
+    }
+
+    /// The same for `routines.json`.
+    @Test
+    func aCorruptRoutineStoreSurfacesRatherThanSuppressingTheReplacementEscalation() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try corruptStore(at: root.appendingPathComponent("routines.json"))
+        let executor = makeExecutor(root: root)
+
+        var thrown: Error?
+        do {
+            _ = try executor.assessRisk(plan: saveRoutinePlan(named: "Morning Setup"), scope: .unscoped)
+        } catch {
+            thrown = error
+        }
+
+        let error = try #require(thrown)
+        #expect(!(error is AutomationStoreError))
+    }
+
+    /// The load-bearing inverse. Surfacing a broken store must not turn a *healthy* store with no
+    /// such name into a failure, or every first-time save would break — and it must not invent an
+    /// escalation either. A genuinely new workspace stays exactly where it was: tier 2, nothing
+    /// raised, lightweight confirmation.
+    @Test
+    func creatingAWorkspaceThatDoesNotExistYetStaysAtTierTwoWithNoEscalation() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root)
+
+        let assessment = try executor.assessRisk(plan: createWorkspacePlan(named: "Research"), scope: .unscoped)
+
+        #expect(assessment.defaultTier == .tier2)
+        #expect(assessment.effectiveTier == .tier2)
+        #expect(assessment.escalations.isEmpty)
+        #expect(assessment.approvalRequirement() == .lightweightConfirmation)
+    }
+
+    /// And the escalation the `try?` was suppressing still fires when it should: a name that really
+    /// is saved, in a store that really does load, raises tier 3 and says why.
+    @Test
+    func creatingAWorkspaceThatAlreadyExistsStillEscalatesAndNamesIt() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try workspaceStore.save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: []))
+        let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
+
+        let assessment = try executor.assessRisk(plan: createWorkspacePlan(named: "Research"), scope: .unscoped)
+
+        #expect(assessment.effectiveTier == .tier3)
+        #expect(assessment.escalations == [
+            CapabilityRiskEscalation(
+                fromTier: .tier2,
+                toTier: .tier3,
+                reason: "Workspace named Research already exists and would be replaced."
+            )
+        ])
+    }
+
+    /// The routine half of the same inverse pair, collapsed into one test because the routine
+    /// adapter's escalation and its no-escalation case share a fixture: save one routine, then
+    /// assess a save of that name and of a different name.
+    @Test
+    func savingARoutineEscalatesOnlyWhenThatNameIsReallyTaken() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try routineStore.save(
+            StoredRoutine(
+                name: "Morning Setup",
+                steps: [AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")]
+            )
+        )
+        let executor = makeExecutor(root: root, routineStore: routineStore)
+
+        let taken = try executor.assessRisk(plan: saveRoutinePlan(named: "Morning Setup"), scope: .unscoped)
+        let free = try executor.assessRisk(plan: saveRoutinePlan(named: "Evening Wind Down"), scope: .unscoped)
+
+        #expect(taken.effectiveTier == .tier3)
+        #expect(taken.escalations == [
+            CapabilityRiskEscalation(
+                fromTier: .tier2,
+                toTier: .tier3,
+                reason: "Routine named Morning Setup already exists and would be replaced."
+            )
+        ])
+        #expect(free.effectiveTier == .tier2)
+        #expect(free.escalations.isEmpty)
+    }
+
     // MARK: - SONNY-24: a routine binds its own browser
 
     /// Order independence, the half that is not obvious. The founder decision (2026-08-04) is that
@@ -3728,6 +3850,49 @@ struct AgentActionExecutorTests {
                     inputPath: root.path,
                     outputPath: output.path,
                     count: 3
+                )
+            ]
+        )
+    }
+
+    /// A store file that claims to be encrypted and is not: a real `SONNYENC1` header over
+    /// ciphertext that cannot authenticate. The recipe `EditWorkspaceTests` uses, so both SONNY-30
+    /// pins induce the failure the same way.
+    private func corruptStore(at url: URL) throws {
+        var corrupt = LocalStorageEncryption.fileHeader
+        corrupt.append(Data(repeating: 0x00, count: 64))
+        try corrupt.write(to: url, options: .atomic)
+    }
+
+    private func createWorkspacePlan(named name: String) -> AgentPlan {
+        AgentPlan(
+            summary: "Create a workspace called \(name).",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "create-workspace",
+                    operation: .createWorkspace,
+                    description: "Save the workspace.",
+                    workspaceName: name,
+                    workspaceApps: ["Safari"]
+                )
+            ]
+        )
+    }
+
+    private func saveRoutinePlan(named name: String) -> AgentPlan {
+        AgentPlan(
+            summary: "Teach Sonny a routine called \(name).",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "save-routine",
+                    operation: .saveRoutine,
+                    description: "Save the routine.",
+                    routineName: name,
+                    routineSteps: [
+                        AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")
+                    ]
                 )
             ]
         )
