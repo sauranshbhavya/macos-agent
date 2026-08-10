@@ -478,8 +478,15 @@ final class AgentViewModel: ObservableObject {
         approvalRequest != nil
     }
 
-    /// Where the plan of the run currently in flight — or paused at an approval — came from, or
-    /// `nil` when there is no prepared run. SONNY-64's origin signal, as the rest of the app sees it.
+    /// Where the plan of the **most recently prepared** run came from, or `nil` when there is none.
+    /// SONNY-64's origin signal, as the rest of the app sees it.
+    ///
+    /// "Most recently prepared", not "in flight": `performStart` clears `preparedRun` when the next
+    /// run begins and `cancelCurrentRun` clears it on cancel, but a run that *completes* leaves it
+    /// set, so this keeps describing that run until another starts. Stated exactly because the
+    /// reader who matters is row C, which will consult it while a run is being assessed — where the
+    /// two readings coincide — and a doc claiming a narrower lifetime than the property has is the
+    /// kind of thing that gets believed at the one call site where it is false.
     ///
     /// Derived from `preparedRun` rather than kept in its own slot, deliberately. A second stored
     /// property would need adding to `performStart`'s per-task reset, to the terminal `defer`, and
@@ -1436,10 +1443,22 @@ final class AgentViewModel: ObservableObject {
     /// would be the second write path SONNY-41 adjudicated against; the sheet's one direct write is
     /// still `markWorkspaceAsTeam`, a display badge rather than a boundary.
     ///
-    /// **It is not `fromComposer`, so it kills any armed card binding** rather than inheriting one.
-    /// An edit dispatched from workspace B's sheet while "New task here" is armed on workspace A
-    /// would otherwise run bound to A while editing B, under a chip naming A. `start` does that
-    /// unconditionally; it is named here because the reason is this function's, not `start`'s.
+    /// **It is not `fromComposer`, so an accepted dispatch kills any armed card binding** rather than
+    /// inheriting one. An edit dispatched from workspace B's sheet while "New task here" is armed on
+    /// workspace A would otherwise run bound to A while editing B, under a chip naming A. `start`
+    /// does the killing; it is named here because the reason is this function's, not `start`'s.
+    ///
+    /// A *refused* dispatch leaves the arm alone, and that is the correct rule rather than a gap in
+    /// this one. The arm's contract is that it binds the next composer dispatch, and a refusal means
+    /// no dispatch happened — so the user's earlier "New task here on A" is still unconsumed and
+    /// still what they asked for. Killing it here would silently discard an intent because an
+    /// unrelated button was pressed at an unlucky moment.
+    ///
+    /// The arm is not hidden, but it is not necessarily on screen at the moment of the refusal
+    /// either: `boundWorkspaceName` prefers the *in-flight* task's binding and falls back to the
+    /// arm, so while the task that caused the refusal is still live the chip names that task's
+    /// workspace and the arm reappears once it clears. Written out because "the arm stays visible"
+    /// is the tempting summary and it is wrong for exactly the window this path runs in.
     ///
     /// **Refusals.** The clarification-pause door and the already-running door are both inherited
     /// rather than re-implemented: this goes through `dispatch`, so `canSubmit`'s terms apply to it
@@ -1455,16 +1474,22 @@ final class AgentViewModel: ObservableObject {
     /// the very page whose `CommandCenterAttentionPanel` would otherwise show it. The floating
     /// widget is a separate window and is the one surface a modal cannot cover, so without this the
     /// user would be left holding an approval with nowhere to answer it.
-    func dispatchWorkspaceScopeEdit(_ edit: WorkspaceScopeEditDispatch) {
+    /// - Returns: whether the edit was submitted. The picker keeps itself open on `false` rather
+    ///   than closing over a refusal — its controls are disabled while a task is in flight, so a
+    ///   refusal here means the state changed between the render and the click, and dismissing would
+    ///   leave the user with a dialog that closed and an edit that never happened.
+    @discardableResult
+    func dispatchWorkspaceScopeEdit(_ edit: WorkspaceScopeEditDispatch) -> Bool {
         let accepted = dispatch(
             command: edit.displayCommand,
             prebuiltPlan: EditWorkspaceCapabilityAdapter.plan(for: edit.request)
         )
         guard accepted else {
             logStore.append(.observe, "Workspace edit ignored while another task needs you.")
-            return
+            return false
         }
         widgetPresentationRequest += 1
+        return true
     }
 
     func markWorkspaceAsTeam(_ workspace: StoredWorkspace) {
