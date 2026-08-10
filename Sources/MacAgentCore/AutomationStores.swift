@@ -398,9 +398,24 @@ public struct RoutineStore: @unchecked Sendable {
         try write(routines)
     }
 
+    /// The routine saved under this name, or `nil` if none is — **keeping "not saved" and "could
+    /// not read the store" apart**, which is the entire reason it exists beside `routine(named:)`.
+    ///
+    /// `routine(named:)` serves a caller for whom absence is an error, so it throws either way and a
+    /// caller who only wants to know *whether* a name is taken reaches for `try?`, which folds a
+    /// decrypt or decode failure back into "not saved". That is exactly the anti-pattern
+    /// `.claude/rules/macagentcore-conventions.md` names — a store that fails to load must never
+    /// read as empty — and in `SaveRoutineCapabilityAdapter.assessRisk` it silently suppressed the
+    /// tier-3 replacement escalation (SONNY-30). Modelled on `SnippetStore.findExactTrigger`, which
+    /// had this shape right already.
+    ///
+    /// A blank name still throws `.missingName`: that is a malformed request, not an absent routine.
+    public func findRoutine(named rawName: String) throws -> StoredRoutine? {
+        try loadAll()[normalizedName(rawName, kind: "Routine")]
+    }
+
     public func routine(named rawName: String) throws -> StoredRoutine {
-        let name = try normalizedName(rawName, kind: "Routine")
-        guard let routine = try loadAll()[name] else {
+        guard let routine = try findRoutine(named: rawName) else {
             throw AutomationStoreError.missingRoutine(rawName)
         }
         return routine
@@ -492,9 +507,14 @@ public struct WorkspaceStore: @unchecked Sendable {
         try write(workspaces)
     }
 
+    /// The workspace saved under this name, or `nil` if none is. `RoutineStore.findRoutine(named:)`
+    /// documents why this exists beside `workspace(named:)` and what a `try?` here used to cost.
+    public func findWorkspace(named rawName: String) throws -> StoredWorkspace? {
+        try loadAll()[normalizedName(rawName, kind: "Workspace")]
+    }
+
     public func workspace(named rawName: String) throws -> StoredWorkspace {
-        let name = try normalizedName(rawName, kind: "Workspace")
-        guard let workspace = try loadAll()[name] else {
+        guard let workspace = try findWorkspace(named: rawName) else {
             throw AutomationStoreError.missingWorkspace(rawName)
         }
         return workspace

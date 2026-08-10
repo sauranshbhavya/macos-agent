@@ -57,9 +57,21 @@ public struct CreateWorkspaceCapabilityAdapter: CapabilityAdapter {
         ]
     }
 
+    /// **Plain `try`, never `try?`.** This read `(try? context.workspaceStore.workspace(named:)) != nil`,
+    /// which collapsed a decrypt or decode failure into "no workspace by that name" — indistinguishable
+    /// from an empty store — and so silently suppressed the tier-3 escalation below. A user whose
+    /// `workspaces.json` had become unreadable approved a routine-looking tier-2 save with no idea that
+    /// a workspace of the same name existed on disk and was about to be replaced (SONNY-30).
+    ///
+    /// `findWorkspace(named:)` answers `nil` only when the load *succeeded* and nothing matched, so
+    /// absence still means absence and a broken store now throws. Throwing is also the honest outcome
+    /// rather than a conservative escalation: `WorkspaceStore.save` loads before it writes, so the save
+    /// this is gating could not have succeeded anyway — failing at the gate is the same outcome, earlier,
+    /// with an accurate reason. `SnippetSaveCapabilityAdapter` and `EditWorkspaceCapabilityAdapter`
+    /// already did it this way; this is the last pair catching up.
     public func assessRisk(plan: AgentPlan, context: CapabilityExecutionContext) throws -> CapabilityRiskAssessment {
         let workspace = try workspaceCreateSpec(plan, context: context).workspace
-        let escalations = (try? context.workspaceStore.workspace(named: workspace.name)) != nil
+        let escalations = try context.workspaceStore.findWorkspace(named: workspace.name) != nil
             ? [
                 CapabilityRiskEscalation(
                     fromTier: metadata.defaultRiskTier,
