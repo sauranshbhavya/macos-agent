@@ -679,6 +679,94 @@ struct WorkspaceDetailSheetTests {
         #expect(try store.workspace(named: "Client Alpha").apps == ["Safari", "Slack"])
     }
 
+    /// **The same guard, through a door this ticket did not build.**
+    ///
+    /// The refusal lives in the shared `dispatch` helper rather than on the sheet's button, so it
+    /// covers `openWorkspaceWidget` and `runRoutineWidget` too — neither of which had one. That is
+    /// the whole argument for putting it there, and this repo's H1 precedent is that "structurally
+    /// covered" is a claim worth a test per door: a later change narrowing the guard to the
+    /// pre-built path only would otherwise break these two silently.
+    @Test
+    func aWorkspaceCardDispatchWhileAnApprovalIsPendingIsAlsoRefusedRatherThanTreatedAsAnAllow() async throws {
+        let root = try makeSheetTestDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let viewModel = try makeSheetTestViewModel(root: root, workspaceStore: store)
+        let research = StoredWorkspace(name: "Research", apps: ["Safari", "Notes"], urls: [])
+        try store.save(research)
+        viewModel.refreshSavedItems()
+
+        let sheet = WorkspaceDetailPresentation(workspace: research, taskHistoryRecords: [])
+        viewModel.dispatchWorkspaceScopeEdit(sheet.apps.entries[1].removeDispatch)
+        try await waitForSheetViewModelToBecomeIdle(viewModel)
+        #expect(viewModel.isAwaitingApproval)
+        let pendingPlan = viewModel.plan
+
+        viewModel.openWorkspaceWidget(research)
+        try await waitForSheetViewModelToBecomeIdle(viewModel)
+
+        // The card action did not become an "allow" on the removal waiting behind it.
+        #expect(viewModel.isAwaitingApproval)
+        #expect(viewModel.plan == pendingPlan)
+        #expect(try store.workspace(named: "Research").apps == ["Safari", "Notes"])
+    }
+
+    /// **A refused dispatch leaves an armed card binding alone, and that is the rule — not an
+    /// oversight in the rule above it.**
+    ///
+    /// `start` kills the arm when it *accepts* a non-composer dispatch; both of its early returns sit
+    /// in front of that. So a sheet edit refused because something else is in flight leaves "New task
+    /// here on Research" armed. That is what the arm is for: it binds the next composer dispatch, and
+    /// nothing dispatched. Killing it would discard an intent the user still holds because an
+    /// unrelated button was pressed at an unlucky moment.
+    ///
+    /// Pinned because the branch's doc comment claimed the kill was unconditional, which was false on
+    /// exactly this path; a sentence that is wrong about a lifecycle is worth replacing with a test.
+    @Test
+    func aRefusedSheetDispatchLeavesAnArmedCardBindingIntact() async throws {
+        let root = try makeSheetTestDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let viewModel = try makeSheetTestViewModel(root: root, workspaceStore: store)
+        let research = StoredWorkspace(name: "Research", apps: ["Safari"], urls: [])
+        let alpha = StoredWorkspace(name: "Client Alpha", apps: ["Safari", "Slack"], urls: [])
+        try store.save(research)
+        try store.save(alpha)
+        viewModel.refreshSavedItems()
+
+        // An approval from somewhere else is pending — the state the sheet's buttons are disabled
+        // for, and the one a scheduled routine can produce between a render and a click.
+        let alphaSheet = WorkspaceDetailPresentation(workspace: alpha, taskHistoryRecords: [])
+        viewModel.dispatchWorkspaceScopeEdit(alphaSheet.apps.entries[1].removeDispatch)
+        try await waitForSheetViewModelToBecomeIdle(viewModel)
+        #expect(viewModel.isAwaitingApproval)
+
+        viewModel.beginTaskInWorkspace(research)
+        #expect(viewModel.pendingWorkspaceBinding == "Research")
+
+        let accepted = viewModel.dispatchWorkspaceScopeEdit(
+            WorkspaceScopeEditCommand.dispatch(
+                workspaceName: "Client Alpha",
+                kind: .app,
+                value: "Notes",
+                action: .add
+            )
+        )
+
+        #expect(accepted == false)
+        #expect(viewModel.pendingWorkspaceBinding == "Research")
+        // While the task that caused the refusal is still live, the widget's chip names *that*
+        // task's workspace — `boundWorkspaceName` prefers the in-flight binding and falls back to
+        // the arm. Asserted rather than assumed, because the tempting claim is that the surviving
+        // arm is on screen throughout, and it is not.
+        #expect(viewModel.boundWorkspaceName == "Client Alpha")
+
+        // Once that task is out of the way, the arm is the binding again — so it was preserved for
+        // the composer dispatch it was always for, not merely left lying in a field.
+        viewModel.cancelCurrentRun()
+        #expect(viewModel.boundWorkspaceName == "Research")
+    }
+
     /// **The sheet's one direct write touches the badge and nothing else.**
     ///
     /// Added after a mutation battery: making `markWorkspaceAsTeam` clear the apps list left the

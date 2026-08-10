@@ -2697,7 +2697,7 @@ private struct WorkspaceDetailView: View {
     let accent: Color
     let isTaskInFlight: Bool
     let markAsTeam: () -> Void
-    let dispatchEdit: (WorkspaceScopeEditDispatch) -> Void
+    let dispatchEdit: (WorkspaceScopeEditDispatch) -> Bool
     @State private var addingTo: WorkspaceScopeAddTarget?
     @Environment(\.dismiss) private var dismiss
 
@@ -2897,7 +2897,10 @@ private struct WorkspaceDetailView: View {
             }
         } trailing: {
             Button {
-                dispatchEdit(entry.removeDispatch)
+                // The row stays put either way; a refusal is reported by the log line
+                // `dispatchWorkspaceScopeEdit` writes, and the button is disabled in the state that
+                // causes one.
+                _ = dispatchEdit(entry.removeDispatch)
             } label: {
                 Label("Remove", systemImage: "minus")
             }
@@ -2929,7 +2932,7 @@ private struct WorkspaceScopeAddTarget: Identifiable {
 private struct WorkspaceScopeAddView: View {
     let presentation: WorkspaceScopeAddPresentation
     let isTaskInFlight: Bool
-    let dispatchEdit: (WorkspaceScopeEditDispatch) -> Void
+    let dispatchEdit: (WorkspaceScopeEditDispatch) -> Bool
     @State private var typedValue: String = ""
     @Environment(\.dismiss) private var dismiss
 
@@ -3094,12 +3097,19 @@ private struct WorkspaceScopeAddView: View {
         submit(dispatch)
     }
 
-    /// Dismisses *after* handing the edit over. The approval it raises renders in the floating
-    /// widget, which `dispatchWorkspaceScopeEdit` brings forward; leaving this dialog stacked on top
-    /// of the detail sheet on top of Command Center would bury the page's own running indicator
-    /// under two modals for no benefit — the user has finished choosing.
+    /// Dismisses *after* handing the edit over, and only if it was taken. The approval it raises
+    /// renders in the floating widget, which `dispatchWorkspaceScopeEdit` brings forward; leaving
+    /// this dialog stacked on top of the detail sheet on top of Command Center would bury the page's
+    /// own running indicator under two modals for no benefit — the user has finished choosing.
+    ///
+    /// A refusal keeps the dialog open. These controls are disabled while a task is in flight, so
+    /// the only way to reach one is a state change between the render and the click — a scheduled
+    /// routine's approval landing in that gap — and closing the dialog over it would report success
+    /// for an edit that never happened.
     private func submit(_ dispatch: WorkspaceScopeEditDispatch) {
-        dispatchEdit(dispatch)
+        guard dispatchEdit(dispatch) else {
+            return
+        }
         dismiss()
     }
 }
