@@ -1219,6 +1219,143 @@ struct AgentActionExecutorTests {
         #expect(written == promised)
     }
 
+    // MARK: - SONNY-28: two documents never convert onto one PDF
+    //
+    // `FileInventory.docxFiles` derives each destination from the document's *basename* and
+    // `regularFiles(in:)` recurses, so `SubA/report.docx` and `SubB/report.docx` both name
+    // `report.pdf` — and with an explicit flat output folder they land in the same directory.
+    // `skippedBecausePDFExists` cannot save them: it is evaluated once, at scan time, so against a
+    // fresh output folder both answer `false` and both convert. There is no test double for
+    // `FileInventory` and none is added: these drive the real one through the executor, with real
+    // files in a real temp directory, which is this suite's existing idiom for docx.
+
+    /// SONNY-28's concrete failure. Under the mock converter the second conversion silently
+    /// destroyed the first; under the real Word converter its `moveItem` threw and aborted the whole
+    /// batch, leaving every later document unprocessed. Both documents now get their own PDF.
+    ///
+    /// Asserted on the conversion *pairs*, not just on two files existing: a fix that renamed the
+    /// destinations but paired them with the wrong sources would pass an existence check.
+    @Test
+    func twoSameNamedDocxFilesSharingAnOutputFolderConvertToDistinctPDFs() async throws {
+        let fixture = try collidingDocxFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let executor = makeExecutor(root: fixture.root, documentConverter: FakeDocumentConverter())
+
+        let result = try await executor.execute(plan: fixture.plan) { _, _ in }
+
+        #expect(FileManager.default.fileExists(atPath: fixture.outputFolder.appendingPathComponent("report.pdf").path))
+        #expect(FileManager.default.fileExists(atPath: fixture.outputFolder.appendingPathComponent("report-2.pdf").path))
+        // Compared as folder/name tails: the scanned source paths come back canonicalised through
+        // the whitelist (`/private/var/...`) while the output folder does not, and that difference
+        // is not what this test is about.
+        #expect(conversionTails(in: result) == [
+            "SubA/report.docx -> PDFs/report.pdf",
+            "SubB/report.docx -> PDFs/report-2.pdf"
+        ])
+    }
+
+    /// A file appearing under a name the user did not ask for has to be said out loud. The run
+    /// summary is the only free-text channel that reaches a person, so the note rides there —
+    /// deliberately not as a risk escalation, which both approval panels label as *what raised this
+    /// above its default tier*.
+    @Test
+    func aRenamedDocxOutputIsNamedInTheRunSummary() async throws {
+        let fixture = try collidingDocxFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let executor = makeExecutor(root: fixture.root, documentConverter: FakeDocumentConverter())
+
+        let result = try await executor.execute(plan: fixture.plan) { _, _ in }
+
+        #expect(result.summary.hasSuffix(
+            "Renamed 1 output because another document would produce the same PDF name: report-2.pdf."
+        ))
+    }
+
+    /// The renamed destination never lands on a real file either — suffixing onto something that
+    /// already exists would trade one silent overwrite for another. With `report-2.pdf` already on
+    /// disk the second document becomes `report-3.pdf`, and the pre-existing file is left untouched.
+    @Test
+    func aRenamedDocxDestinationSkipsPastNamesThatAlreadyExistOnDisk() async throws {
+        let fixture = try collidingDocxFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let occupied = fixture.outputFolder.appendingPathComponent("report-2.pdf")
+        try write("someone else's pdf", to: occupied)
+        let executor = makeExecutor(root: fixture.root, documentConverter: FakeDocumentConverter())
+
+        _ = try await executor.execute(plan: fixture.plan) { _, _ in }
+
+        #expect(try String(contentsOf: occupied) == "someone else's pdf")
+        #expect(FileManager.default.fileExists(atPath: fixture.outputFolder.appendingPathComponent("report-3.pdf").path))
+    }
+
+    /// No-drift on the skip rule, which the rename must not swallow. A document whose *own*
+    /// destination already exists is still skipped and still reported as skipped — it does not get
+    /// renamed onto a free name and converted anyway, which would be this fix quietly overriding a
+    /// deliberate behavior.
+    @Test
+    func aDocxWhoseOwnPDFAlreadyExistsIsStillSkippedRatherThanRenamed() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("docx-a", to: root.appendingPathComponent("a.docx"))
+        try write("existing", to: root.appendingPathComponent("a.pdf"))
+        let executor = makeExecutor(root: root, documentConverter: FakeDocumentConverter())
+
+        let result = try await executor.execute(plan: docxPlan(root: root)) { _, _ in }
+
+        #expect(!FileManager.default.fileExists(atPath: root.appendingPathComponent("a-2.pdf").path))
+        #expect(try String(contentsOf: root.appendingPathComponent("a.pdf")) == "existing")
+        #expect(result.summary == "No DOCX files needed conversion in \(root.path). Skipped 1 existing PDF outputs.")
+    }
+
+    /// Mock fidelity, the second half of the user's 2026-08-04 triage. `MockDocumentConverter` wrote
+    /// with `.atomic`, which replaces an existing file, while `MicrosoftWordDocumentConverter`
+    /// finishes with `moveItem`, which throws — so the one converter a developer exercises had a
+    /// different failure mode from the one real users hit, at the exact moment that matters. Both
+    /// now refuse. Driven directly rather than through the executor because reaching this path
+    /// otherwise needs a process-wide environment variable.
+    @Test
+    func theMockConverterRefusesToOverwriteAnOccupiedDestinationInsteadOfClobberingIt() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let destination = root.appendingPathComponent("report.mock.pdf")
+        try write("an earlier pdf", to: destination)
+        let converter = MockDocumentConverter(enabled: true)
+        let record = DocxRecord(
+            sourceURL: root.appendingPathComponent("report.docx"),
+            destinationURL: destination,
+            skippedBecausePDFExists: false,
+            isMockDestination: true
+        )
+
+        await #expect(throws: DocumentConversionError.mockWriteFailed(
+            "Could not write mock PDF to \(destination.path): a file already exists there."
+        )) {
+            _ = try await converter.convert([record]) { _ in }
+        }
+        #expect(try String(contentsOf: destination) == "an earlier pdf")
+    }
+
+    /// The same converter still writes normally when the destination is free — the guard above must
+    /// refuse a collision, not refuse everything.
+    @Test
+    func theMockConverterStillWritesWhenTheDestinationIsFree() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let destination = root.appendingPathComponent("report.mock.pdf")
+        let converter = MockDocumentConverter(enabled: true)
+        let record = DocxRecord(
+            sourceURL: root.appendingPathComponent("report.docx"),
+            destinationURL: destination,
+            skippedBecausePDFExists: false,
+            isMockDestination: true
+        )
+
+        let converted = try await converter.convert([record]) { _ in }
+
+        #expect(converted.map(\.destinationURL) == [destination])
+        #expect(try String(contentsOf: destination).contains("Mock PDF placeholder"))
+    }
+
     // MARK: - SONNY-24: a routine binds its own browser
 
     /// Order independence, the half that is not obvious. The founder decision (2026-08-04) is that
@@ -3593,6 +3730,64 @@ struct AgentActionExecutorTests {
                     count: 3
                 )
             ]
+        )
+    }
+
+    /// Every `source -> destination` pair a run reported, each side shortened to `folder/name`.
+    private func conversionTails(in result: AgentRunResult) -> [String] {
+        result.previews.flatMap(\.conversions).map { conversion in
+            conversion
+                .components(separatedBy: " -> ")
+                .map { side in
+                    let url = URL(fileURLWithPath: side)
+                    return "\(url.deletingLastPathComponent().lastPathComponent)/\(url.lastPathComponent)"
+                }
+                .joined(separator: " -> ")
+        }
+    }
+
+    /// SONNY-28's fixture: `SubA/report.docx` and `SubB/report.docx` scanned together into one flat
+    /// output folder — "convert the Word docs in ~/Documents to PDF and put them in ~/Desktop/PDFs".
+    /// Both documents' basenames produce `report.pdf` in the same directory.
+    private struct CollidingDocxFixture {
+        let root: URL
+        let subA: URL
+        let subB: URL
+        let outputFolder: URL
+        let plan: AgentPlan
+    }
+
+    private func collidingDocxFixture() throws -> CollidingDocxFixture {
+        let root = try makeDirectory()
+        let documents = root.appendingPathComponent("Documents", isDirectory: true)
+        let subA = documents.appendingPathComponent("SubA", isDirectory: true)
+        let subB = documents.appendingPathComponent("SubB", isDirectory: true)
+        let outputFolder = root.appendingPathComponent("PDFs", isDirectory: true)
+        for directory in [subA, subB, outputFolder] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        try write("docx-a", to: subA.appendingPathComponent("report.docx"))
+        try write("docx-b", to: subB.appendingPathComponent("report.docx"))
+
+        return CollidingDocxFixture(
+            root: root,
+            subA: subA,
+            subB: subB,
+            outputFolder: outputFolder,
+            plan: AgentPlan(
+                summary: "Convert the Word documents to PDF.",
+                requiresConfirmation: true,
+                steps: [
+                    AgentStep(id: "scan", operation: .scanDocx, description: "Scan DOCX.", inputPath: documents.path),
+                    AgentStep(
+                        id: "convert",
+                        operation: .convertDocxToPDF,
+                        description: "Convert DOCX.",
+                        inputPath: documents.path,
+                        outputPath: outputFolder.path
+                    )
+                ]
+            )
         )
     }
 
