@@ -1,5 +1,30 @@
 import Foundation
 
+/// How two output destinations are compared when deciding whether they would be **the same file**.
+///
+/// Case-folded and Unicode-normalised, because the default macOS volume is case-insensitive APFS:
+/// `Report.pdf` and `report.pdf` are two distinct Swift strings and one file on disk, and the same
+/// name written NFC and NFD likewise. Comparing raw paths let two documents each claim a destination
+/// that looked free and was not, which then aborted the conversion at the converter — the exact
+/// pre-fix production failure — instead of renaming, and said nothing in the summary because neither
+/// record was flagged as renamed (SONNY-28, PR #41 review F1).
+///
+/// **Folded unconditionally rather than probed per volume.** On a case-sensitive volume the only cost
+/// is a rename that was not strictly required, which the summary announces either way; getting it
+/// wrong in the other direction loses the fix entirely on the volume nearly every user has. This is
+/// an approximation of the filesystem's own folding, not a reproduction of it, and it is deliberately
+/// the conservative side of the approximation.
+///
+/// Used by `FileInventory.docxFiles` and by `AgentActionExecutor`'s within-plan output-path
+/// disambiguation. The two keep separate *policies* — the docx side must also avoid names that exist
+/// on disk, the executor side must never consult disk or it would suppress the tier-3 "output already
+/// exists" escalation — but they must agree on what "the same destination" means.
+enum DestinationKey {
+    static func folded(_ path: String) -> String {
+        path.precomposedStringWithCanonicalMapping.lowercased()
+    }
+}
+
 public struct FileRecord: Equatable, Sendable {
     public var url: URL
     public var byteCount: Int64
@@ -61,9 +86,16 @@ public struct FileInventory {
 
     /// Every convertible `.docx` under `folder`, paired with the PDF each one would produce.
     ///
-    /// **No two records ever share a destination.** A destination is derived from the document's
+    /// **No two records of one scan ever share a destination**, comparing them the way the filesystem
+    /// does — see `DestinationKey`. A destination is derived from the document's
     /// basename, and `regularFiles(in:)` recurses, so `SubA/report.docx` and `SubB/report.docx` both
     /// name `report.pdf` — and with an explicit flat `outputFolder` they land in the same directory.
+    /// `SubA/Report.docx` and `SubB/report.docx` do too, on the case-insensitive volume nearly every
+    /// user has, which a raw string comparison missed (PR #41 review F1).
+    ///
+    /// The guarantee is per *scan*, and that qualifier is load-bearing: two `[scan_docx, convert]`
+    /// units in one chain scan separately, so the second re-scans after the first has written and its
+    /// record is skipped rather than renamed. That is SONNY-76, filed, not fixed here.
     /// `skippedBecausePDFExists` cannot save them: it is evaluated once, here, before anything is
     /// written, so against a fresh output folder both records answer `false` and both convert. The
     /// second one then destroyed the first under `MockDocumentConverter` (an `.atomic` write, which
@@ -108,14 +140,14 @@ public struct FileInventory {
             }
 
             var destination = preferred
-            let renamed = claimedDestinations.contains(preferred.path)
+            let renamed = claimedDestinations.contains(DestinationKey.folded(preferred.path))
             if renamed {
                 var suffix = 2
                 while true {
                     let candidate = destinationFolder.appendingPathComponent(
                         Self.pdfName(stem: "\(basename)-\(suffix)", mockDestinations: mockDestinations)
                     )
-                    if !claimedDestinations.contains(candidate.path),
+                    if !claimedDestinations.contains(DestinationKey.folded(candidate.path)),
                        !fileManager.fileExists(atPath: candidate.path) {
                         destination = candidate
                         break
@@ -124,7 +156,7 @@ public struct FileInventory {
                 }
             }
 
-            claimedDestinations.insert(destination.path)
+            claimedDestinations.insert(DestinationKey.folded(destination.path))
             records.append(
                 DocxRecord(
                     sourceURL: source.url,

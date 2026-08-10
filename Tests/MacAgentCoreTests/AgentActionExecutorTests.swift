@@ -992,12 +992,14 @@ struct AgentActionExecutorTests {
         #expect(result.summary == "Saved 5 Hacker News headlines to \(output.path).")
     }
 
-    /// And the converse: a duplicate operation inside one workflow's run ends the unit. Two
-    /// `.fetch_hn_headlines` steps are two presets, because `hackerNewsSpec` reads one fetch step
-    /// per call and would otherwise drop the second — the same first-match drop, one operation
-    /// deeper than the plan-level one.
+    /// And the converse: a repeat inside one workflow's run ends the unit — a *repeat*, meaning what
+    /// follows covers the same operations the unit already covers. `[fetch, write, fetch, write]` is
+    /// two digests, because `hackerNewsSpec` reads one fetch and one write step per call and would
+    /// otherwise drop the second pair — the same first-match drop, one operation deeper than the
+    /// plan-level one. The three tests below it guard the other side of that rule: a duplicate that
+    /// is *not* a repeat must not cut the unit.
     @Test
-    func aDuplicateOperationInsideOneWorkflowsRunStartsANewUnit() async throws {
+    func aRepeatedFetchAndWritePairStartsANewUnit() async throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let firstOutput = root.appendingPathComponent("hn-1.md")
@@ -1022,6 +1024,189 @@ struct AgentActionExecutorTests {
         // The second unit's own `count` is honoured — proof it was serviced by its own steps
         // rather than by a re-run of the first unit's.
         #expect(result.summary == "Saved 5 Hacker News headlines to \(firstOutput.path). Saved 3 Hacker News headlines to \(secondOutput.path).")
+    }
+
+    // MARK: - SONNY-34 (PR #41 review, F1): a duplicate that is not a repeat must not cut the unit
+    //
+    // The first draft cut a unit at *any* repeated operation, which ends a unit mid-workflow and
+    // leaves a fragment — a bare `[scan]`, `[scan_docx]` or `[fetch]`. No adapter gates on its
+    // companion step being present; each manufactures a default and acts. All three plans below were
+    // measured producing a second, unrequested effect, and all three are baseline shapes the whole-plan
+    // call handled correctly by absorbing the duplicate. They are fixtures now.
+
+    /// A second scan before the zip is planner noise, not a second archive: the plan names one
+    /// `create_zip`, so one archive is what the user asked for. Asserted on the *whole* directory
+    /// listing rather than on the wanted archive alone — an extra archive beside a correct one is
+    /// exactly the failure, and an existence check on the right file cannot see it.
+    @Test
+    func aScanRepeatedBeforeItsZipStaysOneUnitAndCreatesOneArchive() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folderA = root.appendingPathComponent("A", isDirectory: true)
+        try FileManager.default.createDirectory(at: folderA, withIntermediateDirectories: true)
+        try write(String(repeating: "a", count: 2048), to: folderA.appendingPathComponent("from-a.txt"))
+        let wanted = root.appendingPathComponent("wanted.zip")
+        let executor = makeExecutor(root: root)
+        let plan = AgentPlan(
+            summary: "Zip the largest files in A.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "scan-1", operation: .scanSelectLargestFiles, description: "Scan A.", inputPath: folderA.path, count: 3),
+                AgentStep(id: "scan-2", operation: .scanSelectLargestFiles, description: "Scan A again.", inputPath: folderA.path, count: 3),
+                AgentStep(id: "zip", operation: .createZip, description: "Zip them.", inputPath: folderA.path, outputPath: wanted.path, count: 3)
+            ]
+        )
+
+        let result = try await executor.execute(plan: plan) { _, _ in }
+
+        #expect(result.previews.map(\.writes) == [[wanted.path]])
+        #expect(try FileManager.default.contentsOfDirectory(atPath: folderA.path).filter { $0.hasSuffix(".zip") }.isEmpty)
+        #expect(try FileManager.default.contentsOfDirectory(atPath: root.path).filter { $0.hasSuffix(".zip") } == ["wanted.zip"])
+    }
+
+    /// The same for DOCX, where the fragment's second effect also lands in the wrong place: a bare
+    /// `[scan_docx]` unit has no convert step to read an output folder from, so it converts into the
+    /// source folder — the one directory the user explicitly redirected away from.
+    @Test
+    func aDocxScanRepeatedBeforeItsConversionStaysOneUnitAndWritesOnePDF() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let documents = root.appendingPathComponent("Documents", isDirectory: true)
+        let outputFolder = root.appendingPathComponent("PDFs", isDirectory: true)
+        for directory in [documents, outputFolder] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        try write("docx", to: documents.appendingPathComponent("memo.docx"))
+        let executor = makeExecutor(root: root, documentConverter: FakeDocumentConverter())
+        let plan = AgentPlan(
+            summary: "Convert the Word documents.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "scan-1", operation: .scanDocx, description: "Scan.", inputPath: documents.path),
+                AgentStep(id: "scan-2", operation: .scanDocx, description: "Scan again.", inputPath: documents.path),
+                AgentStep(id: "convert", operation: .convertDocxToPDF, description: "Convert.", inputPath: documents.path, outputPath: outputFolder.path)
+            ]
+        )
+
+        let result = try await executor.execute(plan: plan) { _, _ in }
+
+        #expect(result.previews.count == 1)
+        #expect(FileManager.default.fileExists(atPath: outputFolder.appendingPathComponent("memo.pdf").path))
+        #expect(try FileManager.default.contentsOfDirectory(atPath: documents.path) == ["memo.docx"])
+    }
+
+    /// The serious one. A bare `[fetch]` fragment runs a whole second Hacker News preset — another
+    /// browser open, another fetch, and another Markdown save deriving the same
+    /// `hacker-news-<timestamp>` name in the same second, so the second write lands silently on the
+    /// first at tier 2, with no collision escalation because at assessment time the file did not
+    /// exist. SONNY-35's suffixing cannot reach it: neither fragment carries a `.write_markdown`
+    /// step, so no `outputPath` is ever resolved to compare against.
+    ///
+    /// One unit, so: one open, one file, one sentence.
+    @Test
+    func aHackerNewsFetchRepeatedBeforeAnyWriteStaysOneUnitAndSavesOnce() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let browserOpener = RecordingBrowserOpener()
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let executor = makeExecutor(root: root, browserOpener: browserOpener, now: { stamp })
+        let plan = AgentPlan(
+            summary: "Open Hacker News and grab the headlines.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "open-hn", operation: .openHackerNews, description: "Open Hacker News."),
+                AgentStep(id: "fetch-1", operation: .fetchHNHeadlines, description: "Fetch headlines.", count: 5),
+                AgentStep(id: "fetch-2", operation: .fetchHNHeadlines, description: "Fetch headlines again.", count: 5)
+            ]
+        )
+
+        let result = try await executor.execute(plan: plan) { _, _ in }
+
+        let saved = try FileManager.default.contentsOfDirectory(atPath: root.path).filter { $0.hasPrefix("hacker-news-") }
+        #expect(saved.count == 1)
+        #expect(browserOpener.openedURLs.count == 1)
+        #expect(result.previews.count == 1)
+        #expect(result.summary == "Saved 5 Hacker News headlines to \(root.appendingPathComponent(saved[0]).path).")
+    }
+
+    /// A repeated operation *after* the unit is complete is a trailing fragment, not a repeat, and is
+    /// absorbed for the same reason — the adapter drops it, and the plan named one archive.
+    @Test
+    func aScanTrailingACompletePairStaysInTheSameUnit() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write(String(repeating: "x", count: 2048), to: root.appendingPathComponent("large.txt"))
+        let output = root.appendingPathComponent("largest.zip")
+        let executor = makeExecutor(root: root)
+        let plan = AgentPlan(
+            summary: "Zip the largest files.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "scan", operation: .scanSelectLargestFiles, description: "Scan.", inputPath: root.path, count: 3),
+                AgentStep(id: "zip", operation: .createZip, description: "Zip.", inputPath: root.path, outputPath: output.path, count: 3),
+                AgentStep(id: "scan-again", operation: .scanSelectLargestFiles, description: "Scan again.", inputPath: root.path, count: 3)
+            ]
+        )
+
+        let result = try await executor.execute(plan: plan) { _, _ in }
+
+        #expect(result.previews.map(\.writes) == [[output.path]])
+        #expect(try FileManager.default.contentsOfDirectory(atPath: root.path).filter { $0.hasSuffix(".zip") } == ["largest.zip"])
+    }
+
+    // MARK: - SONNY-34 (PR #41 review, F2): a plan with no steps is still a benign no-op
+
+    /// `chainSegments`' guard refuses exactly one unit and nothing else. A plan with no steps
+    /// classifies `.chain` — an empty `Set` of workflows is not a count of one — and cuts to no
+    /// units, and both chain loops simply do not run. That was the behavior before this branch, an
+    /// earlier draft of the guard turned it into a thrown error, and it is reachable in practice:
+    /// `RoutineStore.save` accepts a routine with no steps, and `RunRoutineCapabilityAdapter`
+    /// previews and assesses that routine's empty nested plan through this same path.
+    ///
+    /// All four entry points pinned together, because the guard sits under all four.
+    @Test
+    func aPlanWithNoStepsIsANoOpAcrossEveryEntryPoint() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root)
+        let plan = AgentPlan(summary: "", requiresConfirmation: false, steps: [])
+
+        let previews = try executor.preview(plan: plan)
+        let prepared = try executor.prepare(plan: plan)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
+        let result = try await executor.execute(plan: plan) { _, _ in }
+
+        #expect(previews.isEmpty)
+        #expect(prepared.previews.isEmpty)
+        #expect(prepared.clarificationQuestion == nil)
+        #expect(assessment.defaultTier == .tier0)
+        #expect(assessment.effectiveTier == .tier0)
+        #expect(assessment.escalations.isEmpty)
+        #expect(result.summary.isEmpty)
+        #expect(result.previews.isEmpty)
+    }
+
+    /// The same shape reached the way a user really can reach it: an empty stored routine, run
+    /// through `run_routine`, whose nested plan has no steps.
+    @Test
+    func runningAStoredRoutineWithNoStepsIsANoOpRatherThanAnError() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try routineStore.save(StoredRoutine(name: "Empty", steps: []))
+        let executor = makeExecutor(root: root, routineStore: routineStore)
+
+        let plan = RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Empty")
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
+        let result = try await executor.execute(plan: plan) { _, _ in }
+
+        // Tier 2 is `run_routine`'s own default, unmoved by a nested plan that assesses nothing; the
+        // trailing space is the outer adapter concatenating an empty nested summary. Both are
+        // pre-existing behavior, pinned as measured rather than as hoped — the point of the test is
+        // that this path answers at all instead of throwing.
+        #expect(assessment.effectiveTier == .tier2)
+        #expect(assessment.escalations.isEmpty)
+        #expect(result.summary == "Ran routine Empty. ")
     }
 
     // MARK: - SONNY-35: every unit resolves its own default output path
@@ -1092,6 +1277,49 @@ struct AgentActionExecutorTests {
             scope: .unscoped
         )
 
+        #expect(assessment.effectiveTier == .tier3)
+        #expect(assessment.escalations == [
+            CapabilityRiskEscalation(
+                fromTier: .tier2,
+                toTier: .tier3,
+                reason: "Draft output already exists at \(occupied.path)."
+            )
+        ])
+    }
+
+    /// The other half of the never-consult-disk boundary (PR #41 review, SONNY-35 F2).
+    /// `unclaimedOutputPath` tests `claimed` twice — once on entry, once per candidate — and the
+    /// first mutation battery only covered the candidate test. Teaching the *entry* test about the
+    /// filesystem is the more dangerous violation of the same rule: it bumps a first generated
+    /// destination that already exists to `-2`, which is exactly how the tier-3 "output already
+    /// exists" escalation would be suppressed. No test had a first destination that already existed,
+    /// so nothing noticed. This one does.
+    @Test
+    func aGeneratedDestinationThatAlreadyExistsOnDiskKeepsItsNameAndItsEscalation() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let stamp = Date(timeIntervalSince1970: 1_700_000_000)
+        let occupied = root.appendingPathComponent("draft-alpha-\(Timestamp.fileSafe(stamp)).md")
+        try write("existing draft", to: occupied)
+        let executor = makeExecutor(root: root, now: { stamp })
+        let plan = AgentPlan(
+            summary: "Draft a note.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "draft",
+                    operation: .createLocalDraft,
+                    description: "Create the draft.",
+                    draftTitle: "Alpha",
+                    draftContent: "A note."
+                )
+            ]
+        )
+
+        let prepared = try executor.prepare(plan: plan)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
+
+        #expect(prepared.plan.steps.first?.outputPath == occupied.path)
         #expect(assessment.effectiveTier == .tier3)
         #expect(assessment.escalations == [
             CapabilityRiskEscalation(
@@ -1307,6 +1535,58 @@ struct AgentActionExecutorTests {
         #expect(result.summary == "No DOCX files needed conversion in \(root.path). Skipped 1 existing PDF outputs.")
     }
 
+    /// Two basenames differing only in case are one file on the default macOS volume, so the
+    /// uniqueness comparison folds case and Unicode form (PR #41 review, SONNY-28 F1). Comparing raw
+    /// paths gave both documents a destination that looked free, neither was flagged as renamed, and
+    /// the run then hit the converter's refusal and aborted the batch — the pre-fix production
+    /// failure this ticket set out to end, plus pre-fix silence about why.
+    ///
+    /// Asserted on the completed conversion rather than only on the record shapes, because "the batch
+    /// finishes" is the property that was actually lost.
+    @Test
+    func twoDocxBasenamesDifferingOnlyInCaseStillConvertToDistinctPDFs() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let documents = root.appendingPathComponent("Documents", isDirectory: true)
+        let subA = documents.appendingPathComponent("SubA", isDirectory: true)
+        let subB = documents.appendingPathComponent("SubB", isDirectory: true)
+        let outputFolder = root.appendingPathComponent("PDFs", isDirectory: true)
+        for directory in [subA, subB, outputFolder] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        try write("docx-a", to: subA.appendingPathComponent("Report.docx"))
+        try write("docx-b", to: subB.appendingPathComponent("report.docx"))
+        let executor = makeExecutor(root: root, documentConverter: FakeDocumentConverter())
+        let plan = AgentPlan(
+            summary: "Convert the Word documents to PDF.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "scan", operation: .scanDocx, description: "Scan DOCX.", inputPath: documents.path),
+                AgentStep(
+                    id: "convert",
+                    operation: .convertDocxToPDF,
+                    description: "Convert DOCX.",
+                    inputPath: documents.path,
+                    outputPath: outputFolder.path
+                )
+            ]
+        )
+
+        let result = try await executor.execute(plan: plan) { _, _ in }
+
+        #expect(conversionTails(in: result) == [
+            "SubA/Report.docx -> PDFs/Report.pdf",
+            "SubB/report.docx -> PDFs/report-2.pdf"
+        ])
+        #expect(result.summary.hasSuffix(
+            "Renamed 1 output because another document would produce the same PDF name: report-2.pdf."
+        ))
+        #expect(
+            try FileManager.default.contentsOfDirectory(atPath: outputFolder.path).sorted()
+                == ["Report.pdf", "report-2.pdf"]
+        )
+    }
+
     /// Mock fidelity, the second half of the user's 2026-08-04 triage. `MockDocumentConverter` wrote
     /// with `.atomic`, which replaces an existing file, while `MicrosoftWordDocumentConverter`
     /// finishes with `moveItem`, which throws — so the one converter a developer exercises had a
@@ -1405,6 +1685,53 @@ struct AgentActionExecutorTests {
 
         let error = try #require(thrown)
         #expect(!(error is AutomationStoreError))
+    }
+
+    /// What the added interruption actually says (PR #41 review, SONNY-30 F1). The escalation this
+    /// ticket restores is the branch's one deliberate new prompt, so the sentence a user meets is
+    /// part of the fix, not decoration — and it was
+    /// "The operation couldn't be completed. (CryptoKit.CryptoKitError error 3.)", because
+    /// `AES.GCM` throws a type with no `LocalizedError` conformance and `AgentViewModel`'s generic
+    /// catch renders `localizedDescription` straight into the task error and into task history.
+    ///
+    /// Asserted from the executor's throw, which is the string that catch receives.
+    @Test
+    func aCorruptStoreFailureNamesDecryptionRatherThanACryptoKitErrorCode() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try corruptStore(at: root.appendingPathComponent("routines.json"))
+        let executor = makeExecutor(root: root)
+
+        var thrown: Error?
+        do {
+            _ = try executor.assessRisk(plan: saveRoutinePlan(named: "Morning Setup"), scope: .unscoped)
+        } catch {
+            thrown = error
+        }
+
+        let message = try #require(thrown).localizedDescription
+        #expect(message == "A local data file exists but could not be decrypted or decoded.")
+        #expect(!message.contains("CryptoKit"))
+    }
+
+    /// A blank name is a malformed request whatever the store's health, and the answer must not
+    /// depend on whether the file happens to decrypt (PR #41 review, SONNY-30 F3). Driven against the
+    /// store directly: both adapters guard the name upstream, so the executor cannot reach it.
+    @Test
+    func aBlankRoutineNameThrowsMissingNameEvenAgainstAnUnreadableStore() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let storeURL = root.appendingPathComponent("routines.json")
+        try corruptStore(at: storeURL)
+        let store = RoutineStore(fileURL: storeURL)
+
+        #expect(throws: AutomationStoreError.missingName("Routine")) {
+            _ = try store.findRoutine(named: "   ")
+        }
+        // The same store, a real name: now the load failure is the honest answer.
+        #expect(throws: LocalStorageEncryptionError.self) {
+            _ = try store.findRoutine(named: "Morning Setup")
+        }
     }
 
     /// The load-bearing inverse. Surfacing a broken store must not turn a *healthy* store with no
@@ -4930,6 +5257,12 @@ private struct RecordingZipArchiver: ZipArchiving {
     }
 }
 
+/// Refuses an occupied destination, like both shipped converters do — `MicrosoftWordDocumentConverter`
+/// via `moveItem` and `MockDocumentConverter` via its own guard. Without this the double was the one
+/// converter in the process that would silently clobber, so the fidelity argument the branch makes for
+/// the shipped mock did not extend to the double the docx tests actually run against, and a
+/// reintroduced shared destination would have been caught only by an output assertion rather than at
+/// the write. (PR #41 review, SONNY-28 "one note, not a finding".)
 private struct FakeDocumentConverter: DocumentConverting {
     var isAvailable: Bool { true }
     var modeName: String { "Fake converter" }
@@ -4939,6 +5272,11 @@ private struct FakeDocumentConverter: DocumentConverting {
         var converted: [DocxRecord] = []
         for record in records where !record.skippedBecausePDFExists {
             log("Converting \(record.sourceURL.lastPathComponent)")
+            guard !FileManager.default.fileExists(atPath: record.destinationURL.path) else {
+                throw DocumentConversionError.conversionFailed(
+                    "Could not move exported PDF to \(record.destinationURL.path): a file already exists there."
+                )
+            }
             try "fake pdf".data(using: .utf8)?.write(to: record.destinationURL)
             converted.append(record)
         }

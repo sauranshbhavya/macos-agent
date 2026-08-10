@@ -409,9 +409,15 @@ public struct RoutineStore: @unchecked Sendable {
     /// tier-3 replacement escalation (SONNY-30). Modelled on `SnippetStore.findExactTrigger`, which
     /// had this shape right already.
     ///
-    /// A blank name still throws `.missingName`: that is a malformed request, not an absent routine.
+    /// A blank name throws `.missingName` — unconditionally, including against a store that cannot be
+    /// read. That is a malformed request, not an absent routine, and it is decided before the load so
+    /// the answer does not depend on the store's health. Collapsing the two into
+    /// `try loadAll()[normalizedName(...)]` reads as one line but evaluates the subscript's base
+    /// first, so a corrupt store answered with a decryption error for a blank name and made this
+    /// sentence true only of a healthy one (PR #41 review, SONNY-30 F3).
     public func findRoutine(named rawName: String) throws -> StoredRoutine? {
-        try loadAll()[normalizedName(rawName, kind: "Routine")]
+        let name = try normalizedName(rawName, kind: "Routine")
+        return try loadAll()[name]
     }
 
     public func routine(named rawName: String) throws -> StoredRoutine {
@@ -510,7 +516,8 @@ public struct WorkspaceStore: @unchecked Sendable {
     /// The workspace saved under this name, or `nil` if none is. `RoutineStore.findRoutine(named:)`
     /// documents why this exists beside `workspace(named:)` and what a `try?` here used to cost.
     public func findWorkspace(named rawName: String) throws -> StoredWorkspace? {
-        try loadAll()[normalizedName(rawName, kind: "Workspace")]
+        let name = try normalizedName(rawName, kind: "Workspace")
+        return try loadAll()[name]
     }
 
     public func workspace(named rawName: String) throws -> StoredWorkspace {
