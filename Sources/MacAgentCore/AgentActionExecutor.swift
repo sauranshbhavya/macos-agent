@@ -30,11 +30,26 @@ public struct PreparedAgentRun: Equatable, Sendable {
     public var plan: AgentPlan
     public var previews: [ActionPreview]
     public var clarificationQuestion: String?
+    /// Where this run's plan came from — see `PreparedPlanSource`. Stamped by `AgentRunner.prepare`,
+    /// which is the only thing that knows the answer; `AgentActionExecutor` prepares a plan without
+    /// caring how it was authored, so its own construction leaves the default in place.
+    ///
+    /// The default is `.planner` because that is the *least*-trusted answer. A carrier for a trust
+    /// signal has to default to the value that grants nothing, so a construction site added later
+    /// that says nothing inherits no trust it never asked for — the same safe-direction rule
+    /// `AgentViewModel.start(fromComposer:)` defaults `false` for.
+    public var source: PreparedPlanSource
 
-    public init(plan: AgentPlan, previews: [ActionPreview], clarificationQuestion: String? = nil) {
+    public init(
+        plan: AgentPlan,
+        previews: [ActionPreview],
+        clarificationQuestion: String? = nil,
+        source: PreparedPlanSource = .planner
+    ) {
         self.plan = plan
         self.previews = previews
         self.clarificationQuestion = clarificationQuestion
+        self.source = source
     }
 
     public var sideEffects: [String] {
