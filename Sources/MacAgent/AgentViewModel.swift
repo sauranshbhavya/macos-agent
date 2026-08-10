@@ -1700,7 +1700,15 @@ final class AgentViewModel: ObservableObject {
         let details = LocalStorageLoadFailureSource.allCases
             .compactMap { localStorageLoadFailures[$0] }
             .joined(separator: "; ")
-        localStorageNotice = "Sonny could not load encrypted local data. A local data file exists but could not be decrypted or decoded. \(details)"
+        // The headline names the *kind* of problem; each detail names the store and why that one
+        // failed. It used to also hardcode "A local data file exists but could not be decrypted or
+        // decoded.", which was the one distinguishing thing a detail carried back when the underlying
+        // errors rendered as raw CryptoKit codes. SONNY-30 gave those errors that exact sentence as
+        // their description, so the banner started saying it twice and the per-source detail
+        // degraded to a repeat of the line above it (PR #41 cycle-3, R4). Dropping it here rather
+        // than from the detail keeps the details distinguishable when two stores fail for *different*
+        // reasons — a decrypt failure and a bad key are not the same problem and must not read alike.
+        localStorageNotice = "Sonny could not load encrypted local data. \(details)"
     }
 
     /// A local-store *write* failure, which needs its own accurate wording — the load-failure

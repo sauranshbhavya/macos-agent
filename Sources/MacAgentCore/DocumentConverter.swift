@@ -176,10 +176,17 @@ public struct MockDocumentConverter: DocumentConverting {
     /// `MicrosoftWordDocumentConverter` finishes with `moveItem`, which throws. That divergence is
     /// what made SONNY-28 read as "silent data loss" when the loss was only reachable with no Word
     /// installed and `MAC_AGENT_MOCK_DOCX=1`; a mock whose failure mode differs from the real thing
-    /// at the one moment that matters is worse than no mock. Destination collisions inside one run
-    /// can no longer arise at all — `FileInventory.docxFiles` gives every record its own name — so
-    /// this is the backstop for what that cannot see: a file that appeared between the scan and the
-    /// write.
+    /// at the one moment that matters is worse than no mock.
+    ///
+    /// This is the backstop for the collisions `FileInventory.docxFiles` cannot see, and there are
+    /// two classes of them rather than the one an earlier version of this comment claimed. It said
+    /// destination collisions inside one run "can no longer arise at all", which is not true and is
+    /// the same absolute phrasing that was corrected in two other places and missed here (PR #41
+    /// cycle-3, R2). What `docxFiles` rules out is same-scan collisions **as `DestinationKey`
+    /// compares them**; what still reaches this guard is (a) a file that appeared between the scan and
+    /// the write, and (b) a pair the filesystem folds together and `DestinationKey` does not —
+    /// `Straße.pdf` against `STRASSE.pdf`, SONNY-79. For (b) this refusal is the whole of the
+    /// protection, and it is why that residual costs a partway-aborted batch and not a lost file.
     public func convert(_ records: [DocxRecord], log: @escaping (String) -> Void) async throws -> [DocxRecord] {
         guard isAvailable else {
             throw DocumentConversionError.wordUnavailable
