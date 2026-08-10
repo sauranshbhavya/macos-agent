@@ -1942,15 +1942,20 @@ struct WorkspaceCardPresentation: Equatable {
     }
 }
 
-/// One stored scope entry, with the command that would remove it.
+/// One stored scope entry, with the edit that would remove it.
 ///
-/// The command is built here rather than in the view body so that what every affordance actually
-/// sends is pinned by a pure test — this repo has no SwiftUI view-inspection harness, so anything
+/// The dispatch is built here rather than in the view body so that what every affordance actually
+/// submits is pinned by a pure test — this repo has no SwiftUI view-inspection harness, so anything
 /// composed inside a `body` is unassertable.
 struct WorkspaceScopeEntryPresentation: Equatable {
     let value: String
-    let removeCommand: String
-    /// States the real removal unit, not a single-entry promise — see `removalUnits`.
+    /// The exact `edit_workspace` change this row's Remove button submits, and the sentence shown
+    /// as what ran. SONNY-64: this used to be a sentence handed to the widget composer for the user
+    /// to press Send on; it is now dispatched as a pre-built plan into the same gate, so the
+    /// composer step is gone and the consent is not.
+    let removeDispatch: WorkspaceScopeEditDispatch
+    /// States the real removal unit, not a single-entry promise — see
+    /// `EditWorkspaceCapabilityAdapter.removalUnits`.
     let removeAccessibilityLabel: String
     /// Non-nil when other stored entries leave with this one. Rendered *visibly*, because an
     /// accessibility label alone tells a sighted user nothing before they tap.
@@ -1983,9 +1988,11 @@ struct WorkspaceScopeSectionPresentation: Equatable {
     let isRestricted: Bool
     /// Non-nil exactly when `isRestricted` is false — including when there are rows to show.
     let notRestrictedText: String?
-    /// A *completable prefix*, in `beginNewWorkspace`'s idiom, because the entry being added does
-    /// not exist yet for the sheet to name. The user finishes it in the widget composer.
-    let addCommand: String
+    /// Which dimension this section edits. The Add button opens
+    /// `WorkspaceScopeAddPresentation(kind:workspace:)` for it — SONNY-64 replaced the completable
+    /// command prefix this used to carry, whose only purpose was giving the widget composer
+    /// something for the user to finish typing.
+    let kind: ScopedResourceKind
     let addAccessibilityLabel: String
 }
 
@@ -2110,7 +2117,9 @@ struct WorkspaceDetailPresentation: Equatable {
             scope.inertEntries.filter { $0.kind == kind }.map { ($0.value, $0.reason) },
             uniquingKeysWith: { first, _ in first }
         )
-        let units = removalUnits(kind: kind, values: values, catalog: catalog, whitelist: whitelist)
+        // The capability's own removal keys, asked of the capability. See its `removalUnits` for why
+        // this is no longer reconstructed here.
+        let units = EditWorkspaceCapabilityAdapter.removalUnits(kind: kind, values: values, catalog: catalog)
 
         return WorkspaceScopeSectionPresentation(
             title: title,
@@ -2119,7 +2128,12 @@ struct WorkspaceDetailPresentation: Equatable {
                 let alsoRemoved = units[index]
                 return WorkspaceScopeEntryPresentation(
                     value: value,
-                    removeCommand: "In my \(workspaceName) workspace, remove \(noun) \(value)",
+                    removeDispatch: WorkspaceScopeEditCommand.dispatch(
+                        workspaceName: workspaceName,
+                        kind: kind,
+                        value: value,
+                        action: .remove
+                    ),
                     removeAccessibilityLabel: alsoRemoved.isEmpty
                         ? "Remove \(value) from \(workspaceName)"
                         : "Remove \(value) from \(workspaceName), which also removes "
@@ -2135,84 +2149,11 @@ struct WorkspaceDetailPresentation: Equatable {
             },
             isRestricted: isRestricted,
             notRestrictedText: isRestricted ? nil : notRestrictedText,
-            // Trailing space is load-bearing: the composer opens with the caret after it so the
-            // user types only the entry.
-            addCommand: "In my \(workspaceName) workspace, add \(noun) ",
+            kind: kind,
             addAccessibilityLabel: "Add \(noun) to \(workspaceName)"
         )
     }
 
-    /// For each stored entry, the *other* stored entries that leave with it when it is removed.
-    ///
-    /// `edit_workspace` matches a removal request at a coarser grain than a row — by host for URLs,
-    /// by catalog key for apps — and the adapter's own comment says a workspace "may legitimately
-    /// hold both" URLs on one host, so several rows sharing one removal unit is an expected state.
-    /// A per-entry Remove button promising single-entry removal would be lying on the one surface
-    /// built to make the boundary trustworthy.
-    ///
-    /// Computed by asking the evaluator twice rather than by re-deriving its keys, which are not
-    /// visible outside `MacAgentCore` and must not be copied here. A scope built from entry A is
-    /// asked about entry B and vice versa, and only a **symmetric** match counts as one unit. One
-    /// direction alone would over-group: `verdict(for:)` is folder *containment* and a dot-suffix
-    /// host match, so `github.com` accepts `api.github.com` and `~/Documents` accepts
-    /// `~/Documents/X`, neither in reverse. Symmetry turns those deliberately asymmetric rules back
-    /// into the equality the adapter's removal matching actually uses.
-    private static func removalUnits(
-        kind: ScopedResourceKind,
-        values: [String],
-        catalog: MacAppCatalog,
-        whitelist: PathWhitelist
-    ) -> [[String]] {
-        let scopes = values.map { value in
-            WorkspaceScope(
-                workspace: singleEntryWorkspace(kind: kind, value: value),
-                catalog: catalog,
-                whitelist: whitelist
-            )
-        }
-        let resources = values.map { resource(kind: kind, value: $0) }
-
-        return values.indices.map { index in
-            values.indices.compactMap { other -> String? in
-                guard other != index,
-                      let mine = resources[index],
-                      let theirs = resources[other],
-                      scopes[index].verdict(for: theirs) == .inScope,
-                      scopes[other].verdict(for: mine) == .inScope else {
-                    return nil
-                }
-                return values[other]
-            }
-        }
-    }
-
-    private static func singleEntryWorkspace(kind: ScopedResourceKind, value: String) -> StoredWorkspace {
-        switch kind {
-        case .app:
-            return StoredWorkspace(name: "", apps: [value], urls: [])
-        case .webDomain:
-            return StoredWorkspace(name: "", apps: [], urls: [value])
-        case .fileLocation:
-            return StoredWorkspace(name: "", apps: [], urls: [], fileLocations: [value])
-        }
-    }
-
-    /// A stored entry as the resource the evaluator compares. URLs become their *host*, which is
-    /// what `WorkspaceScope` matches; an entry `SafeURL` rejects has no host, so it groups with
-    /// nothing — correctly, since it can never match anything either.
-    private static func resource(kind: ScopedResourceKind, value: String) -> ScopedResource? {
-        switch kind {
-        case .app:
-            return .app(value)
-        case .webDomain:
-            guard let host = (try? SafeURL.validateWebURL(value))?.host else {
-                return nil
-            }
-            return .webDomain(host)
-        case .fileLocation:
-            return .fileLocation(value)
-        }
-    }
 }
 
 private struct RoutinesView: View {
@@ -2505,12 +2446,13 @@ private struct WorkspacesView: View {
                         workspace: workspace,
                         taskHistoryRecords: viewModel.taskHistoryRecords
                     ),
+                    workspace: workspace,
                     accent: CommandCenterPalette.workspaceAvatarColors[
                         accentIndex(for: workspace.name)
                     ],
                     isTaskInFlight: viewModel.isTaskInFlight,
                     markAsTeam: { viewModel.markWorkspaceAsTeam(workspace) },
-                    compose: { viewModel.composeWorkspaceScopeEdit($0) }
+                    dispatchEdit: { viewModel.dispatchWorkspaceScopeEdit($0) }
                 )
             } else {
                 // Structurally required — the live lookup is Optional — rather than a path anything
@@ -2740,19 +2682,25 @@ private struct WorkspaceCard: View {
 /// explicitly reverted as too visually distracting from content
 /// (`docs/sonny-founder-design-decisions.md`, Workspaces). The two token sets are not mixed here.
 ///
-/// **Editing never writes from this view.** Every scope affordance hands the widget composer a
-/// ready-made `edit_workspace` command and brings the widget forward; the capability then raises
-/// its own consent — tier 2 to add, tier 3 to remove, with the two distinct removal reasons
+/// **Editing never writes from this view.** Every scope affordance dispatches a pre-built
+/// `edit_workspace` plan (SONNY-64) into the same gate a typed command uses; the capability then
+/// raises its own consent — tier 2 to add, tier 3 to remove, with the two distinct removal reasons
 /// SONNY-40 built. Writing straight to the store from here would be a second write path with its
 /// own notions of matching and escalation, and would silently skip the approval the same edit
 /// raises from the command line. The one direct write on this sheet is *mark as team*, which is a
 /// display badge rather than a boundary and already has its own ratified store call.
+///
+/// Add opens a picker rather than pre-filling the widget composer, and Remove acts on the tapped
+/// row — neither routes through the composer any more. What did *not* change is the consent: both
+/// still stop at the same approval, on the same surfaces, with the same words.
 private struct WorkspaceDetailView: View {
     let presentation: WorkspaceDetailPresentation
+    let workspace: StoredWorkspace
     let accent: Color
     let isTaskInFlight: Bool
     let markAsTeam: () -> Void
-    let compose: (String) -> Void
+    let dispatchEdit: (WorkspaceScopeEditDispatch) -> Void
+    @State private var addingTo: WorkspaceScopeAddTarget?
     @Environment(\.dismiss) private var dismiss
 
     var body: some View {
@@ -2814,6 +2762,13 @@ private struct WorkspaceDetailView: View {
                 .stroke(SonnyTheme.border, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+        .sheet(item: $addingTo) { target in
+            WorkspaceScopeAddView(
+                presentation: WorkspaceScopeAddPresentation(kind: target.kind, workspace: workspace),
+                isTaskInFlight: isTaskInFlight,
+                dispatchEdit: dispatchEdit
+            )
+        }
     }
 
     private var header: some View {
@@ -2871,7 +2826,7 @@ private struct WorkspaceDetailView: View {
                     .foregroundStyle(SonnyTheme.text)
             } trailing: {
                 Button {
-                    compose(section.addCommand)
+                    addingTo = WorkspaceScopeAddTarget(kind: section.kind)
                 } label: {
                     Label("Add", systemImage: "plus")
                 }
@@ -2944,7 +2899,7 @@ private struct WorkspaceDetailView: View {
             }
         } trailing: {
             Button {
-                compose(entry.removeCommand)
+                dispatchEdit(entry.removeDispatch)
             } label: {
                 Label("Remove", systemImage: "minus")
             }
@@ -2953,6 +2908,201 @@ private struct WorkspaceDetailView: View {
             .accessibilityLabel(entry.removeAccessibilityLabel)
             .help(entry.sharedRemovalNote ?? entry.removeAccessibilityLabel)
         }
+    }
+}
+
+/// Identifiable wrapper so a dimension can drive `.sheet(item:)`, for the same reason
+/// `SelectedWorkspaceName` exists: the core model stays free of UI-layer conformances.
+private struct WorkspaceScopeAddTarget: Identifiable {
+    let kind: ScopedResourceKind
+    var id: String { kind.rawValue }
+}
+
+/// The Add dialog — SONNY-64's picker.
+///
+/// **Every row here submits the same way the row behind it does**: a pre-built `edit_workspace`
+/// plan through `prepare → assessRisk → approval`. Nothing on this surface is a shortcut past the
+/// consent; picking Slack from a list and typing "add the app Slack" reach the identical gate, and
+/// the only difference is how much the user had to type to get there.
+///
+/// System A throughout, matching the sheet that presents it. All of its copy is computed by
+/// `WorkspaceScopeAddPresentation` rather than written inline, because inline copy is copy no test
+/// can read.
+private struct WorkspaceScopeAddView: View {
+    let presentation: WorkspaceScopeAddPresentation
+    let isTaskInFlight: Bool
+    let dispatchEdit: (WorkspaceScopeEditDispatch) -> Void
+    @State private var typedValue: String = ""
+    @Environment(\.dismiss) private var dismiss
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 0) {
+            HStack {
+                Text(presentation.title)
+                    .font(SonnyType.itemTitle)
+                    .foregroundStyle(SonnyTheme.text)
+
+                Spacer()
+
+                Button {
+                    dismiss()
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(SonnyType.icon(11, weight: .semibold))
+                        .foregroundStyle(SonnyTheme.muted)
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .sonnyPointerCursor()
+                .sonnyHoverHighlight(cornerRadius: 12)
+                .accessibilityLabel("Close")
+                .keyboardShortcut(.cancelAction)
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 16)
+            .padding(.bottom, 12)
+
+            SettingsDivider()
+                .padding(.horizontal, 20)
+
+            ScrollView {
+                VStack(alignment: .leading, spacing: 0) {
+                    ForEach(Array(presentation.categories.enumerated()), id: \.offset) { index, category in
+                        if index > 0 {
+                            SettingsDivider()
+                        }
+                        categoryView(category)
+                    }
+
+                    if !presentation.categories.isEmpty {
+                        SettingsDivider()
+                    }
+
+                    freeEntry
+                }
+                .padding(.horizontal, 20)
+                .padding(.bottom, 18)
+            }
+        }
+        .frame(width: 420, height: 520, alignment: .top)
+        .background(SonnyTheme.ink)
+        .overlay(
+            RoundedRectangle(cornerRadius: SonnyRadius.container)
+                .stroke(SonnyTheme.border, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+    }
+
+    private func categoryView(_ category: WorkspaceScopeAddPresentation.Category) -> some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(category.title)
+                .font(SonnyType.eyebrow)
+                .foregroundStyle(SonnyTheme.muted)
+
+            VStack(alignment: .leading, spacing: 0) {
+                // Offset-keyed for the same reason the detail sheet's rows are: a name is not
+                // guaranteed unique enough to be an identity.
+                ForEach(Array(category.entries.enumerated()), id: \.offset) { _, entry in
+                    entryRow(entry)
+                }
+            }
+        }
+        .padding(.vertical, 12)
+    }
+
+    private func entryRow(_ entry: WorkspaceScopeAddPresentation.Entry) -> some View {
+        SettingsAdaptiveControlRow {
+            Text(entry.name)
+                .font(SonnyType.caption)
+                .foregroundStyle(entry.isAlreadyListed ? SonnyTheme.muted : SonnyTheme.text)
+                .frame(maxWidth: .infinity, alignment: .leading)
+        } trailing: {
+            if entry.isAlreadyListed {
+                // A word, not a disabled button. "Already added" is the answer to the question the
+                // user is asking by looking; a greyed Add would make them click to find out.
+                Text("Already added")
+                    .font(SonnyType.micro)
+                    .foregroundStyle(SonnyTheme.muted)
+                    .accessibilityLabel(entry.accessibilityLabel)
+            } else {
+                Button {
+                    submit(entry.dispatch)
+                } label: {
+                    Label("Add", systemImage: "plus")
+                }
+                .buttonStyle(CommandCenterRowActionStyle())
+                .disabled(isTaskInFlight)
+                .accessibilityLabel(entry.accessibilityLabel)
+            }
+        }
+    }
+
+    private var freeEntry: some View {
+        VStack(alignment: .leading, spacing: 8) {
+            Text(presentation.freeEntryTitle)
+                .font(SonnyType.eyebrow)
+                .foregroundStyle(SonnyTheme.muted)
+
+            SettingsAdaptiveControlRow {
+                TextField(presentation.freeEntryPlaceholder, text: $typedValue)
+                    .textFieldStyle(.plain)
+                    .font(SonnyType.caption)
+                    .foregroundStyle(SonnyTheme.text)
+                    .padding(.horizontal, 10)
+                    .padding(.vertical, 7)
+                    .background(SonnyTheme.input)
+                    .overlay(
+                        RoundedRectangle(cornerRadius: SonnyRadius.container)
+                            .stroke(SonnyTheme.border, lineWidth: 1)
+                    )
+                    .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+                    .onSubmit(submitTypedValue)
+                    .accessibilityLabel(presentation.freeEntryTitle)
+            } trailing: {
+                Button(action: submitTypedValue) {
+                    Label("Add", systemImage: "plus")
+                }
+                .buttonStyle(CommandCenterRowActionStyle())
+                .disabled(isTaskInFlight || presentation.dispatch(forTypedValue: typedValue) == nil)
+                .accessibilityLabel("Add what you typed to \(presentation.workspaceName)")
+            }
+
+            // The capability's own wording, shown here at the moment the name is typed rather than
+            // only in the approval the user reaches next. Listing an app Sonny cannot launch is
+            // legal and deliberate — this says what it will and will not do, before they commit.
+            if let disclosure = presentation.scopeOnlyDisclosure(forTypedValue: typedValue) {
+                Text(disclosure)
+                    .font(SonnyType.micro)
+                    .foregroundStyle(SonnyTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+
+            if let note = presentation.freeEntryNote {
+                Text(note)
+                    .font(SonnyType.micro)
+                    .foregroundStyle(SonnyTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+            }
+        }
+        .padding(.vertical, 12)
+    }
+
+    private func submitTypedValue() {
+        guard let dispatch = presentation.dispatch(forTypedValue: typedValue) else {
+            return
+        }
+        submit(dispatch)
+    }
+
+    /// Dismisses *after* handing the edit over. The approval it raises renders in the floating
+    /// widget, which `dispatchWorkspaceScopeEdit` brings forward; leaving this dialog stacked on top
+    /// of the detail sheet on top of Command Center would bury the page's own running indicator
+    /// under two modals for no benefit — the user has finished choosing.
+    private func submit(_ dispatch: WorkspaceScopeEditDispatch) {
+        dispatchEdit(dispatch)
+        dismiss()
     }
 }
 
