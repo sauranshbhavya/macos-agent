@@ -2,18 +2,31 @@ import Foundation
 
 /// How two output destinations are compared when deciding whether they would be **the same file**.
 ///
-/// Case-folded and Unicode-normalised, because the default macOS volume is case-insensitive APFS:
-/// `Report.pdf` and `report.pdf` are two distinct Swift strings and one file on disk, and the same
-/// name written NFC and NFD likewise. Comparing raw paths let two documents each claim a destination
-/// that looked free and was not, which then aborted the conversion at the converter — the exact
-/// pre-fix production failure — instead of renaming, and said nothing in the summary because neither
-/// record was flagged as renamed (SONNY-28, PR #41 review F1).
+/// Case-folded, because the default macOS volume is case-insensitive APFS: `Report.pdf` and
+/// `report.pdf` are two distinct Swift strings and one file on disk. Comparing raw paths let two
+/// documents each claim a destination that looked free and was not, which then aborted the conversion
+/// at the converter — the exact pre-fix production failure — instead of renaming, and said nothing in
+/// the summary because neither record was flagged as renamed (SONNY-28, PR #41 review F1).
+///
+/// **What this does and does not catch, stated as a bound rather than as an approximation.**
+/// - *Caught:* simple case differences, which is the reachable everyday collision.
+/// - *Caught already, by `String` itself, not by anything here:* canonically-equivalent spellings.
+///   Swift's `String` equality and hashing are canonical-equivalence-based, so a name written NFC and
+///   one written NFD are the **same** `Set<String>` element before this function is called. An earlier
+///   version ran `precomposedStringWithCanonicalMapping` here and a comment credited it with handling
+///   that case; it was a no-op for the comparison it served, and it is gone rather than kept as
+///   belt-and-braces, because a call that reads like the mechanism and is not is worse than no call.
+/// - **Not caught:** pairs whose full case folding *expands*, where the filesystem folds and this does
+///   not — `Straße.pdf` and `STRASSE.pdf` are one file on disk and two keys here, as are ligature
+///   pairs such as `ﬁ`/`fi`. For that input class the pre-fix behavior survives: both records claim
+///   distinct destinations, neither is flagged as renamed, and the batch aborts partway with nothing
+///   in the summary explaining why. **Nothing is destroyed** — both shipped converters refuse an
+///   occupied destination rather than overwriting it — so the capability's "never overwrites"
+///   invariant and its no-`assessRisk` decision are untouched. Filed as SONNY-79. (PR #41 cycle-3, R1.)
 ///
 /// **Folded unconditionally rather than probed per volume.** On a case-sensitive volume the only cost
 /// is a rename that was not strictly required, which the summary announces either way; getting it
-/// wrong in the other direction loses the fix entirely on the volume nearly every user has. This is
-/// an approximation of the filesystem's own folding, not a reproduction of it, and it is deliberately
-/// the conservative side of the approximation.
+/// wrong in the other direction loses the fix entirely on the volume nearly every user has.
 ///
 /// Used by `FileInventory.docxFiles` and by `AgentActionExecutor`'s within-plan output-path
 /// disambiguation. The two keep separate *policies* — the docx side must also avoid names that exist
@@ -21,7 +34,7 @@ import Foundation
 /// exists" escalation — but they must agree on what "the same destination" means.
 enum DestinationKey {
     static func folded(_ path: String) -> String {
-        path.precomposedStringWithCanonicalMapping.lowercased()
+        path.lowercased()
     }
 }
 
