@@ -268,9 +268,21 @@ struct WorkspaceScopeAddPresentation: Equatable {
     /// `.inScope` under a stored `~/Documents` — yet both are genuinely new entries that
     /// `edit_workspace` would add, because `entryKey` compares whole URLs and canonicalised paths.
     /// Refusing on the verdict would block legitimate narrowing, which is worse than the duplicate
-    /// approval it would prevent. Entry identity for those kinds lives in
-    /// `EditWorkspaceCapabilityAdapter`'s private `entryKey`; exporting a second thing is what
-    /// `removalUnits` did for a defect that was actually costing something, and this one is not.
+    /// approval it would prevent.
+    ///
+    /// **The wart that leaves behind, stated rather than implied: typing a URL or folder the
+    /// workspace already holds still raises a real tier-2 approval that resolves to "No change: the
+    /// workspace already matches this edit."** That is the original F12 outcome, still reachable for
+    /// these two kinds, and accepted. The reasons differ per kind, and an earlier version of this
+    /// comment gave only the URL one for both. For **URLs** it is a genuine API constraint: entry
+    /// identity is `entryKey`'s bespoke `.webDomain` branch — normalized host plus path, query and
+    /// fragment — which is private to `MacAgentCore` and would need a new export. For **folders** it
+    /// is a choice, not a constraint: `entryKey`'s `.fileLocation` branch *is* `removalMatchKey`,
+    /// `PathWhitelist.canonicalURL` is already public, and `EditWorkspaceCapabilityAdapter.removalUnits`
+    /// already computes that exact key equality — so refusing an exact duplicate while still allowing
+    /// narrowing was available with no new export. One rule across both excepted kinds was chosen
+    /// over two rules that differ by kind. (PR #40, cycle-3 residual C3.)
+    ///
     /// Apps are the kind where the two notions coincide — `appKey` equality is both — which is why
     /// this is answerable here at all.
     func alreadyListedNote(forTypedValue raw: String) -> String? {
