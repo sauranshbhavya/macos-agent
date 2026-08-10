@@ -220,6 +220,75 @@ struct WorkspaceScopeAddPickerTests {
         #expect(presentation.dispatch(forTypedValue: "   \n ") == nil)
     }
 
+    /// **The picker's most-read string and the free-entry button's label are the presentation's, not
+    /// the view body's.**
+    ///
+    /// Both were literals inside `WorkspaceScopeAddView` while that view's own doc comment claimed
+    /// none of its copy was. "Already added" is the one a manual item asks the user to read back —
+    /// and it is a manual item precisely because no test can see a rendered `Text`, which is the
+    /// situation owning the words here exists to limit. (PR #40 review, F7.)
+    @Test
+    func thePickersOwnUserVisibleCopyLivesInThePresentation() {
+        #expect(WorkspaceScopeAddPresentation.alreadyAddedText == "Already added")
+
+        let presentation = WorkspaceScopeAddPresentation(kind: .app, workspace: workspace())
+        #expect(presentation.freeEntryAddAccessibilityLabel == "Add what you typed to Client Alpha")
+    }
+
+    /// **The free-entry field refuses what the catalog rows above it refuse.**
+    ///
+    /// Typing the name of an app the workspace already lists used to dispatch an addition, raise a
+    /// real tier-2 approval, and resolve to "No change: the workspace already matches this edit" —
+    /// verbatim the outcome "Already added" exists to prevent. The two halves of one dialog gave
+    /// opposite answers to the same question. Asked of the evaluator, so the alias case behaves the
+    /// same way here as it does in the rows. (PR #40 review, F12.)
+    @Test
+    func typingAnAppTheWorkspaceAlreadyListsIsRefusedJustAsItsCatalogRowIs() {
+        let presentation = WorkspaceScopeAddPresentation(
+            kind: .app,
+            workspace: workspace(apps: ["Google Chrome"])
+        )
+
+        #expect(presentation.dispatch(forTypedValue: "Chrome") == nil)
+        #expect(presentation.alreadyListedNote(forTypedValue: "Chrome") == "Chrome is already in Client Alpha.")
+        // An app it does not list is still addable, so the refusal is specific rather than a
+        // blanket one that would break the field's whole purpose.
+        #expect(presentation.dispatch(forTypedValue: "Xcode") != nil)
+        #expect(presentation.alreadyListedNote(forTypedValue: "Xcode") == nil)
+        #expect(presentation.alreadyListedNote(forTypedValue: "") == nil)
+    }
+
+    /// **URLs and folders are deliberately excepted from that check, and this pins why.**
+    ///
+    /// `verdict(for:)` answers containment, not entry identity: `api.github.com` is `.inScope` under
+    /// a stored `github.com` and `~/Documents/Alpha` is `.inScope` under a stored `~/Documents` —
+    /// yet both are genuinely new entries `edit_workspace` would add. Refusing on the verdict would
+    /// block legitimate narrowing, which is worse than the duplicate approval it would prevent.
+    /// Apps are the one kind where the two notions coincide, which is why the check is answerable
+    /// there and not here.
+    @Test
+    func aNarrowerURLOrFolderInsideAnExistingEntryIsStillOfferedForAddition() throws {
+        let urls = WorkspaceScopeAddPresentation(
+            kind: .webDomain,
+            workspace: StoredWorkspace(name: "Client Alpha", apps: [], urls: ["https://github.com"])
+        )
+        #expect(urls.alreadyListedNote(forTypedValue: "https://api.github.com/x") == nil)
+        let urlDispatch = try #require(urls.dispatch(forTypedValue: "https://api.github.com/x"))
+        #expect(urlDispatch.request.value == "https://api.github.com/x")
+
+        let folders = WorkspaceScopeAddPresentation(
+            kind: .fileLocation,
+            workspace: StoredWorkspace(
+                name: "Client Alpha",
+                apps: ["Safari"],
+                urls: [],
+                fileLocations: ["~/Documents"]
+            )
+        )
+        #expect(folders.alreadyListedNote(forTypedValue: "~/Documents/Alpha") == nil)
+        #expect(folders.dispatch(forTypedValue: "~/Documents/Alpha") != nil)
+    }
+
     /// **Validation is not duplicated here, deliberately.**
     ///
     /// A malformed URL still produces a dispatch: `SafeURL` is the one rule about what a URL entry

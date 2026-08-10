@@ -2058,8 +2058,7 @@ struct WorkspaceDetailPresentation: Equatable {
             isRestricted: !scope.appKeys.isEmpty,
             notRestrictedText: "Not restricted — this workspace does not limit which apps a task can use.",
             scope: scope,
-            catalog: catalog,
-            whitelist: whitelist
+            catalog: catalog
         )
         urls = Self.section(
             title: "URLs",
@@ -2069,8 +2068,7 @@ struct WorkspaceDetailPresentation: Equatable {
             isRestricted: !scope.webDomains.isEmpty,
             notRestrictedText: "Not restricted — this workspace does not limit which sites a task can open.",
             scope: scope,
-            catalog: catalog,
-            whitelist: whitelist
+            catalog: catalog
         )
         // `effectiveFileLocations`, never the raw Optional: "no key on disk" and "explicitly
         // emptied" are the same thing to every reader outside `WorkspaceStore.save`, and both mean
@@ -2083,8 +2081,7 @@ struct WorkspaceDetailPresentation: Equatable {
             isRestricted: !scope.fileRoots.isEmpty,
             notRestrictedText: "Not restricted — this workspace does not limit which folders a task can touch.",
             scope: scope,
-            catalog: catalog,
-            whitelist: whitelist
+            catalog: catalog
         )
         unrestrictedFootnote = [apps, urls, fileLocations].contains { !$0.isRestricted }
             ? "An unrestricted list means this workspace says nothing about that kind of thing — Sonny neither "
@@ -2106,8 +2103,7 @@ struct WorkspaceDetailPresentation: Equatable {
         isRestricted: Bool,
         notRestrictedText: String,
         scope: WorkspaceScope,
-        catalog: MacAppCatalog,
-        whitelist: PathWhitelist
+        catalog: MacAppCatalog
     ) -> WorkspaceScopeSectionPresentation {
         let inertReasons = Dictionary(
             scope.inertEntries.filter { $0.kind == kind }.map { ($0.value, $0.reason) },
@@ -2926,9 +2922,13 @@ private struct WorkspaceScopeAddTarget: Identifiable {
 /// consent; picking Slack from a list and typing "add the app Slack" reach the identical gate, and
 /// the only difference is how much the user had to type to get there.
 ///
-/// System A throughout, matching the sheet that presents it. All of its copy is computed by
-/// `WorkspaceScopeAddPresentation` rather than written inline, because inline copy is copy no test
-/// can read.
+/// System A throughout, matching the sheet that presents it. All of its user-visible copy is
+/// computed by `WorkspaceScopeAddPresentation` rather than written inline, because inline copy is
+/// copy no test can read — including "Already added" and the free-entry button's accessibility
+/// label, both of which were literals here until PR #40's review pointed at this sentence and
+/// showed it was false of exactly the picker's most-read string. The one literal left is
+/// `accessibilityLabel("Close")` on the dismiss button, matching the precedent every other sheet in
+/// this file already sets for that control.
 private struct WorkspaceScopeAddView: View {
     let presentation: WorkspaceScopeAddPresentation
     let isTaskInFlight: Bool
@@ -3021,7 +3021,7 @@ private struct WorkspaceScopeAddView: View {
             if entry.isAlreadyListed {
                 // A word, not a disabled button. "Already added" is the answer to the question the
                 // user is asking by looking; a greyed Add would make them click to find out.
-                Text("Already added")
+                Text(WorkspaceScopeAddPresentation.alreadyAddedText)
                     .font(SonnyType.micro)
                     .foregroundStyle(SonnyTheme.muted)
                     .accessibilityLabel(entry.accessibilityLabel)
@@ -3065,7 +3065,17 @@ private struct WorkspaceScopeAddView: View {
                 }
                 .buttonStyle(CommandCenterRowActionStyle())
                 .disabled(isTaskInFlight || presentation.dispatch(forTypedValue: typedValue) == nil)
-                .accessibilityLabel("Add what you typed to \(presentation.workspaceName)")
+                .accessibilityLabel(presentation.freeEntryAddAccessibilityLabel)
+            }
+
+            // Why the button is off: this workspace already lists what was typed. The same answer
+            // the catalog rows give, so the two halves of one dialog cannot disagree.
+            if let alreadyListed = presentation.alreadyListedNote(forTypedValue: typedValue) {
+                Text(alreadyListed)
+                    .font(SonnyType.micro)
+                    .foregroundStyle(SonnyTheme.muted)
+                    .fixedSize(horizontal: false, vertical: true)
+                    .frame(maxWidth: .infinity, alignment: .leading)
             }
 
             // The capability's own wording, shown here at the moment the name is typed rather than

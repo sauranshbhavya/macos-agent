@@ -86,6 +86,13 @@ struct WorkspaceScopeAddPresentation: Equatable {
         let entries: [Entry]
     }
 
+    /// The words shown in place of a row's Add button when the workspace already lists that app.
+    ///
+    /// Owned here rather than written into the view body. It was a literal in `WorkspaceScopeAddView`
+    /// while that view's own doc comment said none of its copy was — and it is the picker's most
+    /// user-visible string, the one a manual item asks the user to read back. (PR #40 review, F7.)
+    static let alreadyAddedText = "Already added"
+
     let title: String
     let kind: ScopedResourceKind
     let workspaceName: String
@@ -94,11 +101,18 @@ struct WorkspaceScopeAddPresentation: Equatable {
     let categories: [Category]
     let freeEntryTitle: String
     let freeEntryPlaceholder: String
+    /// The free-entry Add button's accessibility label. Here rather than interpolated in the view
+    /// body, for the reason commit 5ef804f moved the section builder's equivalent out of one.
+    /// (PR #40 review, F7.)
+    let freeEntryAddAccessibilityLabel: String
     /// A standing note about what this dimension accepts, shown before anything is typed. Non-nil
     /// only where a rule exists that a user would otherwise discover by being refused.
     let freeEntryNote: String?
 
     private let catalog: MacAppCatalog
+    /// The evaluator's view of the workspace being edited, kept so the free-entry field can ask the
+    /// same "does this already count" question the catalog rows ask.
+    private let scope: WorkspaceScope
 
     /// Fixed grouping of the launch catalog's twelve, by what the app is for.
     ///
@@ -127,6 +141,12 @@ struct WorkspaceScopeAddPresentation: Equatable {
         self.kind = kind
         self.workspaceName = workspace.name
         self.catalog = catalog
+        // Built once for every dimension, not only for apps: the free-entry field consults it too.
+        // Bound to a local as well, because the category builder below reads it inside closures and
+        // `self` is not fully initialized there yet.
+        let scope = WorkspaceScope(workspace: workspace, catalog: catalog, whitelist: whitelist)
+        self.scope = scope
+        freeEntryAddAccessibilityLabel = "Add what you typed to \(workspace.name)"
 
         switch kind {
         case .app:
@@ -152,11 +172,9 @@ struct WorkspaceScopeAddPresentation: Equatable {
             return
         }
 
-        // The evaluator's own answer to "does this workspace already list this app", built once from
-        // the real record. Asking `verdict(for:)` rather than searching `workspace.apps` is what
-        // keeps this agreeing with the capability's duplicate handling, which folds names through
-        // the same `appKey`.
-        let scope = WorkspaceScope(workspace: workspace, catalog: catalog, whitelist: whitelist)
+        // The evaluator's own answer to "does this workspace already list this app". Asking
+        // `verdict(for:)` rather than searching `workspace.apps` is what keeps this agreeing with
+        // the capability's duplicate handling, which folds names through the same `appKey`.
         var placed: Set<String> = []
         var built: [Category] = []
         for group in Self.categoryOrder {
@@ -223,7 +241,7 @@ struct WorkspaceScopeAddPresentation: Equatable {
     /// the divergence this area has already paid for once.
     func dispatch(forTypedValue raw: String) -> WorkspaceScopeEditDispatch? {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
+        guard !trimmed.isEmpty, alreadyListedNote(forTypedValue: trimmed) == nil else {
             return nil
         }
         return WorkspaceScopeEditCommand.dispatch(
@@ -232,6 +250,38 @@ struct WorkspaceScopeAddPresentation: Equatable {
             value: trimmed,
             action: .add
         )
+    }
+
+    /// Why a typed app is not offered: this workspace already lists it. `nil` when it does not, and
+    /// always `nil` for URLs and folders — see below.
+    ///
+    /// **The two halves of this dialog used to disagree.** A catalog row for an app already in the
+    /// workspace shows "Already added" and offers no button, because adding it would raise a real
+    /// tier-2 approval and resolve to "No change: the workspace already matches this edit" — a
+    /// consent asked for nothing. Typing that same app's name into the field beside it did exactly
+    /// that. Same question, same answer now. (PR #40 review, F12.)
+    ///
+    /// **URLs and folders are deliberately excepted, and it is not laziness.** `verdict(for:)`
+    /// answers "is this resource inside the boundary", which for those two kinds is deliberately
+    /// *coarser* than entry identity: a dot-boundary host suffix and folder containment.
+    /// `api.github.com` is `.inScope` under a stored `github.com`, and `~/Documents/Alpha` is
+    /// `.inScope` under a stored `~/Documents` — yet both are genuinely new entries that
+    /// `edit_workspace` would add, because `entryKey` compares whole URLs and canonicalised paths.
+    /// Refusing on the verdict would block legitimate narrowing, which is worse than the duplicate
+    /// approval it would prevent. Entry identity for those kinds lives in
+    /// `EditWorkspaceCapabilityAdapter`'s private `entryKey`; exporting a second thing is what
+    /// `removalUnits` did for a defect that was actually costing something, and this one is not.
+    /// Apps are the kind where the two notions coincide — `appKey` equality is both — which is why
+    /// this is answerable here at all.
+    func alreadyListedNote(forTypedValue raw: String) -> String? {
+        guard kind == .app else {
+            return nil
+        }
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty, scope.verdict(for: .app(trimmed)) == .inScope else {
+            return nil
+        }
+        return "\(trimmed) is already in \(workspaceName)."
     }
 
     /// The scope-only disclosure for a name typed into the app field, in the shared wording, or
