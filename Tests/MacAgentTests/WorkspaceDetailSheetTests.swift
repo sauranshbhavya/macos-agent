@@ -1221,6 +1221,20 @@ struct ClarificationGateTests {
         // Not summoned either: a refused dispatch raises no widget, because there is nothing new
         // there to answer.
         #expect(harness.viewModel.widgetPresentationRequest == 0)
+        // **`dispatch`'s second trace line, and the reason it is asserted here rather than nowhere.**
+        //
+        // F5 added two: a cause-specific one on the approval guard, and this cause-neutral one on
+        // the `canSubmit` path — cause-neutral because `canSubmit` refuses for four different
+        // reasons and naming one would be wrong for the other three. The voice-door test pins the
+        // first; PR #40's cycle-3 re-check deleted the second and the whole suite stayed green.
+        //
+        // That is M13's shape recurring one round later: a contract the fix was specifically built
+        // around, held by nothing, found by a mutant rather than by reading. This door is the right
+        // place for it — a clarification pause refuses *through* `canSubmit`, so the line under test
+        // is the one this path actually emits.
+        #expect(harness.viewModel.logStore.events.contains {
+            $0.message == "Not started: Sonny was not ready to begin another task."
+        })
     }
 
     /// The consequence the guard exists for, asserted on the continuation itself: with the edit
