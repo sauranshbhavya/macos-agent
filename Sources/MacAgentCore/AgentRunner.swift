@@ -1,8 +1,35 @@
 import Foundation
 
+/// How a prepared run's plan came to exist — and, because of that, how much of it any part of the
+/// app is entitled to trust.
+///
+/// **This is the origin signal SONNY-13's row C asked for, and its trustworthiness is structural
+/// rather than promised.** There is no decoding path that reaches it: `AgentPlan` and `AgentStep`
+/// are the only things a planner response is decoded into, neither carries a source field, and the
+/// value is stamped by `AgentRunner.prepare` *after* decoding has already finished — so no planner
+/// output, however adversarial, can name its own origin. `prepare(command:)` hardcodes `.planner`
+/// for exactly that reason: the one entry point a model's text can reach cannot pass a source at
+/// all. Everything else is set by a Swift call site inside this app, which is the same shape
+/// `AgentViewModel.start(fromComposer:)` already uses for the pending-arm rule.
+///
+/// **Nothing reads this to weaken a consent, and nothing may.** Relaxation on `(tier, verdict,
+/// origin)` is row C's territory (SONNY-13); this ticket builds the carrier and stops there. A
+/// future reader must still honour row C's inherited constraints — relaxation is a *requirement*
+/// override and never lowers `effectiveTier`, and only an `.inScope` verdict is ever eligible.
 public enum PreparedPlanSource: String, Equatable, Sendable {
     case planner
     case instantResolver = "instant_resolver"
+    /// The user's own interaction constructed this exact plan, field by field, and no natural
+    /// language was interpreted by anything on the way. The workspace detail sheet's Add and Remove
+    /// affordances are the first callers; the vision-envelope consent §B1 sketches is the next
+    /// planned one.
+    ///
+    /// Named for the mechanism rather than for one surface deliberately. The integration plan makes
+    /// this dispatch path *shared* plumbing, so a case called `workspaceSheet` would need renaming
+    /// the moment the second caller lands — and a rename of a trust signal is exactly the change
+    /// nobody wants to be reviewing under time pressure. A surface that later needs to be told apart
+    /// from this one adds its own case; it does not overload this one.
+    case directUserAction = "direct_user_action"
 
     var planLogMessage: String {
         switch self {
@@ -10,6 +37,8 @@ public enum PreparedPlanSource: String, Equatable, Sendable {
             return "Sending command to planner"
         case .instantResolver:
             return "Resolved command locally"
+        case .directUserAction:
+            return "Using the plan this screen built"
         }
     }
 }
@@ -66,7 +95,10 @@ public final class AgentRunner {
         }
         let planner = try plannerProvider()
         let plan = try await planner.plan(command: trimmed, priorTaskContext: priorTaskContext)
-        return try prepareResolvedPlan(plan)
+        // `.planner`, hardcoded, with no parameter for a caller to override. This is the one entry
+        // point whose plan is authored by a model, so it is the one entry point that must never be
+        // able to claim a stronger origin than that.
+        return try prepareResolvedPlan(plan, source: .planner)
     }
 
     public func prepare(
@@ -75,13 +107,18 @@ public final class AgentRunner {
     ) throws -> PreparedAgentRun {
         logStore.reset()
         logStore.append(.plan, source.planLogMessage)
-        return try prepareResolvedPlan(plan)
+        return try prepareResolvedPlan(plan, source: source)
     }
 
-    private func prepareResolvedPlan(_ plan: AgentPlan) throws -> PreparedAgentRun {
+    /// The single funnel both entry points share, which is what makes "the pre-built path and the
+    /// typed path are the same path" a structural fact rather than two implementations kept in
+    /// step: everything after this line — `executor.prepare`, `approvalRequest`'s `assessRisk`, the
+    /// gate in `execute`, execution itself — never learns how the plan was authored.
+    private func prepareResolvedPlan(_ plan: AgentPlan, source: PreparedPlanSource) throws -> PreparedAgentRun {
         logStore.append(.observe, "Received plan: \(plan.summary)")
         logStore.append(.validate, "Validating whitelist and supported operations")
-        let preparedRun = try executor.prepare(plan: plan)
+        var preparedRun = try executor.prepare(plan: plan)
+        preparedRun.source = source
         logStore.append(.preview, "Prepared \(preparedRun.previews.count) preview item(s)")
         return preparedRun
     }
