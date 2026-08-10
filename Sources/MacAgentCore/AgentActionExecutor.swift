@@ -851,6 +851,19 @@ public final class AgentActionExecutor {
             }
 
             var claimedForUnit = resolved
+            // The `broughtOwnDestination` flags are positional, so they are only meaningful while the
+            // unit's step count is unchanged. Enumerated: of the seven resolvers, only
+            // `InvokeShortcutCapabilityAdapter` alters the step list, and only by replacing the plan
+            // with a clarification, which the early return above already caught. Asserted rather than
+            // trusted, for the same reason `chainSegments(in:)` asserts its own invariant — a future
+            // resolver that dropped a step mid-unit would silently mislabel an explicit destination as
+            // generated and rename a file the plan named. (PR #41 review, SONNY-35 "checked and
+            // correct" note.)
+            guard claimedForUnit.steps.count == broughtOwnDestination.count else {
+                throw AgentExecutionError.invalidPlan(
+                    "Resolving default outputs changed the number of steps in a unit of work."
+                )
+            }
             for (index, broughtOwn) in zip(claimedForUnit.steps.indices, broughtOwnDestination) where !broughtOwn {
                 guard let generated = claimedForUnit.steps[index].outputPath,
                       !generated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -867,7 +880,7 @@ public final class AgentActionExecutor {
                       !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
                     continue
                 }
-                claimedOutputPaths.insert(path)
+                claimedOutputPaths.insert(DestinationKey.folded(path))
             }
             resolvedSteps.append(contentsOf: claimedForUnit.steps)
         }
@@ -905,8 +918,14 @@ public final class AgentActionExecutor {
     /// Without this, two units that generate the same default write one file: two `web_to_markdown`
     /// steps with no destinations both resolve to `web-research-<timestamp>.md` in the same second,
     /// so the second silently overwrites the first — the same silent loss SONNY-34 fixed one level up.
+    /// `claimed` holds `DestinationKey.folded` keys, and **both** the entry test and the candidate
+    /// test below consult it and nothing else. Each is half of the same boundary, and each is pinned
+    /// by its own mutation: teaching the entry test about the filesystem bumps a first destination
+    /// that already exists on disk to `-2`, which is precisely how the tier-3 "output already exists"
+    /// escalation would get suppressed, and the first mutation battery only covered the candidate
+    /// half (PR #41 review, SONNY-35 F2).
     private static func unclaimedOutputPath(from path: String, claimed: Set<String>) -> String {
-        guard claimed.contains(path) else {
+        guard claimed.contains(DestinationKey.folded(path)) else {
             return path
         }
 
@@ -918,7 +937,7 @@ public final class AgentActionExecutor {
             let stem = base.deletingLastPathComponent()
                 .appendingPathComponent("\(base.lastPathComponent)-\(suffix)")
             let candidate = pathExtension.isEmpty ? stem : stem.appendingPathExtension(pathExtension)
-            if !claimed.contains(candidate.path) {
+            if !claimed.contains(DestinationKey.folded(candidate.path)) {
                 return candidate.path
             }
             suffix += 1
@@ -1349,74 +1368,120 @@ public final class AgentActionExecutor {
     }
 
     /// The plan cut into the units the executor dispatches: **a unit is a maximal run of consecutive
-    /// steps that map to one `Workflow` and whose operations are pairwise distinct.**
+    /// steps mapping to one `Workflow`, cut only where the run genuinely repeats itself.**
     ///
     /// One rule, and it is the rule the adapters already assume rather than a second opinion about
     /// plan shape. Every adapter resolves its spec with `.first(where:)` per operation it owns, so
-    /// one adapter call can service at most one step of each operation: `[scan, zip]` is one unit
+    /// one adapter call services at most one step of each operation: `[scan, zip]` is one unit
     /// because `LargestFilesZipCapabilityAdapter` reads across both, and `[scan, zip, scan, zip]` is
     /// two because a single call would service the first pair and silently drop the second. Steps of
     /// different workflows are never absorbed together, which is what makes a multi-workflow plan a
     /// chain of at least two units.
     ///
-    /// This replaces a hand-written switch anchored at `.scanSelectLargestFiles`, `.scanDocx` and
-    /// `.openHackerNews`. Three consequences of generalising it, each an improvement and none a
-    /// relaxation: a run led by a *later* member of its workflow is now grouped too (`[fetchHNHeadlines,
-    /// writeMarkdown]` with no `openHackerNews` step, `[createZip, scanSelectLargestFiles]`), where the
-    /// old anchors split it into units no adapter would have serviced separately; a duplicate operation
-    /// inside a run now ends the unit (`[openHackerNews, fetchHNHeadlines, fetchHNHeadlines]` is two
-    /// units, not one that drops the second fetch); and `.editWorkspace` keeps chaining on repeat for
-    /// the reason it always did — two edits of two *different* workspaces need one unit each, since a
-    /// step carries one `workspaceName`, and the same-workspace plan-shape rule lives in
-    /// `EditWorkspaceCapabilityAdapter.resolveDefaultOutputs`, which sees the whole plan before any of
-    /// this runs.
+    /// **A repeated operation cuts the run only when what follows is a *repeat*, not a fragment** —
+    /// formally, when the steps from the repeat to the end of the run cover exactly the operations
+    /// the unit already covers. Anything else is absorbed, and the adapter's own `.first(where:)`
+    /// drops it, which is what the whole-plan call did before this branch and is right: the plan
+    /// named one archive, one conversion, one digest.
     ///
-    /// **Termination invariant.** Re-cutting a unit yields that same single unit: its steps already
-    /// share one workflow and are already pairwise distinct, so the inner loop absorbs all of them.
-    /// That is what makes it safe for `workflow(in:)` to classify a multi-unit plan as `.chain` while
-    /// `previewChain`/`executeChain` re-enter `preview`/`execute` per unit — a unit can never
-    /// re-classify as `.chain` and recurse on itself. `chainSegments(in:)` checks the other half of the
-    /// invariant at runtime rather than leaving it to this argument alone.
+    /// A plain "any duplicate cuts here" rule shipped in the first draft of SONNY-34 and was wrong in
+    /// the dangerous direction, because it ends a unit *mid-workflow* and no adapter gates on its
+    /// companion step being present — each one manufactures a default and acts. `[scan, scan, zip]`
+    /// built a second archive nobody asked for, `[scan_docx, scan_docx, convert]` wrote a PDF into the
+    /// source folder instead of the requested output folder, and `[open_hn, fetch, fetch]` opened the
+    /// browser twice and reported two saves to one path — the second silently over the first, at tier
+    /// 2, because at assessment time the file did not exist yet. That last one is the exact defect
+    /// class this branch exists to end, and SONNY-35's suffixing had no purchase on it: neither
+    /// fragment carries a `.writeMarkdown` step, so no `outputPath` is ever resolved to compare.
+    /// (PR #41 review, F1.) All three are now single units again and are regression fixtures.
+    ///
+    /// Two other consequences of generalising away from the old switch, both improvements: a run led
+    /// by a *later* member of its workflow is grouped (`[fetchHNHeadlines, writeMarkdown]` with no
+    /// `openHackerNews` step, `[createZip, scanSelectLargestFiles]`), where the old anchors split it
+    /// into units no adapter services separately; and `.editWorkspace` keeps chaining on repeat for
+    /// the reason it always did — two edits of two *different* workspaces need one unit each, since a
+    /// step carries one `workspaceName`. Its same-workspace plan-shape rule lives in
+    /// `EditWorkspaceCapabilityAdapter.resolveDefaultOutputs`, which `resolveDefaultOutputs(in:)` calls
+    /// on the whole plan once the per-unit walk has reassembled it — after this, not before, and the
+    /// rule is indifferent to which because the walk never touches `.editWorkspace` steps and
+    /// reassembly preserves step order.
+    ///
+    /// **Termination invariant.** Re-cutting a unit yields that same single unit, so a unit can never
+    /// re-classify as `.chain` and recurse on itself — which is what makes it safe for `workflow(in:)`
+    /// to classify a multi-unit plan as `.chain` while `previewChain`/`executeChain` re-enter
+    /// `preview`/`execute` per unit. The proof survives absorption, which is worth spelling out
+    /// because a unit may now contain a repeated operation: suppose the walk cut a unit `U =
+    /// steps[0..<j]`, which required `ops(steps[j..<runEnd]) == ops(U)`, and suppose re-cutting `U`
+    /// would break at some repeat `i < j`, which requires `ops(steps[i..<j]) == ops(steps[0..<i])`.
+    /// Then `ops(steps[i..<runEnd]) = ops(steps[i..<j]) ∪ ops(steps[j..<runEnd]) = ops(steps[0..<i])`,
+    /// so the original walk would have cut at `i` too and `U` would never have contained it.
+    /// Contradiction. `chainSegments(in:)` checks the remaining half at runtime rather than leaving it
+    /// to this argument alone.
     private func segmentPlans(in plan: AgentPlan) throws -> [AgentPlan] {
         var segments: [AgentPlan] = []
         var index = 0
 
         while index < plan.steps.count {
-            let step = plan.steps[index]
-            let segmentWorkflow = try workflow(for: step.operation)
-            var steps = [step]
-            var operations: Set<AgentOperation> = [step.operation]
-
-            while index + 1 < plan.steps.count {
-                let next = plan.steps[index + 1]
-                guard try workflow(for: next.operation) == segmentWorkflow,
-                      operations.insert(next.operation).inserted else {
-                    break
-                }
-                steps.append(next)
-                index += 1
+            let unitWorkflow = try workflow(for: plan.steps[index].operation)
+            // The maximal run of consecutive steps sharing this workflow. Every decision below is
+            // made inside one run — a step of a different workflow always ends the unit.
+            var runEnd = index + 1
+            while runEnd < plan.steps.count,
+                  try workflow(for: plan.steps[runEnd].operation) == unitWorkflow {
+                runEnd += 1
             }
 
-            segments.append(segmentPlan(from: plan, steps: steps))
-            index += 1
+            var operations: Set<AgentOperation> = [plan.steps[index].operation]
+            var end = index + 1
+            while end < runEnd {
+                let operation = plan.steps[end].operation
+                if operations.contains(operation),
+                   Set(plan.steps[end..<runEnd].map(\.operation)) == operations {
+                    break
+                }
+                operations.insert(operation)
+                end += 1
+            }
+
+            segments.append(segmentPlan(from: plan, steps: Array(plan.steps[index..<end])))
+            index = end
         }
 
         return segments
     }
 
-    /// `segmentPlans(in:)` for a plan `workflow(in:)` has already classified `.chain`, with that
-    /// classification's own precondition asserted.
+    /// `segmentPlans(in:)` for a plan `workflow(in:)` has already classified `.chain`, refusing the
+    /// one segment count that would recurse.
     ///
-    /// A chain holds at least two units by construction — either two workflows, which are never
-    /// absorbed into one unit, or one workflow whose plan was measured at more than one unit. A
-    /// single unit here would mean the classifier and the cutter disagree, and the shape that
-    /// disagreement takes is not a wrong answer: `previewChain`/`executeChain` would hand the
-    /// identical plan back to `preview`/`execute`, which would classify it `.chain` again, forever.
-    /// An unbounded recursion in the executor hangs the app with no error, so it is worth one
-    /// comparison to turn it into a thrown message instead.
+    /// **Exactly one** unit is the dangerous count, and the only one refused. It would mean the
+    /// classifier and the cutter disagree, and the shape that disagreement takes is not a wrong
+    /// answer: `previewChain`/`executeChain` would hand the identical plan back to
+    /// `preview`/`execute`, which would classify it `.chain` again, and so on. Unbounded re-entry in
+    /// a synchronous call chain ends in a stack-overflow crash, so it is worth one comparison to
+    /// turn it into a thrown message instead.
+    ///
+    /// **Zero units passes through, deliberately.** A plan with no steps classifies `.chain` — an
+    /// empty `Set` of workflows is not a count of one — and cuts to no units, and the two chain
+    /// loops simply do not run: no previews, no writes, tier 0. That is exactly what the executor did
+    /// before this branch, and it is reachable in practice, not only from a malformed planner
+    /// response: `RoutineStore.save` accepts a routine with no steps (`validateStepSafety` has
+    /// nothing to reject), and `RunRoutineCapabilityAdapter` previews and assesses that routine's
+    /// empty nested plan through this same path. An earlier draft of this guard refused zero as well,
+    /// which turned that benign no-op into a thrown error — an unrequested behavior change of exactly
+    /// the kind this branch was fixing elsewhere (PR #41 review, F2). Rejecting an empty plan outright
+    /// was considered and declined for the same reason: it may well be the right product answer, but
+    /// it is a decision no ticket here asked for, and it belongs to whoever makes it deliberately.
+    ///
+    /// With zero handled here, the count this refuses is genuinely unreachable, and the enumeration is
+    /// now complete rather than partial: zero cuts to zero and passes; a one-step plan never reaches
+    /// `.chain` at all, because `workflow(in:)` returns the bare workflow when `steps.count == 1`; and
+    /// any plan of two or more steps that reaches `.chain` did so either by holding two workflows,
+    /// which never share a unit, or by `workflow(in:)` measuring more than one unit with this same
+    /// function. So the guard cannot fire without a source change — which is the claim SONNY-34's
+    /// first records made while having enumerated only the middle case.
     private func chainSegments(in plan: AgentPlan) throws -> [AgentPlan] {
         let segments = try segmentPlans(in: plan)
-        guard segments.count > 1 else {
+        guard segments.count != 1 else {
             throw AgentExecutionError.invalidPlan("A chained plan must contain more than one unit of work.")
         }
         return segments
