@@ -809,8 +809,125 @@ public final class AgentActionExecutor {
         return question
     }
 
+    /// Fills in every default the plan leaves open, **one unit at a time**.
+    ///
+    /// Adapters resolve with `.first(where:)`, so what an adapter can correctly answer for is one
+    /// unit — the same thing `preview`/`execute` hand it. This used to call each adapter once with
+    /// the *whole* plan, which is right for a plan holding one unit and wrong for every plan holding
+    /// more: "draft a note about X and another about Y" left the second `.createLocalDraft` step at
+    /// `outputPath == nil` in the prepared plan, so the preview and the approval copy's "Involves:"
+    /// line named one file while the run wrote two, and the second file's timestamped default name
+    /// was re-derived independently at assessment time and again at execution time — meaning the path
+    /// the risk engine checked for a collision was not the path that got written (SONNY-35).
+    ///
+    /// Resolving per unit fixes that at the cause rather than in the two adapters the ticket named:
+    /// every one of the seven `resolveDefaultOutputs` overrides is correct on a unit, and none of
+    /// them was ever handed one. `LargestFilesZipCapabilityAdapter` in particular could not have been
+    /// fixed adapter-side alone — a second `create_zip`'s default folder comes from *its own* unit's
+    /// scan step, which the whole-plan call cannot tell apart from the first unit's.
+    ///
+    /// Two things stay whole-plan on purpose, both marked below: `edit_workspace`'s plan-shape rule,
+    /// which is unenforceable from inside a unit, and a resolver's right to replace the plan with a
+    /// clarification.
     private func resolveDefaultOutputs(in plan: AgentPlan) throws -> AgentPlan {
         _ = try workflow(in: plan)
+
+        var resolvedSteps: [AgentStep] = []
+        var claimedOutputPaths: Set<String> = []
+
+        for unit in try segmentPlans(in: plan) {
+            // Which steps arrived with a destination of their own, captured *before* resolution:
+            // only the ones that did not are eligible for the collision bump below.
+            let broughtOwnDestination = unit.steps.map(Self.hasOwnOutputPath)
+            let resolved = try resolveUnitDefaultOutputs(in: unit)
+
+            // A resolver may answer with a clarification instead of a resolution —
+            // `InvokeShortcutCapabilityAdapter` does exactly that for a missing or unknown Shortcut
+            // name. A clarification has to be the only step in a plan, so it replaces the *whole*
+            // plan, which is what it did when this ran once over the whole plan, and returning here
+            // keeps that. Resolving the remaining units first would only build state this discards.
+            if resolved.steps.contains(where: { $0.operation == .clarify }) {
+                return resolved
+            }
+
+            var claimedForUnit = resolved
+            for (index, broughtOwn) in zip(claimedForUnit.steps.indices, broughtOwnDestination) where !broughtOwn {
+                guard let generated = claimedForUnit.steps[index].outputPath,
+                      !generated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    continue
+                }
+                claimedForUnit.steps[index].outputPath = Self.unclaimedOutputPath(
+                    from: generated,
+                    claimed: claimedOutputPaths
+                )
+            }
+
+            for step in claimedForUnit.steps {
+                guard let path = step.outputPath,
+                      !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    continue
+                }
+                claimedOutputPaths.insert(path)
+            }
+            resolvedSteps.append(contentsOf: claimedForUnit.steps)
+        }
+
+        var resolvedPlan = plan
+        resolvedPlan.steps = resolvedSteps
+
+        // Resolves no output of its own — it is here because this is the only place an adapter is
+        // handed the *whole* plan, and `edit_workspace`'s plan-shape rule (at most one edit per
+        // workspace) is unenforceable from inside a single unit. The three gates all pass through
+        // here: `prepare`, `assessRisk` and `execute` each resolve before doing anything else.
+        if resolvedPlan.steps.contains(where: { $0.operation == .editWorkspace }) {
+            resolvedPlan = try capabilityRegistry
+                .adapter(for: .editWorkspace)
+                .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
+        }
+
+        return resolvedPlan
+    }
+
+    private static func hasOwnOutputPath(_ step: AgentStep) -> Bool {
+        step.outputPath?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
+
+    /// A generated destination no earlier step of the same plan has already taken, suffixing
+    /// `-2`, `-3`, … before the extension until it is free.
+    ///
+    /// Only *generated* destinations are bumped, never one the plan named itself: writing somewhere
+    /// other than where a plan explicitly said to would be a worse failure than the collision. And
+    /// the comparison is against paths claimed **within this plan only** — deliberately not against
+    /// what exists on disk. A generated path that collides with a real file on disk is what the
+    /// adapters' tier-3 "output already exists" escalation is for, and quietly sidestepping it here
+    /// would delete a warning the user is entitled to.
+    ///
+    /// Without this, two units that generate the same default write one file: two `web_to_markdown`
+    /// steps with no destinations both resolve to `web-research-<timestamp>.md` in the same second,
+    /// so the second silently overwrites the first — the same silent loss SONNY-34 fixed one level up.
+    private static func unclaimedOutputPath(from path: String, claimed: Set<String>) -> String {
+        guard claimed.contains(path) else {
+            return path
+        }
+
+        let url = URL(fileURLWithPath: path)
+        let pathExtension = url.pathExtension
+        let base = url.deletingPathExtension()
+        var suffix = 2
+        while true {
+            let stem = base.deletingLastPathComponent()
+                .appendingPathComponent("\(base.lastPathComponent)-\(suffix)")
+            let candidate = pathExtension.isEmpty ? stem : stem.appendingPathExtension(pathExtension)
+            if !claimed.contains(candidate.path) {
+                return candidate.path
+            }
+            suffix += 1
+        }
+    }
+
+    /// The per-unit half of `resolveDefaultOutputs(in:)`: every resolver whose answer depends only
+    /// on the unit it is given.
+    private func resolveUnitDefaultOutputs(in plan: AgentPlan) throws -> AgentPlan {
         var resolvedPlan = plan
 
         if resolvedPlan.steps.contains(where: { [.scanSelectLargestFiles, .createZip].contains($0.operation) }) {
@@ -825,9 +942,9 @@ public final class AgentActionExecutor {
                 .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
         }
 
-        if let markdownIndex = resolvedPlan.steps.firstIndex(where: { $0.operation == .writeMarkdown }) {
+        if resolvedPlan.steps.contains(where: { $0.operation == .writeMarkdown }) {
             resolvedPlan = try capabilityRegistry
-                .adapter(for: resolvedPlan.steps[markdownIndex].operation)
+                .adapter(for: .writeMarkdown)
                 .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
         }
 
@@ -858,17 +975,6 @@ public final class AgentActionExecutor {
         if resolvedPlan.steps.contains(where: { $0.operation == .switchRunningApp }) {
             resolvedPlan = try capabilityRegistry
                 .adapter(for: .switchRunningApp)
-                .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
-        }
-
-        // Resolves no output of its own — it is here because this is the only place an adapter is
-        // handed the *whole* plan before `segmentPlans` splits it, and `edit_workspace`'s plan-shape
-        // rule (at most one edit per workspace) is unenforceable from inside a single-step segment.
-        // The three gates all pass through here: `prepare`, `assessRisk` and `execute` each resolve
-        // before doing anything else.
-        if resolvedPlan.steps.contains(where: { $0.operation == .editWorkspace }) {
-            resolvedPlan = try capabilityRegistry
-                .adapter(for: .editWorkspace)
                 .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
         }
 
