@@ -2259,6 +2259,6 @@ Records corrected in this round, each because it was measured false rather than 
 
 Also closed in this round, from the reviewer's non-finding notes: the positional `zip(_:_:)` mapping in `resolveDefaultOutputs` now asserts its own invariant, matching `chainSegments`' precedent rather than leaving one of the two unguarded; and `FakeDocumentConverter` refuses an occupied destination like both shipped converters, so the double stops being the only converter in the process that would silently clobber.
 
-Tests after the round: **827 in 60 suites**, exit 0, at `<head SHA below>` — 10 added, none removed or weakened. Six further mutations (N1–N6), one per fix, each killing exactly the pins it should; recorded on the tickets.
+Tests after the round: **827 in 60 suites**, exit 0, at `496bc2e` — 10 added, none removed or weakened. Six further mutations (N1–N6), one per fix, each killing exactly the pins it should; recorded on the tickets.
 
 Next branch: none opened by this session. E12's ratified cleanup sequence ends here, so vision work (§B1's vision-envelope consent, which reuses `feature/prebuilt-plan-dispatch`'s mechanism) is what the roadmap points at next; nothing in this branch starts it. The three discovery tickets above are the user's to triage.
