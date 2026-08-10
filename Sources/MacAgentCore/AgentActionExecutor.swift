@@ -512,7 +512,7 @@ public final class AgentActionExecutor {
         guard try workflow(in: plan) == .chain else {
             return [plan]
         }
-        return try segmentPlans(in: plan)
+        return try chainSegments(in: plan)
     }
 
     public func preview(plan: AgentPlan) throws -> [ActionPreview] {
@@ -686,6 +686,25 @@ public final class AgentActionExecutor {
         case chain
     }
 
+    /// Which dispatch a plan takes: one adapter call, or the segmented chain walk.
+    ///
+    /// **A plan is a chain exactly when it holds more than one unit of work** — where a unit is what
+    /// `segmentPlans(in:)` cuts, and a unit is what one adapter call can actually service. This used
+    /// to be two rules that had to agree and did not: a `shouldChainWhenRepeated` membership list
+    /// answered "does repeating this workflow make a chain", while `segmentPlans` separately decided
+    /// where the cuts fall. Five workflows sat in the list's false arm — `.clarify`, `.largestFiles`,
+    /// `.docx`, `.hackerNews`, `.webResearch` — because each absorbs several steps into one adapter
+    /// call, and the list could not express "several, but only one of each". So a plan repeating one
+    /// of them was handed to a single adapter call whole, and every adapter resolves its spec with
+    /// `.first(where:)`: "zip the 3 largest files in ~/Desktop/A and the 3 largest in ~/Desktop/B"
+    /// created one archive, dropped the other two steps with no error and no log line, and reported
+    /// the archive it did create as a success (SONNY-34).
+    ///
+    /// Counting units subsumes the list rather than extending it. Every workflow in the old true arm
+    /// maps from exactly one operation, so its unit is always a single step and "more than one step"
+    /// and "more than one unit" are the same statement — including `.editWorkspace`, whose repeats
+    /// chain for the reason recorded on `segmentPlans`. The five in the false arm are the only ones
+    /// where the two statements differ, and for those the unit count is the honest answer.
     private func workflow(in plan: AgentPlan) throws -> Workflow {
         try validateSupported(plan)
 
@@ -700,53 +719,21 @@ public final class AgentActionExecutor {
             return .chain
         }
 
-        if plan.steps.count > 1, shouldChainWhenRepeated(workflow) {
-            return .chain
+        guard plan.steps.count > 1 else {
+            return workflow
         }
 
-        return workflow
-    }
-
-    private func shouldChainWhenRepeated(_ workflow: Workflow) -> Bool {
-        switch workflow {
-        case .openApp,
-             .openAppSearchURL,
-             .openURL,
-             .openGeneratedArtifact,
-             .createLocalDraft,
-             .calculator,
-             .clipboardHistory,
-             .snippetSave,
-             .snippetExpansion,
-             .runningAppSwitch,
-             .recentArtifacts,
-             .mediaOpen,
-             .finderSelection,
-             .revealInFinder,
-             .permissionReadiness,
-             .saveRoutine,
-             .runRoutine,
-             .createWorkspace,
-             // Chained when repeated, exactly like its create/open siblings, and that is now the
-             // *safe* setting rather than the lax one. A brief attempt to keep repeated edits
-             // unchained — so one adapter call could count them — bought nothing, because any third
-             // operation forces `.chain` regardless (`workflow(in:)` is an order-independent `Set`),
-             // and it broke the legitimate case: two edits of two *different* workspaces need one
-             // segment each, since a single step carries one `workspaceName`. The plan-shape rule
-             // moved to `EditWorkspaceCapabilityAdapter.resolveDefaultOutputs`, which sees the whole
-             // plan before segmentation and refuses only a second edit of the *same* workspace.
-             .editWorkspace,
-             .openWorkspace,
-             .invokeShortcut:
-            return true
-        case .clarify,
-             .largestFiles,
-             .docx,
-             .hackerNews,
-             .webResearch,
-             .chain:
-            return false
+        // A repeated clarification is the one repeat that must not become a chain, and must not
+        // silently keep the first question either. A clarification is a question asked *instead of*
+        // acting — `execute` refuses the workflow outright — so there is nothing to run twice, and
+        // `clarificationQuestion(in:)` answering with the first `question` while a second went
+        // unasked is precisely the silent drop this ticket ends. It gets the same error a
+        // clarification mixed with real work already gets, because it violates the same rule.
+        if workflow == .clarify {
+            throw AgentExecutionError.invalidPlan("Clarification must be the only planned step.")
         }
+
+        return try segmentPlans(in: plan).count > 1 ? .chain : workflow
     }
 
     private func workflow(for operation: AgentOperation) throws -> Workflow {
@@ -1214,7 +1201,7 @@ public final class AgentActionExecutor {
         var previews: [ActionPreview] = []
         var previousArtifactPath: String?
 
-        for segment in try segmentPlans(in: plan) {
+        for segment in try chainSegments(in: plan) {
             let resolved = resolvePreviousArtifactPathIfNeeded(in: segment, previousArtifactPath: previousArtifactPath)
             let segmentPreviews = try preview(plan: resolved)
             previews.append(contentsOf: segmentPreviews)
@@ -1236,7 +1223,7 @@ public final class AgentActionExecutor {
         var previews: [ActionPreview] = []
         var previousArtifactPath: String?
 
-        for segment in try segmentPlans(in: plan) {
+        for segment in try chainSegments(in: plan) {
             let resolved = resolvePreviousArtifactPathIfNeeded(in: segment, previousArtifactPath: previousArtifactPath)
             let result = try await execute(plan: resolved, preferredBrowser: preferredBrowser, log: log)
             summaries.append(result.summary)
@@ -1255,43 +1242,77 @@ public final class AgentActionExecutor {
         return AgentRunResult(plan: plan, previews: previews, summary: summary, suggestions: suggestions)
     }
 
+    /// The plan cut into the units the executor dispatches: **a unit is a maximal run of consecutive
+    /// steps that map to one `Workflow` and whose operations are pairwise distinct.**
+    ///
+    /// One rule, and it is the rule the adapters already assume rather than a second opinion about
+    /// plan shape. Every adapter resolves its spec with `.first(where:)` per operation it owns, so
+    /// one adapter call can service at most one step of each operation: `[scan, zip]` is one unit
+    /// because `LargestFilesZipCapabilityAdapter` reads across both, and `[scan, zip, scan, zip]` is
+    /// two because a single call would service the first pair and silently drop the second. Steps of
+    /// different workflows are never absorbed together, which is what makes a multi-workflow plan a
+    /// chain of at least two units.
+    ///
+    /// This replaces a hand-written switch anchored at `.scanSelectLargestFiles`, `.scanDocx` and
+    /// `.openHackerNews`. Three consequences of generalising it, each an improvement and none a
+    /// relaxation: a run led by a *later* member of its workflow is now grouped too (`[fetchHNHeadlines,
+    /// writeMarkdown]` with no `openHackerNews` step, `[createZip, scanSelectLargestFiles]`), where the
+    /// old anchors split it into units no adapter would have serviced separately; a duplicate operation
+    /// inside a run now ends the unit (`[openHackerNews, fetchHNHeadlines, fetchHNHeadlines]` is two
+    /// units, not one that drops the second fetch); and `.editWorkspace` keeps chaining on repeat for
+    /// the reason it always did — two edits of two *different* workspaces need one unit each, since a
+    /// step carries one `workspaceName`, and the same-workspace plan-shape rule lives in
+    /// `EditWorkspaceCapabilityAdapter.resolveDefaultOutputs`, which sees the whole plan before any of
+    /// this runs.
+    ///
+    /// **Termination invariant.** Re-cutting a unit yields that same single unit: its steps already
+    /// share one workflow and are already pairwise distinct, so the inner loop absorbs all of them.
+    /// That is what makes it safe for `workflow(in:)` to classify a multi-unit plan as `.chain` while
+    /// `previewChain`/`executeChain` re-enter `preview`/`execute` per unit — a unit can never
+    /// re-classify as `.chain` and recurse on itself. `chainSegments(in:)` checks the other half of the
+    /// invariant at runtime rather than leaving it to this argument alone.
     private func segmentPlans(in plan: AgentPlan) throws -> [AgentPlan] {
         var segments: [AgentPlan] = []
         var index = 0
 
         while index < plan.steps.count {
             let step = plan.steps[index]
-            switch step.operation {
-            case .scanSelectLargestFiles:
-                var steps = [step]
-                if index + 1 < plan.steps.count,
-                   plan.steps[index + 1].operation == .createZip {
-                    steps.append(plan.steps[index + 1])
-                    index += 1
+            let segmentWorkflow = try workflow(for: step.operation)
+            var steps = [step]
+            var operations: Set<AgentOperation> = [step.operation]
+
+            while index + 1 < plan.steps.count {
+                let next = plan.steps[index + 1]
+                guard try workflow(for: next.operation) == segmentWorkflow,
+                      operations.insert(next.operation).inserted else {
+                    break
                 }
-                segments.append(segmentPlan(from: plan, steps: steps))
-            case .scanDocx:
-                var steps = [step]
-                if index + 1 < plan.steps.count,
-                   plan.steps[index + 1].operation == .convertDocxToPDF {
-                    steps.append(plan.steps[index + 1])
-                    index += 1
-                }
-                segments.append(segmentPlan(from: plan, steps: steps))
-            case .openHackerNews:
-                var steps = [step]
-                while index + 1 < plan.steps.count,
-                      [.fetchHNHeadlines, .writeMarkdown].contains(plan.steps[index + 1].operation) {
-                    steps.append(plan.steps[index + 1])
-                    index += 1
-                }
-                segments.append(segmentPlan(from: plan, steps: steps))
-            default:
-                segments.append(segmentPlan(from: plan, steps: [step]))
+                steps.append(next)
+                index += 1
             }
+
+            segments.append(segmentPlan(from: plan, steps: steps))
             index += 1
         }
 
+        return segments
+    }
+
+    /// `segmentPlans(in:)` for a plan `workflow(in:)` has already classified `.chain`, with that
+    /// classification's own precondition asserted.
+    ///
+    /// A chain holds at least two units by construction — either two workflows, which are never
+    /// absorbed into one unit, or one workflow whose plan was measured at more than one unit. A
+    /// single unit here would mean the classifier and the cutter disagree, and the shape that
+    /// disagreement takes is not a wrong answer: `previewChain`/`executeChain` would hand the
+    /// identical plan back to `preview`/`execute`, which would classify it `.chain` again, forever.
+    /// An unbounded recursion in the executor hangs the app with no error, so it is worth one
+    /// comparison to turn it into a thrown message instead.
+    private func chainSegments(in plan: AgentPlan) throws -> [AgentPlan] {
+        let segments = try segmentPlans(in: plan)
+        guard segments.count > 1 else {
+            throw AgentExecutionError.invalidPlan("A chained plan must contain more than one unit of work.")
+        }
         return segments
     }
 
