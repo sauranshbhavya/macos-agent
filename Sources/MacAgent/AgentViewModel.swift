@@ -377,13 +377,34 @@ final class AgentViewModel: ObservableObject {
     /// **A programmatic dispatch is never an approval.** `start()`'s first branch turns a call made
     /// while `isAwaitingApproval` into `approvePendingRun()` — correct for the composer's Send
     /// button, which is the control the widget relabels for exactly that job, and wrong for every
-    /// caller here, none of which is that button. Each of those call sites is gated on
-    /// `isTaskInFlight` at its own button, so this was unreachable by clicking; it was not
-    /// unreachable by *timing*, which is the half H1 already had to be taught once. A scheduled
-    /// routine raises approvals with nobody watching — that is why `CommandCenterAttentionPanel`
-    /// exists — so one landing between a render and a tap turned a workspace-sheet click into a
-    /// silent "allow" on a tier-3 action from somewhere else entirely. The guard is here, at the one
-    /// helper every programmatic caller shares, rather than as a fourth copy on a fourth button.
+    /// caller here, none of which is that button.
+    ///
+    /// **The five doors, enumerated, because a guard in a shared helper is a claim about all of
+    /// them** — and the first version of this comment named two:
+    /// - `dispatchTranscribedCommand` — **the one with the most at stake.** `canUseVoice` blocks
+    ///   *starting* a recording while an approval is pending, but an approval can land during the
+    ///   recording or the transcription, and the finished transcript then went straight into
+    ///   `start()`. A sentence the user spoke about something else would have landed as a silent
+    ///   *allow* on whatever tier-3 action was waiting.
+    /// - `openWorkspaceWidget`, `runRoutineWidget` — behaviour-changed, neither gated for this
+    ///   before. `runRoutineWidget`'s button lives in `RoutineDetailView`, a different file.
+    /// - `dispatchWorkspaceScopeEdit` — the sheet's door, the one this ticket built.
+    /// - `retryLastCommand` — **unaffected.** Its own `!isTaskInFlight` guard is a strict superset
+    ///   of this one and fires before `dispatch` is reached.
+    ///
+    /// **What makes it reachable is timing, not an unattended run.** An earlier telling of this said
+    /// a scheduled routine raises approvals with nobody watching; it does not. `performScheduledRun`
+    /// executes with `approvalDecision: .approved(.tier2)` and routes every `RiskApprovalError` to
+    /// `pauseSchedule` plus a notice — SONNY-31's ratified notify-and-pause design — so it never
+    /// writes `approvalRequest` at all. The real routes are both in the foreground: any run a user
+    /// started pausing at its approval (`performStart`), and `performApproval`'s stale-approval
+    /// re-arm when a re-assessment lands higher than the tier already approved. Either can arrive
+    /// between a render and a tap, which is all this needs — a cheap structural guard on a trust
+    /// boundary does not need an exotic trigger, and claiming one it does not have made the guard
+    /// look better-motivated than the evidence supports. (PR #40 review, F4.)
+    ///
+    /// The guard is here, at the one helper every programmatic caller shares, rather than as a
+    /// fifth copy on a fifth button.
     ///
     /// - Returns: whether the dispatch was accepted, so a caller can tell a refusal apart from a
     ///   submission without re-deriving `canSubmit`'s rule.
@@ -432,8 +453,10 @@ final class AgentViewModel: ObservableObject {
     /// The compose half of the same invariant. These callers never reach `start`, so `dispatch`
     /// cannot cover them — but they write `command` just the same, and a partial command
     /// ("Create a workspace called ") left in a live pause corrupts the continuation exactly as a
-    /// refused dispatch would. Guard first, assign second, which is the ordering
-    /// `composeWorkspaceScopeEdit` already had and the reason it was the one door genuinely closed.
+    /// refused dispatch would. Guard first, assign second — the ordering the sheet's own
+    /// `composeWorkspaceScopeEdit` had, which was the one door genuinely closed at the time. That
+    /// function is gone as of SONNY-64 (the sheet dispatches now), so this is the last door of that
+    /// shape left, and the ordering is its own reason rather than a sibling's precedent.
     func composeCommand(_ commandText: String) {
         guard clarificationQuestion == nil else {
             logStore.append(.observe, "Composer prefill ignored while a clarification is open.")

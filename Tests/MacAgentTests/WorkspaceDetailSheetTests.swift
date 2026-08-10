@@ -651,10 +651,13 @@ struct WorkspaceDetailSheetTests {
     ///
     /// `start()` turns a call made while an approval is pending into "allow", which is right for the
     /// widget's Send button and wrong for a button that says Remove. The sheet's controls are
-    /// disabled while a task is in flight, so this was unreachable by clicking — but a scheduled
-    /// routine raises approvals with nobody watching, and one landing between a render and a tap is
-    /// exactly the timing hole H1 had to be taught about once already. Here the pending approval is
-    /// a *different* workspace's removal, so an accidental allow would be visible in the store.
+    /// disabled while a task is in flight, so this was unreachable by clicking — but not by timing.
+    /// A run the user started can pause at its approval, and `performApproval`'s stale-approval
+    /// re-arm is a second way one appears; either can land between a render and a tap, which is the
+    /// hole H1 had to be taught about once already. (Not a scheduled routine: `performScheduledRun`
+    /// runs pre-approved at tier 2 and pauses the schedule instead of ever setting
+    /// `approvalRequest` — PR #40 review, F4.) Here the pending approval is a *different*
+    /// workspace's removal, so an accidental allow would be visible in the store.
     @Test
     func aSheetDispatchWhileAnApprovalIsPendingIsRefusedRatherThanTreatedAsAnAllow() async throws {
         let root = try makeSheetTestDirectory()
@@ -850,7 +853,7 @@ struct WorkspaceDetailSheetTests {
         viewModel.refreshSavedItems()
 
         // An approval from somewhere else is pending — the state the sheet's buttons are disabled
-        // for, and the one a scheduled routine can produce between a render and a click.
+        // for, and one a foreground run can produce between a render and a click.
         let alphaSheet = WorkspaceDetailPresentation(workspace: alpha, taskHistoryRecords: [])
         viewModel.dispatchWorkspaceScopeEdit(alphaSheet.apps.entries[1].removeDispatch)
         try await waitForSheetViewModelToBecomeIdle(viewModel)
