@@ -59,7 +59,12 @@ public struct SaveRoutineCapabilityAdapter: CapabilityAdapter {
 
         var escalations = nested.escalations
         var effectiveTier = highestTier(defaultTier, nested.effectiveTier)
-        if (try? context.routineStore.routine(named: spec.routine.name)) != nil {
+        // Plain `try`, never `try?` — see `CreateWorkspaceCapabilityAdapter.assessRisk` for the full
+        // reasoning. In short: `try?` made an unreadable store answer the same as an empty one, which
+        // suppressed this tier-3 escalation for exactly the user who most needed it, and
+        // `RoutineStore.save` loads before it writes so the save being gated could not have succeeded
+        // either way (SONNY-30).
+        if try context.routineStore.findRoutine(named: spec.routine.name) != nil {
             escalations.append(
                 CapabilityRiskEscalation(
                     fromTier: metadata.defaultRiskTier,

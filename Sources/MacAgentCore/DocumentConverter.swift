@@ -136,10 +136,29 @@ enum OutputFileNormalizer {
 }
 
 public struct MockDocumentConverter: DocumentConverting {
-    public init() {}
+    private let fileManager: FileManager
+    private let enabled: Bool
+
+    /// `enabled` and `fileManager` are seams, defaulted to exactly what this read before: the live
+    /// environment and `FileManager.default`. They exist so the refuse-to-overwrite behavior below
+    /// can be tested — `isAvailable` gated it behind a process-wide environment variable, and a test
+    /// that has to `setenv` to reach a code path either runs serialized forever or leaks into every
+    /// other test in the process. Same shape `TavilySearchProvider` and `OpenAITranscriber` use for
+    /// their own environment reads, and `MicrosoftWordDocumentConverter` for its `fileManager`.
+    ///
+    /// The environment is now read once, when the converter is constructed, rather than on every
+    /// `isAvailable` access. Nothing changes it mid-process, and reading it once makes a run
+    /// self-consistent instead of able to flip halfway through.
+    public init(
+        fileManager: FileManager = .default,
+        enabled: Bool = ProcessInfo.processInfo.environment["MAC_AGENT_MOCK_DOCX"] == "1"
+    ) {
+        self.fileManager = fileManager
+        self.enabled = enabled
+    }
 
     public var isAvailable: Bool {
-        ProcessInfo.processInfo.environment["MAC_AGENT_MOCK_DOCX"] == "1"
+        enabled
     }
 
     public var modeName: String {
@@ -150,6 +169,24 @@ public struct MockDocumentConverter: DocumentConverting {
         true
     }
 
+    /// Writes a placeholder per pending record, **refusing an occupied destination** exactly as the
+    /// real converter does.
+    ///
+    /// `Data.write(to:options:.atomic)` silently replaces an existing file, while
+    /// `MicrosoftWordDocumentConverter` finishes with `moveItem`, which throws. That divergence is
+    /// what made SONNY-28 read as "silent data loss" when the loss was only reachable with no Word
+    /// installed and `MAC_AGENT_MOCK_DOCX=1`; a mock whose failure mode differs from the real thing
+    /// at the one moment that matters is worse than no mock.
+    ///
+    /// This is the backstop for the collisions `FileInventory.docxFiles` cannot see, and there are
+    /// two classes of them rather than the one an earlier version of this comment claimed. It said
+    /// destination collisions inside one run "can no longer arise at all", which is not true and is
+    /// the same absolute phrasing that was corrected in two other places and missed here (PR #41
+    /// cycle-3, R2). What `docxFiles` rules out is same-scan collisions **as `DestinationKey`
+    /// compares them**; what still reaches this guard is (a) a file that appeared between the scan and
+    /// the write, and (b) a pair the filesystem folds together and `DestinationKey` does not —
+    /// `Straße.pdf` against `STRASSE.pdf`, SONNY-79. For (b) this refusal is the whole of the
+    /// protection, and it is why that residual costs a partway-aborted batch and not a lost file.
     public func convert(_ records: [DocxRecord], log: @escaping (String) -> Void) async throws -> [DocxRecord] {
         guard isAvailable else {
             throw DocumentConversionError.wordUnavailable
@@ -164,6 +201,11 @@ public struct MockDocumentConverter: DocumentConverting {
             Source DOCX: \(record.sourceURL.path)
             Created by Sonny because Microsoft Word was unavailable and MAC_AGENT_MOCK_DOCX=1 was set.
             """
+            guard !fileManager.fileExists(atPath: record.destinationURL.path) else {
+                throw DocumentConversionError.mockWriteFailed(
+                    "Could not write mock PDF to \(record.destinationURL.path): a file already exists there."
+                )
+            }
             do {
                 try markdown.data(using: .utf8)?.write(to: record.destinationURL, options: .atomic)
             } catch {

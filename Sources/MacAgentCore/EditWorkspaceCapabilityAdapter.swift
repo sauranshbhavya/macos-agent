@@ -413,12 +413,17 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
             throw AutomationStoreError.missingName("Workspace")
         }
 
-        // Plain `try`, never `try?`. SONNY-30 documents the sibling adapters' `try?` as a real
-        // defect: it collapses a decrypt or decode failure into "no workspace by that name", which
-        // here would turn a broken store into a silent create-from-nothing and, in `assessRisk`,
-        // would suppress a correct tier-3 escalation. A load failure has to surface as a load
-        // failure. `workspace(named:)` already throws `.missingWorkspace(name)` — which names the
-        // workspace, as the contract requires — only when the load itself succeeded.
+        // Plain `try`, never `try?`. A `try?` collapses a decrypt or decode failure into "no
+        // workspace by that name", which here would turn a broken store into a silent
+        // create-from-nothing and, in `assessRisk`, would suppress a correct tier-3 escalation. A
+        // load failure has to surface as a load failure. `workspace(named:)` already throws
+        // `.missingWorkspace(name)` — which names the workspace, as the contract requires — only
+        // when the load itself succeeded.
+        //
+        // This adapter was the first to get it right; SONNY-30 has since fixed the two siblings it
+        // was written against, `CreateWorkspaceCapabilityAdapter` and `SaveRoutineCapabilityAdapter`,
+        // which now ask `findWorkspace(named:)`/`findRoutine(named:)` — the same distinction, shaped
+        // for a caller to whom absence is a normal answer.
         let stored = try context.workspaceStore.workspace(named: rawName)
 
         let appAdditions = try Self.validatedAppAdditions(step.workspaceApps ?? [])

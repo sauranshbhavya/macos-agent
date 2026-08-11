@@ -512,7 +512,7 @@ public final class AgentActionExecutor {
         guard try workflow(in: plan) == .chain else {
             return [plan]
         }
-        return try segmentPlans(in: plan)
+        return try chainSegments(in: plan)
     }
 
     public func preview(plan: AgentPlan) throws -> [ActionPreview] {
@@ -686,6 +686,25 @@ public final class AgentActionExecutor {
         case chain
     }
 
+    /// Which dispatch a plan takes: one adapter call, or the segmented chain walk.
+    ///
+    /// **A plan is a chain exactly when it holds more than one unit of work** — where a unit is what
+    /// `segmentPlans(in:)` cuts, and a unit is what one adapter call can actually service. This used
+    /// to be two rules that had to agree and did not: a `shouldChainWhenRepeated` membership list
+    /// answered "does repeating this workflow make a chain", while `segmentPlans` separately decided
+    /// where the cuts fall. Five workflows sat in the list's false arm — `.clarify`, `.largestFiles`,
+    /// `.docx`, `.hackerNews`, `.webResearch` — because each absorbs several steps into one adapter
+    /// call, and the list could not express "several, but only one of each". So a plan repeating one
+    /// of them was handed to a single adapter call whole, and every adapter resolves its spec with
+    /// `.first(where:)`: "zip the 3 largest files in ~/Desktop/A and the 3 largest in ~/Desktop/B"
+    /// created one archive, dropped the other two steps with no error and no log line, and reported
+    /// the archive it did create as a success (SONNY-34).
+    ///
+    /// Counting units subsumes the list rather than extending it. Every workflow in the old true arm
+    /// maps from exactly one operation, so its unit is always a single step and "more than one step"
+    /// and "more than one unit" are the same statement — including `.editWorkspace`, whose repeats
+    /// chain for the reason recorded on `segmentPlans`. The five in the false arm are the only ones
+    /// where the two statements differ, and for those the unit count is the honest answer.
     private func workflow(in plan: AgentPlan) throws -> Workflow {
         try validateSupported(plan)
 
@@ -700,53 +719,21 @@ public final class AgentActionExecutor {
             return .chain
         }
 
-        if plan.steps.count > 1, shouldChainWhenRepeated(workflow) {
-            return .chain
+        guard plan.steps.count > 1 else {
+            return workflow
         }
 
-        return workflow
-    }
-
-    private func shouldChainWhenRepeated(_ workflow: Workflow) -> Bool {
-        switch workflow {
-        case .openApp,
-             .openAppSearchURL,
-             .openURL,
-             .openGeneratedArtifact,
-             .createLocalDraft,
-             .calculator,
-             .clipboardHistory,
-             .snippetSave,
-             .snippetExpansion,
-             .runningAppSwitch,
-             .recentArtifacts,
-             .mediaOpen,
-             .finderSelection,
-             .revealInFinder,
-             .permissionReadiness,
-             .saveRoutine,
-             .runRoutine,
-             .createWorkspace,
-             // Chained when repeated, exactly like its create/open siblings, and that is now the
-             // *safe* setting rather than the lax one. A brief attempt to keep repeated edits
-             // unchained — so one adapter call could count them — bought nothing, because any third
-             // operation forces `.chain` regardless (`workflow(in:)` is an order-independent `Set`),
-             // and it broke the legitimate case: two edits of two *different* workspaces need one
-             // segment each, since a single step carries one `workspaceName`. The plan-shape rule
-             // moved to `EditWorkspaceCapabilityAdapter.resolveDefaultOutputs`, which sees the whole
-             // plan before segmentation and refuses only a second edit of the *same* workspace.
-             .editWorkspace,
-             .openWorkspace,
-             .invokeShortcut:
-            return true
-        case .clarify,
-             .largestFiles,
-             .docx,
-             .hackerNews,
-             .webResearch,
-             .chain:
-            return false
+        // A repeated clarification is the one repeat that must not become a chain, and must not
+        // silently keep the first question either. A clarification is a question asked *instead of*
+        // acting — `execute` refuses the workflow outright — so there is nothing to run twice, and
+        // `clarificationQuestion(in:)` answering with the first `question` while a second went
+        // unasked is precisely the silent drop this ticket ends. It gets the same error a
+        // clarification mixed with real work already gets, because it violates the same rule.
+        if workflow == .clarify {
+            throw AgentExecutionError.invalidPlan("Clarification must be the only planned step.")
         }
+
+        return try segmentPlans(in: plan).count > 1 ? .chain : workflow
     }
 
     private func workflow(for operation: AgentOperation) throws -> Workflow {
@@ -822,8 +809,144 @@ public final class AgentActionExecutor {
         return question
     }
 
+    /// Fills in every default the plan leaves open, **one unit at a time**.
+    ///
+    /// Adapters resolve with `.first(where:)`, so what an adapter can correctly answer for is one
+    /// unit — the same thing `preview`/`execute` hand it. This used to call each adapter once with
+    /// the *whole* plan, which is right for a plan holding one unit and wrong for every plan holding
+    /// more: "draft a note about X and another about Y" left the second `.createLocalDraft` step at
+    /// `outputPath == nil` in the prepared plan, so the preview and the approval copy's "Involves:"
+    /// line named one file while the run wrote two, and the second file's timestamped default name
+    /// was re-derived independently at assessment time and again at execution time — meaning the path
+    /// the risk engine checked for a collision was not the path that got written (SONNY-35).
+    ///
+    /// Resolving per unit fixes that at the cause rather than in the two adapters the ticket named:
+    /// every one of the seven `resolveDefaultOutputs` overrides is correct on a unit, and none of
+    /// them was ever handed one. `LargestFilesZipCapabilityAdapter` in particular could not have been
+    /// fixed adapter-side alone — a second `create_zip`'s default folder comes from *its own* unit's
+    /// scan step, which the whole-plan call cannot tell apart from the first unit's.
+    ///
+    /// Two things stay whole-plan on purpose, both marked below: `edit_workspace`'s plan-shape rule,
+    /// which is unenforceable from inside a unit, and a resolver's right to replace the plan with a
+    /// clarification.
     private func resolveDefaultOutputs(in plan: AgentPlan) throws -> AgentPlan {
         _ = try workflow(in: plan)
+
+        var resolvedSteps: [AgentStep] = []
+        var claimedOutputPaths: Set<String> = []
+
+        for unit in try segmentPlans(in: plan) {
+            // Which steps arrived with a destination of their own, captured *before* resolution:
+            // only the ones that did not are eligible for the collision bump below.
+            let broughtOwnDestination = unit.steps.map(Self.hasOwnOutputPath)
+            let resolved = try resolveUnitDefaultOutputs(in: unit)
+
+            // A resolver may answer with a clarification instead of a resolution —
+            // `InvokeShortcutCapabilityAdapter` does exactly that for a missing or unknown Shortcut
+            // name. A clarification has to be the only step in a plan, so it replaces the *whole*
+            // plan, which is what it did when this ran once over the whole plan, and returning here
+            // keeps that. Resolving the remaining units first would only build state this discards.
+            if resolved.steps.contains(where: { $0.operation == .clarify }) {
+                return resolved
+            }
+
+            var claimedForUnit = resolved
+            // The `broughtOwnDestination` flags are positional, so they are only meaningful while the
+            // unit's step count is unchanged. Enumerated: of the seven resolvers, only
+            // `InvokeShortcutCapabilityAdapter` alters the step list, and only by replacing the plan
+            // with a clarification, which the early return above already caught. Asserted rather than
+            // trusted, for the same reason `chainSegments(in:)` asserts its own invariant — a future
+            // resolver that dropped a step mid-unit would silently mislabel an explicit destination as
+            // generated and rename a file the plan named. (PR #41 review, SONNY-35 "checked and
+            // correct" note.)
+            guard claimedForUnit.steps.count == broughtOwnDestination.count else {
+                throw AgentExecutionError.invalidPlan(
+                    "Resolving default outputs changed the number of steps in a unit of work."
+                )
+            }
+            for (index, broughtOwn) in zip(claimedForUnit.steps.indices, broughtOwnDestination) where !broughtOwn {
+                guard let generated = claimedForUnit.steps[index].outputPath,
+                      !generated.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    continue
+                }
+                claimedForUnit.steps[index].outputPath = Self.unclaimedOutputPath(
+                    from: generated,
+                    claimed: claimedOutputPaths
+                )
+            }
+
+            for step in claimedForUnit.steps {
+                guard let path = step.outputPath,
+                      !path.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+                    continue
+                }
+                claimedOutputPaths.insert(DestinationKey.folded(path))
+            }
+            resolvedSteps.append(contentsOf: claimedForUnit.steps)
+        }
+
+        var resolvedPlan = plan
+        resolvedPlan.steps = resolvedSteps
+
+        // Resolves no output of its own — it is here because this is the only place an adapter is
+        // handed the *whole* plan, and `edit_workspace`'s plan-shape rule (at most one edit per
+        // workspace) is unenforceable from inside a single unit. The three gates all pass through
+        // here: `prepare`, `assessRisk` and `execute` each resolve before doing anything else.
+        if resolvedPlan.steps.contains(where: { $0.operation == .editWorkspace }) {
+            resolvedPlan = try capabilityRegistry
+                .adapter(for: .editWorkspace)
+                .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
+        }
+
+        return resolvedPlan
+    }
+
+    private static func hasOwnOutputPath(_ step: AgentStep) -> Bool {
+        step.outputPath?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+    }
+
+    /// A generated destination no earlier step of the same plan has already taken, suffixing
+    /// `-2`, `-3`, … before the extension until it is free.
+    ///
+    /// Only *generated* destinations are bumped, never one the plan named itself: writing somewhere
+    /// other than where a plan explicitly said to would be a worse failure than the collision. And
+    /// the comparison is against paths claimed **within this plan only** — deliberately not against
+    /// what exists on disk. A generated path that collides with a real file on disk is what the
+    /// adapters' tier-3 "output already exists" escalation is for, and quietly sidestepping it here
+    /// would delete a warning the user is entitled to.
+    ///
+    /// Without this, two units that generate the same default write one file: two `web_to_markdown`
+    /// steps with no destinations both resolve to `web-research-<timestamp>.md` in the same second,
+    /// so the second silently overwrites the first — the same silent loss SONNY-34 fixed one level up.
+    /// `claimed` holds `DestinationKey.folded` keys, and **both** the entry test and the candidate
+    /// test below consult it and nothing else. Each is half of the same boundary, and each is pinned
+    /// by its own mutation: teaching the entry test about the filesystem bumps a first destination
+    /// that already exists on disk to `-2`, which is precisely how the tier-3 "output already exists"
+    /// escalation would get suppressed, and the first mutation battery only covered the candidate
+    /// half (PR #41 review, SONNY-35 F2).
+    private static func unclaimedOutputPath(from path: String, claimed: Set<String>) -> String {
+        guard claimed.contains(DestinationKey.folded(path)) else {
+            return path
+        }
+
+        let url = URL(fileURLWithPath: path)
+        let pathExtension = url.pathExtension
+        let base = url.deletingPathExtension()
+        var suffix = 2
+        while true {
+            let stem = base.deletingLastPathComponent()
+                .appendingPathComponent("\(base.lastPathComponent)-\(suffix)")
+            let candidate = pathExtension.isEmpty ? stem : stem.appendingPathExtension(pathExtension)
+            if !claimed.contains(DestinationKey.folded(candidate.path)) {
+                return candidate.path
+            }
+            suffix += 1
+        }
+    }
+
+    /// The per-unit half of `resolveDefaultOutputs(in:)`: every resolver whose answer depends only
+    /// on the unit it is given.
+    private func resolveUnitDefaultOutputs(in plan: AgentPlan) throws -> AgentPlan {
         var resolvedPlan = plan
 
         if resolvedPlan.steps.contains(where: { [.scanSelectLargestFiles, .createZip].contains($0.operation) }) {
@@ -838,9 +961,9 @@ public final class AgentActionExecutor {
                 .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
         }
 
-        if let markdownIndex = resolvedPlan.steps.firstIndex(where: { $0.operation == .writeMarkdown }) {
+        if resolvedPlan.steps.contains(where: { $0.operation == .writeMarkdown }) {
             resolvedPlan = try capabilityRegistry
-                .adapter(for: resolvedPlan.steps[markdownIndex].operation)
+                .adapter(for: .writeMarkdown)
                 .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
         }
 
@@ -871,17 +994,6 @@ public final class AgentActionExecutor {
         if resolvedPlan.steps.contains(where: { $0.operation == .switchRunningApp }) {
             resolvedPlan = try capabilityRegistry
                 .adapter(for: .switchRunningApp)
-                .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
-        }
-
-        // Resolves no output of its own — it is here because this is the only place an adapter is
-        // handed the *whole* plan before `segmentPlans` splits it, and `edit_workspace`'s plan-shape
-        // rule (at most one edit per workspace) is unenforceable from inside a single-step segment.
-        // The three gates all pass through here: `prepare`, `assessRisk` and `execute` each resolve
-        // before doing anything else.
-        if resolvedPlan.steps.contains(where: { $0.operation == .editWorkspace }) {
-            resolvedPlan = try capabilityRegistry
-                .adapter(for: .editWorkspace)
                 .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
         }
 
@@ -1214,7 +1326,7 @@ public final class AgentActionExecutor {
         var previews: [ActionPreview] = []
         var previousArtifactPath: String?
 
-        for segment in try segmentPlans(in: plan) {
+        for segment in try chainSegments(in: plan) {
             let resolved = resolvePreviousArtifactPathIfNeeded(in: segment, previousArtifactPath: previousArtifactPath)
             let segmentPreviews = try preview(plan: resolved)
             previews.append(contentsOf: segmentPreviews)
@@ -1236,7 +1348,7 @@ public final class AgentActionExecutor {
         var previews: [ActionPreview] = []
         var previousArtifactPath: String?
 
-        for segment in try segmentPlans(in: plan) {
+        for segment in try chainSegments(in: plan) {
             let resolved = resolvePreviousArtifactPathIfNeeded(in: segment, previousArtifactPath: previousArtifactPath)
             let result = try await execute(plan: resolved, preferredBrowser: preferredBrowser, log: log)
             summaries.append(result.summary)
@@ -1255,43 +1367,123 @@ public final class AgentActionExecutor {
         return AgentRunResult(plan: plan, previews: previews, summary: summary, suggestions: suggestions)
     }
 
+    /// The plan cut into the units the executor dispatches: **a unit is a maximal run of consecutive
+    /// steps mapping to one `Workflow`, cut only where the run genuinely repeats itself.**
+    ///
+    /// One rule, and it is the rule the adapters already assume rather than a second opinion about
+    /// plan shape. Every adapter resolves its spec with `.first(where:)` per operation it owns, so
+    /// one adapter call services at most one step of each operation: `[scan, zip]` is one unit
+    /// because `LargestFilesZipCapabilityAdapter` reads across both, and `[scan, zip, scan, zip]` is
+    /// two because a single call would service the first pair and silently drop the second. Steps of
+    /// different workflows are never absorbed together, which is what makes a multi-workflow plan a
+    /// chain of at least two units.
+    ///
+    /// **A repeated operation cuts the run only when what follows is a *repeat*, not a fragment** —
+    /// formally, when the steps from the repeat to the end of the run cover exactly the operations
+    /// the unit already covers. Anything else is absorbed, and the adapter's own `.first(where:)`
+    /// drops it, which is what the whole-plan call did before this branch and is right: the plan
+    /// named one archive, one conversion, one digest.
+    ///
+    /// A plain "any duplicate cuts here" rule shipped in the first draft of SONNY-34 and was wrong in
+    /// the dangerous direction, because it ends a unit *mid-workflow* and no adapter gates on its
+    /// companion step being present — each one manufactures a default and acts. `[scan, scan, zip]`
+    /// built a second archive nobody asked for, `[scan_docx, scan_docx, convert]` wrote a PDF into the
+    /// source folder instead of the requested output folder, and `[open_hn, fetch, fetch]` opened the
+    /// browser twice and reported two saves to one path — the second silently over the first, at tier
+    /// 2, because at assessment time the file did not exist yet. That last one is the exact defect
+    /// class this branch exists to end, and SONNY-35's suffixing had no purchase on it: neither
+    /// fragment carries a `.writeMarkdown` step, so no `outputPath` is ever resolved to compare.
+    /// (PR #41 review, F1.) All three are now single units again and are regression fixtures.
+    ///
+    /// Two other consequences of generalising away from the old switch, both improvements: a run led
+    /// by a *later* member of its workflow is grouped (`[fetchHNHeadlines, writeMarkdown]` with no
+    /// `openHackerNews` step, `[createZip, scanSelectLargestFiles]`), where the old anchors split it
+    /// into units no adapter services separately; and `.editWorkspace` keeps chaining on repeat for
+    /// the reason it always did — two edits of two *different* workspaces need one unit each, since a
+    /// step carries one `workspaceName`. Its same-workspace plan-shape rule lives in
+    /// `EditWorkspaceCapabilityAdapter.resolveDefaultOutputs`, which `resolveDefaultOutputs(in:)` calls
+    /// on the whole plan once the per-unit walk has reassembled it — after this, not before, and the
+    /// rule is indifferent to which because the walk never touches `.editWorkspace` steps and
+    /// reassembly preserves step order.
+    ///
+    /// **Termination invariant.** Re-cutting a unit yields that same single unit, so a unit can never
+    /// re-classify as `.chain` and recurse on itself — which is what makes it safe for `workflow(in:)`
+    /// to classify a multi-unit plan as `.chain` while `previewChain`/`executeChain` re-enter
+    /// `preview`/`execute` per unit. The proof survives absorption, which is worth spelling out
+    /// because a unit may now contain a repeated operation: suppose the walk cut a unit `U =
+    /// steps[0..<j]`, which required `ops(steps[j..<runEnd]) == ops(U)`, and suppose re-cutting `U`
+    /// would break at some repeat `i < j`, which requires `ops(steps[i..<j]) == ops(steps[0..<i])`.
+    /// Then `ops(steps[i..<runEnd]) = ops(steps[i..<j]) ∪ ops(steps[j..<runEnd]) = ops(steps[0..<i])`,
+    /// so the original walk would have cut at `i` too and `U` would never have contained it.
+    /// Contradiction. `chainSegments(in:)` checks the remaining half at runtime rather than leaving it
+    /// to this argument alone.
     private func segmentPlans(in plan: AgentPlan) throws -> [AgentPlan] {
         var segments: [AgentPlan] = []
         var index = 0
 
         while index < plan.steps.count {
-            let step = plan.steps[index]
-            switch step.operation {
-            case .scanSelectLargestFiles:
-                var steps = [step]
-                if index + 1 < plan.steps.count,
-                   plan.steps[index + 1].operation == .createZip {
-                    steps.append(plan.steps[index + 1])
-                    index += 1
-                }
-                segments.append(segmentPlan(from: plan, steps: steps))
-            case .scanDocx:
-                var steps = [step]
-                if index + 1 < plan.steps.count,
-                   plan.steps[index + 1].operation == .convertDocxToPDF {
-                    steps.append(plan.steps[index + 1])
-                    index += 1
-                }
-                segments.append(segmentPlan(from: plan, steps: steps))
-            case .openHackerNews:
-                var steps = [step]
-                while index + 1 < plan.steps.count,
-                      [.fetchHNHeadlines, .writeMarkdown].contains(plan.steps[index + 1].operation) {
-                    steps.append(plan.steps[index + 1])
-                    index += 1
-                }
-                segments.append(segmentPlan(from: plan, steps: steps))
-            default:
-                segments.append(segmentPlan(from: plan, steps: [step]))
+            let unitWorkflow = try workflow(for: plan.steps[index].operation)
+            // The maximal run of consecutive steps sharing this workflow. Every decision below is
+            // made inside one run — a step of a different workflow always ends the unit.
+            var runEnd = index + 1
+            while runEnd < plan.steps.count,
+                  try workflow(for: plan.steps[runEnd].operation) == unitWorkflow {
+                runEnd += 1
             }
-            index += 1
+
+            var operations: Set<AgentOperation> = [plan.steps[index].operation]
+            var end = index + 1
+            while end < runEnd {
+                let operation = plan.steps[end].operation
+                if operations.contains(operation),
+                   Set(plan.steps[end..<runEnd].map(\.operation)) == operations {
+                    break
+                }
+                operations.insert(operation)
+                end += 1
+            }
+
+            segments.append(segmentPlan(from: plan, steps: Array(plan.steps[index..<end])))
+            index = end
         }
 
+        return segments
+    }
+
+    /// `segmentPlans(in:)` for a plan `workflow(in:)` has already classified `.chain`, refusing the
+    /// one segment count that would recurse.
+    ///
+    /// **Exactly one** unit is the dangerous count, and the only one refused. It would mean the
+    /// classifier and the cutter disagree, and the shape that disagreement takes is not a wrong
+    /// answer: `previewChain`/`executeChain` would hand the identical plan back to
+    /// `preview`/`execute`, which would classify it `.chain` again, and so on. Unbounded re-entry in
+    /// a synchronous call chain ends in a stack-overflow crash, so it is worth one comparison to
+    /// turn it into a thrown message instead.
+    ///
+    /// **Zero units passes through, deliberately.** A plan with no steps classifies `.chain` — an
+    /// empty `Set` of workflows is not a count of one — and cuts to no units, and the two chain
+    /// loops simply do not run: no previews, no writes, tier 0. That is exactly what the executor did
+    /// before this branch, and it is reachable in practice, not only from a malformed planner
+    /// response: `RoutineStore.save` accepts a routine with no steps (`validateStepSafety` has
+    /// nothing to reject), and `RunRoutineCapabilityAdapter` previews and assesses that routine's
+    /// empty nested plan through this same path. An earlier draft of this guard refused zero as well,
+    /// which turned that benign no-op into a thrown error — an unrequested behavior change of exactly
+    /// the kind this branch was fixing elsewhere (PR #41 review, F2). Rejecting an empty plan outright
+    /// was considered and declined for the same reason: it may well be the right product answer, but
+    /// it is a decision no ticket here asked for, and it belongs to whoever makes it deliberately.
+    ///
+    /// With zero handled here, the count this refuses is genuinely unreachable, and the enumeration is
+    /// now complete rather than partial: zero cuts to zero and passes; a one-step plan never reaches
+    /// `.chain` at all, because `workflow(in:)` returns the bare workflow when `steps.count == 1`; and
+    /// any plan of two or more steps that reaches `.chain` did so either by holding two workflows,
+    /// which never share a unit, or by `workflow(in:)` measuring more than one unit with this same
+    /// function. So the guard cannot fire without a source change — which is the claim SONNY-34's
+    /// first records made while having enumerated only the middle case.
+    private func chainSegments(in plan: AgentPlan) throws -> [AgentPlan] {
+        let segments = try segmentPlans(in: plan)
+        guard segments.count != 1 else {
+            throw AgentExecutionError.invalidPlan("A chained plan must contain more than one unit of work.")
+        }
         return segments
     }
 

@@ -445,10 +445,13 @@ struct EditWorkspaceTests {
         #expect(try fixture.store.loadAll().isEmpty)
     }
 
-    /// The SONNY-30 anti-pattern, pinned so it cannot be reintroduced here. The sibling
-    /// `CreateWorkspaceCapabilityAdapter` wraps its store load in `try?`, which turns a decrypt
-    /// failure into "no workspace by that name" — and in `assessRisk` that silently suppresses a
-    /// correct tier-3 escalation. A broken store has to read as broken.
+    /// The SONNY-30 anti-pattern, pinned so it cannot be reintroduced here. A `try?` around a store
+    /// load turns a decrypt failure into "no workspace by that name" — and in `assessRisk` that
+    /// silently suppresses a correct tier-3 escalation. A broken store has to read as broken.
+    ///
+    /// This test was written while `CreateWorkspaceCapabilityAdapter` and
+    /// `SaveRoutineCapabilityAdapter` still carried that `try?`; SONNY-30 has since fixed both, and
+    /// each now has its own equivalent pin in `AgentActionExecutorTests`.
     @Test
     func aStoreLoadFailureSurfacesAsAFailureRatherThanAsAMissingWorkspace() async throws {
         let fixture = try Fixture()
