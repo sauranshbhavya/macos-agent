@@ -9,6 +9,19 @@ public protocol LocalStorageKeyManaging: Sendable {
 public enum LocalStorageEncryptionError: Error, Equatable, LocalizedError {
     case invalidKeyLength(Int)
     case missingCombinedCiphertext
+    /// An existing local data file could not be read back. Carries the underlying failure for logs
+    /// and tests; deliberately keeps it out of `errorDescription`, which is what a person reads.
+    ///
+    /// Exists because the raw failures here have no human-readable description at all. `AES.GCM`
+    /// throws `CryptoKit.CryptoKitError`, which does not conform to `LocalizedError` in this
+    /// codebase, so `localizedDescription` renders as "The operation couldn't be completed.
+    /// (CryptoKit.CryptoKitError error 3.)" — and that string is what `AgentViewModel`'s generic
+    /// catch sets as the task's error message and writes into task history. Naming decryption is not
+    /// cosmetic here: SONNY-30 made a store load failure reachable from the approval gate for the
+    /// first time, so this is the sentence a user actually meets. Wording matches
+    /// `publishLocalStorageLoadError`'s, which is the load/decrypt-only phrasing `CLAUDE.md` requires
+    /// (and which must never be reused for a *write* failure). (PR #41 review, SONNY-30 F1.)
+    case undecodableLocalData(underlying: String)
 
     public var errorDescription: String? {
         switch self {
@@ -16,6 +29,8 @@ public enum LocalStorageEncryptionError: Error, Equatable, LocalizedError {
             return "Local storage encryption key must be 32 bytes, got \(length)."
         case .missingCombinedCiphertext:
             return "Local storage encryption could not produce combined ciphertext."
+        case .undecodableLocalData:
+            return "A local data file exists but could not be decrypted or decoded."
         }
     }
 }
@@ -147,14 +162,25 @@ public struct LocalStorageEncryption: @unchecked Sendable {
         from data: Data,
         decoder: JSONDecoder = JSONDecoder()
     ) throws -> LocalStorageDecoded<Value> {
-        if data.starts(with: Self.fileHeader) {
-            let combined = Data(data.dropFirst(Self.fileHeader.count))
-            let sealedBox = try AES.GCM.SealedBox(combined: combined)
-            let plaintext = try AES.GCM.open(sealedBox, using: key())
-            return .encrypted(try decoder.decode(type, from: plaintext))
-        }
+        // Every failure below is "an existing file would not read back", and each raw error says so
+        // in a language no user speaks — a CryptoKit error code, or a `DecodingError` key path. The
+        // key-material failures are deliberately *not* wrapped: `key()` throws
+        // `.invalidKeyLength`, which already has honest copy of its own and describes a different
+        // problem.
+        do {
+            if data.starts(with: Self.fileHeader) {
+                let combined = Data(data.dropFirst(Self.fileHeader.count))
+                let sealedBox = try AES.GCM.SealedBox(combined: combined)
+                let plaintext = try AES.GCM.open(sealedBox, using: try key())
+                return .encrypted(try decoder.decode(type, from: plaintext))
+            }
 
-        return .legacy(try decoder.decode(type, from: data))
+            return .legacy(try decoder.decode(type, from: data))
+        } catch let error as LocalStorageEncryptionError {
+            throw error
+        } catch {
+            throw LocalStorageEncryptionError.undecodableLocalData(underlying: "\(error)")
+        }
     }
 
     private func key() throws -> SymmetricKey {

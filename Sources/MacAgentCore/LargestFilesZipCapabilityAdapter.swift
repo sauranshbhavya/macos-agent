@@ -38,6 +38,15 @@ public struct LargestFilesZipCapabilityAdapter: CapabilityAdapter {
         defaultRiskTier: .tier2
     )
 
+    /// Resolves **the** zip step of the unit it is given — `firstIndex` is exact here, not a
+    /// first-match approximation, because a unit holds at most one step per operation.
+    ///
+    /// SONNY-35 filed this `firstIndex` as the defect, and it is the one of its two named sites that
+    /// could never have been fixed adapter-side: a second `create_zip`'s default folder comes from
+    /// *its own* pair's scan step, and a call handed the whole plan cannot tell that pair from the
+    /// first — `spec(in:)` would answer with the first scan's folder for both. The fix is in
+    /// `AgentActionExecutor.resolveDefaultOutputs(in:)`, which now resolves unit by unit so each pair
+    /// arrives here on its own.
     public func resolveDefaultOutputs(in plan: AgentPlan, context: CapabilityExecutionContext) throws -> AgentPlan {
         var resolvedPlan = try FinderSelectionResolver.pinningSelectedDirectoryInput(
             in: plan,

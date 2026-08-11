@@ -154,6 +154,40 @@ struct AgentViewModelLocalStorageTests {
         #expect(notice.contains("snippets"))
         #expect(notice.contains("recent artifacts"))
     }
+
+    /// The pin that was missing when the banner started repeating itself (PR #41 cycle-3, R4).
+    ///
+    /// Every other assertion on this banner uses `contains`, which passes whether the explanation
+    /// appears once or twice — so when SONNY-30 gave store load errors the same sentence the headline
+    /// hardcoded, nothing went red and the per-source detail quietly degraded into a repeat of the
+    /// line above it. Counting the occurrence is what `contains` cannot do.
+    ///
+    /// Asserted alongside the distinguishing content rather than instead of it: a banner that dropped
+    /// the explanation entirely would also count one, and that would be a worse notice, not a better
+    /// one.
+    ///
+    /// **One** corrupt store, deliberately. The duplication was headline-against-detail, so it is
+    /// only visible at one affected store — with two, the explanation legitimately appears twice,
+    /// once per store, and a count assertion would be pinning the store count instead of the defect.
+    @Test
+    func theLoadFailureBannerExplainsItselfOnceAndStillNamesTheAffectedStore() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try RoutineStore(
+            fileURL: root.appendingPathComponent("routines.json"),
+            encryption: testEncryption(byte: 0x42)
+        ).save(StoredRoutine(name: "Unreadable", steps: [
+            AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")
+        ]))
+        let viewModel = try makeViewModel(root: root, encryption: testEncryption(byte: 0x99))
+
+        viewModel.refreshSavedItems()
+
+        let notice = try #require(viewModel.localStorageNotice)
+        let explanation = "A local data file exists but could not be decrypted or decoded."
+        #expect(notice.components(separatedBy: explanation).count - 1 == 1)
+        #expect(notice == "Sonny could not load encrypted local data. saved routines: \(explanation)")
+    }
 }
 
 @MainActor

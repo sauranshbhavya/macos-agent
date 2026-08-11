@@ -29,6 +29,14 @@ public struct CreateLocalDraftCapabilityAdapter: CapabilityAdapter {
         defaultRiskTier: descriptor.defaultRiskTier
     )
 
+    /// Resolves **the** draft step of the unit it is given — `firstIndex` is exact here, not a
+    /// first-match approximation, because a unit holds at most one step per operation.
+    ///
+    /// SONNY-35 filed this `firstIndex` as the defect: two `.createLocalDraft` steps in one plan and
+    /// only the first got a default path. The cause was one level up — `AgentActionExecutor` called
+    /// this once with the *whole* plan — and it is fixed there, by resolving unit by unit. Widening
+    /// this to a loop would be dead code that also has no correct answer to give: `draftSpec` reads
+    /// one step's title and content, so a second draft in the same call would take the first's name.
     public func resolveDefaultOutputs(in plan: AgentPlan, context: CapabilityExecutionContext) throws -> AgentPlan {
         var resolved = plan
         guard let index = resolved.steps.firstIndex(where: { $0.operation == .createLocalDraft }) else {
