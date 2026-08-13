@@ -242,6 +242,47 @@ struct PlannerBoundaryTests {
         }
         #expect(savePlan.steps.map(\.operation) == [.saveSnippet])
     }
+
+    /// **The two app-shaped tools diverge on purpose, and the prompt has to say so** (SONNY-83).
+    ///
+    /// `open_app` is now an open universe: the model is told there is no supported-apps list, and the
+    /// runtime opens anything installed. `open_app_search_url` is the opposite and stays that way —
+    /// its five templates are a §7.4-class audited-template boundary, where the authority sits in the
+    /// *URL Sonny constructs*, not in the app being named. Widening it would mean building arbitrary
+    /// search URLs from model output, which is a different question from launching an installed app
+    /// and is not what C12 ratified; non-catalog search targets are reachable through vision instead
+    /// (row I).
+    ///
+    /// Pinned as a *contrast*, not two separate assertions, because the failure mode worth catching
+    /// is a later reader applying the dissolution one tool too far.
+    @Test
+    func openAppIsOpenUniverseWhileOpenAppSearchURLStaysAFixedTemplateSet() throws {
+        let openApp = try #require(OpenAppCapabilityAdapter.metadata.plannerTools.first)
+        let searchURL = try #require(OpenAppSearchURLCapabilityAdapter.metadata.plannerTools.first)
+
+        // What the model is told.
+        #expect(openApp.description.contains("any application installed on this Mac"))
+        #expect(openApp.description.contains("no supported-apps list"))
+        #expect(!openApp.description.contains("Supported apps:"))
+        #expect(searchURL.description.contains("Supported search targets: Google, GitHub, YouTube, Apple Music, Spotify."))
+
+        // And what the runtime does with the same name, which is what makes the divergence real
+        // rather than a wording difference.
+        #expect(AppSearchURLCatalog.default.templates.count == 5)
+        #expect(throws: AppSearchURLCatalogError.searchTargetNotAllowed("Figma")) {
+            _ = try AppSearchURLCatalog.default.resolve(target: "Figma", query: "buttons")
+        }
+        let installed = InstalledAppResolver(
+            source: FixedAppSource([
+                InstalledApp(
+                    displayName: "Figma",
+                    bundleIdentifier: "com.figma.Desktop",
+                    applicationURL: URL(fileURLWithPath: "/Applications/Figma.app")
+                )
+            ])
+        )
+        #expect(installed.resolve("Figma")?.bundleIdentifier == "com.figma.Desktop")
+    }
 }
 
 private let expectedDefaultPlannerDescription = """
@@ -293,12 +334,12 @@ private let expectedDefaultPlannerDescription = """
   side effects: network request, send fetched public page content to OpenAI, write file
   dry run: Show source URL(s), search query, and Markdown output path without fetching pages or writing files.
   examples: Summarize https://example.com/article and save as Markdown | Compare these source URLs and save a Markdown note | Research Swift concurrency and save a Markdown note
-- open_app: Open allowlisted Mac app
-  description: Open an app from the local allowlist by human app name. Supported apps: Safari, Chrome, Finder, Notes, Calendar, Mail, Messages, Apple Music, Spotify, Slack, VS Code, Terminal.
+- open_app: Open Mac app
+  description: Open any application installed on this Mac, by the human name the user said. There is no supported-apps list: do not substitute a different app, and do not drop the request because a name looks unfamiliar. The runtime decides whether the app is installed, and the step fails with a clear message when it is not.
   required fields: appName
   side effects: open app
-  dry run: Show the allowlisted app that would open.
-  examples: Open Safari | Open Spotify | Launch Apple Music
+  dry run: Show the app that would open.
+  examples: Open Safari | Open Figma | Launch Discord
 - open_app_search_url: Open allowlisted search URL
   description: Open a fixed allowlisted app or website search URL template. Supported search targets: Google, GitHub, YouTube, Apple Music, Spotify.
   required fields: appName, searchQuery

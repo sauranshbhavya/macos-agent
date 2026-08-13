@@ -32,18 +32,26 @@ public struct OpenAppCapabilityAdapter: CapabilityAdapter {
         plannerTools: [
             AgentTool(
                 operation: .openApp,
-                // Every string in this tool reaches the model verbatim through
-                // `ToolRegistry.plannerDescription`, and telling it the truth about the open universe
-                // is SONNY-83's outcome, not this one's — the planner-prompt goldens are this
-                // ticket's never-touch list, and their staying untouched is what proves the boundary
-                // held. The runtime widened first on purpose: a model told about an app universe the
-                // runtime still refused would be the worse half to ship alone.
-                name: "Open allowlisted Mac app",
-                description: "Open an app from the local allowlist by human app name. Supported apps: \(MacAppCatalog.default.displayList).",
+                // Every string here reaches the model verbatim (`ToolRegistry.plannerDescription` ->
+                // `OpenAIPlanner.systemPrompt`), so after SONNY-82 widened the runtime this sentence
+                // was actively false: it enumerated twelve apps as "supported" while the executor
+                // would open any of them. A model honouring a stale list drops "open Figma" at the
+                // source, and no amount of runtime capability recovers a step that was never
+                // emitted. SONNY-82 shipped first on purpose — a model told about an app universe
+                // the runtime still refused would have been the worse half to ship alone.
+                //
+                // Shaped after `CreateWorkspaceCapabilityAdapter`'s own widened description, which
+                // solved the same problem for workspace apps: state the widening, then state the two
+                // failure modes negatively, because "any installed app" alone leaves a model free to
+                // substitute the nearest name it recognizes. The examples carry the rest of the
+                // load — one cataloged app and two that never were, so the open universe is
+                // demonstrated rather than only asserted.
+                name: "Open Mac app",
+                description: "Open any application installed on this Mac, by the human name the user said. There is no supported-apps list: do not substitute a different app, and do not drop the request because a name looks unfamiliar. The runtime decides whether the app is installed, and the step fails with a clear message when it is not.",
                 requiredFields: ["appName"],
                 sideEffects: ["open app"],
-                dryRunBehavior: "Show the allowlisted app that would open.",
-                examples: ["Open Safari", "Open Spotify", "Launch Apple Music"]
+                dryRunBehavior: "Show the app that would open.",
+                examples: ["Open Safari", "Open Figma", "Launch Discord"]
             )
         ],
         requiredPermissions: descriptor.requiredPermissions,
