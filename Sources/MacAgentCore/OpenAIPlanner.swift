@@ -177,6 +177,22 @@ public final class OpenAIPlanner: Planning {
     }
 }
 
+extension OpenAIPlanner {
+    nonisolated public static let providerID = "openai"
+
+    /// Registry descriptor for the shipped default planner (SONNY-85). `construct` is exactly
+    /// the call `AgentViewModel.performStart` used to make directly — every other parameter
+    /// keeps its environment-backed default — so routing through the registry leaves the
+    /// default path byte-identical, including throwing `PlannerError.missingAPIKey` when
+    /// `OPENAI_API_KEY` is unset.
+    nonisolated public static let provider = PlannerProvider(
+        id: providerID,
+        displayName: "OpenAI"
+    ) { usageRecorder in
+        try OpenAIPlanner(usageRecorder: usageRecorder)
+    }
+}
+
 public enum OpenAIResponseParser {
     public static func outputText(from data: Data) throws -> String {
         // A truncated or non-JSON response body would otherwise escape as a raw Foundation
