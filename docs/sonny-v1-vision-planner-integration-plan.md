@@ -770,7 +770,8 @@ H (SONNY-87/88/89/90), I (SONNY-91–96) — see the changelog's locked-roadmap 
   SONNY-18 still its planning ticket; 18: the paid-only entitlement gate landing with/after row 13,
   plus any Accessibility-tree refinements, SONNY-23 still its planning ticket).
 - **C5 — E11's gating function: SUPERSEDED; the benchmark tickets stand untouched.** No ticket
-  references SONNY-70 or SONNY-72; no vision-action work waits on SONNY-70; the planner A/B ships with
+  references SONNY-70 or SONNY-72 as a dependency — SONNY-85/86/92 name them only to disclaim
+  dependency; no vision-action work waits on SONNY-70; the planner A/B ships with
   no SONNY-72 dependency. The tickets themselves are unamended and unsequenced — the founder revisits
   them separately. The default-planner flip is not in the ticket set, so E1's parity condition is
   unexercised, not violated.
