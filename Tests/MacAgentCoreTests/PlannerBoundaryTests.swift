@@ -309,8 +309,13 @@ struct PlannerBoundaryTests {
     @Test
     func theAssembledPromptSpeaksOneAppVocabularyOutsideTheSearchURLBoundary() throws {
         let prompt = OpenAIPlanner.systemPrompt(toolRegistry: .default)
+        // `\b` before "allow" and not before "support", deliberately and asymmetrically. Without the
+        // leading boundary, "sh**allow** **list**ing" matches — which is not hypothetical: the same
+        // pattern run over `Sources/` inflated the cycle-1 hit count from 23 to 24 on exactly that
+        // phrase, in `InstalledAppResolver`'s own sweep doc comment. "support" gets no boundary
+        // because "un-supported apps" is precisely the stale vocabulary worth catching.
         let pattern = try NSRegularExpression(
-            pattern: #"allow[\W_]{0,3}list\w*|support\w*[\W_]{0,3}apps?\b"#,
+            pattern: #"\ballow[\W_]{0,3}list\w*|support\w*[\W_]{0,3}apps?\b"#,
             options: [.caseInsensitive]
         )
 
