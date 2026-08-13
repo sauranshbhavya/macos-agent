@@ -273,9 +273,12 @@ public enum RiskApprovalDecision: Codable, Equatable, Sendable {
 
     /// A standing grant, expressed as the bare tier ceiling it is.
     ///
-    /// Overloads the case's own constructor so that every pre-SONNY-62 `.approved(.tier2)` call site
-    /// keeps meaning exactly what it meant. Those sites are the standing grants — the scheduled
-    /// unattended run and a routine's trust toggle — and none of them ever answered a prompt.
+    /// Overloads the case's own constructor so that every pre-SONNY-62 `.approved(tier)` call site
+    /// keeps meaning exactly what it meant. In `Sources/` those sites are exactly the two standing
+    /// grants — the unattended scheduled run and a routine's trust toggle — and neither ever answered
+    /// a prompt; the rest of the callers are tests, which use it to exercise a bare tier ceiling
+    /// deliberately. A prompt a human answered must use `approved(answering:)` instead, or the
+    /// consent it records will cover reasons nobody was shown.
     public static func approved(_ tier: CapabilityRiskTier) -> RiskApprovalDecision {
         .approved(RiskApprovalConsent(tier: tier, coverage: .standingGrant))
     }
