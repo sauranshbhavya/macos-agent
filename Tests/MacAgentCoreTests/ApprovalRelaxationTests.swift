@@ -628,6 +628,191 @@ struct ApprovalRelaxationTests {
         #expect(RunningAppSwitchCapabilityAdapter.metadata.defaultRiskTier == .tier1)
     }
 
+    // MARK: - Boundary-changing edits and the origin grant (SONNY-98)
+
+    /// The edit that *creates* a boundary is not covered by the grant the boundary earns: the
+    /// first app added to a workspace with no apps configured falls back to the policy requirement
+    /// — exactly today's behaviour — while the same add to a configured dimension auto-runs.
+    @Test
+    func theFirstAppAddedFromTheSheetStillPromptsExactlyAsToday() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try workspaceStore.save(
+            StoredWorkspace(name: "Client Alpha", apps: [], urls: ["https://github.com"])
+        )
+        let runner = AgentRunner(
+            planner: UnusedPlanner(),
+            executor: makeExecutor(root: root, workspaceStore: workspaceStore)
+        )
+        let plan = EditWorkspaceCapabilityAdapter.plan(
+            for: WorkspaceScopeEditRequest(
+                workspaceName: "Client Alpha",
+                kind: .app,
+                value: "Safari",
+                action: .add
+            )
+        )
+
+        let prepared = try runner.prepare(plan: plan, source: .directUserAction)
+        let request = try runner.approvalRequest(
+            for: prepared,
+            scope: .unscoped,
+            context: ApprovalContext(origin: prepared.source, safeMode: false)
+        )
+
+        #expect(request.assessment.effectiveTier == .tier2)
+        #expect(request.requirement == .lightweightConfirmation)
+        #expect(request.relaxationGrant == RelaxationGrant.none)
+    }
+
+    /// The emptying removal keeps explicit approval even from the sheet — the sharpest edge in the
+    /// model, now also the single edit that changes what the whole relaxation system will do for
+    /// this workspace — and it still carries the dimension-no-longer-restricted reason, never the
+    /// entry-naming one.
+    @Test
+    func aRemovalThatEmptiesADimensionKeepsExplicitApprovalFromTheSheet() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("ClientAlpha", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let folderPath = folder.resolvingSymlinksInPath().path
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try workspaceStore.save(
+            StoredWorkspace(
+                name: "Client Alpha",
+                apps: ["Safari"],
+                urls: [],
+                fileLocations: [folderPath]
+            )
+        )
+        let runner = AgentRunner(
+            planner: UnusedPlanner(),
+            executor: makeExecutor(root: root, workspaceStore: workspaceStore)
+        )
+        let plan = EditWorkspaceCapabilityAdapter.plan(
+            for: WorkspaceScopeEditRequest(
+                workspaceName: "Client Alpha",
+                kind: .fileLocation,
+                value: folderPath,
+                action: .remove
+            )
+        )
+
+        let prepared = try runner.prepare(plan: plan, source: .directUserAction)
+        let request = try runner.approvalRequest(
+            for: prepared,
+            scope: .unscoped,
+            context: ApprovalContext(origin: prepared.source, safeMode: false)
+        )
+
+        #expect(request.assessment.effectiveTier == .tier3)
+        #expect(request.requirement == .explicitApproval)
+        #expect(request.relaxationGrant == RelaxationGrant.none)
+        #expect(request.assessment.escalations.map(\.reason) == [
+            "Workspace Client Alpha will no longer restrict file locations at all: "
+                + "this removes the last entry from its file locations list."
+        ])
+    }
+
+    /// A subsuming addition loses the grant even when the dimension was already configured and the
+    /// added folder is not a whitelist root: the tier stays 2 — no escalation — and only the
+    /// weight-of-ask reverts to the policy baseline.
+    @Test
+    func aSubsumingAdditionFromTheSheetLosesTheGrantEvenWhenTheDimensionWasConfigured() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let inner = root.appendingPathComponent("Projects/ClientAlpha", isDirectory: true)
+        try FileManager.default.createDirectory(at: inner, withIntermediateDirectories: true)
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try workspaceStore.save(
+            StoredWorkspace(
+                name: "Client Alpha",
+                apps: ["Safari"],
+                urls: [],
+                fileLocations: [inner.resolvingSymlinksInPath().path]
+            )
+        )
+        let runner = AgentRunner(
+            planner: UnusedPlanner(),
+            executor: makeExecutor(root: root, workspaceStore: workspaceStore)
+        )
+        let plan = EditWorkspaceCapabilityAdapter.plan(
+            for: WorkspaceScopeEditRequest(
+                workspaceName: "Client Alpha",
+                kind: .fileLocation,
+                value: root.appendingPathComponent("Projects").resolvingSymlinksInPath().path,
+                action: .add
+            )
+        )
+
+        let prepared = try runner.prepare(plan: plan, source: .directUserAction)
+        let request = try runner.approvalRequest(
+            for: prepared,
+            scope: .unscoped,
+            context: ApprovalContext(origin: prepared.source, safeMode: false)
+        )
+
+        #expect(request.assessment.effectiveTier == .tier2)
+        #expect(request.assessment.escalations.isEmpty)
+        #expect(request.requirement == .lightweightConfirmation)
+        #expect(request.relaxationGrant == RelaxationGrant.none)
+    }
+
+    /// The exclusion list is exactly the three written triggers, not a vibe: a whitelist-root
+    /// addition over a dimension configured with an *unrelated* entry (under a different root)
+    /// subsumes nothing, empties nothing, and creates no boundary — so it keeps the origin grant,
+    /// and the tier-3 widening escalation makes the ask a lightweight confirmation rather than
+    /// silence. The escalation carries the weight; the grant carries the friction; neither is
+    /// widened past its contract.
+    @Test
+    func aRootAdditionOverAnUnrelatedConfiguredDimensionKeepsTheGrantAtTheEscalatedTier() async throws {
+        let rootA = try makeDirectory()
+        let rootB = try makeDirectory()
+        defer {
+            try? FileManager.default.removeItem(at: rootA)
+            try? FileManager.default.removeItem(at: rootB)
+        }
+        let insideA = rootA.appendingPathComponent("ClientAlpha", isDirectory: true)
+        try FileManager.default.createDirectory(at: insideA, withIntermediateDirectories: true)
+        let workspaceStore = WorkspaceStore(fileURL: rootA.appendingPathComponent("workspaces.json"))
+        try workspaceStore.save(
+            StoredWorkspace(
+                name: "Client Alpha",
+                apps: ["Safari"],
+                urls: [],
+                fileLocations: [insideA.resolvingSymlinksInPath().path]
+            )
+        )
+        let runner = AgentRunner(
+            planner: UnusedPlanner(),
+            executor: makeExecutor(
+                root: rootA,
+                workspaceStore: workspaceStore,
+                whitelist: PathWhitelist(roots: [rootA, rootB])
+            )
+        )
+        let plan = EditWorkspaceCapabilityAdapter.plan(
+            for: WorkspaceScopeEditRequest(
+                workspaceName: "Client Alpha",
+                kind: .fileLocation,
+                value: rootB.resolvingSymlinksInPath().path,
+                action: .add
+            )
+        )
+
+        let prepared = try runner.prepare(plan: plan, source: .directUserAction)
+        let request = try runner.approvalRequest(
+            for: prepared,
+            scope: .unscoped,
+            context: ApprovalContext(origin: prepared.source, safeMode: false)
+        )
+
+        #expect(request.assessment.effectiveTier == .tier3)
+        #expect(request.requirement == .lightweightConfirmation)
+        #expect(request.relaxationGrant == .directUserAuthored)
+    }
+
     // MARK: - Requirement drift re-arms (SONNY-97, I7)
 
     /// The drift case row C mints and must therefore gate: a lightweight confirmation answered for
@@ -874,10 +1059,11 @@ struct ApprovalRelaxationTests {
         root: URL,
         routineStore: RoutineStore? = nil,
         workspaceStore: WorkspaceStore? = nil,
+        whitelist: PathWhitelist? = nil,
         capabilityRegistry: CapabilityRegistry = .default
     ) -> AgentActionExecutor {
         AgentActionExecutor(
-            whitelist: PathWhitelist(roots: [root]),
+            whitelist: whitelist ?? PathWhitelist(roots: [root]),
             appOpener: UnusedAppOpener(),
             fileOpener: UnusedFileOpener(),
             routineStore: routineStore ?? RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
