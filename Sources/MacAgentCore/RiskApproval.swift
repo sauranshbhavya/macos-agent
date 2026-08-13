@@ -183,9 +183,20 @@ public struct RiskApprovalConsent: Codable, Equatable, Sendable {
 
         /// One prompt, answered by a human who was shown exactly these escalation reasons.
         ///
-        /// The empty set is meaningful and is not the same statement as `standingGrant`: a plan
-        /// whose *default* tier is 3 raises no escalations at all, so its prompt names no reasons,
-        /// and a later assessment that grows one must still re-arm.
+        /// **The empty set is the ordinary shape, not an edge case** — a tier-2 confirmation raises
+        /// no escalations at all, so its prompt names no reasons. It is still a different statement
+        /// from `standingGrant`: this one says a human answered a prompt that named nothing, that
+        /// one says no prompt was answered. **But as of SONNY-62 the difference cannot change an
+        /// authorize/deny outcome, and claiming it could was this file's own first mistake.** For
+        /// the two to disagree on an outcome, a consent would need a tier-3 ceiling with an empty
+        /// acknowledged set, and no adapter can produce that assessment: all 25 literal
+        /// `defaultRiskTier` values in `Sources/` are tier 2 or below (7/8/10 across tiers 0/1/2,
+        /// and the one adapter that varies its default at assessment time, `InvokeShortcut`, only
+        /// lowers it), while every escalation targets tier 3 — so a tier-3 assessment always
+        /// carries at least one reason, and a non-empty reason set always means tier 3. They do
+        /// differ in the *trace* today — only this case can emit
+        /// `risk.rearmed` — and they will differ in outcome the day an adapter defaults to tier 3
+        /// or an escalation targets tier 2.
         case acknowledgedReasons(Set<String>)
     }
 

@@ -196,9 +196,15 @@ struct RiskApprovalTests {
         #expect(RiskApprovalDecision.approved(.tier2) == .approved(grant))
     }
 
-    /// The empty acknowledged set is a real state, not a spelling of `standingGrant`: a plan whose
-    /// *default* tier is 3 raises no escalations, so its prompt names no reasons — and a reason that
-    /// appears afterwards must still re-arm.
+    /// The empty acknowledged set is a real state, not a spelling of `standingGrant` — a human
+    /// answered a prompt that named nothing, which is what every tier-2 confirmation is.
+    ///
+    /// This case builds its assessment directly because the *outcome-differing* half of it is not
+    /// reachable through any adapter today: it needs a tier-3 assessment carrying no escalations,
+    /// and every `defaultRiskTier` in `Sources/` is tier 2 or below while every escalation targets
+    /// tier 3, so tier 3 always arrives with at least one reason. The rule is pinned here anyway,
+    /// because the day an adapter defaults to tier 3 is not the day to be deriving what an empty
+    /// acknowledged set means.
     @Test
     func anEmptyAcknowledgedSetIsNotAStandingGrant() {
         let answered = makeRequest(tier: .tier3, reasons: [])
