@@ -467,6 +467,34 @@ struct ProductShellTests {
         #expect(viewModel.activeTaskScope == .unscoped)
     }
 
+    /// SONNY-99's differential-signal rule at the real dispatch surface: a tier-1 run inside its
+    /// own workspace is in scope, so the workspace grant is *reported* on its request — but tier 1
+    /// auto-ran on its own in every grant column, so the grant changed nothing, and a
+    /// ran-without-asking trace here would teach the user to ignore the one that matters. The
+    /// silence has to stay ordinary silence.
+    @Test
+    func aTierOneRunInsideItsOwnWorkspaceLeavesNoRanWithoutAskingTrace() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let research = StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
+        try fixture.workspaceStore.save(research)
+        viewModel.refreshSavedItems()
+
+        viewModel.command = "open workspace Research"
+        viewModel.start(workspaceBinding: "Research")
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        // Premises, guarded rather than assumed: the run was bound to its own workspace, completed
+        // without any prompt, and really opened things through the hermetic seams.
+        #expect(viewModel.lastAssessedScope == .scoped(WorkspaceScope(workspace: research)))
+        #expect(!viewModel.isAwaitingApproval)
+        #expect(viewModel.errorMessage == nil)
+        #expect(!viewModel.finalSummary.isEmpty)
+
+        #expect(viewModel.relaxationTrace == nil)
+    }
+
     /// F1's regression test — a **re-armed** approval is a second pause, not a terminal exit, so the
     /// binding must survive it.
     ///

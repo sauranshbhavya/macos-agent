@@ -154,4 +154,42 @@ enum AgentActivityPresentation {
         .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         .filter { !$0.isEmpty }
     }
+
+    /// The one-line ran-without-asking trace (SONNY-99): the sentence that lets a person watching a
+    /// task tell "nothing happened because it was low-risk" from "something happened silently
+    /// because a relaxation grant allowed it". It names the grant's *reason* — the workspace whose
+    /// boundary allowed it, or that the user built the action on screen — never the internal enum,
+    /// and the two grants read differently because they are different facts a user can act on.
+    ///
+    /// `nil` unless the grant actually changed the outcome. Two gates, both load-bearing:
+    /// - `.none` never traces — a run with no grant is ordinary.
+    /// - A tier at or below 1 never traces, **whatever the grant says**: tiers 0 and 1 auto-run on
+    ///   their own in every grant column, so a grant reported there was outcome-irrelevant, and a
+    ///   trace on a step that was always silent is exactly what would make the signal meaningless.
+    ///   Tier ≥ 2 is precise under every policy: no tier-2-or-above cell is `.autoRun` without a
+    ///   grant, so a granted auto-run at those tiers ran unprompted *because of* the grant.
+    ///
+    /// The workspace grant names the workspace; the fallback exists only because this function is
+    /// total — an `.inScope` verdict cannot arise without a bound workspace to name.
+    static func relaxationTraceLine(
+        grant: RelaxationGrant,
+        effectiveTier: CapabilityRiskTier,
+        workspaceName: String?
+    ) -> String? {
+        guard effectiveTier.rawValue >= CapabilityRiskTier.tier2.rawValue else {
+            return nil
+        }
+        switch grant {
+        case .none:
+            return nil
+        case .inScopeWorkspace:
+            let trimmed = workspaceName?.trimmingCharacters(in: .whitespacesAndNewlines)
+            guard let name = trimmed, !name.isEmpty else {
+                return "Ran without asking — inside this workspace's boundary."
+            }
+            return "Ran without asking — inside the \(name) workspace's boundary."
+        case .directUserAuthored:
+            return "Ran without asking — you built this action on screen."
+        }
+    }
 }

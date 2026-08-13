@@ -656,6 +656,35 @@ struct WorkspaceDetailSheetTests {
         #expect(after.teamType == .team)
         #expect(viewModel.isAwaitingApproval == false)
         #expect(viewModel.errorMessage == nil)
+        // The prompt was the disclosure: a run the user approved surfaces no ran-without-asking
+        // trace on top of it (SONNY-99).
+        #expect(viewModel.relaxationTrace == nil)
+    }
+
+    /// The sheet addition that auto-runs under the origin grant leaves the ran-without-asking
+    /// trace, and it reads as "you built this on screen" — never as a workspace-boundary grant,
+    /// which is a different fact (SONNY-99).
+    @Test
+    func aSheetAdditionThatAutoRanLeavesTheBuiltOnScreenTrace() async throws {
+        let root = try makeSheetTestDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let viewModel = try makeSheetTestViewModel(root: root, workspaceStore: store)
+        let stored = StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: [])
+        try store.save(stored)
+        viewModel.refreshSavedItems()
+        let picker = WorkspaceScopeAddPresentation(kind: .app, workspace: stored)
+        let slack = try #require(
+            picker.categories.flatMap(\.entries).first { $0.name == "Slack" }
+        )
+
+        _ = viewModel.dispatchWorkspaceScopeEdit(slack.dispatch)
+        try await waitForSheetViewModelToBecomeIdle(viewModel)
+
+        // Premise, guarded rather than assumed: the run really did auto-run and apply.
+        #expect(!viewModel.isAwaitingApproval)
+        #expect(try store.workspace(named: "Client Alpha").apps == ["Safari", "Slack"])
+        #expect(viewModel.relaxationTrace == "Ran without asking — you built this action on screen.")
     }
 
     /// **A dispatch from this sheet is never an approval of something else.**

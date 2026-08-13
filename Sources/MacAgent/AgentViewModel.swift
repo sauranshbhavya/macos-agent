@@ -31,6 +31,14 @@ final class AgentViewModel: ObservableObject {
     @Published var savedRoutines: [StoredRoutine] = []
     @Published var savedWorkspaces: [StoredWorkspace] = []
     @Published var approvalRequest: RiskApprovalRequest?
+    /// The ran-without-asking trace for the last completed run (SONNY-99), or `nil` when no
+    /// relaxation grant changed that run's outcome. The sentence itself comes from
+    /// `AgentActivityPresentation.relaxationTraceLine` — pure and tested, because no SwiftUI
+    /// inspection harness exists to pin what a view renders. Set only after a granted auto-run
+    /// actually executed (a run that drifted to a prompt was disclosed by the prompt), cleared at
+    /// the start of every task, and untouched by the scheduled path, which cannot reach a grant
+    /// (I6) and never writes it.
+    @Published private(set) var relaxationTrace: String?
     @Published var clipboardHistoryEnabled: Bool = true
     @Published var priorTaskContext: PriorTaskContext?
     @Published var taskUsageSummary: TaskUsageSummary = .empty
@@ -730,6 +738,10 @@ final class AgentViewModel: ObservableObject {
         }
 
         activeTaskScope = .unscoped
+        // A new task starts with no trace: the line describes the run it completed with, and a
+        // previous task's trace surviving into this one would claim a silence that has not
+        // happened yet.
+        relaxationTrace = nil
 
         defer {
             publishTaskUsageSummary()
@@ -918,10 +930,12 @@ final class AgentViewModel: ObservableObject {
             if routineTrustApproval == .notRequested {
                 // Read off the prepared run's own source rather than off `autoExecute`, which
                 // describes how the *text* arrived and says nothing true about a run that had no
-                // text to arrive. Unreachable for `edit_workspace`, whose floor is tier 2 and which
-                // therefore always pauses before this line — but this path is shared plumbing now
-                // (§B1's vision envelope is the next caller), and "unreachable today" is how a
-                // knowingly-wrong string survives to the day it is reachable.
+                // text to arrive. Reachable for `edit_workspace` since row C (SONNY-97): its floor
+                // is tier 2, which used to pause every such run before this line, but a screen-built
+                // edit now takes the origin grant to `.autoRun` — so the `.directUserAction` branch
+                // below is that path's ordinary confirmation message, not dead plumbing waiting for
+                // §B1's vision envelope. The vision envelope remains the next *caller*; it is no
+                // longer the first.
                 if prepared.source == .directUserAction {
                     autoApprovalMessage = "Screen-built action auto-approved execution"
                 } else {
@@ -936,6 +950,22 @@ final class AgentViewModel: ObservableObject {
                 approvalDecision: routineTrustApproval,
                 confirmationMessage: autoApprovalMessage,
                 logRiskAssessment: false
+            )
+            // Only after the run really executed: a granted auto-run that drifted to a prompt was
+            // disclosed by the prompt, and tracing it as silent would be false. The line is nil for
+            // the trust path structurally — a routine plan's eligibility is empty, so its request
+            // never carries a grant — and nil for tiers that auto-run on their own; the pure
+            // function owns both rules.
+            let boundWorkspaceNameForTrace: String?
+            if case .scoped(let boundScope) = activeTaskScope {
+                boundWorkspaceNameForTrace = boundScope.workspaceName
+            } else {
+                boundWorkspaceNameForTrace = nil
+            }
+            relaxationTrace = AgentActivityPresentation.relaxationTraceLine(
+                grant: request.relaxationGrant,
+                effectiveTier: request.assessment.effectiveTier,
+                workspaceName: boundWorkspaceNameForTrace
             )
             finalSummary = result.summary
             suggestions = result.suggestions
