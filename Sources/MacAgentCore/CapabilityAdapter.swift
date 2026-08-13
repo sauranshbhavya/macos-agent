@@ -55,7 +55,7 @@ public enum CapabilityPermissionRequirement: String, Codable, CaseIterable, Equa
         case .browserOpening:
             return "Sonny may ask macOS to open a URL in the default browser."
         case .appOpening:
-            return "Sonny may ask macOS to open an allowlisted app."
+            return "Sonny may ask macOS to open an app installed on this Mac."
         case .networkAccess:
             return "Sonny may make a fixed network request for this capability."
         case .finderAutomation:

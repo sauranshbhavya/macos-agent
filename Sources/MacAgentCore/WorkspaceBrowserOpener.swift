@@ -32,17 +32,24 @@ public enum BrowserOpeningError: Error, LocalizedError, Equatable {
     }
 }
 
-/// Which allowlisted apps count as browsers when Sonny opens a workspace's URLs.
+/// Which apps count as browsers when Sonny opens a workspace's URLs.
 ///
-/// An explicit bundle-identifier set, deliberately not a heuristic: probing Launch Services for
-/// apps that declare an `http` handler would silently pull in every Electron app, mail client and
-/// PDF reader that registers one. Bundle identifier rather than display name because that is the
-/// identity `MacAppCatalog` already resolves aliases down to ("Google Chrome" and "Chrome" both
-/// land on `com.google.Chrome`), so there is one source of truth instead of two that can disagree.
+/// An explicit bundle-identifier set, deliberately not a heuristic **and deliberately not the open
+/// universe**: probing Launch Services for apps that declare an `http` handler would silently pull
+/// in every Electron app, mail client and PDF reader that registers one. C12 dissolved the *launch*
+/// allowlist; this set is a different question — not "may Sonny open it" but "will a URL sensibly
+/// land in it" — and it stays a fixed five. Bundle identifier rather than display name because that
+/// is the identity both the alias table and `InstalledAppResolver` resolve down to ("Google Chrome"
+/// and "Chrome" both land on `com.google.Chrome`), so there is one source of truth instead of two
+/// that can disagree.
 ///
-/// `MacAppCatalog.default` only carries Safari and Chrome today; Arc, Firefox and Edge are listed
-/// so that adding one to the catalog makes it browser-aware in the same edit, with nothing here to
-/// remember to update.
+/// **Arc, Firefox and Edge were dead weight until SONNY-82 and are now live.** They were listed here
+/// from the start on the theory that adding one to the launch catalog would make it browser-aware in
+/// the same edit — but the catalog never grew, and only catalog-resolved apps ever reached
+/// `firstBrowser`, so these three bundle identifiers were unreachable by construction. The
+/// dissolution reached them from the other direction: workspace and routine app resolution now goes
+/// through Launch Services, so a workspace listing Arc gets its URLs in Arc without this file
+/// changing at all.
 public enum WorkspaceBrowserCatalog {
     public static let browserBundleIdentifiers: Set<String> = [
         "com.apple.Safari",
