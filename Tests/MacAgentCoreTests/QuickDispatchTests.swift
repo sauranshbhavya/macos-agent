@@ -43,8 +43,8 @@ struct QuickDispatchTests {
         try workspaceStore.save(StoredWorkspace(name: "Deep Work", apps: ["Safari"], urls: []))
         let resolver = InstantCommandResolver(routineStore: routineStore, workspaceStore: workspaceStore)
 
-        // A workspace named like an allowlisted app: "open Slack" is ambiguous and must reach
-        // the planner, while the explicit kind-prefixed form stays instant.
+        // A workspace named like an installed app: "open Slack" is ambiguous and must reach the
+        // planner, while the explicit kind-prefixed form stays instant.
         #expect(resolver.resolve(command: "open Slack") == nil)
         guard case .plan(let workspacePlan) = resolver.resolve(command: "open workspace Slack") else {
             Issue.record("Expected explicit workspace launch to resolve locally.")
@@ -61,11 +61,11 @@ struct QuickDispatchTests {
         #expect(routinePlan.steps[0].routineName == "Deep Work")
     }
 
-    /// The exact case from manual testing: a workspace saved as "slack" (lowercase) while
-    /// "Slack" is an allowlisted app. `resolve()` must return nil so the real planner decides,
-    /// rather than instant-running the workspace behind the user's back.
+    /// The exact case from manual testing: a workspace saved as "slack" (lowercase) while Slack is
+    /// an installed app. `resolve()` must return nil so the real planner decides, rather than
+    /// instant-running the workspace behind the user's back.
     @Test
-    func lowercaseWorkspaceNamedLikeAnAllowlistedAppDefersToThePlanner() throws {
+    func lowercaseWorkspaceNamedLikeAnInstalledAppDefersToThePlanner() throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
@@ -216,10 +216,10 @@ struct QuickDispatchTests {
         #expect(plan.steps[0].workspaceName == "hehe")
     }
 
-    /// Three-way ambiguity — the cross-kind name also names an allowlisted app — steps aside to
+    /// Three-way ambiguity — the cross-kind name also names an installed app — steps aside to
     /// the planner, consistent with the existing direct-form collision handling.
     @Test
-    func crossKindNameThatAlsoNamesAnAllowlistedAppDefersToThePlanner() throws {
+    func crossKindNameThatAlsoNamesAnInstalledAppDefersToThePlanner() throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
@@ -230,6 +230,97 @@ struct QuickDispatchTests {
         )
 
         #expect(resolver.resolve(command: "run Slack") == nil)
+    }
+
+    // MARK: - The ambiguity check over the open app universe (SONNY-83)
+
+    /// The collision the check exists to catch, for an app the launch catalog never carried.
+    ///
+    /// While `MacAppCatalog` answered this question, a workspace called "Figma" and the installed
+    /// Figma stopped disambiguating the instant SONNY-82 made Figma openable: the resolver saw no
+    /// app by that name, so "open Figma" silently auto-ran the workspace while the user had every
+    /// reason to mean the app. Repointing at `InstalledAppResolver` restores the step-aside for the
+    /// whole open universe, not just the twelve.
+    @Test
+    func aWorkspaceNamedLikeAnInstalledNonCatalogAppDefersToThePlanner() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try workspaceStore.save(StoredWorkspace(name: "Figma", apps: ["Notes"], urls: []))
+        try routineStore.save(StoredRoutine(name: "Discord", steps: [openSafariStep()]))
+        let resolver = InstantCommandResolver(
+            routineStore: routineStore,
+            workspaceStore: workspaceStore,
+            installedAppResolver: Self.resolver(installing: ["Figma": "com.figma.Desktop", "Discord": "com.hnc.Discord"])
+        )
+
+        #expect(resolver.resolve(command: "open Figma") == nil)
+        #expect(resolver.resolve(command: "run Discord") == nil)
+        // Three-way: the cross-kind miss also names an installed app.
+        #expect(resolver.resolve(command: "run Figma") == nil)
+
+        // The explicit kind-prefixed forms are unambiguous and stay instant — the widening must not
+        // reach them, or naming the kind would stop being the escape hatch it exists to be.
+        guard case .plan(let workspacePlan) = resolver.resolve(command: "open workspace Figma") else {
+            Issue.record("Expected explicit workspace launch to resolve locally.")
+            return
+        }
+        #expect(workspacePlan.steps[0].workspaceName == "Figma")
+        guard case .plan(let routinePlan) = resolver.resolve(command: "run routine Discord") else {
+            Issue.record("Expected explicit routine launch to resolve locally.")
+            return
+        }
+        #expect(routinePlan.steps[0].routineName == "Discord")
+    }
+
+    /// The other direction, and the one that stops this from being "step aside more often".
+    ///
+    /// Same saved names, same commands, an empty installed universe: nothing collides, so the
+    /// instant path is exactly what it was. Without this pin a resolver that returned nil for every
+    /// direct-prefixed command would pass the test above.
+    @Test
+    func theSameSavedNamesResolveInstantlyWhenNoSuchAppIsInstalled() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try workspaceStore.save(StoredWorkspace(name: "Figma", apps: ["Notes"], urls: []))
+        try routineStore.save(StoredRoutine(name: "Discord", steps: [openSafariStep()]))
+        let resolver = InstantCommandResolver(
+            routineStore: routineStore,
+            workspaceStore: workspaceStore,
+            installedAppResolver: Self.resolver(installing: [:])
+        )
+
+        guard case .plan(let workspacePlan) = resolver.resolve(command: "open Figma") else {
+            Issue.record("Expected the workspace to keep resolving instantly with no app collision.")
+            return
+        }
+        #expect(workspacePlan.steps.map(\.operation) == [.openWorkspace])
+        #expect(workspacePlan.steps[0].workspaceName == "Figma")
+
+        guard case .plan(let routinePlan) = resolver.resolve(command: "run Discord") else {
+            Issue.record("Expected the routine to keep resolving instantly with no app collision.")
+            return
+        }
+        #expect(routinePlan.steps.map(\.operation) == [.runRoutine])
+        #expect(routinePlan.steps[0].routineName == "Discord")
+    }
+
+    /// An installed universe stated by the test, never inherited from this Mac.
+    private static func resolver(installing apps: [String: String]) -> InstalledAppResolver {
+        InstalledAppResolver(
+            source: FixedAppSource(
+                apps.map { name, bundleIdentifier in
+                    InstalledApp(
+                        displayName: name,
+                        bundleIdentifier: bundleIdentifier,
+                        applicationURL: URL(fileURLWithPath: "/Applications/\(name).app")
+                    )
+                }
+            )
+        )
     }
 
     @Test

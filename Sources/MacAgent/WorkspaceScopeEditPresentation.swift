@@ -60,13 +60,15 @@ enum WorkspaceScopeEditCommand {
 
 /// Everything the sheet's Add dialog renders for one dimension, computed as data.
 ///
-/// **The catalog is a suggestion source here and nothing more.** `MacAppCatalog`'s twelve apps are
-/// the allowlist of what Sonny may *launch*; a workspace may list an app it does not carry, for
-/// scope membership only (the decoupling founder decision recorded on SONNY-44). So a picker that
-/// offered only those twelve would be strictly narrower than the typed command it replaces — it
-/// would quietly remove the ability to put Xcode inside a boundary — which is why the free-entry
-/// field is not a fallback for completeness but a first-class half of this dialog, carrying
-/// `WorkspaceScopeOnlyApps`' own wording at the moment the name is typed.
+/// **The catalog is a suggestion source here and nothing more.** It was once described here as the
+/// allowlist of what Sonny may *launch*; C12 dissolved that meaning (SONNY-82) and left it an alias
+/// table of twelve common apps, so the rows below are a shortlist of likely picks and never a limit.
+/// A picker offering only those twelve would be strictly narrower than the typed command it
+/// replaces — it would quietly remove the ability to put Xcode inside a boundary — which is why the
+/// free-entry field is not a fallback for completeness but a first-class half of this dialog,
+/// carrying `WorkspaceScopeOnlyApps`' own wording at the moment the name is typed. The wording it
+/// carries narrowed with the same change: it now says an app is not *installed*, not that Sonny
+/// cannot launch it.
 ///
 /// Pure and `Equatable`, per this repo's standard for anything a view renders: there is no SwiftUI
 /// view-inspection harness, so a sentence composed inside a `body` is a sentence no test can read.
@@ -110,18 +112,43 @@ struct WorkspaceScopeAddPresentation: Equatable {
     let freeEntryNote: String?
 
     private let catalog: MacAppCatalog
+    /// Which app a typed name means on this Mac. Held only for `scopeOnlyDisclosure`, which after
+    /// SONNY-82 asks "is it installed" rather than "is it in the catalog" — the same narrowed
+    /// question `WorkspaceScopeOnlyApps` now answers for the capability's own preview and result, so
+    /// the dialog and the capability keep saying the same thing about the same app.
+    private let resolver: any InstalledAppResolving
     /// The evaluator's view of the workspace being edited, kept so the free-entry field can ask the
     /// same "does this already count" question the catalog rows ask.
     private let scope: WorkspaceScope
 
-    /// Fixed grouping of the launch catalog's twelve, by what the app is for.
+    /// Written out rather than synthesized, because `resolver` is an existential and existentials are
+    /// not `Equatable`. Every previously-compared member is still compared — the list below is the
+    /// synthesized one minus the collaborator, which is the right exclusion anyway: two presentations
+    /// built from the same workspace render the same dialog whichever resolver answered, and the
+    /// answers themselves are already compared through `categories` and `scope`.
+    static func == (lhs: WorkspaceScopeAddPresentation, rhs: WorkspaceScopeAddPresentation) -> Bool {
+        lhs.title == rhs.title
+            && lhs.kind == rhs.kind
+            && lhs.workspaceName == rhs.workspaceName
+            && lhs.categories == rhs.categories
+            && lhs.freeEntryTitle == rhs.freeEntryTitle
+            && lhs.freeEntryPlaceholder == rhs.freeEntryPlaceholder
+            && lhs.freeEntryAddAccessibilityLabel == rhs.freeEntryAddAccessibilityLabel
+            && lhs.freeEntryNote == rhs.freeEntryNote
+            && lhs.catalog == rhs.catalog
+            && lhs.scope == rhs.scope
+    }
+
+    /// Fixed grouping of the alias table's twelve, by what the app is for.
     ///
     /// Presentational only, and deliberately *not* a new concept in the model: no category is
-    /// stored, nothing branches on one, and `MacAppCatalog` is untouched — expanding it is
-    /// SONNY-66's, and treating it as anything other than a launch catalog is explicitly forbidden.
-    /// Membership is stated by display name and the catalog is filtered by it, so the catalog stays
-    /// the single list; an app this table does not name still appears, under `uncategorizedTitle`,
-    /// rather than vanishing. `everyCatalogAppAppearsExactlyOnce` pins that.
+    /// stored, nothing branches on one, and `MacAppCatalog` is untouched. Adding an entry to that
+    /// table is warranted when a real app has a second common name, and never in order to make
+    /// something available — SONNY-66 closed as Done when C12 removed the roster's capability
+    /// meaning outright rather than expanding it. Membership is stated by display name and the
+    /// catalog is filtered by it, so the catalog stays the single list; an app this table does not
+    /// name still appears, under `uncategorizedTitle`, rather than vanishing.
+    /// `everyCatalogAppAppearsExactlyOnce` pins that.
     private static let categoryOrder: [(title: String, names: [String])] = [
         ("Browsers", ["Safari", "Chrome"]),
         ("Communication", ["Mail", "Messages", "Slack"]),
@@ -136,15 +163,22 @@ struct WorkspaceScopeAddPresentation: Equatable {
         kind: ScopedResourceKind,
         workspace: StoredWorkspace,
         catalog: MacAppCatalog = .default,
+        resolver: any InstalledAppResolving = InstalledAppResolver.shared,
         whitelist: PathWhitelist = PathWhitelist()
     ) {
         self.kind = kind
         self.workspaceName = workspace.name
         self.catalog = catalog
+        self.resolver = resolver
         // Built once for every dimension, not only for apps: the free-entry field consults it too.
         // Bound to a local as well, because the category builder below reads it inside closures and
         // `self` is not fully initialized there yet.
-        let scope = WorkspaceScope(workspace: workspace, catalog: catalog, whitelist: whitelist)
+        //
+        // Handed the *same* resolver the disclosure uses. Both default to `InstalledAppResolver.shared`
+        // in production, so this changes nothing there — it exists so that a test injecting an
+        // installed universe cannot get a dialog whose "already listed" answer and whose
+        // scope-only sentence were computed against two different machines.
+        let scope = WorkspaceScope(workspace: workspace, catalog: catalog, resolver: resolver, whitelist: whitelist)
         self.scope = scope
         freeEntryAddAccessibilityLabel = "Add what you typed to \(workspace.name)"
 
@@ -297,7 +331,7 @@ struct WorkspaceScopeAddPresentation: Equatable {
     }
 
     /// The scope-only disclosure for a name typed into the app field, in the shared wording, or
-    /// `nil` when the catalog resolves it (or there is nothing typed yet).
+    /// `nil` when the name resolves to an installed app (or there is nothing typed yet).
     ///
     /// Shown *before* submitting, which is the point: the capability already appends this same
     /// sentence to its preview and its result, so a user learned it after approving. Reading it from
@@ -312,7 +346,7 @@ struct WorkspaceScopeAddPresentation: Equatable {
             return nil
         }
         return WorkspaceScopeOnlyApps.scopeOnlyNote(
-            for: WorkspaceScopeOnlyApps.names(in: [trimmed], catalog: catalog)
+            for: WorkspaceScopeOnlyApps.names(in: [trimmed], resolver: resolver)
         )
     }
 }

@@ -36,13 +36,14 @@ public enum ScopedResourceKind: String, Codable, Equatable, Sendable, CaseIterab
 /// One thing a plan step will touch, carried in the form the workspace's own lists are compared
 /// against.
 public enum ScopedResource: Equatable, Hashable, Sendable {
-    /// A human app name as a user would type it — resolved through `MacAppCatalog` before matching,
-    /// never compared raw.
+    /// A human app name as a user would type it — canonicalized through the alias table and the
+    /// installed-app resolver before matching, never compared raw.
     case app(String)
     /// An app already resolved to its real running identity (SONNY-58): matched by bundle
-    /// identifier first, then by the uncataloged name-fallback key — never by catalog-resolving the
-    /// display name, which would hand any app that merely *calls itself* "Chrome" the cataloged
-    /// Chrome's scope membership. Built only from a pinned `switch_running_app` step, where the
+    /// identifier first, then by the name-fallback key of entries that could not be keyed by bundle —
+    /// never by re-resolving the display name, which would hand any app that merely *calls itself*
+    /// "Chrome" the real Chrome's scope membership. SONNY-84 shrank what the fallback can reach: an
+    /// entry naming any *installed* app now keys by bundle identifier, not just a cataloged one. Built only from a pinned `switch_running_app` step, where the
     /// bundle identifier is the ground truth and the display name exists for the user-facing
     /// sentence.
     case resolvedApp(bundleIdentifier: String, displayName: String)
@@ -80,9 +81,9 @@ public enum ScopedResource: Equatable, Hashable, Sendable {
 /// Exactly three things become inert, and it is worth being precise because the list is shorter than
 /// it looks: a file location `PathWhitelist` rejects (the whole reason this type exists — scope
 /// narrows the global whitelist and never widens it), a URL `SafeURL` rejects or that carries no
-/// host, and a blank app name. An app name the catalog cannot resolve is **not** inert — it falls
-/// back to a normalized-name key and still matches, which is what keeps Microsoft Word and
-/// running-app switches inside scope checking at all.
+/// host, and a blank app name. An app name that resolves to nothing installed is **not** inert — it
+/// falls back to a normalized-name key and still matches, which is what keeps Microsoft Word,
+/// running-app switches and any app the user has not installed inside scope checking at all.
 ///
 /// Reported rather than dropped so that a boundary which quietly does nothing is at least
 /// observable. **Nothing consumes this yet** — no ticket in this module requires a surface for it,
@@ -109,7 +110,7 @@ public struct WorkspaceScopeInertEntry: Equatable, Sendable {
 public struct WorkspaceScope: Equatable, Sendable {
     /// The workspace's stored display name, for whoever words the escalation.
     public let workspaceName: String
-    /// Canonical app keys — see `appKey(for:catalog:)` for what makes a key.
+    /// Canonical app keys — see `appKey(for:catalog:resolver:)` for what makes a key.
     public let appKeys: [String]
     /// Hosts derived from the stored full URLs: lowercased, trailing dots and a leading `www.`
     /// removed.
@@ -120,6 +121,24 @@ public struct WorkspaceScope: Equatable, Sendable {
     public let inertEntries: [WorkspaceScopeInertEntry]
 
     private let catalog: MacAppCatalog
+    /// Kept because `verdict(for: .app(_:))` canonicalizes the *queried* name at evaluate time, and
+    /// it must go through the identical three stages the stored entries went through — a scope that
+    /// keyed its entries one way and its queries another would answer questions about a different
+    /// workspace than the one on disk.
+    private let resolver: any InstalledAppResolving
+
+    /// Written out rather than synthesized, because `resolver` is an existential and existentials are
+    /// not `Equatable`. Every member the synthesized version compared is still compared; only the
+    /// collaborator is left out, which is right on its own terms — two scopes holding the same
+    /// canonical keys *are* the same boundary, whichever resolver derived them.
+    public static func == (lhs: WorkspaceScope, rhs: WorkspaceScope) -> Bool {
+        lhs.workspaceName == rhs.workspaceName
+            && lhs.appKeys == rhs.appKeys
+            && lhs.webDomains == rhs.webDomains
+            && lhs.fileRoots == rhs.fileRoots
+            && lhs.inertEntries == rhs.inertEntries
+            && lhs.catalog == rhs.catalog
+    }
 
     /// Builds the scope, canonicalizing every entry once.
     ///
@@ -131,16 +150,18 @@ public struct WorkspaceScope: Equatable, Sendable {
     public init(
         workspace: StoredWorkspace,
         catalog: MacAppCatalog = .default,
+        resolver: any InstalledAppResolving = InstalledAppResolver.shared,
         whitelist: PathWhitelist = PathWhitelist()
     ) {
         self.workspaceName = workspace.name
         self.catalog = catalog
+        self.resolver = resolver
 
         var inert: [WorkspaceScopeInertEntry] = []
 
         var appKeys: [String] = []
         for rawApp in workspace.apps {
-            guard let key = Self.appKey(for: rawApp, catalog: catalog) else {
+            guard let key = Self.appKey(for: rawApp, catalog: catalog, resolver: resolver) else {
                 inert.append(
                     WorkspaceScopeInertEntry(kind: .app, value: rawApp, reason: "The app name is empty.")
                 )
@@ -216,7 +237,7 @@ public struct WorkspaceScope: Equatable, Sendable {
             guard !appKeys.isEmpty else {
                 return .unconstrained
             }
-            guard let key = Self.appKey(for: rawName, catalog: catalog) else {
+            guard let key = Self.appKey(for: rawName, catalog: catalog, resolver: resolver) else {
                 return .outOfScope
             }
             return appKeys.contains(key) ? .inScope : .outOfScope
@@ -228,11 +249,15 @@ public struct WorkspaceScope: Equatable, Sendable {
             if appKeys.contains(Self.bundleKey(bundleIdentifier)) {
                 return .inScope
             }
-            // The name half matches only stored entries the catalog could not resolve — a stored
-            // name the catalog knows produced a `bundle:` key above, never a `name:` key, so this
-            // cannot hand a resolved app the cataloged identity of whatever its display name
-            // happens to be. It is what keeps an uncataloged stored entry ("Xcode") matching the
-            // running Xcode, which is the same reason the name fallback exists in `appKey` at all.
+            // The name half matches only stored entries that neither the alias table nor the
+            // installed-app resolver could key — either of those produced a `bundle:` key above,
+            // never a `name:` key — so this cannot hand a resolved app the identity of whatever its
+            // display name happens to be. SONNY-84 narrowed what reaches it: an entry naming an
+            // *installed* app now keys by bundle identifier, so an imposter can no longer spend the
+            // membership of any installed app, cataloged or not. What is left matching by name is
+            // what genuinely has no bundle identity available — an app that is not installed, and
+            // Microsoft Word's implicit `convert_docx_to_pdf` resource — which is the same reason
+            // the name fallback exists in `appKey` at all.
             return appKeys.contains(Self.nameFallbackKey(displayName)) ? .inScope : .outOfScope
 
         case .webDomain(let rawHost):
@@ -277,14 +302,35 @@ public struct WorkspaceScope: Equatable, Sendable {
 
     /// The single canonical form both sides of an app comparison go through.
     ///
-    /// `MacAppCatalog` first, so `"Chrome"` and `"Google Chrome"` are the same app rather than the
-    /// same app matching in one workspace and not another. Names the catalog does not know fall back
-    /// to a normalized form of the raw name rather than being dropped, because two real resources
-    /// are not in that 12-app catalog: `switch_running_app` matches against the *running* apps, and
-    /// `convert_docx_to_pdf` implicitly drives Microsoft Word. Dropping them would remove them from
-    /// scope checking entirely, which is the one outcome a boundary must never produce. The `bundle:`
-    /// / `name:` prefixes keep a raw name that happens to look like a bundle identifier from
-    /// colliding with a real one.
+    /// **Three stages, and the order is the security property** (SONNY-84):
+    ///
+    /// 1. **The alias table**, so `"Chrome"` and `"Google Chrome"` are the same app rather than the
+    ///    same app matching in one workspace and not another. Unconditional — a cataloged name keys
+    ///    to its cataloged bundle identifier whether or not the app is installed, which is not an
+    ///    oversight but the stronger answer: if this stage deferred to installation, a workspace
+    ///    listing "Chrome" on a Mac without Chrome would key to `name:chrome`, and an app that merely
+    ///    *calls itself* Chrome would then match it. Keeping the stage unconditional is also what
+    ///    makes catalog-app behavior byte-identical to before this ticket.
+    /// 2. **`InstalledAppResolver`**, which extends the same `bundle:` precision to every *installed*
+    ///    app. Before SONNY-84 a non-catalog entry — "Figma", stored as a raw string — had only the
+    ///    weaker name key, so a process self-reporting that display name earned `.inScope`. The
+    ///    resolution authority here is the Launch Services database and never a running process's
+    ///    self-reported name, which is precisely the distinction that makes the key worth anything:
+    ///    an identity taken from the imposter cannot be used to exclude the imposter.
+    /// 3. **The normalized raw name**, for what neither stage can resolve. Names that reach here are
+    ///    *not* dropped, because dropping them would remove them from scope checking entirely, which
+    ///    is the one outcome a boundary must never produce (SONNY-44). Three real resources land
+    ///    here: `switch_running_app` matches against the *running* apps, `convert_docx_to_pdf`
+    ///    implicitly drives Microsoft Word, and any listed app that is genuinely not installed. Name
+    ///    identity is all anyone has for those, and it is better than nothing.
+    ///
+    /// The `bundle:` / `name:` prefixes keep a raw name that happens to look like a bundle identifier
+    /// from colliding with a real one.
+    ///
+    /// Resolved at evaluate time and never stored: keys stay derived, the workspace record is
+    /// untouched, and there is no schema change — the same "derived, not stored" shape SONNY-44 chose
+    /// for scope-only status. It also has to be derived: whether an app is installed changes without
+    /// the workspace changing, and a key written to disk in March cannot know that.
     ///
     /// The fallback folds through `MacAppCatalog.normalize` — the catalog's *own* normalization, not
     /// the stores' `normalized(_:)`. The two differ: the stores fold case and diacritics, while the
@@ -298,13 +344,20 @@ public struct WorkspaceScope: Equatable, Sendable {
     /// names, and a second app-key function there would make "Chrome" and "Google Chrome" the same
     /// app to the evaluator and different apps to the edit path — a removal that appeared to succeed
     /// and left the app in scope. The matching semantics themselves are untouched.
-    static func appKey(for rawName: String, catalog: MacAppCatalog) -> String? {
+    static func appKey(
+        for rawName: String,
+        catalog: MacAppCatalog,
+        resolver: any InstalledAppResolving
+    ) -> String? {
         let trimmed = rawName.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             return nil
         }
-        if let app = try? catalog.resolve(trimmed) {
+        if let app = catalog.canonicalApp(named: trimmed) {
             return bundleKey(app.bundleIdentifier)
+        }
+        if let installed = resolver.resolve(trimmed) {
+            return bundleKey(installed.bundleIdentifier)
         }
         return nameFallbackKey(trimmed)
     }
@@ -323,7 +376,7 @@ public struct WorkspaceScope: Equatable, Sendable {
     /// Lowercased, trailing DNS root dots removed, then a single leading `www.` removed. Applied to
     /// both sides, so `https://github.com./x` cannot slip past a `github.com` entry.
     ///
-    /// Module-visible for the same reason as `appKey(for:catalog:)`: the edit path matches removal
+    /// Module-visible for the same reason as `appKey(for:catalog:resolver:)`: the edit path matches removal
     /// requests against stored URLs by host, and it must be *this* host normalization.
     static func normalizedHost(_ rawHost: String) -> String? {
         var host = rawHost

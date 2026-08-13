@@ -899,6 +899,130 @@ struct WorkspaceScopeTests {
         )
     }
 
+    // MARK: - Bundle-id precision for every installed app (SONNY-84)
+
+    /// **The imposter pin the whole ticket exists for.** Before SONNY-84 a non-catalog entry —
+    /// "Figma", stored as a raw string — could only ever produce the weaker `name:` key, so any
+    /// process self-reporting that display name earned `.inScope`. With the entry keyed by the
+    /// bundle identifier Launch Services reports, the imposter's own bundle id is what it is judged
+    /// on, and the display name buys it nothing.
+    @Test
+    func anImposterSharingAnInstalledNonCatalogAppsDisplayNameStaysOutOfScope() {
+        let scope = Self.scope(apps: ["Figma"], installing: ["Figma": "com.figma.Desktop"])
+
+        #expect(
+            scope.verdict(for: .resolvedApp(bundleIdentifier: "com.imposter.figma", displayName: "Figma"))
+                == .outOfScope
+        )
+        // The genuine app, by bundle id, is the other half — without it the assertion above would be
+        // satisfied by a scope that matched nothing at all.
+        #expect(
+            scope.verdict(for: .resolvedApp(bundleIdentifier: "com.figma.Desktop", displayName: "Figma"))
+                == .inScope
+        )
+        // And by bundle id whatever the running app calls itself, which is the point of keying on it.
+        #expect(
+            scope.verdict(for: .resolvedApp(bundleIdentifier: "com.figma.Desktop", displayName: "Figma Beta"))
+                == .inScope
+        )
+    }
+
+    /// The SONNY-44 invariant, which SONNY-84 must not erode: an entry that resolves to nothing
+    /// installed is **never dropped from matching**. It keeps the name key it always had.
+    ///
+    /// Both directions, because the failure worth catching is silent: a listed-but-absent app that
+    /// stopped matching would look exactly like a workspace that was simply stricter than expected.
+    @Test
+    func anEntryThatResolvesToNothingInstalledStillMatchesByItsNameKey() {
+        let scope = Self.scope(apps: ["Figma", "Microsoft Word"], installing: ["Figma": "com.figma.Desktop"])
+
+        // Word is not installed here, so it keeps the name key — and still matches, by name.
+        #expect(scope.verdict(for: .app("Microsoft Word")) == .inScope)
+        #expect(scope.verdict(for: .app("microsoftword")) == .inScope)
+        #expect(
+            scope.verdict(for: .resolvedApp(bundleIdentifier: "com.microsoft.Word", displayName: "Microsoft Word"))
+                == .inScope
+        )
+        // It is a real key, not a wildcard: a different absent app does not match it.
+        #expect(scope.verdict(for: .app("Microsoft Excel")) == .outOfScope)
+    }
+
+    /// Keys are **derived at evaluate time, never stored** — the same shape SONNY-44 chose for
+    /// scope-only status, and it has to be that way: whether an app is installed changes without the
+    /// workspace changing. One identical `StoredWorkspace` produces a `bundle:` key or a `name:` key
+    /// purely according to the resolver it is evaluated against, and the record itself is untouched.
+    @Test
+    func theSameStoredRecordKeysDifferentlyOnDifferentMachinesWithNoSchemaChange() {
+        let record = StoredWorkspace(name: "Design", apps: ["Figma"], urls: [])
+
+        let withFigma = WorkspaceScope(
+            workspace: record,
+            resolver: Self.resolver(installing: ["Figma": "com.figma.Desktop"])
+        )
+        let withoutFigma = WorkspaceScope(workspace: record, resolver: Self.resolver(installing: [:]))
+
+        #expect(withFigma.appKeys == ["bundle:com.figma.Desktop"])
+        #expect(withoutFigma.appKeys == ["name:figma"])
+        // The record never changed, and neither scope wrote anything to it.
+        #expect(record.apps == ["Figma"])
+    }
+
+    /// The alias-table stage stays **unconditional**, and that is a security property rather than an
+    /// oversight. A workspace listing Chrome on a Mac without Chrome still keys to Chrome's bundle
+    /// identifier — if this stage deferred to installation the entry would fall to `name:chrome`, and
+    /// an app that merely calls itself Chrome would then match it. Keeping it unconditional is also
+    /// what makes every cataloged app's behavior byte-identical to before this ticket.
+    @Test
+    func aCatalogedAppKeysByBundleIdentifierEvenWhereItIsNotInstalled() {
+        let scope = Self.scope(apps: ["Chrome"], installing: [:])
+
+        #expect(scope.appKeys == ["bundle:com.google.Chrome"])
+        #expect(
+            scope.verdict(for: .resolvedApp(bundleIdentifier: "com.imposter.chrome", displayName: "Chrome"))
+                == .outOfScope
+        )
+        #expect(
+            scope.verdict(for: .resolvedApp(bundleIdentifier: "com.google.Chrome", displayName: "Google Chrome"))
+                == .inScope
+        )
+    }
+
+    /// **The stage *order* itself, pinned against a populated universe.**
+    ///
+    /// `aCatalogedAppKeysByBundleIdentifierEvenWhereItIsNotInstalled` above pins the alias stage as
+    /// unconditional, but it does so against an *empty* installed universe — and against an empty
+    /// universe stage two returns `nil`, so swapping stages one and two changes nothing and that test
+    /// survives the swap. It is a pin on the stage being unconditional, not on its precedence.
+    /// (Found by the PR #44 cycle-1 review, which demonstrated that the whole suite survived the
+    /// swap.)
+    ///
+    /// This is the probe that distinguishes them: the universe is populated, and what is in it is an
+    /// **imposter that resolves by name**. Google Chrome is absent; something calling itself "Chrome"
+    /// with a different bundle identifier is installed. Stage one must still win, or the imposter
+    /// hands itself the membership the user granted to Chrome — which is the precise failure the
+    /// three-stage order exists to prevent, and the one an empty universe can never expose.
+    @Test
+    func theAliasTableOutranksTheResolverWhenAnImposterIsTheOnlyInstalledMatch() {
+        let scope = Self.scope(apps: ["Chrome"], installing: ["Chrome": "com.imposter.chrome"])
+
+        // Stage one won: the key is the *cataloged* bundle identifier, not the installed one.
+        #expect(scope.appKeys == ["bundle:com.google.Chrome"])
+        // So the imposter — the only thing on this machine answering to "Chrome" — stays out.
+        #expect(
+            scope.verdict(for: .resolvedApp(bundleIdentifier: "com.imposter.chrome", displayName: "Chrome"))
+                == .outOfScope
+        )
+        // And the genuine Chrome is in scope, uninstalled though it is here, because membership is
+        // what the user configured and installation is a separate question.
+        #expect(
+            scope.verdict(for: .resolvedApp(bundleIdentifier: "com.google.Chrome", displayName: "Chrome"))
+                == .inScope
+        )
+        // The same order holds for the queried side, which goes through the identical three stages.
+        #expect(scope.verdict(for: .app("Chrome")) == .inScope)
+        #expect(scope.verdict(for: .app("Google Chrome")) == .inScope)
+    }
+
     /// The unconstrained and rendering halves: a workspace configuring no apps constrains no
     /// resolved app, and the user-facing value is the display name so an escalation reads as a
     /// sentence about an app, never about a bundle identifier.
@@ -1008,7 +1132,7 @@ struct WorkspaceScopeTests {
     /// and the catalog's identifier has to be the one the AppleScript actually addresses.
     @Test
     func theFinderConstantResolvesToTheBundleIdentifierTheAppleScriptAddresses() throws {
-        let finder = try MacAppCatalog.default.resolve(PlanScopedResources.finderAppName)
+        let finder = try #require(MacAppCatalog.default.canonicalApp(named: PlanScopedResources.finderAppName))
         #expect(finder.bundleIdentifier == "com.apple.finder")
 
         let source = try String(contentsOf: sourceFile(named: "FinderContextService.swift"), encoding: .utf8)
@@ -1240,6 +1364,29 @@ struct WorkspaceScopeTests {
     }
 
     // MARK: - Helpers
+
+    /// A scope over a stated installed universe. Stated, never inherited: nothing here may depend on
+    /// which apps this particular Mac has.
+    fileprivate static func scope(apps: [String], installing installed: [String: String]) -> WorkspaceScope {
+        WorkspaceScope(
+            workspace: StoredWorkspace(name: "Design", apps: apps, urls: []),
+            resolver: resolver(installing: installed)
+        )
+    }
+
+    fileprivate static func resolver(installing apps: [String: String]) -> InstalledAppResolver {
+        InstalledAppResolver(
+            source: FixedAppSource(
+                apps.map { name, bundleIdentifier in
+                    InstalledApp(
+                        displayName: name,
+                        bundleIdentifier: bundleIdentifier,
+                        applicationURL: URL(fileURLWithPath: "/Applications/\(name).app")
+                    )
+                }
+            )
+        )
+    }
 
     private func makeScope(
         name: String = "Research",

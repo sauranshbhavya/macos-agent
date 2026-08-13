@@ -1855,7 +1855,14 @@ struct AgentActionExecutorTests {
 
         _ = try await fixture.executor.execute(plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Both Browsers")) { _, _ in }
 
-        #expect(browserOpener.openedBrowsers == [MacApp(displayName: "Chrome", bundleIdentifier: "com.google.Chrome", aliases: ["Google Chrome"])])
+        // No `aliases:` on the expectation any more. The routine's browser is resolved through
+        // `InstalledAppResolver` since SONNY-82, and an `InstalledApp` carries the identity Launch
+        // Services answers with — a display name and a bundle identifier — not the alias-table
+        // entry's list of other spellings. Nothing downstream reads `MacApp.aliases`
+        // (`WorkspaceBrowserCatalog` keys on the bundle identifier, `AppOpening` takes only the
+        // identifier, and the browser opener uses the identifier plus the display name), so the list
+        // was incidental to what this test pins: which of two browsers binds, and in what order.
+        #expect(browserOpener.openedBrowsers == [MacApp(displayName: "Chrome", bundleIdentifier: "com.google.Chrome")])
     }
 
     /// A routine that opens an app which is not a browser must be completely unchanged — no
@@ -2503,10 +2510,10 @@ struct AgentActionExecutorTests {
             _ = try executor.prepare(plan: runRoutinePlan(name: "   "))
         }
 
-        // A workspace holding an app outside the launch catalog is no longer a failure at all.
-        // SONNY-44 decoupled scope listing from the catalog, so that entry is scope-only: it is
-        // skipped at open time and the open succeeds. (Before that decision this threw
-        // `MacAppCatalogError`, which is what made Microsoft Word unlistable.)
+        // A workspace holding an app Sonny cannot launch is no longer a failure at all. SONNY-44
+        // decoupled scope listing from launchability, so that entry is scope-only: it is skipped at
+        // open time and the open succeeds. (Before that decision this threw the catalog's
+        // membership rejection, which is what made Microsoft Word unlistable.)
         let scopeOnly = try executor.prepare(plan: openWorkspacePlan(name: "Scope Only"))
         #expect(scopeOnly.clarificationQuestion == nil)
         #expect(scopeOnly.plan.steps.map(\.operation) == [.openWorkspace])
@@ -2528,8 +2535,8 @@ struct AgentActionExecutorTests {
                 AgentStep(
                     id: "open-app",
                     operation: .openApp,
-                    description: "Open an app outside the allowlist.",
-                    appName: "DefinitelyNotAllowlisted"
+                    description: "Open an app that is not installed.",
+                    appName: "DefinitelyNotInstalled"
                 ),
                 AgentStep(
                     id: "open-workspace",
@@ -2539,7 +2546,7 @@ struct AgentActionExecutorTests {
                 )
             ]
         )
-        #expect(throws: MacAppCatalogError.self) {
+        #expect(throws: MacAppError.notInstalled("DefinitelyNotInstalled")) {
             _ = try executor.prepare(plan: chainPlan)
         }
     }
@@ -2808,8 +2815,12 @@ struct AgentActionExecutorTests {
         #expect(!FileManager.default.fileExists(atPath: output.path))
     }
 
+    /// Alias canonicalization at the preview surface: the user typed "Visual Studio Code" and the
+    /// preview names VS Code by its canonical spelling and real bundle identifier. Named for the
+    /// allowlist until SONNY-82 dissolved it — the behavior this pins was never the allowlist, it was
+    /// the alias table underneath, which is the half that survives.
     @Test
-    func openAppPreviewUsesAllowlist() throws {
+    func openAppPreviewCanonicalizesAnAliasToItsRealIdentity() throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let executor = makeExecutor(root: root)
@@ -2833,14 +2844,28 @@ struct AgentActionExecutorTests {
         #expect(appleMusic.first?.opens == ["Apple Music"])
     }
 
+    /// The only failure left on the launch path, and the sentence it produces.
+    ///
+    /// This test used to read `appNotAllowed("Untrusted App")` — "Untrusted App is not in the
+    /// allowlisted app catalog." — which was the launch gate C12 dissolved: a *refusal*, phrased as
+    /// though the user had asked for something they were not permitted. What replaces it is a
+    /// statement about the machine. The failing name is one nothing could plausibly install, because
+    /// under XCTest the resolver's universe is the alias table's roster and the point of the
+    /// assertion is the miss.
     @Test
-    func openAppRejectsUnknownApp() throws {
+    func openAppFailsWithNotInstalledCopyForAnAppThisMacDoesNotHave() throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let executor = makeExecutor(root: root)
 
-        #expect(throws: MacAppCatalogError.appNotAllowed("Untrusted App")) {
-            try executor.preview(plan: openAppPlan(appName: "Untrusted App"))
+        #expect(throws: MacAppError.notInstalled("Figma")) {
+            try executor.preview(plan: openAppPlan(appName: "Figma"))
+        }
+        #expect(MacAppError.notInstalled("Figma").errorDescription == "Figma isn't installed on this Mac.")
+        // A blank name is a different failure and keeps its own wording — the two must not collapse
+        // into one message, because only one of them is about the machine.
+        #expect(throws: MacAppError.missingAppName) {
+            try executor.preview(plan: openAppPlan(appName: "   "))
         }
     }
 
@@ -3604,11 +3629,12 @@ struct AgentActionExecutorTests {
 
     // MARK: - Scope-only workspace apps (SONNY-44)
 
-    /// The headline of the 2026-08-05 decoupling decision: a workspace may list an app
-    /// `MacAppCatalog` does not carry. Before this, `create_workspace` validated every name through
-    /// the catalog's twelve entries and `MacAppCatalogError.appNotAllowed` made Microsoft Word
-    /// unlistable — which is what would have made every `convert_docx_to_pdf` inside an apps-listing
-    /// workspace escalate forever once SONNY-37 wires the verdict in.
+    /// The headline of the 2026-08-05 decoupling decision: a workspace may list an app Sonny
+    /// cannot launch. Before this, `create_workspace` validated every name through the catalog's
+    /// twelve entries and its membership rejection made Microsoft Word unlistable — which is what
+    /// would have made every `convert_docx_to_pdf` inside an apps-listing workspace escalate forever
+    /// once SONNY-37 wires the verdict in. (SONNY-82 deleted that rejection outright; the name here
+    /// is still unlaunchable on a Mac without Word, which is what keeps this case real.)
     @Test
     func aWorkspaceCanListAnAppTheLaunchCatalogDoesNotCarry() async throws {
         let root = try makeDirectory()
@@ -3722,11 +3748,11 @@ struct AgentActionExecutorTests {
         #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://github.com"])
         // Asserted whole, not by substring: SONNY-9's doubled-period bug shipped straight through
         // four `contains`-style assertions.
-        #expect(messages.contains("Skipping Microsoft Word — not an app Sonny can launch; it counts for workspace scope only."))
+        #expect(messages.contains("Skipping Microsoft Word — it isn't installed on this Mac; it counts for workspace scope only."))
         // The summary counts what opened *and* names what did not. This is the only one of the three
         // channels a user actually sees, so it carries the whole signal — an honest "1 app(s)" alone
         // would leave them guessing which of the two listed apps started.
-        #expect(result.summary == "Opened workspace Drafting with 1 app(s) and 1 URL(s). Microsoft Word is scope-only and was not opened.")
+        #expect(result.summary == "Opened workspace Drafting with 1 app(s) and 1 URL(s). Microsoft Word isn't installed and was not opened.")
     }
 
     /// The signal has to arrive somewhere a person looks. `ActionPreview` is rendered by nothing,
@@ -3748,10 +3774,10 @@ struct AgentActionExecutorTests {
         let created = try await executor.execute(plan: scopeOnly.create) { _, _ in }
         // The saved count is the full listed count — three apps really were saved. Which of them
         // Sonny cannot open is what the note is for.
-        #expect(created.summary == "Saved workspace Drafting with 3 app(s) and 1 URL(s). Microsoft Word and Figma aren't apps Sonny can launch — counted for workspace scope only.")
+        #expect(created.summary == "Saved workspace Drafting with 3 app(s) and 1 URL(s). Microsoft Word and Figma aren't installed on this Mac — counted for workspace scope only.")
 
         let opened = try await executor.execute(plan: scopeOnly.open) { _, _ in }
-        #expect(opened.summary == "Opened workspace Drafting with 1 app(s) and 1 URL(s). Microsoft Word and Figma are scope-only and were not opened.")
+        #expect(opened.summary == "Opened workspace Drafting with 1 app(s) and 1 URL(s). Microsoft Word and Figma aren't installed and were not opened.")
 
         // And an all-catalog workspace's summaries are byte-identical to what they were before any
         // of this existed — the note appears only when it has something to say.
@@ -3794,7 +3820,7 @@ struct AgentActionExecutorTests {
         #expect(browserOpener.openedURLs.isEmpty)
         // Succeeds rather than throwing — a workspace of nothing but scope-only entries is a legal
         // boundary, not a broken launcher.
-        #expect(result.summary == "Opened workspace Drafting with 0 app(s) and 0 URL(s). Microsoft Word is scope-only and was not opened.")
+        #expect(result.summary == "Opened workspace Drafting with 0 app(s) and 0 URL(s). Microsoft Word isn't installed and was not opened.")
     }
 
     /// The adapter's own comment promises the skip is logged "between the entries around it", which
@@ -3823,7 +3849,7 @@ struct AgentActionExecutorTests {
         // Whole sequence, in order — the skip sits where the entry sits.
         #expect(messages == [
             "Opening Safari",
-            "Skipping Microsoft Word — not an app Sonny can launch; it counts for workspace scope only.",
+            "Skipping Microsoft Word — it isn't installed on this Mac; it counts for workspace scope only.",
             "Opening Notes",
             "Opened workspace"
         ])
@@ -3849,20 +3875,20 @@ struct AgentActionExecutorTests {
         )
         let repeatedResult = try await executor.execute(plan: repeated.create) { _, _ in }
         // Named once in the note; still two saved entries, so the count stays 2.
-        #expect(repeatedResult.summary == "Saved workspace Repeats with 2 app(s) and 0 URL(s). Microsoft Word isn't an app Sonny can launch — counted for workspace scope only.")
+        #expect(repeatedResult.summary == "Saved workspace Repeats with 2 app(s) and 0 URL(s). Microsoft Word isn't installed on this Mac — counted for workspace scope only.")
 
         let oneCommaName = workspacePlans(name: "One Name", apps: ["Foo, Bar"], urls: [])
         let oneResult = try await executor.execute(plan: oneCommaName.create) { _, _ in }
-        #expect(oneResult.summary == "Saved workspace One Name with 1 app(s) and 0 URL(s). Foo, Bar isn't an app Sonny can launch — counted for workspace scope only.")
+        #expect(oneResult.summary == "Saved workspace One Name with 1 app(s) and 0 URL(s). Foo, Bar isn't installed on this Mac — counted for workspace scope only.")
 
         let twoNames = workspacePlans(name: "Two Names", apps: ["Foo", "Bar"], urls: [])
         let twoResult = try await executor.execute(plan: twoNames.create) { _, _ in }
-        #expect(twoResult.summary == "Saved workspace Two Names with 2 app(s) and 0 URL(s). Foo and Bar aren't apps Sonny can launch — counted for workspace scope only.")
+        #expect(twoResult.summary == "Saved workspace Two Names with 2 app(s) and 0 URL(s). Foo and Bar aren't installed on this Mac — counted for workspace scope only.")
 
         // Three or more take the serial join, so the last name never merges into the one before it.
         let threeNames = workspacePlans(name: "Three Names", apps: ["Foo", "Bar", "Baz"], urls: [])
         let threeResult = try await executor.execute(plan: threeNames.create) { _, _ in }
-        #expect(threeResult.summary == "Saved workspace Three Names with 3 app(s) and 0 URL(s). Foo, Bar and Baz aren't apps Sonny can launch — counted for workspace scope only.")
+        #expect(threeResult.summary == "Saved workspace Three Names with 3 app(s) and 0 URL(s). Foo, Bar and Baz aren't installed on this Mac — counted for workspace scope only.")
     }
 
     /// The preview declares side effects, so it must not claim an open that cannot happen. The
@@ -3885,7 +3911,7 @@ struct AgentActionExecutorTests {
 
         #expect(preview.opens == ["Safari", "https://github.com"])
         #expect(preview.details.contains("Apps: Safari, Microsoft Word"))
-        #expect(preview.details.contains("Microsoft Word isn't an app Sonny can launch — counted for workspace scope only."))
+        #expect(preview.details.contains("Microsoft Word isn't installed on this Mac — counted for workspace scope only."))
     }
 
     /// The typo guard. It cannot tell "Microsft Word" from "Microsoft Word" — nothing can, once the
@@ -3909,7 +3935,7 @@ struct AgentActionExecutorTests {
         #expect(noted.details == [
             "Apps: Safari, Microsoft Word, Figma",
             "URLs: none",
-            "Microsoft Word and Figma aren't apps Sonny can launch — counted for workspace scope only."
+            "Microsoft Word and Figma aren't installed on this Mac — counted for workspace scope only."
         ])
 
         // And on the channel the user actually sees: nothing in `MacAgent` renders an
@@ -3918,7 +3944,7 @@ struct AgentActionExecutorTests {
         _ = try await executor.execute(plan: withScopeOnly.create) { _, message in
             messages.append(message)
         }
-        #expect(messages.contains("Microsoft Word and Figma aren't apps Sonny can launch — counted for workspace scope only."))
+        #expect(messages.contains("Microsoft Word and Figma aren't installed on this Mac — counted for workspace scope only."))
 
         let allCatalog = workspacePlans(name: "Browsing", apps: ["Safari", "Chrome"], urls: [])
         let silent = try #require(try executor.preview(plan: allCatalog.create).first)
@@ -3943,7 +3969,7 @@ struct AgentActionExecutorTests {
         let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
         let plans = workspacePlans(name: "Drafting", apps: ["Safari", "   "], urls: [])
 
-        await #expect(throws: MacAppCatalogError.missingAppName) {
+        await #expect(throws: MacAppError.missingAppName) {
             _ = try await executor.execute(plan: plans.create) { _, _ in }
         }
         #expect(throws: (any Error).self) {
@@ -4111,6 +4137,10 @@ struct AgentActionExecutorTests {
         browserOpener: BrowserOpening = NoopBrowserOpener(),
         hackerNewsFetcher: HackerNewsFetching = StaticHackerNewsFetcher(),
         appCatalog: MacAppCatalog = .default,
+        // Defaults to the process-appropriate resolver, which under XCTest holds exactly the alias
+        // table's roster — the pre-dissolution universe, so every test written before SONNY-82 keeps
+        // the answers it was written against. A test about the open universe injects the app it means.
+        installedAppResolver: any InstalledAppResolving = InstalledAppResolver.shared,
         appSearchURLCatalog: AppSearchURLCatalog = .default,
         appOpener: AppOpening = NoopAppOpener(),
         fileOpener: FileOpening = NoopFileOpener(),
@@ -4138,6 +4168,7 @@ struct AgentActionExecutorTests {
             browserOpener: browserOpener,
             hackerNewsFetcher: hackerNewsFetcher,
             appCatalog: appCatalog,
+            installedAppResolver: installedAppResolver,
             appSearchURLCatalog: appSearchURLCatalog,
             appOpener: appOpener,
             fileOpener: fileOpener,

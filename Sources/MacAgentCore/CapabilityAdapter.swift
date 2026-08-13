@@ -55,7 +55,7 @@ public enum CapabilityPermissionRequirement: String, Codable, CaseIterable, Equa
         case .browserOpening:
             return "Sonny may ask macOS to open a URL in the default browser."
         case .appOpening:
-            return "Sonny may ask macOS to open an allowlisted app."
+            return "Sonny may ask macOS to open an app installed on this Mac."
         case .networkAccess:
             return "Sonny may make a fixed network request for this capability."
         case .finderAutomation:
@@ -142,7 +142,12 @@ public struct CapabilityExecutionContext {
     public var documentConverter: any DocumentConverting
     public var browserOpener: any BrowserOpening
     public var hackerNewsFetcher: any HackerNewsFetching
+    /// The alias table — which names mean the same app. Not a roster of what may be opened; that
+    /// question moved to `installedAppResolver` when C12 dissolved the launch allowlist (SONNY-82).
     public var appCatalog: MacAppCatalog
+    /// Which app a human name means on *this* Mac, answered from the Launch Services database.
+    /// The launch, workspace-open and browser-binding paths all resolve through this one seam.
+    public var installedAppResolver: any InstalledAppResolving
     public var appSearchURLCatalog: AppSearchURLCatalog
     public var appOpener: any AppOpening
     public var fileOpener: any FileOpening
@@ -194,6 +199,7 @@ public struct CapabilityExecutionContext {
         browserOpener: any BrowserOpening,
         hackerNewsFetcher: any HackerNewsFetching,
         appCatalog: MacAppCatalog,
+        installedAppResolver: any InstalledAppResolving,
         appSearchURLCatalog: AppSearchURLCatalog,
         appOpener: any AppOpening,
         fileOpener: any FileOpening,
@@ -236,6 +242,7 @@ public struct CapabilityExecutionContext {
         self.browserOpener = browserOpener
         self.hackerNewsFetcher = hackerNewsFetcher
         self.appCatalog = appCatalog
+        self.installedAppResolver = installedAppResolver
         self.appSearchURLCatalog = appSearchURLCatalog
         self.appOpener = appOpener
         self.fileOpener = fileOpener

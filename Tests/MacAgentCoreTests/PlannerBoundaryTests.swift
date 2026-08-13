@@ -242,6 +242,131 @@ struct PlannerBoundaryTests {
         }
         #expect(savePlan.steps.map(\.operation) == [.saveSnippet])
     }
+
+    /// **The two app-shaped tools diverge on purpose, and the prompt has to say so** (SONNY-83).
+    ///
+    /// `open_app` is now an open universe: the model is told there is no supported-apps list, and the
+    /// runtime opens anything installed. `open_app_search_url` is the opposite and stays that way —
+    /// its five templates are a §7.4-class audited-template boundary, where the authority sits in the
+    /// *URL Sonny constructs*, not in the app being named. Widening it would mean building arbitrary
+    /// search URLs from model output, which is a different question from launching an installed app
+    /// and is not what C12 ratified; non-catalog search targets are reachable through vision instead
+    /// (row I).
+    ///
+    /// Pinned as a *contrast*, not two separate assertions, because the failure mode worth catching
+    /// is a later reader applying the dissolution one tool too far.
+    @Test
+    func openAppIsOpenUniverseWhileOpenAppSearchURLStaysAFixedTemplateSet() throws {
+        let openApp = try #require(OpenAppCapabilityAdapter.metadata.plannerTools.first)
+        let searchURL = try #require(OpenAppSearchURLCapabilityAdapter.metadata.plannerTools.first)
+
+        // What the model is told.
+        #expect(openApp.description.contains("any application installed on this Mac"))
+        #expect(openApp.description.contains("Not limited to a fixed list of apps"))
+        #expect(!openApp.description.contains("Supported apps:"))
+        #expect(searchURL.description.contains("Supported search targets: Google, GitHub, YouTube, Apple Music, Spotify."))
+
+        // And what the runtime does with the same name, which is what makes the divergence real
+        // rather than a wording difference.
+        #expect(AppSearchURLCatalog.default.templates.count == 5)
+        #expect(throws: AppSearchURLCatalogError.searchTargetNotAllowed("Figma")) {
+            _ = try AppSearchURLCatalog.default.resolve(target: "Figma", query: "buttons")
+        }
+        let installed = InstalledAppResolver(
+            source: FixedAppSource([
+                InstalledApp(
+                    displayName: "Figma",
+                    bundleIdentifier: "com.figma.Desktop",
+                    applicationURL: URL(fileURLWithPath: "/Applications/Figma.app")
+                )
+            ])
+        )
+        #expect(installed.resolve("Figma")?.bundleIdentifier == "com.figma.Desktop")
+    }
+
+    /// **The whole assembled prompt speaks one vocabulary about apps, and the sweep that proves it
+    /// is a test rather than a grep someone remembered to run** (PR #44 cycle-1 review, MEDIUM-2).
+    ///
+    /// SONNY-83 rewrote `open_app` and left three sibling descriptions still promising a
+    /// supported-apps list — `create_workspace`'s "An unsupported app is saved for scope only and
+    /// simply is not opened when the workspace opens" was outright false after C12, and the prompt
+    /// simultaneously told the model that no such list exists and that apps can be outside it. That
+    /// survived because the sweep that caught the *first* vocabulary ("allowlist") never looked for
+    /// the one the rename introduced ("supported apps"). **Both are searched here, and any future
+    /// third has to be added deliberately.**
+    ///
+    /// Deliberately run over `OpenAIPlanner.systemPrompt` — the real assembled text, scaffold rules
+    /// included — not over the tool descriptions alone, because rule lines carry this vocabulary too.
+    /// Markup-tolerant per `CLAUDE.md`'s counting rule: the pattern tolerates emphasis characters,
+    /// hyphens and line-wrapping whitespace between words, so `*supported* apps` and `supported-apps`
+    /// match as readily as the plain phrase.
+    ///
+    /// The one survivor is `open_app_search_url`, whose five templates *are* still a fixed
+    /// allowlist — a §7.4-class audited-template boundary C12 explicitly did not dissolve. So the
+    /// assertion is not "no hits" but "every hit is a search-URL line", which keeps the deliberate
+    /// exception legible instead of hiding it behind an exact-count number that means nothing to
+    /// whoever reads the failure.
+    @Test
+    func theAssembledPromptSpeaksOneAppVocabularyOutsideTheSearchURLBoundary() throws {
+        let prompt = OpenAIPlanner.systemPrompt(toolRegistry: .default)
+        // Three deliberate asymmetries, each paid for by a wrong count during the cycle-1 fix round:
+        //
+        // 1. A lookbehind rejecting a preceding *letter* before lowercase "allow", because
+        //    "sh**allow** **list**ing" otherwise matches — and it does occur, in
+        //    `InstalledAppResolver`'s own sweep doc comment. A naive markup-tolerant pattern read 24
+        //    where the true count was 23.
+        // 2. A separate camelCase alternative for capital "Allow", because a plain `\b` fixes (1)
+        //    and then silently drops `OpenAllowlistedAppCapabilityAdapter` — the correction for one
+        //    false positive bought a false negative, and the re-measurement read 22.
+        // 3. No boundary at all before "support", because "unsupported apps" is exactly the stale
+        //    vocabulary worth catching rather than a word to be excluded.
+        // Explicit case classes rather than `.caseInsensitive`, because the flag is global and this
+        // pattern needs case-*sensitivity* in one alternative and not the others: a case-insensitive
+        // engine cannot tell camelCase `OpenAllowlisted` from the "shallow" the lookbehind exists to
+        // reject. Written out, each alternative says what it means on its own.
+        let pattern = try NSRegularExpression(
+            pattern: #"(?<![A-Za-z])[Aa]llow[\W_]{0,3}[Ll]ist\w*|Allow[\W_]{0,3}[Ll]ist\w*|[Ss]upport\w*[\W_]{0,3}[Aa]pps?\b"#,
+            options: []
+        )
+
+        var offenders: [String] = []
+        for line in prompt.split(separator: "\n", omittingEmptySubsequences: false) {
+            let text = String(line)
+            let range = NSRange(text.startIndex..., in: text)
+            guard pattern.firstMatch(in: text, range: range) != nil else {
+                continue
+            }
+            // The deliberate exception, identified by what the line is *about* rather than by
+            // position, so reordering the registry cannot silently widen it.
+            //
+            // Matched on search-URL *markers*, never on the bare word "search". The first draft of
+            // this test exempted any line containing "search" and was caught by its own mutation
+            // battery: `open_workspace`'s description ends "…or \"get into research mode\" — ask a
+            // clarifying question instead", and re-**search** contains it, so the guard exempted
+            // precisely the line the cycle-1 review had flagged. A guard whose exception is a
+            // substring of ordinary prose is not a guard.
+            let lowered = text.lowercased()
+            let isSearchURLLine = ["open_app_search_url", "search url", "search target"]
+                .contains { lowered.contains($0) }
+            if isSearchURLLine {
+                continue
+            }
+            offenders.append(text.trimmingCharacters(in: .whitespaces))
+        }
+
+        #expect(
+            offenders.isEmpty,
+            """
+            The assembled planner prompt still promises an app allowlist or a supported-apps list \
+            outside the search-URL templates. C12 dissolved the launch allowlist; any surviving \
+            mention is telling the model something the runtime will not do:
+            \(offenders.joined(separator: "\n"))
+            """
+        )
+        // The exception itself is asserted rather than assumed: if the search-URL tool ever stopped
+        // saying this, the loop above would pass vacuously and this test would be pinning nothing.
+        #expect(prompt.contains("Open a fixed allowlisted app or website search URL template."))
+    }
 }
 
 private let expectedDefaultPlannerDescription = """
@@ -293,12 +418,12 @@ private let expectedDefaultPlannerDescription = """
   side effects: network request, send fetched public page content to OpenAI, write file
   dry run: Show source URL(s), search query, and Markdown output path without fetching pages or writing files.
   examples: Summarize https://example.com/article and save as Markdown | Compare these source URLs and save a Markdown note | Research Swift concurrency and save a Markdown note
-- open_app: Open allowlisted Mac app
-  description: Open an app from the local allowlist by human app name. Supported apps: Safari, Chrome, Finder, Notes, Calendar, Mail, Messages, Apple Music, Spotify, Slack, VS Code, Terminal.
+- open_app: Open Mac app
+  description: Open any application installed on this Mac, by the human name the user said. Not limited to a fixed list of apps: do not substitute a different app, and do not drop the request because a name looks unfamiliar. The runtime decides whether the app is installed, and the step fails with a clear message when it is not.
   required fields: appName
   side effects: open app
-  dry run: Show the allowlisted app that would open.
-  examples: Open Safari | Open Spotify | Launch Apple Music
+  dry run: Show the app that would open.
+  examples: Open Safari | Open Figma | Launch Discord
 - open_app_search_url: Open allowlisted search URL
   description: Open a fixed allowlisted app or website search URL template. Supported search targets: Google, GitHub, YouTube, Apple Music, Spotify.
   required fields: appName, searchQuery
@@ -372,19 +497,19 @@ private let expectedDefaultPlannerDescription = """
   dry run: Preview the saved routine without executing its steps.
   examples: Run my morning setup routine
 - create_workspace: Create workspace launcher
-  description: Save a named workspace containing the apps and safe http/https URLs the user names. An app does NOT have to be in the supported-apps list: include every app the user names, because a workspace's apps are also its restriction scope. An unsupported app is saved for scope only and simply is not opened when the workspace opens.
+  description: Save a named workspace containing the apps and safe http/https URLs the user names. Include every app the user names, whether or not it is installed on this Mac, because a workspace's apps are also its restriction scope. An app that is not installed is still saved, for scope only, and is skipped when the workspace opens.
   required fields: workspaceName
   side effects: write local workspace file
   dry run: Show the workspace apps and URLs without saving.
   examples: Create a workspace called research with Safari, VS Code, and https://github.com | Create a workspace called drafting with Microsoft Word and Safari
 - edit_workspace: Edit workspace
-  description: Add or remove apps, safe http/https URLs, and folders on a workspace the user has already saved. A workspace's apps, URLs, and folders are also its restriction scope, so include every app the user names whether or not it is in the supported-apps list. Folders must be inside Desktop or Documents.
+  description: Add or remove apps, safe http/https URLs, and folders on a workspace the user has already saved. A workspace's apps, URLs, and folders are also its restriction scope, so include every app the user names, whether or not it is installed on this Mac. Folders must be inside Desktop or Documents.
   required fields: workspaceName
   side effects: write local workspace file
   dry run: Show the additions and removals without saving.
   examples: Add ~/Documents/ClientAlpha to my Client Alpha workspace | Remove Slack from my research workspace
 - open_workspace: Open saved workspace
-  description: Open the supported apps and URLs saved in a named workspace. Use only when the user names a workspace they have actually saved; do not infer a workspace name from vague activity phrasing such as "focus on writing" or "get into research mode" — ask a clarifying question instead.
+  description: Open the apps and URLs saved in a named workspace. Use only when the user names a workspace they have actually saved; do not infer a workspace name from vague activity phrasing such as "focus on writing" or "get into research mode" — ask a clarifying question instead.
   required fields: workspaceName
   side effects: open apps, open browser
   dry run: Show apps and URLs that would open.
