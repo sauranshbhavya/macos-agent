@@ -60,13 +60,15 @@ enum WorkspaceScopeEditCommand {
 
 /// Everything the sheet's Add dialog renders for one dimension, computed as data.
 ///
-/// **The catalog is a suggestion source here and nothing more.** `MacAppCatalog`'s twelve apps are
-/// the allowlist of what Sonny may *launch*; a workspace may list an app it does not carry, for
-/// scope membership only (the decoupling founder decision recorded on SONNY-44). So a picker that
-/// offered only those twelve would be strictly narrower than the typed command it replaces — it
-/// would quietly remove the ability to put Xcode inside a boundary — which is why the free-entry
-/// field is not a fallback for completeness but a first-class half of this dialog, carrying
-/// `WorkspaceScopeOnlyApps`' own wording at the moment the name is typed.
+/// **The catalog is a suggestion source here and nothing more.** It was once described here as the
+/// allowlist of what Sonny may *launch*; C12 dissolved that meaning (SONNY-82) and left it an alias
+/// table of twelve common apps, so the rows below are a shortlist of likely picks and never a limit.
+/// A picker offering only those twelve would be strictly narrower than the typed command it
+/// replaces — it would quietly remove the ability to put Xcode inside a boundary — which is why the
+/// free-entry field is not a fallback for completeness but a first-class half of this dialog,
+/// carrying `WorkspaceScopeOnlyApps`' own wording at the moment the name is typed. The wording it
+/// carries narrowed with the same change: it now says an app is not *installed*, not that Sonny
+/// cannot launch it.
 ///
 /// Pure and `Equatable`, per this repo's standard for anything a view renders: there is no SwiftUI
 /// view-inspection harness, so a sentence composed inside a `body` is a sentence no test can read.
@@ -137,14 +139,16 @@ struct WorkspaceScopeAddPresentation: Equatable {
             && lhs.scope == rhs.scope
     }
 
-    /// Fixed grouping of the launch catalog's twelve, by what the app is for.
+    /// Fixed grouping of the alias table's twelve, by what the app is for.
     ///
     /// Presentational only, and deliberately *not* a new concept in the model: no category is
-    /// stored, nothing branches on one, and `MacAppCatalog` is untouched — expanding it is
-    /// SONNY-66's, and treating it as anything other than a launch catalog is explicitly forbidden.
-    /// Membership is stated by display name and the catalog is filtered by it, so the catalog stays
-    /// the single list; an app this table does not name still appears, under `uncategorizedTitle`,
-    /// rather than vanishing. `everyCatalogAppAppearsExactlyOnce` pins that.
+    /// stored, nothing branches on one, and `MacAppCatalog` is untouched. Adding an entry to that
+    /// table is warranted when a real app has a second common name, and never in order to make
+    /// something available — SONNY-66 closed as Done when C12 removed the roster's capability
+    /// meaning outright rather than expanding it. Membership is stated by display name and the
+    /// catalog is filtered by it, so the catalog stays the single list; an app this table does not
+    /// name still appears, under `uncategorizedTitle`, rather than vanishing.
+    /// `everyCatalogAppAppearsExactlyOnce` pins that.
     private static let categoryOrder: [(title: String, names: [String])] = [
         ("Browsers", ["Safari", "Chrome"]),
         ("Communication", ["Mail", "Messages", "Slack"]),
@@ -169,7 +173,12 @@ struct WorkspaceScopeAddPresentation: Equatable {
         // Built once for every dimension, not only for apps: the free-entry field consults it too.
         // Bound to a local as well, because the category builder below reads it inside closures and
         // `self` is not fully initialized there yet.
-        let scope = WorkspaceScope(workspace: workspace, catalog: catalog, whitelist: whitelist)
+        //
+        // Handed the *same* resolver the disclosure uses. Both default to `InstalledAppResolver.shared`
+        // in production, so this changes nothing there — it exists so that a test injecting an
+        // installed universe cannot get a dialog whose "already listed" answer and whose
+        // scope-only sentence were computed against two different machines.
+        let scope = WorkspaceScope(workspace: workspace, catalog: catalog, resolver: resolver, whitelist: whitelist)
         self.scope = scope
         freeEntryAddAccessibilityLabel = "Add what you typed to \(workspace.name)"
 

@@ -339,6 +339,57 @@ struct PrebuiltPlanDispatchTests {
         #expect(units[2] == [])
     }
 
+    /// **Non-catalog apps join the grouping rule on the same terms (SONNY-84), and only where the
+    /// resolver actually proves identity.**
+    ///
+    /// The fixture models two copies of one app on disk — `/Applications/Figma.app` and a renamed
+    /// `/Applications/Figma 2.app` — which Launch Services collapses to one bundle identifier, so the
+    /// live source reproduces it. Before this ticket those two entries produced `name:figma` and
+    /// `name:figma2`, two different keys, and a removal naming one silently left the other in scope.
+    ///
+    /// Worth stating plainly, because "grouping improved" is easy to over-read: for non-catalog names
+    /// the resolver's own lookup is normalization-based, so mere *spelling* variants ("Figma",
+    /// "figma") grouped before this ticket and group now, unchanged. What is new is grouping by
+    /// **proven bundle identity** — two genuinely different strings — which nothing but a resolver
+    /// could ever have established.
+    @Test
+    func appRemovalUnitsGroupNonCatalogNamesOnlyWhereTheResolverProvesOneIdentity() {
+        let resolver = InstalledAppResolver(
+            source: FixedAppSource([
+                InstalledApp(displayName: "Figma", bundleIdentifier: "com.figma.Desktop", applicationURL: URL(fileURLWithPath: "/Applications/Figma.app")),
+                InstalledApp(displayName: "Figma 2", bundleIdentifier: "com.figma.Desktop", applicationURL: URL(fileURLWithPath: "/Applications/Figma 2.app")),
+                InstalledApp(displayName: "Sketch", bundleIdentifier: "com.bohemiancoding.sketch3", applicationURL: URL(fileURLWithPath: "/Applications/Sketch.app"))
+            ])
+        )
+
+        let units = EditWorkspaceCapabilityAdapter.removalUnits(
+            kind: .app,
+            values: ["Figma", "Figma 2", "Sketch", "Framer"],
+            resolver: resolver
+        )
+
+        #expect(units[0] == ["Figma 2"])
+        #expect(units[1] == ["Figma"])
+        // A different installed app is its own unit — proven identity, not "both are installed".
+        #expect(units[2] == [])
+        // And a name nothing installed answers to keeps the old name key, grouped with nothing.
+        #expect(units[3] == [])
+    }
+
+    /// The other side of the same rule: with **no** resolver-proven identity, the two names are two
+    /// units. Without this the test above would pass just as happily against an implementation that
+    /// grouped every app entry together.
+    @Test
+    func theSameTwoNamesAreSeparateRemovalUnitsWhenNeitherResolves() {
+        let units = EditWorkspaceCapabilityAdapter.removalUnits(
+            kind: .app,
+            values: ["Figma", "Figma 2"],
+            resolver: InstalledAppResolver(source: FixedAppSource([]))
+        )
+
+        #expect(units == [[], []])
+    }
+
     /// **SONNY-41's R-1, fixed: entries the evaluator considers inert are grouped too.**
     ///
     /// Both paths here are outside any whitelist, so `WorkspaceScope` drops them and a scope built

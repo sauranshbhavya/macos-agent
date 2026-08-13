@@ -496,11 +496,25 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
             fileLocations: fileArithmetic.after
         )
 
-        // Both scopes built through the evaluator itself, with this context's own catalog and
-        // whitelist, so "does this kind still restrict anything" is answered by the same code that
-        // will answer it for every task in this workspace afterwards.
-        let beforeScope = WorkspaceScope(workspace: stored, catalog: context.appCatalog, whitelist: context.whitelist)
-        let afterScope = WorkspaceScope(workspace: updated, catalog: context.appCatalog, whitelist: context.whitelist)
+        // Both scopes built through the evaluator itself, with this context's own catalog, installed-
+        // app resolver and whitelist, so "does this kind still restrict anything" is answered by the
+        // same code — and the same machine's answer about what is installed — that will answer it for
+        // every task in this workspace afterwards. The resolver is threaded explicitly rather than
+        // left to its default for that last reason: the default and the context's resolver are the
+        // same object in production, and a test injecting one would otherwise get an edit path
+        // reasoning about a different installed universe than the run it is checking.
+        let beforeScope = WorkspaceScope(
+            workspace: stored,
+            catalog: context.appCatalog,
+            resolver: context.installedAppResolver,
+            whitelist: context.whitelist
+        )
+        let afterScope = WorkspaceScope(
+            workspace: updated,
+            catalog: context.appCatalog,
+            resolver: context.installedAppResolver,
+            whitelist: context.whitelist
+        )
         let lists = [appArithmetic, urlArithmetic, fileArithmetic].map { arithmetic in
             // Matched on the raw stored string, and safely so: `WorkspaceScopeInertEntry.value` is
             // the entry verbatim as `WorkspaceScope` read it out of the stored record, and `removed`
@@ -672,7 +686,7 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
         kind: ScopedResourceKind,
         context: CapabilityExecutionContext
     ) -> String? {
-        removalMatchKey(raw, kind: kind, catalog: context.appCatalog)
+        removalMatchKey(raw, kind: kind, catalog: context.appCatalog, resolver: context.installedAppResolver)
     }
 
     /// For each stored entry, the *other* stored entries that a removal naming it would take with
@@ -697,9 +711,10 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
     public static func removalUnits(
         kind: ScopedResourceKind,
         values: [String],
-        catalog: MacAppCatalog = .default
+        catalog: MacAppCatalog = .default,
+        resolver: any InstalledAppResolving = InstalledAppResolver.shared
     ) -> [[String]] {
-        let keys = values.map { removalMatchKey($0, kind: kind, catalog: catalog) }
+        let keys = values.map { removalMatchKey($0, kind: kind, catalog: catalog, resolver: resolver) }
         return values.indices.map { index in
             // A `nil` key belongs to no unit and takes nothing with it — `listArithmetic` skips
             // exactly those entries when it applies a removal, so reporting them as grouped would
@@ -716,11 +731,17 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
     private static func removalMatchKey(
         _ raw: String,
         kind: ScopedResourceKind,
-        catalog: MacAppCatalog
+        catalog: MacAppCatalog,
+        resolver: any InstalledAppResolving
     ) -> String? {
         switch kind {
         case .app:
-            return WorkspaceScope.appKey(for: raw, catalog: catalog)
+            // The evaluator's own key function, three stages and all. SONNY-84 made the second stage
+            // resolver-backed, which means two spellings of one *installed* app now group as one
+            // removal unit the way two spellings of a cataloged app always have — and a name that
+            // resolves to nothing still groups only with itself, because the fallback key is the raw
+            // name folded and nothing else can fold onto it.
+            return WorkspaceScope.appKey(for: raw, catalog: catalog, resolver: resolver)
 
         case .webDomain:
             // Hosts on both sides, not full URLs, and for two independent reasons. A removal that
