@@ -50,6 +50,15 @@ final class AgentViewModel: ObservableObject {
     /// Carries successes too, not just skips: an action taken with nobody watching should be
     /// visible after the fact, which is the whole reason unattended execution needs a surface.
     @Published var scheduledRunNotice: String?
+    /// The planner router could not honor the configured planner selection and used the
+    /// default instead — who actually planned the task, and why (SONNY-85). Its own channel
+    /// for the same reason `scheduledRunNotice` has one: the subject is neither a failed task
+    /// (`errorMessage` — the task went on to run) nor Sonny's own data (`localStorageNotice`).
+    /// Set by `performStart` when the registry reports a fallback, cleared at the next
+    /// dispatch — the notice describes the current task's planning, and a stale one would
+    /// claim a swap that never happened. A planner swap must never be silent, so the widget
+    /// renders this as its own dismissible strip.
+    @Published var plannerFallbackNotice: String?
     @Published var localDataDeletionStatusMessage: String?
     /// Set on every `start()`. Approving a pending run genuinely does not touch it —
     /// `performApproval` reuses the existing prepared run. A clarification answer *does* go back
@@ -121,6 +130,12 @@ final class AgentViewModel: ObservableObject {
     private let localDataDeletionService: LocalDataDeletionService
     private let priorTaskContextStore: PriorTaskContextStore
     private let taskUsageRecorder: TaskUsageRecorder
+    private let plannerProviderRegistry: PlannerProviderRegistry
+    /// Which registered planner provider plans tasks. Environment-backed in production
+    /// (`SONNY_PLANNER`, read once at init — the environment cannot change under a running
+    /// process); mutable so tests can drive both the honored and fallback selection paths
+    /// through one view model.
+    var plannerSelection: String?
     private let userDefaults: UserDefaults
     private var clipboardHistoryTimer: Timer?
     private var routineScheduleTimer: Timer?
@@ -271,6 +286,12 @@ final class AgentViewModel: ObservableObject {
         static let hasCompletedFirstApproval = "com.sonny.state.hasCompletedFirstApproval"
     }
 
+    /// The environment variable naming which registered planner provider plans tasks —
+    /// same env-backed shape as `OPENAI_API_KEY`/`OPENAI_MODEL`, and the same variable name
+    /// the experiment era used, so the founder's existing launch incantation keeps working.
+    /// Unset means the registry default (OpenAI).
+    nonisolated static let plannerSelectionEnvironmentKey = "SONNY_PLANNER"
+
     init(
         audioRecorder: AudioCommandRecorder = AudioCommandRecorder(),
         permissionReadinessService: PermissionReadinessService = PermissionReadinessService(),
@@ -295,6 +316,9 @@ final class AgentViewModel: ObservableObject {
         localDataDeletionService: LocalDataDeletionService = LocalDataDeletionService(),
         priorTaskContextStore: PriorTaskContextStore = PriorTaskContextStore(),
         taskUsageRecorder: TaskUsageRecorder = TaskUsageRecorder(),
+        plannerProviderRegistry: PlannerProviderRegistry = .default,
+        plannerSelection: String? = ProcessInfo.processInfo
+            .environment[AgentViewModel.plannerSelectionEnvironmentKey],
         userDefaults: UserDefaults = .standard
     ) {
         self.userDefaults = userDefaults
@@ -325,6 +349,8 @@ final class AgentViewModel: ObservableObject {
         self.localDataDeletionService = localDataDeletionService
         self.priorTaskContextStore = priorTaskContextStore
         self.taskUsageRecorder = taskUsageRecorder
+        self.plannerProviderRegistry = plannerProviderRegistry
+        self.plannerSelection = plannerSelection
     }
 
     var hasAPIKey: Bool {
@@ -693,6 +719,7 @@ final class AgentViewModel: ObservableObject {
         approvalRequest = nil
         stepStatuses = [:]
         pendingTaskHistoryStartedAt = nil
+        plannerFallbackNotice = nil
 
         if preserveUsageForNextStart {
             preserveUsageForNextStart = false
@@ -737,7 +764,7 @@ final class AgentViewModel: ObservableObject {
 
             // **First, and it has to be first.** The two branches below both start from
             // `submittedCommand` — the resolver pattern-matches it, and anything it does not match
-            // falls through to `try OpenAIPlanner(...)`. A pre-built plan's command text is a
+            // falls through to the registry-selected planner. A pre-built plan's command text is a
             // *label* for history and the running indicator, not an instruction, and the resolver
             // has no pattern for a workspace edit anyway; letting it reach either branch would send
             // a plan the screen already built to the planner to be re-derived from a sentence — the
@@ -764,9 +791,20 @@ final class AgentViewModel: ObservableObject {
                     prepared = try runner.prepare(plan: localPlan, source: .instantResolver)
                 }
             } else {
-                let planner = try OpenAIPlanner(usageRecorder: taskUsageRecorder)
+                // The registry, not this site, decides which provider plans the task
+                // (SONNY-85): a new provider is a registration in MacAgentCore, never another
+                // branch here. With the default selection this constructs exactly the
+                // `OpenAIPlanner(usageRecorder:)` call that used to be written inline.
+                let selected = try plannerProviderRegistry.makePlanner(
+                    selection: plannerSelection,
+                    usageRecorder: taskUsageRecorder
+                )
+                if let notice = selected.fallbackNotice {
+                    plannerFallbackNotice = notice
+                    logStore.append(.plan, notice)
+                }
                 runner = AgentRunner(
-                    planner: planner,
+                    planner: selected.planner,
                     executor: executor,
                     logStore: logStore,
                     recentArtifactStore: recentArtifactStore

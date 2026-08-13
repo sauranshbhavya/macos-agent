@@ -59,8 +59,26 @@ struct FloatingWidgetView: View {
                 }
 
                 if let notice = viewModel.localStorageNotice {
-                    WidgetStorageNoticeStrip(message: notice) {
+                    WidgetNoticeStrip(
+                        message: notice,
+                        icon: "externaldrive.badge.exclamationmark",
+                        dismissAccessibilityLabel: "Dismiss storage notice"
+                    ) {
                         viewModel.localStorageNotice = nil
+                    }
+                }
+
+                // The planner router's "never a silent planner swap" surface (SONNY-85): when
+                // the configured planner selection couldn't be honored, this says who actually
+                // planned the task and why. The widget renders it because the widget is where
+                // a run is watched; it is not a failure — the task ran.
+                if let notice = viewModel.plannerFallbackNotice {
+                    WidgetNoticeStrip(
+                        message: notice,
+                        icon: "exclamationmark.triangle",
+                        dismissAccessibilityLabel: "Dismiss planner notice"
+                    ) {
+                        viewModel.plannerFallbackNotice = nil
                     }
                 }
 
@@ -784,13 +802,15 @@ private struct WidgetFilePreviewChip: View {
 /// `WidgetState`. It is deliberately not part of the state priority chain: a corrupt store is not
 /// a task outcome, and routing it through `.failure` is exactly what made a successful task read
 /// as failed. It never raises the panel on its own — it only appears when the widget is expanded.
-private struct WidgetStorageNoticeStrip: View {
+private struct WidgetNoticeStrip: View {
     let message: String
+    let icon: String
+    let dismissAccessibilityLabel: String
     let onDismiss: () -> Void
 
     var body: some View {
         HStack(alignment: .top, spacing: 8) {
-            Image(systemName: "externaldrive.badge.exclamationmark")
+            Image(systemName: icon)
                 .font(WidgetType.icon)
                 .foregroundStyle(WidgetTheme.errorGlyph)
             Text(message)
@@ -804,7 +824,7 @@ private struct WidgetStorageNoticeStrip: View {
                     .foregroundStyle(WidgetTheme.textMuted)
             }
             .buttonStyle(.plain)
-            .accessibilityLabel("Dismiss storage notice")
+            .accessibilityLabel(dismissAccessibilityLabel)
         }
         .padding(.horizontal, 16)
         .padding(.vertical, 12)
