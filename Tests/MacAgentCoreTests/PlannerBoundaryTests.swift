@@ -323,7 +323,17 @@ struct PlannerBoundaryTests {
             }
             // The deliberate exception, identified by what the line is *about* rather than by
             // position, so reordering the registry cannot silently widen it.
-            if text.lowercased().contains("search") {
+            //
+            // Matched on search-URL *markers*, never on the bare word "search". The first draft of
+            // this test exempted any line containing "search" and was caught by its own mutation
+            // battery: `open_workspace`'s description ends "…or \"get into research mode\" — ask a
+            // clarifying question instead", and re-**search** contains it, so the guard exempted
+            // precisely the line the cycle-1 review had flagged. A guard whose exception is a
+            // substring of ordinary prose is not a guard.
+            let lowered = text.lowercased()
+            let isSearchURLLine = ["open_app_search_url", "search url", "search target"]
+                .contains { lowered.contains($0) }
+            if isSearchURLLine {
                 continue
             }
             offenders.append(text.trimmingCharacters(in: .whitespaces))
