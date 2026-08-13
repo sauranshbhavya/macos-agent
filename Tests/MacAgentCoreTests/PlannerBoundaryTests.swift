@@ -309,14 +309,24 @@ struct PlannerBoundaryTests {
     @Test
     func theAssembledPromptSpeaksOneAppVocabularyOutsideTheSearchURLBoundary() throws {
         let prompt = OpenAIPlanner.systemPrompt(toolRegistry: .default)
-        // `\b` before "allow" and not before "support", deliberately and asymmetrically. Without the
-        // leading boundary, "sh**allow** **list**ing" matches — which is not hypothetical: the same
-        // pattern run over `Sources/` inflated the cycle-1 hit count from 23 to 24 on exactly that
-        // phrase, in `InstalledAppResolver`'s own sweep doc comment. "support" gets no boundary
-        // because "un-supported apps" is precisely the stale vocabulary worth catching.
+        // Three deliberate asymmetries, each paid for by a wrong count during the cycle-1 fix round:
+        //
+        // 1. A lookbehind rejecting a preceding *letter* before lowercase "allow", because
+        //    "sh**allow** **list**ing" otherwise matches — and it does occur, in
+        //    `InstalledAppResolver`'s own sweep doc comment. A naive markup-tolerant pattern read 24
+        //    where the true count was 23.
+        // 2. A separate camelCase alternative for capital "Allow", because a plain `\b` fixes (1)
+        //    and then silently drops `OpenAllowlistedAppCapabilityAdapter` — the correction for one
+        //    false positive bought a false negative, and the re-measurement read 22.
+        // 3. No boundary at all before "support", because "unsupported apps" is exactly the stale
+        //    vocabulary worth catching rather than a word to be excluded.
+        // Explicit case classes rather than `.caseInsensitive`, because the flag is global and this
+        // pattern needs case-*sensitivity* in one alternative and not the others: a case-insensitive
+        // engine cannot tell camelCase `OpenAllowlisted` from the "shallow" the lookbehind exists to
+        // reject. Written out, each alternative says what it means on its own.
         let pattern = try NSRegularExpression(
-            pattern: #"\ballow[\W_]{0,3}list\w*|support\w*[\W_]{0,3}apps?\b"#,
-            options: [.caseInsensitive]
+            pattern: #"(?<![A-Za-z])[Aa]llow[\W_]{0,3}[Ll]ist\w*|Allow[\W_]{0,3}[Ll]ist\w*|[Ss]upport\w*[\W_]{0,3}[Aa]pps?\b"#,
+            options: []
         )
 
         var offenders: [String] = []
