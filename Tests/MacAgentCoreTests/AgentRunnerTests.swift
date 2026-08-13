@@ -544,6 +544,63 @@ struct AgentRunnerTests {
         })
     }
 
+    /// The negative half of the test above: `risk.rearmed` is a claim that a *consent* was exceeded,
+    /// so the very first prompt for a tier-3 action must not carry it — nobody had approved anything
+    /// yet for the drift to have escaped.
+    ///
+    /// `AgentRunner.execute`'s gate reaches the same `else` branch for `.notRequested` as for a
+    /// consent that fell short, and the only thing telling those apart is the `if case .approved`
+    /// binding around the trace. Nothing pinned that until this test: PR #46's review ran a ninth
+    /// mutation emitting the line on the `.notRequested` path too — so every ordinary first-time
+    /// approval logs a re-arm that never happened — and it survived the whole suite.
+    ///
+    /// **The assertion only means something on a denial that carries reasons.** A tier-2
+    /// `.notRequested` denial raises no escalations at all, so that mutation logs nothing there
+    /// either and a test built on one would pass against both trees. Hence an already-existing
+    /// output: tier 3, one reason, and no consent in hand.
+    @Test
+    func aFirstTimeApprovalPromptIsNotTracedAsAReArm() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("small", to: root.appendingPathComponent("small.txt"))
+        try write(String(repeating: "x", count: 2048), to: root.appendingPathComponent("large.txt"))
+        let output = root.appendingPathComponent("largest.zip")
+        try write("existing zip", to: output)
+        let zipArchiver = RecordingZipArchiver()
+        let logStore = AgentLogStore()
+        let runner = AgentRunner(
+            planner: StaticPlanner(plan: largestPlan(root: root, output: output)),
+            executor: makeExecutor(root: root, zipArchiver: zipArchiver),
+            logStore: logStore
+        )
+
+        let prepared = try await runner.prepare(command: "Zip the largest files")
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
+        // Reasons exist to be mislabelled. Without this the expectation below is vacuous.
+        #expect(request.assessment.effectiveTier == .tier3)
+        #expect(request.assessment.escalations.map(\.reason) == [
+            "Zip output already exists at \(output.path)."
+        ])
+
+        do {
+            _ = try await runner.execute(prepared, scope: .unscoped)
+            Issue.record("Expected the tier-3 assessment to require approval.")
+        } catch RiskApprovalError.approvalRequired(let denied) {
+            #expect(denied.requirement == .explicitApproval)
+        } catch {
+            Issue.record("Expected approvalRequired, got \(error).")
+        }
+
+        // The gate ran, and it wrote to *this* store — otherwise the absence below would only prove
+        // the runner was logging somewhere else.
+        #expect(logStore.events.contains { event in
+            event.phase == .confirm && event.message == "Approval required for Tier 3"
+        })
+        #expect(!logStore.events.contains { $0.message.hasPrefix("risk.rearmed") })
+        #expect(zipArchiver.createdArchives.isEmpty)
+        #expect(try String(contentsOf: output, encoding: .utf8) == "existing zip")
+    }
+
     /// The re-arm is one extra question, not a loop: the fresh prompt carries the new reason, and
     /// answering *that* one executes.
     @Test
