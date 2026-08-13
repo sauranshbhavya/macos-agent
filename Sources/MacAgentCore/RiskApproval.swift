@@ -285,21 +285,39 @@ public struct RiskApprovalConsent: Codable, Equatable, Sendable {
     /// The ceiling. A fresh assessment above it is never authorized, whatever its reasons.
     public var tier: CapabilityRiskTier
     public var coverage: Coverage
+    /// The *requirement* the user actually answered — the third axis (SONNY-97), recorded because
+    /// row C ended the implication "same tier means same requirement": a tier-3 ask can now be a
+    /// lightweight confirmation under a relaxation grant, and a light consent must not be spent as
+    /// an explicit approval at equal tier the moment the grant disappears.
+    ///
+    /// `nil` for a standing grant, which never answered a prompt — its consent is a pure tier
+    /// ceiling by decision (see `Coverage.standingGrant`), and the requirement axis is simply not
+    /// one it is expressed on, exactly like the reason axis. The only site that may record a
+    /// non-nil value is `init(answering:)`, the same rule SONNY-62 set for acknowledged reasons: a
+    /// consent assembled from mismatched parts is a consent nobody gave.
+    public var answeredRequirement: RiskApprovalRequirement?
 
-    public init(tier: CapabilityRiskTier, coverage: Coverage) {
+    public init(
+        tier: CapabilityRiskTier,
+        coverage: Coverage,
+        answeredRequirement: RiskApprovalRequirement? = nil
+    ) {
         self.tier = tier
         self.coverage = coverage
+        self.answeredRequirement = answeredRequirement
     }
 
     /// The consent a human gives by answering `request`.
     ///
-    /// Tier and reasons are read from the same request in one place on purpose: a call site free to
-    /// pass a tier from one assessment and reasons from another could record a consent nobody ever
-    /// gave, and that mismatch is exactly the failure this type exists to make impossible.
+    /// Tier, reasons and the answered requirement are read from the same request in one place on
+    /// purpose: a call site free to pass a tier from one assessment and reasons or a requirement
+    /// from another could record a consent nobody ever gave, and that mismatch is exactly the
+    /// failure this type exists to make impossible.
     public init(answering request: RiskApprovalRequest) {
         self.init(
             tier: request.assessment.effectiveTier,
-            coverage: .acknowledgedReasons(Set(request.assessment.escalations.map(\.reason)))
+            coverage: .acknowledgedReasons(Set(request.assessment.escalations.map(\.reason))),
+            answeredRequirement: request.requirement
         )
     }
 
@@ -322,11 +340,18 @@ public struct RiskApprovalConsent: Codable, Equatable, Sendable {
     /// Whether this consent still authorizes `request` — the stale-approval question, asked fresh at
     /// execution time.
     ///
-    /// **The rule, exactly.** Authorized when *both* hold:
+    /// **The rule, exactly.** Authorized when *all three* hold:
     ///
     /// 1. `request`'s effective tier is at or below this consent's tier. Unchanged from before
     ///    SONNY-62, and still evaluated first: a tier that rose re-arms regardless of reasons.
     /// 2. Every escalation reason in `request` is one this consent already acknowledged.
+    /// 3. `request`'s freshly derived requirement is not *stricter* than the one this consent
+    ///    answered — including at equal tier, which is the case the first two checks cannot see
+    ///    (SONNY-97). Before row C the requirement was a pure function of the tier, so "same tier"
+    ///    implied "same requirement" and this axis had nothing to compare; a relaxation grant ends
+    ///    that implication, and the concrete failure is a lightweight confirmation answered for a
+    ///    tier-3 action being spent as an explicit approval after the grant disappears. Skipped for
+    ///    a standing grant, whose consent is a pure tier ceiling on both other axes too.
     ///
     /// **Subset, not equality.** A reason that *disappeared* between the prompt and the execution
     /// means the world got less risky along that axis — the user consented to strictly more than is
@@ -348,15 +373,21 @@ public struct RiskApprovalConsent: Codable, Equatable, Sendable {
     /// recorded when they answer it acknowledges the new reasons, and the next execution's
     /// assessment — deterministic for a fixed plan and a fixed world — is covered.
     ///
-    /// Takes the whole `RiskApprovalRequest` rather than its assessment because the requirement is
-    /// the next axis to land here: row C (SONNY-97) records which requirement the user actually
-    /// answered and re-arms when a stricter one appears at equal tier, which is this same masking
-    /// class arriving through a second door. That check belongs in this function, next to these two.
+    /// Takes the whole `RiskApprovalRequest` rather than its assessment because the third check
+    /// reads `request.requirement` — the fresh requirement the engine just derived under the run's
+    /// real context. SONNY-62 anticipated exactly this: the requirement axis is the same masking
+    /// class arriving through a second door, and it belongs in this function, next to the other two.
     public func authorizes(_ request: RiskApprovalRequest) -> Bool {
         guard request.assessment.effectiveTier.rawValue <= tier.rawValue else {
             return false
         }
-        return unacknowledgedReasons(in: request).isEmpty
+        guard unacknowledgedReasons(in: request).isEmpty else {
+            return false
+        }
+        if let answeredRequirement {
+            return request.requirement.permissivenessRank >= answeredRequirement.permissivenessRank
+        }
+        return true
     }
 }
 

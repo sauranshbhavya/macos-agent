@@ -628,6 +628,176 @@ struct ApprovalRelaxationTests {
         #expect(RunningAppSwitchCapabilityAdapter.metadata.defaultRiskTier == .tier1)
     }
 
+    // MARK: - Requirement drift re-arms (SONNY-97, I7)
+
+    /// The drift case row C mints and must therefore gate: a lightweight confirmation answered for
+    /// a tier-3 action whose grant then vanishes re-arms instead of executing — at *equal* tier and
+    /// with *identical* reasons, the combination the tier and reason axes cannot see.
+    ///
+    /// The vanish is expressed by deriving the answered prompt under the granting context and
+    /// executing under a non-granting one — the one lever a test can move deterministically, since
+    /// both assessments inside one `execute` call are back-to-back on the same actor. The
+    /// production mechanism is any future cause of grant loss (SONNY-98's store-dependent narrowing
+    /// while a prompt sits open is the first); the gate holds for every cause because it compares
+    /// recorded consent against the fresh derivation, not causes.
+    @Test
+    func aLightweightAnsweredTierThreeWhoseGrantVanishesReArmsInsteadOfExecuting() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try workspaceStore.save(StoredWorkspace(name: "Client Alpha", apps: ["Safari", "Notes"], urls: []))
+        let logStore = AgentLogStore()
+        let runner = AgentRunner(
+            planner: UnusedPlanner(),
+            executor: makeExecutor(root: root, workspaceStore: workspaceStore),
+            logStore: logStore
+        )
+        let plan = EditWorkspaceCapabilityAdapter.plan(
+            for: WorkspaceScopeEditRequest(
+                workspaceName: "Client Alpha",
+                kind: .app,
+                value: "Notes",
+                action: .remove
+            )
+        )
+
+        let prepared = try runner.prepare(plan: plan, source: .directUserAction)
+        let answered = try runner.approvalRequest(
+            for: prepared,
+            scope: .unscoped,
+            context: ApprovalContext(origin: prepared.source, safeMode: false)
+        )
+        #expect(answered.assessment.effectiveTier == .tier3)
+        #expect(answered.requirement == .lightweightConfirmation)
+
+        do {
+            _ = try await runner.execute(
+                prepared,
+                approvalDecision: .approved(answering: answered),
+                scope: .unscoped,
+                context: ApprovalContext(origin: .planner, safeMode: false)
+            )
+            Issue.record("Expected the stricter fresh requirement to re-arm the approval.")
+        } catch RiskApprovalError.approvalRequired(let rearmed) {
+            // Equal tier, identical reasons — only the weight of the ask moved.
+            #expect(rearmed.assessment.effectiveTier == answered.assessment.effectiveTier)
+            #expect(rearmed.assessment.escalations == answered.assessment.escalations)
+            #expect(rearmed.requirement == .explicitApproval)
+            #expect(rearmed.relaxationGrant == RelaxationGrant.none)
+        }
+
+        // Nothing executed: the removal did not happen.
+        #expect(try workspaceStore.workspace(named: "Client Alpha").apps == ["Safari", "Notes"])
+        // And the re-arm names its cause in the trace.
+        #expect(logStore.events.contains {
+            $0.phase == .risk && $0.message
+                == "risk.rearmed: a stricter approval is now required: Explicit approval (answered: Lightweight confirmation)"
+        })
+    }
+
+    /// The re-arm is one extra question, not a loop: answering the stricter re-armed prompt
+    /// executes.
+    @Test
+    func answeringTheStricterReArmedPromptExecutes() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try workspaceStore.save(StoredWorkspace(name: "Client Alpha", apps: ["Safari", "Notes"], urls: []))
+        let runner = AgentRunner(
+            planner: UnusedPlanner(),
+            executor: makeExecutor(root: root, workspaceStore: workspaceStore)
+        )
+        let plan = EditWorkspaceCapabilityAdapter.plan(
+            for: WorkspaceScopeEditRequest(
+                workspaceName: "Client Alpha",
+                kind: .app,
+                value: "Notes",
+                action: .remove
+            )
+        )
+        let prepared = try runner.prepare(plan: plan, source: .directUserAction)
+        let answered = try runner.approvalRequest(
+            for: prepared,
+            scope: .unscoped,
+            context: ApprovalContext(origin: prepared.source, safeMode: false)
+        )
+
+        var rearmed: RiskApprovalRequest?
+        do {
+            _ = try await runner.execute(
+                prepared,
+                approvalDecision: .approved(answering: answered),
+                scope: .unscoped,
+                context: ApprovalContext(origin: .planner, safeMode: false)
+            )
+            Issue.record("Expected the stricter fresh requirement to re-arm the approval.")
+        } catch RiskApprovalError.approvalRequired(let request) {
+            rearmed = request
+        }
+
+        let secondAnswer = try #require(rearmed)
+        _ = try await runner.execute(
+            prepared,
+            approvalDecision: .approved(answering: secondAnswer),
+            scope: .unscoped,
+            context: ApprovalContext(origin: .planner, safeMode: false)
+        )
+
+        #expect(try workspaceStore.workspace(named: "Client Alpha").apps == ["Safari"])
+    }
+
+    /// A relaxed auto-run that drifts to a required approval stops at the gate — and, because the
+    /// run carried `.notRequested` rather than a consent, the denial is the ordinary "this needs
+    /// approval" path: **no `risk.rearmed` event**, per SONNY-62's M9 lesson that a first-time
+    /// prompt traced as a re-arm is a false event. The graceful pending-approval half of this drift
+    /// lives in `AgentViewModel`'s widened catch, which turns exactly this thrown request into a
+    /// second prompt instead of a failure.
+    @Test
+    func aRelaxedAutoRunThatDriftsToARequiredApprovalStopsWithoutAFalseReArmTrace() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+        try workspaceStore.save(StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: []))
+        let logStore = AgentLogStore()
+        let runner = AgentRunner(
+            planner: UnusedPlanner(),
+            executor: makeExecutor(root: root, workspaceStore: workspaceStore),
+            logStore: logStore
+        )
+        let plan = EditWorkspaceCapabilityAdapter.plan(
+            for: WorkspaceScopeEditRequest(
+                workspaceName: "Client Alpha",
+                kind: .app,
+                value: "Slack",
+                action: .add
+            )
+        )
+        let prepared = try runner.prepare(plan: plan, source: .directUserAction)
+        // The premise: under the granting context this addition auto-runs, so the dispatch carries
+        // `.notRequested` — there was no prompt to answer.
+        let granting = try runner.approvalRequest(
+            for: prepared,
+            scope: .unscoped,
+            context: ApprovalContext(origin: prepared.source, safeMode: false)
+        )
+        #expect(granting.requirement == .autoRun)
+
+        do {
+            _ = try await runner.execute(
+                prepared,
+                approvalDecision: .notRequested,
+                scope: .unscoped,
+                context: ApprovalContext(origin: .planner, safeMode: false)
+            )
+            Issue.record("Expected the drifted requirement to stop the run.")
+        } catch RiskApprovalError.approvalRequired(let request) {
+            #expect(request.requirement == .lightweightConfirmation)
+        }
+
+        #expect(try workspaceStore.workspace(named: "Client Alpha").apps == ["Safari"])
+        #expect(!logStore.events.contains { $0.message.hasPrefix("risk.rearmed") })
+    }
+
     // MARK: - The removed public paths stay removed
 
     /// The two removed wrappers (`CapabilityRiskAssessment.approvalRequirement(policy:)` and
