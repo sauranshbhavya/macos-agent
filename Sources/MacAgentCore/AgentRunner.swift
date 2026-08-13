@@ -167,8 +167,25 @@ public final class AgentRunner {
         case .autoRun:
             break
         case .lightweightConfirmation, .explicitApproval:
-            guard case .approved(let approvedTier) = approvalDecision,
-                  approvedTier.rawValue >= request.assessment.effectiveTier.rawValue else {
+            // The stale-approval gate. `request` above is a *fresh* assessment, not the one the user
+            // answered, so this is the only place that can notice the world drifting between the
+            // prompt and the run. It used to compare bare tiers, which made two different tier-3
+            // causes indistinguishable — see `RiskApprovalConsent.authorizes(_:)` for the rule that
+            // replaced it and for why each half of it reads the way it does (SONNY-62).
+            guard approvalDecision.authorizes(request) else {
+                // Only for the reason-drift half, and only when a consent existed to be exceeded:
+                // `.notRequested` reaching here is the ordinary "this needs approval" path, not a
+                // re-arm, and labelling it one would put a false event in the trace. The tier half
+                // is already legible from the `risk.assessed` line's own tier.
+                if case .approved(let consent) = approvalDecision {
+                    let unacknowledged = consent.unacknowledgedReasons(in: request)
+                    if !unacknowledged.isEmpty {
+                        logStore.append(
+                            .risk,
+                            "risk.rearmed: reasons not covered by the approval: \(unacknowledged.joined(separator: " "))"
+                        )
+                    }
+                }
                 logStore.append(.confirm, "Approval required for \(request.assessment.effectiveTier.displayName)")
                 throw RiskApprovalError.approvalRequired(request)
             }
