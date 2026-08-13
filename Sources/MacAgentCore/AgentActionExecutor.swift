@@ -294,12 +294,19 @@ public final class AgentActionExecutor {
     /// site writes `.unscoped` deliberately or passes a real scope; none of them gets to be silent.
     ///
     /// Scope only ever **raises**. `effectiveTier` is computed as a maximum that now includes the
-    /// scope escalations' `toTier`, so nothing here can lower a tier — which four other things
-    /// depend on staying honest: the unattended gate (`approvedTier >= effectiveTier` against a
-    /// fixed `.approved(.tier2)`), the stale-approval re-check in `AgentRunner.execute`, the
-    /// `risk.assessed`/`risk.escalated` trace, and `UnattendedTrustAdvisory`, which reads
-    /// `effectiveTier` alone. No relaxation of any kind lives here; that is row C's, and the
-    /// `scopeVerdict` roll-up exists to give it a typed input rather than a re-derivation.
+    /// scope escalations' `toTier`, so nothing here can lower a tier — which everything reading
+    /// that field depends on staying honest. The consumer population is larger than any closed
+    /// list stays current with (this comment first said "four things"; row C's planning counted
+    /// 151 references across 24 files at `0fdac1c`): five structural decision gates alone — the
+    /// unattended gate (`approvedTier >= effectiveTier` against a fixed `.approved(.tier2)`), the
+    /// stale-approval re-check in `AgentRunner.execute`, the `risk.assessed`/`risk.escalated`
+    /// trace, `UnattendedTrustAdvisory` (which reads `effectiveTier` alone), and SONNY-54's
+    /// manual-routine-trust check in `AgentViewModel`, whose own comment says it mirrors the
+    /// execute gate — plus the approved-tier write-back, `RiskApprovalError`'s descriptions, and
+    /// the tier handed to `approvalCopy(for:metadata:tier:)` below. Relaxation now exists (row C)
+    /// and none of it lives here: `RiskApprovalPolicy.requirement(for:context:)` overrides the
+    /// *requirement* downstream and never writes this assessment (I1/I2); the `scopeVerdict` and
+    /// `relaxationEligibility` roll-ups exist to hand it typed inputs rather than re-derivations.
     public func assessRisk(plan: AgentPlan, scope: TaskWorkspaceScope) throws -> CapabilityRiskAssessment {
         let resolvedPlan = try resolveDefaultOutputs(in: plan)
         // The same scope goes into the nested-plan closure, so a `run_routine` step's stored steps
