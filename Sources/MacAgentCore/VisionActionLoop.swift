@@ -209,7 +209,11 @@ public enum VisionActionLoop {
             }
             try await settle(800_000_000)
 
+            // Per-action substrate timing is the A/B's latency metric — measured loop-side with
+            // the same clock for both substrates, printed into the transcript lines below.
+            let captureStarted = Date()
             let capture = try await driver.captureFrontWindow(ofProcess: pid, appName: request.appName)
+            let captureMillis = Int(Date().timeIntervalSince(captureStarted) * 1000)
             let unmarkedPNG = try pngData(from: capture.image)
 
             // Compare UNMARKED bytes across iterations: the deterministic PNG encode makes
@@ -227,7 +231,7 @@ public enum VisionActionLoop {
             guard png.count <= 9_000_000 else {
                 throw VisionActionLoopError.captureFailed("screenshot PNG is \(png.count) bytes, over the vision API payload limit")
             }
-            emit("iteration \(iteration): captured \(capture.image.width)x\(capture.image.height)px of window \"\(capture.windowTitle)\" (\(png.count) bytes, window frame \(Int(capture.windowFrame.origin.x)),\(Int(capture.windowFrame.origin.y)) \(Int(capture.windowFrame.width))x\(Int(capture.windowFrame.height))pt)")
+            emit("iteration \(iteration): captured \(capture.image.width)x\(capture.image.height)px of window \"\(capture.windowTitle)\" (\(png.count) bytes, window frame \(Int(capture.windowFrame.origin.x)),\(Int(capture.windowFrame.origin.y)) \(Int(capture.windowFrame.width))x\(Int(capture.windowFrame.height))pt, capture \(captureMillis)ms)")
 
             let prompt = decisionPrompt(
                 request: request,
@@ -255,7 +259,9 @@ public enum VisionActionLoop {
                 }
                 // Same mandate as clicks: log BEFORE the keystrokes are issued.
                 emit("iteration \(iteration): TYPE \"\(text.replacingOccurrences(of: "\n", with: "\\n"))\" target=\"\(decision.target)\" rationale=\"\(decision.rationale)\"")
+                let typeStarted = Date()
                 try await driver.typeText(text)
+                emit("iteration \(iteration): typing completed in \(Int(Date().timeIntervalSince(typeStarted) * 1000))ms")
                 actions.append(ActionRecord(
                     kind: .type,
                     iteration: iteration,
@@ -297,7 +303,9 @@ public enum VisionActionLoop {
                 // logged BEFORE any event is dispatched; the substrate additionally logs the
                 // resolved global point before posting.
                 emit("iteration \(iteration): CLICK image(\(x),\(y)) target=\"\(decision.target)\" rationale=\"\(decision.rationale)\"")
+                let clickStarted = Date()
                 let outcome = try await driver.clickInWindow(capture, atImagePoint: CGPoint(x: CGFloat(x), y: CGFloat(y)), avoiding: ownFrames)
+                let clickMillis = Int(Date().timeIntervalSince(clickStarted) * 1000)
 
                 switch outcome {
                 case .windowDisappeared:
@@ -320,7 +328,7 @@ public enum VisionActionLoop {
                     history.append("iteration \(iteration): click on \"\(decision.target)\" skipped — the substrate refused it (\(reason)); reassess from the new screenshot")
                     continue
                 case .posted(let globalPoint):
-                    emit("iteration \(iteration): click posted at global(\(Int(globalPoint.x)),\(Int(globalPoint.y)))")
+                    emit("iteration \(iteration): click posted at global(\(Int(globalPoint.x)),\(Int(globalPoint.y))) in \(clickMillis)ms")
                     lastClickImagePoint = CGPoint(x: x, y: y)
                     actions.append(ActionRecord(
                         kind: .click,
