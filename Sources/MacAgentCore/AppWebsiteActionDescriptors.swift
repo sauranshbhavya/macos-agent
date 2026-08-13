@@ -31,8 +31,10 @@ public struct LocalActionDescriptor: Equatable, Sendable {
 
 public enum AppWebsiteActionDescriptors {
     // Not planner-visible: `ToolRegistry.plannerDescription` composes `AgentTool`, never this
-    // descriptor, so these three strings can tell the truth about the open universe while
-    // SONNY-83 still owns the prompt the model reads.
+    // descriptor. That is why these three strings could tell the truth about the open universe in
+    // SONNY-82 while the prompt the model reads waited for SONNY-83 — and it is also why they are
+    // easy to forget once the prompt has been fixed, which is what happened to `openWorkspace`'s
+    // below (PR #44 cycle-1 review, MEDIUM-2). Not planner-visible is not the same as not read.
     public static let openApp = LocalActionDescriptor(
         capabilityID: "local.apps.open-app",
         displayName: "Open Mac app",
@@ -88,7 +90,7 @@ public enum AppWebsiteActionDescriptors {
     public static let openWorkspace = LocalActionDescriptor(
         capabilityID: "local.workspaces.open",
         displayName: "Open saved workspace",
-        description: "Open the supported apps and safe URLs saved in a named workspace.",
+        description: "Open the apps and safe URLs saved in a named workspace.",
         supportedActions: [.openWorkspace],
         requiredPermissions: [
             CapabilityPermissionMetadata(requirement: .appOpening),

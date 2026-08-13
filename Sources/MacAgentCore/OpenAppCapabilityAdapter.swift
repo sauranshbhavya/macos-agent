@@ -47,7 +47,14 @@ public struct OpenAppCapabilityAdapter: CapabilityAdapter {
                 // load — one cataloged app and two that never were, so the open universe is
                 // demonstrated rather than only asserted.
                 name: "Open Mac app",
-                description: "Open any application installed on this Mac, by the human name the user said. There is no supported-apps list: do not substitute a different app, and do not drop the request because a name looks unfamiliar. The runtime decides whether the app is installed, and the step fails with a clear message when it is not.",
+                //
+                // "There is no supported-apps list" was the original phrasing, and it was replaced
+                // once its three siblings stopped mentioning such a list (PR #44 cycle-1 review,
+                // MEDIUM-2): a negation is only as clear as the concept it negates, and this had
+                // become the sole place the prompt raised the idea at all. The prompt now speaks one
+                // vocabulary about apps — installed on this Mac — with "allowlist" surviving only
+                // where it is still true, on the search-URL templates.
+                description: "Open any application installed on this Mac, by the human name the user said. Not limited to a fixed list of apps: do not substitute a different app, and do not drop the request because a name looks unfamiliar. The runtime decides whether the app is installed, and the step fails with a clear message when it is not.",
                 requiredFields: ["appName"],
                 sideEffects: ["open app"],
                 dryRunBehavior: "Show the app that would open.",

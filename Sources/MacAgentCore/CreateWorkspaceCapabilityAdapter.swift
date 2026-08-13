@@ -18,13 +18,22 @@ public struct CreateWorkspaceCapabilityAdapter: CapabilityAdapter {
                 name: "Create workspace launcher",
                 // Reaches the model verbatim (`ToolRegistry.plannerDescription` ->
                 // `OpenAIPlanner.systemPrompt`), and natural-language creation is the *only* way to
-                // set a workspace's apps until SONNY-40 ships an edit path. This sentence used to
-                // say "allowlisted apps", which the same prompt then defines as the twelve-app
-                // supported list — so a model honouring it would drop "Microsoft Word" at the
-                // source and SONNY-37's escalation would stay exactly as unremediable as the
-                // 2026-08-05 decision exists to prevent. It has to say the opposite, explicitly,
-                // and the second example has to demonstrate it.
-                description: "Save a named workspace containing the apps and safe http/https URLs the user names. An app does NOT have to be in the supported-apps list: include every app the user names, because a workspace's apps are also its restriction scope. An unsupported app is saved for scope only and simply is not opened when the workspace opens.",
+                // set a workspace's apps. This sentence used to say "allowlisted apps", which the
+                // same prompt then defined as the twelve-app supported list — so a model honouring
+                // it would drop "Microsoft Word" at the source and SONNY-37's escalation would stay
+                // exactly as unremediable as the 2026-08-05 decision exists to prevent. It has to
+                // say the opposite, explicitly, and the second example has to demonstrate it.
+                //
+                // Rewritten again after C12 (PR #44 cycle-1 review, MEDIUM-2), because the fix for
+                // one era's falsehood had become the next era's: "An unsupported app is saved for
+                // scope only and simply is not opened when the workspace opens" was true only while
+                // a roster decided what opens. Any *installed* app opens now, so that sentence told
+                // the model the opposite of what the runtime does, and the "supported-apps list" it
+                // named no longer exists. The rule it was protecting is unchanged and still has to
+                // be stated — a workspace's apps are its restriction scope, so no name may be
+                // dropped — only the reason an entry might not open has moved from membership to
+                // installation.
+                description: "Save a named workspace containing the apps and safe http/https URLs the user names. Include every app the user names, whether or not it is installed on this Mac, because a workspace's apps are also its restriction scope. An app that is not installed is still saved, for scope only, and is skipped when the workspace opens.",
                 requiredFields: ["workspaceName"],
                 sideEffects: ["write local workspace file"],
                 dryRunBehavior: "Show the workspace apps and URLs without saving.",

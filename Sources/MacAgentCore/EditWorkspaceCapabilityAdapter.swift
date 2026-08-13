@@ -62,8 +62,10 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
                 // Reaches the model verbatim (`ToolRegistry.plannerDescription` ->
                 // `OpenAIPlanner.systemPrompt`), so the same rule `create_workspace`'s description
                 // had to spell out applies here: a workspace's apps are its restriction scope, and
-                // an app outside the supported list still belongs in that list.
-                description: "Add or remove apps, safe http/https URLs, and folders on a workspace the user has already saved. A workspace's apps, URLs, and folders are also its restriction scope, so include every app the user names whether or not it is in the supported-apps list. Folders must be inside Desktop or Documents.",
+                // an app Sonny cannot open still belongs in that list. Repointed from membership to
+                // installation with its sibling after C12 (PR #44 cycle-1 review, MEDIUM-2) — the
+                // supported-apps list it referred to no longer exists.
+                description: "Add or remove apps, safe http/https URLs, and folders on a workspace the user has already saved. A workspace's apps, URLs, and folders are also its restriction scope, so include every app the user names, whether or not it is installed on this Mac. Folders must be inside Desktop or Documents.",
                 requiredFields: ["workspaceName"],
                 sideEffects: ["write local workspace file"],
                 dryRunBehavior: "Show the additions and removals without saving.",
