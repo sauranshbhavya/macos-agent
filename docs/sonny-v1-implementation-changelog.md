@@ -2319,7 +2319,7 @@ Tickets: **SONNY-82** (universal app launch — the catalog gate dissolves), **S
 Reviewed by: pending — fresh session per WORKFLOW.md step 7.
 
 Spec sections covered: §6.2, §10.1 (open_app bounds), §11.1 (tier 1 unchanged — verified, not assumed).
-Files changed (29 files across `242e82e`, `73c21fc`, `7f88940`, `84e418a`, `afa2a36`):
+Files changed (29 files across `242e82e`, `73c21fc`, `7f88940`, `84e418a`, `afa2a36`, plus the cycle-1 fix round `429f30b`, `2211fbd`, `42d1d96`, `e39ad8a`, `7944efe`):
 - `Sources/MacAgentCore/InstalledAppResolver.swift` (new — the seam, its live Launch-Services source, and the fixed test source)
 - `Sources/MacAgentCore/OpenAppCapabilityAdapter.swift` (new; replaces `OpenAllowlistedAppCapabilityAdapter.swift`, deleted)
 - `Sources/MacAgentCore/MacAppService.swift` (catalog demoted to an alias table; `MacAppCatalogError` → `MacAppError`, `appNotAllowed` deleted, `notInstalled` added; icon resolver widened)
@@ -2328,7 +2328,7 @@ Files changed (29 files across `242e82e`, `73c21fc`, `7f88940`, `84e418a`, `afa2
 - `Sources/MacAgent/WorkspaceScopeEditPresentation.swift` (the add dialog's disclosure and its scope, threaded through one resolver)
 - `Sources/MacAgentCore/{WorkspaceBrowserOpener,CapabilityAdapter}.swift` (two strings the dissolution left false, caught by a pre-PR sweep — see below)
 - `Tests/MacAgentCoreTests/InstalledAppResolverTests.swift` (new) plus ten existing test files
-Tests: **858 in 62 suites, exit 0** at `HEAD_SHA`, via the flagged command in `CLAUDE.md`. Baseline **828 in 60 suites, exit 0 at `0fdac1c`** — *measured*, in a detached worktree at that SHA, rather than inferred from the previous branch's entry: +30 tests, none weakened. **38 non-comment, non-blank deletion lines under `Tests/` branch-wide** at `4772ea5` (41 at `HEAD_SHA`), essentially all of them rewritten copy assertions and renamed test declarations; the SONNY-84 window alone (`7f88940..84e418a`) has zero, which is the narrower claim that criterion asked for. Fourteen mutations across the three tickets, each recorded on its ticket with the tests it killed.
+Tests: **858 in 62 suites, exit 0** at `7944efe`, via the flagged command in `CLAUDE.md`. Baseline **828 in 60 suites, exit 0 at `0fdac1c`** — *measured*, in a detached worktree at that SHA, rather than inferred from the previous branch's entry: +30 tests, none weakened. **38 non-comment, non-blank deletion lines under `Tests/` branch-wide** at `4772ea5` (41 at `7944efe`, the fix round having rewritten more copy), essentially all of them rewritten copy assertions and renamed test declarations; the SONNY-84 window alone (`7f88940..84e418a`) has zero, which is the narrower claim that criterion asked for. Fifteen mutations across the three tickets, each recorded on its ticket with the tests it killed.
 
 What changed for the user: **any app installed on this Mac now opens by name.** "Open Figma", "open Discord", "open Xcode" — previously all refused with "«name» is not in the allowlisted app catalog." — now launch, and an app that genuinely is not installed says so ("«name» isn't installed on this Mac.") instead of implying a permission problem. Workspaces launch their non-catalog entries instead of silently skipping them, a workspace naming Arc, Firefox or Edge finally opens its URLs in that browser, and a workspace row listing a non-catalog app shows the app's real icon. Nothing gained a new prompt: `open_app` is tier 1 before and after.
 
