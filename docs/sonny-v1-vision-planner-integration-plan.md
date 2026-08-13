@@ -12,6 +12,11 @@ honesty: every load-bearing claim carries file:line at a SHA, or a ticket/doc ci
 `CLAUDE.md`'s claims-and-evidence rules. Where the experiment's own ticket comments make a claim, the
 claim was checked against the code and any discrepancy is called out.
 
+**Amended 2026-08-12 by SONNY-81 (`docs/sonny-81-vision-planning`): §F appended.** The founder's 100%
+planning directive ratified supersessions of parts of §E, the locked roadmap gained rows F–I, and the
+§C "Amend" tickets were commented — so the status line above ("no roadmap row is edited, no ticket is
+amended") describes the 2026-08-08 session only. **Where §F and §E disagree, §F wins.**
+
 **Corrected 2026-08-09 by PR #37's light pre-merge pass (fix round at `3ae568d`).** The review found
 no defect in the analysis, and confirmed the merge-base pitfall (§1), the impact matrix's coverage of
 all twenty named tickets (§C), and the risk-engine and planner-seam grounding (§A, §B) against
@@ -725,6 +730,84 @@ implementation and future-branch planning tickets for the planner
 track (E1/E2/E11) and the vision track (E8's rows 14/18; E4/E5/E6/E9's modes and consent) are deferred
 until E12's cleanup lands, per E13's sequencing. The roadmap-table edit for E8's split is a
 founder-authorized follow-up, not made by this planning session.
+
+## F. The 100% directive — collisions with §E, founder-ratified 2026-08-12 (SONNY-81)
+
+With E12's cleanup merged (`main` at `a51acd0`), the founder directed the ticket-set phase to **plan as
+if the vision models work 100% of the time**: perfect screen understanding, perfect action grounding —
+no capability hedges, no accuracy-contingent fallbacks, no benchmark-gated sequencing, no degraded
+modes designed around model unreliability. Friction removal became a first-class ticket source (named
+example: the whitelist/blacklist constraints). Constraints that exist because actions carry
+**authority** — consent, privacy, data egress — do not dissolve under the assumption; every place the
+directive argued for loosening one was presented as a named supersession and ratified explicitly, in
+one pass, on 2026-08-12. This section is the durable record; §E stays as written above, and where a
+ruling below supersedes part of a §E decision, this section wins. Planning ticket: **SONNY-81**
+(branch `docs/sonny-81-vision-planning`). Tickets created: rows F (SONNY-82/83/84), G (SONNY-85/86),
+H (SONNY-87/88/89/90), I (SONNY-91–96) — see the changelog's locked-roadmap table.
+
+- **C1 — E4's pausing tiers: KEPT; its accuracy rider superseded.** The consequence-tiered mid-loop
+  pausing (ordinary auto-runs; external-effect confirms; destructive approves) is authority design and
+  stands as the product shape. The rider that made recognition accuracy a measured pre-ship gate is
+  superseded with C5.
+- **C2 — E5's per-session envelope approval: SUPERSEDED (the headline ruling).** The envelope bundled
+  four consents, each now held elsewhere: the goal (the user's own just-typed command), the medium
+  (E6's durable per-app grant), the egress (the per-app grant's disclosure + E9 transparency), and
+  consequential acts (E4's mid-loop pauses). Ratified shape: **the first vision approval for an app IS
+  the durable, Settings-revocable control grant; thereafter sessions in that app start unprompted**,
+  with E4 pauses, the HUD, and Safe mode carrying per-session authority. The engine still gates every
+  session — consent maps to a *requirement* override, never a tier change, in one function with row
+  C's mapping. E5's automatic-trigger half survives; its per-session-approval half does not.
+- **C3 — E6: consent KEPT, terminals-never KEPT; the imported eval machinery SUPERSEDED.** Any
+  installed app is consent-eligible. Spec §13.7's per-app eval bar (95% scripted suite, re-run per
+  macOS release) and the 8-app candidate cap are accuracy hedges and are superseded — a recorded
+  conscious spec deviation, same class as E9's two. Terminals stay never-controllable on authority
+  grounds: typing into a terminal is arbitrary shell execution (§7.4), true even for a perfectly
+  accurate model. Terminals remain *launchable* (C12 — launch and control are different questions).
+- **C4 — E8's split: SUPERSEDED in placement, kept as build order.** Ratified Option A: one contiguous
+  vision track — rows F/G/H/I inserted between rows C and D — with seeing-before-acting preserved as
+  the intra-track build order (the loop consumes capture and writes the ledger) rather than as
+  roadmap-distant rows. Rows 14 and 18 rescope in place to residuals (14: screen-Q&A/OCR/region-capture,
+  SONNY-18 still its planning ticket; 18: the paid-only entitlement gate landing with/after row 13,
+  plus any Accessibility-tree refinements, SONNY-23 still its planning ticket).
+- **C5 — E11's gating function: SUPERSEDED; the benchmark tickets stand untouched.** No ticket
+  references SONNY-70 or SONNY-72 as a dependency — SONNY-85/86/92 name them only to disclaim
+  dependency; no vision-action work waits on SONNY-70; the planner A/B ships with
+  no SONNY-72 dependency. The tickets themselves are unamended and unsequenced — the founder revisits
+  them separately. The default-planner flip is not in the ticket set, so E1's parity condition is
+  unexercised, not violated.
+- **C6 — E1: KEPT.** OpenAI default, Cerebras-served open-weights planner as a live A/B behind the
+  router (SONNY-85/86). The flip question stays the founder's.
+- **C7 — E9's two modes: KEPT in full.** Normal mode *is* the 100% product (low friction, honest
+  after-the-fact egress ledger — SONNY-88). Safe mode is a user-authority dial, not a model-distrust
+  mode — the right to inspect egress pre-send and gate every action survives perfect accuracy
+  (SONNY-90). The label relocation stands (the §11.3 deviation E9 already recorded; SONNY-32 reshaped
+  accordingly — its honesty fix lands as SONNY-88's classification-correctness bar).
+- **C8 — E7: KEPT in full.** Unattended never — mid-loop confirms/approvals require a present human,
+  and session-bound visibility prevents covert control (SONNY-94: refusal + ceiling + routine
+  forbiddance, auto-pause on lock/sleep/idle).
+- **C9 — E3, E10, E13: KEPT.** One capability; no-retention vision hosts only (Cerebras at launch,
+  never Google's free tier — that host class is not rebuilt); the spike never merges and everything
+  routes through the risk engine. Every created ticket names its engine integration point.
+- **C10 — §12.4's bounded-retry machinery and the iteration cap: reclassified.** Kept as engine-owned
+  containment invariants (the same class as the tier ceiling — defense against a runaway session, not
+  a product hedge); **zero reliability UX** is built around them — no retry budgets, no degraded modes.
+- **C11 — §6.5/§13.1 paid-only vs. a pre-billing vision track: a ratified timing deviation.** Vision
+  ships ungated in pre-release builds (no entitlement system exists before rows 12/13); the paid-only
+  entitlement gate is a recorded row-18-residual line item landing with/after row 13. Not a drop of
+  paid-only.
+- **C12 — E6's recorded reach on SONNY-66 ("per-app consent resolves both lists"): SUPERSEDED on the
+  launch half.** Launch = open set: any installed app, tier 1 (§11.1's own placement of "Open app"),
+  no membership check and no per-app consent — the launch whitelist was a capability hedge from the
+  spec's "without pretending to support arbitrary app automation *yet*" era. Control = per-app consent
+  (E6), unchanged. Grounding, measured at `a51acd0` (SONNY-81's enumeration: 87 `MacAppCatalog`
+  call-site lines across 21 files): the only hard launch gate is
+  `OpenAllowlistedAppCapabilityAdapter.swift:70`; `switch_running_app` is already open-universe; and
+  the catalog's own doc comment scopes it to "exactly one meaning — the allowlist of what Sonny may
+  *launch*" (verbatim, `WorkspaceScopeOnlyApps.swift:8` at `a51acd0`) — a launchability roster rather
+  than a broader security boundary (paraphrase). The name→bundle-id *resolution* function is
+  load-bearing for workspace scope's anti-imposter `bundle:`/`name:` keys and is replaced by a
+  Launch-Services-backed resolver, never deleted (SONNY-82/84). SONNY-66 closed as Done with successors
+  recorded on it.
 
 ## Appendix — how this plan was produced
 
