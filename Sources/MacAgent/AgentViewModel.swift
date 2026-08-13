@@ -814,13 +814,15 @@ final class AgentViewModel: ObservableObject {
                 // SONNY-54: a routine the user marked trusted carries the same `.approved(.tier2)`
                 // decision on a manual run that its scheduled runs already carry — the toggle was
                 // always a per-routine trust grant, and presence is the safer case, not the riskier
-                // one. The tier comparison mirrors `AgentRunner.execute`'s own gate, which still
-                // re-assesses and enforces it structurally; this check only decides
-                // pause-versus-proceed, so a tier-3+ assessment pauses at this prompt exactly as it
-                // did before trust covered manual runs.
+                // one. This asks `AgentRunner.execute`'s own gate the same question rather than
+                // restating it — before SONNY-62 it was a hand-written copy of the tier comparison,
+                // and a copy of a gate is a gate that drifts. `execute` still re-assesses and
+                // enforces it structurally; this check only decides pause-versus-proceed, so a
+                // tier-3+ assessment pauses at this prompt exactly as it did before trust covered
+                // manual runs. A standing grant is a tier ceiling, so the reason half of that gate
+                // is vacuous here by construction.
                 let trustDecision = manualRoutineTrustDecision(for: prepared.plan)
-                if case .approved(let trustedTier) = trustDecision,
-                   trustedTier.rawValue >= request.assessment.effectiveTier.rawValue {
+                if trustDecision.authorizes(request) {
                     routineTrustApproval = trustDecision
                 } else {
                     approvalRequest = request
@@ -2001,7 +2003,13 @@ final class AgentViewModel: ObservableObject {
             let result = try await executePreparedRun(
                 preparedRun: preparedRun,
                 runner: runner,
-                approvalDecision: .approved(approvalRequest.assessment.effectiveTier),
+                // `answering:` rather than a bare tier: the decision now carries the escalation
+                // reasons this exact prompt showed, so `AgentRunner.execute`'s re-check can tell a
+                // second, different tier-3 cause apart from the one the user actually read
+                // (SONNY-62). The request passed here is the one that was on screen — the same
+                // object `performApproval` received — which is what makes the recorded consent a
+                // record of what was consented to rather than of what was merely true at the time.
+                approvalDecision: .approved(answering: approvalRequest),
                 confirmationMessage: "User approved \(approvalRequest.assessment.effectiveTier.displayName) action",
                 logRiskAssessment: true
             )

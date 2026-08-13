@@ -538,6 +538,86 @@ struct ProductShellTests {
         #expect(viewModel.activeTaskScope == .unscoped)
     }
 
+    /// SONNY-62, at the surface it was observed on: the approval the user answered names one tier-3
+    /// reason, a *second* one appears before they tap Allow, and the run must stop again instead of
+    /// riding the first approval.
+    ///
+    /// The re-arm above this one drifts *upward* (tier 2 → tier 3), which the guard has always
+    /// caught. This one holds the tier fixed at 3 and changes only the reasons — the case the tier
+    /// comparison could not see, and the one that let a real run replace a file the user had never
+    /// been asked about. Two out-of-scope destinations rather than a file are used because they are
+    /// hermetic: `HermeticBrowserOpener` is also the proof that nothing was opened while it sat
+    /// re-armed.
+    ///
+    /// It also pins the write-back, which is half the fix and lives in this file: if
+    /// `performApproval` recorded a bare tier instead of the request the user answered, the engine
+    /// would have nothing to compare and this would execute.
+    @Test
+    func approvingOneOutOfScopeReasonDoesNotAuthorizeASecondOneThatAppearsFirst() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let research = StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"])
+        try fixture.workspaceStore.save(research)
+        try fixture.routineStore.save(
+            StoredRoutine(
+                name: "Morning",
+                steps: [
+                    AgentStep(id: "a", operation: .openURL, description: "Out of scope.", targetURL: "https://example.com/page")
+                ]
+            )
+        )
+        viewModel.refreshSavedItems()
+
+        viewModel.command = "run routine Morning"
+        viewModel.start(workspaceBinding: "Research")
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.isAwaitingApproval)
+        #expect(viewModel.approvalRequest?.assessment.effectiveTier == .tier3)
+        #expect(viewModel.approvalRequest?.assessment.escalations.map(\.reason) == [
+            "example.com is not part of the Research workspace."
+        ])
+
+        // The drift: a second destination outside the same workspace. Tier 3 either way — the
+        // approval on screen is worth exactly as much as before, and covers strictly less.
+        try fixture.routineStore.save(
+            StoredRoutine(
+                name: "Morning",
+                steps: [
+                    AgentStep(id: "a", operation: .openURL, description: "Out of scope.", targetURL: "https://example.com/page"),
+                    AgentStep(id: "b", operation: .openURL, description: "Never shown.", targetURL: "https://unseen.example.org/page")
+                ]
+            )
+        )
+
+        // The Allow tap.
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.isAwaitingApproval)
+        #expect(viewModel.approvalRequest?.assessment.effectiveTier == .tier3)
+        #expect(Set(viewModel.approvalRequest?.assessment.escalations.map(\.reason) ?? []) == [
+            "example.com is not part of the Research workspace.",
+            "unseen.example.org is not part of the Research workspace."
+        ])
+        #expect(fixture.browserOpener.openedURLs.isEmpty)
+        // A second pause, so the binding is still the one the run was assessed under (the invariant
+        // the test above owns, re-checked here because this re-arm arrives by a different route).
+        #expect(viewModel.activeTaskScope == .scoped(WorkspaceScope(workspace: research)))
+
+        // Answering the re-armed prompt runs it: one extra question, not a loop.
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(!viewModel.isAwaitingApproval)
+        #expect(fixture.browserOpener.openedURLs.map(\.absoluteString) == [
+            "https://example.com/page",
+            "https://unseen.example.org/page"
+        ])
+        #expect(viewModel.activeTaskScope == .unscoped)
+    }
+
     /// AC4 — the scope used at `approvalRequest` is the scope used inside `execute`.
     ///
     /// This one needs the log to prove anything, and that is the point of the criterion. `execute`
