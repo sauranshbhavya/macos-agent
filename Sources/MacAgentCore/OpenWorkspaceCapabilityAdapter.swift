@@ -17,13 +17,16 @@ public struct OpenWorkspaceCapabilityAdapter: CapabilityAdapter {
                 operation: .openWorkspace,
                 name: "Open saved workspace",
                 // "Open every app" was true until SONNY-44 let a workspace list apps Sonny cannot
-                // launch; a scope-only entry is now skipped, so "every" overclaims. Unlike the
-                // descriptor strings fixed alongside it, this one reaches the model verbatim
-                // (`ToolRegistry.plannerDescription` -> `OpenAIPlanner.systemPrompt`). The skip
-                // itself is deliberately not spelled out: this description governs only *when* to
-                // emit `open_workspace`, which takes a workspace name and no app list, so the
-                // detail would cost prompt tokens and decide nothing.
-                description: "Open the supported apps and URLs saved in a named workspace. Use only when the user names a workspace they have actually saved; do not infer a workspace name from vague activity phrasing such as \"focus on writing\" or \"get into research mode\" — ask a clarifying question instead.",
+                // launch; a scope-only entry is now skipped, so "every" overclaims. The hedge chosen
+                // then was "the supported apps", which C12 falsified in turn — support is no longer
+                // the question, installation is — so the qualifier is simply dropped (PR #44
+                // cycle-1 review, MEDIUM-2). Unlike the descriptor strings fixed alongside it, this
+                // one reaches the model verbatim (`ToolRegistry.plannerDescription` ->
+                // `OpenAIPlanner.systemPrompt`). The skip itself is still deliberately not spelled
+                // out: this description governs only *when* to emit `open_workspace`, which takes a
+                // workspace name and no app list, so the detail would cost prompt tokens and decide
+                // nothing.
+                description: "Open the apps and URLs saved in a named workspace. Use only when the user names a workspace they have actually saved; do not infer a workspace name from vague activity phrasing such as \"focus on writing\" or \"get into research mode\" — ask a clarifying question instead.",
                 requiredFields: ["workspaceName"],
                 sideEffects: ["open apps", "open browser"],
                 dryRunBehavior: "Show apps and URLs that would open.",
