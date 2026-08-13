@@ -152,10 +152,12 @@ struct WorkspaceScopeAddPickerTests {
             == WorkspaceScopeOnlyApps.scopeOnlyNote(for: ["Xcode"]))
     }
 
-    /// A name the catalog resolves gets no disclosure — including through an alias, so the dialog
-    /// does not accuse "Visual Studio Code" of being unlaunchable.
+    /// A name that resolves to an installed app gets no disclosure — including through an alias, so
+    /// the dialog does not accuse "Visual Studio Code" of being unlaunchable. Under XCTest the
+    /// resolver's universe is the alias table's roster, so these two are the installed ones here;
+    /// after SONNY-82 the same is true on a real Mac for anything the user actually has.
     @Test
-    func aCatalogedNameCarriesNoScopeOnlyDisclosure() {
+    func anInstalledNameCarriesNoScopeOnlyDisclosure() {
         let presentation = WorkspaceScopeAddPresentation(kind: .app, workspace: workspace())
 
         #expect(presentation.scopeOnlyDisclosure(forTypedValue: "Slack") == nil)

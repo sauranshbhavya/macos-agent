@@ -2815,8 +2815,12 @@ struct AgentActionExecutorTests {
         #expect(!FileManager.default.fileExists(atPath: output.path))
     }
 
+    /// Alias canonicalization at the preview surface: the user typed "Visual Studio Code" and the
+    /// preview names VS Code by its canonical spelling and real bundle identifier. Named for the
+    /// allowlist until SONNY-82 dissolved it — the behavior this pins was never the allowlist, it was
+    /// the alias table underneath, which is the half that survives.
     @Test
-    func openAppPreviewUsesAllowlist() throws {
+    func openAppPreviewCanonicalizesAnAliasToItsRealIdentity() throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let executor = makeExecutor(root: root)
