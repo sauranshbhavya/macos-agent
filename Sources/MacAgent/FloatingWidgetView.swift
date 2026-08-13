@@ -428,7 +428,11 @@ private extension FloatingWidgetView {
                 onDeny: { viewModel.cancelCurrentRun() }
             )
         case .result(let summary, let suggestion):
-            WidgetResultPanel(summary: summary, suggestion: suggestion) { suggestion in
+            WidgetResultPanel(
+                summary: summary,
+                relaxationTrace: viewModel.relaxationTrace,
+                suggestion: suggestion
+            ) { suggestion in
                 viewModel.runSuggestion(suggestion)
             }
         case .failure(let message):
@@ -705,6 +709,10 @@ private struct WidgetClarificationPanel: View {
 
 private struct WidgetResultPanel: View {
     let summary: String
+    /// The ran-without-asking line (SONNY-99), or nil for a run no relaxation grant made silent.
+    /// One line of muted text on this existing surface — the founder-approved wireframe exception,
+    /// bounded to exactly this shape: tokens already on the panel, no new component.
+    let relaxationTrace: String?
     let suggestion: RunSuggestion?
     let onOpen: (RunSuggestion) -> Void
 
@@ -715,6 +723,14 @@ private struct WidgetResultPanel: View {
                 .foregroundStyle(WidgetTheme.textFull)
                 .lineLimit(3)
                 .fixedSize(horizontal: false, vertical: true)
+
+            if let relaxationTrace {
+                Text(relaxationTrace)
+                    .font(WidgetType.caption)
+                    .foregroundStyle(WidgetTheme.textMuted)
+                    .lineLimit(2)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
 
             if let suggestion {
                 WidgetFilePreviewChip(suggestion: suggestion, onOpen: onOpen)
