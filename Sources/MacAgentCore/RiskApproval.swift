@@ -195,11 +195,14 @@ public struct RiskApprovalConsent: Codable, Equatable, Sendable {
         /// tier-3 assessment always carries at least one reason, and a non-empty reason set always
         /// means tier 3.
         ///
-        /// **Why no `defaultTier` reaches tier 3.** Swept at `042f74e` over every `defaultRiskTier`
+        /// **Why no `defaultTier` reaches tier 3.** Swept at `04ce7e4` — and first at `042f74e`,
+        /// before this branch rebased onto row F, which edited several of the files counted here and
+        /// so required the whole sweep re-run rather than carried — over every `defaultRiskTier`
         /// occurrence and every `CapabilityRiskAssessment` construction site in `Sources/`, rather
-        /// than over the adapters that looked relevant. All 25 literals are tier 2 or below (7/8/10
-        /// across tiers 0/1/2), and the six `descriptor.defaultRiskTier` forwards each resolve to a
-        /// `static let` in `AppWebsiteActionDescriptors` — one of those same literals. **Three**
+        /// than over the adapters that looked relevant; every figure here is the re-measured one.
+        /// All 25 literals are tier 2 or below (7/8/10 across tiers 0/1/2), and the six
+        /// `descriptor.defaultRiskTier` forwards each resolve to a `static let` in
+        /// `AppWebsiteActionDescriptors` — one of those same literals. **Three**
         /// sites compute the value at assessment time instead of forwarding a literal, not one:
         /// `InvokeShortcut` picks `.tier1` on a clean run history and its own literal otherwise, so
         /// it only lowers — but `RunRoutine` and `SaveRoutine` each take the *maximum* of their own
