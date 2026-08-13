@@ -344,8 +344,37 @@ public final class AgentActionExecutor {
                 findings: findings,
                 nested: assessments.compactMap(\.scopeVerdict),
                 scope: scope
+            ),
+            relaxationEligibility: relaxationEligibility(
+                in: resolvedPlan,
+                narrowedBy: assessments
             )
         )
+    }
+
+    /// The plan-level relaxation-eligibility roll-up (SONNY-97): intersection across every step of
+    /// the static per-operation classification, further intersected with any narrowing an adapter
+    /// declared on its own assessment. Intersection is the only combinator, which is what makes
+    /// "an adapter may narrow and may never widen" structural rather than remembered — and a
+    /// `run_routine` step's forwarded nested roll-up joins the same intersection, so a routine
+    /// cannot launder eligibility any more than it can launder the scope verdict.
+    ///
+    /// A plan with no steps yields the empty set: nothing was classified, so nothing is eligible —
+    /// the same fail-closed answer an unclassifiable input gets everywhere else in this engine.
+    private func relaxationEligibility(
+        in plan: AgentPlan,
+        narrowedBy assessments: [CapabilityRiskAssessment]
+    ) -> OperationRelaxation {
+        guard !plan.steps.isEmpty else {
+            return []
+        }
+        var eligibility = plan.steps
+            .map { OperationRelaxation.relaxation(for: $0.operation) }
+            .reduce(OperationRelaxation.all) { $0.intersection($1) }
+        for narrowed in assessments.compactMap(\.relaxationEligibility) {
+            eligibility.formIntersection(narrowed)
+        }
+        return eligibility
     }
 
     /// How many distinct out-of-scope resources the prompt names before it stops listing them.

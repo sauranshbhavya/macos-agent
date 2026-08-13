@@ -356,6 +356,67 @@ public struct CapabilityRiskEscalation: Codable, Equatable, Sendable {
     }
 }
 
+/// Which relaxation grants an operation may ever take (SONNY-97, row C).
+///
+/// The verdict grant is protected by the verdict machinery itself — `.opaque` poisons the plan
+/// roll-up, `.unconstrained` and `nil` never qualify. The origin grant has none of that protection,
+/// because it bypasses scope entirely; this set is its fail-closed containment, and the verdict
+/// grant takes the same gate for uniformity. Each bit gates exactly one grant, and they are
+/// independent on purpose: SONNY-98 narrows a boundary-changing workspace edit by dropping
+/// `byDirectUserOrigin` *alone*, leaving `byWorkspaceScope` set, so nothing here may collapse the
+/// two into one "eligible at all" answer (PR #45 review, F2).
+public struct OperationRelaxation: OptionSet, Codable, Equatable, Sendable {
+    public let rawValue: Int
+
+    public init(rawValue: Int) {
+        self.rawValue = rawValue
+    }
+
+    /// The operation may take `.inScopeWorkspace` — the founder charter's verdict grant.
+    public static let byWorkspaceScope = OperationRelaxation(rawValue: 1 << 0)
+    /// The operation may take `.directUserAuthored` — the screen-built-plan origin grant.
+    public static let byDirectUserOrigin = OperationRelaxation(rawValue: 1 << 1)
+
+    public static let all: OperationRelaxation = [.byWorkspaceScope, .byDirectUserOrigin]
+
+    /// The static classification: what each operation may ever take, before any adapter narrows it.
+    ///
+    /// `byWorkspaceScope` is a **denylist** — every operation except `.runRoutine` and
+    /// `.invokeShortcut`. `.runRoutine` loses it deliberately: SONNY-54's founder decision
+    /// (2026-08-06) made the per-routine trust toggle the single door for skipping a routine's
+    /// tier-2 prompt, scheduled *or* manual, and without this exclusion an untrusted routine running
+    /// inside a workspace would auto-run through a second door the founder never opened — on its
+    /// first run, with its arbitrary steps unreviewed. Scope answers "right place", never "right
+    /// severity" — and never "right thing". The cost is recorded and accepted: a user may ask why
+    /// their routine still confirms inside a workspace where typing the same command does not.
+    /// `.invokeShortcut` loses it too — belt-and-braces for the verdict grant (a scoped Shortcut is
+    /// already `.opaque`) but load-bearing for the origin grant, which never consults the verdict.
+    ///
+    /// `byDirectUserOrigin` is an **allowlist** — only `.editWorkspace`, the one operation a screen
+    /// builds field by field today. A future surface's operation joins by conscious classification
+    /// here, never by falling into a wider bucket.
+    ///
+    /// **No `default:` clause, for the reason `PlanScopedResources` already refuses one**: a new
+    /// operation must not be able to land unclassified. When row I adds its vision operation, the
+    /// compiler forces a decision, and classifying it as granting neither is the answer recorded on
+    /// SONNY-92.
+    public static func relaxation(for operation: AgentOperation) -> OperationRelaxation {
+        switch operation {
+        case .editWorkspace:
+            return [.byWorkspaceScope, .byDirectUserOrigin]
+        case .runRoutine, .invokeShortcut:
+            return []
+        case .scanSelectLargestFiles, .createZip, .scanDocx, .convertDocxToPDF, .openHackerNews,
+             .fetchHNHeadlines, .writeMarkdown, .webToMarkdown, .openApp, .openAppSearchURL,
+             .openURL, .playMedia, .getFinderSelection, .revealInFinder, .showPermissionReadiness,
+             .saveRoutine, .createWorkspace, .openWorkspace, .openGeneratedArtifact,
+             .createLocalDraft, .calculateUtility, .lookupClipboardHistory, .expandSnippet,
+             .saveSnippet, .switchRunningApp, .lookupRecentArtifacts, .clarify, .unsupported:
+            return [.byWorkspaceScope]
+        }
+    }
+}
+
 public struct CapabilityRiskAssessment: Codable, Equatable, Sendable {
     public var defaultTier: CapabilityRiskTier
     public var effectiveTier: CapabilityRiskTier
@@ -373,19 +434,34 @@ public struct CapabilityRiskAssessment: Codable, Equatable, Sendable {
     /// unchanged: an adapter assesses one segment and has no plan-level view, so `nil` there is the
     /// honest answer rather than a forgotten one. The executor is the only thing that fills it in.
     public var scopeVerdict: ScopeVerdict?
+    /// The plan-level relaxation-eligibility roll-up (SONNY-97): the intersection, across every
+    /// step, of each operation's static `OperationRelaxation.relaxation(for:)` classification and
+    /// any narrowing the step's own adapter declared. Any step that forbids a grant forbids it for
+    /// the whole plan — the same poison shape `.opaque` already has on the verdict axis.
+    ///
+    /// Optional with the same meaning as `scopeVerdict`'s optionality, and it is call-site
+    /// compatibility, not disk migration (this type is embedded in none of the local stores —
+    /// re-verified on SONNY-97): `nil` from an adapter means "no narrowing declared", which the
+    /// executor's fold treats as identity. An adapter that *does* set it may only narrow what the
+    /// static classification allows — the fold intersects, so widening is structurally
+    /// inexpressible. On an assessment that never went through the executor's fold, `nil` grants
+    /// nothing: the grant computation fails closed rather than inventing an eligibility.
+    public var relaxationEligibility: OperationRelaxation?
 
     public init(
         defaultTier: CapabilityRiskTier,
         effectiveTier: CapabilityRiskTier? = nil,
         approvalCopy: RiskApprovalCopy? = nil,
         escalations: [CapabilityRiskEscalation] = [],
-        scopeVerdict: ScopeVerdict? = nil
+        scopeVerdict: ScopeVerdict? = nil,
+        relaxationEligibility: OperationRelaxation? = nil
     ) {
         self.defaultTier = defaultTier
         self.effectiveTier = effectiveTier ?? Self.highestTier(defaultTier: defaultTier, escalations: escalations)
         self.approvalCopy = approvalCopy
         self.escalations = escalations
         self.scopeVerdict = scopeVerdict
+        self.relaxationEligibility = relaxationEligibility
     }
 
     public func approvalRequirement(policy: RiskApprovalPolicy = .default) -> RiskApprovalRequirement {
