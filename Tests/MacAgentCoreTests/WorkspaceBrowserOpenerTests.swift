@@ -26,14 +26,14 @@ struct WorkspaceBrowserOpenerTests {
         #expect(WorkspaceBrowserCatalog.isBrowser(Self.slack) == false)
     }
 
-    /// The catalog resolves aliases down to one canonical `MacApp` before recognition ever runs, so
+    /// The alias table folds aliases down to one canonical `MacApp` before recognition ever runs, so
     /// a workspace saved as "Google Chrome" is the same browser as one saved as "Chrome". Pinned
     /// because recognition keys on the bundle identifier precisely so the alias problem cannot exist.
     @Test
     func aBrowserSavedUnderAnAliasIsStillRecognized() throws {
         let catalog = MacAppCatalog.default
-        let viaAlias = try catalog.resolve("Google Chrome")
-        let viaDisplayName = try catalog.resolve("chrome")
+        let viaAlias = try #require(catalog.canonicalApp(named: "Google Chrome"))
+        let viaDisplayName = try #require(catalog.canonicalApp(named: "chrome"))
 
         #expect(viaAlias == viaDisplayName)
         #expect(WorkspaceBrowserCatalog.isBrowser(viaAlias))

@@ -17,13 +17,16 @@ public struct OpenWorkspaceCapabilityAdapter: CapabilityAdapter {
                 operation: .openWorkspace,
                 name: "Open saved workspace",
                 // "Open every app" was true until SONNY-44 let a workspace list apps Sonny cannot
-                // launch; a scope-only entry is now skipped, so "every" overclaims. Unlike the
-                // descriptor strings fixed alongside it, this one reaches the model verbatim
-                // (`ToolRegistry.plannerDescription` -> `OpenAIPlanner.systemPrompt`). The skip
-                // itself is deliberately not spelled out: this description governs only *when* to
-                // emit `open_workspace`, which takes a workspace name and no app list, so the
-                // detail would cost prompt tokens and decide nothing.
-                description: "Open the supported apps and URLs saved in a named workspace. Use only when the user names a workspace they have actually saved; do not infer a workspace name from vague activity phrasing such as \"focus on writing\" or \"get into research mode\" — ask a clarifying question instead.",
+                // launch; a scope-only entry is now skipped, so "every" overclaims. The hedge chosen
+                // then was "the supported apps", which C12 falsified in turn — support is no longer
+                // the question, installation is — so the qualifier is simply dropped (PR #44
+                // cycle-1 review, MEDIUM-2). Unlike the descriptor strings fixed alongside it, this
+                // one reaches the model verbatim (`ToolRegistry.plannerDescription` ->
+                // `OpenAIPlanner.systemPrompt`). The skip itself is still deliberately not spelled
+                // out: this description governs only *when* to emit `open_workspace`, which takes a
+                // workspace name and no app list, so the detail would cost prompt tokens and decide
+                // nothing.
+                description: "Open the apps and URLs saved in a named workspace. Use only when the user names a workspace they have actually saved; do not infer a workspace name from vague activity phrasing such as \"focus on writing\" or \"get into research mode\" — ask a clarifying question instead.",
                 requiredFields: ["workspaceName"],
                 sideEffects: ["open apps", "open browser"],
                 dryRunBehavior: "Show apps and URLs that would open.",
@@ -80,9 +83,9 @@ public struct OpenWorkspaceCapabilityAdapter: CapabilityAdapter {
                 try await context.appOpener.open(bundleIdentifier: app.bundleIdentifier)
                 apps.append(app)
             case .scopeOnly(let storedName):
-                // Never an error. Scope listing is decoupled from the launch catalog (2026-08-05),
-                // so a workspace legitimately holds names it cannot open, and the SONNY-9 precedent
-                // for an app that cannot be launched is to proceed and log — opening the rest of an
+                // Never an error. Scope listing is decoupled from launchability (2026-08-05), so
+                // a workspace legitimately holds names it cannot open, and the SONNY-9 precedent for
+                // an app that cannot be launched is to proceed and log — opening the rest of an
                 // otherwise-good workspace beats failing the whole open.
                 log(.observe, WorkspaceScopeOnlyApps.openSkipNote(for: storedName))
             }
@@ -129,10 +132,10 @@ public struct OpenWorkspaceCapabilityAdapter: CapabilityAdapter {
     /// One stored app entry, classified once so `preview` and `execute` cannot disagree about which
     /// entries open.
     private enum WorkspaceAppEntry {
-        /// A stored name `MacAppCatalog` resolves. Launched when the workspace opens, exactly as
-        /// before.
+        /// A stored name that resolves to an app installed on this Mac. Launched when the
+        /// workspace opens.
         case launchable(storedName: String, app: MacApp)
-        /// A stored name the catalog does not carry. Present for scope membership only, so it is
+        /// A stored name nothing installed answers to. Present for scope membership only, so it is
         /// skipped at open time and never fails the open.
         case scopeOnly(storedName: String)
     }
@@ -173,11 +176,16 @@ public struct OpenWorkspaceCapabilityAdapter: CapabilityAdapter {
         // workspace unable to hold Microsoft Word, and it is the thing SONNY-44 removes. URL
         // validation is untouched and still throws: `SafeURL` is a capability bound, not a
         // user-declared boundary, and nothing decoupled it from anything.
+        //
+        // This was the *second* catalog-consulting launch path, and the quiet one: because it soft-
+        // skips with `try?` rather than throwing, a workspace listing Figma opened everything except
+        // Figma and said so in a note, where `open_app` refused outright. Both now ask the same
+        // question — is it installed — through the same seam, so the two doors agree.
         let entries = workspace.apps.map { storedName in
-            guard let app = try? context.appCatalog.resolve(storedName) else {
+            guard let app = context.installedAppResolver.resolve(storedName) else {
                 return WorkspaceAppEntry.scopeOnly(storedName: storedName)
             }
-            return WorkspaceAppEntry.launchable(storedName: storedName, app: app)
+            return WorkspaceAppEntry.launchable(storedName: storedName, app: app.macApp)
         }
         for url in workspace.urls {
             _ = try SafeURL.validateWebURL(url)

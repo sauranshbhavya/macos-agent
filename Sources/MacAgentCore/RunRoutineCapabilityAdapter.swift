@@ -122,9 +122,13 @@ public struct RunRoutineCapabilityAdapter: CapabilityAdapter {
     ///
     /// `nil` when the routine names no browser, which keeps the system-default behavior exactly.
     ///
-    /// Unresolvable app names are skipped rather than thrown on: a routine step naming an app the
-    /// catalog no longer knows fails when *that step* executes, with its own error. Resolving the
-    /// browser must not pre-empt that with a different failure before any step has run.
+    /// Unresolvable app names are skipped rather than thrown on: a routine step naming an app that
+    /// is not installed fails when *that step* executes, with its own error. Resolving the browser
+    /// must not pre-empt that with a different failure before any step has run.
+    ///
+    /// Resolved through `installedAppResolver` since SONNY-82, which is what finally makes
+    /// `WorkspaceBrowserCatalog`'s Arc, Firefox and Edge entries reachable — they were bundle
+    /// identifiers no resolution path could ever produce while only the twelve-app catalog answered.
     ///
     /// Only `.openApp` steps are considered. A nested workspace open is *rejected by
     /// `SaveRoutineCapabilityAdapter.validateRoutineSteps`* — but that is the save capability's
@@ -134,7 +138,7 @@ public struct RunRoutineCapabilityAdapter: CapabilityAdapter {
     private func browser(for routine: StoredRoutine, context: CapabilityExecutionContext) -> MacApp? {
         let apps = routine.steps
             .filter { $0.operation == .openApp }
-            .compactMap { try? context.appCatalog.resolve($0.appName) }
+            .compactMap { context.installedAppResolver.resolve($0.appName)?.macApp }
         return WorkspaceBrowserCatalog.firstBrowser(in: apps)
     }
 

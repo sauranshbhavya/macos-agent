@@ -916,7 +916,7 @@ struct EditWorkspaceTests {
         defer { fixture.tearDown() }
         try fixture.store.save(StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: []))
 
-        await #expect(throws: MacAppCatalogError.missingAppName) {
+        await #expect(throws: MacAppError.missingAppName) {
             _ = try await fixture.executor.execute(
                 plan: Fixture.editPlan(addApps: ["Notes", "   "])
             ) { _, _ in }
@@ -1220,7 +1220,7 @@ struct EditWorkspaceScopeOnlyDisclosureTests {
         // The exact wording the create path emits, from the one shared builder — asserted against
         // that builder's own output so the two doors cannot drift to different sentences.
         let expected = try #require(WorkspaceScopeOnlyApps.scopeOnlyNote(for: ["Microsoft Word"]))
-        #expect(expected == "Microsoft Word isn't an app Sonny can launch — counted for workspace scope only.")
+        #expect(expected == "Microsoft Word isn't installed on this Mac — counted for workspace scope only.")
         #expect(previews.first?.details.contains(expected) == true)
         #expect(result.summary.contains(expected))
         // The app is still a real scope member — this is disclosure, never refusal.

@@ -11,7 +11,12 @@ public struct InstantCommandResolver: Sendable {
     private let routineStore: RoutineStore
     private let workspaceStore: WorkspaceStore
     private let shortcutCatalog: any ShortcutCatalogProviding
-    private let appCatalog: MacAppCatalog
+    /// Only ever asked one question — "does this saved name also name an app?" — and only to step
+    /// aside to the planner when it does. Repointed from `MacAppCatalog` at SONNY-83: while the
+    /// catalog answered, a workspace called "Figma" and the installed Figma stopped disambiguating
+    /// the moment SONNY-82 made Figma openable, because the collision the check exists to catch had
+    /// become invisible to it.
+    private let installedAppResolver: any InstalledAppResolving
 
     public init(
         snippetStore: SnippetStore = SnippetStore(),
@@ -19,14 +24,14 @@ public struct InstantCommandResolver: Sendable {
         routineStore: RoutineStore = RoutineStore(),
         workspaceStore: WorkspaceStore = WorkspaceStore(),
         shortcutCatalog: any ShortcutCatalogProviding = ProcessShortcutCatalog(),
-        appCatalog: MacAppCatalog = .default
+        installedAppResolver: any InstalledAppResolving = InstalledAppResolver.shared
     ) {
         self.snippetStore = snippetStore
         self.recentArtifactStore = recentArtifactStore
         self.routineStore = routineStore
         self.workspaceStore = workspaceStore
         self.shortcutCatalog = shortcutCatalog
-        self.appCatalog = appCatalog
+        self.installedAppResolver = installedAppResolver
     }
 
     public func resolve(command rawCommand: String) -> InstantCommandResolution? {
@@ -135,21 +140,21 @@ public struct InstantCommandResolver: Sendable {
         }
 
         // Direct-prefixed forms ("open X", "run X", "start X", "launch X") are ambiguous: the
-        // same name can be a saved routine, a saved workspace, or an allowlisted app. On any
+        // same name can be a saved routine, a saved workspace, or an installed app. On any
         // collision, step aside (nil) so the planner interprets the command instead of one
         // meaning silently auto-running.
         let directRoutine = savedRoutine(matching: routineCandidates.direct)
         let directWorkspace = savedWorkspace(matching: workspaceCandidates.direct)
-        let namesAllowlistedApp = (routineCandidates.direct + workspaceCandidates.direct)
-            .contains { (try? appCatalog.resolve($0)) != nil }
+        let namesInstalledApp = (routineCandidates.direct + workspaceCandidates.direct)
+            .contains { installedAppResolver.resolve($0) != nil }
 
         switch (directRoutine, directWorkspace) {
         case (.some, .some):
             return nil
         case (.some(let routine), nil):
-            return namesAllowlistedApp ? nil : .plan(runRoutinePlan(routine))
+            return namesInstalledApp ? nil : .plan(runRoutinePlan(routine))
         case (nil, .some(let workspace)):
-            return namesAllowlistedApp ? nil : .plan(openWorkspacePlan(workspace))
+            return namesInstalledApp ? nil : .plan(openWorkspacePlan(workspace))
         case (nil, nil):
             break
         }
@@ -194,9 +199,9 @@ public struct InstantCommandResolver: Sendable {
         let workspaceSide = workspaceCandidates.explicit + workspaceCandidates.direct
 
         if let workspace = savedWorkspace(matching: routineSide) {
-            let namesApp = routineSide.contains { (try? appCatalog.resolve($0)) != nil }
-            // Three-way ambiguity (also an allowlisted app) steps aside to the planner, same as
-            // the direct-form collision handling above.
+            let namesApp = routineSide.contains { installedAppResolver.resolve($0) != nil }
+            // Three-way ambiguity (the name is also an installed app) steps aside to the planner,
+            // same as the direct-form collision handling above.
             return namesApp ? nil : .clarify(crossKindQuickDispatchClarificationPlan(
                 missingKind: "routine",
                 foundKind: "workspace",
@@ -205,7 +210,7 @@ public struct InstantCommandResolver: Sendable {
             ))
         }
         if let routine = savedRoutine(matching: workspaceSide) {
-            let namesApp = workspaceSide.contains { (try? appCatalog.resolve($0)) != nil }
+            let namesApp = workspaceSide.contains { installedAppResolver.resolve($0) != nil }
             return namesApp ? nil : .clarify(crossKindQuickDispatchClarificationPlan(
                 missingKind: "workspace",
                 foundKind: "routine",

@@ -13,20 +13,47 @@ public struct MacApp: Equatable, Sendable {
     }
 }
 
-public enum MacAppCatalogError: Error, LocalizedError, Equatable {
+/// The two ways naming an app can fail once membership is gone.
+///
+/// `appNotAllowed` — "«name» is not in the allowlisted app catalog." — was the third, and it was the
+/// launch gate itself: the refusal C12 dissolved (2026-08-12). It is deleted rather than deprecated,
+/// so that no path can reach the sentence. What is left is a request that named no app at all, and a
+/// request that named one this Mac does not have.
+///
+/// Renamed from `MacAppCatalogError` with that removal: the catalog no longer decides either of
+/// these. `missingAppName` is raised by the workspace create and edit paths for a blank entry as much
+/// as by the launch path, and `notInstalled` is Launch Services' answer, not a roster's.
+public enum MacAppError: Error, LocalizedError, Equatable {
     case missingAppName
-    case appNotAllowed(String)
+    case notInstalled(String)
 
     public var errorDescription: String? {
         switch self {
         case .missingAppName:
             return "Opening an app requires an app name."
-        case .appNotAllowed(let appName):
-            return "\(appName) is not in the allowlisted app catalog."
+        case .notInstalled(let appName):
+            // Plain and about the machine, not about Sonny's permissions — the old sentence told the
+            // user they had hit a policy, and after C12 there is no policy left to hit. Names what
+            // they typed, because a name that is merely misspelled reads back wrong here.
+            return "\(appName) isn't installed on this Mac."
         }
     }
 }
 
+/// The app **alias table**: which human names mean the same application.
+///
+/// This type used to be the launch allowlist — "exactly one meaning — the allowlist of what Sonny may
+/// *launch*", as `WorkspaceScopeOnlyApps`' header put it — and SONNY-82 removed that meaning under
+/// C12. What survives is the half that was never a permission: the knowledge that "Google Chrome" and
+/// "Chrome" are one app, that "iMessage" is Messages, that "Code" and "Visual Studio Code" are VS
+/// Code, and that "iTunes" now means Music.
+///
+/// **It is deliberately not a roster of what may be opened, and its twelve entries are not a limit on
+/// anything.** `InstalledAppResolver` answers what is launchable, from Launch Services. Membership
+/// here buys exactly two things: canonicalization (one bundle identifier for several spellings) and
+/// a stable `bundle:` scope key for those spellings — which is precisely why C12 records that this
+/// resolution function is *replaced, never deleted*. Adding an entry is warranted when a real app has
+/// a second common name, and never in order to make something launchable.
 public struct MacAppCatalog: Equatable, Sendable {
     public var apps: [MacApp]
 
@@ -49,20 +76,23 @@ public struct MacAppCatalog: Equatable, Sendable {
         MacApp(displayName: "Terminal", bundleIdentifier: "com.apple.Terminal")
     ])
 
-    public func resolve(_ rawName: String?) throws -> MacApp {
+    /// The canonical app this name is a spelling of, or `nil` when the table has never heard of it.
+    ///
+    /// Optional rather than throwing, and that is the shape of the dissolution rather than a style
+    /// choice: every caller but one already wrote `try? catalog.resolve(...)`, because "this table
+    /// does not know that name" was never an error — only the launch capability
+    /// treated it as one, and that treatment *was* the launch gate. With the gate gone there is no
+    /// caller left for whom a miss is a failure, so there is no error to throw.
+    public func canonicalApp(named rawName: String?) -> MacApp? {
         guard let rawName, !rawName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw MacAppCatalogError.missingAppName
+            return nil
         }
 
         let normalizedName = Self.normalize(rawName)
-        if let app = apps.first(where: { app in
+        return apps.first { app in
             Self.normalize(app.displayName) == normalizedName ||
-                app.aliases.contains(where: { Self.normalize($0) == normalizedName })
-        }) {
-            return app
+                app.aliases.contains { Self.normalize($0) == normalizedName }
         }
-
-        throw MacAppCatalogError.appNotAllowed(rawName)
     }
 
     public var displayList: String {
@@ -70,10 +100,11 @@ public struct MacAppCatalog: Equatable, Sendable {
     }
 
     /// The one app-name normalization in this module. Internal rather than private so a name the
-    /// catalog *cannot* resolve is still folded the same way `resolve` would have folded it —
-    /// `WorkspaceScope.appKey`'s fallback is the only such caller. A second, weaker folding there
-    /// would make "Microsoft Word" and "MicrosoftWord" different apps to workspace scope while being
-    /// the same app to everything else.
+    /// alias table *cannot* canonicalize is still folded the same way `canonicalApp(named:)` would
+    /// have folded it — `WorkspaceScope.appKey`'s fallback and `InstalledAppResolver`'s name lookup
+    /// are the callers. A second, weaker folding in either would make "Microsoft Word" and
+    /// "MicrosoftWord" different apps to workspace scope, or to Launch Services, while being the same
+    /// app to everything else.
     static func normalize(_ value: String) -> String {
         value
             .trimmingCharacters(in: .whitespacesAndNewlines)
@@ -127,10 +158,12 @@ public struct WorkspaceAppOpener: AppOpening {
 
 @MainActor
 public protocol WorkspaceAppIconResolving {
-    /// Returns the app's real icon, or `nil` if it can't be resolved — either because `appName`
-    /// isn't in the allowlisted `MacAppCatalog`, or because the app isn't installed on this
-    /// machine (a distinct failure mode from an unrecognized name, but the same graceful-fallback
-    /// contract for callers: render a generic glyph, don't treat either case as an error).
+    /// Returns the app's real icon, or `nil` when the name resolves to nothing installed on this
+    /// machine. Graceful fallback, never an error: callers render a generic glyph.
+    ///
+    /// It used to be two failure modes — not in the allowlisted catalog, or not installed — and the
+    /// first is gone with the catalog's membership meaning (SONNY-82). A workspace listing Figma now
+    /// shows Figma's real icon on a Mac that has it, for the same reason it can now open it.
     func icon(forAppName appName: String) -> NSImage?
 }
 
@@ -138,24 +171,23 @@ public protocol WorkspaceAppIconResolving {
 public final class WorkspaceAppIconResolver: WorkspaceAppIconResolving {
     public static let shared = WorkspaceAppIconResolver()
 
-    private let catalog: MacAppCatalog
+    private let resolver: any InstalledAppResolving
     private var cache: [String: NSImage] = [:]
 
-    public init(catalog: MacAppCatalog = .default) {
-        self.catalog = catalog
+    public init(resolver: any InstalledAppResolving = InstalledAppResolver.shared) {
+        self.resolver = resolver
     }
 
     public func icon(forAppName appName: String) -> NSImage? {
-        guard let app = try? catalog.resolve(appName) else {
+        // The resolver's own `applicationURL` rather than a second Launch Services lookup: the icon
+        // shown and the bundle that would open have to be the same one.
+        guard let app = resolver.resolve(appName) else {
             return nil
         }
         if let cached = cache[app.bundleIdentifier] {
             return cached
         }
-        guard let appURL = NSWorkspace.shared.urlForApplication(withBundleIdentifier: app.bundleIdentifier) else {
-            return nil
-        }
-        let icon = NSWorkspace.shared.icon(forFile: appURL.path)
+        let icon = NSWorkspace.shared.icon(forFile: app.applicationURL.path)
         cache[app.bundleIdentifier] = icon
         return icon
     }
