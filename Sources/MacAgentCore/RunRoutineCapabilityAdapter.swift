@@ -75,7 +75,14 @@ public struct RunRoutineCapabilityAdapter: CapabilityAdapter {
             // yields **`.inScope`** on a plan whose routine writes outside the boundary, which is
             // precisely the value row C relaxes on. Both shapes are pinned; the mixed one is the
             // reason this line exists.
-            scopeVerdict: nested.scopeVerdict
+            scopeVerdict: nested.scopeVerdict,
+            // Forwarded for the same laundering reason as the verdict above, with one honest
+            // difference: today this is belt-and-braces, not load-bearing. The static
+            // classification already gives `.runRoutine` itself the empty set, so the outer
+            // intersection zeroes any plan containing this step before the nested value is
+            // consulted. It becomes load-bearing the day that classification changes, and dropping
+            // it then would let a routine's steps escape a narrowing one of them declared.
+            relaxationEligibility: nested.relaxationEligibility
         )
     }
 
