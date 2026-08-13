@@ -361,14 +361,14 @@ struct QuickDispatchTests {
         )
 
         let prepared = try runner.prepare(plan: plan, source: .instantResolver)
-        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped, context: approvalContext(for: prepared))
 
         #expect(request.assessment.effectiveTier == .tier2)
         #expect(request.requirement == .lightweightConfirmation)
         #expect(request.requirement != .autoRun)
 
         do {
-            _ = try await runner.execute(prepared, scope: .unscoped)
+            _ = try await runner.execute(prepared, scope: .unscoped, context: approvalContext(for: prepared))
             Issue.record("Expected instant routine launch to pause for tier 2 approval.")
         } catch RiskApprovalError.approvalRequired(let approvalRequest) {
             #expect(approvalRequest.requirement == .lightweightConfirmation)
@@ -399,14 +399,14 @@ struct QuickDispatchTests {
         )
 
         let prepared = try runner.prepare(plan: plan, source: .instantResolver)
-        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped, context: approvalContext(for: prepared))
 
         #expect(request.assessment.effectiveTier == .tier3)
         #expect(request.requirement == .explicitApproval)
         #expect(request.requirement != .autoRun)
 
         do {
-            _ = try await runner.execute(prepared, scope: .unscoped)
+            _ = try await runner.execute(prepared, scope: .unscoped, context: approvalContext(for: prepared))
             Issue.record("Expected instant routine launch to pause for explicit tier 3 approval.")
         } catch RiskApprovalError.approvalRequired(let approvalRequest) {
             #expect(approvalRequest.requirement == .explicitApproval)
@@ -442,8 +442,8 @@ struct QuickDispatchTests {
         )
 
         let prepared = try runner.prepare(plan: plan, source: .instantResolver)
-        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
-        let result = try await runner.execute(prepared, scope: .unscoped)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped, context: approvalContext(for: prepared))
+        let result = try await runner.execute(prepared, scope: .unscoped, context: approvalContext(for: prepared))
 
         #expect(request.assessment.effectiveTier == .tier1)
         #expect(request.requirement == .autoRun)
@@ -459,6 +459,10 @@ struct QuickDispatchTests {
             .appendingPathComponent("QuickDispatchTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+
+    private func approvalContext(for prepared: PreparedAgentRun) -> ApprovalContext {
+        ApprovalContext(origin: prepared.source, safeMode: false)
     }
 
     private func makeExecutor(

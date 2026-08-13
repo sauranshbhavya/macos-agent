@@ -528,15 +528,19 @@ struct WorkspaceDetailSheetTests {
     /// **The sheet never writes a scope change itself, and dispatching did not change that.**
     ///
     /// The acceptance criterion for SONNY-64's infrastructure half, asserted end to end: a Remove
-    /// tap runs the plan the row named, reaches the *same* tier-3 approval a typed removal reaches,
-    /// carries the capability's own consent sentence verbatim, and leaves the store exactly as it
-    /// was until that approval is answered. The composer is gone from the path; the gate is not.
+    /// tap runs the plan the row named, pauses at the *same* tier-3 assessment a typed removal
+    /// reaches — same tier, same consent sentence, verbatim — and leaves the store exactly as it
+    /// was until that ask is answered. The composer is gone from the path; the gate is not.
+    ///
+    /// Since SONNY-97 the *weight* of the ask differs from the typed path: the screen-built origin
+    /// earns `.directUserAuthored`, which maps the tier-3 removal to a lightweight confirmation
+    /// where a typed removal keeps explicit approval. The assessment halves — tier and sentence —
+    /// are asserted unchanged, which is exactly I1/I2 at this surface.
     ///
     /// `preparedRun.source` is asserted because it is the whole point of the origin work — the run
-    /// has to be *identifiable* as screen-built for row C later, while changing nothing about the
-    /// consent now.
+    /// has to be *identifiable* as screen-built, and now that identity is what the grant reads.
     @Test
-    func dispatchingARemovalRunsThePreBuiltPlanAndStopsAtTheSameTierThreeApproval() async throws {
+    func dispatchingARemovalRunsThePreBuiltPlanAndStopsAtSameTierWithALighterAsk() async throws {
         let root = try makeSheetTestDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
@@ -551,11 +555,13 @@ struct WorkspaceDetailSheetTests {
         viewModel.dispatchWorkspaceScopeEdit(presentation.apps.entries[1].removeDispatch)
         try await waitForSheetViewModelToBecomeIdle(viewModel)
 
-        // Paused at the approval the capability raised — not run, not skipped.
+        // Paused at the ask the capability raised — not run, not skipped. The origin grant made
+        // the ask lightweight; it did not make it disappear.
         #expect(viewModel.isAwaitingApproval)
         let request = try #require(viewModel.approvalRequest)
         #expect(request.assessment.effectiveTier == .tier3)
-        #expect(request.requirement == .explicitApproval)
+        #expect(request.requirement == .lightweightConfirmation)
+        #expect(request.relaxationGrant == .directUserAuthored)
         #expect(request.assessment.escalations.map(\.reason) == [
             "Removes Notes from workspace Client Alpha's apps. "
                 + "What is removed stops counting as part of this workspace."
@@ -578,10 +584,17 @@ struct WorkspaceDetailSheetTests {
         #expect(try store.workspace(named: "Client Alpha") == before)
     }
 
-    /// An addition takes the same route and stops at the tier-2 confirmation — the one-directional
-    /// escalation rule reaches the picker unchanged, and an add is still not a free action.
+    /// An addition takes the same route and **auto-runs under the origin grant** (SONNY-97): the
+    /// user built this edit field by field on the sheet, the apps dimension is already configured,
+    /// and re-prompting for it was the founder's 2026-08-07 friction complaint — so the edit
+    /// applies with no prompt at all. The one-directional escalation rule still reaches the picker
+    /// unchanged: it is the *ask* that got lighter, not the assessment.
+    ///
+    /// The fixture adds to an already-configured dimension deliberately — SONNY-98 narrows
+    /// boundary-*changing* edits (first entry into an empty dimension, emptying removals, subsuming
+    /// adds) back out of the grant, and this test must stay true on both sides of that change.
     @Test
-    func dispatchingAnAdditionStopsAtTheTierTwoConfirmationAndWritesNothingYet() async throws {
+    func dispatchingAnAdditionAutoRunsUnderTheOriginGrantAndApplies() async throws {
         let root = try makeSheetTestDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
@@ -594,20 +607,18 @@ struct WorkspaceDetailSheetTests {
         let slack = try #require(
             picker.categories.flatMap(\.entries).first { $0.name == "Slack" }
         )
-        // The return value is the picker's dismissal signal — it closes only on `true`, so a
-        // dispatch that succeeded while reporting otherwise would leave the dialog stacked over the
-        // approval it just raised. Asserted after a mutation battery: inverting this return left the
-        // whole suite green.
+        // The return value is the picker's dismissal signal — it closes only on `true`. Asserted
+        // after a mutation battery: inverting this return left the whole suite green.
         let accepted = viewModel.dispatchWorkspaceScopeEdit(slack.dispatch)
         try await waitForSheetViewModelToBecomeIdle(viewModel)
 
         #expect(accepted)
-        #expect(viewModel.isAwaitingApproval)
-        let request = try #require(viewModel.approvalRequest)
-        #expect(request.assessment.effectiveTier == .tier2)
-        #expect(request.requirement == .lightweightConfirmation)
+        // No prompt: the run completed, and the tapped change — exactly that change — is applied.
+        #expect(!viewModel.isAwaitingApproval)
+        #expect(viewModel.approvalRequest == nil)
         #expect(viewModel.plan?.steps.first?.workspaceApps == ["Slack"])
-        #expect(try store.workspace(named: "Client Alpha").apps == ["Safari"])
+        #expect(viewModel.activeTaskPlanSource == .directUserAction)
+        #expect(try store.workspace(named: "Client Alpha").apps == ["Safari", "Slack"])
     }
 
     /// Approving applies exactly the tapped change and nothing else.
@@ -1047,8 +1058,15 @@ struct WorkspaceDetailSheetTests {
         try await waitForSheetViewModelToBecomeIdle(viewModel)
 
         #expect(viewModel.pendingWorkspaceBinding == nil)
-        // Bound to the workspace the plan names, never to the abandoned arm.
-        #expect(viewModel.activeTaskScope == .scoped(WorkspaceScope(workspace: alpha)))
+        // Bound to the workspace the plan names, never to the abandoned arm. The addition
+        // auto-runs to completion under the origin grant (SONNY-97), so `activeTaskScope` is
+        // already `.unscoped` again by the time the dispatch settles — `lastAssessedScope` is the
+        // durable record of what the run was actually bound to, and it exists for exactly this
+        // class of post-hoc check.
+        #expect(viewModel.lastAssessedScope == .scoped(WorkspaceScope(workspace: alpha)))
+        // And the edit applied to the workspace the plan named, not the armed one.
+        #expect(try store.workspace(named: "Client Alpha").apps == ["Safari", "Notes"])
+        #expect(try store.workspace(named: "Research").apps == ["Safari"])
     }
 
     // MARK: - Write failures

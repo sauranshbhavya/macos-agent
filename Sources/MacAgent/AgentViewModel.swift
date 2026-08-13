@@ -844,7 +844,12 @@ final class AgentViewModel: ObservableObject {
                 return
             }
 
-            let request = try runner.approvalRequest(for: prepared, logAssessment: true, scope: activeTaskScope)
+            let request = try runner.approvalRequest(
+                for: prepared,
+                logAssessment: true,
+                scope: activeTaskScope,
+                context: approvalContext(for: prepared)
+            )
             switch request.requirement {
             case .autoRun:
                 break
@@ -1963,6 +1968,18 @@ final class AgentViewModel: ObservableObject {
         return .scoped(WorkspaceScope(workspace: record))
     }
 
+    /// The authority context every dispatch threads into `AgentRunner` (SONNY-97): the prepared
+    /// run's own stamped origin, and Safe mode.
+    ///
+    /// **`safeMode: false` is written here and nowhere else.** Row H's SONNY-90 replaces this one
+    /// literal with the real Settings-backed value; a second site writing it would be a second
+    /// place that replacement has to find, and the one it misses would run a Safe-mode user's tasks
+    /// under ordinary rules. The origin is read off the prepared run rather than taken as a
+    /// parameter so no call site can claim a stronger origin than `AgentRunner.prepare` stamped.
+    private func approvalContext(for preparedRun: PreparedAgentRun) -> ApprovalContext {
+        ApprovalContext(origin: preparedRun.source, safeMode: false)
+    }
+
     private func executePreparedRun(
         preparedRun: PreparedAgentRun,
         runner: AgentRunner,
@@ -1978,8 +1995,11 @@ final class AgentViewModel: ObservableObject {
             logRiskAssessment: logRiskAssessment,
             // The same value the approval the user saw was built from. `execute` re-assesses fresh
             // on every call, so a `.unscoped` here against a scoped `approvalRequest` would have the
-            // stale-approval guard comparing two different assessments.
-            scope: activeTaskScope
+            // stale-approval guard comparing two different assessments. The context threads for the
+            // same reason: one origin at the prompt and another at execution would derive two
+            // different requirements from one run.
+            scope: activeTaskScope,
+            context: approvalContext(for: preparedRun)
         )
         markAllSteps(.complete)
         // The task itself succeeded; a bookkeeping failure is a storage notice, not a task error.
@@ -2357,7 +2377,14 @@ final class AgentViewModel: ObservableObject {
                 // `create_workspace` and `open_workspace` as routine steps, so a stored routine can
                 // never name a workspace, and nothing else in a scheduled run carries one — there is
                 // no command text a user typed and no dispatch that named one.
-                scope: .unscoped
+                //
+                // Together with `source: .instantResolver` above, this is one of the two independent
+                // call-site choices that keep the unattended path outside both relaxation grants
+                // (SONNY-97, I6): an unscoped assessment has no verdict to be `.inScope`, and an
+                // instant-resolver origin never takes the direct-user grant. Neither choice is a
+                // type-level guarantee, which is why a test named for the hazard pins them.
+                scope: .unscoped,
+                context: approvalContext(for: prepared)
             )
             recordScheduledRunInHistory(name: name, at: occurrence)
             recordScheduledTaskHistory(status: .completed, startedAt: startedAt)

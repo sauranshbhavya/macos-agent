@@ -20,15 +20,19 @@ struct RiskApprovalTests {
         }
     }
 
+    /// The baseline tier mapping, asked through the one public path (SONNY-97 demoted the tier-only
+    /// `requirement(for:)` to private): a bare assessment carries no eligibility and no verdict, so
+    /// no grant can fire and the answer *is* the baseline.
     @Test
     func defaultPolicyKeepsTierZeroAndOneAutonomous() {
         let policy = RiskApprovalPolicy.default
+        let context = ApprovalContext(origin: .planner, safeMode: false)
 
-        #expect(policy.requirement(for: .tier0) == .autoRun)
-        #expect(policy.requirement(for: .tier1) == .autoRun)
-        #expect(policy.requirement(for: .tier2) == .lightweightConfirmation)
-        #expect(policy.requirement(for: .tier3) == .explicitApproval)
-        #expect(policy.requirement(for: .tier4) == .refuse)
+        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier0), context: context) == .autoRun)
+        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier1), context: context) == .autoRun)
+        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier2), context: context) == .lightweightConfirmation)
+        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier3), context: context) == .explicitApproval)
+        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier4), context: context) == .refuse)
     }
 
     @Test
@@ -37,10 +41,11 @@ struct RiskApprovalTests {
             requireApprovalForTier1: true,
             tier2Mode: .previewOnly
         )
+        let context = ApprovalContext(origin: .planner, safeMode: false)
 
-        #expect(policy.requirement(for: .tier0) == .autoRun)
-        #expect(policy.requirement(for: .tier1) == .lightweightConfirmation)
-        #expect(policy.requirement(for: .tier2) == .previewOnly)
+        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier0), context: context) == .autoRun)
+        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier1), context: context) == .lightweightConfirmation)
+        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier2), context: context) == .previewOnly)
     }
 
     @Test
@@ -58,7 +63,12 @@ struct RiskApprovalTests {
 
         #expect(assessment.defaultTier == .tier2)
         #expect(assessment.effectiveTier == .tier3)
-        #expect(assessment.approvalRequirement() == .explicitApproval)
+        #expect(
+            RiskApprovalPolicy.default.requirement(
+                for: assessment,
+                context: ApprovalContext(origin: .planner, safeMode: false)
+            ) == .explicitApproval
+        )
     }
 
     @Test
@@ -237,7 +247,13 @@ struct RiskApprovalTests {
                 CapabilityRiskEscalation(fromTier: .tier2, toTier: .tier3, reason: $0)
             }
         )
-        return RiskApprovalRequest(assessment: assessment, requirement: assessment.approvalRequirement())
+        return RiskApprovalRequest(
+            assessment: assessment,
+            requirement: RiskApprovalPolicy.default.requirement(
+                for: assessment,
+                context: ApprovalContext(origin: .planner, safeMode: false)
+            )
+        )
     }
 
     @Test
