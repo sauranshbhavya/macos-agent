@@ -189,14 +189,30 @@ public struct RiskApprovalConsent: Codable, Equatable, Sendable {
         /// one says no prompt was answered. **But as of SONNY-62 the difference cannot change an
         /// authorize/deny outcome, and claiming it could was this file's own first mistake.** For
         /// the two to disagree on an outcome, a consent would need a tier-3 ceiling with an empty
-        /// acknowledged set, and no adapter can produce that assessment: all 25 literal
-        /// `defaultRiskTier` values in `Sources/` are tier 2 or below (7/8/10 across tiers 0/1/2,
-        /// and the one adapter that varies its default at assessment time, `InvokeShortcut`, only
-        /// lowers it), while every escalation targets tier 3 — so a tier-3 assessment always
-        /// carries at least one reason, and a non-empty reason set always means tier 3. They do
-        /// differ in the *trace* today — only this case can emit
-        /// `risk.rearmed` — and they will differ in outcome the day an adapter defaults to tier 3
-        /// or an escalation targets tier 2.
+        /// acknowledged set. No adapter can produce that assessment: no `defaultTier` anywhere can
+        /// reach tier 3, while all eight `CapabilityRiskEscalation` construction sites target tier
+        /// 3 and each assessment forwards the escalations of any plan nested inside it — so a
+        /// tier-3 assessment always carries at least one reason, and a non-empty reason set always
+        /// means tier 3.
+        ///
+        /// **Why no `defaultTier` reaches tier 3.** Swept at `042f74e` over every `defaultRiskTier`
+        /// occurrence and every `CapabilityRiskAssessment` construction site in `Sources/`, rather
+        /// than over the adapters that looked relevant. All 25 literals are tier 2 or below (7/8/10
+        /// across tiers 0/1/2), and the six `descriptor.defaultRiskTier` forwards each resolve to a
+        /// `static let` in `AppWebsiteActionDescriptors` — one of those same literals. **Three**
+        /// sites compute the value at assessment time instead of forwarding a literal, not one:
+        /// `InvokeShortcut` picks `.tier1` on a clean run history and its own literal otherwise, so
+        /// it only lowers — but `RunRoutine` and `SaveRoutine` each take the *maximum* of their own
+        /// literal and the nested plan's `defaultTier`, and `AgentActionExecutor` maximizes across
+        /// a plan's adapters. A maximum is free to move a default *upward*, which is why "only
+        /// lowers" was the wrong argument and this paragraph's second mistake. What actually bounds
+        /// it: a maximum over values that are all tier 2 or below is itself tier 2 or below, and a
+        /// nested `defaultTier` is another such maximum one level down, so the bound holds at every
+        /// nesting depth.
+        ///
+        /// The two cases do differ in the *trace* today — only this one can emit `risk.rearmed` —
+        /// and they will differ in outcome the day an adapter defaults to tier 3 or an escalation
+        /// targets tier 2.
         case acknowledgedReasons(Set<String>)
     }
 
