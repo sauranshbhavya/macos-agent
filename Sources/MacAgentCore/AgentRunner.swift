@@ -139,15 +139,25 @@ public final class AgentRunner {
     /// A default is what makes that failure silent, so there isn't one. SONNY-38 has to write a
     /// scope at every site or the compiler stops it. Nothing about the gating below changes — scope
     /// changes the assessment, never the gate.
+    ///
+    /// `context` is non-defaulted for the identical reason (SONNY-97): `execute` calls this again
+    /// internally, so a context threaded here and defaulted there would prompt under one
+    /// requirement and execute under another. And note where it lands — the *requirement*, never
+    /// the assessment. `assessRisk` above takes no context and must never grow one: the funnel
+    /// comment on `prepareResolvedPlan` promises that nothing downstream learns how the plan was
+    /// authored, and that stays true of the assessment even now that it is false of the
+    /// requirement. `effectiveTier` remains a pure function of the plan.
     public func approvalRequest(
         for preparedRun: PreparedAgentRun,
         logAssessment: Bool = false,
-        scope: TaskWorkspaceScope
+        scope: TaskWorkspaceScope,
+        context: ApprovalContext
     ) throws -> RiskApprovalRequest {
         let assessment = try executor.assessRisk(plan: preparedRun.plan, scope: scope)
         let request = RiskApprovalRequest(
             assessment: assessment,
-            requirement: assessment.approvalRequirement(policy: approvalPolicy)
+            requirement: approvalPolicy.requirement(for: assessment, context: context),
+            relaxationGrant: RelaxationGrant.applied(for: assessment, context: context)
         )
         if logAssessment {
             logRiskAssessment(request)
@@ -160,9 +170,15 @@ public final class AgentRunner {
         approvalDecision: RiskApprovalDecision = .notRequested,
         confirmationMessage: String = "Execution approved",
         logRiskAssessment: Bool = true,
-        scope: TaskWorkspaceScope
+        scope: TaskWorkspaceScope,
+        context: ApprovalContext
     ) async throws -> AgentRunResult {
-        let request = try approvalRequest(for: preparedRun, logAssessment: logRiskAssessment, scope: scope)
+        let request = try approvalRequest(
+            for: preparedRun,
+            logAssessment: logRiskAssessment,
+            scope: scope,
+            context: context
+        )
         switch request.requirement {
         case .autoRun:
             break

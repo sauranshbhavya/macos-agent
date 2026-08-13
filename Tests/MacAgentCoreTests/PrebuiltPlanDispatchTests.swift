@@ -99,7 +99,10 @@ struct PrebuiltPlanDispatchTests {
     /// escalation and its reason are computed downstream from the plan and the store, and there is
     /// no field on the plan through which a caller could pre-empt any of it. Pinned by running the
     /// real assessment over a screen-built removal and getting the capability's own tier-3 reason
-    /// back, verbatim.
+    /// back, verbatim. Since SONNY-97 the *requirement* does read the origin — a tier-3 removal
+    /// from the sheet drops to a lightweight confirmation under the origin grant — but the
+    /// assessment stays origin-blind, which is exactly what the tier and reason assertions below
+    /// keep pinning.
     @Test
     func aScreenBuiltRemovalIsAssessedByTheCapabilityExactlyAsATypedOneIs() async throws {
         let fixture = try Fixture()
@@ -118,10 +121,17 @@ struct PrebuiltPlanDispatchTests {
         )
         let runner = AgentRunner(planner: UnusedPlanner(), executor: fixture.executor)
         let prepared = try runner.prepare(plan: plan, source: .directUserAction)
-        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
+        let request = try runner.approvalRequest(
+            for: prepared,
+            scope: .unscoped,
+            context: ApprovalContext(origin: prepared.source, safeMode: false)
+        )
 
         #expect(request.assessment.effectiveTier == .tier3)
-        #expect(request.requirement == .explicitApproval)
+        // SONNY-97: tier 3 under `.directUserAuthored` maps to the lightweight confirmation — the
+        // weight of the ask changed, the sentence (asserted below, verbatim) did not.
+        #expect(request.requirement == .lightweightConfirmation)
+        #expect(request.relaxationGrant == .directUserAuthored)
         #expect(request.assessment.escalations.map(\.reason) == [
             "Removes Notes from workspace Client Alpha's apps. "
                 + "What is removed stops counting as part of this workspace."
@@ -158,7 +168,11 @@ struct PrebuiltPlanDispatchTests {
         )
         let runner = AgentRunner(planner: UnusedPlanner(), executor: fixture.executor)
         let prepared = try runner.prepare(plan: plan, source: .directUserAction)
-        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
+        let request = try runner.approvalRequest(
+            for: prepared,
+            scope: .unscoped,
+            context: ApprovalContext(origin: prepared.source, safeMode: false)
+        )
 
         #expect(request.assessment.effectiveTier == .tier3)
         #expect(request.assessment.escalations.map(\.reason) == [
@@ -169,8 +183,11 @@ struct PrebuiltPlanDispatchTests {
 
     /// An addition stays tier 2 through this path, exactly as it does when typed — the
     /// one-directional escalation rule is the capability's and the dispatch path does not touch it.
+    /// Since SONNY-97 the tier-2 sheet addition *auto-runs* under the origin grant — the founder's
+    /// 2026-08-07 friction complaint, answered — while the tier assertion keeps pinning that the
+    /// assessment itself never moved.
     @Test
-    func aScreenBuiltAdditionStaysAtTheTierTwoConfirmation() async throws {
+    func aScreenBuiltAdditionStaysAtTierTwoAndAutoRunsUnderTheOriginGrant() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
         try fixture.store.save(StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: []))
@@ -184,13 +201,16 @@ struct PrebuiltPlanDispatchTests {
             )
         )
         let runner = AgentRunner(planner: UnusedPlanner(), executor: fixture.executor)
+        let prepared = try runner.prepare(plan: plan, source: .directUserAction)
         let request = try runner.approvalRequest(
-            for: try runner.prepare(plan: plan, source: .directUserAction),
-            scope: .unscoped
+            for: prepared,
+            scope: .unscoped,
+            context: ApprovalContext(origin: prepared.source, safeMode: false)
         )
 
         #expect(request.assessment.effectiveTier == .tier2)
-        #expect(request.requirement == .lightweightConfirmation)
+        #expect(request.requirement == .autoRun)
+        #expect(request.relaxationGrant == .directUserAuthored)
         #expect(request.assessment.escalations.isEmpty)
     }
 
@@ -232,11 +252,16 @@ struct PrebuiltPlanDispatchTests {
         )
         let runner = AgentRunner(planner: UnusedPlanner(), executor: fixture.executor)
         let prepared = try runner.prepare(plan: plan, source: .directUserAction)
-        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
+        let request = try runner.approvalRequest(
+            for: prepared,
+            scope: .unscoped,
+            context: ApprovalContext(origin: prepared.source, safeMode: false)
+        )
 
-        // Tier 2, not 3, and no escalation reason naming a loss that did not happen.
+        // Tier 2, not 3, and no escalation reason naming a loss that did not happen. Under the
+        // origin grant (SONNY-97) the un-escalated tier-2 edit auto-runs from the sheet.
         #expect(request.assessment.effectiveTier == .tier2)
-        #expect(request.requirement == .lightweightConfirmation)
+        #expect(request.requirement == .autoRun)
         #expect(request.assessment.escalations.isEmpty)
     }
 

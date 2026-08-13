@@ -398,7 +398,7 @@ struct AgentActionExecutorTests {
         let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
 
         #expect(assessment.effectiveTier == .tier2)
-        #expect(assessment.approvalRequirement().requiresUserApproval)
+        #expect(RiskApprovalPolicy.default.requirement(for: assessment, context: plannerContext).requiresUserApproval)
         #expect(assessment.approvalCopy?.dataLeavesDevice == false)
     }
 
@@ -425,7 +425,7 @@ struct AgentActionExecutorTests {
 
         #expect(assessment.defaultTier == .tier2)
         #expect(assessment.effectiveTier == .tier3)
-        #expect(assessment.approvalRequirement() == .explicitApproval)
+        #expect(RiskApprovalPolicy.default.requirement(for: assessment, context: plannerContext) == .explicitApproval)
         #expect(assessment.escalations == [
             CapabilityRiskEscalation(
                 fromTier: .tier2,
@@ -454,7 +454,7 @@ struct AgentActionExecutorTests {
 
         #expect(assessment.effectiveTier == .tier2)
         #expect(assessment.escalations.isEmpty)
-        #expect(assessment.approvalRequirement() == .lightweightConfirmation)
+        #expect(RiskApprovalPolicy.default.requirement(for: assessment, context: plannerContext) == .lightweightConfirmation)
     }
 
     /// Two steps aimed at the same existing file describe one collision, and the approval panel
@@ -685,7 +685,7 @@ struct AgentActionExecutorTests {
 
         #expect(assessment.defaultTier == .tier2)
         #expect(assessment.effectiveTier == .tier2)
-        #expect(assessment.approvalRequirement() == .lightweightConfirmation)
+        #expect(RiskApprovalPolicy.default.requirement(for: assessment, context: plannerContext) == .lightweightConfirmation)
         #expect(assessment.escalations.isEmpty)
     }
 
@@ -741,7 +741,7 @@ struct AgentActionExecutorTests {
 
         #expect(assessment.defaultTier == .tier2)
         #expect(assessment.effectiveTier == .tier3)
-        #expect(assessment.approvalRequirement() == .explicitApproval)
+        #expect(RiskApprovalPolicy.default.requirement(for: assessment, context: plannerContext) == .explicitApproval)
         #expect(assessment.escalations == [
             CapabilityRiskEscalation(
                 fromTier: .tier2,
@@ -824,7 +824,7 @@ struct AgentActionExecutorTests {
         )
 
         #expect(assessment.effectiveTier == .tier3)
-        #expect(assessment.approvalRequirement() == .explicitApproval)
+        #expect(RiskApprovalPolicy.default.requirement(for: assessment, context: plannerContext) == .explicitApproval)
         #expect(assessment.escalations == [
             CapabilityRiskEscalation(
                 fromTier: .tier2,
@@ -1749,7 +1749,7 @@ struct AgentActionExecutorTests {
         #expect(assessment.defaultTier == .tier2)
         #expect(assessment.effectiveTier == .tier2)
         #expect(assessment.escalations.isEmpty)
-        #expect(assessment.approvalRequirement() == .lightweightConfirmation)
+        #expect(RiskApprovalPolicy.default.requirement(for: assessment, context: plannerContext) == .lightweightConfirmation)
     }
 
     /// And the escalation the `try?` was suppressing still fires when it should: a name that really
@@ -1917,7 +1917,12 @@ struct AgentActionExecutorTests {
             source: .instantResolver
         )
 
-        _ = try await runner.execute(prepared, approvalDecision: .approved(.tier2), scope: .unscoped)
+        _ = try await runner.execute(
+            prepared,
+            approvalDecision: .approved(.tier2),
+            scope: .unscoped,
+            context: ApprovalContext(origin: prepared.source, safeMode: false)
+        )
 
         #expect(browserOpener.openedBrowsers == [MacApp(displayName: "Safari", bundleIdentifier: "com.apple.Safari")])
     }
@@ -4128,6 +4133,10 @@ struct AgentActionExecutorTests {
         #expect(fileOpener.openedFiles == [output.standardizedFileURL])
         #expect(result.summary.contains("Created local draft"))
         #expect(result.summary.contains("Opened generated artifact"))
+    }
+
+    private var plannerContext: ApprovalContext {
+        ApprovalContext(origin: .planner, safeMode: false)
     }
 
     private func makeExecutor(

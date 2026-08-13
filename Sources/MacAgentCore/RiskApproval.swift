@@ -53,6 +53,28 @@ public enum RiskApprovalRequirement: String, Codable, CaseIterable, Equatable, S
             return false
         }
     }
+
+    /// The permissiveness rank every relaxation property is stated on (SONNY-97): how much happens
+    /// without further gating. `previewOnly` sits *below* `explicitApproval` because nothing ever
+    /// runs under it — an explicit approval can still end in execution; a preview cannot.
+    var permissivenessRank: Int {
+        switch self {
+        case .refuse:
+            return 0
+        case .previewOnly:
+            return 1
+        case .explicitApproval:
+            return 2
+        case .lightweightConfirmation:
+            return 3
+        case .autoRun:
+            return 4
+        }
+    }
+
+    static func stricter(of first: Self, _ second: Self) -> Self {
+        first.permissivenessRank <= second.permissivenessRank ? first : second
+    }
 }
 
 public enum Tier2ApprovalMode: String, Codable, CaseIterable, Equatable, Sendable {
@@ -74,7 +96,16 @@ public struct RiskApprovalPolicy: Codable, Equatable, Sendable {
         self.tier2Mode = tier2Mode
     }
 
-    public func requirement(for tier: CapabilityRiskTier) -> RiskApprovalRequirement {
+    /// The tier-only baseline — the sanctioned internal sub-call `requirement(for:context:)`
+    /// delegates to, and nothing else.
+    ///
+    /// **Demoted from `public` on SONNY-97, deliberately.** Tier-only and context-free, this is
+    /// row B's "never two chained rules" violation in miniature: any caller outside this file that
+    /// could reach it would be a second public path to a requirement, bypassing Safe mode, both
+    /// grants, and every future `ApprovalContext` field (per-app consent lands there on row I).
+    /// `private` scopes it to this file, so the compiler — not a convention — is what enforces
+    /// "exactly one public function produces a `RiskApprovalRequirement`" (I8).
+    private func requirement(for tier: CapabilityRiskTier) -> RiskApprovalRequirement {
         switch tier {
         case .tier0:
             return .autoRun
@@ -93,6 +124,26 @@ public struct RiskApprovalPolicy: Codable, Equatable, Sendable {
             return .refuse
         }
     }
+
+    /// Safe mode's requirement for a tier: the *stricter* of the ordinary baseline and
+    /// `safeModeFloor`, on `RiskApprovalRequirement.permissivenessRank`.
+    ///
+    /// A formula rather than a free-standing per-tier table on purpose, and the formula is the
+    /// contract handed to row H's SONNY-90 (which supplies the real `safeMode` value): a function
+    /// returning whatever seemed right per tier could define a Safe mode that is *looser* than the
+    /// baseline somewhere — this shape cannot, which is what property P1 pins over the whole
+    /// cross-product. Note the baseline keeps the user's own tightening through the formula:
+    /// a `previewOnly` tier-2 policy stays `previewOnly`, because it is stricter than the floor.
+    private func safeModeRequirement(for tier: CapabilityRiskTier) -> RiskApprovalRequirement {
+        .stricter(of: requirement(for: tier), Self.safeModeFloor)
+    }
+
+    /// Everything Safe mode allows still asks first. `explicitApproval` rather than `previewOnly`
+    /// because Safe mode is a user-authority dial, not a lockout: the user can always allow
+    /// (escalate-never-block, I4), they are just always asked. Tier 4 still refuses through the
+    /// formula — `refuse` is stricter than the floor. SONNY-90 owns revisiting this constant when
+    /// the Settings surface lands; it revises the *floor*, never the formula.
+    static let safeModeFloor: RiskApprovalRequirement = .explicitApproval
 }
 
 public struct RiskApprovalCopy: Codable, Equatable, Sendable {
@@ -131,14 +182,26 @@ public struct RiskApprovalRequest: Codable, Equatable, Sendable {
     public var assessment: CapabilityRiskAssessment
     public var requirement: RiskApprovalRequirement
     public var approvalCopy: RiskApprovalCopy
+    /// The relaxation grant `requirement` was derived under (SONNY-97) — the carrier SONNY-99's
+    /// ran-without-asking trace reads, populated at the one deriving site
+    /// (`AgentRunner.approvalRequest`) from the same assessment and context that produced
+    /// `requirement`, so the two cannot disagree on one request. `.none` under Safe mode, because
+    /// no grant applied there (I5). **Reporting only, never an authorization input** — nothing may
+    /// read this to gate anything; the requirement already *is* the grant's whole effect (I8).
+    ///
+    /// Defaulted `.none` for the construction sites that never derive one (tests building a request
+    /// around a hand-made assessment) — the honest value for a request no grant was computed for.
+    public var relaxationGrant: RelaxationGrant
 
     public init(
         assessment: CapabilityRiskAssessment,
         requirement: RiskApprovalRequirement,
-        approvalCopy: RiskApprovalCopy? = nil
+        approvalCopy: RiskApprovalCopy? = nil,
+        relaxationGrant: RelaxationGrant = .none
     ) {
         self.assessment = assessment
         self.requirement = requirement
+        self.relaxationGrant = relaxationGrant
         self.approvalCopy = approvalCopy ?? assessment.approvalCopy ?? RiskApprovalCopy(
             actionDescription: "Run the prepared plan",
             riskReason: assessment.effectiveTier.semanticName,
@@ -464,10 +527,6 @@ public struct CapabilityRiskAssessment: Codable, Equatable, Sendable {
         self.relaxationEligibility = relaxationEligibility
     }
 
-    public func approvalRequirement(policy: RiskApprovalPolicy = .default) -> RiskApprovalRequirement {
-        policy.requirement(for: effectiveTier)
-    }
-
     private static func highestTier(
         defaultTier: CapabilityRiskTier,
         escalations: [CapabilityRiskEscalation]
@@ -476,6 +535,141 @@ public struct CapabilityRiskAssessment: Codable, Equatable, Sendable {
             .map(\.toTier.rawValue)
             .reduce(defaultTier.rawValue, max)
         return CapabilityRiskTier(rawValue: highestRaw) ?? defaultTier
+    }
+}
+
+/// The authority context an approval requirement is derived under (SONNY-97, row C): how the plan
+/// came to exist, and whether the user's Safe mode is engaged.
+///
+/// This is an input to `RiskApprovalPolicy.requirement(for:context:)` and nothing else — it never
+/// reaches `assessRisk`, which stays origin-blind so `effectiveTier` remains a pure function of the
+/// plan. Threaded non-defaulted into `AgentRunner.approvalRequest` and `AgentRunner.execute` for the
+/// same reason `scope:` is: `execute` re-derives the requirement internally, so a context threaded
+/// at one site and defaulted at the other would prompt under one requirement and execute under
+/// another, with green tests and a lying log.
+public struct ApprovalContext: Equatable, Sendable {
+    public var origin: PreparedPlanSource
+    /// Row H's SONNY-90 supplies the real, Settings-backed value; until then row C's only caller
+    /// writes `false` at one named site (`AgentViewModel.approvalContext(for:)`). When true, the
+    /// requirement is `safeModeRequirement(for:)`'s formula and no grant is ever computed (I5).
+    public var safeMode: Bool
+    // Row I's SONNY-91 adds `appControlConsent` HERE, as a field this function maps — never as a
+    // rule applied to the function's return value, which is the post-hoc clamp I8 forbids.
+
+    // Explicit rather than synthesized: the memberwise initializer of a public struct is internal,
+    // and `MacAgent` is a separate target.
+    public init(origin: PreparedPlanSource, safeMode: Bool) {
+        self.origin = origin
+        self.safeMode = safeMode
+    }
+}
+
+/// Which relaxation applied to a requirement — the *why* behind a prompt that got lighter, kept as
+/// two cases even though they map identically today, because they have different revocation stories
+/// and different user-facing explanations: "because this is inside Client Alpha" and "because you
+/// built this on screen" are different facts, and a user can act on the difference.
+public enum RelaxationGrant: String, Codable, Equatable, Sendable {
+    case none
+    /// The plan-level scope roll-up is `.inScope` — the boundary-earned grant of the founder
+    /// charter (2026-08-04): in-scope tier 2 auto-runs, in-scope tier 3 drops to a lightweight
+    /// confirmation.
+    case inScopeWorkspace = "in_scope_workspace"
+    /// The plan came from `PreparedPlanSource.directUserAction`: the user built it field by field
+    /// on a UI surface, with no natural language interpreted on the way (founder observation,
+    /// 2026-08-07). This grant exists because the verdict grant structurally cannot reach the
+    /// workspace-sheet edit: `edit_workspace` classifies as `.none` scoped resources, so a sheet
+    /// edit's roll-up is never `.inScope`.
+    case directUserAuthored = "direct_user_authored"
+
+    /// The §2.1 grant formula, per-grant eligibility and all (PR #45 review, F2: eligibility is
+    /// tested *per grant*, never once ahead of both — SONNY-98 drops `byDirectUserOrigin` alone on
+    /// a boundary-changing edit, and a single "eligibility forbids it" guard ahead of both branches
+    /// cannot express that).
+    ///
+    /// `.inScopeWorkspace` is tested first so anything surfacing a reason names the stronger,
+    /// boundary-earned grant when both apply.
+    ///
+    /// Only `.inScope` ever grants (I3). The other three verdicts and `nil` fail the equality test
+    /// structurally, and the three-state trap the verdict's own doc comment warns about — `nil`
+    /// ("no workspace bound") versus `.unconstrained` ("bound, and says nothing about this kind") —
+    /// stays uncollapsed because neither compares equal to `.inScope`. A `nil` eligibility (an
+    /// assessment that never went through the executor's fold) grants nothing: fail closed, never
+    /// invented.
+    ///
+    /// **I10, stated as a rule even though SONNY-84 discharges it structurally:** an `.inScope`
+    /// verdict reached through `WorkspaceScope`'s *name-fallback* key must never grant. Since
+    /// SONNY-84, every installed app earns a real `bundle:` key, so a name-fallback match survives
+    /// only for genuinely uninstalled entries — which cannot be running and so cannot produce a
+    /// `.resolvedApp` match at all. Today the sole `.resolvedApp` producer
+    /// (`RunningAppSwitchCapabilityAdapter`) is also tier 1, a tier no grant column touches. A
+    /// future tier bump on any name-fallback-matched operation is a conscious decision against this
+    /// stated rule, not a silent reopening of the imposter gap.
+    static func grant(for assessment: CapabilityRiskAssessment, context: ApprovalContext) -> RelaxationGrant {
+        let eligibility = assessment.relaxationEligibility ?? []
+        if eligibility.contains(.byWorkspaceScope), assessment.scopeVerdict == .inScope {
+            return .inScopeWorkspace
+        }
+        if eligibility.contains(.byDirectUserOrigin), context.origin == .directUserAction {
+            return .directUserAuthored
+        }
+        return .none
+    }
+
+    /// The grant `requirement(for:context:)` actually applied — `.none` under Safe mode, mirroring
+    /// I5's composition rule (the requirement function returns before the grant is computed, so a
+    /// Safe-mode run relaxed nothing and must not report that it did). This is the reporting seam
+    /// `RiskApprovalRequest.relaxationGrant` is filled from; it is never an authorization input.
+    static func applied(for assessment: CapabilityRiskAssessment, context: ApprovalContext) -> RelaxationGrant {
+        context.safeMode ? .none : grant(for: assessment, context: context)
+    }
+}
+
+public extension RiskApprovalPolicy {
+    /// The one public path from an assessment to an approval requirement (SONNY-97, row C — I8:
+    /// exactly one public function produces a `RiskApprovalRequirement`, and no public function
+    /// takes one and returns a different one; per-app consent and every future authority axis lands
+    /// *here*, as an `ApprovalContext` field this mapping reads, never as a rule chained after it).
+    ///
+    /// Body order is the composition rule: Safe mode returns before the grant is computed, so
+    /// "Safe mode wins — relaxation never applies inside it" is structural rather than remembered
+    /// (I5). The switch below is a function of `(effectiveTier, grant)` *on a given policy* —
+    /// `self` is the policy, and two cells read `tier2Mode` exactly as the tier-only baseline
+    /// always has for tiers 1 and 2. That is not a chained rule: no intermediate requirement is
+    /// produced and nothing re-fires.
+    ///
+    /// Relaxation is a requirement override and nothing else: it never writes `effectiveTier` (I1),
+    /// never writes `escalations` and never changes `approvalCopy` (I2) — the assessment passes
+    /// through this function untouched, so relaxation changes the *weight* of the ask, never the
+    /// sentence. No cell refuses that would not have refused before (I4), and no grant cell is ever
+    /// less permissive than its `.none` column (P2).
+    func requirement(
+        for assessment: CapabilityRiskAssessment,
+        context: ApprovalContext
+    ) -> RiskApprovalRequirement {
+        if context.safeMode {
+            return safeModeRequirement(for: assessment.effectiveTier)
+        }
+        switch (assessment.effectiveTier, RelaxationGrant.grant(for: assessment, context: context)) {
+        case (.tier0, .none), (.tier0, .inScopeWorkspace), (.tier0, .directUserAuthored):
+            return .autoRun
+        case (.tier1, .none), (.tier1, .inScopeWorkspace), (.tier1, .directUserAuthored):
+            return requirement(for: .tier1)
+        case (.tier2, .none):
+            return requirement(for: .tier2)
+        case (.tier2, .inScopeWorkspace), (.tier2, .directUserAuthored):
+            // Relaxation never exceeds the user's own policy (I9): a `previewOnly` tier-2 mode is
+            // the user's own tightening, and a grant must not override it. Unreachable in the
+            // shipped app today — nothing constructs a non-default policy outside tests — but a
+            // dead configuration surface that comes alive later should not silently defeat the
+            // preference it exists to express.
+            return tier2Mode == .previewOnly ? .previewOnly : .autoRun
+        case (.tier3, .none):
+            return requirement(for: .tier3)
+        case (.tier3, .inScopeWorkspace), (.tier3, .directUserAuthored):
+            return .lightweightConfirmation
+        case (.tier4, .none), (.tier4, .inScopeWorkspace), (.tier4, .directUserAuthored):
+            return .refuse
+        }
     }
 }
 
@@ -508,9 +702,5 @@ public extension CapabilityRiskTier {
         case .tier4:
             return .refuseOrRequireTakeover
         }
-    }
-
-    func approvalRequirement(policy: RiskApprovalPolicy = .default) -> RiskApprovalRequirement {
-        policy.requirement(for: self)
     }
 }
