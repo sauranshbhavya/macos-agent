@@ -152,8 +152,12 @@ public struct PlannerProviderRegistry: Sendable {
 }
 
 extension PlannerProviderRegistry {
-    /// The shipped registry. OpenAI is the default and — deliberately — the sole registered
-    /// provider at SONNY-85's close; a second provider is a `register` call here plus its own
-    /// descriptor, never a new branch at the construction site.
-    public static let `default` = PlannerProviderRegistry(defaultProvider: OpenAIPlanner.provider)
+    /// The shipped registry. OpenAI is the default; the Cerebras-served open-weights planner
+    /// is the explicitly-selectable A/B alternate (SONNY-86). No flip logic exists anywhere —
+    /// changing the default is a founder decision, not a code path.
+    public static let `default`: PlannerProviderRegistry = {
+        var registry = PlannerProviderRegistry(defaultProvider: OpenAIPlanner.provider)
+        registry.register(CerebrasPlanner.provider)
+        return registry
+    }()
 }

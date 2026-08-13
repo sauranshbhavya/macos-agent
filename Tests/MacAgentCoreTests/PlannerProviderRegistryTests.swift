@@ -12,13 +12,26 @@ import Testing
 struct PlannerProviderRegistryTests {
     // MARK: - The shipped registry
 
+    /// SONNY-85 pinned OpenAI as the sole provider; SONNY-86 extends the shipped set with the
+    /// Cerebras A/B alternate. What must never drift: OpenAI is the default (no flip logic —
+    /// resolving no selection lands on it), and the set is exactly these two.
     @Test
-    func shippedRegistryOffersOpenAIAsDefaultAndSoleProvider() {
+    func shippedRegistryOffersOpenAIAsDefaultWithCerebrasAsTheAlternate() {
         let registry = PlannerProviderRegistry.default
         #expect(registry.defaultProvider.id == "openai")
         #expect(registry.defaultProvider.displayName == "OpenAI")
-        #expect(registry.providers.map(\.id) == ["openai"])
+        #expect(registry.providers.map(\.id) == ["openai", "cerebras"])
+        #expect(registry.resolve(selection: nil).provider.id == "openai")
         #expect(OpenAIPlanner.provider.id == OpenAIPlanner.providerID)
+        #expect(CerebrasPlanner.provider.id == CerebrasPlanner.providerID)
+        #expect(CerebrasPlanner.provider.displayName == "Cerebras")
+    }
+
+    @Test
+    func shippedRegistryHonorsTheCerebrasSelectionWithoutANotice() {
+        let resolution = PlannerProviderRegistry.default.resolve(selection: "cerebras")
+        #expect(resolution.provider.id == "cerebras")
+        #expect(resolution.fallbackNotice == nil)
     }
 
     @Test
@@ -26,7 +39,7 @@ struct PlannerProviderRegistryTests {
         let resolution = PlannerProviderRegistry.default.resolve(selection: "gpt6")
         #expect(resolution.provider.id == "openai")
         #expect(resolution.fallbackNotice
-            == "Sonny doesn't have a planner called “gpt6”, so it used OpenAI instead. Available planners: openai.")
+            == "Sonny doesn't have a planner called “gpt6”, so it used OpenAI instead. Available planners: openai, cerebras.")
     }
 
     // MARK: - Selection resolution
