@@ -987,6 +987,42 @@ struct WorkspaceScopeTests {
         )
     }
 
+    /// **The stage *order* itself, pinned against a populated universe.**
+    ///
+    /// `aCatalogedAppKeysByBundleIdentifierEvenWhereItIsNotInstalled` above pins the alias stage as
+    /// unconditional, but it does so against an *empty* installed universe — and against an empty
+    /// universe stage two returns `nil`, so swapping stages one and two changes nothing and that test
+    /// survives the swap. It is a pin on the stage being unconditional, not on its precedence.
+    /// (Found by the PR #44 cycle-1 review, which demonstrated that the whole suite survived the
+    /// swap.)
+    ///
+    /// This is the probe that distinguishes them: the universe is populated, and what is in it is an
+    /// **imposter that resolves by name**. Google Chrome is absent; something calling itself "Chrome"
+    /// with a different bundle identifier is installed. Stage one must still win, or the imposter
+    /// hands itself the membership the user granted to Chrome — which is the precise failure the
+    /// three-stage order exists to prevent, and the one an empty universe can never expose.
+    @Test
+    func theAliasTableOutranksTheResolverWhenAnImposterIsTheOnlyInstalledMatch() {
+        let scope = Self.scope(apps: ["Chrome"], installing: ["Chrome": "com.imposter.chrome"])
+
+        // Stage one won: the key is the *cataloged* bundle identifier, not the installed one.
+        #expect(scope.appKeys == ["bundle:com.google.Chrome"])
+        // So the imposter — the only thing on this machine answering to "Chrome" — stays out.
+        #expect(
+            scope.verdict(for: .resolvedApp(bundleIdentifier: "com.imposter.chrome", displayName: "Chrome"))
+                == .outOfScope
+        )
+        // And the genuine Chrome is in scope, uninstalled though it is here, because membership is
+        // what the user configured and installation is a separate question.
+        #expect(
+            scope.verdict(for: .resolvedApp(bundleIdentifier: "com.google.Chrome", displayName: "Chrome"))
+                == .inScope
+        )
+        // The same order holds for the queried side, which goes through the identical three stages.
+        #expect(scope.verdict(for: .app("Chrome")) == .inScope)
+        #expect(scope.verdict(for: .app("Google Chrome")) == .inScope)
+    }
+
     /// The unconstrained and rendering halves: a workspace configuring no apps constrains no
     /// resolved app, and the user-facing value is the display name so an escalation reads as a
     /// sentence about an app, never about a bundle identifier.
