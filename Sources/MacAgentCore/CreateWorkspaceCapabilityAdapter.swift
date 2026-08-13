@@ -119,10 +119,12 @@ public struct CreateWorkspaceCapabilityAdapter: CapabilityAdapter {
         // unchecked claim about what is live that made the act log look like a fix.
         // `ActionPreview.details` and the act log above are rendered by nothing at all, so the note
         // has to ride here or the ticket's "soft signal at creation" exists only in the model.
-        // Deliberately *not* a `CapabilityRiskEscalation` — all six existing escalation sites
-        // raise a tier, and both approval panels label that line as what raised this above its
-        // default tier, so a same-tier entry would render an informational note in warning colour
-        // under a heading that would then be false.
+        // Deliberately *not* a `CapabilityRiskEscalation` — every existing escalation site raises
+        // a tier (8 in `Sources/` as of SONNY-100's correction; this line first said "all six",
+        // a count row B's own two additions had already made stale — the claim that matters, that
+        // every site *raises*, held at both counts), and both approval panels label that line as
+        // what raised this above its default tier, so a same-tier entry would render an
+        // informational note in warning colour under a heading that would then be false.
         //
         // The count stays the full listed count: two apps really were saved. Which of them is
         // scope-only is what the note is for.

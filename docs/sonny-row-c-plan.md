@@ -615,3 +615,13 @@ findings): §2.1's grant formula now tests eligibility **per grant** (F2), and �
 scheduled-pre-check forward-hazard amendment — carried in the same 2026-08-13 ratification as the ten
 decisions rather than being one of them, and omitted from this document until now (F1). Both are corrections to this artifact, not changes to the ratified design; F3 was
 the branch's own changelog entry, which lives in the changelog. Frozen from here.
+
+**Status update, 2026-08-13 (SONNY-100 — the one line this frozen artifact takes per its own header):**
+branch 1 (`feature/approval-relaxation-structural`, SONNY-97/98/99/100) is complete and in review.
+Implementation followed this plan with four small, named additions rather than divergences, each
+recorded on the tickets: `RiskApprovalRequest` carries the applied grant as a reporting-only field
+(the seam SONNY-99's never-touch list required SONNY-97 to leave), the consent's answered
+requirement is a sibling Optional field rather than a `Coverage` payload, `safeModeFloor` is
+`.explicitApproval` (SONNY-90 owns the floor, never the formula), and the ran-without-asking trace
+additionally gates on tier ≥ 2 so a grant that changed nothing (tiers 0/1 auto-run in every column)
+never traces. Branch 2 is not started.
