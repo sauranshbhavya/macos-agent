@@ -5,7 +5,7 @@ import ImageIO
 import UniformTypeIdentifiers
 
 // SONNY-69 experiment (throwaway spike — never merges). Screenshot the target app's front
-// window, ask a vision model (Gemma 4 31B) which control to click, synthesize a real click,
+// window, ask a vision model which control to click, synthesize a real click,
 // re-screenshot, loop. Deliberately OUTSIDE the risk/approval engine — the model can click
 // anything, including destructive controls. Supervised runs on the founder's machine only; every
 // click is logged to the console (coordinates + rationale) before it is issued.
@@ -99,9 +99,40 @@ public enum VisionActionLoopError: Error, LocalizedError {
 /// The vision-model seam: what the loop needs from whoever decides the next action. Lets the
 /// seam tests script decisions without touching the network; VisionModelClient is the real one.
 protocol VisionDeciding: Sendable {
-    /// e.g. "cerebras/gemma-4-31b" — recorded in the transcript and the run summary.
+    /// e.g. "opencode/gpt-5.6-luna" — recorded in the transcript and the run summary.
     var transcriptDescription: String { get }
     func decide(prompt: String, pngData: Data) async throws -> (reply: String, latencySeconds: Double)
+}
+
+public struct VisionClarificationRequest: Equatable, Sendable {
+    public let question: String
+    public let rationale: String
+
+    public init(question: String, rationale: String) {
+        self.question = question
+        self.rationale = rationale
+    }
+}
+
+public struct VisionCoordinatorRequest: Equatable, Sendable {
+    public let instruction: String
+    public let rationale: String
+
+    public init(instruction: String, rationale: String) {
+        self.instruction = instruction
+        self.rationale = rationale
+    }
+}
+
+public enum VisionCoordinatorResult: Equatable, Sendable {
+    case completed(summary: String)
+    case failed(reason: String)
+}
+
+@MainActor
+public protocol VisionActionLoopInteracting: Sendable {
+    func requestClarification(_ request: VisionClarificationRequest) async throws -> String
+    func delegateToCoordinator(_ request: VisionCoordinatorRequest) async throws -> VisionCoordinatorResult
 }
 
 public enum VisionActionLoop {
@@ -151,13 +182,16 @@ public enum VisionActionLoop {
         }
     }
 
-    public static func run(_ request: VisionActionRequest) async throws -> RunSummary {
+    public static func run(
+        _ request: VisionActionRequest,
+        interaction: any VisionActionLoopInteracting
+    ) async throws -> RunSummary {
         let driver = ComputerUseDriverFactory.make()
         do {
             try driver.preflightPermissions()
             try await driver.prepare()
             let client = try VisionModelClient()
-            let summary = try await run(request, driver: driver, decider: client)
+            let summary = try await run(request, driver: driver, decider: client, interaction: interaction)
             await driver.shutdown()
             return summary
         } catch {
@@ -172,6 +206,7 @@ public enum VisionActionLoop {
         _ request: VisionActionRequest,
         driver: any ComputerUseDriver,
         decider: any VisionDeciding,
+        interaction: any VisionActionLoopInteracting = UnavailableVisionActionLoopInteraction(),
         settleScale: Double = 1.0
     ) async throws -> RunSummary {
         var transcript: [String] = []
@@ -194,7 +229,7 @@ public enum VisionActionLoop {
         }
         var actions: [ActionRecord] = []
         var iterationsRun = 0
-        // Feedback state, live 2026-08-08: Gemma's raw pointing runs ~1 list-row low and, with
+        // Feedback state, live 2026-08-08: the original model's raw pointing ran ~1 list-row low and, with
         // byte-identical re-captures, the history kept implying the click worked — so the model
         // repeated the same miss six times. The marker + pixel-identical callout give it ground
         // truth to correct against.
@@ -249,6 +284,40 @@ public enum VisionActionLoop {
                 return RunSummary(outcome: .done(decision.rationale), actions: actions, iterations: iteration, transcript: transcript, modelDescription: decider.transcriptDescription)
             case .stuck:
                 return RunSummary(outcome: .stuck(decision.rationale), actions: actions, iterations: iteration, transcript: transcript, modelDescription: decider.transcriptDescription)
+            case .clarify:
+                guard let question = decision.question?.trimmingCharacters(in: .whitespacesAndNewlines), !question.isEmpty else {
+                    throw VisionActionLoopError.unparseableModelReply(reply)
+                }
+                emit("iteration \(iteration): CLARIFY — \(question)")
+                history.append("iteration \(iteration): asked the user: \"\(question)\" — \(decision.rationale)")
+                let answer = try await interaction.requestClarification(VisionClarificationRequest(
+                    question: question,
+                    rationale: decision.rationale
+                ))
+                emit("iteration \(iteration): user answered clarification")
+                history.append("external result for iteration \(iteration): user answered: \"\(answer)\"")
+                lastClickImagePoint = nil
+                lastUnmarkedPNG = nil
+            case .delegate:
+                guard let instruction = decision.instruction?.trimmingCharacters(in: .whitespacesAndNewlines), !instruction.isEmpty else {
+                    throw VisionActionLoopError.unparseableModelReply(reply)
+                }
+                emit("iteration \(iteration): DELEGATE — \(instruction)")
+                history.append("iteration \(iteration): delegated to Sonny's coordinator: \"\(instruction)\" — \(decision.rationale)")
+                let result = try await interaction.delegateToCoordinator(VisionCoordinatorRequest(
+                    instruction: instruction,
+                    rationale: decision.rationale
+                ))
+                switch result {
+                case .completed(let summary):
+                    emit("iteration \(iteration): coordinator completed — \(summary)")
+                    history.append("external result for iteration \(iteration): coordinator completed: \(summary)")
+                case .failed(let reason):
+                    emit("iteration \(iteration): coordinator failed — \(reason)")
+                    history.append("external result for iteration \(iteration): coordinator failed: \(reason)")
+                }
+                lastClickImagePoint = nil
+                lastUnmarkedPNG = nil
             case .wait:
                 emit("iteration \(iteration): WAIT — \(decision.rationale)")
                 history.append("iteration \(iteration): waited for the screen to settle — \(decision.rationale)")
@@ -291,6 +360,13 @@ public enum VisionActionLoop {
                     x = refined.x
                     y = refined.y
                     refineLatency = refined.latency
+                }
+
+                guard (0..<capture.image.width).contains(x),
+                      (0..<capture.image.height).contains(y) else {
+                    emit("iteration \(iteration): click image(\(x),\(y)) is outside the captured \(capture.image.width)x\(capture.image.height)px image — click skipped, recapturing")
+                    history.append("iteration \(iteration): click on \"\(decision.target)\" skipped — coordinates (\(x), \(y)) are outside the screenshot bounds 0...\(capture.image.width - 1) x 0...\(capture.image.height - 1); choose a point visibly inside the new screenshot")
+                    continue
                 }
 
                 // Sonny's own floating widget is a .floating-level window anchored bottom-center;
@@ -522,7 +598,7 @@ public enum VisionActionLoop {
     ) -> String {
         let historyBlock = history.isEmpty ? "none yet" : history.joined(separator: "\n")
         return """
-        You are a precise macOS UI vision agent. You see one screenshot of the window \"\(windowTitle)\" of the app \"\(request.appName)\". The screenshot is \(imageWidth)x\(imageHeight) pixels; the coordinate origin (0,0) is the TOP-LEFT corner, x grows right, y grows down.
+        You are a precise macOS UI vision agent. You see one screenshot of the window \"\(windowTitle)\" of the app \"\(request.appName)\". The screenshot is \(imageWidth)x\(imageHeight) pixels; the coordinate origin (0,0) is the TOP-LEFT corner, x grows right, y grows down. Every click must satisfy 0 <= x < \(imageWidth) and 0 <= y < \(imageHeight); never estimate coordinates outside those bounds.
 
         GOAL: \(request.goal)
 
@@ -533,128 +609,79 @@ public enum VisionActionLoop {
         {"action":"click","x":<int>,"y":<int>,"target":"<visible label of the control>","rationale":"<one short sentence>"}
         {"action":"type","text":"<the literal text to type>","target":"<the focused text field>","rationale":"<one short sentence>"}
         {"action":"wait","x":null,"y":null,"target":"","rationale":"<why>"}
+        {"action":"clarify","question":"<one specific question for the user>","rationale":"<why the answer is required>"}
+        {"action":"delegate","instruction":"<one bounded task for Sonny's coordinator>","rationale":"<why this is better handled outside the visible UI>"}
         {"action":"done","x":null,"y":null,"target":"","rationale":"<why>"}
         {"action":"stuck","x":null,"y":null,"target":"","rationale":"<why>"}
         Coordinates must be pixels inside this screenshot. Aim EXACTLY at the visible text of the target itself: put the point in the vertical middle of the text glyphs (a name, a button label), never on the row, container, or whitespace around it. If the target has both an icon and a text label, click the text label.
         A red circle-and-crosshair marker, when visible, marks exactly where your PREVIOUS click landed. If the marker is not sitting on the target's text, your aim was off — shift your next coordinates by the same distance in the opposite direction of the miss.
         "type" sends real keystrokes to whatever control currently has keyboard focus — click the text field first in an earlier action if it is not already focused, and only type text the goal itself calls for. To submit what you typed (a chat message, an address bar URL), end the text with \\n — it is delivered as a real Return keypress.
         Use "wait" when the page or app is visibly still loading and the right move is to let it finish.
+        Use "clarify" only when the goal is ambiguous and one specific answer from the user is required before acting.
+        Use "delegate" when a bounded subtask is better handled by Sonny's coordinator tools, such as opening another app or URL, accessing local files, researching information, creating a file, or writing a summary. Do not delegate clicks or typing in the current app. The coordinator result will be returned in Actions already taken, then you will receive a fresh screenshot of this app and continue the original goal.
         Use "done" when the goal is already visibly complete in this screenshot; use "stuck" only after a click, typing, and waiting have all failed to advance the goal.
         """
     }
 }
 
-// MARK: - Vision model client (Cerebras primary, Google hosted fallback)
+// MARK: - Vision model client (OpenCode Zen Responses API)
 
 struct VisionModelClient: VisionDeciding {
-    enum Host: String {
-        case cerebras
-        case google
-    }
-
-    let host: Host
     let model: String
     private let apiKey: String
+    private let endpoint: URL
     private let session: URLSession
 
-    var transcriptDescription: String { "\(host.rawValue)/\(model)" }
+    var transcriptDescription: String { "opencode/\(model)" }
 
     init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
+        endpoint: URL = URL(string: "https://opencode.ai/zen/go/v1/responses")!,
         session: URLSession = .shared
     ) throws {
-        let host = Host(rawValue: environment["SONNY_VISION_HOST"]?.lowercased() ?? "") ?? .cerebras
-        self.host = host
+        self.model = environment["SONNY_VISION_MODEL"] ?? "gpt-5.6-luna"
+        self.endpoint = endpoint
         self.session = session
-        switch host {
-        case .cerebras:
-            self.model = environment["SONNY_VISION_MODEL"] ?? "gemma-4-31b"
-            guard let key = environment["CEREBRAS_API_KEY"], !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                throw VisionActionLoopError.missingAPIKey("CEREBRAS_API_KEY")
-            }
-            self.apiKey = key
-        case .google:
-            self.model = environment["SONNY_VISION_MODEL"] ?? "gemma-4-31b-it"
-            guard let key = environment["GEMINI_API_KEY"], !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-                throw VisionActionLoopError.missingAPIKey("GEMINI_API_KEY")
-            }
-            self.apiKey = key
+        guard let key = environment["OPENCODE_API_KEY"], !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            throw VisionActionLoopError.missingAPIKey("OPENCODE_API_KEY")
         }
+        self.apiKey = key
     }
 
     func decide(prompt: String, pngData: Data) async throws -> (reply: String, latencySeconds: Double) {
         let started = Date()
-        let reply: String
-        switch host {
-        case .cerebras:
-            reply = try await decideViaCerebras(prompt: prompt, pngData: pngData)
-        case .google:
-            reply = try await decideViaGoogle(prompt: prompt, pngData: pngData)
-        }
+        let reply = try await decideViaOpenCode(prompt: prompt, pngData: pngData)
         return (reply, Date().timeIntervalSince(started))
     }
 
-    private func decideViaCerebras(prompt: String, pngData: Data) async throws -> String {
+    private func decideViaOpenCode(prompt: String, pngData: Data) async throws -> String {
         let body: [String: Any] = [
             "model": model,
-            "messages": [
+            "input": [
                 [
                     "role": "user",
                     "content": [
-                        ["type": "text", "text": prompt],
+                        ["type": "input_text", "text": prompt],
                         [
-                            "type": "image_url",
-                            "image_url": ["url": "data:image/png;base64,\(pngData.base64EncodedString())"]
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,\(pngData.base64EncodedString())"
                         ]
                     ]
                 ]
             ]
         ]
-        var request = URLRequest(url: URL(string: "https://api.cerebras.ai/v1/chat/completions")!)
+        var request = URLRequest(url: endpoint)
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
         request.httpBody = try JSONSerialization.data(withJSONObject: body)
 
         let data = try await send(request)
-        return try CerebrasChatResponseParser.messageContent(from: data)
-    }
-
-    private func decideViaGoogle(prompt: String, pngData: Data) async throws -> String {
-        let body: [String: Any] = [
-            "contents": [
-                [
-                    "parts": [
-                        ["inline_data": ["mime_type": "image/png", "data": pngData.base64EncodedString()]],
-                        ["text": prompt]
-                    ]
-                ]
-            ]
-        ]
-        var components = URLComponents(string: "https://generativelanguage.googleapis.com/v1beta/models/\(model):generateContent")!
-        components.queryItems = [URLQueryItem(name: "key", value: apiKey)]
-        var request = URLRequest(url: components.url!)
-        request.httpMethod = "POST"
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
-
-        let data = try await send(request)
-        guard let object = try? JSONSerialization.jsonObject(with: data) as? [String: Any],
-              let candidates = object["candidates"] as? [[String: Any]],
-              let content = candidates.first?["content"] as? [String: Any],
-              let parts = content["parts"] as? [[String: Any]] else {
+        do {
+            return try OpenAIResponseParser.outputText(from: data)
+        } catch {
             throw VisionActionLoopError.unparseableModelReply(String(data: data, encoding: .utf8) ?? "<unreadable body>")
         }
-        // Gemma 4 on this endpoint emits thinking parts flagged {"thought": true} ahead of the
-        // real answer (observed live 2026-08-08); concatenating them would bury the JSON reply.
-        let text = parts
-            .filter { ($0["thought"] as? Bool) != true }
-            .compactMap { $0["text"] as? String }
-            .joined()
-        guard !text.isEmpty else {
-            throw VisionActionLoopError.unparseableModelReply(String(data: data, encoding: .utf8) ?? "<unreadable body>")
-        }
-        return text
     }
 
     private func send(_ request: URLRequest) async throws -> Data {
@@ -669,13 +696,15 @@ struct VisionModelClient: VisionDeciding {
     }
 }
 
-// MARK: - Model decision parsing (deliberately lenient — Gemma has no structured-output guarantee)
+// MARK: - Model decision parsing (deliberately lenient about surrounding text)
 
 struct VisionDecision {
     enum Kind: String {
         case click
         case type
         case wait
+        case clarify
+        case delegate
         case done
         case stuck
     }
@@ -684,6 +713,8 @@ struct VisionDecision {
     let x: Int?
     let y: Int?
     let text: String?
+    let question: String?
+    let instruction: String?
     let target: String
     let rationale: String
 
@@ -710,8 +741,20 @@ struct VisionDecision {
             x: intValue("x"),
             y: intValue("y"),
             text: object["text"] as? String,
+            question: object["question"] as? String,
+            instruction: object["instruction"] as? String,
             target: object["target"] as? String ?? "",
             rationale: object["rationale"] as? String ?? ""
         )
+    }
+}
+
+private struct UnavailableVisionActionLoopInteraction: VisionActionLoopInteracting {
+    func requestClarification(_ request: VisionClarificationRequest) async throws -> String {
+        throw VisionActionLoopError.driverFailure("Vision clarification is unavailable in this host.")
+    }
+
+    func delegateToCoordinator(_ request: VisionCoordinatorRequest) async throws -> VisionCoordinatorResult {
+        throw VisionActionLoopError.driverFailure("Vision coordinator delegation is unavailable in this host.")
     }
 }

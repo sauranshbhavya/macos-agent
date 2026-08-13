@@ -92,6 +92,8 @@ final class AgentViewModel: ObservableObject {
     private var preparedRun: PreparedAgentRun?
     private var runner: AgentRunner?
     private var currentTask: Task<Void, Never>?
+    private var visionClarificationContinuation: CheckedContinuation<String, Error>?
+    private var visionApprovalContinuation: CheckedContinuation<CapabilityRiskTier?, Never>?
     private let audioRecorder: AudioCommandRecorder
     private let permissionReadinessService: PermissionReadinessService
     private let routineStore: RoutineStore
@@ -921,7 +923,7 @@ final class AgentViewModel: ObservableObject {
 
     private func runVisionLoop(_ request: VisionActionRequest) async {
         do {
-            let summary = try await VisionActionLoop.run(request)
+            let summary = try await VisionActionLoop.run(request, interaction: self)
             finalSummary = summary.userSummary
             logStore.append(.summarize, summary.userSummary)
         } catch {
@@ -935,7 +937,60 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
+    private func awaitVisionApproval(_ request: RiskApprovalRequest) async -> CapabilityRiskTier? {
+        approvalRequest = request
+        finalSummary = "Approval needed before Sonny's coordinator can act."
+        logStore.append(.confirm, "Vision-requested coordinator action requires \(request.assessment.effectiveTier.displayName) approval")
+        return await withCheckedContinuation { continuation in
+            visionApprovalContinuation = continuation
+        }
+    }
+
+    private func prepareVisionCoordinatorRun(command: String) async throws -> (AgentRunner, PreparedAgentRun) {
+        let executor = makeExecutor()
+        if let resolution = makeInstantCommandResolver().resolve(command: command) {
+            let runner = AgentRunner(
+                planner: InstantOnlyFallbackPlanner(),
+                executor: executor,
+                logStore: logStore,
+                recentArtifactStore: recentArtifactStore
+            )
+            switch resolution {
+            case .plan(let plan), .clarify(let plan):
+                return (runner, try runner.prepare(plan: plan, source: .instantResolver))
+            }
+        }
+
+        let planner: any Planning
+        if ProcessInfo.processInfo.environment["SONNY_PLANNER"]?.lowercased() == "cerebras" {
+            planner = try CerebrasPlanner(usageRecorder: taskUsageRecorder)
+        } else {
+            planner = try OpenAIPlanner(usageRecorder: taskUsageRecorder)
+        }
+        let runner = AgentRunner(
+            planner: planner,
+            executor: executor,
+            logStore: logStore,
+            recentArtifactStore: recentArtifactStore
+        )
+        return (runner, try await runner.prepare(command: command))
+    }
+
     func cancelCurrentRun() {
+        if let continuation = visionApprovalContinuation {
+            visionApprovalContinuation = nil
+            approvalRequest = nil
+            hasCompletedFirstApproval = true
+            continuation.resume(returning: nil)
+            return
+        }
+        if let continuation = visionClarificationContinuation {
+            visionClarificationContinuation = nil
+            clarificationQuestion = nil
+            clarificationAnswer = ""
+            continuation.resume(throwing: CancellationError())
+            return
+        }
         if isAwaitingApproval {
             if let preparedRun, let pendingCommandForPriorTaskContext {
                 recordPriorTaskContext(
@@ -1063,6 +1118,14 @@ final class AgentViewModel: ObservableObject {
         let answer = clarificationAnswer.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !answer.isEmpty else {
             setError("Enter an answer before continuing.")
+            return
+        }
+
+        if let continuation = visionClarificationContinuation {
+            visionClarificationContinuation = nil
+            clarificationQuestion = nil
+            clarificationAnswer = ""
+            continuation.resume(returning: answer)
             return
         }
 
@@ -1845,6 +1908,13 @@ final class AgentViewModel: ObservableObject {
     }
 
     private func approvePendingRun() {
+        if let continuation = visionApprovalContinuation, let approvalRequest {
+            visionApprovalContinuation = nil
+            self.approvalRequest = nil
+            hasCompletedFirstApproval = true
+            continuation.resume(returning: approvalRequest.assessment.effectiveTier)
+            return
+        }
         guard !isRunning, let preparedRun, let runner, let approvalRequest else {
             return
         }
@@ -2356,6 +2426,93 @@ final class AgentViewModel: ObservableObject {
             return
         }
         stepStatuses = Dictionary(uniqueKeysWithValues: stepStatuses.keys.map { ($0, status) })
+    }
+}
+
+extension AgentViewModel: VisionActionLoopInteracting {
+    func requestClarification(_ request: VisionClarificationRequest) async throws -> String {
+        clarificationQuestion = request.question
+        clarificationAnswer = ""
+        finalSummary = "Clarification needed before the vision agent can continue."
+        logStore.append(.summarize, "Vision clarification needed: \(request.question)")
+        return try await withTaskCancellationHandler {
+            try await withCheckedThrowingContinuation { continuation in
+                visionClarificationContinuation = continuation
+            }
+        } onCancel: {
+            Task { @MainActor in
+                guard let continuation = self.visionClarificationContinuation else { return }
+                self.visionClarificationContinuation = nil
+                self.clarificationQuestion = nil
+                continuation.resume(throwing: CancellationError())
+            }
+        }
+    }
+
+    func delegateToCoordinator(_ request: VisionCoordinatorRequest) async throws -> VisionCoordinatorResult {
+        do {
+            let (runner, prepared) = try await prepareVisionCoordinatorRun(command: request.instruction)
+            if let question = prepared.clarificationQuestion {
+                let answer = try await requestClarification(VisionClarificationRequest(
+                    question: question,
+                    rationale: "The coordinator needs this information to complete the delegated task."
+                ))
+                return try await delegateToCoordinator(VisionCoordinatorRequest(
+                    instruction: """
+                    \(request.instruction)
+
+                    Clarification question: \(question)
+                    Clarification answer: \(answer)
+                    """,
+                    rationale: request.rationale
+                ))
+            }
+
+            let scope = resolveTaskScope(command: request.instruction, plan: prepared.plan)
+            let approval = try runner.approvalRequest(for: prepared, logAssessment: true, scope: scope)
+            var decision: RiskApprovalDecision
+            switch approval.requirement {
+            case .autoRun:
+                decision = .notRequested
+            case .lightweightConfirmation, .explicitApproval:
+                guard let approvedTier = await awaitVisionApproval(approval) else {
+                    return .failed(reason: "The user declined the coordinator action.")
+                }
+                decision = .approved(approvedTier)
+            case .previewOnly:
+                return .failed(reason: "The coordinator action is limited to preview by the current approval policy.")
+            case .refuse:
+                return .failed(reason: "The coordinator refused this action under the current approval policy.")
+            }
+
+            let result: AgentRunResult
+            while true {
+                do {
+                    result = try await runner.execute(
+                        prepared,
+                        approvalDecision: decision,
+                        confirmationMessage: "Vision-requested coordinator action approved",
+                        logRiskAssessment: true,
+                        scope: scope
+                    )
+                    break
+                } catch RiskApprovalError.approvalRequired(let refreshedRequest) {
+                    guard let approvedTier = await awaitVisionApproval(refreshedRequest) else {
+                        return .failed(reason: "The user declined the coordinator action after its risk changed.")
+                    }
+                    decision = .approved(approvedTier)
+                }
+            }
+            refreshSavedItems()
+            if let artifactFailure = runner.lastRecentArtifactFailure {
+                recordLocalStorageWriteFailure(artifactFailure)
+            }
+            return .completed(summary: result.summary)
+        } catch let error where isCancellationError(error) {
+            throw error
+        } catch {
+            return .failed(reason: error.localizedDescription)
+        }
     }
 }
 

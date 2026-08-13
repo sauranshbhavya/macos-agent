@@ -5,6 +5,13 @@ import Testing
 @Suite
 struct PlannerBoundaryTests {
     @Test
+    func whatsappResolvesToTheInstalledApplicationBundle() throws {
+        let app = try MacAppCatalog.default.resolve("WhatsApp")
+
+        #expect(app.bundleIdentifier == "net.whatsapp.WhatsApp")
+    }
+
+    @Test
     func defaultToolRegistryPlannerDescriptionMatchesGolden() {
         assertExactString(ToolRegistry.default.plannerDescription, expectedDefaultPlannerDescription)
     }
@@ -182,7 +189,7 @@ private let expectedDefaultPlannerDescription = """
   dry run: Show source URL(s), search query, and Markdown output path without fetching pages or writing files.
   examples: Summarize https://example.com/article and save as Markdown | Compare these source URLs and save a Markdown note | Research Swift concurrency and save a Markdown note
 - open_app: Open allowlisted Mac app
-  description: Open an app from the local allowlist by human app name. Supported apps: Safari, Chrome, Finder, Notes, Calendar, Mail, Messages, Apple Music, Spotify, Slack, Discord, VS Code, Terminal.
+  description: Open an app from the local allowlist by human app name. Supported apps: Safari, Chrome, Finder, Notes, Calendar, Mail, Messages, Apple Music, Spotify, Slack, Discord, WhatsApp, VS Code, Terminal.
   required fields: appName
   side effects: open app
   dry run: Show the allowlisted app that would open.

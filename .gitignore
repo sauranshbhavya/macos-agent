@@ -8,5 +8,8 @@ DerivedData/
 *.xcodeproj/
 *.log
 
+# Machine-local launchers may contain API keys.
+scripts/*.local.sh
+
 # Founder-only reference doc, not part of the repo's tracked history
 docs/sonny-v1-product-overview.md

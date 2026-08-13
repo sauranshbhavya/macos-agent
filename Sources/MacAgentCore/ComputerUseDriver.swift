@@ -180,8 +180,7 @@ public enum ComputerUseSubstrate: String, Equatable, Sendable {
 public enum ComputerUseDriverFactory {
     /// SONNY_VISION_SUBSTRATE=handwritten selects the spike's original substrate; anything else
     /// (including unset) selects the CUA driver — it is the experiment's default per SONNY-80.
-    /// Lenient like the spike's SONNY_VISION_HOST handling: an unrecognized value falls back to
-    /// the default rather than failing the run.
+    /// An unrecognized value falls back to the default rather than failing the run.
     public static func substrate(fromEnvironment environment: [String: String]) -> ComputerUseSubstrate {
         environment["SONNY_VISION_SUBSTRATE"]?.lowercased() == "handwritten" ? .handwritten : .cua
     }

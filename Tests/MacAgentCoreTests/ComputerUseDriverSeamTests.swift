@@ -106,6 +106,24 @@ private final class ScriptedDecider: VisionDeciding, Sendable {
     }
 }
 
+@MainActor
+private final class ScriptedVisionInteraction: VisionActionLoopInteracting {
+    var clarificationAnswer = "Personal"
+    var coordinatorResult: VisionCoordinatorResult = .completed(summary: "Opened Notes.")
+    private(set) var clarificationRequests: [VisionClarificationRequest] = []
+    private(set) var coordinatorRequests: [VisionCoordinatorRequest] = []
+
+    func requestClarification(_ request: VisionClarificationRequest) async throws -> String {
+        clarificationRequests.append(request)
+        return clarificationAnswer
+    }
+
+    func delegateToCoordinator(_ request: VisionCoordinatorRequest) async throws -> VisionCoordinatorResult {
+        coordinatorRequests.append(request)
+        return coordinatorResult
+    }
+}
+
 private func makeImage(width: Int = 200, height: Int = 150, white: CGFloat) throws -> CGImage {
     let colorSpace = try #require(CGColorSpace(name: CGColorSpace.sRGB))
     let context = try #require(CGContext(
@@ -128,6 +146,63 @@ private let sampleRequest = VisionActionRequest(appName: "Mock App", goal: "pres
 
 @Suite
 struct ComputerUseDriverSeamTests {
+    @Test @MainActor
+    func clarificationAnswerReturnsToTheVisionLoopBeforeAFreshCapture() async throws {
+        let driver = MockComputerUseDriver(images: [
+            try makeImage(white: 0.2), try makeImage(white: 0.8)
+        ])
+        let decider = ScriptedDecider(replies: [
+            #"{"action":"clarify","question":"Which account should I use?","rationale":"Two accounts are visible."}"#,
+            #"{"action":"done","rationale":"The account is now known."}"#
+        ])
+        let interaction = ScriptedVisionInteraction()
+
+        let summary = try await VisionActionLoop.run(
+            sampleRequest,
+            driver: driver,
+            decider: decider,
+            interaction: interaction,
+            settleScale: 0
+        )
+
+        #expect(interaction.clarificationRequests == [VisionClarificationRequest(
+            question: "Which account should I use?",
+            rationale: "Two accounts are visible."
+        )])
+        #expect(decider.recordedPrompts[1].contains(#"user answered: "Personal""#))
+        #expect(await driver.captureCount == 2)
+        #expect(summary.actions.isEmpty)
+    }
+
+    @Test @MainActor
+    func coordinatorResultReturnsToTheVisionLoopBeforeAFreshCapture() async throws {
+        let driver = MockComputerUseDriver(images: [
+            try makeImage(white: 0.2), try makeImage(white: 0.8)
+        ])
+        let decider = ScriptedDecider(replies: [
+            #"{"action":"delegate","instruction":"Open Notes and summarize the latest draft","rationale":"This requires another app and local file access."}"#,
+            #"{"action":"done","rationale":"The coordinator completed the supporting work."}"#
+        ])
+        let interaction = ScriptedVisionInteraction()
+        interaction.coordinatorResult = .completed(summary: "Opened Notes and saved Summary.md.")
+
+        let summary = try await VisionActionLoop.run(
+            sampleRequest,
+            driver: driver,
+            decider: decider,
+            interaction: interaction,
+            settleScale: 0
+        )
+
+        #expect(interaction.coordinatorRequests == [VisionCoordinatorRequest(
+            instruction: "Open Notes and summarize the latest draft",
+            rationale: "This requires another app and local file access."
+        )])
+        #expect(decider.recordedPrompts[1].contains("coordinator completed: Opened Notes and saved Summary.md."))
+        #expect(await driver.captureCount == 2)
+        #expect(summary.actions.isEmpty)
+    }
+
     @Test
     func clickIsSentToTheDriverInImagePixelsAndRecordedWithTheDriversGlobalPoint() async throws {
         let driver = MockComputerUseDriver(images: [
@@ -187,6 +262,29 @@ struct ComputerUseDriverSeamTests {
         #expect(summary.transcript.contains { $0.contains("window disappeared during model inference — click skipped, recapturing") })
         let secondPrompt = try #require(decider.recordedPrompts.last)
         #expect(secondPrompt.contains("click on \"Button\" skipped — the window disappeared; reassess from the new screenshot"))
+    }
+
+    @Test
+    func outOfImageClickIsSkippedBeforeTheDriverAndCorrectedOnTheNextPrompt() async throws {
+        let driver = MockComputerUseDriver(images: [
+            try makeImage(width: 200, height: 150, white: 0.2),
+            try makeImage(width: 200, height: 150, white: 0.5),
+            try makeImage(width: 200, height: 150, white: 0.8)
+        ])
+        let decider = ScriptedDecider(replies: [
+            #"{"action":"click","x":80,"y":154,"target":"Send chat","rationale":"focus the field"}"#,
+            #"{"action":"click","x":80,"y":140,"target":"Send chat","rationale":"use an in-bounds point"}"#,
+            #"{"action":"done","x":null,"y":null,"target":"","rationale":"field focused"}"#
+        ])
+
+        let summary = try await VisionActionLoop.run(sampleRequest, driver: driver, decider: decider, settleScale: 0)
+
+        #expect(await driver.clickCalls == [CGPoint(x: 80, y: 140)])
+        #expect(summary.actions.count == 1)
+        #expect(summary.transcript.contains { $0.contains("click image(80,154) is outside the captured 200x150px image") })
+        let correctionPrompt = try #require(decider.recordedPrompts.dropFirst().first)
+        #expect(correctionPrompt.contains("coordinates (80, 154) are outside the screenshot bounds 0...199 x 0...149"))
+        #expect(decider.recordedPrompts.first?.contains("0 <= x < 200 and 0 <= y < 150") == true)
     }
 
     @Test
@@ -288,7 +386,7 @@ struct ComputerUseDriverFactoryTests {
         #expect(ComputerUseDriverFactory.substrate(fromEnvironment: [:]) == .cua)
         #expect(ComputerUseDriverFactory.substrate(fromEnvironment: ["SONNY_VISION_SUBSTRATE": "handwritten"]) == .handwritten)
         #expect(ComputerUseDriverFactory.substrate(fromEnvironment: ["SONNY_VISION_SUBSTRATE": "HandWritten"]) == .handwritten)
-        // Lenient like the spike's SONNY_VISION_HOST: unknown values fall back to the default.
+        // Unknown values fall back to the default.
         #expect(ComputerUseDriverFactory.substrate(fromEnvironment: ["SONNY_VISION_SUBSTRATE": "python"]) == .cua)
     }
 }
