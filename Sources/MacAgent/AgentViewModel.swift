@@ -947,14 +947,19 @@ final class AgentViewModel: ObservableObject {
                 startedAt: taskHistoryStartedAt
             )
             refreshSavedItems()
-        } catch RiskApprovalError.approvalRequired(let request) where routineTrustApproval != .notRequested {
-            // The trust grant stopped covering this run in the window between the assessment above
-            // and `AgentRunner.execute`'s own re-assessment — the state-drift class `performApproval`
-            // re-arms on ("the zip already exists" landing mid-flight). A manual run has a user
-            // present, so it prompts exactly as an untrusted run would rather than failing. The
-            // `where` clause keeps the ordinary auto-run path's drift behavior (the generic failure
-            // below) byte-identical: only an execution that actually carried the trust decision may
-            // re-arm here.
+        } catch RiskApprovalError.approvalRequired(let request) {
+            // Whatever let this run proceed without a prompt — a routine's trust grant, or a
+            // relaxation grant mapping it to `.autoRun` (SONNY-97) — stopped covering it in the
+            // window between the assessment above and `AgentRunner.execute`'s own re-assessment:
+            // the state-drift class `performApproval` re-arms on ("the zip already exists" landing
+            // mid-flight). Every dispatch through this function has a user present, so it prompts
+            // exactly as an ordinary run would rather than failing. The `where routineTrustApproval
+            // != .notRequested` clause that used to scope this to the trust path is gone
+            // deliberately: a plan that reached `.autoRun` through a row-C grant carries
+            // `.notRequested`, and hard-failing the one drift a user could simply answer was the
+            // gap SONNY-97's contract names. The unattended path is unaffected — it dispatches
+            // through `performScheduledRun`, whose own `RiskApprovalError` catch pauses the
+            // schedule instead (SONNY-31).
             markAllSteps(.pending)
             approvalRequest = request
             pendingCommandForPriorTaskContext = submittedCommand

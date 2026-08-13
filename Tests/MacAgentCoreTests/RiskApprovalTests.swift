@@ -236,7 +236,80 @@ struct RiskApprovalTests {
         #expect(!decision.authorizes(makeRequest(tier: .tier3, reasons: ["Any reason."])))
     }
 
-    private func makeRequest(tier: CapabilityRiskTier, reasons: [String]) -> RiskApprovalRequest {
+    // MARK: - The requirement axis (SONNY-97)
+
+    /// The third axis's concrete failure, held to exactly the case the first two axes cannot see:
+    /// equal tier, identical reasons, and only the *requirement* stricter — a lightweight
+    /// confirmation answered for a tier-3 action under a relaxation grant, then re-derived as an
+    /// explicit approval after the grant disappeared. The light consent must not be spent as the
+    /// heavy one.
+    @Test
+    func aLightweightAnswerDoesNotAuthorizeAnEqualTierExplicitRequirement() {
+        let answered = makeRequest(
+            tier: .tier3,
+            reasons: ["Shared reason."],
+            requirement: .lightweightConfirmation
+        )
+        let consent = RiskApprovalConsent(answering: answered)
+        let drifted = makeRequest(
+            tier: .tier3,
+            reasons: ["Shared reason."],
+            requirement: .explicitApproval
+        )
+
+        #expect(consent.answeredRequirement == .lightweightConfirmation)
+        #expect(consent.authorizes(answered))
+        #expect(!consent.authorizes(drifted))
+    }
+
+    /// The other direction stays covered: a requirement that is equal, or *looser* than the one
+    /// answered, is strictly less than what the user consented to — re-asking would be a prompt
+    /// with nothing new in it, the same subset logic the reason axis uses.
+    @Test
+    func anAnswerStillCoversAFreshRequirementThatIsEqualOrLooser() {
+        let explicit = RiskApprovalConsent(
+            answering: makeRequest(tier: .tier3, reasons: ["Shared reason."], requirement: .explicitApproval)
+        )
+
+        #expect(explicit.authorizes(
+            makeRequest(tier: .tier3, reasons: ["Shared reason."], requirement: .explicitApproval)
+        ))
+        #expect(explicit.authorizes(
+            makeRequest(tier: .tier3, reasons: ["Shared reason."], requirement: .lightweightConfirmation)
+        ))
+    }
+
+    /// A standing grant has no requirement axis, exactly as it has no reason axis: its consent is a
+    /// pure tier ceiling by decision, and a fresh requirement at or under that ceiling is covered
+    /// whatever its weight. This is what keeps the routine-trust and unattended paths untouched.
+    @Test
+    func aStandingGrantHasNoRequirementAxisToDriftOn() {
+        let grant = RiskApprovalConsent(tier: .tier2, coverage: .standingGrant)
+
+        #expect(grant.answeredRequirement == nil)
+        #expect(grant.authorizes(makeRequest(tier: .tier2, reasons: [], requirement: .lightweightConfirmation)))
+        #expect(grant.authorizes(makeRequest(tier: .tier2, reasons: [], requirement: .explicitApproval)))
+        #expect(!grant.authorizes(makeRequest(tier: .tier3, reasons: ["Any reason."], requirement: .lightweightConfirmation)))
+    }
+
+    /// `init(answering:)` reads the requirement from the same request as the tier and the reasons —
+    /// one source, so no call site can pair a requirement from one prompt with the reasons of
+    /// another.
+    @Test
+    func answeringARequestRecordsItsRequirementFromThatSameRequest() {
+        let request = makeRequest(tier: .tier3, reasons: ["Reason A."], requirement: .lightweightConfirmation)
+        let consent = RiskApprovalConsent(answering: request)
+
+        #expect(consent.tier == .tier3)
+        #expect(consent.coverage == .acknowledgedReasons(["Reason A."]))
+        #expect(consent.answeredRequirement == .lightweightConfirmation)
+    }
+
+    private func makeRequest(
+        tier: CapabilityRiskTier,
+        reasons: [String],
+        requirement: RiskApprovalRequirement? = nil
+    ) -> RiskApprovalRequest {
         let assessment = CapabilityRiskAssessment(
             defaultTier: .tier2,
             // Passed explicitly rather than derived, so a case can pin a tier that its reason list
@@ -247,9 +320,12 @@ struct RiskApprovalTests {
                 CapabilityRiskEscalation(fromTier: .tier2, toTier: .tier3, reason: $0)
             }
         )
+        // `requirement` is likewise explicit where a case needs a weight the baseline would not
+        // produce for this tier — a lightweight tier-3 ask is exactly what a relaxation grant
+        // makes real (SONNY-97), and the requirement-axis cases pin how consents treat it.
         return RiskApprovalRequest(
             assessment: assessment,
-            requirement: RiskApprovalPolicy.default.requirement(
+            requirement: requirement ?? RiskApprovalPolicy.default.requirement(
                 for: assessment,
                 context: ApprovalContext(origin: .planner, safeMode: false)
             )

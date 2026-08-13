@@ -189,16 +189,24 @@ public final class AgentRunner {
             // causes indistinguishable — see `RiskApprovalConsent.authorizes(_:)` for the rule that
             // replaced it and for why each half of it reads the way it does (SONNY-62).
             guard approvalDecision.authorizes(request) else {
-                // Only for the reason-drift half, and only when a consent existed to be exceeded:
-                // `.notRequested` reaching here is the ordinary "this needs approval" path, not a
-                // re-arm, and labelling it one would put a false event in the trace. The tier half
-                // is already legible from the `risk.assessed` line's own tier.
+                // Only for the reason-drift and requirement-drift halves, and only when a consent
+                // existed to be exceeded: `.notRequested` reaching here is the ordinary "this needs
+                // approval" path, not a re-arm, and labelling it one would put a false event in the
+                // trace (the mutation that emitted it there survived a whole battery — SONNY-62,
+                // M9). The tier half is already legible from the `risk.assessed` line's own tier.
                 if case .approved(let consent) = approvalDecision {
                     let unacknowledged = consent.unacknowledgedReasons(in: request)
                     if !unacknowledged.isEmpty {
                         logStore.append(
                             .risk,
                             "risk.rearmed: reasons not covered by the approval: \(unacknowledged.joined(separator: " "))"
+                        )
+                    }
+                    if let answered = consent.answeredRequirement,
+                       request.requirement.permissivenessRank < answered.permissivenessRank {
+                        logStore.append(
+                            .risk,
+                            "risk.rearmed: a stricter approval is now required: \(request.requirement.displayName) (answered: \(answered.displayName))"
                         )
                     }
                 }
