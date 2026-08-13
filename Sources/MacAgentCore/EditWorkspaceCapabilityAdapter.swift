@@ -530,7 +530,7 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
             lists: lists,
             scopeOnlyAdditions: WorkspaceScopeOnlyApps.names(
                 in: appArithmetic.added,
-                catalog: context.appCatalog
+                resolver: context.installedAppResolver
             )
         )
     }
@@ -563,7 +563,7 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
         for rawApp in raw {
             let trimmed = rawApp.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else {
-                throw MacAppCatalogError.missingAppName
+                throw MacAppError.missingAppName
             }
             apps.append(trimmed)
         }

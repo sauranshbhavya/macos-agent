@@ -66,6 +66,7 @@ public final class AgentActionExecutor {
     private let browserOpener: BrowserOpening
     private let hackerNewsFetcher: HackerNewsFetching
     private let appCatalog: MacAppCatalog
+    private let installedAppResolver: any InstalledAppResolving
     private let appSearchURLCatalog: AppSearchURLCatalog
     private let appOpener: AppOpening
     private let fileOpener: FileOpening
@@ -100,6 +101,7 @@ public final class AgentActionExecutor {
         browserOpener: BrowserOpening = WorkspaceBrowserOpener(),
         hackerNewsFetcher: HackerNewsFetching = HackerNewsAPIClient(),
         appCatalog: MacAppCatalog = .default,
+        installedAppResolver: any InstalledAppResolving = InstalledAppResolver.shared,
         appSearchURLCatalog: AppSearchURLCatalog = .default,
         appOpener: AppOpening = WorkspaceAppOpener(),
         fileOpener: FileOpening = WorkspaceFileOpener(),
@@ -133,6 +135,7 @@ public final class AgentActionExecutor {
         self.browserOpener = browserOpener
         self.hackerNewsFetcher = hackerNewsFetcher
         self.appCatalog = appCatalog
+        self.installedAppResolver = installedAppResolver
         self.appSearchURLCatalog = appSearchURLCatalog
         self.appOpener = appOpener
         self.fileOpener = fileOpener
@@ -211,8 +214,8 @@ public final class AgentActionExecutor {
     /// workspace that does exist all still throw exactly as before.
     ///
     /// An *unresolvable app* inside an existing workspace used to be on that list and no longer is —
-    /// SONNY-44 decoupled scope listing from `MacAppCatalog`, so such an entry is skipped at open
-    /// time and the open succeeds. It is not a clarification either; it is simply not an error.
+    /// SONNY-44 decoupled scope listing from launchability, so such an entry is skipped at open time
+    /// and the open succeeds. It is not a clarification either; it is simply not an error.
     ///
     /// Checks the *other* store first: "run hehe" when hehe is a saved workspace used to answer
     /// with a list of routine names while ignoring the exact-name workspace the user almost
@@ -1276,6 +1279,7 @@ public final class AgentActionExecutor {
             browserOpener: browserOpener,
             hackerNewsFetcher: hackerNewsFetcher,
             appCatalog: appCatalog,
+            installedAppResolver: installedAppResolver,
             appSearchURLCatalog: appSearchURLCatalog,
             appOpener: appOpener,
             fileOpener: fileOpener,

@@ -94,7 +94,7 @@ struct RiskApprovalTests {
             "local.instant.recent-artifacts": .tier0,
             "local.instant.running-app-switch": .tier1,
             "local.instant.snippet-save": .tier2,
-            "local.apps.open-allowlisted-app": .tier1,
+            "local.apps.open-app": .tier1,
             "local.browser.open-app-search-url": .tier1,
             "local.browser.open-url": .tier1,
             "local.media.open-result": .tier1,
