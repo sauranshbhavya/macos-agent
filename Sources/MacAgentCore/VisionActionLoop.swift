@@ -1,16 +1,20 @@
 import AppKit
-import ApplicationServices
 import CoreGraphics
 import Foundation
 import ImageIO
-import ScreenCaptureKit
 import UniformTypeIdentifiers
 
 // SONNY-69 experiment (throwaway spike — never merges). Screenshot the target app's front
-// window, ask a vision model (Gemma 4 31B) which control to click, synthesize a real CGEvent
-// click, re-screenshot, loop. Deliberately OUTSIDE the risk/approval engine — the model can
-// click anything, including destructive controls. Supervised runs on the founder's machine
-// only; every click is logged to the console (coordinates + rationale) before it is issued.
+// window, ask a vision model (Gemma 4 31B) which control to click, synthesize a real click,
+// re-screenshot, loop. Deliberately OUTSIDE the risk/approval engine — the model can click
+// anything, including destructive controls. Supervised runs on the founder's machine only; every
+// click is logged to the console (coordinates + rationale) before it is issued.
+//
+// SONNY-80 amendment: the computer-use substrate (window capture + click/typing synthesis) now
+// lives behind the ComputerUseDriver seam. The CUA-backed driver is the default;
+// SONNY_VISION_SUBSTRATE=handwritten selects the spike's original substrate. Loop semantics,
+// prompts, and history/transcript wording are unchanged above the seam so an A/B run differs
+// only in substrate.
 
 public struct VisionActionRequest: Equatable, Sendable {
     public let appName: String
@@ -68,6 +72,7 @@ public enum VisionActionLoopError: Error, LocalizedError {
     case captureFailed(String)
     case badResponse(Int, String)
     case unparseableModelReply(String)
+    case driverFailure(String)
 
     public var errorDescription: String? {
         switch self {
@@ -85,8 +90,18 @@ public enum VisionActionLoopError: Error, LocalizedError {
             return "Vision model request failed with HTTP \(status): \(body)"
         case .unparseableModelReply(let reply):
             return "Vision model reply was not usable JSON: \(reply)"
+        case .driverFailure(let reason):
+            return "Computer-use driver failure: \(reason)"
         }
     }
+}
+
+/// The vision-model seam: what the loop needs from whoever decides the next action. Lets the
+/// seam tests script decisions without touching the network; VisionModelClient is the real one.
+protocol VisionDeciding: Sendable {
+    /// e.g. "cerebras/gemma-4-31b" — recorded in the transcript and the run summary.
+    var transcriptDescription: String { get }
+    func decide(prompt: String, pngData: Data) async throws -> (reply: String, latencySeconds: Double)
 }
 
 public enum VisionActionLoop {
@@ -137,16 +152,41 @@ public enum VisionActionLoop {
     }
 
     public static func run(_ request: VisionActionRequest) async throws -> RunSummary {
-        try preflightPermissions()
-        let client = try VisionModelClient()
+        let driver = ComputerUseDriverFactory.make()
+        do {
+            try driver.preflightPermissions()
+            try await driver.prepare()
+            let client = try VisionModelClient()
+            let summary = try await run(request, driver: driver, decider: client)
+            await driver.shutdown()
+            return summary
+        } catch {
+            await driver.shutdown()
+            throw error
+        }
+    }
 
+    // `settleScale` exists for the seam tests only: it scales the loop's human-paced settle
+    // sleeps (0 in tests) without changing their relative structure.
+    static func run(
+        _ request: VisionActionRequest,
+        driver: any ComputerUseDriver,
+        decider: any VisionDeciding,
+        settleScale: Double = 1.0
+    ) async throws -> RunSummary {
         var transcript: [String] = []
         func emit(_ line: String) {
             print("[VisionLoop] \(line)")
             transcript.append(line)
         }
+        func settle(_ nanoseconds: UInt64) async throws {
+            let scaled = UInt64(Double(nanoseconds) * settleScale)
+            if scaled > 0 {
+                try await Task.sleep(nanoseconds: scaled)
+            }
+        }
 
-        emit("start host=\(client.host.rawValue) model=\(client.model) app=\"\(request.appName)\" goal=\"\(request.goal)\"")
+        emit("start substrate=\(driver.substrateDescription) vision=\(decider.transcriptDescription) app=\"\(request.appName)\" goal=\"\(request.goal)\"")
 
         var history: [String] = []
         if let contextNote = request.contextNote {
@@ -164,12 +204,12 @@ public enum VisionActionLoop {
         for iteration in 1...maxIterations {
             iterationsRun = iteration
 
-            guard let pid = await activateApp(named: request.appName) else {
-                throw VisionActionLoopError.targetAppNotRunning(request.appName, available: await visibleAppNames())
+            guard let pid = await driver.activateApp(named: request.appName) else {
+                throw VisionActionLoopError.targetAppNotRunning(request.appName, available: await driver.visibleAppNames())
             }
-            try await Task.sleep(nanoseconds: 800_000_000)
+            try await settle(800_000_000)
 
-            let capture = try await captureFrontWindow(ofProcess: pid, appName: request.appName)
+            let capture = try await driver.captureFrontWindow(ofProcess: pid, appName: request.appName)
             let unmarkedPNG = try pngData(from: capture.image)
 
             // Compare UNMARKED bytes across iterations: the deterministic PNG encode makes
@@ -196,26 +236,26 @@ public enum VisionActionLoop {
                 imageHeight: capture.image.height,
                 history: history
             )
-            let (reply, latency) = try await client.decide(prompt: prompt, pngData: png)
+            let (reply, latency) = try await decider.decide(prompt: prompt, pngData: png)
             let decision = try VisionDecision.parse(reply)
             emit("iteration \(iteration): model replied in \(String(format: "%.2f", latency))s action=\(decision.kind.rawValue) target=\"\(decision.target)\"")
 
             switch decision.kind {
             case .done:
-                return RunSummary(outcome: .done(decision.rationale), actions: actions, iterations: iteration, transcript: transcript, modelDescription: "\(client.host.rawValue)/\(client.model)")
+                return RunSummary(outcome: .done(decision.rationale), actions: actions, iterations: iteration, transcript: transcript, modelDescription: decider.transcriptDescription)
             case .stuck:
-                return RunSummary(outcome: .stuck(decision.rationale), actions: actions, iterations: iteration, transcript: transcript, modelDescription: "\(client.host.rawValue)/\(client.model)")
+                return RunSummary(outcome: .stuck(decision.rationale), actions: actions, iterations: iteration, transcript: transcript, modelDescription: decider.transcriptDescription)
             case .wait:
                 emit("iteration \(iteration): WAIT — \(decision.rationale)")
                 history.append("iteration \(iteration): waited for the screen to settle — \(decision.rationale)")
-                try await Task.sleep(nanoseconds: 2_000_000_000)
+                try await settle(2_000_000_000)
             case .type:
                 guard let text = decision.text, !text.isEmpty else {
                     throw VisionActionLoopError.unparseableModelReply(reply)
                 }
                 // Same mandate as clicks: log BEFORE the keystrokes are issued.
                 emit("iteration \(iteration): TYPE \"\(text.replacingOccurrences(of: "\n", with: "\\n"))\" target=\"\(decision.target)\" rationale=\"\(decision.rationale)\"")
-                try await synthesizeTyping(text)
+                try await driver.typeText(text)
                 actions.append(ActionRecord(
                     kind: .type,
                     iteration: iteration,
@@ -227,7 +267,7 @@ public enum VisionActionLoop {
                     visionLatencySeconds: latency
                 ))
                 history.append("iteration \(iteration): typed \"\(text.replacingOccurrences(of: "\n", with: "\\n"))\" into \"\(decision.target)\" — \(decision.rationale)")
-                try await Task.sleep(nanoseconds: 1_500_000_000)
+                try await settle(1_500_000_000)
             case .click:
                 guard let initialX = decision.x, let initialY = decision.y else {
                     throw VisionActionLoopError.unparseableModelReply(reply)
@@ -238,7 +278,7 @@ public enum VisionActionLoop {
                 var x = initialX
                 var y = initialY
                 var refineLatency = 0.0
-                if let refined = await refineClick(client: client, image: capture.image, target: decision.target, initialX: initialX, initialY: initialY) {
+                if let refined = await refineClick(decider: decider, image: capture.image, target: decision.target, initialX: initialX, initialY: initialY) {
                     if refined.x != initialX || refined.y != initialY {
                         emit("iteration \(iteration): zoom pass refined \"\(decision.target)\" from image(\(initialX),\(initialY)) to image(\(refined.x),\(refined.y)) in \(String(format: "%.2f", refined.latency))s")
                     }
@@ -246,69 +286,64 @@ public enum VisionActionLoop {
                     y = refined.y
                     refineLatency = refined.latency
                 }
-                // The screenshot is requested at 1x, but the scale is always recomputed from the
-                // actual image dimensions so a 2x capture still maps correctly to window points.
-                let frame = capture.windowFrame
-                let scaleX = frame.width / CGFloat(capture.image.width)
-                let scaleY = frame.height / CGFloat(capture.image.height)
-                let windowPoint = CGPoint(x: CGFloat(x) * scaleX, y: CGFloat(y) * scaleY)
-
-                // The frame was captured before the vision call, whose latency is uncapped — the
-                // window can move meanwhile. A pure move keeps the model's window-relative point
-                // valid, so translate through the FRESH origin; a resize (or a vanished window)
-                // means the content shifted under the model and the click would be a lie — skip
-                // it and recapture instead.
-                guard let freshFrame = currentWindowFrame(windowID: capture.windowID) else {
-                    emit("iteration \(iteration): window disappeared during model inference — click skipped, recapturing")
-                    history.append("iteration \(iteration): click on \"\(decision.target)\" skipped — the window disappeared; reassess from the new screenshot")
-                    continue
-                }
-                if abs(freshFrame.width - frame.width) > 2 || abs(freshFrame.height - frame.height) > 2 {
-                    emit("iteration \(iteration): window resized during model inference (\(Int(frame.width))x\(Int(frame.height)) -> \(Int(freshFrame.width))x\(Int(freshFrame.height))) — click skipped, recapturing")
-                    history.append("iteration \(iteration): click on \"\(decision.target)\" skipped — the window resized; reassess from the new screenshot")
-                    continue
-                }
-                // SCWindow.frame, kCGWindowBounds, and CGEvent all use top-left-origin global
-                // display coordinates, so the mapping is pure translation — no y-flip.
-                let globalPoint = CGPoint(x: freshFrame.origin.x + windowPoint.x, y: freshFrame.origin.y + windowPoint.y)
 
                 // Sonny's own floating widget is a .floating-level window anchored bottom-center;
                 // a click landing inside any of our own windows would be swallowed by the widget
-                // while the transcript records a normal-looking click on the target app.
+                // while the transcript records a normal-looking click on the target app. The
+                // substrate checks these rects against the freshly resolved global point.
                 let ownFrames = await ownWindowFramesInCGSpace()
-                if let blocked = ownFrames.first(where: { $0.contains(globalPoint) }) {
+
+                // Mandated by the ticket's safety note: the intent (coordinates + rationale) is
+                // logged BEFORE any event is dispatched; the substrate additionally logs the
+                // resolved global point before posting.
+                emit("iteration \(iteration): CLICK image(\(x),\(y)) target=\"\(decision.target)\" rationale=\"\(decision.rationale)\"")
+                let outcome = try await driver.clickInWindow(capture, atImagePoint: CGPoint(x: CGFloat(x), y: CGFloat(y)), avoiding: ownFrames)
+
+                switch outcome {
+                case .windowDisappeared:
+                    // The frame was captured before the vision call, whose latency is uncapped —
+                    // the window can vanish meanwhile; the click would be a lie. Skip, recapture.
+                    emit("iteration \(iteration): window disappeared during model inference — click skipped, recapturing")
+                    history.append("iteration \(iteration): click on \"\(decision.target)\" skipped — the window disappeared; reassess from the new screenshot")
+                    continue
+                case .windowResized(let from, let to):
+                    emit("iteration \(iteration): window resized during model inference (\(Int(from.width))x\(Int(from.height)) -> \(Int(to.width))x\(Int(to.height))) — click skipped, recapturing")
+                    history.append("iteration \(iteration): click on \"\(decision.target)\" skipped — the window resized; reassess from the new screenshot")
+                    continue
+                case .suppressed(let globalPoint, let blocked):
                     emit("iteration \(iteration): click at global(\(Int(globalPoint.x)),\(Int(globalPoint.y))) suppressed — it falls inside Sonny's own window at \(Int(blocked.origin.x)),\(Int(blocked.origin.y)) \(Int(blocked.width))x\(Int(blocked.height))")
                     history.append("iteration \(iteration): click on \"\(decision.target)\" was blocked — that screen area is covered by the operator's control panel; pick a different control or report stuck")
-                    try await Task.sleep(nanoseconds: 400_000_000)
+                    try await settle(400_000_000)
                     continue
+                case .refusedByDriver(let reason):
+                    emit("iteration \(iteration): click refused by the driver — \(reason) — click skipped, recapturing")
+                    history.append("iteration \(iteration): click on \"\(decision.target)\" skipped — the substrate refused it (\(reason)); reassess from the new screenshot")
+                    continue
+                case .posted(let globalPoint):
+                    emit("iteration \(iteration): click posted at global(\(Int(globalPoint.x)),\(Int(globalPoint.y)))")
+                    lastClickImagePoint = CGPoint(x: x, y: y)
+                    actions.append(ActionRecord(
+                        kind: .click,
+                        iteration: iteration,
+                        imagePoint: CGPoint(x: x, y: y),
+                        globalPoint: globalPoint,
+                        text: nil,
+                        target: decision.target,
+                        rationale: decision.rationale,
+                        visionLatencySeconds: latency + refineLatency
+                    ))
+                    history.append("iteration \(iteration): clicked \"\(decision.target)\" at image (\(x), \(y)) — \(decision.rationale)")
+                    let clickActions = actions.filter { $0.kind == .click }
+                    if let previous = clickActions.dropLast().last, let previousPoint = previous.imagePoint,
+                       abs(previousPoint.x - CGFloat(x)) <= 5, abs(previousPoint.y - CGFloat(y)) <= 5 {
+                        history.append("warning: you clicked this same spot twice with no visible effect — choose a different control or report stuck")
+                    }
+                    try await settle(1_200_000_000)
                 }
-
-                // Mandated by the ticket's safety note: log BEFORE the click is issued.
-                emit("iteration \(iteration): CLICK image(\(x),\(y)) -> global(\(Int(globalPoint.x)),\(Int(globalPoint.y))) target=\"\(decision.target)\" rationale=\"\(decision.rationale)\"")
-                try await synthesizeClick(at: globalPoint)
-
-                lastClickImagePoint = CGPoint(x: x, y: y)
-                actions.append(ActionRecord(
-                    kind: .click,
-                    iteration: iteration,
-                    imagePoint: CGPoint(x: x, y: y),
-                    globalPoint: globalPoint,
-                    text: nil,
-                    target: decision.target,
-                    rationale: decision.rationale,
-                    visionLatencySeconds: latency + refineLatency
-                ))
-                history.append("iteration \(iteration): clicked \"\(decision.target)\" at image (\(x), \(y)) — \(decision.rationale)")
-                let clickActions = actions.filter { $0.kind == .click }
-                if let previous = clickActions.dropLast().last, let previousPoint = previous.imagePoint,
-                   abs(previousPoint.x - CGFloat(x)) <= 5, abs(previousPoint.y - CGFloat(y)) <= 5 {
-                    history.append("warning: you clicked this same spot twice with no visible effect — choose a different control or report stuck")
-                }
-                try await Task.sleep(nanoseconds: 1_200_000_000)
             }
         }
 
-        return RunSummary(outcome: .iterationCapReached, actions: actions, iterations: iterationsRun, transcript: transcript, modelDescription: "\(client.host.rawValue)/\(client.model)")
+        return RunSummary(outcome: .iterationCapReached, actions: actions, iterations: iterationsRun, transcript: transcript, modelDescription: decider.transcriptDescription)
     }
 
     // MARK: - Fallback target resolution
@@ -338,121 +373,20 @@ public enum VisionActionLoop {
         }
     }
 
-    // MARK: - Permissions
-
-    static func preflightPermissions() throws {
-        if !CGPreflightScreenCaptureAccess() {
-            // Triggers the system prompt / creates the System Settings entry, but the grant only
-            // takes effect after relaunch — so this attempt still fails loudly.
-            CGRequestScreenCaptureAccess()
-            throw VisionActionLoopError.screenRecordingNotGranted
-        }
-        // Literal value of kAXTrustedCheckOptionPrompt — the SDK global is a mutable `var` and
-        // Swift 6 strict concurrency refuses to read it from a nonisolated context.
-        let promptKey = "AXTrustedCheckOptionPrompt"
-        if !AXIsProcessTrustedWithOptions([promptKey: true] as CFDictionary) {
-            throw VisionActionLoopError.accessibilityNotGranted
-        }
-    }
-
-    // MARK: - App activation (AppKit values never leave the MainActor closures)
-
-    private static func activateApp(named appName: String) async -> pid_t? {
-        await MainActor.run {
-            let apps = NSWorkspace.shared.runningApplications
-            let match = apps.first { $0.localizedName?.caseInsensitiveCompare(appName) == .orderedSame }
-                ?? apps.first { $0.localizedName?.localizedCaseInsensitiveContains(appName) ?? false }
-            guard let match else { return nil }
-            match.activate()
-            return match.processIdentifier
-        }
-    }
-
-    private static func visibleAppNames() async -> [String] {
-        await MainActor.run {
-            NSWorkspace.shared.runningApplications
-                .filter { $0.activationPolicy == .regular }
-                .compactMap { $0.localizedName }
-                .sorted()
-        }
-    }
-
-    // MARK: - Capture
-
-    struct WindowCapture {
-        let image: CGImage
-        let windowFrame: CGRect
-        let windowTitle: String
-        let windowID: CGWindowID
-    }
-
-    private static func captureFrontWindow(ofProcess pid: pid_t, appName: String) async throws -> WindowCapture {
-        let content = try await SCShareableContent.excludingDesktopWindows(true, onScreenWindowsOnly: true)
-        let candidates = content.windows.filter { window in
-            window.owningApplication?.processID == pid
-                && window.isOnScreen
-                && window.windowLayer == 0
-                && window.frame.width >= 80
-                && window.frame.height >= 80
-        }
-        // SCShareableContent's window order is undocumented, but CGWindowListCopyWindowInfo with
-        // onScreenOnly is front-to-back — so the app's actually-frontmost window (a dialog over
-        // its main window, say) is the one the model should see. Largest-area is the fallback.
-        let frontmostID = frontmostWindowID(ofProcess: pid)
-        let window = candidates.first { frontmostID != nil && $0.windowID == frontmostID }
-            ?? candidates.max(by: { $0.frame.width * $0.frame.height < $1.frame.width * $1.frame.height })
-        guard let window else {
-            throw VisionActionLoopError.captureFailed("no on-screen window found for \(appName) (pid \(pid))")
-        }
-
-        let configuration = SCStreamConfiguration()
-        configuration.width = Int(window.frame.width)
-        configuration.height = Int(window.frame.height)
-        configuration.showsCursor = false
-        configuration.captureResolution = .nominal
-
-        let filter = SCContentFilter(desktopIndependentWindow: window)
-        let image = try await SCScreenshotManager.captureImage(contentFilter: filter, configuration: configuration)
-        return WindowCapture(image: image, windowFrame: window.frame, windowTitle: window.title ?? "untitled", windowID: window.windowID)
-    }
-
-    // Front-to-back z-order scan; the first layer-0 window of the pid is its frontmost.
-    private static func frontmostWindowID(ofProcess pid: pid_t) -> CGWindowID? {
-        guard let list = CGWindowListCopyWindowInfo([.optionOnScreenOnly, .excludeDesktopElements], kCGNullWindowID) as? [[String: Any]] else {
-            return nil
-        }
-        for info in list {
-            guard let ownerPID = info[kCGWindowOwnerPID as String] as? Int, pid_t(ownerPID) == pid,
-                  let layer = info[kCGWindowLayer as String] as? Int, layer == 0,
-                  let boundsDict = info[kCGWindowBounds as String] as? [String: Any],
-                  let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary),
-                  bounds.width >= 80, bounds.height >= 80,
-                  let number = info[kCGWindowNumber as String] as? Int else {
-                continue
-            }
-            return CGWindowID(number)
-        }
-        return nil
-    }
-
-    private static func currentWindowFrame(windowID: CGWindowID) -> CGRect? {
-        guard let list = CGWindowListCopyWindowInfo([.optionIncludingWindow], windowID) as? [[String: Any]],
-              let info = list.first,
-              let boundsDict = info[kCGWindowBounds as String] as? [String: Any],
-              let bounds = CGRect(dictionaryRepresentation: boundsDict as CFDictionary) else {
-            return nil
-        }
-        return bounds
-    }
+    // MARK: - Own-window suppression rects
 
     // NSWindow.frame is bottom-left-origin Cocoa space; convert to the top-left-origin global
-    // display space the click math lives in before comparing.
+    // display space the click math lives in before comparing. Stays loop-side (it inspects
+    // Sonny's own NSApp windows, which no substrate should know about).
     private static func ownWindowFramesInCGSpace() async -> [CGRect] {
         await MainActor.run { () -> [CGRect] in
             let primaryHeight = NSScreen.screens.first(where: { $0.frame.origin == .zero })?.frame.height
                 ?? NSScreen.screens.first?.frame.height
             guard let primaryHeight else { return [] }
-            return NSApp.windows.filter { $0.isVisible }.map { window in
+            // NSApp is an implicitly-unwrapped global that is nil in a headless test process —
+            // the seam tests are the first thing to ever drive this path without a real app.
+            guard let application = NSApp else { return [] }
+            return application.windows.filter { $0.isVisible }.map { window in
                 let frame = window.frame
                 return CGRect(
                     x: frame.origin.x,
@@ -514,7 +448,7 @@ public enum VisionActionLoop {
     }
 
     private static func refineClick(
-        client: VisionModelClient,
+        decider: any VisionDeciding,
         image: CGImage,
         target: String,
         initialX: Int,
@@ -532,7 +466,7 @@ public enum VisionActionLoop {
         let prompt = """
         Zoomed 2x view of a \(side)x\(side)-pixel region of the same window screenshot, origin top-left. Find this control: "\(target)". Reply ONLY {"x":<int>,"y":<int>} — the point in THIS zoomed \(side * 2)x\(side * 2) image that sits EXACTLY on the target's visible text, in the vertical middle of its glyphs (never the row, container, or whitespace around it) — or {"x":null,"y":null} if it is not visible here.
         """
-        guard let response = try? await client.decide(prompt: prompt, pngData: png),
+        guard let response = try? await decider.decide(prompt: prompt, pngData: png),
               let refined = parseRefinement(response.reply),
               (0...side * 2).contains(refined.x), (0...side * 2).contains(refined.y) else {
             return nil
@@ -567,59 +501,6 @@ public enum VisionActionLoop {
             throw VisionActionLoopError.captureFailed("could not encode PNG")
         }
         return data as Data
-    }
-
-    // MARK: - Click synthesis
-
-    private static func synthesizeClick(at point: CGPoint) async throws {
-        guard let source = CGEventSource(stateID: .hidSystemState) else {
-            throw VisionActionLoopError.captureFailed("could not create CGEventSource")
-        }
-        func post(_ type: CGEventType) {
-            CGEvent(mouseEventSource: source, mouseType: type, mouseCursorPosition: point, mouseButton: .left)?
-                .post(tap: .cghidEventTap)
-        }
-        post(.mouseMoved)
-        try await Task.sleep(nanoseconds: 60_000_000)
-        post(.leftMouseDown)
-        do {
-            try await Task.sleep(nanoseconds: 80_000_000)
-        } catch {
-            // A cancel landing in this 80ms window must never leave the synthetic left button
-            // held down at the HID level — post the up event, then propagate the cancellation.
-            post(.leftMouseUp)
-            throw error
-        }
-        post(.leftMouseUp)
-    }
-
-    // One character per event pair — multi-character keyboardSetUnicodeString chunks are legal
-    // but some targets (Chromium's omnibox among them) only honor the first character. Newlines
-    // are the other observed live failure: a unicode "\n" is not a Return keypress and neither
-    // a shell nor an address bar executes on it, so they are synthesized as real Return-keycode
-    // (36) events instead.
-    private static func synthesizeTyping(_ text: String) async throws {
-        guard let source = CGEventSource(stateID: .hidSystemState) else {
-            throw VisionActionLoopError.captureFailed("could not create CGEventSource")
-        }
-        for character in text {
-            if character == "\n" || character == "\r" {
-                for keyDown in [true, false] {
-                    CGEvent(keyboardEventSource: source, virtualKey: 36, keyDown: keyDown)?
-                        .post(tap: .cghidEventTap)
-                }
-            } else {
-                let units = Array(String(character).utf16)
-                for keyDown in [true, false] {
-                    guard let event = CGEvent(keyboardEventSource: source, virtualKey: 0, keyDown: keyDown) else { continue }
-                    units.withUnsafeBufferPointer { buffer in
-                        event.keyboardSetUnicodeString(stringLength: units.count, unicodeString: buffer.baseAddress)
-                    }
-                    event.post(tap: .cghidEventTap)
-                }
-            }
-            try await Task.sleep(nanoseconds: 15_000_000)
-        }
     }
 
     // MARK: - Prompt
@@ -657,7 +538,7 @@ public enum VisionActionLoop {
 
 // MARK: - Vision model client (Cerebras primary, Google hosted fallback)
 
-struct VisionModelClient {
+struct VisionModelClient: VisionDeciding {
     enum Host: String {
         case cerebras
         case google
@@ -667,6 +548,8 @@ struct VisionModelClient {
     let model: String
     private let apiKey: String
     private let session: URLSession
+
+    var transcriptDescription: String { "\(host.rawValue)/\(model)" }
 
     init(
         environment: [String: String] = ProcessInfo.processInfo.environment,

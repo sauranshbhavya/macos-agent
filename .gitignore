@@ -1,5 +1,7 @@
 .build/
 .DS_Store
+# SONNY-80: pinned cua-driver binary vendored by scripts/fetch-cua-driver.sh — never committed
+vendor/
 DerivedData/
 *.xcuserdata/
 *.xcworkspace/
