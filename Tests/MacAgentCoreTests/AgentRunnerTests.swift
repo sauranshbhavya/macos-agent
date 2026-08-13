@@ -623,8 +623,18 @@ struct AgentRunnerTests {
         #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://example.com/page"])
     }
 
-    /// The tier half of the guard, on the decision shape the app actually writes back now — the
-    /// pre-SONNY-62 behavior, unchanged and still checked first.
+    /// The pre-SONNY-62 escalation case, on the decision shape the app actually writes back now: a
+    /// tier-2 prompt the user answered still does not authorize a tier-3 escalation that lands
+    /// afterwards.
+    ///
+    /// It does *not* isolate the tier half of the guard, and the mutation battery is what proved
+    /// that rather than the reading: with the tier ceiling deleted from `authorizes(_:)`, this test
+    /// still passes. The reason is structural — a fixed plan's default tier cannot move, so at this
+    /// level a tier only ever rises *by* an escalation, and the escalation's reason arrives in the
+    /// same assessment. The tier half is isolated by `staleTierTwoApprovalDoesNotAuthorize...`
+    /// above, which approves a standing grant that has no reason check at all, and by
+    /// `RiskApprovalTests.aHigherTierIsNeverAuthorizedAndALowerOneStillIs`, which can pin a tier and
+    /// a reason set independently because it builds the assessment directly.
     @Test
     func aTierTwoPromptAnsweredByTheUserDoesNotAuthorizeALaterTierThreeEscalation() async throws {
         let root = try makeDirectory()
