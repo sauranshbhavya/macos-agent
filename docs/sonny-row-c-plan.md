@@ -104,14 +104,29 @@ reads. Hence **I2** (§4), the ratified upgrade to the inherited constraint.
 ### 2.1 Two grants
 
 ```
-grant = .none                if the plan's relaxation eligibility forbids it
-      = .inScopeWorkspace    if scopeVerdict == .inScope        (founder charter, 2026-08-04)
-      = .directUserAuthored  if origin == .directUserAction     (founder observation, 2026-08-07)
+grant = .inScopeWorkspace    if eligibility.contains(.byWorkspaceScope)
+                                && scopeVerdict == .inScope     (founder charter, 2026-08-04)
+      = .directUserAuthored  if eligibility.contains(.byDirectUserOrigin)
+                                && origin == .directUserAction  (founder observation, 2026-08-07)
       = .none                otherwise
 ```
 
+`eligibility` is the plan-level `relaxationEligibility` roll-up (§3.3).
+
 `.inScopeWorkspace` is tested first so that anything surfacing a reason names the stronger,
 boundary-earned grant when both apply.
+
+**Eligibility is tested per grant, never once ahead of both.** This is PR #45's review finding F2,
+fixed 2026-08-13; the founder confirmed per-grant as the ratified intent rather than a design change,
+and the same block is the contract on SONNY-97, corrected there in the same round.
+`relaxationEligibility` is a **two-bit** `OptionSet` (§3.3) and each bit gates exactly one line above,
+so a single un-parameterised *"eligibility forbids it"* ahead of both branches cannot express what §6
+actually does. Hand-traced against §6's own central case: `EditWorkspaceCapabilityAdapter` narrows a
+boundary-changing edit by dropping `byDirectUserOrigin` **only**, leaving `byWorkspaceScope` set — so
+against the un-parameterised form the set is non-empty and the guard never fires; `scopeVerdict` is
+never `.inScope` for an `edit_workspace` plan (§1.1), so the first line misses; and the plan falls
+through to the origin line and takes `.directUserAuthored` anyway, the dropped bit notwithstanding.
+That is precisely the auto-run §6 exists to prevent.
 
 They are kept as separate cases even though they map identically today, because they have different
 revocation stories and different user-facing explanations: *"because this is inside Client Alpha"*
@@ -459,6 +474,21 @@ separates the two notions is a workspace whose lists are all non-empty and one o
 inert, because a suite whose every unrestricted dimension is also a literally-empty one cannot tell
 them apart.
 
+**A second row-B item row C makes more expensive — and deliberately does not answer.** Row B's own
+changelog entry parks an open question alongside the widening flag: *"Should a scheduled run's
+unattended pre-check assess with the run's real scope?"* (`feature/workspace-restriction-scope`,
+open questions). It was flagged by SONNY-37 and left open because answering *yes* would make
+`UnattendedTrustAdvisory`'s pre-check disagree with its own docstring. Row C adds a second, much
+larger consequence that was not on the table when the question was parked: **answering yes would make
+in-scope tier-2 steps auto-run unattended, without the per-routine trust opt-in.** The mechanism is
+**I6** (§4). The unattended path reaches neither grant today only because the scheduled dispatch makes
+*two* independent call-site choices — `source: .instantResolver` and `scope: .unscoped`
+(`AgentViewModel.swift:2283-2315`, whose own comment says the second is *"on purpose, not by
+omission"*). Assessing a scheduled run with its real scope removes one of the two, and the column it
+opens is the tier-2 auto-run one. **The question stays open; only its cost is corrected** — amended
+in place as **SONNY-100's** deliverable (C4), founder-ratified 2026-08-13 as part of that ticket
+rather than as a new decision.
+
 ---
 
 ## 7. Default-on, and the two options declined
@@ -518,7 +548,7 @@ SONNY-62 merge):
 | **SONNY-97** | The relaxation function: `ApprovalContext`, the grants, `relaxationEligibility` folded in `assessRisk`, the 15-case mapping, the three prior entry points removed or demoted, non-defaulted threading, the Safe-mode input and formula, §3.5's re-arm work, and the full table + P1/P2 + I1–I10 tests. No UI. |
 | **SONNY-98** | `edit_workspace`: boundary-changing edits lose the origin grant; root-level file-location widening escalates. §6's answer to the forward flag. |
 | **SONNY-99** | The ran-without-asking trace, plus the stale comment at `AgentViewModel.swift:876-879` that this branch falsifies. |
-| **SONNY-100** | Spec §11.2/§11.3, the founder-decisions record, the forward-flag closure in all four places, §1.3's `effectiveTier` count correction, and the changelog entry. |
+| **SONNY-100** | Spec §11.2/§11.3, the founder-decisions record, the forward-flag closure in all four places, **the scheduled-pre-check open question's forward-hazard amendment (§6)**, §1.3's `effectiveTier` count correction, and the changelog entry. |
 
 **Branch 2 — `feature/approval-relaxation-surface`** (after branch 1 merges):
 
@@ -579,3 +609,9 @@ modifications). Tickets SONNY-97 through SONNY-101 created and attached to modul
 "C — approval relaxation (structural)", alongside the pre-existing SONNY-62 and SONNY-50. No
 implementation has started. This document is frozen; the branches record their own outcomes in
 `docs/sonny-v1-implementation-changelog.md`.
+
+Corrected once before merge, in PR #45's records-only fix round (2026-08-13, cycle 1's three
+findings): §2.1's grant formula now tests eligibility **per grant** (F2), and §6 carries the
+scheduled-pre-check forward-hazard amendment — carried in the same 2026-08-13 ratification as the ten
+decisions rather than being one of them, and omitted from this document until now (F1). Both are corrections to this artifact, not changes to the ratified design; F3 was
+the branch's own changelog entry, which lives in the changelog. Frozen from here.
