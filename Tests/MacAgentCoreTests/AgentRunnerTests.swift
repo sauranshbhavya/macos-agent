@@ -151,7 +151,7 @@ struct AgentRunnerTests {
 
         _ = try await runner.execute(
             prepared,
-            approvalDecision: .approved(request.assessment.effectiveTier),
+            approvalDecision: .approved(answering: request),
             confirmationMessage: "User approved Tier 2 action",
             scope: .unscoped
         )
@@ -208,7 +208,7 @@ struct AgentRunnerTests {
 
         _ = try await runner.execute(
             prepared,
-            approvalDecision: .approved(request.assessment.effectiveTier),
+            approvalDecision: .approved(answering: request),
             confirmationMessage: "User approved corrected Tier 2 action",
             scope: .unscoped
         )
@@ -466,6 +466,263 @@ struct AgentRunnerTests {
             #expect(originalRequest.assessment.effectiveTier == .tier2)
             #expect(newRequest.assessment.effectiveTier == .tier3)
             #expect(newRequest.requirement == .explicitApproval)
+        } catch {
+            Issue.record("Expected approvalRequired, got \(error).")
+        }
+
+        #expect(zipArchiver.createdArchives.isEmpty)
+    }
+
+    /// SONNY-62, reproduced at the runner: the approval names one tier-3 reason, a *different*
+    /// tier-3 reason lands while the prompt sits open, and the guard's tier comparison passes.
+    ///
+    /// The observed run this is built from (2026-08-06) approved an out-of-scope destination and
+    /// then silently replaced a file that appeared in the meantime. Both halves are here — the scope
+    /// escalation the user answered, and the already-exists escalation they never saw — because the
+    /// bug needs exactly that pair to show itself: one reason each, same tier, disjoint causes.
+    @Test
+    func anApprovalForOneTierThreeReasonDoesNotAuthorizeADifferentTierThreeReason() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("small", to: root.appendingPathComponent("small.txt"))
+        try write(String(repeating: "x", count: 2048), to: root.appendingPathComponent("large.txt"))
+        let output = root.appendingPathComponent("largest.zip")
+        let zipArchiver = RecordingZipArchiver()
+        let browserOpener = RecordingBrowserOpener()
+        let logStore = AgentLogStore()
+        let runner = AgentRunner(
+            planner: StaticPlanner(plan: zipAndOpenURLPlan(root: root, output: output, url: "https://example.com/page")),
+            executor: makeExecutor(root: root, zipArchiver: zipArchiver, browserOpener: browserOpener),
+            logStore: logStore
+        )
+        let scope = TaskWorkspaceScope.scoped(
+            WorkspaceScope(workspace: StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"]))
+        )
+
+        let prepared = try await runner.prepare(command: "Zip the largest files and open the site")
+        let answered = try runner.approvalRequest(for: prepared, scope: scope)
+
+        // The prompt the user actually read named one reason, and it was not the file.
+        #expect(answered.assessment.effectiveTier == .tier3)
+        #expect(answered.assessment.escalations.map(\.reason) == [
+            "example.com is not part of the Research workspace."
+        ])
+
+        // The drift — the same `touch` the manual pass performed while the panel was open.
+        try write("appeared while the prompt was open", to: output)
+
+        do {
+            _ = try await runner.execute(
+                prepared,
+                approvalDecision: .approved(answering: answered),
+                confirmationMessage: "User approved Tier 3 action",
+                scope: scope
+            )
+            Issue.record("Expected the unseen second reason to re-arm the approval.")
+        } catch RiskApprovalError.approvalRequired(let rearmed) {
+            // Equal tiers — which is precisely why the old guard let this through.
+            #expect(rearmed.assessment.effectiveTier == answered.assessment.effectiveTier)
+            #expect(rearmed.requirement == .explicitApproval)
+            #expect(Set(rearmed.assessment.escalations.map(\.reason)) == [
+                "Zip output already exists at \(output.path).",
+                "example.com is not part of the Research workspace."
+            ])
+        } catch {
+            Issue.record("Expected approvalRequired, got \(error).")
+        }
+
+        // Nothing ran: not the archive the user never consented to replacing, and not the site
+        // whose approval was being borrowed.
+        #expect(zipArchiver.createdArchives.isEmpty)
+        #expect(browserOpener.openedURLs.isEmpty)
+        #expect(try String(contentsOf: output, encoding: .utf8) == "appeared while the prompt was open")
+        // The trace names the reason that was not covered, and only that one — an approval re-armed
+        // for a reason nobody logs is the same invisible failure in a quieter form.
+        #expect(logStore.events.contains { event in
+            event.phase == .risk
+                && event.message == "risk.rearmed: reasons not covered by the approval: Zip output already exists at \(output.path)."
+        })
+    }
+
+    /// The negative half of the test above: `risk.rearmed` is a claim that a *consent* was exceeded,
+    /// so the very first prompt for a tier-3 action must not carry it — nobody had approved anything
+    /// yet for the drift to have escaped.
+    ///
+    /// `AgentRunner.execute`'s gate reaches the same `else` branch for `.notRequested` as for a
+    /// consent that fell short, and the only thing telling those apart is the `if case .approved`
+    /// binding around the trace. Nothing pinned that until this test: PR #46's review ran a ninth
+    /// mutation emitting the line on the `.notRequested` path too — so every ordinary first-time
+    /// approval logs a re-arm that never happened — and it survived the whole suite.
+    ///
+    /// **The assertion only means something on a denial that carries reasons.** A tier-2
+    /// `.notRequested` denial raises no escalations at all, so that mutation logs nothing there
+    /// either and a test built on one would pass against both trees. Hence an already-existing
+    /// output: tier 3, one reason, and no consent in hand.
+    @Test
+    func aFirstTimeApprovalPromptIsNotTracedAsAReArm() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("small", to: root.appendingPathComponent("small.txt"))
+        try write(String(repeating: "x", count: 2048), to: root.appendingPathComponent("large.txt"))
+        let output = root.appendingPathComponent("largest.zip")
+        try write("existing zip", to: output)
+        let zipArchiver = RecordingZipArchiver()
+        let logStore = AgentLogStore()
+        let runner = AgentRunner(
+            planner: StaticPlanner(plan: largestPlan(root: root, output: output)),
+            executor: makeExecutor(root: root, zipArchiver: zipArchiver),
+            logStore: logStore
+        )
+
+        let prepared = try await runner.prepare(command: "Zip the largest files")
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
+        // Reasons exist to be mislabelled. Without this the expectation below is vacuous.
+        #expect(request.assessment.effectiveTier == .tier3)
+        #expect(request.assessment.escalations.map(\.reason) == [
+            "Zip output already exists at \(output.path)."
+        ])
+
+        do {
+            _ = try await runner.execute(prepared, scope: .unscoped)
+            Issue.record("Expected the tier-3 assessment to require approval.")
+        } catch RiskApprovalError.approvalRequired(let denied) {
+            #expect(denied.requirement == .explicitApproval)
+        } catch {
+            Issue.record("Expected approvalRequired, got \(error).")
+        }
+
+        // The gate ran, and it wrote to *this* store — otherwise the absence below would only prove
+        // the runner was logging somewhere else.
+        #expect(logStore.events.contains { event in
+            event.phase == .confirm && event.message == "Approval required for Tier 3"
+        })
+        #expect(!logStore.events.contains { $0.message.hasPrefix("risk.rearmed") })
+        #expect(zipArchiver.createdArchives.isEmpty)
+        #expect(try String(contentsOf: output, encoding: .utf8) == "existing zip")
+    }
+
+    /// The re-arm is one extra question, not a loop: the fresh prompt carries the new reason, and
+    /// answering *that* one executes.
+    @Test
+    func answeringTheReArmedPromptExecutesRatherThanReArmingAgain() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("small", to: root.appendingPathComponent("small.txt"))
+        try write(String(repeating: "x", count: 2048), to: root.appendingPathComponent("large.txt"))
+        let output = root.appendingPathComponent("largest.zip")
+        let zipArchiver = RecordingZipArchiver()
+        let browserOpener = RecordingBrowserOpener()
+        let runner = AgentRunner(
+            planner: StaticPlanner(plan: zipAndOpenURLPlan(root: root, output: output, url: "https://example.com/page")),
+            executor: makeExecutor(root: root, zipArchiver: zipArchiver, browserOpener: browserOpener)
+        )
+        let scope = TaskWorkspaceScope.scoped(
+            WorkspaceScope(workspace: StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"]))
+        )
+
+        let prepared = try await runner.prepare(command: "Zip the largest files and open the site")
+        let answered = try runner.approvalRequest(for: prepared, scope: scope)
+        try write("appeared while the prompt was open", to: output)
+
+        var rearmed: RiskApprovalRequest?
+        do {
+            _ = try await runner.execute(prepared, approvalDecision: .approved(answering: answered), scope: scope)
+            Issue.record("Expected the unseen second reason to re-arm the approval.")
+        } catch RiskApprovalError.approvalRequired(let request) {
+            rearmed = request
+        }
+
+        let secondAnswer = try #require(rearmed)
+        let result = try await runner.execute(
+            prepared,
+            approvalDecision: .approved(answering: secondAnswer),
+            scope: scope
+        )
+
+        #expect(result.summary.isEmpty == false)
+        #expect(zipArchiver.createdArchives.count == 1)
+        #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://example.com/page"])
+    }
+
+    /// Subset, not equality — a reason that *went away* is strictly less than what was consented to,
+    /// so re-asking would be a prompt with nothing new in it.
+    @Test
+    func anApprovalStillCoversAnAssessmentWhoseReasonDisappeared() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("small", to: root.appendingPathComponent("small.txt"))
+        try write(String(repeating: "x", count: 2048), to: root.appendingPathComponent("large.txt"))
+        let output = root.appendingPathComponent("largest.zip")
+        try write("existing zip", to: output)
+        let zipArchiver = RecordingZipArchiver()
+        let browserOpener = RecordingBrowserOpener()
+        let runner = AgentRunner(
+            planner: StaticPlanner(plan: zipAndOpenURLPlan(root: root, output: output, url: "https://example.com/page")),
+            executor: makeExecutor(root: root, zipArchiver: zipArchiver, browserOpener: browserOpener)
+        )
+        let scope = TaskWorkspaceScope.scoped(
+            WorkspaceScope(workspace: StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"]))
+        )
+
+        let prepared = try await runner.prepare(command: "Zip the largest files and open the site")
+        let answered = try runner.approvalRequest(for: prepared, scope: scope)
+        #expect(Set(answered.assessment.escalations.map(\.reason)) == [
+            "Zip output already exists at \(output.path).",
+            "example.com is not part of the Research workspace."
+        ])
+
+        // The file is gone by execution time, so the replace reason no longer applies.
+        try FileManager.default.removeItem(at: output)
+
+        _ = try await runner.execute(prepared, approvalDecision: .approved(answering: answered), scope: scope)
+
+        #expect(zipArchiver.createdArchives.count == 1)
+        #expect(browserOpener.openedURLs.map(\.absoluteString) == ["https://example.com/page"])
+    }
+
+    /// The pre-SONNY-62 escalation case, on the decision shape the app actually writes back now: a
+    /// tier-2 prompt the user answered still does not authorize a tier-3 escalation that lands
+    /// afterwards.
+    ///
+    /// It does *not* isolate the tier half of the guard, and the mutation battery is what proved
+    /// that rather than the reading: with the tier ceiling deleted from `authorizes(_:)`, this test
+    /// still passes. The reason is structural — a fixed plan's default tier cannot move, so at this
+    /// level a tier only ever rises *by* an escalation, and the escalation's reason arrives in the
+    /// same assessment. The tier half is isolated by `staleTierTwoApprovalDoesNotAuthorize...`
+    /// above, which approves a standing grant that has no reason check at all, and by
+    /// `RiskApprovalTests.aHigherTierIsNeverAuthorizedAndALowerOneStillIs`, which can pin a tier and
+    /// a reason set independently because it builds the assessment directly.
+    @Test
+    func aTierTwoPromptAnsweredByTheUserDoesNotAuthorizeALaterTierThreeEscalation() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try write("small", to: root.appendingPathComponent("small.txt"))
+        try write(String(repeating: "x", count: 2048), to: root.appendingPathComponent("large.txt"))
+        let output = root.appendingPathComponent("largest.zip")
+        let zipArchiver = RecordingZipArchiver()
+        let runner = AgentRunner(
+            planner: StaticPlanner(plan: largestPlan(root: root, output: output)),
+            executor: makeExecutor(root: root, zipArchiver: zipArchiver)
+        )
+
+        let prepared = try await runner.prepare(command: "Zip the largest files")
+        let answered = try runner.approvalRequest(for: prepared, scope: .unscoped)
+        #expect(answered.assessment.effectiveTier == .tier2)
+        #expect(answered.assessment.escalations.isEmpty)
+
+        try write("appeared after approval", to: output)
+
+        do {
+            _ = try await runner.execute(
+                prepared,
+                approvalDecision: .approved(answering: answered),
+                confirmationMessage: "User approved Tier 2 action",
+                scope: .unscoped
+            )
+            Issue.record("Expected later escalation to require a fresh approval.")
+        } catch RiskApprovalError.approvalRequired(let rearmed) {
+            #expect(rearmed.assessment.effectiveTier == .tier3)
+            #expect(rearmed.requirement == .explicitApproval)
         } catch {
             Issue.record("Expected approvalRequired, got \(error).")
         }
@@ -749,7 +1006,7 @@ struct AgentRunnerTests {
 
         let result = try await runner.execute(
             prepared,
-            approvalDecision: .approved(request.assessment.effectiveTier),
+            approvalDecision: .approved(answering: request),
             scope: .unscoped
         )
 
@@ -893,7 +1150,7 @@ struct AgentRunnerTests {
 
         let result = try await runner.execute(
             prepared,
-            approvalDecision: .approved(request.assessment.effectiveTier),
+            approvalDecision: .approved(answering: request),
             scope: .unscoped
         )
 
@@ -1014,6 +1271,22 @@ struct AgentRunnerTests {
                 )
             ]
         )
+    }
+
+    /// A zip chain plus an unrelated open — two units, so the plan can carry two independent
+    /// escalation causes at the same tier: the archive's own already-exists check, and the workspace
+    /// boundary the URL crosses.
+    private func zipAndOpenURLPlan(root: URL, output: URL, url: String) -> AgentPlan {
+        var plan = largestPlan(root: root, output: output)
+        plan.steps.append(
+            AgentStep(
+                id: "open-url",
+                operation: .openURL,
+                description: "Open \(url).",
+                targetURL: url
+            )
+        )
+        return plan
     }
 
     private func hnPlan(output: URL) -> AgentPlan {
