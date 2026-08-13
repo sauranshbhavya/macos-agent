@@ -146,7 +146,7 @@ struct WorkspaceScopeAddPickerTests {
         let presentation = WorkspaceScopeAddPresentation(kind: .app, workspace: workspace())
 
         #expect(presentation.scopeOnlyDisclosure(forTypedValue: "Xcode")
-            == "Xcode isn't an app Sonny can launch — counted for workspace scope only.")
+            == "Xcode isn't installed on this Mac — counted for workspace scope only.")
         // Same wording the capability appends to its own preview and summary.
         #expect(presentation.scopeOnlyDisclosure(forTypedValue: "Xcode")
             == WorkspaceScopeOnlyApps.scopeOnlyNote(for: ["Xcode"]))

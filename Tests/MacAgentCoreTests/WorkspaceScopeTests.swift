@@ -1008,7 +1008,7 @@ struct WorkspaceScopeTests {
     /// and the catalog's identifier has to be the one the AppleScript actually addresses.
     @Test
     func theFinderConstantResolvesToTheBundleIdentifierTheAppleScriptAddresses() throws {
-        let finder = try MacAppCatalog.default.resolve(PlanScopedResources.finderAppName)
+        let finder = try #require(MacAppCatalog.default.canonicalApp(named: PlanScopedResources.finderAppName))
         #expect(finder.bundleIdentifier == "com.apple.finder")
 
         let source = try String(contentsOf: sourceFile(named: "FinderContextService.swift"), encoding: .utf8)

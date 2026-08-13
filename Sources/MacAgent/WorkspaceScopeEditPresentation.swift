@@ -110,9 +110,32 @@ struct WorkspaceScopeAddPresentation: Equatable {
     let freeEntryNote: String?
 
     private let catalog: MacAppCatalog
+    /// Which app a typed name means on this Mac. Held only for `scopeOnlyDisclosure`, which after
+    /// SONNY-82 asks "is it installed" rather than "is it in the catalog" — the same narrowed
+    /// question `WorkspaceScopeOnlyApps` now answers for the capability's own preview and result, so
+    /// the dialog and the capability keep saying the same thing about the same app.
+    private let resolver: any InstalledAppResolving
     /// The evaluator's view of the workspace being edited, kept so the free-entry field can ask the
     /// same "does this already count" question the catalog rows ask.
     private let scope: WorkspaceScope
+
+    /// Written out rather than synthesized, because `resolver` is an existential and existentials are
+    /// not `Equatable`. Every previously-compared member is still compared — the list below is the
+    /// synthesized one minus the collaborator, which is the right exclusion anyway: two presentations
+    /// built from the same workspace render the same dialog whichever resolver answered, and the
+    /// answers themselves are already compared through `categories` and `scope`.
+    static func == (lhs: WorkspaceScopeAddPresentation, rhs: WorkspaceScopeAddPresentation) -> Bool {
+        lhs.title == rhs.title
+            && lhs.kind == rhs.kind
+            && lhs.workspaceName == rhs.workspaceName
+            && lhs.categories == rhs.categories
+            && lhs.freeEntryTitle == rhs.freeEntryTitle
+            && lhs.freeEntryPlaceholder == rhs.freeEntryPlaceholder
+            && lhs.freeEntryAddAccessibilityLabel == rhs.freeEntryAddAccessibilityLabel
+            && lhs.freeEntryNote == rhs.freeEntryNote
+            && lhs.catalog == rhs.catalog
+            && lhs.scope == rhs.scope
+    }
 
     /// Fixed grouping of the launch catalog's twelve, by what the app is for.
     ///
@@ -136,11 +159,13 @@ struct WorkspaceScopeAddPresentation: Equatable {
         kind: ScopedResourceKind,
         workspace: StoredWorkspace,
         catalog: MacAppCatalog = .default,
+        resolver: any InstalledAppResolving = InstalledAppResolver.shared,
         whitelist: PathWhitelist = PathWhitelist()
     ) {
         self.kind = kind
         self.workspaceName = workspace.name
         self.catalog = catalog
+        self.resolver = resolver
         // Built once for every dimension, not only for apps: the free-entry field consults it too.
         // Bound to a local as well, because the category builder below reads it inside closures and
         // `self` is not fully initialized there yet.
@@ -297,7 +322,7 @@ struct WorkspaceScopeAddPresentation: Equatable {
     }
 
     /// The scope-only disclosure for a name typed into the app field, in the shared wording, or
-    /// `nil` when the catalog resolves it (or there is nothing typed yet).
+    /// `nil` when the name resolves to an installed app (or there is nothing typed yet).
     ///
     /// Shown *before* submitting, which is the point: the capability already appends this same
     /// sentence to its preview and its result, so a user learned it after approving. Reading it from
@@ -312,7 +337,7 @@ struct WorkspaceScopeAddPresentation: Equatable {
             return nil
         }
         return WorkspaceScopeOnlyApps.scopeOnlyNote(
-            for: WorkspaceScopeOnlyApps.names(in: [trimmed], catalog: catalog)
+            for: WorkspaceScopeOnlyApps.names(in: [trimmed], resolver: resolver)
         )
     }
 }

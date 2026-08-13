@@ -169,7 +169,7 @@ public struct CreateWorkspaceCapabilityAdapter: CapabilityAdapter {
         for rawApp in rawApps {
             let trimmed = rawApp.trimmingCharacters(in: .whitespacesAndNewlines)
             guard !trimmed.isEmpty else {
-                throw MacAppCatalogError.missingAppName
+                throw MacAppError.missingAppName
             }
             apps.append(trimmed)
         }
@@ -179,7 +179,7 @@ public struct CreateWorkspaceCapabilityAdapter: CapabilityAdapter {
 
         return WorkspaceCreateSpec(
             workspace: StoredWorkspace(name: name, apps: apps, urls: urls),
-            scopeOnlyApps: WorkspaceScopeOnlyApps.names(in: apps, catalog: context.appCatalog)
+            scopeOnlyApps: WorkspaceScopeOnlyApps.names(in: apps, resolver: context.installedAppResolver)
         )
     }
 }

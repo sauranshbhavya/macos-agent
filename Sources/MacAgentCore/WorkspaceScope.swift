@@ -303,7 +303,7 @@ public struct WorkspaceScope: Equatable, Sendable {
         guard !trimmed.isEmpty else {
             return nil
         }
-        if let app = try? catalog.resolve(trimmed) {
+        if let app = catalog.canonicalApp(named: trimmed) {
             return bundleKey(app.bundleIdentifier)
         }
         return nameFallbackKey(trimmed)

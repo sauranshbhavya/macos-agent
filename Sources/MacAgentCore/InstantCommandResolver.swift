@@ -141,7 +141,7 @@ public struct InstantCommandResolver: Sendable {
         let directRoutine = savedRoutine(matching: routineCandidates.direct)
         let directWorkspace = savedWorkspace(matching: workspaceCandidates.direct)
         let namesAllowlistedApp = (routineCandidates.direct + workspaceCandidates.direct)
-            .contains { (try? appCatalog.resolve($0)) != nil }
+            .contains { appCatalog.canonicalApp(named: $0) != nil }
 
         switch (directRoutine, directWorkspace) {
         case (.some, .some):
@@ -194,7 +194,7 @@ public struct InstantCommandResolver: Sendable {
         let workspaceSide = workspaceCandidates.explicit + workspaceCandidates.direct
 
         if let workspace = savedWorkspace(matching: routineSide) {
-            let namesApp = routineSide.contains { (try? appCatalog.resolve($0)) != nil }
+            let namesApp = routineSide.contains { appCatalog.canonicalApp(named: $0) != nil }
             // Three-way ambiguity (also an allowlisted app) steps aside to the planner, same as
             // the direct-form collision handling above.
             return namesApp ? nil : .clarify(crossKindQuickDispatchClarificationPlan(
@@ -205,7 +205,7 @@ public struct InstantCommandResolver: Sendable {
             ))
         }
         if let routine = savedRoutine(matching: workspaceSide) {
-            let namesApp = workspaceSide.contains { (try? appCatalog.resolve($0)) != nil }
+            let namesApp = workspaceSide.contains { appCatalog.canonicalApp(named: $0) != nil }
             return namesApp ? nil : .clarify(crossKindQuickDispatchClarificationPlan(
                 missingKind: "workspace",
                 foundKind: "routine",
