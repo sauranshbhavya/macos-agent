@@ -560,7 +560,6 @@ struct ProductShellTests {
             "runner",
             "pendingCommandForPriorTaskContext",
             "pendingTaskHistoryStartedAt",
-            "activeTaskEgressRunID",
             "preserveUsageForNextStart"
         ]
 
@@ -586,7 +585,7 @@ struct ProductShellTests {
             "routineStore", "workspaceStore", "snippetStore", "recentArtifactStore",
             "shortcutCatalog", "browserOpener", "appOpener", "fileOpener", "mediaOpener",
             "runningAppSwitcher", "shortcutInvoker", "finderContextReader", "documentConverter",
-            "zipArchiver", "shortcutRunHistoryStore", "taskHistoryStore", "aiEgressStore",
+            "zipArchiver", "shortcutRunHistoryStore", "taskHistoryStore",
             "clipboardHistorySettingsStore", "clipboardHistoryMonitor", "localDataDeletionService",
             "priorTaskContextStore", "taskUsageRecorder", "plannerProviderRegistry",
             "plannerSelection", "userDefaults", "whitelist", "routineScheduleTimer", "wakeObserver",

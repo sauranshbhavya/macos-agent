@@ -13,8 +13,9 @@ public enum RedactionLocationCategory: String, Codable, Equatable, Sendable {
 /// §12.3's report shape: {type, count, location category, confidence}. One entry per detection
 /// class per surface; `confidence` is the LOWEST confidence among the coalesced detections (the
 /// honest worst case), and `belowConfidenceThreshold` marks that at least one of them rode the
-/// fail-closed redact-and-flag path. Codable because these entries are exactly what the
-/// Data-Sent-to-AI ledger (SONNY-88) persists per egress event.
+/// fail-closed redact-and-flag path. Codable so a consuming surface can persist or render
+/// entries; the first consumer is Safe mode's pre-send preview when row I's vision iterations
+/// arrive.
 public struct RedactionReportEntry: Codable, Equatable, Sendable {
     public var detectionClass: SecretDetectionClass
     public var count: Int

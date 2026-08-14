@@ -23,22 +23,15 @@ public struct PlannerProvider: Identifiable, Sendable {
     public let id: String
     /// Human-readable name for notices and (later) settings surfaces.
     public let displayName: String
-    /// What this provider does with a payload after serving the request — declared at
-    /// registration so the egress ledger states a fact the registration owns. Defaults to
-    /// `.unknown`, which the ledger renders as exactly that; a provider that wants a stronger
-    /// claim on its rows has to make it here.
-    public let retentionPosture: ProviderRetentionPosture
     private let construct: @MainActor @Sendable (any TaskUsageRecording) throws -> any Planning
 
     public init(
         id: String,
         displayName: String,
-        retentionPosture: ProviderRetentionPosture = .unknown,
         construct: @escaping @MainActor @Sendable (any TaskUsageRecording) throws -> any Planning
     ) {
         self.id = id
         self.displayName = displayName
-        self.retentionPosture = retentionPosture
         self.construct = construct
     }
 
@@ -122,29 +115,15 @@ public struct PlannerProviderRegistry: Sendable {
     /// actually got constructed. See the type doc for the fallback contract; the one throwing
     /// path is the default provider's own construction failure, which propagates unchanged so
     /// the default path stays byte-identical to constructing the default planner directly.
-    ///
-    /// `egressRecorder` is non-defaulted on the SONNY-37/SONNY-97 precedent: every constructed
-    /// planner is wrapped in `EgressRecordingPlanner` before it leaves this function, on all
-    /// three paths, so a planner that can reach the network cannot exist in the app without the
-    /// Data-Sent-to-AI ledger seeing its prompts — "an egress with no ledger entry is a bug by
-    /// construction" (SONNY-88), enforced by this signature rather than by convention.
     @MainActor
     public func makePlanner(
         selection: String?,
-        usageRecorder: any TaskUsageRecording,
-        egressRecorder: any AIEgressRecording
+        usageRecorder: any TaskUsageRecording
     ) throws -> SelectedPlanner {
-        func recording(_ planner: any Planning, provider: PlannerProvider) -> any Planning {
-            EgressRecordingPlanner(wrapping: planner, provider: provider, recorder: egressRecorder)
-        }
-
         let resolution = resolve(selection: selection)
         guard Self.normalize(resolution.provider.id) != Self.normalize(defaultProvider.id) else {
             return SelectedPlanner(
-                planner: recording(
-                    try defaultProvider.makePlanner(usageRecorder: usageRecorder),
-                    provider: defaultProvider
-                ),
+                planner: try defaultProvider.makePlanner(usageRecorder: usageRecorder),
                 provider: defaultProvider,
                 fallbackNotice: resolution.fallbackNotice
             )
@@ -152,19 +131,13 @@ public struct PlannerProviderRegistry: Sendable {
 
         do {
             return SelectedPlanner(
-                planner: recording(
-                    try resolution.provider.makePlanner(usageRecorder: usageRecorder),
-                    provider: resolution.provider
-                ),
+                planner: try resolution.provider.makePlanner(usageRecorder: usageRecorder),
                 provider: resolution.provider,
                 fallbackNotice: nil
             )
         } catch {
             return SelectedPlanner(
-                planner: recording(
-                    try defaultProvider.makePlanner(usageRecorder: usageRecorder),
-                    provider: defaultProvider
-                ),
+                planner: try defaultProvider.makePlanner(usageRecorder: usageRecorder),
                 provider: defaultProvider,
                 fallbackNotice: "The \(resolution.provider.displayName) planner isn't available, "
                     + "so Sonny used \(defaultProvider.displayName) instead. "

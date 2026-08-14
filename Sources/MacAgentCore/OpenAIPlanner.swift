@@ -3,22 +3,12 @@ import Foundation
 @MainActor
 public protocol Planning {
     func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan
-
-    /// The model identifier requests are addressed to, for planners that talk to a hosted model.
-    /// A protocol requirement (not just an extension member) so the egress ledger's read through
-    /// `any Planning` dispatches to the real planner's answer; the extension default keeps every
-    /// local and test conformer compiling unchanged.
-    var plannerModelIdentifier: String? { get }
 }
 
 public extension Planning {
     func plan(command: String) async throws -> AgentPlan {
         try await plan(command: command, priorTaskContext: nil)
     }
-
-    /// `nil` — the default, and what every local/test planner reports — renders in the egress
-    /// ledger as unspecified rather than inventing one.
-    var plannerModelIdentifier: String? { nil }
 }
 
 public enum PlannerError: Error, LocalizedError, Equatable {
@@ -65,9 +55,6 @@ public final class OpenAIPlanner: Planning {
         self.toolRegistry = toolRegistry
         self.usageRecorder = usageRecorder
     }
-
-    // `model` is an immutable String, so this nonisolated read off the main actor is safe.
-    nonisolated public var plannerModelIdentifier: String? { model }
 
     public func plan(command: String, priorTaskContext: PriorTaskContext? = nil) async throws -> AgentPlan {
         let requestBody = requestBody(command: command, priorTaskContext: priorTaskContext)
@@ -200,11 +187,7 @@ extension OpenAIPlanner {
     /// `OPENAI_API_KEY` is unset.
     nonisolated public static let provider = PlannerProvider(
         id: providerID,
-        displayName: "OpenAI",
-        // The API tier's standard posture at this writing: prompts are not used for training but
-        // are retained temporarily for abuse monitoring — "retained temporarily", not "not
-        // retained", and the ledger says so.
-        retentionPosture: .retainedTemporarily
+        displayName: "OpenAI"
     ) { usageRecorder in
         try OpenAIPlanner(usageRecorder: usageRecorder)
     }

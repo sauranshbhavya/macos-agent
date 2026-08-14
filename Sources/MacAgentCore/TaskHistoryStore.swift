@@ -19,13 +19,6 @@ public struct CompletedTaskRecord: Codable, Equatable, Sendable {
     /// `decodeIfPresent` reasoning as `StoredWorkspace.teamType`. Absent means manual, which is
     /// what every pre-existing record is.
     public var trigger: TaskTrigger?
-    /// The run's Data-Sent-to-AI record id (SONNY-88) — the task-detail surface's exact join
-    /// into `AIEgressStore`, deliberately an id rather than a shared timestamp: both stores
-    /// persist dates as ISO8601, whose whole-second truncation makes date equality a fragile
-    /// join key (a re-minted "same" instant straddling a second boundary would silently
-    /// unlink the two records). Optional on the same decode reasoning as `trigger`; absent
-    /// means the run sent nothing (or predates the ledger).
-    public var egressRunID: UUID?
 
     public init(
         command: String,
@@ -33,8 +26,7 @@ public struct CompletedTaskRecord: Codable, Equatable, Sendable {
         completedAt: Date,
         outcomeStatus: PriorTaskOutcomeStatus,
         workspaceName: String? = nil,
-        trigger: TaskTrigger? = nil,
-        egressRunID: UUID? = nil
+        trigger: TaskTrigger? = nil
     ) {
         self.command = command.trimmingCharacters(in: .whitespacesAndNewlines)
         self.startedAt = startedAt
@@ -42,7 +34,6 @@ public struct CompletedTaskRecord: Codable, Equatable, Sendable {
         self.outcomeStatus = outcomeStatus
         self.workspaceName = workspaceName
         self.trigger = trigger
-        self.egressRunID = egressRunID
     }
 
     public var effectiveTrigger: TaskTrigger {

@@ -79,8 +79,8 @@ struct RiskApprovalTests {
     /// Four lines, not §11.3's five: the "Data leaves device" line is removed from all normal
     /// approval surfaces — E9's deliberate, founder-ratified spec deviation (2026-08-08, kept in
     /// full by C7 on 2026-08-12; SONNY-90's landing). The line survives only inside Safe mode —
-    /// the companion test below — and Normal mode's egress honesty lives in the Data-Sent-to-AI
-    /// ledger (SONNY-88) instead of a pre-run label.
+    /// the companion test below — which is the product's one egress disclosure since the founder
+    /// superseded E9's in-product after-the-fact log on 2026-08-14.
     @Test
     func approvalCopyContainsRequiredUserFacingFieldsWithoutTheDataEgressLine() {
         let copy = RiskApprovalCopy(

@@ -174,8 +174,9 @@ public struct RiskApprovalCopy: Codable, Equatable, Sendable {
     /// among these four — spec §11.3 made it one of five mandatory lines on every approval
     /// surface, and E9 (founder-ratified 2026-08-08, kept in full by C7 on 2026-08-12) is a
     /// conscious deviation: the label leaves all normal surfaces and renders only inside Safe
-    /// mode, where `safeModeLines` restores it in its original position. Normal mode's honesty
-    /// lives in the per-run Data-Sent-to-AI ledger (SONNY-88) instead of a pre-run label.
+    /// mode, where `safeModeLines` restores it in its original position. (E9's other half — an
+    /// in-product after-the-fact egress log — was superseded by the founder on 2026-08-14; the
+    /// Safe-mode label is the product's one egress disclosure.)
     public var lines: [String] {
         [
             "What Sonny is about to do: \(actionDescription)",
@@ -186,9 +187,10 @@ public struct RiskApprovalCopy: Codable, Equatable, Sendable {
     }
 
     /// The Safe-mode disclosure: the same lines with "Data leaves device: yes/no" restored where
-    /// §11.3 put it, sourced from the same bidirectionally-honest classification the
-    /// Data-Sent-to-AI ledger records (SONNY-88 — the classification cannot lie in either
-    /// direction, which is what makes the surviving label worth rendering).
+    /// §11.3 put it, sourced from the bidirectionally-honest `dataLeavesDevice` classification
+    /// (SONNY-32's fix, landed with SONNY-88 and kept when the ledger was deleted — the
+    /// classification cannot lie in either direction, which is what makes the surviving label
+    /// worth rendering).
     public var safeModeLines: [String] {
         [
             "What Sonny is about to do: \(actionDescription)",
