@@ -239,6 +239,11 @@ final class AgentViewModel: ObservableObject {
     private var isPushToTalkHotKeyDown = false
     private var pendingCommandForPriorTaskContext: String?
     private var pendingTaskHistoryStartedAt: Date?
+    /// The current run's Data-Sent-to-AI record id, minted where the egress recorder is
+    /// constructed (the planner branch of `performStart`; nil for planner-free runs) and carried
+    /// into the completed-task record as the exact ledger join. Survives an approval pause the
+    /// same way `pendingTaskHistoryStartedAt` does — the resumed run is the same task.
+    private var activeTaskEgressRunID: UUID?
     private var preserveUsageForNextStart = false
     private var localStorageLoadFailures: [LocalStorageLoadFailureSource: String] = [:]
     /// Last clipboard-poll failure text, so a repeating 1s failure is reported once, not 60×/min.
@@ -739,6 +744,7 @@ final class AgentViewModel: ObservableObject {
         stepStatuses = [:]
         pendingTaskHistoryStartedAt = nil
         plannerFallbackNotice = nil
+        activeTaskEgressRunID = nil
 
         if preserveUsageForNextStart {
             preserveUsageForNextStart = false
@@ -823,9 +829,11 @@ final class AgentViewModel: ObservableObject {
                 // task-detail join), so the egress layer only ever says what left. The registry
                 // wraps the planner with it — every planner prompt this run sends is in the
                 // Data-Sent-to-AI ledger at the moment it leaves.
+                let egressRunID = UUID()
+                activeTaskEgressRunID = egressRunID
                 let egressRecorder = AIEgressLedgerRecorder(
                     store: aiEgressStore,
-                    runID: UUID(),
+                    runID: egressRunID,
                     runStartedAt: taskHistoryStartedAt,
                     onWriteFailure: { [weak self] message in
                         self?.reportAIEgressLedgerWriteFailure(message)
@@ -1760,6 +1768,7 @@ final class AgentViewModel: ObservableObject {
         runner = nil
         pendingCommandForPriorTaskContext = nil
         pendingTaskHistoryStartedAt = nil
+        activeTaskEgressRunID = nil
         preserveUsageForNextStart = false
         priorTaskContextStore.clear()
         taskUsageRecorder.reset()
@@ -2293,7 +2302,10 @@ final class AgentViewModel: ObservableObject {
                     // Derived from origin rather than threaded through every call site — origin
                     // already records who started this run, and a second parameter saying the same
                     // thing is a second thing to forget to pass.
-                    trigger: activeTaskOrigin == .scheduled ? .scheduled : .manual
+                    trigger: activeTaskOrigin == .scheduled ? .scheduled : .manual,
+                    // Same reasoning: per-task state `performStart` resets and the planner branch
+                    // sets, not a parameter for every terminal call site to remember.
+                    egressRunID: activeTaskEgressRunID
                 )
             )
             refreshTaskHistory()

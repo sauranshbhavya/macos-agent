@@ -32,9 +32,15 @@ struct AIEgressDispatchTests {
         #expect(entry.model == "draft-model")
         #expect(entry.contextSources.contains("command"))
 
-        // The join: the ledger record and the completed-task record carry the same instant.
+        // The join is by id, exactly: the completed-task record names this ledger record, and
+        // reading back through the store's join API lands on it. (The shared instant is kept on
+        // the ledger record for display, but ISO8601's whole-second persistence makes a date a
+        // fragile join key — the id is the one that binds.)
         let taskRecords = try fixture.taskHistoryStore.loadAll()
         #expect(taskRecords.count == 1)
+        let egressRunID = try #require(taskRecords.first?.egressRunID)
+        #expect(egressRunID == record.runID)
+        #expect(try fixture.egressStore.record(forRunID: egressRunID)?.entries.count == 1)
         #expect(taskRecords.first?.startedAt == record.runStartedAt)
     }
 
@@ -71,8 +77,10 @@ struct AIEgressDispatchTests {
 
         #expect(fixture.viewModel.finalSummary.contains("4"))
         #expect(try fixture.egressStore.loadAll().isEmpty)
-        // The run itself is real and recorded in task history.
-        #expect(try fixture.taskHistoryStore.loadAll().count == 1)
+        // The run itself is real and recorded in task history — with no phantom ledger join.
+        let taskRecords = try fixture.taskHistoryStore.loadAll()
+        #expect(taskRecords.count == 1)
+        #expect(taskRecords.first?.egressRunID == nil)
     }
 
     @Test
