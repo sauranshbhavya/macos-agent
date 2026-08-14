@@ -85,7 +85,9 @@ public struct CreateWorkspaceCapabilityAdapter: CapabilityAdapter {
                 CapabilityRiskEscalation(
                     fromTier: metadata.defaultRiskTier,
                     toTier: .tier3,
-                    reason: "Workspace named \(workspace.name) already exists and would be replaced."
+                    reason: "Workspace named \(workspace.name) already exists and would be replaced.",
+                    // Replace-on-save destroys the workspace the user already built.
+                    consequence: .destructive
                 )
             ]
             : []

@@ -72,17 +72,12 @@ public struct RunRoutineCapabilityAdapter: CapabilityAdapter {
             // one. A plan whose *only* step is `run_routine` has no outer findings at all
             // (`PlanScopedResources` classifies the operation as `.none`), so dropping this yields
             // `.unconstrained` — wrong, but inert. Add one in-scope step beside it and dropping this
-            // yields **`.inScope`** on a plan whose routine writes outside the boundary, which is
-            // precisely the value row C relaxes on. Both shapes are pinned; the mixed one is the
-            // reason this line exists.
-            scopeVerdict: nested.scopeVerdict,
-            // Forwarded for the same laundering reason as the verdict above, with one honest
-            // difference: today this is belt-and-braces, not load-bearing. The static
-            // classification already gives `.runRoutine` itself the empty set, so the outer
-            // intersection zeroes any plan containing this step before the nested value is
-            // consulted. It becomes load-bearing the day that classification changes, and dropping
-            // it then would let a routine's steps escape a narrowing one of them declared.
-            relaxationEligibility: nested.relaxationEligibility
+            // yields **`.inScope`** on a plan whose routine writes outside the boundary. Nothing
+            // gates on the verdict since the consequence rule (2026-08-13) — it is data for the
+            // surfaces that render it and for the future vision cage — but data that lies about a
+            // routine's reach is still a lie a surface would repeat. Both shapes are pinned; the
+            // mixed one is the reason this line exists.
+            scopeVerdict: nested.scopeVerdict
         )
     }
 

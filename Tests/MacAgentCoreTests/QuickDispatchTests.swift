@@ -343,8 +343,12 @@ struct QuickDispatchTests {
         #expect(plan.steps[0].appName == "Safari")
     }
 
+    /// Instant dispatch never skips assessment — it reaches the same runner path a typed command
+    /// does — and under the consequence rule (2026-08-13) a tier-2 nested draft with no collision
+    /// runs without asking. The destructive nested pause on this same instant path keeps its own
+    /// test directly below: instant dispatch relaxes nothing and tightens nothing.
     @Test
-    func instantRoutineWithTierTwoNestedStepStillRequiresApproval() async throws {
+    func instantRoutineWithTierTwoNestedStepAutoRunsUnderTheConsequenceRule() async throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let output = root.appendingPathComponent("draft.md")
@@ -364,20 +368,11 @@ struct QuickDispatchTests {
         let request = try runner.approvalRequest(for: prepared, scope: .unscoped, context: approvalContext(for: prepared))
 
         #expect(request.assessment.effectiveTier == .tier2)
-        #expect(request.requirement == .lightweightConfirmation)
-        #expect(request.requirement != .autoRun)
+        #expect(request.requirement == .autoRun)
 
-        do {
-            _ = try await runner.execute(prepared, scope: .unscoped, context: approvalContext(for: prepared))
-            Issue.record("Expected instant routine launch to pause for tier 2 approval.")
-        } catch RiskApprovalError.approvalRequired(let approvalRequest) {
-            #expect(approvalRequest.requirement == .lightweightConfirmation)
-            #expect(approvalRequest.assessment.effectiveTier == .tier2)
-        } catch {
-            Issue.record("Expected approvalRequired, got \(error).")
-        }
+        _ = try await runner.execute(prepared, scope: .unscoped, context: approvalContext(for: prepared))
 
-        #expect(!FileManager.default.fileExists(atPath: output.path))
+        #expect(FileManager.default.fileExists(atPath: output.path))
     }
 
     @Test
@@ -462,7 +457,7 @@ struct QuickDispatchTests {
     }
 
     private func approvalContext(for prepared: PreparedAgentRun) -> ApprovalContext {
-        ApprovalContext(origin: prepared.source, safeMode: false)
+        ApprovalContext(safeMode: false)
     }
 
     private func makeExecutor(

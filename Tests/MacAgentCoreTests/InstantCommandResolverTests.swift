@@ -73,7 +73,7 @@ struct InstantCommandResolverTests {
             for: prepared,
             logAssessment: true,
             scope: .unscoped,
-            context: ApprovalContext(origin: prepared.source, safeMode: false)
+            context: ApprovalContext(safeMode: false)
         )
         #expect(request.assessment.effectiveTier == .tier0)
         #expect(request.requirement == .autoRun)
@@ -82,7 +82,7 @@ struct InstantCommandResolverTests {
             prepared,
             confirmationMessage: "Instant calculator auto-run",
             scope: .unscoped,
-            context: ApprovalContext(origin: prepared.source, safeMode: false)
+            context: ApprovalContext(safeMode: false)
         )
         #expect(result.summary == "2 + 2 * 3 = 8.")
         #expect(usageRecorder.snapshot().requestCount == 0)

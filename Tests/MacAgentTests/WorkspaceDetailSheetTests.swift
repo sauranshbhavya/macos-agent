@@ -525,22 +525,20 @@ struct WorkspaceDetailSheetTests {
         #expect(entries.allSatisfy { $0.inertNote != nil })
     }
 
-    /// **The sheet never writes a scope change itself, and dispatching did not change that.**
+    /// **A Remove tap runs the plan the row named — and, under the consequence rule (2026-08-13),
+    /// applies it without asking.**
     ///
-    /// The acceptance criterion for SONNY-64's infrastructure half, asserted end to end: a Remove
-    /// tap runs the plan the row named, pauses at the *same* tier-3 assessment a typed removal
-    /// reaches — same tier, same consent sentence, verbatim — and leaves the store exactly as it
-    /// was until that ask is answered. The composer is gone from the path; the gate is not.
+    /// SONNY-64's infrastructure claim survives the pivot in its important half: the plan that ran
+    /// is the one the row named, field for field — no planner read anything, and nothing widened
+    /// it. What changed is the gate's answer: the removal's tier-3 escalation is advisory, so the
+    /// edit applies immediately and its consent sentence — same words, verbatim — surfaces on the
+    /// ran-without-asking trace instead of a prompt. This supersedes the Q4-ratified prompting the
+    /// same tap used to reach; a recorded coordinator call, founder-vetoable.
     ///
-    /// Since SONNY-97 the *weight* of the ask differs from the typed path: the screen-built origin
-    /// earns `.directUserAuthored`, which maps the tier-3 removal to a lightweight confirmation
-    /// where a typed removal keeps explicit approval. The assessment halves — tier and sentence —
-    /// are asserted unchanged, which is exactly I1/I2 at this surface.
-    ///
-    /// `preparedRun.source` is asserted because it is the whole point of the origin work — the run
-    /// has to be *identifiable* as screen-built, and now that identity is what the grant reads.
+    /// `activeTaskPlanSource` is asserted because the run still has to be *identifiable* as
+    /// screen-built — dispatch and copy read it even though no grant does anymore.
     @Test
-    func dispatchingARemovalRunsThePreBuiltPlanAndStopsAtSameTierWithALighterAsk() async throws {
+    func dispatchingARemovalRunsThePreBuiltPlanAndAppliesWithTheTraceNamingTheChange() async throws {
         let root = try makeSheetTestDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
@@ -548,27 +546,21 @@ struct WorkspaceDetailSheetTests {
         let stored = StoredWorkspace(name: "Client Alpha", apps: ["Safari", "Notes"], urls: [])
         try store.save(stored)
         viewModel.refreshSavedItems()
-        let before = try store.workspace(named: "Client Alpha")
         let requestsBefore = viewModel.widgetPresentationRequest
 
         let presentation = WorkspaceDetailPresentation(workspace: stored, taskHistoryRecords: [])
         viewModel.dispatchWorkspaceScopeEdit(presentation.apps.entries[1].removeDispatch)
         try await waitForSheetViewModelToBecomeIdle(viewModel)
 
-        // Paused at the ask the capability raised — not run, not skipped. The origin grant made
-        // the ask lightweight; it did not make it disappear.
-        #expect(viewModel.isAwaitingApproval)
-        let request = try #require(viewModel.approvalRequest)
-        #expect(request.assessment.effectiveTier == .tier3)
-        #expect(request.requirement == .lightweightConfirmation)
-        #expect(request.relaxationGrant == .directUserAuthored)
-        #expect(request.assessment.escalations.map(\.reason) == [
-            "Removes Notes from workspace Client Alpha's apps. "
-                + "What is removed stops counting as part of this workspace."
-        ])
+        // Ran without asking — and said so, naming the exact consent sentence the prompt used to
+        // carry.
+        #expect(!viewModel.isAwaitingApproval)
+        #expect(viewModel.approvalRequest == nil)
+        #expect(viewModel.ranWithoutAskingTrace == "Ran without asking — worth knowing: "
+            + "Removes Notes from workspace Client Alpha's apps. "
+            + "What is removed stops counting as part of this workspace.")
 
-        // The plan that reached the gate is the one the row named, field for field — no planner
-        // read anything, and nothing widened it.
+        // The plan that ran is the one the row named, field for field.
         let plan = try #require(viewModel.plan)
         #expect(plan.steps.count == 1)
         #expect(plan.steps[0].operation == .editWorkspace)
@@ -578,23 +570,19 @@ struct WorkspaceDetailSheetTests {
 
         #expect(viewModel.activeTaskPlanSource == .directUserAction)
         #expect(viewModel.lastCommand == "In my Client Alpha workspace, remove the app Notes")
-        // The widget is summoned, because it is the one surface this sheet cannot cover.
+        // The widget is summoned: it is where the trace renders, and the one surface this modal
+        // sheet cannot cover.
         #expect(viewModel.widgetPresentationRequest == requestsBefore + 1)
-        // The boundary is untouched until the approval is answered.
-        #expect(try store.workspace(named: "Client Alpha") == before)
+        // Exactly the tapped change applied, and nothing else.
+        #expect(try store.workspace(named: "Client Alpha").apps == ["Safari"])
     }
 
-    /// An addition takes the same route and **auto-runs under the origin grant** (SONNY-97): the
-    /// user built this edit field by field on the sheet, the apps dimension is already configured,
-    /// and re-prompting for it was the founder's 2026-08-07 friction complaint — so the edit
-    /// applies with no prompt at all. The one-directional escalation rule still reaches the picker
-    /// unchanged: it is the *ask* that got lighter, not the assessment.
-    ///
-    /// The fixture adds to an already-configured dimension deliberately — SONNY-98 narrows
-    /// boundary-*changing* edits (first entry into an empty dimension, emptying removals, subsuming
-    /// adds) back out of the grant, and this test must stay true on both sides of that change.
+    /// An addition takes the same route and auto-runs: under the consequence rule every sheet edit
+    /// does — the founder's 2026-08-07 friction complaint, answered by the rule itself. The
+    /// one-directional escalation rule still reaches the picker unchanged: the assessment never
+    /// moved, only the gate's answer did.
     @Test
-    func dispatchingAnAdditionAutoRunsUnderTheOriginGrantAndApplies() async throws {
+    func dispatchingAnAdditionAutoRunsAndApplies() async throws {
         let root = try makeSheetTestDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
@@ -621,13 +609,14 @@ struct WorkspaceDetailSheetTests {
         #expect(try store.workspace(named: "Client Alpha").apps == ["Safari", "Slack"])
     }
 
-    /// Approving applies exactly the tapped change and nothing else.
+    /// A dispatched removal applies exactly the tapped change and nothing else.
     ///
-    /// The other half of the parity claim: it is not enough that the prompt matched — the write that
-    /// follows it has to be the one the prompt described. A dispatch path that assessed the right
-    /// plan and executed a different one would pass every assertion above.
+    /// The other half of the parity claim: it is not enough that the assessment matched — the
+    /// write has to be the one the row described. A dispatch path that assessed the right plan and
+    /// executed a different one would pass every assertion above. Every other field of the
+    /// boundary — the URLs, the team type — must come through untouched.
     @Test
-    func approvingADispatchedRemovalAppliesExactlyTheTappedChange() async throws {
+    func aDispatchedRemovalAppliesExactlyTheTappedChange() async throws {
         let root = try makeSheetTestDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
@@ -644,10 +633,6 @@ struct WorkspaceDetailSheetTests {
         let presentation = WorkspaceDetailPresentation(workspace: stored, taskHistoryRecords: [])
         viewModel.dispatchWorkspaceScopeEdit(presentation.apps.entries[1].removeDispatch)
         try await waitForSheetViewModelToBecomeIdle(viewModel)
-        #expect(viewModel.isAwaitingApproval)
-
-        viewModel.start()
-        try await waitForSheetViewModelToBecomeIdle(viewModel)
 
         let after = try store.workspace(named: "Client Alpha")
         #expect(after.apps == ["Safari"])
@@ -656,16 +641,13 @@ struct WorkspaceDetailSheetTests {
         #expect(after.teamType == .team)
         #expect(viewModel.isAwaitingApproval == false)
         #expect(viewModel.errorMessage == nil)
-        // The prompt was the disclosure: a run the user approved surfaces no ran-without-asking
-        // trace on top of it (SONNY-99).
-        #expect(viewModel.relaxationTrace == nil)
     }
 
-    /// The sheet addition that auto-runs under the origin grant leaves the ran-without-asking
-    /// trace, and it reads as "you built this on screen" — never as a workspace-boundary grant,
-    /// which is a different fact (SONNY-99).
+    /// The sheet addition that auto-runs leaves the ran-without-asking trace, and — with nothing
+    /// advisory on a plain tier-2 add — it states the rule itself, so the user learns *why* Sonny
+    /// stopped asking (SONNY-99, reshaped by the consequence rule).
     @Test
-    func aSheetAdditionThatAutoRanLeavesTheBuiltOnScreenTrace() async throws {
+    func aSheetAdditionThatAutoRanLeavesTheRuleStatingTrace() async throws {
         let root = try makeSheetTestDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
@@ -684,7 +666,8 @@ struct WorkspaceDetailSheetTests {
         // Premise, guarded rather than assumed: the run really did auto-run and apply.
         #expect(!viewModel.isAwaitingApproval)
         #expect(try store.workspace(named: "Client Alpha").apps == ["Safari", "Slack"])
-        #expect(viewModel.relaxationTrace == "Ran without asking — you built this action on screen.")
+        #expect(viewModel.ranWithoutAskingTrace
+            == "Ran without asking — nothing here is destructive, and it affects no one else.")
     }
 
     /// **A dispatch from this sheet is never an approval of something else.**
@@ -696,23 +679,20 @@ struct WorkspaceDetailSheetTests {
     /// re-arm is a second way one appears; either can land between a render and a tap, which is the
     /// hole H1 had to be taught about once already. (Not a scheduled routine: `performScheduledRun`
     /// runs pre-approved at tier 2 and pauses the schedule instead of ever setting
-    /// `approvalRequest` — PR #40 review, F4.) Here the pending approval is a *different*
-    /// workspace's removal, so an accidental allow would be visible in the store.
+    /// `approvalRequest` — PR #40 review, F4.) The pending approval is a destructive snippet
+    /// replace — the pause the consequence rule still has, since sheet edits themselves no longer
+    /// pause — so an accidental allow would be visible in the snippet store.
     @Test
     func aSheetDispatchWhileAnApprovalIsPendingIsRefusedRatherThanTreatedAsAnAllow() async throws {
         let root = try makeSheetTestDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
         let viewModel = try makeSheetTestViewModel(root: root, workspaceStore: store)
-        let research = StoredWorkspace(name: "Research", apps: ["Safari", "Notes"], urls: [])
         let alpha = StoredWorkspace(name: "Client Alpha", apps: ["Safari", "Slack"], urls: [])
-        try store.save(research)
         try store.save(alpha)
         viewModel.refreshSavedItems()
 
-        let researchSheet = WorkspaceDetailPresentation(workspace: research, taskHistoryRecords: [])
-        viewModel.dispatchWorkspaceScopeEdit(researchSheet.apps.entries[1].removeDispatch)
-        try await waitForSheetViewModelToBecomeIdle(viewModel)
+        let snippetStore = try await armPendingDestructiveApproval(viewModel, root: root)
         #expect(viewModel.isAwaitingApproval)
         let pendingPlan = viewModel.plan
 
@@ -723,7 +703,7 @@ struct WorkspaceDetailSheetTests {
         // Still waiting on the original approval; nothing was allowed and nothing was replaced.
         #expect(viewModel.isAwaitingApproval)
         #expect(viewModel.plan == pendingPlan)
-        #expect(try store.workspace(named: "Research").apps == ["Safari", "Notes"])
+        #expect(try snippetStore.snippet(matchingTrigger: ";armed").expansion == "Old text")
         #expect(try store.workspace(named: "Client Alpha").apps == ["Safari", "Slack"])
     }
 
@@ -737,32 +717,27 @@ struct WorkspaceDetailSheetTests {
     /// anywhere; the approval would simply have been granted.
     ///
     /// Driven through `dispatchTranscribedCommand`, which exists as a seam for exactly this — one
-    /// copy of the guard, one `start(...)` call, no transcriber and no API key required. The pending
-    /// approval is a *different* workspace's removal, so an accidental allow is visible in the store
-    /// rather than only in a flag.
+    /// copy of the guard, one `start(...)` call, no transcriber and no API key required. The
+    /// pending approval is a destructive snippet replace, so an accidental allow is visible in the
+    /// store rather than only in a flag.
     @Test
     func aVoiceDispatchWhileAnApprovalIsPendingIsRefusedRatherThanTreatedAsAnAllow() async throws {
         let root = try makeSheetTestDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
         let viewModel = try makeSheetTestViewModel(root: root, workspaceStore: store)
-        let research = StoredWorkspace(name: "Research", apps: ["Safari", "Notes"], urls: [])
-        try store.save(research)
-        viewModel.refreshSavedItems()
 
-        let sheet = WorkspaceDetailPresentation(workspace: research, taskHistoryRecords: [])
-        viewModel.dispatchWorkspaceScopeEdit(sheet.apps.entries[1].removeDispatch)
-        try await waitForSheetViewModelToBecomeIdle(viewModel)
+        let snippetStore = try await armPendingDestructiveApproval(viewModel, root: root)
         #expect(viewModel.isAwaitingApproval)
         let pendingPlan = viewModel.plan
 
         viewModel.dispatchTranscribedCommand("what is the weather today", origin: .widget)
         try await waitForSheetViewModelToBecomeIdle(viewModel)
 
-        // The removal is still waiting to be answered, and Notes is still in Research.
+        // The replace is still waiting to be answered, and the old snippet text survives.
         #expect(viewModel.isAwaitingApproval)
         #expect(viewModel.plan == pendingPlan)
-        #expect(try store.workspace(named: "Research").apps == ["Safari", "Notes"])
+        #expect(try snippetStore.snippet(matchingTrigger: ";armed").expansion == "Old text")
         // The spoken words did not become the next command either — the residue guard cleared them.
         #expect(viewModel.command == "")
         // And the refusal is on the record, which is the half F5 was about: the voice path used to
@@ -781,13 +756,8 @@ struct WorkspaceDetailSheetTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
         let viewModel = try makeSheetTestViewModel(root: root, workspaceStore: store)
-        let research = StoredWorkspace(name: "Research", apps: ["Safari", "Notes"], urls: [])
-        try store.save(research)
-        viewModel.refreshSavedItems()
 
-        let sheet = WorkspaceDetailPresentation(workspace: research, taskHistoryRecords: [])
-        viewModel.dispatchWorkspaceScopeEdit(sheet.apps.entries[1].removeDispatch)
-        try await waitForSheetViewModelToBecomeIdle(viewModel)
+        let snippetStore = try await armPendingDestructiveApproval(viewModel, root: root)
         #expect(viewModel.isAwaitingApproval)
         let pendingPlan = viewModel.plan
 
@@ -796,7 +766,7 @@ struct WorkspaceDetailSheetTests {
 
         #expect(viewModel.isAwaitingApproval)
         #expect(viewModel.plan == pendingPlan)
-        #expect(try store.workspace(named: "Research").apps == ["Safari", "Notes"])
+        #expect(try snippetStore.snippet(matchingTrigger: ";armed").expansion == "Old text")
     }
 
     /// **The retry door, which the guard does *not* change** — recorded so the enumeration is
@@ -813,13 +783,8 @@ struct WorkspaceDetailSheetTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let store = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
         let viewModel = try makeSheetTestViewModel(root: root, workspaceStore: store)
-        let research = StoredWorkspace(name: "Research", apps: ["Safari", "Notes"], urls: [])
-        try store.save(research)
-        viewModel.refreshSavedItems()
 
-        let sheet = WorkspaceDetailPresentation(workspace: research, taskHistoryRecords: [])
-        viewModel.dispatchWorkspaceScopeEdit(sheet.apps.entries[1].removeDispatch)
-        try await waitForSheetViewModelToBecomeIdle(viewModel)
+        let snippetStore = try await armPendingDestructiveApproval(viewModel, root: root)
         #expect(viewModel.isAwaitingApproval)
         let pendingPlan = viewModel.plan
 
@@ -828,7 +793,7 @@ struct WorkspaceDetailSheetTests {
 
         #expect(viewModel.isAwaitingApproval)
         #expect(viewModel.plan == pendingPlan)
-        #expect(try store.workspace(named: "Research").apps == ["Safari", "Notes"])
+        #expect(try snippetStore.snippet(matchingTrigger: ";armed").expansion == "Old text")
         // Refused by `retryLastCommand`'s own guard, so `dispatch` was never entered and its
         // refusal line was never written. That is what makes this door's answer "unaffected"
         // rather than "also covered".
@@ -854,19 +819,17 @@ struct WorkspaceDetailSheetTests {
         try store.save(research)
         viewModel.refreshSavedItems()
 
-        let sheet = WorkspaceDetailPresentation(workspace: research, taskHistoryRecords: [])
-        viewModel.dispatchWorkspaceScopeEdit(sheet.apps.entries[1].removeDispatch)
-        try await waitForSheetViewModelToBecomeIdle(viewModel)
+        let snippetStore = try await armPendingDestructiveApproval(viewModel, root: root)
         #expect(viewModel.isAwaitingApproval)
         let pendingPlan = viewModel.plan
 
         viewModel.openWorkspaceWidget(research)
         try await waitForSheetViewModelToBecomeIdle(viewModel)
 
-        // The card action did not become an "allow" on the removal waiting behind it.
+        // The card action did not become an "allow" on the replace waiting behind it.
         #expect(viewModel.isAwaitingApproval)
         #expect(viewModel.plan == pendingPlan)
-        #expect(try store.workspace(named: "Research").apps == ["Safari", "Notes"])
+        #expect(try snippetStore.snippet(matchingTrigger: ";armed").expansion == "Old text")
     }
 
     /// **A refused dispatch leaves an armed card binding alone, and that is the rule — not an
@@ -893,10 +856,9 @@ struct WorkspaceDetailSheetTests {
         viewModel.refreshSavedItems()
 
         // An approval from somewhere else is pending — the state the sheet's buttons are disabled
-        // for, and one a foreground run can produce between a render and a click.
-        let alphaSheet = WorkspaceDetailPresentation(workspace: alpha, taskHistoryRecords: [])
-        viewModel.dispatchWorkspaceScopeEdit(alphaSheet.apps.entries[1].removeDispatch)
-        try await waitForSheetViewModelToBecomeIdle(viewModel)
+        // for, and one a foreground run can produce between a render and a click. Bound to Client
+        // Alpha explicitly, so the in-flight-versus-armed distinction below stays observable.
+        _ = try await armPendingDestructiveApproval(viewModel, root: root, workspaceBinding: "Client Alpha")
         #expect(viewModel.isAwaitingApproval)
 
         viewModel.beginTaskInWorkspace(research)
@@ -1134,6 +1096,24 @@ struct WorkspaceDetailSheetTests {
         // load banner would render a *successful* task as a failure in the widget.
         #expect(viewModel.localStorageNotice == nil)
     }
+}
+
+/// Arms a pending approval the consequence rule still produces: a typed snippet save whose
+/// trigger already exists with different text — a destructive replace. Returns the store so the
+/// caller can assert nothing was written while the prompt sat pending. (Sheet edits themselves
+/// auto-run now, so the pending-approval tests arm their pause here instead.)
+@MainActor
+private func armPendingDestructiveApproval(
+    _ viewModel: AgentViewModel,
+    root: URL,
+    workspaceBinding: String? = nil
+) async throws -> SnippetStore {
+    let snippetStore = SnippetStore(fileURL: root.appendingPathComponent("snippets.json"))
+    try snippetStore.save(StoredSnippet(trigger: ";armed", expansion: "Old text"))
+    viewModel.command = "snippet save ;armed = New text"
+    viewModel.start(workspaceBinding: workspaceBinding)
+    try await waitForSheetViewModelToBecomeIdle(viewModel)
+    return snippetStore
 }
 
 @MainActor

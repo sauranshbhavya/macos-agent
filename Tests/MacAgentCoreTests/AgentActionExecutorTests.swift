@@ -398,7 +398,8 @@ struct AgentActionExecutorTests {
         let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
 
         #expect(assessment.effectiveTier == .tier2)
-        #expect(RiskApprovalPolicy.default.requirement(for: assessment, context: plannerContext).requiresUserApproval)
+        // Consequence rule (2026-08-13): a tier-2 local save with nothing destructive auto-runs.
+        #expect(RiskApprovalPolicy.default.requirement(for: assessment, context: plannerContext) == .autoRun)
         #expect(assessment.approvalCopy?.dataLeavesDevice == false)
     }
 
@@ -430,7 +431,8 @@ struct AgentActionExecutorTests {
             CapabilityRiskEscalation(
                 fromTier: .tier2,
                 toTier: .tier3,
-                reason: "Draft output already exists at \(second.path)."
+                reason: "Draft output already exists at \(second.path).",
+                consequence: .destructive
             )
         ])
     }
@@ -454,7 +456,7 @@ struct AgentActionExecutorTests {
 
         #expect(assessment.effectiveTier == .tier2)
         #expect(assessment.escalations.isEmpty)
-        #expect(RiskApprovalPolicy.default.requirement(for: assessment, context: plannerContext) == .lightweightConfirmation)
+        #expect(RiskApprovalPolicy.default.requirement(for: assessment, context: plannerContext) == .autoRun)
     }
 
     /// Two steps aimed at the same existing file describe one collision, and the approval panel
@@ -513,7 +515,8 @@ struct AgentActionExecutorTests {
             CapabilityRiskEscalation(
                 fromTier: .tier2,
                 toTier: .tier3,
-                reason: "Zip output already exists at \(secondZip.path)."
+                reason: "Zip output already exists at \(secondZip.path).",
+                consequence: .destructive
             )
         ])
     }
@@ -544,7 +547,8 @@ struct AgentActionExecutorTests {
             CapabilityRiskEscalation(
                 fromTier: .tier2,
                 toTier: .tier3,
-                reason: "Markdown output already exists at \(webResearchOutput.path)."
+                reason: "Markdown output already exists at \(webResearchOutput.path).",
+                consequence: .destructive
             )
         ])
     }
@@ -641,12 +645,14 @@ struct AgentActionExecutorTests {
             CapabilityRiskEscalation(
                 fromTier: .tier2,
                 toTier: .tier3,
-                reason: "Zip output already exists at \(zipOutput.path)."
+                reason: "Zip output already exists at \(zipOutput.path).",
+                consequence: .destructive
             ),
             CapabilityRiskEscalation(
                 fromTier: .tier2,
                 toTier: .tier3,
-                reason: "Draft output already exists at \(draftOutput.path)."
+                reason: "Draft output already exists at \(draftOutput.path).",
+                consequence: .destructive
             )
         ])
     }
@@ -685,7 +691,7 @@ struct AgentActionExecutorTests {
 
         #expect(assessment.defaultTier == .tier2)
         #expect(assessment.effectiveTier == .tier2)
-        #expect(RiskApprovalPolicy.default.requirement(for: assessment, context: plannerContext) == .lightweightConfirmation)
+        #expect(RiskApprovalPolicy.default.requirement(for: assessment, context: plannerContext) == .autoRun)
         #expect(assessment.escalations.isEmpty)
     }
 
@@ -746,7 +752,8 @@ struct AgentActionExecutorTests {
             CapabilityRiskEscalation(
                 fromTier: .tier2,
                 toTier: .tier3,
-                reason: "Draft output already exists at \(existingDraft.path)."
+                reason: "Draft output already exists at \(existingDraft.path).",
+                consequence: .destructive
             )
         ])
     }
@@ -829,7 +836,8 @@ struct AgentActionExecutorTests {
             CapabilityRiskEscalation(
                 fromTier: .tier2,
                 toTier: .tier3,
-                reason: "Zip output already exists at \(zipB.path)."
+                reason: "Zip output already exists at \(zipB.path).",
+                consequence: .destructive
             )
         ])
     }
@@ -1282,7 +1290,8 @@ struct AgentActionExecutorTests {
             CapabilityRiskEscalation(
                 fromTier: .tier2,
                 toTier: .tier3,
-                reason: "Draft output already exists at \(occupied.path)."
+                reason: "Draft output already exists at \(occupied.path).",
+                consequence: .destructive
             )
         ])
     }
@@ -1325,7 +1334,8 @@ struct AgentActionExecutorTests {
             CapabilityRiskEscalation(
                 fromTier: .tier2,
                 toTier: .tier3,
-                reason: "Draft output already exists at \(occupied.path)."
+                reason: "Draft output already exists at \(occupied.path).",
+                consequence: .destructive
             )
         ])
     }
@@ -1749,7 +1759,7 @@ struct AgentActionExecutorTests {
         #expect(assessment.defaultTier == .tier2)
         #expect(assessment.effectiveTier == .tier2)
         #expect(assessment.escalations.isEmpty)
-        #expect(RiskApprovalPolicy.default.requirement(for: assessment, context: plannerContext) == .lightweightConfirmation)
+        #expect(RiskApprovalPolicy.default.requirement(for: assessment, context: plannerContext) == .autoRun)
     }
 
     /// And the escalation the `try?` was suppressing still fires when it should: a name that really
@@ -1769,7 +1779,8 @@ struct AgentActionExecutorTests {
             CapabilityRiskEscalation(
                 fromTier: .tier2,
                 toTier: .tier3,
-                reason: "Workspace named Research already exists and would be replaced."
+                reason: "Workspace named Research already exists and would be replaced.",
+                consequence: .destructive
             )
         ])
     }
@@ -1798,7 +1809,8 @@ struct AgentActionExecutorTests {
             CapabilityRiskEscalation(
                 fromTier: .tier2,
                 toTier: .tier3,
-                reason: "Routine named Morning Setup already exists and would be replaced."
+                reason: "Routine named Morning Setup already exists and would be replaced.",
+                consequence: .destructive
             )
         ])
         #expect(free.effectiveTier == .tier2)
@@ -1921,7 +1933,7 @@ struct AgentActionExecutorTests {
             prepared,
             approvalDecision: .approved(.tier2),
             scope: .unscoped,
-            context: ApprovalContext(origin: prepared.source, safeMode: false)
+            context: ApprovalContext(safeMode: false)
         )
 
         #expect(browserOpener.openedBrowsers == [MacApp(displayName: "Safari", bundleIdentifier: "com.apple.Safari")])
@@ -4136,7 +4148,7 @@ struct AgentActionExecutorTests {
     }
 
     private var plannerContext: ApprovalContext {
-        ApprovalContext(origin: .planner, safeMode: false)
+        ApprovalContext(safeMode: false)
     }
 
     private func makeExecutor(

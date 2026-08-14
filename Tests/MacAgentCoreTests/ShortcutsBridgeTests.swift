@@ -62,7 +62,8 @@ struct ShortcutsBridgeTests {
         let prepared = try runner.prepare(plan: plan, source: .instantResolver)
         let firstRequest = try runner.approvalRequest(for: prepared, scope: .unscoped, context: approvalContext(for: prepared))
         #expect(firstRequest.assessment.effectiveTier == .tier2)
-        #expect(firstRequest.requirement == .lightweightConfirmation)
+        // Tier 2 auto-runs under the consequence rule; the tier movement below is the feature.
+        #expect(firstRequest.requirement == .autoRun)
 
         let result = try await runner.execute(prepared, approvalDecision: .approved(.tier2), scope: .unscoped, context: approvalContext(for: prepared))
         #expect(result.summary == "Ran Shortcut Morning Routine.")
@@ -112,7 +113,7 @@ struct ShortcutsBridgeTests {
         #expect(try !history.hasCleanObservedSuccess(for: "Morning Routine"))
         let resetRequest = try runner.approvalRequest(for: prepared, scope: .unscoped, context: approvalContext(for: prepared))
         #expect(resetRequest.assessment.effectiveTier == .tier2)
-        #expect(resetRequest.requirement == .lightweightConfirmation)
+        #expect(resetRequest.requirement == .autoRun)
     }
 
     @Test
@@ -201,7 +202,7 @@ struct ShortcutsBridgeTests {
     }
 
     private func approvalContext(for prepared: PreparedAgentRun) -> ApprovalContext {
-        ApprovalContext(origin: prepared.source, safeMode: false)
+        ApprovalContext(safeMode: false)
     }
 
     private func makeExecutor(

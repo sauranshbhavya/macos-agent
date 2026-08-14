@@ -1072,15 +1072,18 @@ struct EditWorkspaceTests {
 
     // MARK: - Fixture
 
-    // MARK: - Boundary-changing edits and the origin grant's eligibility (SONNY-98)
+    // MARK: - The edits SONNY-98 gated, under the consequence rule (2026-08-13)
+    //
+    // The origin-grant narrowing these edits used to drop is deleted with the grants themselves;
+    // what survives is what the escalations *say* and that none of them prompts. The tests here
+    // pin the surviving facts: the tiers, the exact reasons (they are what the ran-without-asking
+    // trace names), and the `.advisory` class that makes every workspace edit run without asking.
 
-    /// The dimension goes unconstrained → constrained: the first entry that *counts* starts the
-    /// dimension escalating and starts it granting relaxation, so the edit that creates the
-    /// boundary is not covered by the grant the boundary earns. `byDirectUserOrigin` is dropped
-    /// alone — `byWorkspaceScope` survives, which is exactly the per-grant shape PR #45's F2
-    /// correction exists for.
+    /// The first entry into an empty dimension is an ordinary tier-2 add — no escalation, nothing
+    /// to say. Under the superseded design this edit dropped the origin grant; under the
+    /// consequence rule it simply runs, like every other add.
     @Test
-    func addingTheFirstWorkingEntryToAnEmptyDimensionDropsTheOriginEligibilityBit() async throws {
+    func addingTheFirstWorkingEntryToAnEmptyDimensionIsAnOrdinaryTierTwoAdd() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
         try fixture.store.save(
@@ -1092,25 +1095,6 @@ struct EditWorkspaceTests {
             scope: .unscoped
         )
 
-        #expect(assessment.relaxationEligibility == [.byWorkspaceScope])
-        #expect(assessment.effectiveTier == .tier2)
-        #expect(assessment.escalations.isEmpty)
-    }
-
-    /// The ordinary addition — one more entry in a dimension that already restricts — declares no
-    /// narrowing, so the plan keeps both bits and the sheet's add keeps its grant.
-    @Test
-    func anAdditionToAConfiguredDimensionDeclaresNoNarrowing() async throws {
-        let fixture = try Fixture()
-        defer { fixture.tearDown() }
-        try fixture.store.save(StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: []))
-
-        let assessment = try fixture.executor.assessRisk(
-            plan: Fixture.editPlan(addApps: ["Notes"]),
-            scope: .unscoped
-        )
-
-        #expect(assessment.relaxationEligibility == [.byWorkspaceScope, .byDirectUserOrigin])
         #expect(assessment.effectiveTier == .tier2)
         #expect(assessment.escalations.isEmpty)
     }
@@ -1118,10 +1102,11 @@ struct EditWorkspaceTests {
     /// **The fixture that separates the two notions of empty**: every list is non-empty, and the
     /// file-locations list is left holding only an inert entry. Removing the one *working* entry
     /// empties the dimension by the evaluator's canonical answer — the raw array still has an
-    /// element, and `after.isEmpty` would say nothing was emptied. The narrowing must follow the
-    /// evaluator: the origin bit drops, and the reason is the dimension-no-longer-restricted one.
+    /// element, and `after.isEmpty` would say nothing was emptied. The dimension-no-longer-
+    /// restricted wording must follow the evaluator, and it is `.advisory`: it surfaces on the
+    /// trace, it no longer prompts.
     @Test
-    func removingTheLastWorkingEntryIsAnEmptyingByTheEvaluatorsAnswerAndDropsTheOriginBit() async throws {
+    func removingTheLastWorkingEntryIsAnEmptyingByTheEvaluatorsAnswer() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
         let working = try fixture.makeFolder("ClientAlpha")
@@ -1141,14 +1126,15 @@ struct EditWorkspaceTests {
             scope: .unscoped
         )
 
-        #expect(assessment.relaxationEligibility == [.byWorkspaceScope])
         #expect(assessment.effectiveTier == .tier3)
         #expect(assessment.escalations.map(\.reason) == [Self.fileLocationsNoLongerRestrictedReason])
+        #expect(assessment.escalations.map(\.consequence) == [.advisory])
     }
 
     /// Adding a `PathWhitelist` root *itself* escalates to tier 3 with a reason naming the
     /// consequence — the whole territory the entry converts — asserted on the literal string, the
-    /// way every reason in this file is.
+    /// way every reason in this file is. `.advisory` under the consequence rule: the sentence
+    /// lands on the trace, not a prompt.
     @Test
     func addingAWhitelistRootEscalatesToTierThreeWithTheConsequenceNamingReason() async throws {
         let fixture = try Fixture()
@@ -1168,19 +1154,19 @@ struct EditWorkspaceTests {
                 + "of this workspace, so this one entry turns that whole territory into the "
                 + "workspace's boundary."
         ])
-        // It is also the first entry into an empty dimension, so the origin bit drops too.
-        #expect(assessment.relaxationEligibility == [.byWorkspaceScope])
+        #expect(assessment.escalations.map(\.consequence) == [.advisory])
     }
 
-    /// An added folder that *contains* a stored entry loses the origin bit even though the
-    /// dimension was already configured and the addition is not a whitelist root: the added entry
-    /// silently widens what the existing one covered. No escalation — the tier stays 2; only the
-    /// grant's eligibility narrows.
+    /// Folder containment no longer distinguishes an add in either direction — the subsumption
+    /// machinery went with the origin grant it narrowed. Both an added folder that contains a
+    /// stored entry and one inside a stored entry are ordinary tier-2 adds with no escalation;
+    /// only a whitelist *root* itself says anything (the test above).
     @Test
-    func addingAFolderThatContainsAStoredEntryDropsTheOriginEligibilityBit() async throws {
+    func containmentInEitherDirectionIsAnOrdinaryTierTwoAdd() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
         let inner = try fixture.makeFolder("Projects/ClientAlpha")
+        let outer = try fixture.makeFolder("Projects")
         try fixture.store.save(
             StoredWorkspace(
                 name: "Client Alpha",
@@ -1189,44 +1175,28 @@ struct EditWorkspaceTests {
                 fileLocations: [inner.path]
             )
         )
-        let outer = try fixture.makeFolder("Projects")
 
-        let assessment = try fixture.executor.assessRisk(
+        let subsuming = try fixture.executor.assessRisk(
             plan: Fixture.editPlan(addFileLocations: [outer.path]),
             scope: .unscoped
         )
+        #expect(subsuming.effectiveTier == .tier2)
+        #expect(subsuming.escalations.isEmpty)
 
-        #expect(assessment.relaxationEligibility == [.byWorkspaceScope])
-        #expect(assessment.effectiveTier == .tier2)
-        #expect(assessment.escalations.isEmpty)
-    }
-
-    /// The other direction keeps the grant: a folder *inside* a stored entry widens nothing — the
-    /// territory was already covered — so it is an ordinary add. Without this test the subsumption
-    /// check could compare in either direction and still pass its sibling above.
-    @Test
-    func addingAFolderInsideAStoredEntryDeclaresNoNarrowing() async throws {
-        let fixture = try Fixture()
-        defer { fixture.tearDown() }
-        let outer = try fixture.makeFolder("Projects")
         try fixture.store.save(
             StoredWorkspace(
-                name: "Client Alpha",
+                name: "Client Beta",
                 apps: ["Safari"],
                 urls: [],
                 fileLocations: [outer.path]
             )
         )
-        let inner = try fixture.makeFolder("Projects/ClientAlpha")
-
-        let assessment = try fixture.executor.assessRisk(
-            plan: Fixture.editPlan(addFileLocations: [inner.path]),
+        let contained = try fixture.executor.assessRisk(
+            plan: Fixture.editPlan(workspaceName: "Client Beta", addFileLocations: [inner.path]),
             scope: .unscoped
         )
-
-        #expect(assessment.relaxationEligibility == [.byWorkspaceScope, .byDirectUserOrigin])
-        #expect(assessment.effectiveTier == .tier2)
-        #expect(assessment.escalations.isEmpty)
+        #expect(contained.effectiveTier == .tier2)
+        #expect(contained.escalations.isEmpty)
     }
 
     @MainActor

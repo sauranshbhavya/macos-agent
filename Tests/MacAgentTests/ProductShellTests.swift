@@ -357,11 +357,23 @@ struct ProductShellTests {
         try fixture.workspaceStore.save(
             StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
         )
+        // The routine's draft output already exists, so the run pauses on the destructive
+        // collision — the pause the consequence rule still has. (This fixture used the tier-2
+        // routine confirmation before the rule; the lifecycle claim is unchanged.)
+        let occupied = fixture.root.appendingPathComponent("draft.md")
+        try "existing draft".write(to: occupied, atomically: true, encoding: .utf8)
         try fixture.routineStore.save(
             StoredRoutine(
                 name: "Morning",
                 steps: [
-                    AgentStep(id: "a", operation: .openURL, description: "In scope.", targetURL: "https://github.com/sonny")
+                    AgentStep(
+                        id: "a",
+                        operation: .createLocalDraft,
+                        description: "Draft notes.",
+                        outputPath: occupied.path,
+                        draftTitle: "Notes",
+                        draftContent: "Body."
+                    )
                 ]
             )
         )
@@ -371,7 +383,7 @@ struct ProductShellTests {
         viewModel.start(workspaceBinding: "Research")
         try await waitForViewModelToBecomeIdle(viewModel)
 
-        // Bound, and paused on `run_routine`'s tier-2 confirmation — the premise, guarded.
+        // Bound, and paused on the destructive collision — the premise, guarded.
         #expect(viewModel.isAwaitingApproval)
         #expect(viewModel.activeTaskScope != .unscoped)
 
@@ -398,10 +410,28 @@ struct ProductShellTests {
         try fixture.workspaceStore.save(
             StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
         )
-        try fixture.workspaceStore.save(StoredWorkspace(name: "Drafting", apps: ["Notes"], urls: []))
+        // Paused on a destructive collision (the pause the consequence rule still has), bound to
+        // Research by the explicit dispatch.
+        let occupied = fixture.root.appendingPathComponent("draft.md")
+        try "existing draft".write(to: occupied, atomically: true, encoding: .utf8)
+        try fixture.routineStore.save(
+            StoredRoutine(
+                name: "Morning",
+                steps: [
+                    AgentStep(
+                        id: "a",
+                        operation: .createLocalDraft,
+                        description: "Draft notes.",
+                        outputPath: occupied.path,
+                        draftTitle: "Notes",
+                        draftContent: "Body."
+                    )
+                ]
+            )
+        )
         viewModel.refreshSavedItems()
 
-        viewModel.command = "open workspace Drafting"
+        viewModel.command = "run routine Morning"
         viewModel.start(workspaceBinding: "Research")
         try await waitForViewModelToBecomeIdle(viewModel)
 
@@ -437,12 +467,11 @@ struct ProductShellTests {
 
     /// AC6 — a pending approval must not leave a binding behind when in-memory state is cleared.
     ///
-    /// The fixture has to *actually pause*. An earlier version of this test ran "open workspace
-    /// Research" while bound to Research — in scope, so it produced no escalation, auto-ran to
-    /// completion, and had already cleared the binding before `deleteLocalData()` was ever called.
-    /// It could not fail. This binds to Research and opens Drafting, whose stored apps fall outside
-    /// Research, so the run escalates to tier 3 and genuinely sits awaiting approval. The state is
-    /// reachable in the app: `deleteLocalData` guards on `!isRunning`, not `!isAwaitingApproval`.
+    /// The fixture has to *actually pause*. An earlier version of this test ran an in-scope
+    /// command — no pause, so it could not fail. Under the consequence rule the pause that still
+    /// exists is the destructive one, so the bound run collides on an existing draft output and
+    /// genuinely sits awaiting approval. The state is reachable in the app: `deleteLocalData`
+    /// guards on `!isRunning`, not `!isAwaitingApproval`.
     @Test
     func clearingInMemoryStateWithAnApprovalPendingLeavesNoStaleBinding() async throws {
         let fixture = try makeProductShellFixture()
@@ -451,10 +480,26 @@ struct ProductShellTests {
         try fixture.workspaceStore.save(
             StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
         )
-        try fixture.workspaceStore.save(StoredWorkspace(name: "Drafting", apps: ["Notes"], urls: []))
+        let occupied = fixture.root.appendingPathComponent("draft.md")
+        try "existing draft".write(to: occupied, atomically: true, encoding: .utf8)
+        try fixture.routineStore.save(
+            StoredRoutine(
+                name: "Morning",
+                steps: [
+                    AgentStep(
+                        id: "a",
+                        operation: .createLocalDraft,
+                        description: "Draft notes.",
+                        outputPath: occupied.path,
+                        draftTitle: "Notes",
+                        draftContent: "Body."
+                    )
+                ]
+            )
+        )
         viewModel.refreshSavedItems()
 
-        viewModel.command = "open workspace Drafting"
+        viewModel.command = "run routine Morning"
         viewModel.start(workspaceBinding: "Research")
         try await waitForViewModelToBecomeIdle(viewModel)
 
@@ -467,11 +512,9 @@ struct ProductShellTests {
         #expect(viewModel.activeTaskScope == .unscoped)
     }
 
-    /// SONNY-99's differential-signal rule at the real dispatch surface: a tier-1 run inside its
-    /// own workspace is in scope, so the workspace grant is *reported* on its request — but tier 1
-    /// auto-ran on its own in every grant column, so the grant changed nothing, and a
-    /// ran-without-asking trace here would teach the user to ignore the one that matters. The
-    /// silence has to stay ordinary silence.
+    /// SONNY-99's differential-signal rule at the real dispatch surface: a tier-1 run always ran
+    /// silently, so a ran-without-asking trace on it would mark a silence that was always ordinary
+    /// and teach the user to ignore the one that matters. The silence has to stay ordinary silence.
     @Test
     func aTierOneRunInsideItsOwnWorkspaceLeavesNoRanWithoutAskingTrace() async throws {
         let fixture = try makeProductShellFixture()
@@ -492,7 +535,7 @@ struct ProductShellTests {
         #expect(viewModel.errorMessage == nil)
         #expect(!viewModel.finalSummary.isEmpty)
 
-        #expect(viewModel.relaxationTrace == nil)
+        #expect(viewModel.ranWithoutAskingTrace == nil)
     }
 
     /// F1's regression test — a **re-armed** approval is a second pause, not a terminal exit, so the
@@ -515,12 +558,18 @@ struct ProductShellTests {
         let viewModel = fixture.viewModel
         let research = StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
         try fixture.workspaceStore.save(research)
-        // In scope to begin with, so the first assessment is `run_routine`'s own tier 2.
+        // Paused on one destructive collision to begin with. (Before the consequence rule this
+        // fixture paused on the tier-2 routine confirmation and drifted upward to tier 3; a pause
+        // now already means tier 3, so the drift below is a second reason at equal tier — the
+        // shape SONNY-62's reason axis exists for.)
+        let draftA = fixture.root.appendingPathComponent("a.md")
+        let draftB = fixture.root.appendingPathComponent("b.md")
+        try "existing a".write(to: draftA, atomically: true, encoding: .utf8)
         try fixture.routineStore.save(
             StoredRoutine(
                 name: "Morning",
                 steps: [
-                    AgentStep(id: "a", operation: .openURL, description: "In scope.", targetURL: "https://github.com/sonny")
+                    AgentStep(id: "a", operation: .createLocalDraft, description: "Draft A.", outputPath: draftA.path, draftTitle: "A", draftContent: "Body A.")
                 ]
             )
         )
@@ -531,16 +580,18 @@ struct ProductShellTests {
         try await waitForViewModelToBecomeIdle(viewModel)
 
         #expect(viewModel.isAwaitingApproval)
-        #expect(viewModel.approvalRequest?.assessment.effectiveTier == .tier2)
+        #expect(viewModel.approvalRequest?.assessment.effectiveTier == .tier3)
         #expect(viewModel.activeTaskScope == .scoped(WorkspaceScope(workspace: research)))
 
-        // The drift: the routine now leaves the workspace, so re-assessment lands at tier 3 — above
-        // the tier 2 the user is about to approve.
+        // The drift: a second colliding draft the user was never shown, landing while the prompt
+        // sits open.
+        try "existing b".write(to: draftB, atomically: true, encoding: .utf8)
         try fixture.routineStore.save(
             StoredRoutine(
                 name: "Morning",
                 steps: [
-                    AgentStep(id: "a", operation: .openURL, description: "Out of scope.", targetURL: "https://example.com/page")
+                    AgentStep(id: "a", operation: .createLocalDraft, description: "Draft A.", outputPath: draftA.path, draftTitle: "A", draftContent: "Body A."),
+                    AgentStep(id: "b", operation: .createLocalDraft, description: "Draft B.", outputPath: draftB.path, draftTitle: "B", draftContent: "Body B.")
                 ]
             )
         )
@@ -553,45 +604,47 @@ struct ProductShellTests {
         #expect(viewModel.approvalRequest?.assessment.effectiveTier == .tier3)
         // ...and the binding is still here, which is the whole finding.
         #expect(viewModel.activeTaskScope == .scoped(WorkspaceScope(workspace: research)))
-        // Nothing was opened while it sat re-armed — and this reads a fake, which is also the
-        // standing proof that this fixture never reaches the real browser.
-        #expect(fixture.browserOpener.openedURLs.isEmpty)
+        // Nothing was written while it sat re-armed.
+        #expect(try String(contentsOf: draftA, encoding: .utf8) == "existing a")
 
-        // Approving the second time really executes, through the injected seam.
+        // Approving the second time really executes.
         viewModel.start()
         try await waitForViewModelToBecomeIdle(viewModel)
 
         #expect(!viewModel.isAwaitingApproval)
-        #expect(fixture.browserOpener.openedURLs.map(\.absoluteString) == ["https://example.com/page"])
+        #expect(try String(contentsOf: draftA, encoding: .utf8) != "existing a")
+        #expect(try String(contentsOf: draftB, encoding: .utf8) != "existing b")
         #expect(viewModel.activeTaskScope == .unscoped)
     }
 
-    /// SONNY-62, at the surface it was observed on: the approval the user answered names one tier-3
-    /// reason, a *second* one appears before they tap Allow, and the run must stop again instead of
-    /// riding the first approval.
+    /// SONNY-62, at the surface it was observed on: the approval the user answered names one
+    /// tier-3 reason, and by the time they tap Allow the run's *actual* reason is a different one
+    /// — equal tier, disjoint reason — so it must stop again instead of riding the first approval.
     ///
-    /// The re-arm above this one drifts *upward* (tier 2 → tier 3), which the guard has always
-    /// caught. This one holds the tier fixed at 3 and changes only the reasons — the case the tier
-    /// comparison could not see, and the one that let a real run replace a file the user had never
-    /// been asked about. Two out-of-scope destinations rather than a file are used because they are
-    /// hermetic: `HermeticBrowserOpener` is also the proof that nothing was opened while it sat
-    /// re-armed.
+    /// Before the consequence rule this fixture drifted between two *out-of-scope* reasons; those
+    /// are advisory now and never prompt, so the drift that still reaches a human is between two
+    /// destructive reasons — which is also exactly the shape of the original SONNY-62 field
+    /// observation ("the draft output already exists" appearing behind an answered prompt).
     ///
     /// It also pins the write-back, which is half the fix and lives in this file: if
     /// `performApproval` recorded a bare tier instead of the request the user answered, the engine
     /// would have nothing to compare and this would execute.
     @Test
-    func approvingOneOutOfScopeReasonDoesNotAuthorizeASecondOneThatAppearsFirst() async throws {
+    func approvingOneDestructiveReasonDoesNotAuthorizeADifferentOneThatReplacesIt() async throws {
         let fixture = try makeProductShellFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let viewModel = fixture.viewModel
         let research = StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"])
         try fixture.workspaceStore.save(research)
+        let draftA = fixture.root.appendingPathComponent("a.md")
+        let draftB = fixture.root.appendingPathComponent("b.md")
+        try "existing a".write(to: draftA, atomically: true, encoding: .utf8)
+        try "existing b".write(to: draftB, atomically: true, encoding: .utf8)
         try fixture.routineStore.save(
             StoredRoutine(
                 name: "Morning",
                 steps: [
-                    AgentStep(id: "a", operation: .openURL, description: "Out of scope.", targetURL: "https://example.com/page")
+                    AgentStep(id: "a", operation: .createLocalDraft, description: "Draft A.", outputPath: draftA.path, draftTitle: "A", draftContent: "Body A.")
                 ]
             )
         )
@@ -604,17 +657,17 @@ struct ProductShellTests {
         #expect(viewModel.isAwaitingApproval)
         #expect(viewModel.approvalRequest?.assessment.effectiveTier == .tier3)
         #expect(viewModel.approvalRequest?.assessment.escalations.map(\.reason) == [
-            "example.com is not part of the Research workspace."
+            "Draft output already exists at \(draftA.path)."
         ])
 
-        // The drift: a second destination outside the same workspace. Tier 3 either way — the
-        // approval on screen is worth exactly as much as before, and covers strictly less.
+        // The drift: the routine now collides on a *different* file. Tier 3 either way — the
+        // approval on screen is worth exactly as much as before, and covers none of what is now
+        // about to happen.
         try fixture.routineStore.save(
             StoredRoutine(
                 name: "Morning",
                 steps: [
-                    AgentStep(id: "a", operation: .openURL, description: "Out of scope.", targetURL: "https://example.com/page"),
-                    AgentStep(id: "b", operation: .openURL, description: "Never shown.", targetURL: "https://unseen.example.org/page")
+                    AgentStep(id: "b", operation: .createLocalDraft, description: "Draft B.", outputPath: draftB.path, draftTitle: "B", draftContent: "Body B.")
                 ]
             )
         )
@@ -625,11 +678,11 @@ struct ProductShellTests {
 
         #expect(viewModel.isAwaitingApproval)
         #expect(viewModel.approvalRequest?.assessment.effectiveTier == .tier3)
-        #expect(Set(viewModel.approvalRequest?.assessment.escalations.map(\.reason) ?? []) == [
-            "example.com is not part of the Research workspace.",
-            "unseen.example.org is not part of the Research workspace."
+        #expect(viewModel.approvalRequest?.assessment.escalations.map(\.reason) == [
+            "Draft output already exists at \(draftB.path)."
         ])
-        #expect(fixture.browserOpener.openedURLs.isEmpty)
+        // Nothing was written while it sat re-armed.
+        #expect(try String(contentsOf: draftB, encoding: .utf8) == "existing b")
         // A second pause, so the binding is still the one the run was assessed under (the invariant
         // the test above owns, re-checked here because this re-arm arrives by a different route).
         #expect(viewModel.activeTaskScope == .scoped(WorkspaceScope(workspace: research)))
@@ -639,10 +692,7 @@ struct ProductShellTests {
         try await waitForViewModelToBecomeIdle(viewModel)
 
         #expect(!viewModel.isAwaitingApproval)
-        #expect(fixture.browserOpener.openedURLs.map(\.absoluteString) == [
-            "https://example.com/page",
-            "https://unseen.example.org/page"
-        ])
+        #expect(try String(contentsOf: draftB, encoding: .utf8) != "existing b")
         #expect(viewModel.activeTaskScope == .unscoped)
     }
 
@@ -650,14 +700,15 @@ struct ProductShellTests {
     ///
     /// This one needs the log to prove anything, and that is the point of the criterion. `execute`
     /// re-assesses fresh; if it re-assessed `.unscoped` against a scoped approval, the run would
-    /// still succeed — the stale-approval guard compares an approved tier 3 against a now-lower
-    /// effective tier and passes — so **no outcome differs**. The only observable trace is that the
-    /// re-assessment logs its own `risk.escalated` line, and an unscoped one has no scope reason to
-    /// log.
+    /// still proceed — the destructive reason alone still covers it — so **no outcome differs**.
+    /// The only observable trace is that the re-assessment logs its own `risk.escalated` line for
+    /// the scope reason, and an unscoped one has no scope reason to log.
     ///
-    /// The fixture is the one shape that produces an out-of-scope escalation through the instant
-    /// path: bound to Research by an explicit dispatch, opening Drafting, whose own stored apps are
-    /// compared against Research and fall outside it.
+    /// The fixture pairs the out-of-scope fact (advisory — it cannot pause anything on its own
+    /// under the consequence rule) with a destructive draft collision, so the run genuinely pauses
+    /// and the prompt's assessment carries the scope reason beside the destructive one. Approving
+    /// re-enters `execute`, which must assess under the same scope and log the scope reason a
+    /// second time.
     @Test
     func theScopeUsedAtApprovalIsTheSameScopeUsedInsideExecute() async throws {
         let fixture = try makeProductShellFixture()
@@ -666,16 +717,34 @@ struct ProductShellTests {
         try fixture.workspaceStore.save(
             StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
         )
-        try fixture.workspaceStore.save(StoredWorkspace(name: "Drafting", apps: ["Notes"], urls: []))
+        let occupied = fixture.root.appendingPathComponent("draft.md")
+        try "existing draft".write(to: occupied, atomically: true, encoding: .utf8)
+        try fixture.routineStore.save(
+            StoredRoutine(
+                name: "Morning",
+                steps: [
+                    AgentStep(id: "a", operation: .openURL, description: "Out of scope.", targetURL: "https://example.com/page"),
+                    AgentStep(
+                        id: "b",
+                        operation: .createLocalDraft,
+                        description: "Draft notes.",
+                        outputPath: occupied.path,
+                        draftTitle: "Notes",
+                        draftContent: "Body."
+                    )
+                ]
+            )
+        )
         viewModel.refreshSavedItems()
 
-        viewModel.command = "open workspace Drafting"
+        viewModel.command = "run routine Morning"
         viewModel.start(workspaceBinding: "Research")
         try await waitForViewModelToBecomeIdle(viewModel)
 
-        // The scope really did fire: an out-of-scope escalation raised this to an approval.
+        // Paused on the destructive collision, with the scope's advisory reason on the same
+        // assessment — the scope really was applied.
         #expect(viewModel.isAwaitingApproval)
-        let reason = "Notes is not part of the Research workspace."
+        let reason = "example.com is not part of the Research workspace."
         #expect(viewModel.approvalRequest?.assessment.escalations.map(\.reason).contains(reason) == true)
 
         let beforeApproval = viewModel.logStore.events.filter { $0.message.contains(reason) }.count
@@ -793,15 +862,31 @@ struct ProductShellTests {
         let viewModel = fixture.viewModel
         let research = StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
         try fixture.workspaceStore.save(research)
-        try fixture.workspaceStore.save(StoredWorkspace(name: "Drafting", apps: ["Notes"], urls: []))
+        // A destructive collision, so there is a stable in-flight pause to observe — the pause the
+        // consequence rule still has.
+        let occupied = fixture.root.appendingPathComponent("draft.md")
+        try "existing draft".write(to: occupied, atomically: true, encoding: .utf8)
+        try fixture.routineStore.save(
+            StoredRoutine(
+                name: "Morning",
+                steps: [
+                    AgentStep(
+                        id: "a",
+                        operation: .createLocalDraft,
+                        description: "Draft notes.",
+                        outputPath: occupied.path,
+                        draftTitle: "Notes",
+                        draftContent: "Body."
+                    )
+                ]
+            )
+        )
         viewModel.refreshSavedItems()
 
         viewModel.beginTaskInWorkspace(research)
         #expect(viewModel.boundWorkspaceName == "Research")
 
-        // A command that pauses on an approval, so there is a stable in-flight window to observe.
-        // Bound to Research, opening Drafting — whose stored app falls outside Research.
-        viewModel.command = "open workspace Drafting"
+        viewModel.command = "run routine Morning"
         viewModel.start(origin: .widget, fromComposer: true)
         try await waitForViewModelToBecomeIdle(viewModel)
 
@@ -1158,6 +1243,9 @@ struct ProductShellTests {
         let fixture = try makeProductShellFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let viewModel = fixture.viewModel
+        // The trigger already exists with different text, so the save is a destructive replace —
+        // the pause the consequence rule still has (a first-time save auto-runs).
+        try fixture.snippetStore.save(StoredSnippet(trigger: ";history-test", expansion: "Old text"))
         viewModel.command = "snippet save ;history-test = Hello"
 
         viewModel.start()
@@ -1227,13 +1315,12 @@ struct ProductShellTests {
         viewModel.command = "run morning setup"
         viewModel.start()
         try await waitForViewModelToBecomeIdle(viewModel)
-        #expect(viewModel.approvalRequest != nil)
-
-        viewModel.cancelCurrentRun()
 
         let records = try fixture.taskHistoryStore.loadAll()
         let record = try #require(records.last)
-        #expect(record.outcomeStatus == .canceled)
+        // The tier-2 routine auto-runs under the consequence rule, so the record is a completed
+        // one now rather than the canceled-at-approval record this test used before the rule.
+        #expect(record.outcomeStatus == .completed)
         // The command text never mentions "Research" — this can only be tagged via the
         // routine-nested resolution reading the routine's own saved steps, not free-text matching.
         #expect(record.workspaceName == "Research")
@@ -1260,10 +1347,10 @@ struct ProductShellTests {
         viewModel.runRoutineWidget(routine)
         try await waitForViewModelToBecomeIdle(viewModel)
 
-        // run_routine's default tier (2) requires approval — reaching that state, rather than a
-        // planner-missing-key failure, proves the command resolved instantly and locally, with no
-        // network call attempted.
-        #expect(viewModel.approvalRequest != nil)
+        // The routine auto-runs to completion under the consequence rule — completing, rather
+        // than a planner-missing-key failure, proves the command resolved instantly and locally,
+        // with no network call attempted.
+        #expect(viewModel.finalSummary.contains("Ran routine Morning Setup"))
         #expect(viewModel.errorMessage == nil)
     }
 
@@ -1366,6 +1453,9 @@ struct ProductShellTests {
         let fixture = try makeProductShellFixture()
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let viewModel = fixture.viewModel
+        // A destructive replace, so the run genuinely pauses (a first-time save auto-runs under
+        // the consequence rule).
+        try fixture.snippetStore.save(StoredSnippet(trigger: ";cross-surface-test", expansion: "Old text"))
         viewModel.command = "snippet save ;cross-surface-test = Hello"
 
         // Default origin is `.commandCenter` — simulates a task a Command-Center-only entry point
@@ -1663,6 +1753,7 @@ private func makeProductShellFixture() throws -> (
     root: URL,
     routineStore: RoutineStore,
     workspaceStore: WorkspaceStore,
+    snippetStore: SnippetStore,
     taskHistoryStore: TaskHistoryStore,
     userDefaults: UserDefaults,
     userDefaultsSuiteName: String,
@@ -1683,6 +1774,7 @@ private func makeProductShellFixture(
     root: URL,
     routineStore: RoutineStore,
     workspaceStore: WorkspaceStore,
+    snippetStore: SnippetStore,
     taskHistoryStore: TaskHistoryStore,
     userDefaults: UserDefaults,
     userDefaultsSuiteName: String,
@@ -1715,13 +1807,14 @@ private func makeProductShellFixture(
     let browserOpener = HermeticBrowserOpener()
     let appOpener = HermeticAppOpener()
     let fileOpener = HermeticFileOpener()
+    let snippetStore = SnippetStore(
+        fileURL: root.appendingPathComponent("snippets.json"),
+        encryption: encryption
+    )
     let viewModel = AgentViewModel(
         routineStore: routineStore,
         workspaceStore: workspaceStore,
-        snippetStore: SnippetStore(
-            fileURL: root.appendingPathComponent("snippets.json"),
-            encryption: encryption
-        ),
+        snippetStore: snippetStore,
         recentArtifactStore: RecentArtifactStore(
             fileURL: root.appendingPathComponent("recent-artifacts.json"),
             encryption: encryption
@@ -1755,10 +1848,14 @@ private func makeProductShellFixture(
         localDataDeletionService: LocalDataDeletionService(fileURLs: []),
         priorTaskContextStore: PriorTaskContextStore(),
         taskUsageRecorder: TaskUsageRecorder(),
-        userDefaults: userDefaults
+        userDefaults: userDefaults,
+        // The fixture root, so the REAL dispatch path can assess and execute file-writing plans
+        // (drafts above all) hermetically — the seam whose absence let a green mapping suite
+        // coexist with a live app that behaved differently (2026-08-13 manual-pass finding).
+        whitelist: PathWhitelist(roots: [root])
     )
     let suiteName = userDefaultsSuiteName ?? "ProductShellInjected-\(UUID().uuidString)"
-    return (viewModel, root, routineStore, workspaceStore, taskHistoryStore, userDefaults, suiteName, browserOpener, appOpener)
+    return (viewModel, root, routineStore, workspaceStore, snippetStore, taskHistoryStore, userDefaults, suiteName, browserOpener, appOpener)
 }
 
 @MainActor

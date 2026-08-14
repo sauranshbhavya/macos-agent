@@ -155,41 +155,37 @@ enum AgentActivityPresentation {
         .filter { !$0.isEmpty }
     }
 
-    /// The one-line ran-without-asking trace (SONNY-99): the sentence that lets a person watching a
-    /// task tell "nothing happened because it was low-risk" from "something happened silently
-    /// because a relaxation grant allowed it". It names the grant's *reason* — the workspace whose
-    /// boundary allowed it, or that the user built the action on screen — never the internal enum,
-    /// and the two grants read differently because they are different facts a user can act on.
+    /// The one-line ran-without-asking trace (SONNY-99, reshaped by the consequence rule
+    /// 2026-08-13): the sentence that lets a person watching a task tell "nothing happened because
+    /// it was low-risk" from "something happened silently because Sonny no longer asks for it".
+    /// When the silent run carried advisory escalations, the trace names them — the out-of-scope
+    /// resource, the workspace-entry removal, the whitelist-root widening — because those are the
+    /// sentences the approval panel used to carry and the user still gets to read them; a silent
+    /// run with nothing advisory states the rule instead.
     ///
-    /// `nil` unless the grant actually changed the outcome. Two gates, both load-bearing:
-    /// - `.none` never traces — a run with no grant is ordinary.
-    /// - A tier at or below 1 never traces, **whatever the grant says**: tiers 0 and 1 auto-run on
-    ///   their own in every grant column, so a grant reported there was outcome-irrelevant, and a
-    ///   trace on a step that was always silent is exactly what would make the signal meaningless.
-    ///   Tier ≥ 2 is precise under every policy: no tier-2-or-above cell is `.autoRun` without a
-    ///   grant, so a granted auto-run at those tiers ran unprompted *because of* the grant.
-    ///
-    /// The workspace grant names the workspace; the fallback exists only because this function is
-    /// total — an `.inScope` verdict cannot arise without a bound workspace to name.
-    static func relaxationTraceLine(
-        grant: RelaxationGrant,
+    /// `nil` unless the silence is new. Two gates, both load-bearing:
+    /// - Only `.autoRun` traces. A run that prompted was disclosed by the prompt; a
+    ///   trust-approved routine run was disclosed by the user's own standing toggle; Safe mode
+    ///   always prompts, so nothing traces inside it.
+    /// - A tier at or below 1 never traces: tiers 0 and 1 always auto-ran, so a trace there would
+    ///   mark a silence that was always ordinary and train the user to ignore the one that is not.
+    ///   At tier 2 and above the silence is the consequence rule's own doing — before it, every
+    ///   such run asked.
+    static func ranWithoutAskingLine(
+        requirement: RiskApprovalRequirement,
         effectiveTier: CapabilityRiskTier,
-        workspaceName: String?
+        advisoryReasons: [String]
     ) -> String? {
-        guard effectiveTier.rawValue >= CapabilityRiskTier.tier2.rawValue else {
+        guard requirement == .autoRun,
+              effectiveTier.rawValue >= CapabilityRiskTier.tier2.rawValue else {
             return nil
         }
-        switch grant {
-        case .none:
-            return nil
-        case .inScopeWorkspace:
-            let trimmed = workspaceName?.trimmingCharacters(in: .whitespacesAndNewlines)
-            guard let name = trimmed, !name.isEmpty else {
-                return "Ran without asking — inside this workspace's boundary."
-            }
-            return "Ran without asking — inside the \(name) workspace's boundary."
-        case .directUserAuthored:
-            return "Ran without asking — you built this action on screen."
+        let reasons = advisoryReasons
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !reasons.isEmpty else {
+            return "Ran without asking — nothing here is destructive, and it affects no one else."
         }
+        return "Ran without asking — worth knowing: " + reasons.joined(separator: " ")
     }
 }

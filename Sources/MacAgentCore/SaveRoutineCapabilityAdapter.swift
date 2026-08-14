@@ -69,7 +69,9 @@ public struct SaveRoutineCapabilityAdapter: CapabilityAdapter {
                 CapabilityRiskEscalation(
                     fromTier: metadata.defaultRiskTier,
                     toTier: .tier3,
-                    reason: "Routine named \(spec.routine.name) already exists and would be replaced."
+                    reason: "Routine named \(spec.routine.name) already exists and would be replaced.",
+                    // Replace-on-save destroys the routine the user already built.
+                    consequence: .destructive
                 )
             )
             effectiveTier = highestTier(effectiveTier, .tier3)

@@ -303,10 +303,11 @@ public final class AgentActionExecutor {
     /// trace, `UnattendedTrustAdvisory` (which reads `effectiveTier` alone), and SONNY-54's
     /// manual-routine-trust check in `AgentViewModel`, whose own comment says it mirrors the
     /// execute gate — plus the approved-tier write-back, `RiskApprovalError`'s descriptions, and
-    /// the tier handed to `approvalCopy(for:metadata:tier:)` below. Relaxation now exists (row C)
-    /// and none of it lives here: `RiskApprovalPolicy.requirement(for:context:)` overrides the
-    /// *requirement* downstream and never writes this assessment (I1/I2); the `scopeVerdict` and
-    /// `relaxationEligibility` roll-ups exist to hand it typed inputs rather than re-derivations.
+    /// the tier handed to `approvalCopy(for:metadata:tier:)` below. The approval decision itself
+    /// lives downstream: `RiskApprovalPolicy.requirement(for:context:)` maps this assessment under
+    /// the consequence rule and never writes it — the tier and every escalation sentence leave
+    /// here honest and arrive at their surfaces (panel or ran-without-asking trace) unedited. The
+    /// `scopeVerdict` roll-up is data for the surfaces and the future vision cage, not a gate.
     public func assessRisk(plan: AgentPlan, scope: TaskWorkspaceScope) throws -> CapabilityRiskAssessment {
         let resolvedPlan = try resolveDefaultOutputs(in: plan)
         // The same scope goes into the nested-plan closure, so a `run_routine` step's stored steps
@@ -351,37 +352,8 @@ public final class AgentActionExecutor {
                 findings: findings,
                 nested: assessments.compactMap(\.scopeVerdict),
                 scope: scope
-            ),
-            relaxationEligibility: relaxationEligibility(
-                in: resolvedPlan,
-                narrowedBy: assessments
             )
         )
-    }
-
-    /// The plan-level relaxation-eligibility roll-up (SONNY-97): intersection across every step of
-    /// the static per-operation classification, further intersected with any narrowing an adapter
-    /// declared on its own assessment. Intersection is the only combinator, which is what makes
-    /// "an adapter may narrow and may never widen" structural rather than remembered — and a
-    /// `run_routine` step's forwarded nested roll-up joins the same intersection, so a routine
-    /// cannot launder eligibility any more than it can launder the scope verdict.
-    ///
-    /// A plan with no steps yields the empty set: nothing was classified, so nothing is eligible —
-    /// the same fail-closed answer an unclassifiable input gets everywhere else in this engine.
-    private func relaxationEligibility(
-        in plan: AgentPlan,
-        narrowedBy assessments: [CapabilityRiskAssessment]
-    ) -> OperationRelaxation {
-        guard !plan.steps.isEmpty else {
-            return []
-        }
-        var eligibility = plan.steps
-            .map { OperationRelaxation.relaxation(for: $0.operation) }
-            .reduce(OperationRelaxation.all) { $0.intersection($1) }
-        for narrowed in assessments.compactMap(\.relaxationEligibility) {
-            eligibility.formIntersection(narrowed)
-        }
-        return eligibility
     }
 
     /// How many distinct out-of-scope resources the prompt names before it stops listing them.
@@ -494,7 +466,13 @@ public final class AgentActionExecutor {
             CapabilityRiskEscalation(
                 fromTier: fromTier,
                 toTier: .tier3,
-                reason: "\(resource.value) is not part of the \(workspaceScope.workspaceName) workspace."
+                reason: "\(resource.value) is not part of the \(workspaceScope.workspaceName) workspace.",
+                // Consequence rule (2026-08-13): being outside the workspace boundary is a fact
+                // worth surfacing, not a consent worth interrupting for — the action itself
+                // destroys nothing and reaches nobody. The reason lands on the
+                // ran-without-asking trace instead of a prompt; the tier still rises so the
+                // severity signal and the unattended ceiling stay honest.
+                consequence: .advisory
             )
         }
     }

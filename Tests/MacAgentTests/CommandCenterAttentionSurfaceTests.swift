@@ -24,6 +24,10 @@ struct CommandCenterAttentionSurfaceTests {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let viewModel = try makeViewModel(root: root)
+        // The trigger already exists with different text, so the save is a destructive replace —
+        // the approval the consequence rule still raises (a first-time save auto-runs).
+        try SnippetStore(fileURL: root.appendingPathComponent("snippets.json"))
+            .save(StoredSnippet(trigger: ";sig", expansion: "Old text"))
 
         viewModel.command = "snippet save ;sig = Best, Sonny"
         viewModel.start()
@@ -31,7 +35,7 @@ struct CommandCenterAttentionSurfaceTests {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
 
-        // A real tier-2 approval, raised by a task this surface submitted.
+        // A real destructive approval, raised by a task this surface submitted.
         #expect(viewModel.activeTaskOrigin == .commandCenter)
         #expect(viewModel.approvalRequest != nil)
         #expect(viewModel.hasVisibleWidgetPanel)

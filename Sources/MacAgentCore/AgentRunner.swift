@@ -12,10 +12,11 @@ import Foundation
 /// all. Everything else is set by a Swift call site inside this app, which is the same shape
 /// `AgentViewModel.start(fromComposer:)` already uses for the pending-arm rule.
 ///
-/// **Nothing reads this to weaken a consent, and nothing may.** Relaxation on `(tier, verdict,
-/// origin)` is row C's territory (SONNY-13); this ticket builds the carrier and stops there. A
-/// future reader must still honour row C's inherited constraints — relaxation is a *requirement*
-/// override and never lowers `effectiveTier`, and only an `.inScope` verdict is ever eligible.
+/// **Nothing reads this to weaken a consent, and nothing may.** Row C's origin grant briefly did —
+/// superseded by the founder's consequence rule (2026-08-13), which gates on what an action *does*
+/// (destructive / affects-others / advisory), never on how its plan came to exist. What survives
+/// reading this value: dispatch (which planner path to take), the plan log line, the pending-arm
+/// rule, and the view model's confirmation copy.
 public enum PreparedPlanSource: String, Equatable, Sendable {
     case planner
     case instantResolver = "instant_resolver"
@@ -143,10 +144,9 @@ public final class AgentRunner {
     /// `context` is non-defaulted for the identical reason (SONNY-97): `execute` calls this again
     /// internally, so a context threaded here and defaulted there would prompt under one
     /// requirement and execute under another. And note where it lands — the *requirement*, never
-    /// the assessment. `assessRisk` above takes no context and must never grow one: the funnel
-    /// comment on `prepareResolvedPlan` promises that nothing downstream learns how the plan was
-    /// authored, and that stays true of the assessment even now that it is false of the
-    /// requirement. `effectiveTier` remains a pure function of the plan.
+    /// the assessment. `assessRisk` takes no context and must never grow one: `effectiveTier`
+    /// remains a pure function of the plan, and the requirement is that tier plus the escalations'
+    /// consequence classes plus whatever the context says (Safe mode today).
     public func approvalRequest(
         for preparedRun: PreparedAgentRun,
         logAssessment: Bool = false,
@@ -156,8 +156,7 @@ public final class AgentRunner {
         let assessment = try executor.assessRisk(plan: preparedRun.plan, scope: scope)
         let request = RiskApprovalRequest(
             assessment: assessment,
-            requirement: approvalPolicy.requirement(for: assessment, context: context),
-            relaxationGrant: RelaxationGrant.applied(for: assessment, context: context)
+            requirement: approvalPolicy.requirement(for: assessment, context: context)
         )
         if logAssessment {
             logRiskAssessment(request)
