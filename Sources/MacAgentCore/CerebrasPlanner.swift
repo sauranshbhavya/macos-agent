@@ -69,6 +69,9 @@ public final class CerebrasPlanner: Planning {
         self.useNativeStructuredOutput = useNativeStructuredOutput
     }
 
+    // `model` is an immutable String, so this nonisolated read off the main actor is safe.
+    nonisolated public var plannerModelIdentifier: String? { model }
+
     public func plan(command: String, priorTaskContext: PriorTaskContext? = nil) async throws -> AgentPlan {
         let requestBody = requestBody(command: command, priorTaskContext: priorTaskContext)
         let requestData = try JSONSerialization.data(withJSONObject: requestBody)
@@ -196,7 +199,10 @@ extension CerebrasPlanner {
     /// visible notice.
     nonisolated public static let provider = PlannerProvider(
         id: providerID,
-        displayName: "Cerebras"
+        displayName: "Cerebras",
+        // No-retention / no-training on all tiers, the very posture that made Cerebras the only
+        // acceptable screenshot host (plan §B6 / external-facts §2, verified 2026-08-08).
+        retentionPosture: .notRetained
     ) { usageRecorder in
         try CerebrasPlanner(usageRecorder: usageRecorder)
     }

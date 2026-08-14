@@ -84,6 +84,7 @@ public struct WebResearchMarkdownCapabilityAdapter: CapabilityAdapter {
     }
 
     public func preview(plan: AgentPlan, context: CapabilityExecutionContext) throws -> [ActionPreview] {
+        try validateMarkdownContentSource(in: plan)
         if isHackerNewsPreset(plan) {
             let spec = try hackerNewsSpec(in: plan, context: context)
             return [
@@ -242,9 +243,31 @@ public struct WebResearchMarkdownCapabilityAdapter: CapabilityAdapter {
         var outputURL: URL
     }
 
+    /// The Hacker News workflow is identified by its Hacker News operations — deliberately NOT by
+    /// `.writeMarkdown`, which is a file write. The looser membership was SONNY-32's false-"no":
+    /// a plan whose only step was a solitary `.writeMarkdown` disclosed "Data leaves device: no"
+    /// and was then silently promoted to this preset, which opens news.ycombinator.com and
+    /// fetches headlines over the network. Tightening the shape makes the "no" answer true
+    /// (fixed under SONNY-88, which absorbed SONNY-32); the solitary shape itself is rejected as
+    /// incomplete by `validateMarkdownContentSource`.
     private func isHackerNewsPreset(_ plan: AgentPlan) -> Bool {
         plan.steps.contains { step in
-            [.openHackerNews, .fetchHNHeadlines, .writeMarkdown].contains(step.operation)
+            [.openHackerNews, .fetchHNHeadlines].contains(step.operation)
+        }
+    }
+
+    /// A `.writeMarkdown` step is a sink, not a source: without a Hacker News fetch or a
+    /// `.webToMarkdown` step beside it there is nothing to write, and before SONNY-88 the
+    /// solitary shape silently became the Hacker News preset instead of failing. Throwing here —
+    /// `preview` runs inside `AgentActionExecutor.prepare` and again inside `execute` — stops it
+    /// on both paths with an error that names the real problem.
+    private func validateMarkdownContentSource(in plan: AgentPlan) throws {
+        let hasWriteMarkdown = plan.steps.contains { $0.operation == .writeMarkdown }
+        let hasWebResearch = plan.steps.contains { $0.operation == .webToMarkdown }
+        if hasWriteMarkdown, !hasWebResearch, !isHackerNewsPreset(plan) {
+            throw AgentExecutionError.invalidPlan(
+                "write_markdown needs a content source in the same plan — fetch_hn_headlines for the Hacker News digest, or web_to_markdown for a research note."
+            )
         }
     }
 

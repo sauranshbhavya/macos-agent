@@ -91,7 +91,8 @@ public struct LocalDataDeletionService: @unchecked Sendable {
             SnippetStore(fileManager: fileManager).fileURL,
             RecentArtifactStore(fileManager: fileManager).fileURL,
             ShortcutRunHistoryStore(fileManager: fileManager).fileURL,
-            TaskHistoryStore(fileManager: fileManager).fileURL
+            TaskHistoryStore(fileManager: fileManager).fileURL,
+            AIEgressStore(fileManager: fileManager).fileURL
         ]
     }
 

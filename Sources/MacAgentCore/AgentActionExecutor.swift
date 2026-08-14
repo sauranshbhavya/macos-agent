@@ -1134,11 +1134,25 @@ public final class AgentActionExecutor {
         return names.isEmpty ? "Prepared Sonny action" : names.joined(separator: ", ")
     }
 
-    /// Operations that leave the device on *every* execution, whatever their step's parameters
-    /// say. An operation whose egress depends on saved content it merely names — a workspace, a
-    /// routine — cannot be answered by the operation alone and does not belong here; see
-    /// `stepLeavesDevice`.
-    private static let dataEgressOperations: Set<AgentOperation> = [
+    /// **The membership rule is bidirectional (SONNY-32, landed with SONNY-88):** an operation is
+    /// in this set — or handled by `stepLeavesDevice`'s switch — *if and only if* executing it
+    /// can send anything off the device. The original rule (SONNY-10) stated only the forward
+    /// direction, guarding against a false "yes"; the converse is the more dangerous direction —
+    /// a user told nothing leaves the device approves on that basis — and it is a live invariant,
+    /// not a review habit: `EgressClassificationTests` classifies every `AgentOperation` case
+    /// against this rule explicitly, so a new operation cannot land unclassified.
+    ///
+    /// Membership here means egress on *every* execution, whatever the step's parameters say. An
+    /// operation whose egress depends on saved content it merely names — a workspace, a routine —
+    /// cannot be answered by the operation alone and belongs in `stepLeavesDevice`'s switch
+    /// instead. (`writeMarkdown` is deliberately in neither: it is a local file write, and the
+    /// solitary-step shape that used to promote it silently into the network-touching Hacker News
+    /// preset is now rejected as an incomplete plan — see
+    /// `WebResearchMarkdownCapabilityAdapter.isHackerNewsPreset`.)
+    ///
+    /// Internal, not private, exactly so `EgressClassificationTests` can hold the whole enum
+    /// against this set.
+    static let dataEgressOperations: Set<AgentOperation> = [
         .openHackerNews,
         .fetchHNHeadlines,
         .webToMarkdown,

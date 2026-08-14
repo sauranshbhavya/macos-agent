@@ -78,47 +78,61 @@ struct PlannerProviderRegistryTests {
     /// The acceptance criterion, pinned as behavior: registering a provider is all it takes
     /// for a selection to construct that provider's planner through the same `makePlanner`
     /// call the construction site already makes. No edit outside the registry is part of
-    /// this test's arrangement.
+    /// this test's arrangement. (Since SONNY-88 the returned planner is the egress-recording
+    /// wrapper, so "constructed that provider's planner" is pinned by whose plan comes back,
+    /// not by instance identity.)
     @Test
-    func registeringAProviderMakesItConstructibleThroughTheExistingSelectionCall() throws {
+    func registeringAProviderMakesItConstructibleThroughTheExistingSelectionCall() async throws {
         let alternatePlanner = StubPlanner(marker: "alternate")
         var registry = PlannerProviderRegistry(defaultProvider: stubProvider(id: "primary", displayName: "Primary"))
         registry.register(
             PlannerProvider(id: "alternate", displayName: "Alternate") { _ in alternatePlanner }
         )
 
-        let selected = try registry.makePlanner(selection: "alternate", usageRecorder: NoopTaskUsageRecorder.shared)
+        let selected = try registry.makePlanner(
+            selection: "alternate",
+            usageRecorder: NoopTaskUsageRecorder.shared,
+            egressRecorder: NullEgressRecorder()
+        )
 
-        #expect(selected.planner as? StubPlanner === alternatePlanner)
+        #expect(try await selected.planner.plan(command: "do it").summary == "Planned by alternate.")
         #expect(selected.provider.id == "alternate")
         #expect(selected.fallbackNotice == nil)
     }
 
     @Test
-    func defaultSelectionConstructsTheDefaultPlannerWithoutANotice() throws {
+    func defaultSelectionConstructsTheDefaultPlannerWithoutANotice() async throws {
         let defaultPlanner = StubPlanner(marker: "primary")
         let registry = PlannerProviderRegistry(
             defaultProvider: PlannerProvider(id: "primary", displayName: "Primary") { _ in defaultPlanner }
         )
 
-        let selected = try registry.makePlanner(selection: nil, usageRecorder: NoopTaskUsageRecorder.shared)
+        let selected = try registry.makePlanner(
+            selection: nil,
+            usageRecorder: NoopTaskUsageRecorder.shared,
+            egressRecorder: NullEgressRecorder()
+        )
 
-        #expect(selected.planner as? StubPlanner === defaultPlanner)
+        #expect(try await selected.planner.plan(command: "do it").summary == "Planned by primary.")
         #expect(selected.provider.id == "primary")
         #expect(selected.fallbackNotice == nil)
     }
 
     @Test
-    func unknownSelectionConstructsTheDefaultPlannerAndKeepsTheNotice() throws {
+    func unknownSelectionConstructsTheDefaultPlannerAndKeepsTheNotice() async throws {
         let defaultPlanner = StubPlanner(marker: "primary")
         var registry = PlannerProviderRegistry(
             defaultProvider: PlannerProvider(id: "primary", displayName: "Primary") { _ in defaultPlanner }
         )
         registry.register(stubProvider(id: "alternate", displayName: "Alternate"))
 
-        let selected = try registry.makePlanner(selection: "mystery", usageRecorder: NoopTaskUsageRecorder.shared)
+        let selected = try registry.makePlanner(
+            selection: "mystery",
+            usageRecorder: NoopTaskUsageRecorder.shared,
+            egressRecorder: NullEgressRecorder()
+        )
 
-        #expect(selected.planner as? StubPlanner === defaultPlanner)
+        #expect(try await selected.planner.plan(command: "do it").summary == "Planned by primary.")
         #expect(selected.provider.id == "primary")
         #expect(selected.fallbackNotice
             == "Sonny doesn't have a planner called “mystery”, so it used Primary instead. Available planners: primary, alternate.")
@@ -128,7 +142,7 @@ struct PlannerProviderRegistryTests {
     /// registered provider, but constructing it fails (a missing API key is the canonical
     /// case). The swap to the default must carry a notice naming the reason — never silence.
     @Test
-    func unavailableSelectedProviderFallsBackToTheDefaultWithTheReasonInTheNotice() throws {
+    func unavailableSelectedProviderFallsBackToTheDefaultWithTheReasonInTheNotice() async throws {
         let defaultPlanner = StubPlanner(marker: "primary")
         var registry = PlannerProviderRegistry(
             defaultProvider: PlannerProvider(id: "primary", displayName: "Primary") { _ in defaultPlanner }
@@ -139,9 +153,13 @@ struct PlannerProviderRegistryTests {
             }
         )
 
-        let selected = try registry.makePlanner(selection: "alternate", usageRecorder: NoopTaskUsageRecorder.shared)
+        let selected = try registry.makePlanner(
+            selection: "alternate",
+            usageRecorder: NoopTaskUsageRecorder.shared,
+            egressRecorder: NullEgressRecorder()
+        )
 
-        #expect(selected.planner as? StubPlanner === defaultPlanner)
+        #expect(try await selected.planner.plan(command: "do it").summary == "Planned by primary.")
         #expect(selected.provider.id == "primary")
         #expect(selected.fallbackNotice
             == "The Alternate planner isn't available, so Sonny used Primary instead. (STUB_KEY is not set.)")
@@ -159,7 +177,11 @@ struct PlannerProviderRegistryTests {
         )
 
         #expect(throws: StubProviderError.keyMissing) {
-            _ = try registry.makePlanner(selection: nil, usageRecorder: NoopTaskUsageRecorder.shared)
+            _ = try registry.makePlanner(
+                selection: nil,
+                usageRecorder: NoopTaskUsageRecorder.shared,
+                egressRecorder: NullEgressRecorder()
+            )
         }
     }
 
@@ -176,7 +198,11 @@ struct PlannerProviderRegistryTests {
         )
         let recorder = TaskUsageRecorder()
 
-        _ = try registry.makePlanner(selection: nil, usageRecorder: recorder)
+        _ = try registry.makePlanner(
+            selection: nil,
+            usageRecorder: recorder,
+            egressRecorder: NullEgressRecorder()
+        )
 
         #expect(received.identifier == ObjectIdentifier(recorder))
     }
@@ -210,6 +236,11 @@ private final class StubPlanner: Planning {
 @MainActor
 private final class RecorderCapture {
     var identifier: ObjectIdentifier?
+}
+
+/// This suite pins routing, not recording — AIEgressLedgerTests owns the recording contract.
+private struct NullEgressRecorder: AIEgressRecording {
+    func record(_ entry: AIEgressEntry) async {}
 }
 
 private enum StubProviderError: Error, LocalizedError, Equatable {

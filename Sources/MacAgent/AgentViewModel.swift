@@ -133,6 +133,7 @@ final class AgentViewModel: ObservableObject {
     private let zipArchiver: any ZipArchiving
     private let shortcutRunHistoryStore: ShortcutRunHistoryStore
     private let taskHistoryStore: TaskHistoryStore
+    private let aiEgressStore: AIEgressStore
     private let clipboardHistorySettingsStore: ClipboardHistorySettingsStore
     private let clipboardHistoryMonitor: ClipboardHistoryMonitor
     private let localDataDeletionService: LocalDataDeletionService
@@ -325,6 +326,7 @@ final class AgentViewModel: ObservableObject {
         zipArchiver: any ZipArchiving = ProcessZipArchiver(),
         shortcutRunHistoryStore: ShortcutRunHistoryStore = ShortcutRunHistoryStore(),
         taskHistoryStore: TaskHistoryStore = TaskHistoryStore(),
+        aiEgressStore: AIEgressStore = AIEgressStore(),
         clipboardHistorySettingsStore: ClipboardHistorySettingsStore = ClipboardHistorySettingsStore(),
         clipboardHistoryMonitor: ClipboardHistoryMonitor? = nil,
         localDataDeletionService: LocalDataDeletionService = LocalDataDeletionService(),
@@ -358,6 +360,7 @@ final class AgentViewModel: ObservableObject {
         self.zipArchiver = zipArchiver
         self.shortcutRunHistoryStore = shortcutRunHistoryStore
         self.taskHistoryStore = taskHistoryStore
+        self.aiEgressStore = aiEgressStore
         self.clipboardHistorySettingsStore = clipboardHistorySettingsStore
         self.clipboardHistoryMonitor = clipboardHistoryMonitor
             ?? ClipboardHistoryMonitor(settingsStore: clipboardHistorySettingsStore)
@@ -815,9 +818,23 @@ final class AgentViewModel: ObservableObject {
                 // (SONNY-85): a new provider is a registration in MacAgentCore, never another
                 // branch here. With the default selection this constructs exactly the
                 // `OpenAIPlanner(usageRecorder:)` call that used to be written inline.
+                // The recorder is per-run: it carries the run identity (a fresh id plus the same
+                // startedAt instant the completed-task record will carry, which is the
+                // task-detail join), so the egress layer only ever says what left. The registry
+                // wraps the planner with it — every planner prompt this run sends is in the
+                // Data-Sent-to-AI ledger at the moment it leaves.
+                let egressRecorder = AIEgressLedgerRecorder(
+                    store: aiEgressStore,
+                    runID: UUID(),
+                    runStartedAt: taskHistoryStartedAt,
+                    onWriteFailure: { [weak self] message in
+                        self?.reportAIEgressLedgerWriteFailure(message)
+                    }
+                )
                 let selected = try plannerProviderRegistry.makePlanner(
                     selection: plannerSelection,
-                    usageRecorder: taskUsageRecorder
+                    usageRecorder: taskUsageRecorder,
+                    egressRecorder: egressRecorder
                 )
                 if let notice = selected.fallbackNotice {
                     plannerFallbackNotice = notice
@@ -2284,6 +2301,15 @@ final class AgentViewModel: ObservableObject {
             setError("Could not save task history: \(error.localizedDescription)")
             logStore.append(.observe, "Could not record task history: \(error.localizedDescription)")
         }
+    }
+
+    /// A ledger *write* failure: a real prompt left the device and its record could not be
+    /// saved. Accurate write-failure wording set directly (the `applyClipboardHistoryNoticeChoice`
+    /// pattern), never the load-failure banner, whose copy is decrypt/decode-specific. The run
+    /// itself proceeds — the ledger is transparency, not a gate — but the failure is visible.
+    private func reportAIEgressLedgerWriteFailure(_ message: String) {
+        setError(message)
+        logStore.append(.observe, message)
     }
 
     // MARK: - Routine scheduling
