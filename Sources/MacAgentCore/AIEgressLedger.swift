@@ -191,10 +191,10 @@ public struct AIEgressStore: @unchecked Sendable {
         return decoded.migratingLegacyPlaintext(store: "AI egress ledger", write: write)
     }
 
-    /// The task-detail join read: the record whose run shares this `startedAt`, or nil for a run
-    /// that sent nothing — absence IS the honest empty record.
-    public func record(forRunStartedAt startedAt: Date) throws -> AIEgressRecord? {
-        try loadAll().first { $0.runStartedAt == startedAt }
+    /// The task-detail join read: the record `CompletedTaskRecord.egressRunID` names, or nil for
+    /// a run that sent nothing — absence IS the honest empty record.
+    public func record(forRunID runID: UUID) throws -> AIEgressRecord? {
+        try loadAll().first { $0.runID == runID }
     }
 
     private func capped(_ records: [AIEgressRecord]) -> [AIEgressRecord] {

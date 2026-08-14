@@ -125,14 +125,14 @@ struct AIEgressStoreTests {
         let root = try makeRoot()
         defer { try? FileManager.default.removeItem(at: root) }
         let store = makeStore(root: root)
-        let startedAt = Date(timeIntervalSince1970: 9_000)
-        try store.append(entry(), runID: UUID(), runStartedAt: startedAt)
+        let runID = UUID()
+        try store.append(entry(), runID: runID, runStartedAt: Date(timeIntervalSince1970: 9_000))
 
-        let joined = try store.record(forRunStartedAt: startedAt)
+        let joined = try store.record(forRunID: runID)
         #expect(joined?.entries.count == 1)
 
         // The honest empty record: a run that sent nothing has no record at all.
-        #expect(try store.record(forRunStartedAt: Date(timeIntervalSince1970: 12_345)) == nil)
+        #expect(try store.record(forRunID: UUID()) == nil)
     }
 
     @Test

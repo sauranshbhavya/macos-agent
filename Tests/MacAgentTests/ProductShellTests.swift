@@ -560,6 +560,7 @@ struct ProductShellTests {
             "runner",
             "pendingCommandForPriorTaskContext",
             "pendingTaskHistoryStartedAt",
+            "activeTaskEgressRunID",
             "preserveUsageForNextStart"
         ]
 
