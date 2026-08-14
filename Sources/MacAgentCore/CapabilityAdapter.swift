@@ -28,6 +28,8 @@ public enum CapabilityPermissionRequirement: String, Codable, CaseIterable, Equa
     case finderAutomation = "finder_automation"
     case wordAutomation = "word_automation"
     case shortcutsAutomation = "shortcuts_automation"
+    case screenRecording = "screen_recording"
+    case accessibilityControl = "accessibility_control"
 
     public var displayName: String {
         switch self {
@@ -45,6 +47,10 @@ public enum CapabilityPermissionRequirement: String, Codable, CaseIterable, Equa
             return "Microsoft Word automation"
         case .shortcutsAutomation:
             return "Shortcuts automation"
+        case .screenRecording:
+            return "Screen Recording"
+        case .accessibilityControl:
+            return "Accessibility control"
         }
     }
 
@@ -64,6 +70,10 @@ public enum CapabilityPermissionRequirement: String, Codable, CaseIterable, Equa
             return "Sonny may use a fixed Microsoft Word AppleScript template."
         case .shortcutsAutomation:
             return "Sonny may invoke a named Apple Shortcut through the fixed Shortcuts CLI template."
+        case .screenRecording:
+            return "Sonny may capture the frontmost window of an app you target so screen-aware tools can see it."
+        case .accessibilityControl:
+            return "Sonny may use macOS Accessibility to act inside apps you have specifically allowed."
         }
     }
 }

@@ -3506,7 +3506,7 @@ struct SettingsDialogView: View {
     }
 }
 
-private struct SettingsDivider: View {
+struct SettingsDivider: View {
     var body: some View {
         Rectangle()
             .fill(SonnyTheme.border)
@@ -3610,6 +3610,8 @@ private struct SettingsPreferencesPage: View {
 
 private struct SettingsSecurityAccessPage: View {
     @ObservedObject var viewModel: AgentViewModel
+    @StateObject private var screenAccessModel = ScreenAccessOnboardingModel()
+    @State private var isScreenAccessSetupPresented = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -3658,10 +3660,40 @@ private struct SettingsSecurityAccessPage: View {
                 .padding(.vertical, 16)
             }
             .padding(.top, 24)
+            .padding(.bottom, 16)
+
+            SettingsDivider()
+
+            SettingsSectionBlock(title: "Screen Access") {
+                SettingsAdaptiveControlRow {
+                    SettingsControlLabel(
+                        title: "Set up screen access",
+                        detail: "Guides you through the Screen Recording and Accessibility grants Sonny's screen-aware tools need, including the relaunch Screen Recording requires."
+                    )
+                } trailing: {
+                    Button("Set up") {
+                        isScreenAccessSetupPresented = true
+                    }
+                    .buttonStyle(SonnyButtonStyle(tone: .secondary, width: 96))
+                    .accessibilityLabel("Set up screen access")
+                }
+                .padding(.vertical, 16)
+            }
+            .padding(.top, 24)
         }
         .frame(maxWidth: 760, alignment: .topLeading)
         .onAppear {
             viewModel.refreshPermissions()
+        }
+        .sheet(isPresented: $isScreenAccessSetupPresented) {
+            ScreenAccessOnboardingView(model: screenAccessModel, isPresented: $isScreenAccessSetupPresented)
+        }
+        .onChange(of: isScreenAccessSetupPresented) { _, isPresented in
+            // An Accessibility grant lands without a relaunch, so re-read the readiness rows the
+            // moment the setup dialog closes rather than waiting for the page to reappear.
+            if !isPresented {
+                viewModel.refreshPermissions()
+            }
         }
     }
 }
