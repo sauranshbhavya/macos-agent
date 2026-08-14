@@ -155,6 +155,29 @@ enum AgentActivityPresentation {
         .filter { !$0.isEmpty }
     }
 
+    /// The disclosure lines an approval surface renders, selected by the mode it renders under
+    /// (SONNY-90): Safe mode restores the "Data leaves device: yes/no" line in its §11.3
+    /// position; normal surfaces omit it — E9's founder-ratified deviation, whose test citation
+    /// lives on the copy tests. A pure function on `firstRunApprovalExplainerLines`' precedent so
+    /// the selection is pinned without a view-inspection harness; both directions have tests.
+    static func approvalDisclosureLines(
+        for request: RiskApprovalRequest,
+        safeModeEnabled: Bool
+    ) -> [String] {
+        safeModeEnabled ? request.approvalCopy.safeModeLines : request.approvalCopy.lines
+    }
+
+    /// The widget's Safe-mode-only data-egress caption (SONNY-90). The widget's steady-state
+    /// panel is one "Allow access to [resource]" row — no field-labeled lines — so Safe mode adds
+    /// exactly this one line rather than the full disclosure; `nil` in Normal mode means the
+    /// widget renders nothing, which IS the ratified relocation.
+    static func widgetDataEgressLine(
+        for request: RiskApprovalRequest,
+        safeModeEnabled: Bool
+    ) -> String? {
+        safeModeEnabled ? request.approvalCopy.dataLeavesDeviceLine : nil
+    }
+
     /// The one-line ran-without-asking trace (SONNY-99, reshaped by the consequence rule
     /// 2026-08-13): the sentence that lets a person watching a task tell "nothing happened because
     /// it was low-risk" from "something happened silently because Sonny no longer asks for it".

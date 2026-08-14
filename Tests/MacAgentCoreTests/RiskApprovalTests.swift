@@ -76,8 +76,13 @@ struct RiskApprovalTests {
         )
     }
 
+    /// Four lines, not §11.3's five: the "Data leaves device" line is removed from all normal
+    /// approval surfaces — E9's deliberate, founder-ratified spec deviation (2026-08-08, kept in
+    /// full by C7 on 2026-08-12; SONNY-90's landing). The line survives only inside Safe mode —
+    /// the companion test below — and Normal mode's egress honesty lives in the Data-Sent-to-AI
+    /// ledger (SONNY-88) instead of a pre-run label.
     @Test
-    func approvalCopyContainsRequiredUserFacingFields() {
+    func approvalCopyContainsRequiredUserFacingFieldsWithoutTheDataEgressLine() {
         let copy = RiskApprovalCopy(
             actionDescription: "Create a zip archive",
             riskReason: "This writes a new file",
@@ -90,9 +95,39 @@ struct RiskApprovalTests {
             "What Sonny is about to do: Create a zip archive",
             "Why this is risky: This writes a new file",
             "Involves: /Users/test/Desktop/largest.zip",
-            "Data leaves device: no",
             "Undo: Delete the created zip"
         ])
+        // Both truth values, because a "no" leaking onto normal surfaces would be as much a
+        // regression as a "yes".
+        for leaves in [false, true] {
+            var variant = copy
+            variant.dataLeavesDevice = leaves
+            #expect(!variant.lines.joined(separator: "\n").contains("Data leaves device"))
+        }
+    }
+
+    @Test
+    func safeModeLinesRestoreTheDataEgressLineInItsOriginalPosition() {
+        let copy = RiskApprovalCopy(
+            actionDescription: "Create a zip archive",
+            riskReason: "This writes a new file",
+            involvedResource: "/Users/test/Desktop/largest.zip",
+            dataLeavesDevice: true,
+            undoDescription: "Delete the created zip"
+        )
+
+        #expect(copy.safeModeLines == [
+            "What Sonny is about to do: Create a zip archive",
+            "Why this is risky: This writes a new file",
+            "Involves: /Users/test/Desktop/largest.zip",
+            "Data leaves device: yes",
+            "Undo: Delete the created zip"
+        ])
+        #expect(copy.dataLeavesDeviceLine == "Data leaves device: yes")
+
+        var negative = copy
+        negative.dataLeavesDevice = false
+        #expect(negative.safeModeLines.contains("Data leaves device: no"))
     }
 
     // MARK: - SONNY-62: what an approval covers, reason by reason
