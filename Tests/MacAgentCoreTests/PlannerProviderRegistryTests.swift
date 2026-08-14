@@ -78,7 +78,9 @@ struct PlannerProviderRegistryTests {
     /// The acceptance criterion, pinned as behavior: registering a provider is all it takes
     /// for a selection to construct that provider's planner through the same `makePlanner`
     /// call the construction site already makes. No edit outside the registry is part of
-    /// this test's arrangement.
+    /// this test's arrangement. (Instance identity again since the founder's 2026-08-14
+    /// ledger deletion removed the egress-recording wrap — the registry hands back the
+    /// provider's own planner.)
     @Test
     func registeringAProviderMakesItConstructibleThroughTheExistingSelectionCall() throws {
         let alternatePlanner = StubPlanner(marker: "alternate")

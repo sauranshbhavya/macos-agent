@@ -821,3 +821,7 @@ and adversarially re-verified the four load-bearing claims (planner exclusion se
 membership, the scheduled `.approved(.tier2)` ceiling, spec §16.5's router language) against source
 before writing. Evidence is cited inline as file:line at a SHA, or ticket/doc reference. Measurements
 the experiment never recorded are named as owed, not invented.
+
+---
+
+**Addendum, 2026-08-14 (row H implementation; founder decisions on PR #49).** Two E9/§F items changed after this plan froze, recorded here so a §B6/E9/C7 reader does not inherit them as current: (1) **E9's Normal-mode after-the-fact egress log is superseded** — the in-product Data-Sent-to-AI ledger built for it was deleted at the founder's direction (no data-sent-to-AI mention in the product; website-era messaging later), and the product's egress disclosure is the Safe-mode approval label alone, sourced from the bidirectional `dataLeavesDevice` classification which survives with its forcing test; (2) **Safe mode's setting shipped as the three-segment mode control Safe | Normal | Power**, with Power identical to Normal until row I's screen-control features gate on it (row 18's mode landing as a setting first). Durable record: `docs/sonny-founder-design-decisions.md` → "The transparency posture"; branch record: the changelog's `feature/vision-foundations` entry and its supersession block.

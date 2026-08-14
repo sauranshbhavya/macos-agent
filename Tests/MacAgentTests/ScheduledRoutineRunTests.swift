@@ -139,6 +139,31 @@ struct ScheduledRoutineRunTests {
         #expect(saved.schedule?.lastRunAt == fixture.nineAM)
     }
 
+    /// SONNY-90's unattended clause, pinned on the real scheduled path: Safe mode creates no new
+    /// unattended prompt class, and a schedule Safe mode silently suspended would be one — so a
+    /// benign trusted scheduled run under Safe mode runs exactly as it does without it. The
+    /// standing tier-2 grant answers Safe mode's requirement the way it answers any requirement
+    /// at or below its ceiling; what a scheduled run cannot satisfy (tier 3+) still pauses via
+    /// SONNY-31's existing notify-and-pause, Safe mode or not. The *attended* trust shortcut is
+    /// the half Safe mode does gate — pinned in InteractionModeTests, not here.
+    @Test
+    func aBenignTrustedScheduledRunUnderSafeModeStillRunsWithoutPromptOrPause() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.saveRoutine(unattendedTrusted: true)
+        fixture.viewModel.interactionMode = .safe
+
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
+        try await fixture.waitForIdle()
+
+        let notice = try #require(fixture.viewModel.scheduledRunNotice)
+        #expect(notice.contains("ran on schedule"))
+        #expect(fixture.viewModel.approvalRequest == nil)
+        let schedule = try #require(fixture.routineStore.routine(named: "Morning").schedule)
+        #expect(schedule.isEnabled)
+        #expect(schedule.pausedReason == nil)
+    }
+
     /// The tier-3+ backstop. `AgentRunner` re-assesses at execute time and requires the approved
     /// tier to be at least the effective tier, so the tier-2 unattended approval cannot satisfy a
     /// routine that escalates — the refusal is structural, not a policy check written in the view

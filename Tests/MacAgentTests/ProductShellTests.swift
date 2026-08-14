@@ -596,7 +596,7 @@ struct ProductShellTests {
 
             // 3. Settings, preferences and readiness — none of it is local *data*, and a wipe that
             // silently reset the user's preferences would be a different feature.
-            "errorIsPersistent", "usePointerCursors", "displayFullNames", "safeModeEnabled",
+            "errorIsPersistent", "usePointerCursors", "displayFullNames", "interactionMode",
             "voiceHotKeyStatus", "voiceHotKeyReady", "permissionItems", "clipboardHistoryPollFailure",
             "hasCompletedFirstApproval", "widgetPresentationRequest", "scheduledRunNotice",
             "plannerFallbackNotice",

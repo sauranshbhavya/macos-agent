@@ -424,6 +424,7 @@ private extension FloatingWidgetView {
                 stepStatuses: viewModel.stepStatuses,
                 request: request,
                 isFirstApproval: !viewModel.hasCompletedFirstApproval,
+                safeMode: viewModel.interactionMode == .safe,
                 onAllow: { viewModel.start() },
                 onDeny: { viewModel.cancelCurrentRun() }
             )
@@ -562,6 +563,7 @@ private struct WidgetPermissionPanel: View {
     /// `AgentActivityPresentation.firstRunApprovalExplainerLines` for why, and for why the
     /// steady-state panel is unchanged.
     let isFirstApproval: Bool
+    let safeMode: Bool
     let onAllow: () -> Void
     let onDeny: () -> Void
 
@@ -614,6 +616,20 @@ private struct WidgetPermissionPanel: View {
                 Text(escalationReasons)
                     .font(WidgetType.captionSmall)
                     .foregroundStyle(WidgetTheme.secondaryCircular)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            // Safe mode only (SONNY-90): the one place "Data leaves device: yes/no" survives
+            // E9's ratified §11.3 deviation. Normal and Power render nothing here — the
+            // relocation, not an omission. One muted caption, matching the panel's label-free
+            // voice.
+            if let dataEgressLine = AgentActivityPresentation.widgetDataEgressLine(
+                for: request,
+                safeMode: safeMode
+            ) {
+                Text(dataEgressLine)
+                    .font(WidgetType.captionSmall)
+                    .foregroundStyle(WidgetTheme.textMuted)
                     .fixedSize(horizontal: false, vertical: true)
             }
 

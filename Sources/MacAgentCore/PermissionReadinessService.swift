@@ -1,6 +1,4 @@
-import ApplicationServices
 import AVFoundation
-import CoreGraphics
 import Foundation
 
 public enum PermissionReadinessState: String, Codable, Equatable, Sendable {
@@ -35,7 +33,13 @@ public struct PermissionReadinessItem: Identifiable, Codable, Equatable, Sendabl
 }
 
 public struct PermissionReadinessService: Sendable {
-    public init() {}
+    private let screenPermissionChecker: any ScreenCapturePermissionChecking
+
+    public init(
+        screenPermissionChecker: any ScreenCapturePermissionChecking = SystemScreenCapturePermissionChecker()
+    ) {
+        self.screenPermissionChecker = screenPermissionChecker
+    }
 
     public func currentStatus(hasAPIKey: Bool, hotKeyReady: Bool) -> [PermissionReadinessItem] {
         [
@@ -70,23 +74,33 @@ public struct PermissionReadinessService: Sendable {
                 state: .unknown,
                 detail: "DOCX conversion may trigger an Automation prompt when Word is controlled."
             ),
-            PermissionReadinessItem(
-                id: "accessibility",
-                title: "Accessibility",
-                state: AXIsProcessTrusted() ? .ready : .unknown,
-                detail: AXIsProcessTrusted()
-                    ? "Accessibility is trusted for the current process."
-                    : "Not required yet; future UI-control tools would need Accessibility."
-            ),
-            PermissionReadinessItem(
-                id: "screen-recording",
-                title: "Screen Recording",
-                state: CGPreflightScreenCaptureAccess() ? .ready : .unknown,
-                detail: CGPreflightScreenCaptureAccess()
-                    ? "Screen Recording is available."
-                    : "Not required yet; future screen-aware tools would need Screen Recording."
-            )
+            accessibilityStatus(),
+            screenRecordingStatus()
         ]
+    }
+
+    private func accessibilityStatus() -> PermissionReadinessItem {
+        let trusted = screenPermissionChecker.isAccessibilityTrusted()
+        return PermissionReadinessItem(
+            id: "accessibility",
+            title: "Accessibility",
+            state: trusted ? .ready : .needsAction,
+            detail: trusted
+                ? "Accessibility is trusted for the current process."
+                : "Screen-acting tools need Accessibility. Enable Sonny in System Settings › Privacy & Security › Accessibility."
+        )
+    }
+
+    private func screenRecordingStatus() -> PermissionReadinessItem {
+        let granted = screenPermissionChecker.hasScreenRecordingPermission()
+        return PermissionReadinessItem(
+            id: "screen-recording",
+            title: "Screen Recording",
+            state: granted ? .ready : .needsAction,
+            detail: granted
+                ? "Screen Recording is granted."
+                : "Screen-aware tools need Screen Recording. Enable Sonny in System Settings › Privacy & Security › Screen Recording, then relaunch Sonny."
+        )
     }
 
     private func microphoneStatus() -> PermissionReadinessItem {
