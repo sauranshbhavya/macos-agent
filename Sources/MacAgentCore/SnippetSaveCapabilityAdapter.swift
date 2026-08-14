@@ -68,7 +68,9 @@ public struct SnippetSaveCapabilityAdapter: CapabilityAdapter {
                 CapabilityRiskEscalation(
                     fromTier: metadata.defaultRiskTier,
                     toTier: .tier3,
-                    reason: "Snippet trigger \(spec.trigger) already exists and would be replaced."
+                    reason: "Snippet trigger \(spec.trigger) already exists and would be replaced.",
+                    // Replace-on-save destroys the expansion the user already has.
+                    consequence: .destructive
                 )
             ]
             : []

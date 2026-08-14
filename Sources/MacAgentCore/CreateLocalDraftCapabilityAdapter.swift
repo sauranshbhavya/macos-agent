@@ -67,7 +67,9 @@ public struct CreateLocalDraftCapabilityAdapter: CapabilityAdapter {
                 CapabilityRiskEscalation(
                     fromTier: metadata.defaultRiskTier,
                     toTier: .tier3,
-                    reason: "Draft output already exists at \(spec.outputURL.path)."
+                    reason: "Draft output already exists at \(spec.outputURL.path).",
+                    // The write would overwrite an existing file.
+                    consequence: .destructive
                 )
             ]
             : []

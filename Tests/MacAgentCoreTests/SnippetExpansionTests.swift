@@ -80,28 +80,17 @@ struct SnippetExpansionTests {
         let prepared = try runner.prepare(plan: savePlan, source: .instantResolver)
         #expect(prepared.previews.first?.title == "Save snippet")
 
-        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped, context: approvalContext(for: prepared))
         #expect(request.assessment.effectiveTier == .tier2)
-        #expect(request.requirement == .lightweightConfirmation)
-        #expect(request.requirement != .autoRun)
-
-        do {
-            _ = try await runner.execute(prepared, scope: .unscoped)
-            Issue.record("Expected snippet save to pause for tier 2 approval.")
-        } catch RiskApprovalError.approvalRequired(let approvalRequest) {
-            #expect(approvalRequest.requirement == .lightweightConfirmation)
-            #expect(approvalRequest.assessment.effectiveTier == .tier2)
-        } catch {
-            Issue.record("Expected approvalRequired, got \(error).")
-        }
-
-        #expect(try store.findExactTrigger(";sig") == nil)
+        // Consequence rule (2026-08-13): a first-time snippet save destroys nothing, so it runs
+        // without asking. (A save that would *replace* a different expansion still asks — that
+        // destructive path keeps its own coverage in `ConsequenceRuleTests`.)
+        #expect(request.requirement == .autoRun)
 
         let result = try await runner.execute(
             prepared,
-            approvalDecision: .approved(.tier2),
-            confirmationMessage: "Test approved snippet save",
-            scope: .unscoped
+            scope: .unscoped,
+            context: approvalContext(for: prepared)
         )
         #expect(result.summary == "Saved snippet ;sig.")
         #expect(try store.snippet(matchingTrigger: ";sig").expansion == "Best, Sonny")
@@ -132,7 +121,7 @@ struct SnippetExpansionTests {
         }
 
         let prepared = try runner.prepare(plan: savePlan, source: .instantResolver)
-        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped, context: approvalContext(for: prepared))
 
         #expect(request.assessment.effectiveTier == .tier3)
         #expect(request.requirement == .explicitApproval)
@@ -166,15 +155,15 @@ struct SnippetExpansionTests {
         }
 
         let prepared = try runner.prepare(plan: savePlan, source: .instantResolver)
-        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped, context: approvalContext(for: prepared))
 
         #expect(request.assessment.effectiveTier == .tier2)
         #expect(request.assessment.escalations.isEmpty)
-        #expect(request.requirement == .lightweightConfirmation)
+        #expect(request.requirement == .autoRun)
 
         // And it is genuinely runnable at the tier an unattended run can carry — the gate is the
         // thing that was broken, so assert through it rather than stopping at the assessment.
-        let result = try await runner.execute(prepared, approvalDecision: .approved(.tier2), scope: .unscoped)
+        let result = try await runner.execute(prepared, approvalDecision: .approved(.tier2), scope: .unscoped, context: approvalContext(for: prepared))
         #expect(result.summary == "Saved snippet ;sig.")
         #expect(try store.snippet(matchingTrigger: ";sig").expansion == "Best, Sonny")
     }
@@ -205,7 +194,8 @@ struct SnippetExpansionTests {
             ]
         )
 
-        let request = try runner.approvalRequest(for: try runner.prepare(plan: plan, source: .instantResolver), scope: .unscoped)
+        let prepared = try runner.prepare(plan: plan, source: .instantResolver)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped, context: approvalContext(for: prepared))
 
         #expect(request.assessment.effectiveTier == .tier2)
         #expect(request.assessment.escalations.isEmpty)
@@ -249,11 +239,11 @@ struct SnippetExpansionTests {
         #expect(prepared.previews.first?.title == "Expand snippet")
         #expect(prepared.previews.first?.details.contains("Expansion: Best,\nSonny") == true)
 
-        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped, context: approvalContext(for: prepared))
         #expect(request.assessment.effectiveTier == .tier0)
         #expect(request.requirement == .autoRun)
 
-        let result = try await runner.execute(prepared, scope: .unscoped)
+        let result = try await runner.execute(prepared, scope: .unscoped, context: approvalContext(for: prepared))
         #expect(result.summary == "Best,\nSonny")
     }
 
@@ -262,6 +252,10 @@ struct SnippetExpansionTests {
             .appendingPathComponent("SnippetExpansionTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+
+    private func approvalContext(for prepared: PreparedAgentRun) -> ApprovalContext {
+        ApprovalContext(safeMode: false)
     }
 }
 

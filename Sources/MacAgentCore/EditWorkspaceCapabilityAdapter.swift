@@ -37,12 +37,21 @@ public struct WorkspaceScopeEditRequest: Equatable, Sendable {
 /// Until this capability existed a workspace could only be *created*, so `fileLocations` had no way
 /// of ever being set and one of the three founder-specified scope dimensions did nothing at all.
 ///
-/// **Escalation is one-directional.** Adding never raises the tier — the user typed the command
-/// asking for it, and taxing ordinary setup with an approval prompt would tax exactly the action
-/// this feature depends on. Removing does, because removing is the only half that can weaken a
-/// boundary the user is relying on. That asymmetry is a recorded row-B decision with a forward flag
-/// on row C, not an oversight: once relaxation ships, an ungated add is a way to manufacture
-/// relaxation-eligible territory in one un-escalated step.
+/// **Escalation is one-directional, with one exception SONNY-98 added.** Adding never raises the
+/// tier — the user typed the command asking for it, and taxing ordinary setup with an approval
+/// prompt would tax exactly the action this feature depends on. Removing does, because removing is
+/// the only half that can weaken a boundary the user is relying on. SONNY-98's exception: adding a
+/// `PathWhitelist` root *itself* as a file location escalates to tier 3, the one add whose
+/// territory is the whole of what Sonny may touch there.
+///
+/// **Under the consequence rule (founder directive, 2026-08-13), every escalation here is
+/// `.advisory`: no workspace edit prompts anymore, from the sheet or from a typed command.** A
+/// removal weakens a boundary but destroys no user data and no user-built artifact, and it reaches
+/// nobody else — so it runs, and its reason (the dimension-emptying wording included) surfaces on
+/// the ran-without-asking trace instead of a prompt. This consciously supersedes row C's ratified
+/// boundary-changing-edit gating (the origin-grant narrowing SONNY-98 first shipped is deleted
+/// with the grants themselves); the tier-3 escalations stay because the tier is the severity
+/// signal other gates read, and because their sentences are what the trace names.
 public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
     public init() {}
 
@@ -221,7 +230,7 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
         // sentence asserting a loss is the same over-claim the reason wording was already corrected
         // for once. Same single source of truth as `removalEmptiesTheKind`: the evaluator decides
         // what counted, this path only reads its answer.
-        let escalations = edit.lists.compactMap { list -> CapabilityRiskEscalation? in
+        let removalEscalations = edit.lists.compactMap { list -> CapabilityRiskEscalation? in
             guard !list.effectivelyRemoved.isEmpty else {
                 return nil
             }
@@ -234,10 +243,45 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
                         workspaceName: edit.stored.name,
                         kind: list.kind,
                         removed: list.effectivelyRemoved
-                    )
+                    ),
+                // Consequence rule (2026-08-13, superseding Q4's week-old ratification — a
+                // recorded coordinator call, founder-vetoable): a workspace-entry removal weakens
+                // a boundary but destroys no user data and no user-built artifact — the workspace
+                // survives, minus one list entry — and it reaches nobody else. Advisory: it runs
+                // without asking, and this sentence (the dimension-emptying variant included)
+                // lands on the ran-without-asking trace instead of a prompt.
+                consequence: .advisory
             )
         }
-        return CapabilityRiskAssessment(defaultTier: metadata.defaultRiskTier, escalations: escalations)
+        // SONNY-98's one exception to add-never-escalates: a `PathWhitelist` root itself. File
+        // locations are matched by *containment*, so this single entry converts everything Sonny
+        // may touch under that root into this workspace's scope. One escalation per added root,
+        // appended after the removal escalations so those stay byte-identical.
+        let wideningEscalations = edit.lists.flatMap { list in
+            list.addedWhitelistRoots.map { root in
+                CapabilityRiskEscalation(
+                    fromTier: metadata.defaultRiskTier,
+                    toTier: .tier3,
+                    reason: Self.wholeRootWideningReason(workspaceName: edit.stored.name, root: root),
+                    // Consequence rule: widening a boundary destroys nothing and reaches nobody.
+                    // The consequence-naming sentence survives on the trace; the tier still rises.
+                    consequence: .advisory
+                )
+            }
+        }
+        return CapabilityRiskAssessment(
+            defaultTier: metadata.defaultRiskTier,
+            escalations: removalEscalations + wideningEscalations
+        )
+    }
+
+    /// The reason for adding a whitelist root itself. Names the *consequence* — the territory this
+    /// one entry converts — never just the entry, per row B's own standard for escalation reasons.
+    private static func wholeRootWideningReason(workspaceName: String, root: String) -> String {
+        "Adds \(root) itself — not a folder inside it — to workspace \(workspaceName)'s "
+            + "file locations. Everything Sonny may touch under \(root) would count as part of "
+            + "this workspace, so this one entry turns that whole territory into the workspace's "
+            + "boundary."
     }
 
     /// The reason for a removal that leaves the kind configured. Names what is lost.
@@ -320,6 +364,15 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
         /// named in a reason claiming a loss. Same division of labour as the two flags above — the
         /// evaluator decides what counted, this type only carries the answer.
         let effectivelyRemoved: [String]
+        /// Added entries that are a `PathWhitelist` root *itself* — `~/Desktop` or `~/Documents`,
+        /// not a folder inside one. Always empty for `.app` and `.webDomain` (SONNY-98's stated
+        /// asymmetry: file locations are the only kind matched by containment, so only there can
+        /// one entry convert a whole territory; apps have no hierarchy at all, and a web domain is
+        /// bounded by `SafeURL` and the specific host the user typed). Compared through
+        /// `PathWhitelist.canonicalURL` against the whitelist's own resolved roots — the same
+        /// pipeline `validateInsideWhitelist` compares through, so no second path arithmetic exists
+        /// to drift on `..` or symlinks.
+        let addedWhitelistRoots: [String]
 
         /// True when the edit leaves the dimension unconstrained: it was restricting something, and
         /// now it is not.
@@ -536,7 +589,10 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
                 unmatchedRemovals: arithmetic.unmatchedRemovals,
                 beforeRestrictsKind: Self.restricts(arithmetic.kind, in: beforeScope),
                 afterRestrictsKind: Self.restricts(arithmetic.kind, in: afterScope),
-                effectivelyRemoved: arithmetic.removed.filter { !inert.contains($0) }
+                effectivelyRemoved: arithmetic.removed.filter { !inert.contains($0) },
+                addedWhitelistRoots: arithmetic.kind == .fileLocation
+                    ? arithmetic.added.filter { Self.isWhitelistRoot($0, whitelist: context.whitelist) }
+                    : []
             )
         }
 
@@ -561,6 +617,16 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
             return !scope.webDomains.isEmpty
         case .fileLocation:
             return !scope.fileRoots.isEmpty
+        }
+    }
+
+    /// Whether an added path is a whitelist root *itself* — canonical equality against the same
+    /// resolved form `validateInsideWhitelist` compares candidates to, so tilde expansion, `..`
+    /// collapsing and symlink resolution are the whitelist's own, not a re-derivation.
+    private static func isWhitelistRoot(_ rawPath: String, whitelist: PathWhitelist) -> Bool {
+        let canonical = PathWhitelist.canonicalURL(rawPath).standardizedFileURL.path
+        return whitelist.roots.contains { root in
+            root.resolvingSymlinksInPath().standardizedFileURL.path == canonical
         }
     }
 

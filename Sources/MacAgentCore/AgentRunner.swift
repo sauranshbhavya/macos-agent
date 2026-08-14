@@ -12,10 +12,11 @@ import Foundation
 /// all. Everything else is set by a Swift call site inside this app, which is the same shape
 /// `AgentViewModel.start(fromComposer:)` already uses for the pending-arm rule.
 ///
-/// **Nothing reads this to weaken a consent, and nothing may.** Relaxation on `(tier, verdict,
-/// origin)` is row C's territory (SONNY-13); this ticket builds the carrier and stops there. A
-/// future reader must still honour row C's inherited constraints — relaxation is a *requirement*
-/// override and never lowers `effectiveTier`, and only an `.inScope` verdict is ever eligible.
+/// **Nothing reads this to weaken a consent, and nothing may.** Row C's origin grant briefly did —
+/// superseded by the founder's consequence rule (2026-08-13), which gates on what an action *does*
+/// (destructive / affects-others / advisory), never on how its plan came to exist. What survives
+/// reading this value: dispatch (which planner path to take), the plan log line, the pending-arm
+/// rule, and the view model's confirmation copy.
 public enum PreparedPlanSource: String, Equatable, Sendable {
     case planner
     case instantResolver = "instant_resolver"
@@ -139,15 +140,23 @@ public final class AgentRunner {
     /// A default is what makes that failure silent, so there isn't one. SONNY-38 has to write a
     /// scope at every site or the compiler stops it. Nothing about the gating below changes — scope
     /// changes the assessment, never the gate.
+    ///
+    /// `context` is non-defaulted for the identical reason (SONNY-97): `execute` calls this again
+    /// internally, so a context threaded here and defaulted there would prompt under one
+    /// requirement and execute under another. And note where it lands — the *requirement*, never
+    /// the assessment. `assessRisk` takes no context and must never grow one: `effectiveTier`
+    /// remains a pure function of the plan, and the requirement is that tier plus the escalations'
+    /// consequence classes plus whatever the context says (Safe mode today).
     public func approvalRequest(
         for preparedRun: PreparedAgentRun,
         logAssessment: Bool = false,
-        scope: TaskWorkspaceScope
+        scope: TaskWorkspaceScope,
+        context: ApprovalContext
     ) throws -> RiskApprovalRequest {
         let assessment = try executor.assessRisk(plan: preparedRun.plan, scope: scope)
         let request = RiskApprovalRequest(
             assessment: assessment,
-            requirement: assessment.approvalRequirement(policy: approvalPolicy)
+            requirement: approvalPolicy.requirement(for: assessment, context: context)
         )
         if logAssessment {
             logRiskAssessment(request)
@@ -160,9 +169,15 @@ public final class AgentRunner {
         approvalDecision: RiskApprovalDecision = .notRequested,
         confirmationMessage: String = "Execution approved",
         logRiskAssessment: Bool = true,
-        scope: TaskWorkspaceScope
+        scope: TaskWorkspaceScope,
+        context: ApprovalContext
     ) async throws -> AgentRunResult {
-        let request = try approvalRequest(for: preparedRun, logAssessment: logRiskAssessment, scope: scope)
+        let request = try approvalRequest(
+            for: preparedRun,
+            logAssessment: logRiskAssessment,
+            scope: scope,
+            context: context
+        )
         switch request.requirement {
         case .autoRun:
             break
@@ -173,16 +188,24 @@ public final class AgentRunner {
             // causes indistinguishable — see `RiskApprovalConsent.authorizes(_:)` for the rule that
             // replaced it and for why each half of it reads the way it does (SONNY-62).
             guard approvalDecision.authorizes(request) else {
-                // Only for the reason-drift half, and only when a consent existed to be exceeded:
-                // `.notRequested` reaching here is the ordinary "this needs approval" path, not a
-                // re-arm, and labelling it one would put a false event in the trace. The tier half
-                // is already legible from the `risk.assessed` line's own tier.
+                // Only for the reason-drift and requirement-drift halves, and only when a consent
+                // existed to be exceeded: `.notRequested` reaching here is the ordinary "this needs
+                // approval" path, not a re-arm, and labelling it one would put a false event in the
+                // trace (the mutation that emitted it there survived a whole battery — SONNY-62,
+                // M9). The tier half is already legible from the `risk.assessed` line's own tier.
                 if case .approved(let consent) = approvalDecision {
                     let unacknowledged = consent.unacknowledgedReasons(in: request)
                     if !unacknowledged.isEmpty {
                         logStore.append(
                             .risk,
                             "risk.rearmed: reasons not covered by the approval: \(unacknowledged.joined(separator: " "))"
+                        )
+                    }
+                    if let answered = consent.answeredRequirement,
+                       request.requirement.permissivenessRank < answered.permissivenessRank {
+                        logStore.append(
+                            .risk,
+                            "risk.rearmed: a stricter approval is now required: \(request.requirement.displayName) (answered: \(answered.displayName))"
                         )
                     }
                 }

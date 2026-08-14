@@ -20,27 +20,36 @@ struct RiskApprovalTests {
         }
     }
 
+    /// The consequence rule on bare, escalation-free assessments, asked through the one public
+    /// path: tiers 0–2 auto-run, an escalation-free tier 3 fails closed to an explicit ask
+    /// (nothing classified means nothing to run silently on), and tier 4 refuses.
     @Test
-    func defaultPolicyKeepsTierZeroAndOneAutonomous() {
+    func escalationFreeTiersMapToTheConsequenceRulesDefaults() {
         let policy = RiskApprovalPolicy.default
+        let context = ApprovalContext(safeMode: false)
 
-        #expect(policy.requirement(for: .tier0) == .autoRun)
-        #expect(policy.requirement(for: .tier1) == .autoRun)
-        #expect(policy.requirement(for: .tier2) == .lightweightConfirmation)
-        #expect(policy.requirement(for: .tier3) == .explicitApproval)
-        #expect(policy.requirement(for: .tier4) == .refuse)
+        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier0), context: context) == .autoRun)
+        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier1), context: context) == .autoRun)
+        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier2), context: context) == .autoRun)
+        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier3), context: context) == .explicitApproval)
+        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier4), context: context) == .refuse)
     }
 
+    /// The policy dials are inert on the ordinary path under the consequence rule — a tightened
+    /// tier 1 and a preview-only tier 2 both auto-run; the stricter tier-2 dial survives only
+    /// inside Safe mode, where the formula takes the stricter of baseline and floor. (Whether the
+    /// dials should now be deleted outright is the founder's call, flagged in the pivot records.)
     @Test
-    func policyCanTightenTierOneAndPreviewTierTwo() {
+    func thePolicyDialsAreInertOnTheOrdinaryPath() {
         let policy = RiskApprovalPolicy(
             requireApprovalForTier1: true,
             tier2Mode: .previewOnly
         )
 
-        #expect(policy.requirement(for: .tier0) == .autoRun)
-        #expect(policy.requirement(for: .tier1) == .lightweightConfirmation)
-        #expect(policy.requirement(for: .tier2) == .previewOnly)
+        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier0), context: ApprovalContext(safeMode: false)) == .autoRun)
+        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier1), context: ApprovalContext(safeMode: false)) == .autoRun)
+        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier2), context: ApprovalContext(safeMode: false)) == .autoRun)
+        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier2), context: ApprovalContext(safeMode: true)) == .previewOnly)
     }
 
     @Test
@@ -51,14 +60,20 @@ struct RiskApprovalTests {
                 CapabilityRiskEscalation(
                     fromTier: .tier2,
                     toTier: .tier3,
-                    reason: "Output file already exists."
+                    reason: "Output file already exists.",
+                    consequence: .destructive
                 )
             ]
         )
 
         #expect(assessment.defaultTier == .tier2)
         #expect(assessment.effectiveTier == .tier3)
-        #expect(assessment.approvalRequirement() == .explicitApproval)
+        #expect(
+            RiskApprovalPolicy.default.requirement(
+                for: assessment,
+                context: ApprovalContext(safeMode: false)
+            ) == .explicitApproval
+        )
     }
 
     @Test
@@ -226,7 +241,80 @@ struct RiskApprovalTests {
         #expect(!decision.authorizes(makeRequest(tier: .tier3, reasons: ["Any reason."])))
     }
 
-    private func makeRequest(tier: CapabilityRiskTier, reasons: [String]) -> RiskApprovalRequest {
+    // MARK: - The requirement axis (SONNY-97)
+
+    /// The third axis's concrete failure, held to exactly the case the first two axes cannot see:
+    /// equal tier, identical reasons, and only the *requirement* stricter — a lightweight
+    /// confirmation answered for a tier-3 action under a relaxation grant, then re-derived as an
+    /// explicit approval after the grant disappeared. The light consent must not be spent as the
+    /// heavy one.
+    @Test
+    func aLightweightAnswerDoesNotAuthorizeAnEqualTierExplicitRequirement() {
+        let answered = makeRequest(
+            tier: .tier3,
+            reasons: ["Shared reason."],
+            requirement: .lightweightConfirmation
+        )
+        let consent = RiskApprovalConsent(answering: answered)
+        let drifted = makeRequest(
+            tier: .tier3,
+            reasons: ["Shared reason."],
+            requirement: .explicitApproval
+        )
+
+        #expect(consent.answeredRequirement == .lightweightConfirmation)
+        #expect(consent.authorizes(answered))
+        #expect(!consent.authorizes(drifted))
+    }
+
+    /// The other direction stays covered: a requirement that is equal, or *looser* than the one
+    /// answered, is strictly less than what the user consented to — re-asking would be a prompt
+    /// with nothing new in it, the same subset logic the reason axis uses.
+    @Test
+    func anAnswerStillCoversAFreshRequirementThatIsEqualOrLooser() {
+        let explicit = RiskApprovalConsent(
+            answering: makeRequest(tier: .tier3, reasons: ["Shared reason."], requirement: .explicitApproval)
+        )
+
+        #expect(explicit.authorizes(
+            makeRequest(tier: .tier3, reasons: ["Shared reason."], requirement: .explicitApproval)
+        ))
+        #expect(explicit.authorizes(
+            makeRequest(tier: .tier3, reasons: ["Shared reason."], requirement: .lightweightConfirmation)
+        ))
+    }
+
+    /// A standing grant has no requirement axis, exactly as it has no reason axis: its consent is a
+    /// pure tier ceiling by decision, and a fresh requirement at or under that ceiling is covered
+    /// whatever its weight. This is what keeps the routine-trust and unattended paths untouched.
+    @Test
+    func aStandingGrantHasNoRequirementAxisToDriftOn() {
+        let grant = RiskApprovalConsent(tier: .tier2, coverage: .standingGrant)
+
+        #expect(grant.answeredRequirement == nil)
+        #expect(grant.authorizes(makeRequest(tier: .tier2, reasons: [], requirement: .lightweightConfirmation)))
+        #expect(grant.authorizes(makeRequest(tier: .tier2, reasons: [], requirement: .explicitApproval)))
+        #expect(!grant.authorizes(makeRequest(tier: .tier3, reasons: ["Any reason."], requirement: .lightweightConfirmation)))
+    }
+
+    /// `init(answering:)` reads the requirement from the same request as the tier and the reasons —
+    /// one source, so no call site can pair a requirement from one prompt with the reasons of
+    /// another.
+    @Test
+    func answeringARequestRecordsItsRequirementFromThatSameRequest() {
+        let request = makeRequest(tier: .tier3, reasons: ["Reason A."], requirement: .lightweightConfirmation)
+        let consent = RiskApprovalConsent(answering: request)
+
+        #expect(consent.tier == .tier3)
+        #expect(consent.coverage == .acknowledgedReasons(["Reason A."]))
+        #expect(consent.answeredRequirement == .lightweightConfirmation)
+    }
+
+    private func makeRequest(
+        tier: CapabilityRiskTier,
+        reasons: [String],
+        requirement: RiskApprovalRequirement? = nil
+    ) -> RiskApprovalRequest {
         let assessment = CapabilityRiskAssessment(
             defaultTier: .tier2,
             // Passed explicitly rather than derived, so a case can pin a tier that its reason list
@@ -234,10 +322,23 @@ struct RiskApprovalTests {
             // handle correctly.
             effectiveTier: tier,
             escalations: reasons.map {
-                CapabilityRiskEscalation(fromTier: .tier2, toTier: .tier3, reason: $0)
+                // `.destructive` throughout: the consent machinery is class-agnostic (it compares
+                // tiers, reason strings, and answered requirements — never classes), and
+                // destructive is the class whose escalations still reach a human's consent at all.
+                CapabilityRiskEscalation(fromTier: .tier2, toTier: .tier3, reason: $0, consequence: .destructive)
             }
         )
-        return RiskApprovalRequest(assessment: assessment, requirement: assessment.approvalRequirement())
+        // `requirement` is likewise explicit where a case needs a weight the mapping would not
+        // produce for this tier — the requirement axis is defense-in-depth for every context
+        // field that bends the mapping (Safe mode today), and the cases pin how consents treat a
+        // weight difference at equal tier whatever produced it.
+        return RiskApprovalRequest(
+            assessment: assessment,
+            requirement: requirement ?? RiskApprovalPolicy.default.requirement(
+                for: assessment,
+                context: ApprovalContext(safeMode: false)
+            )
+        )
     }
 
     @Test

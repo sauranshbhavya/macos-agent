@@ -49,11 +49,11 @@ struct RunningAppAndRecentArtifactsTests {
         #expect(prepared.previews.first?.title == "Switch running app")
         #expect(prepared.previews.first?.details.contains("App: Notion") == true)
 
-        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped, context: approvalContext(for: prepared))
         #expect(request.assessment.effectiveTier == .tier1)
         #expect(request.requirement == .autoRun)
 
-        let result = try await runner.execute(prepared, scope: .unscoped)
+        let result = try await runner.execute(prepared, scope: .unscoped, context: approvalContext(for: prepared))
         #expect(result.summary == "Switched to Notion.")
         #expect(switcher.activatedBundleIdentifiers == ["notion.id"])
     }
@@ -87,7 +87,7 @@ struct RunningAppAndRecentArtifactsTests {
         #expect(prepared.plan.steps[0].resolvedAppName == "Xcode")
         #expect(prepared.plan.steps[0].resolvedBundleIdentifier == "com.apple.dt.Xcode")
 
-        let request = try runner.approvalRequest(for: prepared, scope: scope)
+        let request = try runner.approvalRequest(for: prepared, scope: scope, context: approvalContext(for: prepared))
         #expect(request.assessment.effectiveTier == .tier3)
         #expect(request.assessment.scopeVerdict == .outOfScope)
         #expect(request.assessment.escalations.contains {
@@ -122,13 +122,13 @@ struct RunningAppAndRecentArtifactsTests {
         )
 
         let prepared = try runner.prepare(plan: plan, source: .instantResolver)
-        let request = try runner.approvalRequest(for: prepared, scope: scope)
+        let request = try runner.approvalRequest(for: prepared, scope: scope, context: approvalContext(for: prepared))
         #expect(request.assessment.effectiveTier == .tier1)
         #expect(request.requirement == .autoRun)
         #expect(request.assessment.escalations.isEmpty)
         #expect(request.assessment.scopeVerdict == .inScope)
 
-        let result = try await runner.execute(prepared, scope: scope)
+        let result = try await runner.execute(prepared, scope: scope, context: approvalContext(for: prepared))
         #expect(result.summary == "Switched to Google Chrome.")
         #expect(switcher.activatedBundleIdentifiers == ["com.google.Chrome"])
     }
@@ -160,7 +160,7 @@ struct RunningAppAndRecentArtifactsTests {
         ]
 
         await #expect(throws: RunningAppSwitchError.noMatchingRunningApp("Notion")) {
-            try await runner.execute(prepared, scope: .unscoped)
+            try await runner.execute(prepared, scope: .unscoped, context: approvalContext(for: prepared))
         }
         #expect(switcher.activatedBundleIdentifiers.isEmpty)
     }
@@ -319,11 +319,11 @@ struct RunningAppAndRecentArtifactsTests {
         #expect(prepared.previews.first?.title == "Recent artifacts")
         #expect(prepared.previews.first?.details.contains { $0.contains("research-note.md") } == true)
 
-        let request = try runner.approvalRequest(for: prepared, scope: .unscoped)
+        let request = try runner.approvalRequest(for: prepared, scope: .unscoped, context: approvalContext(for: prepared))
         #expect(request.assessment.effectiveTier == .tier0)
         #expect(request.requirement == .autoRun)
 
-        let result = try await runner.execute(prepared, scope: .unscoped)
+        let result = try await runner.execute(prepared, scope: .unscoped, context: approvalContext(for: prepared))
         #expect(result.summary == "Found 1 recent artifact.")
     }
 
@@ -386,10 +386,19 @@ struct RunningAppAndRecentArtifactsTests {
         let prepared = try runner.prepare(plan: plan, source: .instantResolver)
         #expect(try store.loadAll().isEmpty)
 
-        let result = try await runner.execute(prepared, approvalDecision: .approved(.tier2), scope: .unscoped)
+        let result = try await runner.execute(
+            prepared,
+            approvalDecision: .approved(.tier2),
+            scope: .unscoped,
+            context: approvalContext(for: prepared)
+        )
         #expect(result.summary == "Created local draft at \(output.path).")
         #expect(try store.loadAll().map(\.path) == [output.path])
         #expect(logStore.events.contains { $0.phase == .observe && $0.message == "Recorded 1 recent artifact" })
+    }
+
+    private func approvalContext(for prepared: PreparedAgentRun) -> ApprovalContext {
+        ApprovalContext(safeMode: false)
     }
 
     private func makeDirectory() throws -> URL {

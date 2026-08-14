@@ -89,7 +89,9 @@ public struct LargestFilesZipCapabilityAdapter: CapabilityAdapter {
                 CapabilityRiskEscalation(
                     fromTier: metadata.defaultRiskTier,
                     toTier: .tier3,
-                    reason: "Zip output already exists at \(spec.outputURL.path)."
+                    reason: "Zip output already exists at \(spec.outputURL.path).",
+                    // The write would overwrite an existing file.
+                    consequence: .destructive
                 )
             ]
             : []

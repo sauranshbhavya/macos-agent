@@ -60,16 +60,17 @@ struct ShortcutsBridgeTests {
         let plan = shortcutPlan(name: "Morning Routine")
 
         let prepared = try runner.prepare(plan: plan, source: .instantResolver)
-        let firstRequest = try runner.approvalRequest(for: prepared, scope: .unscoped)
+        let firstRequest = try runner.approvalRequest(for: prepared, scope: .unscoped, context: approvalContext(for: prepared))
         #expect(firstRequest.assessment.effectiveTier == .tier2)
-        #expect(firstRequest.requirement == .lightweightConfirmation)
+        // Tier 2 auto-runs under the consequence rule; the tier movement below is the feature.
+        #expect(firstRequest.requirement == .autoRun)
 
-        let result = try await runner.execute(prepared, approvalDecision: .approved(.tier2), scope: .unscoped)
+        let result = try await runner.execute(prepared, approvalDecision: .approved(.tier2), scope: .unscoped, context: approvalContext(for: prepared))
         #expect(result.summary == "Ran Shortcut Morning Routine.")
         #expect(invoker.invocations.map(\.name) == ["Morning Routine"])
         #expect(try history.hasCleanObservedSuccess(for: "morning routine"))
 
-        let demotedRequest = try runner.approvalRequest(for: prepared, scope: .unscoped)
+        let demotedRequest = try runner.approvalRequest(for: prepared, scope: .unscoped, context: approvalContext(for: prepared))
         #expect(demotedRequest.assessment.effectiveTier == .tier1)
         #expect(demotedRequest.requirement == .autoRun)
     }
@@ -94,12 +95,12 @@ struct ShortcutsBridgeTests {
         let plan = shortcutPlan(name: "Morning Routine")
 
         let prepared = try runner.prepare(plan: plan, source: .instantResolver)
-        let demotedRequest = try runner.approvalRequest(for: prepared, scope: .unscoped)
+        let demotedRequest = try runner.approvalRequest(for: prepared, scope: .unscoped, context: approvalContext(for: prepared))
         #expect(demotedRequest.assessment.effectiveTier == .tier1)
         #expect(demotedRequest.requirement == .autoRun)
 
         do {
-            _ = try await runner.execute(prepared, scope: .unscoped)
+            _ = try await runner.execute(prepared, scope: .unscoped, context: approvalContext(for: prepared))
             Issue.record("Expected failed Shortcut process to throw.")
         } catch ShortcutsBridgeError.invocationFailed(let name, let code, let output) {
             #expect(name == "Morning Routine")
@@ -110,9 +111,9 @@ struct ShortcutsBridgeTests {
         }
 
         #expect(try !history.hasCleanObservedSuccess(for: "Morning Routine"))
-        let resetRequest = try runner.approvalRequest(for: prepared, scope: .unscoped)
+        let resetRequest = try runner.approvalRequest(for: prepared, scope: .unscoped, context: approvalContext(for: prepared))
         #expect(resetRequest.assessment.effectiveTier == .tier2)
-        #expect(resetRequest.requirement == .lightweightConfirmation)
+        #expect(resetRequest.requirement == .autoRun)
     }
 
     @Test
@@ -198,6 +199,10 @@ struct ShortcutsBridgeTests {
             .appendingPathComponent("ShortcutsBridgeTests-\(UUID().uuidString)", isDirectory: true)
         try FileManager.default.createDirectory(at: url, withIntermediateDirectories: true)
         return url
+    }
+
+    private func approvalContext(for prepared: PreparedAgentRun) -> ApprovalContext {
+        ApprovalContext(safeMode: false)
     }
 
     private func makeExecutor(

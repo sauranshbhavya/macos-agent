@@ -17,13 +17,11 @@ public enum ScopeVerdict: String, Codable, Equatable, Sendable, CaseIterable {
     /// That kind *is* configured on this workspace, and the resource matches nothing in it.
     case outOfScope
     /// That kind is not configured on this workspace. Neither permission nor prohibition: it
-    /// produces no escalation, and it is never eligible for the approval relaxation roadmap row C
-    /// builds on top of this model.
+    /// produces no escalation.
     case unconstrained
     /// The resource cannot be named before execution — a Shortcut's internals, the URLs a web search
-    /// has yet to return. It never escalates on scope grounds, because there is nothing to compare;
-    /// it is never eligible for relaxation, because Sonny never saw what it touches; and it poisons
-    /// the plan-level roll-up, so a plan containing one can never be relaxed by association.
+    /// has yet to return. It never escalates on scope grounds, because there is nothing to compare,
+    /// and it poisons the plan-level roll-up.
     case opaque
 }
 
@@ -229,8 +227,7 @@ public struct WorkspaceScope: Equatable, Sendable {
     /// A kind whose canonical list is empty is `.unconstrained`, and that includes the case where
     /// every entry the user configured turned out to be inert: an inert list restricts nothing, so
     /// reporting `.outOfScope` for it would escalate every action of that kind while enforcing
-    /// nothing. `.unconstrained` leaves behavior exactly as it is today and is never relaxable,
-    /// which is the safe reading in both directions.
+    /// nothing. `.unconstrained` leaves behavior exactly as it is today, which is the safe reading.
     public func verdict(for resource: ScopedResource) -> ScopeVerdict {
         switch resource {
         case .app(let rawName):
@@ -477,9 +474,7 @@ public enum WorkspaceScopeEvaluator {
     /// The plan-level roll-up.
     ///
     /// `.inScope` only when every resource was statically knowable, at least one matched, none is
-    /// out of scope, and no step is opaque. That composition is what stops a plan containing a
-    /// Shortcut from being relaxed by association later: Sonny never saw what the Shortcut touches,
-    /// so the plan it sits in can never earn the benefit of a boundary it was never checked against.
+    /// out of scope, and no step is opaque.
     ///
     /// `.outOfScope` outranks `.opaque` because it is the actionable one — a plan with both a
     /// Shortcut and a folder outside the workspace still has something concrete to tell the user

@@ -85,7 +85,9 @@ public struct CreateWorkspaceCapabilityAdapter: CapabilityAdapter {
                 CapabilityRiskEscalation(
                     fromTier: metadata.defaultRiskTier,
                     toTier: .tier3,
-                    reason: "Workspace named \(workspace.name) already exists and would be replaced."
+                    reason: "Workspace named \(workspace.name) already exists and would be replaced.",
+                    // Replace-on-save destroys the workspace the user already built.
+                    consequence: .destructive
                 )
             ]
             : []
@@ -119,10 +121,18 @@ public struct CreateWorkspaceCapabilityAdapter: CapabilityAdapter {
         // unchecked claim about what is live that made the act log look like a fix.
         // `ActionPreview.details` and the act log above are rendered by nothing at all, so the note
         // has to ride here or the ticket's "soft signal at creation" exists only in the model.
-        // Deliberately *not* a `CapabilityRiskEscalation` — all six existing escalation sites
-        // raise a tier, and both approval panels label that line as what raised this above its
-        // default tier, so a same-tier entry would render an informational note in warning colour
-        // under a heading that would then be false.
+        // Deliberately *not* a `CapabilityRiskEscalation` — every existing escalation site raises
+        // a tier (**9 construction sites across 8 files in `Sources/`**, by
+        // `git grep -n "CapabilityRiskEscalation(" -- Sources/` at `1994bba`; matches
+        // `RiskApproval.swift`'s own count of the same population). Two earlier figures stood here
+        // and both were wrong: "all six", which row B's two additions had already made stale, and
+        // "8", which SONNY-98's whitelist-root widening had made stale two commits *before* this
+        // line was written to correct the first one. Neither carried a SHA, which is the whole
+        // reason neither could be told apart from a current count — the rule this line broke twice.
+        // The claim that matters, that every site *raises*, held at all three counts. And both
+        // approval panels label that line as what raised this above its default tier, so a
+        // same-tier entry would render an informational note in warning colour under a heading
+        // that would then be false.
         //
         // The count stays the full listed count: two apps really were saved. Which of them is
         // scope-only is what the note is for.
