@@ -120,13 +120,19 @@ struct AgentRunnerTests {
         #expect(result.summary.hasPrefix("Permission readiness checked."))
     }
 
+    /// The gate-before-execute ordering, kept on the escalation that still gates: under the
+    /// consequence rule (2026-08-13) a collision-free tier-2 zip auto-runs, so the pause this test
+    /// pins is the *destructive* one — the output already exists — and nothing executes until the
+    /// user answers it. (Before the rule this test used a plain tier-2 confirmation for the same
+    /// ordering claim; the claim is unchanged, the fixture had to move to what still asks.)
     @Test
-    func tierTwoCommandRequiresApprovalBeforeRunnerExecutes() async throws {
+    func aDestructiveCollisionRequiresApprovalBeforeRunnerExecutes() async throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         try write("small", to: root.appendingPathComponent("small.txt"))
         try write(String(repeating: "x", count: 2048), to: root.appendingPathComponent("large.txt"))
         let output = root.appendingPathComponent("largest.zip")
+        try write("existing zip", to: output)
         let zipArchiver = RecordingZipArchiver()
         let runner = AgentRunner(
             planner: StaticPlanner(plan: largestPlan(root: root, output: output)),
@@ -138,23 +144,23 @@ struct AgentRunnerTests {
 
         do {
             _ = try await runner.execute(prepared, scope: .unscoped, context: approvalContext(for: prepared))
-            Issue.record("Expected tier 2 execution to require approval.")
+            Issue.record("Expected the destructive collision to require approval.")
         } catch RiskApprovalError.approvalRequired(let approvalRequest) {
-            #expect(approvalRequest.requirement == .lightweightConfirmation)
-            #expect(approvalRequest.assessment.effectiveTier == .tier2)
+            #expect(approvalRequest.requirement == .explicitApproval)
+            #expect(approvalRequest.assessment.effectiveTier == .tier3)
         } catch {
             Issue.record("Expected approvalRequired, got \(error).")
         }
 
-        #expect(request.assessment.effectiveTier == .tier2)
-        #expect(request.requirement == .lightweightConfirmation)
+        #expect(request.assessment.effectiveTier == .tier3)
+        #expect(request.requirement == .explicitApproval)
+        #expect(request.assessment.escalations.map(\.consequence) == [.destructive])
         #expect(zipArchiver.createdArchives.isEmpty)
-        #expect(!FileManager.default.fileExists(atPath: output.path))
 
         _ = try await runner.execute(
             prepared,
             approvalDecision: .approved(answering: request),
-            confirmationMessage: "User approved Tier 2 action",
+            confirmationMessage: "User approved the overwrite",
             scope: .unscoped,
             context: approvalContext(for: prepared)
         )
@@ -163,8 +169,12 @@ struct AgentRunnerTests {
         #expect(FileManager.default.fileExists(atPath: output.path))
     }
 
+    /// The follow-up-correction machinery is the subject: the planner receives the correction and
+    /// the prior context, and the refined plan is the one that runs. Under the consequence rule a
+    /// collision-free tier-2 zip auto-runs, so the corrected plan executes without a prompt — the
+    /// gating half this test used to carry now lives with the destructive fixtures.
     @Test
-    func followUpCorrectionRefinesLargestFilesPlanAndStillRequiresApproval() async throws {
+    func followUpCorrectionRefinesLargestFilesPlanAndAutoRunsUnderTheConsequenceRule() async throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let originalFolder = root.appendingPathComponent("MacAgentDemo")
@@ -195,27 +205,9 @@ struct AgentRunnerTests {
         #expect(planner.receivedPriorTaskContext == priorContext)
         #expect(prepared.plan.steps.first?.inputPath == correctedFolder.path)
         #expect(request.assessment.effectiveTier == .tier2)
-        #expect(request.requirement == .lightweightConfirmation)
+        #expect(request.requirement == .autoRun)
 
-        do {
-            _ = try await runner.execute(prepared, scope: .unscoped, context: approvalContext(for: prepared))
-            Issue.record("Expected corrected tier 2 plan to require approval.")
-        } catch RiskApprovalError.approvalRequired(let approvalRequest) {
-            #expect(approvalRequest.assessment.effectiveTier == .tier2)
-        } catch {
-            Issue.record("Expected approvalRequired, got \(error).")
-        }
-
-        #expect(zipArchiver.createdArchives.isEmpty)
-        #expect(!FileManager.default.fileExists(atPath: output.path))
-
-        _ = try await runner.execute(
-            prepared,
-            approvalDecision: .approved(answering: request),
-            confirmationMessage: "User approved corrected Tier 2 action",
-            scope: .unscoped,
-            context: approvalContext(for: prepared)
-        )
+        _ = try await runner.execute(prepared, scope: .unscoped, context: approvalContext(for: prepared))
 
         #expect(zipArchiver.createdArchives == [output])
         #expect(FileManager.default.fileExists(atPath: output.path))
@@ -319,7 +311,7 @@ struct AgentRunnerTests {
         #expect(assessment.defaultTier == .tier2)
         #expect(assessment.effectiveTier == .tier2)
         #expect(assessment.escalations.isEmpty)
-        #expect(RiskApprovalPolicy.default.requirement(for: assessment, context: ApprovalContext(origin: .planner, safeMode: false)) == .lightweightConfirmation)
+        #expect(RiskApprovalPolicy.default.requirement(for: assessment, context: ApprovalContext(safeMode: false)) == .autoRun)
         #expect(assessment.approvalCopy?.involvedResource.contains(output.path) == true)
     }
 
@@ -348,7 +340,8 @@ struct AgentRunnerTests {
             CapabilityRiskEscalation(
                 fromTier: .tier2,
                 toTier: .tier3,
-                reason: "Zip output already exists at \(output.path)."
+                reason: "Zip output already exists at \(output.path).",
+                consequence: .destructive
             )
         ])
         #expect(logStore.events.contains { event in
@@ -362,10 +355,10 @@ struct AgentRunnerTests {
     /// line: a `contains("risk.escalated")` check would pass on any escalation from any source and
     /// prove nothing about scope.
     ///
-    /// Also pins the gating half of this ticket's contract at the runner level: an out-of-scope plan
-    /// escalates the *assessment* to tier 3 and therefore reaches `.explicitApproval` through the
-    /// ordinary tier mapping. No scope branch was added to the requirement switch — scope changes
-    /// what is assessed, never how the gate reads it.
+    /// Under the consequence rule (2026-08-13) the out-of-scope escalation is advisory: the
+    /// assessment still rises to tier 3 and the `risk.escalated` line still fires — the log stays
+    /// honest — but the requirement is `.autoRun`, and the sentence reaches the user on the
+    /// ran-without-asking trace instead of a prompt.
     @Test
     func anOutOfScopePlanEscalatesThroughTheOrdinaryGateAndLogsItsOwnRiskEvent() async throws {
         let root = try makeDirectory()
@@ -396,7 +389,8 @@ struct AgentRunnerTests {
         let request = try runner.approvalRequest(for: prepared, logAssessment: true, scope: scope, context: approvalContext(for: prepared))
 
         #expect(request.assessment.effectiveTier == .tier3)
-        #expect(request.requirement == .explicitApproval)
+        #expect(request.requirement == .autoRun)
+        #expect(request.assessment.escalations.map(\.consequence) == [.advisory])
         #expect(request.assessment.scopeVerdict == .outOfScope)
         #expect(logStore.events.contains { event in
             event.phase == .risk
@@ -878,7 +872,7 @@ struct AgentRunnerTests {
         #expect(request.assessment.defaultTier == .tier2)
         #expect(request.assessment.effectiveTier == .tier2)
         #expect(request.assessment.escalations.isEmpty)
-        #expect(request.requirement == .lightweightConfirmation)
+        #expect(request.requirement == .autoRun)
     }
 
     @Test
@@ -985,7 +979,7 @@ struct AgentRunnerTests {
     }
 
     @Test
-    func runRoutineTierTwoRequiresApprovalBeforeNestedExecution() async throws {
+    func runRoutineTierTwoAutoRunsItsNestedExecutionUnderTheConsequenceRule() async throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
@@ -999,23 +993,15 @@ struct AgentRunnerTests {
         let prepared = try await runner.prepare(command: "Run my morning setup")
         let request = try runner.approvalRequest(for: prepared, scope: .unscoped, context: approvalContext(for: prepared))
 
-        do {
-            _ = try await runner.execute(prepared, scope: .unscoped, context: approvalContext(for: prepared))
-            Issue.record("Expected run routine to require approval.")
-        } catch RiskApprovalError.approvalRequired(let approvalRequest) {
-            #expect(approvalRequest.requirement == .lightweightConfirmation)
-            #expect(approvalRequest.assessment.effectiveTier == .tier2)
-        } catch {
-            Issue.record("Expected approvalRequired, got \(error).")
-        }
-
+        // Consequence rule (2026-08-13): a tier-2 routine with nothing destructive in it runs
+        // without asking — trusted or not — and the nested execution really happens. The
+        // destructive nested pause keeps its own coverage in
+        // `runRoutineRiskAssessmentFoldsNestedEscalations` below.
         #expect(request.assessment.effectiveTier == .tier2)
-        #expect(request.requirement == .lightweightConfirmation)
-        #expect(appOpener.openedBundleIDs.isEmpty)
+        #expect(request.requirement == .autoRun)
 
         let result = try await runner.execute(
             prepared,
-            approvalDecision: .approved(answering: request),
             scope: .unscoped,
             context: approvalContext(for: prepared)
         )
@@ -1052,7 +1038,8 @@ struct AgentRunnerTests {
             CapabilityRiskEscalation(
                 fromTier: .tier2,
                 toTier: .tier3,
-                reason: "Zip output already exists at \(output.path)."
+                reason: "Zip output already exists at \(output.path).",
+                consequence: .destructive
             )
         ])
         #expect(logStore.events.contains { event in
@@ -1102,7 +1089,8 @@ struct AgentRunnerTests {
             CapabilityRiskEscalation(
                 fromTier: .tier2,
                 toTier: .tier3,
-                reason: "Zip output already exists at \(output.path)."
+                reason: "Zip output already exists at \(output.path).",
+                consequence: .destructive
             )
         ))
 
@@ -1124,6 +1112,11 @@ struct AgentRunnerTests {
         #expect(try routineStore.loadAll().isEmpty)
     }
 
+    /// The chain is assessed and gated as ONE unit before any segment executes. The fixture's
+    /// pause moved to what still asks under the consequence rule — the zip output pre-exists, so
+    /// the whole chain carries a destructive escalation — and the claim is unchanged: neither the
+    /// archive nor the reveal happens until the one approval is answered, and answering it runs
+    /// both segments.
     @Test
     func zipThenRevealChainIsRiskAssessedAndGatedAsOneUnit() async throws {
         let root = try makeDirectory()
@@ -1131,6 +1124,7 @@ struct AgentRunnerTests {
         try write("small", to: root.appendingPathComponent("small.txt"))
         try write(String(repeating: "x", count: 2048), to: root.appendingPathComponent("large.txt"))
         let output = root.appendingPathComponent("largest.zip")
+        try write("existing zip", to: output)
         let marker = root.appendingPathComponent("revealed-marker.txt")
         let zipArchiver = RecordingZipArchiver()
         let registry = try CapabilityRegistry(adapters: [
@@ -1149,14 +1143,14 @@ struct AgentRunnerTests {
             _ = try await runner.execute(prepared, scope: .unscoped, context: approvalContext(for: prepared))
             Issue.record("Expected zip plus reveal chain to require one approval before any segment executes.")
         } catch RiskApprovalError.approvalRequired(let approvalRequest) {
-            #expect(approvalRequest.assessment.effectiveTier == .tier2)
-            #expect(approvalRequest.requirement == .lightweightConfirmation)
+            #expect(approvalRequest.assessment.effectiveTier == .tier3)
+            #expect(approvalRequest.requirement == .explicitApproval)
         } catch {
             Issue.record("Expected approvalRequired, got \(error).")
         }
 
-        #expect(request.assessment.effectiveTier == .tier2)
-        #expect(request.requirement == .lightweightConfirmation)
+        #expect(request.assessment.effectiveTier == .tier3)
+        #expect(request.requirement == .explicitApproval)
         #expect(zipArchiver.createdArchives.isEmpty)
         #expect(!FileManager.default.fileExists(atPath: marker.path))
 
@@ -1170,7 +1164,9 @@ struct AgentRunnerTests {
         #expect(zipArchiver.createdArchives == [output])
         #expect(FileManager.default.fileExists(atPath: output.path))
         #expect(try String(contentsOf: marker, encoding: .utf8) == output.path)
-        #expect(result.summary == "Created largest.zip with 2 largest files from \(root.path). Revealed \(output.path) in Finder.")
+        // Three files, not two: the pre-existing zip that carries the destructive escalation is
+        // itself the third file the scan finds.
+        #expect(result.summary == "Created largest.zip with 3 largest files from \(root.path). Revealed \(output.path) in Finder.")
     }
 
     private func makeExecutor(
@@ -1583,7 +1579,7 @@ struct AgentRunnerTests {
     }
 
     private func approvalContext(for prepared: PreparedAgentRun) -> ApprovalContext {
-        ApprovalContext(origin: prepared.source, safeMode: false)
+        ApprovalContext(safeMode: false)
     }
 }
 

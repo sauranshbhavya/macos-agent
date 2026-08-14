@@ -119,7 +119,9 @@ public struct WebResearchMarkdownCapabilityAdapter: CapabilityAdapter {
                 CapabilityRiskEscalation(
                     fromTier: metadata.defaultRiskTier,
                     toTier: .tier3,
-                    reason: "Markdown output already exists at \(outputURL.path)."
+                    reason: "Markdown output already exists at \(outputURL.path).",
+                    // The write would overwrite an existing file.
+                    consequence: .destructive
                 )
             }
         return CapabilityRiskAssessment(defaultTier: metadata.defaultRiskTier, escalations: escalations)

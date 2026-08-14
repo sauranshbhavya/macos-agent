@@ -1,0 +1,254 @@
+import Foundation
+import Testing
+@testable import MacAgent
+@testable import MacAgentCore
+
+/// The consequence rule driven through the REAL dispatch path, end to end — typed command in,
+/// planner (a fake provider registered through the real registry), `performStart`, the real
+/// assessment, the real gate, the real execution, file on disk out.
+///
+/// This suite exists because of the 2026-08-13 manual-pass finding: row C's relaxation shipped
+/// with 950 green tests pinning the mapping *function* while nothing pinned the product's dispatch
+/// path into it, and the live app never fired the grant. A mapping-level suite can be green while
+/// the product is wrong; these tests are the ones that would have caught it, rebuilt for the rule
+/// that replaced the grants. The `AgentViewModel` whitelist and Safe-mode seams these tests use
+/// were added for exactly this purpose.
+@Suite(.serialized)
+@MainActor
+struct ConsequenceRuleDispatchTests {
+    /// A tier-2 draft inside its own workspace, typed as a command: runs with no prompt, writes
+    /// the file, and leaves the ran-without-asking trace.
+    @Test
+    func anInWorkspaceTierTwoDraftTypedAsACommandAutoRuns() async throws {
+        let fixture = try makeDispatchFixture()
+        defer { fixture.tearDown() }
+        try fixture.workspaceStore.save(
+            StoredWorkspace(
+                name: "Client Alpha",
+                apps: ["Safari"],
+                urls: [],
+                fileLocations: [fixture.projectFolder.path]
+            )
+        )
+        fixture.viewModel.refreshSavedItems()
+
+        fixture.viewModel.command = "Draft notes in Client Alpha"
+        fixture.viewModel.start(workspaceBinding: "Client Alpha")
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.viewModel.approvalRequest == nil)
+        #expect(!fixture.viewModel.isAwaitingApproval)
+        #expect(fixture.viewModel.errorMessage == nil)
+        #expect(fixture.viewModel.lastAssessedScope != .unscoped)
+        #expect(FileManager.default.fileExists(atPath: fixture.draftOutput.path))
+        #expect(fixture.viewModel.ranWithoutAskingTrace
+            == "Ran without asking — nothing here is destructive, and it affects no one else.")
+    }
+
+    /// The identical draft with no workspace bound runs identically — the boundary is data, not a
+    /// gate, so its absence must not re-introduce a prompt.
+    @Test
+    func aPlainUnscopedTierTwoDraftTypedAsACommandAutoRuns() async throws {
+        let fixture = try makeDispatchFixture()
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "Draft notes"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.viewModel.approvalRequest == nil)
+        #expect(!fixture.viewModel.isAwaitingApproval)
+        #expect(fixture.viewModel.errorMessage == nil)
+        #expect(fixture.viewModel.lastAssessedScope == .unscoped)
+        #expect(FileManager.default.fileExists(atPath: fixture.draftOutput.path))
+        #expect(fixture.viewModel.ranWithoutAskingTrace
+            == "Ran without asking — nothing here is destructive, and it affects no one else.")
+    }
+
+    /// The overwrite still prompts — the destructive class keeps today's asking exactly — and
+    /// approving it is what performs the write. No trace: the prompt was the disclosure.
+    @Test
+    func anOverwriteStillPromptsThroughTheRealDispatchPathAndApprovingRunsIt() async throws {
+        let fixture = try makeDispatchFixture()
+        defer { fixture.tearDown() }
+        try "existing draft".write(to: fixture.draftOutput, atomically: true, encoding: .utf8)
+
+        fixture.viewModel.command = "Draft notes"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        let request = try #require(fixture.viewModel.approvalRequest)
+        #expect(request.assessment.effectiveTier == .tier3)
+        #expect(request.assessment.escalations.map(\.consequence) == [.destructive])
+        #expect(request.requirement == .explicitApproval)
+        #expect(try String(contentsOf: fixture.draftOutput, encoding: .utf8) == "existing draft")
+
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(!fixture.viewModel.isAwaitingApproval)
+        #expect(try String(contentsOf: fixture.draftOutput, encoding: .utf8) != "existing draft")
+        #expect(fixture.viewModel.ranWithoutAskingTrace == nil)
+    }
+
+    /// Safe mode makes all three ask — the in-workspace draft, the unscoped draft, and the
+    /// overwrite — through the same real path, reading the same stored property SONNY-90 will back
+    /// with Settings.
+    @Test
+    func safeModeMakesAllThreeAskThroughTheRealDispatchPath() async throws {
+        let fixture = try makeDispatchFixture()
+        defer { fixture.tearDown() }
+        try fixture.workspaceStore.save(
+            StoredWorkspace(
+                name: "Client Alpha",
+                apps: ["Safari"],
+                urls: [],
+                fileLocations: [fixture.projectFolder.path]
+            )
+        )
+        fixture.viewModel.refreshSavedItems()
+        fixture.viewModel.safeModeEnabled = true
+
+        // 1. In-workspace draft.
+        fixture.viewModel.command = "Draft notes in Client Alpha"
+        fixture.viewModel.start(workspaceBinding: "Client Alpha")
+        try await waitForIdle(fixture.viewModel)
+        #expect(fixture.viewModel.approvalRequest?.requirement == .explicitApproval)
+        #expect(!FileManager.default.fileExists(atPath: fixture.draftOutput.path))
+        fixture.viewModel.cancelCurrentRun()
+
+        // 2. Unscoped draft.
+        fixture.viewModel.command = "Draft notes"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+        #expect(fixture.viewModel.approvalRequest?.requirement == .explicitApproval)
+        #expect(!FileManager.default.fileExists(atPath: fixture.draftOutput.path))
+        fixture.viewModel.cancelCurrentRun()
+
+        // 3. The overwrite (asks either way; Safe mode must not make it ask less).
+        try "existing draft".write(to: fixture.draftOutput, atomically: true, encoding: .utf8)
+        fixture.viewModel.command = "Draft notes"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+        #expect(fixture.viewModel.approvalRequest?.requirement == .explicitApproval)
+        #expect(try String(contentsOf: fixture.draftOutput, encoding: .utf8) == "existing draft")
+        fixture.viewModel.cancelCurrentRun()
+    }
+}
+
+// MARK: - Fixture
+
+@MainActor
+private struct DispatchFixture {
+    let viewModel: AgentViewModel
+    let root: URL
+    let projectFolder: URL
+    let draftOutput: URL
+    let workspaceStore: WorkspaceStore
+
+    func tearDown() {
+        try? FileManager.default.removeItem(at: root)
+    }
+}
+
+/// The real view model with three substitutions, each named: a fake planner provider registered
+/// through the real registry (so the typed-command branch of `performStart` runs without a network
+/// key), the fixture root as the whitelist (so the draft is writable hermetically), and the
+/// hermetic side-effect seams every view-model suite injects.
+@MainActor
+private func makeDispatchFixture() throws -> DispatchFixture {
+    let root = FileManager.default.temporaryDirectory
+        .appendingPathComponent("ConsequenceRuleDispatchTests-\(UUID().uuidString)", isDirectory: true)
+    let projectFolder = root.appendingPathComponent("ClientAlpha", isDirectory: true)
+    try FileManager.default.createDirectory(at: projectFolder, withIntermediateDirectories: true)
+    let draftOutput = projectFolder.appendingPathComponent("notes.md")
+
+    let suiteName = "ConsequenceRuleDispatchTests-\(UUID().uuidString)"
+    let userDefaults = try #require(UserDefaults(suiteName: suiteName))
+    userDefaults.removePersistentDomain(forName: suiteName)
+
+    let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
+    let registry = PlannerProviderRegistry(
+        defaultProvider: PlannerProvider(id: "draft-stub", displayName: "Draft Stub") { _ in
+            DraftPlanner(output: draftOutput)
+        }
+    )
+    let viewModel = AgentViewModel(
+        routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
+        workspaceStore: workspaceStore,
+        snippetStore: SnippetStore(fileURL: root.appendingPathComponent("snippets.json")),
+        recentArtifactStore: RecentArtifactStore(fileURL: root.appendingPathComponent("recent-artifacts.json")),
+        shortcutCatalog: EmptyDispatchShortcutCatalog(),
+        browserOpener: HermeticBrowserOpener(),
+        appOpener: HermeticAppOpener(),
+        fileOpener: HermeticFileOpener(),
+        mediaOpener: HermeticMediaOpener(),
+        runningAppSwitcher: HermeticRunningAppSwitcher(),
+        shortcutInvoker: HermeticShortcutInvoker(),
+        finderContextReader: HermeticFinderContextReader(),
+        documentConverter: HermeticDocumentConverter(),
+        zipArchiver: HermeticZipArchiver(),
+        shortcutRunHistoryStore: ShortcutRunHistoryStore(
+            fileURL: root.appendingPathComponent("shortcuts-run-history.json")
+        ),
+        taskHistoryStore: TaskHistoryStore(fileURL: root.appendingPathComponent("task-history.json")),
+        clipboardHistorySettingsStore: ClipboardHistorySettingsStore(
+            fileURL: root.appendingPathComponent("clipboard-history-settings.json")
+        ),
+        localDataDeletionService: LocalDataDeletionService(fileURLs: []),
+        priorTaskContextStore: PriorTaskContextStore(),
+        taskUsageRecorder: TaskUsageRecorder(),
+        plannerProviderRegistry: registry,
+        plannerSelection: nil,
+        userDefaults: userDefaults,
+        whitelist: PathWhitelist(roots: [root])
+    )
+    return DispatchFixture(
+        viewModel: viewModel,
+        root: root,
+        projectFolder: projectFolder,
+        draftOutput: draftOutput,
+        workspaceStore: workspaceStore
+    )
+}
+
+@MainActor
+private func waitForIdle(_ viewModel: AgentViewModel, timeout: TimeInterval = 2) async throws {
+    let deadline = Date(timeIntervalSinceNow: timeout)
+    while viewModel.isRunning {
+        if Date() > deadline {
+            Issue.record("View model did not become idle before timeout.")
+            return
+        }
+        try await Task.sleep(for: .milliseconds(10))
+    }
+}
+
+/// Returns the same tier-2 draft plan for every command — the planner half of the manual-pass
+/// scenario, minus the network.
+private struct DraftPlanner: Planning {
+    let output: URL
+
+    func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
+        AgentPlan(
+            summary: "Draft notes.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "draft",
+                    operation: .createLocalDraft,
+                    description: "Draft notes.",
+                    outputPath: output.path,
+                    draftTitle: "Notes",
+                    draftContent: "Outline for today."
+                )
+            ]
+        )
+    }
+}
+
+private struct EmptyDispatchShortcutCatalog: ShortcutCatalogProviding {
+    func shortcutNames() throws -> [String] {
+        []
+    }
+}

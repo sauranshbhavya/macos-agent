@@ -99,10 +99,10 @@ struct PrebuiltPlanDispatchTests {
     /// escalation and its reason are computed downstream from the plan and the store, and there is
     /// no field on the plan through which a caller could pre-empt any of it. Pinned by running the
     /// real assessment over a screen-built removal and getting the capability's own tier-3 reason
-    /// back, verbatim. Since SONNY-97 the *requirement* does read the origin — a tier-3 removal
-    /// from the sheet drops to a lightweight confirmation under the origin grant — but the
-    /// assessment stays origin-blind, which is exactly what the tier and reason assertions below
-    /// keep pinning.
+    /// back, verbatim. Under the consequence rule (2026-08-13) the requirement no longer reads the
+    /// origin at all — the removal is advisory, so it runs from the sheet and from a typed command
+    /// alike — and the assessment stays origin-blind, which is exactly what the tier and reason
+    /// assertions below keep pinning.
     @Test
     func aScreenBuiltRemovalIsAssessedByTheCapabilityExactlyAsATypedOneIs() async throws {
         let fixture = try Fixture()
@@ -124,14 +124,14 @@ struct PrebuiltPlanDispatchTests {
         let request = try runner.approvalRequest(
             for: prepared,
             scope: .unscoped,
-            context: ApprovalContext(origin: prepared.source, safeMode: false)
+            context: ApprovalContext(safeMode: false)
         )
 
         #expect(request.assessment.effectiveTier == .tier3)
-        // SONNY-97: tier 3 under `.directUserAuthored` maps to the lightweight confirmation — the
-        // weight of the ask changed, the sentence (asserted below, verbatim) did not.
-        #expect(request.requirement == .lightweightConfirmation)
-        #expect(request.relaxationGrant == .directUserAuthored)
+        // Consequence rule (2026-08-13): the removal is advisory, so it runs without asking — the
+        // sentence (asserted below, verbatim) survives on the ran-without-asking trace instead.
+        #expect(request.requirement == .autoRun)
+        #expect(request.assessment.escalations.map(\.consequence) == [.advisory])
         #expect(request.assessment.escalations.map(\.reason) == [
             "Removes Notes from workspace Client Alpha's apps. "
                 + "What is removed stops counting as part of this workspace."
@@ -171,7 +171,7 @@ struct PrebuiltPlanDispatchTests {
         let request = try runner.approvalRequest(
             for: prepared,
             scope: .unscoped,
-            context: ApprovalContext(origin: prepared.source, safeMode: false)
+            context: ApprovalContext(safeMode: false)
         )
 
         #expect(request.assessment.effectiveTier == .tier3)
@@ -182,12 +182,12 @@ struct PrebuiltPlanDispatchTests {
     }
 
     /// An addition stays tier 2 through this path, exactly as it does when typed — the
-    /// one-directional escalation rule is the capability's and the dispatch path does not touch it.
-    /// Since SONNY-97 the tier-2 sheet addition *auto-runs* under the origin grant — the founder's
-    /// 2026-08-07 friction complaint, answered — while the tier assertion keeps pinning that the
-    /// assessment itself never moved.
+    /// one-directional escalation rule is the capability's and the dispatch path does not touch
+    /// it. Under the consequence rule every tier-2 edit auto-runs — the founder's 2026-08-07
+    /// friction complaint, answered by the rule itself rather than by an origin grant — while the
+    /// tier assertion keeps pinning that the assessment itself never moved.
     @Test
-    func aScreenBuiltAdditionStaysAtTierTwoAndAutoRunsUnderTheOriginGrant() async throws {
+    func aScreenBuiltAdditionStaysAtTierTwoAndAutoRuns() async throws {
         let fixture = try Fixture()
         defer { fixture.tearDown() }
         try fixture.store.save(StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: []))
@@ -205,12 +205,11 @@ struct PrebuiltPlanDispatchTests {
         let request = try runner.approvalRequest(
             for: prepared,
             scope: .unscoped,
-            context: ApprovalContext(origin: prepared.source, safeMode: false)
+            context: ApprovalContext(safeMode: false)
         )
 
         #expect(request.assessment.effectiveTier == .tier2)
         #expect(request.requirement == .autoRun)
-        #expect(request.relaxationGrant == .directUserAuthored)
         #expect(request.assessment.escalations.isEmpty)
     }
 
@@ -255,7 +254,7 @@ struct PrebuiltPlanDispatchTests {
         let request = try runner.approvalRequest(
             for: prepared,
             scope: .unscoped,
-            context: ApprovalContext(origin: prepared.source, safeMode: false)
+            context: ApprovalContext(safeMode: false)
         )
 
         // Tier 2, not 3, and no escalation reason naming a loss that did not happen. Under the

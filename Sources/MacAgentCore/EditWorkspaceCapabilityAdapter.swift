@@ -37,17 +37,21 @@ public struct WorkspaceScopeEditRequest: Equatable, Sendable {
 /// Until this capability existed a workspace could only be *created*, so `fileLocations` had no way
 /// of ever being set and one of the three founder-specified scope dimensions did nothing at all.
 ///
-/// **Escalation is one-directional, with one exception row C added.** Adding never raises the tier
-/// — the user typed the command asking for it, and taxing ordinary setup with an approval prompt
-/// would tax exactly the action this feature depends on. Removing does, because removing is the
-/// only half that can weaken a boundary the user is relying on. That asymmetry was a recorded
-/// row-B decision with a forward flag on row C — once relaxation ships, an ungated add is a way to
-/// manufacture relaxation-eligible territory in one un-escalated step — and SONNY-98 is the flag's
-/// answer: adding a `PathWhitelist` root *itself* as a file location escalates to tier 3 (the one
-/// add whose territory is the whole of what Sonny may touch there), and a **boundary-changing**
-/// edit drops the origin grant's eligibility so it cannot auto-run from the workspace sheet. The
-/// ratified rule, one sentence: the origin grant covers edits that move entries *within* a
-/// boundary; it never covers an edit that changes *whether a dimension is a boundary at all*.
+/// **Escalation is one-directional, with one exception SONNY-98 added.** Adding never raises the
+/// tier — the user typed the command asking for it, and taxing ordinary setup with an approval
+/// prompt would tax exactly the action this feature depends on. Removing does, because removing is
+/// the only half that can weaken a boundary the user is relying on. SONNY-98's exception: adding a
+/// `PathWhitelist` root *itself* as a file location escalates to tier 3, the one add whose
+/// territory is the whole of what Sonny may touch there.
+///
+/// **Under the consequence rule (founder directive, 2026-08-13), every escalation here is
+/// `.advisory`: no workspace edit prompts anymore, from the sheet or from a typed command.** A
+/// removal weakens a boundary but destroys no user data and no user-built artifact, and it reaches
+/// nobody else — so it runs, and its reason (the dimension-emptying wording included) surfaces on
+/// the ran-without-asking trace instead of a prompt. This consciously supersedes row C's ratified
+/// boundary-changing-edit gating (the origin-grant narrowing SONNY-98 first shipped is deleted
+/// with the grants themselves); the tier-3 escalations stay because the tier is the severity
+/// signal other gates read, and because their sentences are what the trace names.
 public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
     public init() {}
 
@@ -239,36 +243,35 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
                         workspaceName: edit.stored.name,
                         kind: list.kind,
                         removed: list.effectivelyRemoved
-                    )
+                    ),
+                // Consequence rule (2026-08-13, superseding Q4's week-old ratification — a
+                // recorded coordinator call, founder-vetoable): a workspace-entry removal weakens
+                // a boundary but destroys no user data and no user-built artifact — the workspace
+                // survives, minus one list entry — and it reaches nobody else. Advisory: it runs
+                // without asking, and this sentence (the dimension-emptying variant included)
+                // lands on the ran-without-asking trace instead of a prompt.
+                consequence: .advisory
             )
         }
-        // Row C's one exception to add-never-escalates (SONNY-98): a `PathWhitelist` root itself.
-        // File locations are matched by *containment*, so this single entry converts everything
-        // Sonny may touch under that root into this workspace's scope — and, now that being in
-        // scope reduces prompting, into relaxation-eligible territory. One escalation per added
-        // root, appended after the removal escalations so those stay byte-identical.
+        // SONNY-98's one exception to add-never-escalates: a `PathWhitelist` root itself. File
+        // locations are matched by *containment*, so this single entry converts everything Sonny
+        // may touch under that root into this workspace's scope. One escalation per added root,
+        // appended after the removal escalations so those stay byte-identical.
         let wideningEscalations = edit.lists.flatMap { list in
             list.addedWhitelistRoots.map { root in
                 CapabilityRiskEscalation(
                     fromTier: metadata.defaultRiskTier,
                     toTier: .tier3,
-                    reason: Self.wholeRootWideningReason(workspaceName: edit.stored.name, root: root)
+                    reason: Self.wholeRootWideningReason(workspaceName: edit.stored.name, root: root),
+                    // Consequence rule: widening a boundary destroys nothing and reaches nobody.
+                    // The consequence-naming sentence survives on the trace; the tier still rises.
+                    consequence: .advisory
                 )
             }
         }
         return CapabilityRiskAssessment(
             defaultTier: metadata.defaultRiskTier,
-            escalations: removalEscalations + wideningEscalations,
-            // The origin grant's narrowing (SONNY-98): a boundary-changing edit drops
-            // `byDirectUserOrigin` **only**, leaving `byWorkspaceScope` set — the executor's fold
-            // intersects, so this cannot widen anything, and eligibility is evaluated per grant
-            // downstream (PR #45, F2), which is what makes dropping one bit expressible at all.
-            // `nil` for every other edit: no narrowing declared, the static classification stands,
-            // and the sheet's ordinary adds and one-of-several removals keep their grant — that is
-            // the founder's 2026-08-07 friction complaint staying answered.
-            relaxationEligibility: edit.lists.contains(where: \.changesWhetherTheDimensionIsABoundary)
-                ? [.byWorkspaceScope]
-                : nil
+            escalations: removalEscalations + wideningEscalations
         )
     }
 
@@ -370,13 +373,6 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
         /// pipeline `validateInsideWhitelist` compares through, so no second path arithmetic exists
         /// to drift on `..` or symlinks.
         let addedWhitelistRoots: [String]
-        /// Whether an added file location *subsumes* an entry already stored — folder containment,
-        /// asked of `PathWhitelist.contains` over `canonicalURL` output on both sides, never of a
-        /// second comparison. The added entry silently widens what an existing one covered. Always
-        /// false for `.app` and `.webDomain`, for the asymmetry above. Equal paths cannot reach
-        /// this flag: an addition whose canonical path matches a stored entry is deduplicated by
-        /// `listArithmetic` before it ever lands in `added`.
-        let addedEntrySubsumesAStoredEntry: Bool
 
         /// True when the edit leaves the dimension unconstrained: it was restricting something, and
         /// now it is not.
@@ -392,29 +388,6 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
         /// to wonder which of the two is load-bearing.
         var removalEmptiesTheKind: Bool {
             beforeRestrictsKind && !afterRestrictsKind
-        }
-
-        /// The ratified row-C rule (SONNY-98), as one predicate: does this edit change *whether*
-        /// the dimension is a boundary at all, rather than moving entries within one?
-        ///
-        /// Three triggers, and exactly three — the exclusion list is contract-bounded and must not
-        /// be widened past what is written here:
-        /// - the dimension goes unconstrained → constrained (the edit adds the first entry that
-        ///   *counts*, by the evaluator's canonical answer — an inert addition to an empty
-        ///   dimension changes nothing and does not trigger): it starts escalating, and it starts
-        ///   granting relaxation;
-        /// - the dimension goes constrained → unconstrained (`removalEmptiesTheKind`, the same
-        ///   evaluator-sourced flag the emptying consent reads): it stops escalating on anything;
-        /// - an added file location subsumes a stored entry: what an existing entry covered is
-        ///   silently widened.
-        ///
-        /// Every term here is the evaluator's answer carried by this type, never a re-derivation —
-        /// `entries.isEmpty` and `after.isEmpty` are precisely the two notions of empty that
-        /// diverged three times on row B.
-        var changesWhetherTheDimensionIsABoundary: Bool {
-            (!beforeRestrictsKind && afterRestrictsKind)
-                || removalEmptiesTheKind
-                || addedEntrySubsumesAStoredEntry
         }
     }
 
@@ -619,11 +592,7 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
                 effectivelyRemoved: arithmetic.removed.filter { !inert.contains($0) },
                 addedWhitelistRoots: arithmetic.kind == .fileLocation
                     ? arithmetic.added.filter { Self.isWhitelistRoot($0, whitelist: context.whitelist) }
-                    : [],
-                addedEntrySubsumesAStoredEntry: arithmetic.kind == .fileLocation
-                    && arithmetic.added.contains { addition in
-                        arithmetic.before.contains { Self.addedEntrySubsumes(addition, stored: $0) }
-                    }
+                    : []
             )
         }
 
@@ -659,17 +628,6 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
         return whitelist.roots.contains { root in
             root.resolvingSymlinksInPath().standardizedFileURL.path == canonical
         }
-    }
-
-    /// Whether an added file location contains a stored entry — `PathWhitelist.contains` over
-    /// `canonicalURL` output on both sides, exactly the containment the evaluator matches file
-    /// resources with. A second path comparison that diverged on `..` or symlinks would be a
-    /// security bug, not a style one.
-    private static func addedEntrySubsumes(_ added: String, stored: String) -> Bool {
-        PathWhitelist.contains(
-            root: PathWhitelist.canonicalURL(added),
-            candidate: PathWhitelist.canonicalURL(stored)
-        )
     }
 
     // MARK: - Validation of additions

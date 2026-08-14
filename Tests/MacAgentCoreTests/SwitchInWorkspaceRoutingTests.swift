@@ -294,7 +294,7 @@ struct SwitchInWorkspaceRoutingTests {
         let outOfScope = try runner.approvalRequest(
             for: prepared,
             scope: .scoped(WorkspaceScope(workspace: StoredWorkspace(name: "Switch", apps: ["Chrome"], urls: []))),
-            context: ApprovalContext(origin: prepared.source, safeMode: false)
+            context: ApprovalContext(safeMode: false)
         )
         #expect(outOfScope.assessment.effectiveTier == .tier3)
         #expect(outOfScope.assessment.scopeVerdict == .outOfScope)
@@ -305,7 +305,7 @@ struct SwitchInWorkspaceRoutingTests {
         let inScope = try runner.approvalRequest(
             for: prepared,
             scope: .scoped(WorkspaceScope(workspace: StoredWorkspace(name: "Switch", apps: ["Xcode"], urls: []))),
-            context: ApprovalContext(origin: prepared.source, safeMode: false)
+            context: ApprovalContext(safeMode: false)
         )
         #expect(inScope.assessment.effectiveTier == .tier1)
         #expect(inScope.assessment.scopeVerdict == .inScope)

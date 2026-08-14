@@ -398,7 +398,7 @@ struct RunningAppAndRecentArtifactsTests {
     }
 
     private func approvalContext(for prepared: PreparedAgentRun) -> ApprovalContext {
-        ApprovalContext(origin: prepared.source, safeMode: false)
+        ApprovalContext(safeMode: false)
     }
 
     private func makeDirectory() throws -> URL {

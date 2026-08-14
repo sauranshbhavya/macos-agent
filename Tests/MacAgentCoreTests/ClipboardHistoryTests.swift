@@ -151,7 +151,7 @@ struct ClipboardHistoryTests {
         let request = try runner.approvalRequest(
             for: prepared,
             scope: .unscoped,
-            context: ApprovalContext(origin: prepared.source, safeMode: false)
+            context: ApprovalContext(safeMode: false)
         )
         #expect(request.assessment.effectiveTier == .tier0)
         #expect(request.requirement == .autoRun)
@@ -159,7 +159,7 @@ struct ClipboardHistoryTests {
         let result = try await runner.execute(
             prepared,
             scope: .unscoped,
-            context: ApprovalContext(origin: prepared.source, safeMode: false)
+            context: ApprovalContext(safeMode: false)
         )
         #expect(result.summary == "Found 1 clipboard item.")
     }

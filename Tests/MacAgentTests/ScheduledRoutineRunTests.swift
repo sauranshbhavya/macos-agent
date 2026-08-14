@@ -686,15 +686,22 @@ struct ScheduledRoutineRunTests {
         #expect(try fixture.routineStore.routine(named: "Morning").schedule?.unattendedTrusted == true)
     }
 
-    // MARK: - Manual runs of a trusted routine (SONNY-54)
+    // MARK: - Manual runs and the trust toggle (SONNY-54, under the consequence rule)
+    //
+    // The consequence rule (2026-08-13) subsumed the toggle's *manual* half: a tier-2 routine
+    // runs by hand without asking whether or not it is trusted, because nothing tier-2 asks
+    // anymore. What the toggle still governs is the unattended path (a schedule fires only under
+    // it) and nothing else — its manual-run door closed because every manual tier-2 door did.
+    // The trust *ceiling* is untouched and still observable: a destructive routine step prompts
+    // by hand, trusted or not (`aTrustedTierThreeRoutineStillPromptsWhenRunByHand` below).
 
-    /// The headline behavior: a routine the user marked trusted runs by hand with no tier-2
-    /// prompt, carrying the same `.approved(.tier2)` decision its scheduled runs already carry —
-    /// and none of the *scheduled* run's bookkeeping. A manual run is the user's own task: it
-    /// reports through `finalSummary`, never through `scheduledRunNotice`, and it must not
-    /// advance the streak history or the catch-up baseline that belong to the schedule.
+    /// A tier-2 routine run by hand completes with no prompt — through the ordinary consequence-
+    /// rule auto-run, not through the trust decision — and none of the *scheduled* run's
+    /// bookkeeping moves. A manual run is the user's own task: it reports through `finalSummary`,
+    /// never through `scheduledRunNotice`, and it must not advance the streak history or the
+    /// catch-up baseline that belong to the schedule.
     @Test
-    func aTrustedRoutineRunByHandSkipsTheTierTwoPrompt() async throws {
+    func aTierTwoRoutineRunByHandRunsWithoutAskingTrustedOrNot() async throws {
         let fixture = try makeFixture()
         defer { fixture.cleanUp() }
         try fixture.saveRoutine(unattendedTrusted: true)
@@ -708,8 +715,9 @@ struct ScheduledRoutineRunTests {
         #expect(fixture.viewModel.isAwaitingApproval == false)
         #expect(fixture.viewModel.finalSummary.contains("Ran routine Morning"))
         #expect(fixture.viewModel.errorMessage == nil)
-        // It went through the trust decision, not the plain auto-run path a tier-0 command takes.
-        #expect(fixture.viewModel.logStore.events.contains {
+        // The ordinary auto-run, not the trust decision: nothing tier-2 asks, so the trust check
+        // never authorizes anything on the manual path anymore.
+        #expect(!fixture.viewModel.logStore.events.contains {
             $0.message == "Manual run approved by this routine's trust setting"
         })
         // No approval UI was involved, so the first-approval education state is untouched.
@@ -730,21 +738,35 @@ struct ScheduledRoutineRunTests {
         #expect(history.first?.outcomeStatus == .completed)
     }
 
-    /// Untrusted means unchanged: the same manual dispatch still pauses at the tier-2 prompt, and
-    /// approving it still runs the routine — the whole prompt-then-approve flow is byte-identical
-    /// to before trust covered manual runs.
+    /// The prompt-then-approve flow on the manual routine path, kept on what still asks: an
+    /// untrusted routine whose step would *replace* an existing snippet pauses at the destructive
+    /// prompt, and approving it runs the routine. (Before the consequence rule this flow was
+    /// exercised by the plain tier-2 confirmation, which no longer exists.)
     @Test
-    func anUntrustedRoutineStillPromptsWhenRunByHandAndApprovingRunsIt() async throws {
+    func anUntrustedRoutineWithADestructiveStepPromptsWhenRunByHandAndApprovingRunsIt() async throws {
         let fixture = try makeFixture()
         defer { fixture.cleanUp() }
-        try fixture.saveRoutine(unattendedTrusted: false)
+        try fixture.snippetStore.save(StoredSnippet(trigger: ";sig", expansion: "Old text"))
+        try fixture.saveRoutine(
+            unattendedTrusted: false,
+            steps: [
+                AgentStep(
+                    id: "snippet",
+                    operation: .saveSnippet,
+                    description: "Save snippet ;sig.",
+                    searchQuery: ";sig",
+                    draftContent: "New text"
+                )
+            ]
+        )
         let routine = try fixture.routineStore.routine(named: "Morning")
 
         fixture.viewModel.runRoutineWidget(routine)
         try await fixture.waitForIdle()
 
         let request = try #require(fixture.viewModel.approvalRequest)
-        #expect(request.assessment.effectiveTier == .tier2)
+        #expect(request.assessment.effectiveTier == .tier3)
+        #expect(request.assessment.escalations.map(\.consequence) == [.destructive])
         #expect(fixture.viewModel.finalSummary == "Approval needed before Sonny can act.")
         #expect(!fixture.viewModel.logStore.events.contains {
             $0.message == "Manual run approved by this routine's trust setting"
@@ -755,13 +777,14 @@ struct ScheduledRoutineRunTests {
 
         #expect(fixture.viewModel.approvalRequest == nil)
         #expect(fixture.viewModel.finalSummary.contains("Ran routine Morning"))
+        #expect(try fixture.snippetStore.snippet(matchingTrigger: ";sig").expansion == "New text")
     }
 
-    /// A routine with no schedule has no trust grant at all — `unattendedTrusted` lives on the
-    /// schedule, and this ticket deliberately added no new persisted state — so its manual runs
-    /// keep the full prompt.
+    /// A routine with no schedule — and therefore nowhere for a trust grant to live — runs by
+    /// hand exactly like every other tier-2 routine: without asking. Pins that the manual path
+    /// needs no schedule record at all.
     @Test
-    func aRoutineWithoutAScheduleStillPromptsWhenRunByHand() async throws {
+    func aRoutineWithoutAScheduleRunsByHandWithoutAsking() async throws {
         let fixture = try makeFixture()
         defer { fixture.cleanUp() }
         try fixture.routineStore.save(StoredRoutine(name: "Morning", steps: [fixture.inertStep]))
@@ -770,17 +793,19 @@ struct ScheduledRoutineRunTests {
         fixture.viewModel.runRoutineWidget(routine)
         try await fixture.waitForIdle()
 
-        #expect(fixture.viewModel.approvalRequest != nil)
-        #expect(fixture.viewModel.finalSummary == "Approval needed before Sonny can act.")
+        #expect(fixture.viewModel.approvalRequest == nil)
+        #expect(fixture.viewModel.finalSummary.contains("Ran routine Morning"))
     }
 
-    /// Coordinator ruling (PR #34 review cycle 2, F4, 2026-08-07): a disabled schedule with trust
-    /// still on covers manual runs — **intended**. Trust is the routine's standing consent;
-    /// disabling the schedule suspends *runs*, not consent, consistent with the label's
-    /// "scheduled or manual". Both directions pinned: the grant survives the schedule being
-    /// switched off, and revoking trust restores the prompt regardless of the schedule's state.
+    /// The schedule's enabled state and the trust toggle no longer change a manual tier-2 run in
+    /// either direction — disabled-and-trusted runs, and revoking trust with the schedule still
+    /// off runs too. This deliberately supersedes the manual half of the F4 coordinator ruling
+    /// (PR #34 review cycle 2, 2026-08-07: "a disabled schedule with trust still on covers manual
+    /// runs"): under the consequence rule nothing tier-2 asks, so there is no manual prompt left
+    /// for trust to cover or its revocation to restore. The toggle's remaining door is the
+    /// unattended one, pinned by the scheduled-run tests above.
     @Test
-    func aDisabledScheduleLeavesTheTrustGrantCoveringManualRuns() async throws {
+    func neitherScheduleStateNorTrustChangesAManualTierTwoRunAnymore() async throws {
         let fixture = try makeFixture()
         defer { fixture.cleanUp() }
         // Disabled by the user (the initializer's default activation), trusted.
@@ -802,7 +827,7 @@ struct ScheduledRoutineRunTests {
         #expect(fixture.viewModel.approvalRequest == nil)
         #expect(fixture.viewModel.finalSummary.contains("Ran routine Morning"))
 
-        // Revoking trust restores the prompt, schedule still off.
+        // Revoking trust changes nothing manual either, schedule still off.
         fixture.viewModel.setRoutineUnattendedTrust(routine, to: false)
         let revoked = try fixture.routineStore.routine(named: "Morning")
         #expect(revoked.schedule?.isEnabled == false)
@@ -811,8 +836,8 @@ struct ScheduledRoutineRunTests {
         fixture.viewModel.runRoutineWidget(revoked)
         try await fixture.waitForIdle()
 
-        #expect(fixture.viewModel.approvalRequest != nil)
-        #expect(fixture.viewModel.finalSummary == "Approval needed before Sonny can act.")
+        #expect(fixture.viewModel.approvalRequest == nil)
+        #expect(fixture.viewModel.finalSummary.contains("Ran routine Morning"))
     }
 
     /// The tier-3+ backstop on the manual path, end to end: trust never covers an escalated

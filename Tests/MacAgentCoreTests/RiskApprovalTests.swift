@@ -20,32 +20,36 @@ struct RiskApprovalTests {
         }
     }
 
-    /// The baseline tier mapping, asked through the one public path (SONNY-97 demoted the tier-only
-    /// `requirement(for:)` to private): a bare assessment carries no eligibility and no verdict, so
-    /// no grant can fire and the answer *is* the baseline.
+    /// The consequence rule on bare, escalation-free assessments, asked through the one public
+    /// path: tiers 0–2 auto-run, an escalation-free tier 3 fails closed to an explicit ask
+    /// (nothing classified means nothing to run silently on), and tier 4 refuses.
     @Test
-    func defaultPolicyKeepsTierZeroAndOneAutonomous() {
+    func escalationFreeTiersMapToTheConsequenceRulesDefaults() {
         let policy = RiskApprovalPolicy.default
-        let context = ApprovalContext(origin: .planner, safeMode: false)
+        let context = ApprovalContext(safeMode: false)
 
         #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier0), context: context) == .autoRun)
         #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier1), context: context) == .autoRun)
-        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier2), context: context) == .lightweightConfirmation)
+        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier2), context: context) == .autoRun)
         #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier3), context: context) == .explicitApproval)
         #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier4), context: context) == .refuse)
     }
 
+    /// The policy dials are inert on the ordinary path under the consequence rule — a tightened
+    /// tier 1 and a preview-only tier 2 both auto-run; the stricter tier-2 dial survives only
+    /// inside Safe mode, where the formula takes the stricter of baseline and floor. (Whether the
+    /// dials should now be deleted outright is the founder's call, flagged in the pivot records.)
     @Test
-    func policyCanTightenTierOneAndPreviewTierTwo() {
+    func thePolicyDialsAreInertOnTheOrdinaryPath() {
         let policy = RiskApprovalPolicy(
             requireApprovalForTier1: true,
             tier2Mode: .previewOnly
         )
-        let context = ApprovalContext(origin: .planner, safeMode: false)
 
-        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier0), context: context) == .autoRun)
-        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier1), context: context) == .lightweightConfirmation)
-        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier2), context: context) == .previewOnly)
+        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier0), context: ApprovalContext(safeMode: false)) == .autoRun)
+        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier1), context: ApprovalContext(safeMode: false)) == .autoRun)
+        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier2), context: ApprovalContext(safeMode: false)) == .autoRun)
+        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier2), context: ApprovalContext(safeMode: true)) == .previewOnly)
     }
 
     @Test
@@ -56,7 +60,8 @@ struct RiskApprovalTests {
                 CapabilityRiskEscalation(
                     fromTier: .tier2,
                     toTier: .tier3,
-                    reason: "Output file already exists."
+                    reason: "Output file already exists.",
+                    consequence: .destructive
                 )
             ]
         )
@@ -66,7 +71,7 @@ struct RiskApprovalTests {
         #expect(
             RiskApprovalPolicy.default.requirement(
                 for: assessment,
-                context: ApprovalContext(origin: .planner, safeMode: false)
+                context: ApprovalContext(safeMode: false)
             ) == .explicitApproval
         )
     }
@@ -317,17 +322,21 @@ struct RiskApprovalTests {
             // handle correctly.
             effectiveTier: tier,
             escalations: reasons.map {
-                CapabilityRiskEscalation(fromTier: .tier2, toTier: .tier3, reason: $0)
+                // `.destructive` throughout: the consent machinery is class-agnostic (it compares
+                // tiers, reason strings, and answered requirements — never classes), and
+                // destructive is the class whose escalations still reach a human's consent at all.
+                CapabilityRiskEscalation(fromTier: .tier2, toTier: .tier3, reason: $0, consequence: .destructive)
             }
         )
-        // `requirement` is likewise explicit where a case needs a weight the baseline would not
-        // produce for this tier — a lightweight tier-3 ask is exactly what a relaxation grant
-        // makes real (SONNY-97), and the requirement-axis cases pin how consents treat it.
+        // `requirement` is likewise explicit where a case needs a weight the mapping would not
+        // produce for this tier — the requirement axis is defense-in-depth for every context
+        // field that bends the mapping (Safe mode today), and the cases pin how consents treat a
+        // weight difference at equal tier whatever produced it.
         return RiskApprovalRequest(
             assessment: assessment,
             requirement: requirement ?? RiskApprovalPolicy.default.requirement(
                 for: assessment,
-                context: ApprovalContext(origin: .planner, safeMode: false)
+                context: ApprovalContext(safeMode: false)
             )
         )
     }

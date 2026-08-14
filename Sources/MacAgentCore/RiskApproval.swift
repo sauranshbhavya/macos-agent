@@ -54,7 +54,7 @@ public enum RiskApprovalRequirement: String, Codable, CaseIterable, Equatable, S
         }
     }
 
-    /// The permissiveness rank every relaxation property is stated on (SONNY-97): how much happens
+    /// The permissiveness rank every approval property is stated on (SONNY-97): how much happens
     /// without further gating. `previewOnly` sits *below* `explicitApproval` because nothing ever
     /// runs under it — an explicit approval can still end in execution; a preview cannot.
     var permissivenessRank: Int {
@@ -96,15 +96,18 @@ public struct RiskApprovalPolicy: Codable, Equatable, Sendable {
         self.tier2Mode = tier2Mode
     }
 
-    /// The tier-only baseline — the sanctioned internal sub-call `requirement(for:context:)`
-    /// delegates to, and nothing else.
+    /// The tier-only baseline. Since the consequence rule (2026-08-13) its sole caller is
+    /// `safeModeRequirement(for:)` — the ordinary path maps tiers directly and no longer consults
+    /// it, which also means `requireApprovalForTier1` has **no observable effect anywhere** (its
+    /// tightening is subsumed by Safe mode's floor) and `tier2Mode == .previewOnly` shows only
+    /// under Safe mode. Both dials are kept pending a founder decision on deleting them — flagged
+    /// in the pivot's closing records rather than removed unilaterally.
     ///
-    /// **Demoted from `public` on SONNY-97, deliberately.** Tier-only and context-free, this is
-    /// row B's "never two chained rules" violation in miniature: any caller outside this file that
-    /// could reach it would be a second public path to a requirement, bypassing Safe mode, both
-    /// grants, and every future `ApprovalContext` field (per-app consent lands there on row I).
-    /// `private` scopes it to this file, so the compiler — not a convention — is what enforces
-    /// "exactly one public function produces a `RiskApprovalRequirement`" (I8).
+    /// **Demoted from `public` on SONNY-97, deliberately.** Tier-only and context-free, any caller
+    /// outside this file would be a second public path to a requirement, bypassing Safe mode and
+    /// every future `ApprovalContext` field (per-app consent lands there on row I). `private`
+    /// scopes it to this file, so the compiler — not a convention — is what enforces "exactly one
+    /// public function produces a `RiskApprovalRequirement`" (I8).
     private func requirement(for tier: CapabilityRiskTier) -> RiskApprovalRequirement {
         switch tier {
         case .tier0:
@@ -182,26 +185,14 @@ public struct RiskApprovalRequest: Codable, Equatable, Sendable {
     public var assessment: CapabilityRiskAssessment
     public var requirement: RiskApprovalRequirement
     public var approvalCopy: RiskApprovalCopy
-    /// The relaxation grant `requirement` was derived under (SONNY-97) — the carrier SONNY-99's
-    /// ran-without-asking trace reads, populated at the one deriving site
-    /// (`AgentRunner.approvalRequest`) from the same assessment and context that produced
-    /// `requirement`, so the two cannot disagree on one request. `.none` under Safe mode, because
-    /// no grant applied there (I5). **Reporting only, never an authorization input** — nothing may
-    /// read this to gate anything; the requirement already *is* the grant's whole effect (I8).
-    ///
-    /// Defaulted `.none` for the construction sites that never derive one (tests building a request
-    /// around a hand-made assessment) — the honest value for a request no grant was computed for.
-    public var relaxationGrant: RelaxationGrant
 
     public init(
         assessment: CapabilityRiskAssessment,
         requirement: RiskApprovalRequirement,
-        approvalCopy: RiskApprovalCopy? = nil,
-        relaxationGrant: RelaxationGrant = .none
+        approvalCopy: RiskApprovalCopy? = nil
     ) {
         self.assessment = assessment
         self.requirement = requirement
-        self.relaxationGrant = relaxationGrant
         self.approvalCopy = approvalCopy ?? assessment.approvalCopy ?? RiskApprovalCopy(
             actionDescription: "Run the prepared plan",
             riskReason: assessment.effectiveTier.semanticName,
@@ -242,21 +233,32 @@ public struct RiskApprovalConsent: Codable, Equatable, Sendable {
         /// escalation any adapter or the scope evaluator produces targets tier 3, so an assessment
         /// at or below tier 2 carries no escalations for either rule to compare. They diverge only
         /// if a tier-2 escalation is ever added, and this case records which answer that day gets.)
+        ///
+        /// The consequence rule (2026-08-13) leans on the same ceiling from the other side: an
+        /// advisory-only tier 3 auto-runs when a user dispatched it, but no unattended run can
+        /// *reach* one — a scheduled run is `.unscoped` (no out-of-scope advisories) and
+        /// `StoredRoutine.forbiddenStepOperations` rejects `edit_workspace` (no removal or
+        /// widening advisories) — so every escalation an unattended run can raise is one of the
+        /// destructive replace/collision family, which still asks, and which this tier-2 ceiling
+        /// still refuses. Reachability, not a type-level guarantee; pinned by a named test.
         case standingGrant
 
         /// One prompt, answered by a human who was shown exactly these escalation reasons.
         ///
-        /// **The empty set is the ordinary shape, not an edge case** — a tier-2 confirmation raises
-        /// no escalations at all, so its prompt names no reasons. It is still a different statement
-        /// from `standingGrant`: this one says a human answered a prompt that named nothing, that
-        /// one says no prompt was answered. **But as of SONNY-62 the difference cannot change an
-        /// authorize/deny outcome, and claiming it could was this file's own first mistake.** For
-        /// the two to disagree on an outcome, a consent would need a tier-3 ceiling with an empty
-        /// acknowledged set. No adapter can produce that assessment: no `defaultTier` anywhere can
-        /// reach tier 3, while all eight `CapabilityRiskEscalation` construction sites target tier
-        /// 3 and each assessment forwards the escalations of any plan nested inside it — so a
-        /// tier-3 assessment always carries at least one reason, and a non-empty reason set always
-        /// means tier 3.
+        /// **The empty set is a real shape, not an edge case** — under the consequence rule the
+        /// prompts that name no reasons are Safe mode's (every tier that could run asks there,
+        /// escalations or not; before the rule, every ordinary tier-2 confirmation was this shape
+        /// too). It is still a different statement from `standingGrant`: this one says a human
+        /// answered a prompt that named nothing, that one says no prompt was answered. **But as of
+        /// SONNY-62 the difference cannot change an authorize/deny outcome, and claiming it could
+        /// was this file's own first mistake.** For the two to disagree on an outcome, a consent
+        /// would need a tier-3 ceiling with an empty acknowledged set. No adapter can produce that
+        /// assessment: no `defaultTier` anywhere can reach tier 3, while all nine
+        /// `CapabilityRiskEscalation` construction sites target tier 3 (the eight counted at
+        /// `04ce7e4` plus SONNY-98's whitelist-root widening; re-swept at `972c62a`) and each
+        /// assessment forwards the escalations of any plan nested inside it — so a tier-3
+        /// assessment always carries at least one reason, and a non-empty reason set always means
+        /// tier 3.
         ///
         /// **Why no `defaultTier` reaches tier 3.** Swept at `04ce7e4` — and first at `042f74e`,
         /// before this branch rebased onto row F, which edited several of the files counted here and
@@ -286,9 +288,11 @@ public struct RiskApprovalConsent: Codable, Equatable, Sendable {
     public var tier: CapabilityRiskTier
     public var coverage: Coverage
     /// The *requirement* the user actually answered — the third axis (SONNY-97), recorded because
-    /// row C ended the implication "same tier means same requirement": a tier-3 ask can now be a
-    /// lightweight confirmation under a relaxation grant, and a light consent must not be spent as
-    /// an explicit approval at equal tier the moment the grant disappears.
+    /// the requirement stopped being a pure function of the tier: first through row C's grants
+    /// (since superseded), now through `ApprovalContext` (Safe mode today, per-app consent on row
+    /// I) and the escalations' consequence classes. A consent given to a lighter ask must never be
+    /// spent on a stricter one at equal tier, whatever produced the difference — the axis is
+    /// defense-in-depth for every context field that will ever bend the mapping.
     ///
     /// `nil` for a standing grant, which never answered a prompt — its consent is a pure tier
     /// ceiling by decision (see `Coverage.standingGrant`), and the requirement axis is simply not
@@ -347,11 +351,12 @@ public struct RiskApprovalConsent: Codable, Equatable, Sendable {
     /// 2. Every escalation reason in `request` is one this consent already acknowledged.
     /// 3. `request`'s freshly derived requirement is not *stricter* than the one this consent
     ///    answered — including at equal tier, which is the case the first two checks cannot see
-    ///    (SONNY-97). Before row C the requirement was a pure function of the tier, so "same tier"
-    ///    implied "same requirement" and this axis had nothing to compare; a relaxation grant ends
-    ///    that implication, and the concrete failure is a lightweight confirmation answered for a
-    ///    tier-3 action being spent as an explicit approval after the grant disappears. Skipped for
-    ///    a standing grant, whose consent is a pure tier ceiling on both other axes too.
+    ///    (SONNY-97). The requirement stopped being a pure function of the tier — first through
+    ///    row C's grants (superseded 2026-08-13), now through `ApprovalContext` and the
+    ///    escalations' consequence classes — so "same tier" no longer implies "same requirement",
+    ///    and a light consent must not be spent on a stricter fresh ask, whatever bent the
+    ///    mapping. Skipped for a standing grant, whose consent is a pure tier ceiling on both
+    ///    other axes too.
     ///
     /// **Subset, not equality.** A reason that *disappeared* between the prompt and the execution
     /// means the world got less risky along that axis — the user consented to strictly more than is
@@ -439,75 +444,60 @@ public enum RiskApprovalError: Error, Equatable, LocalizedError {
 }
 
 public struct CapabilityRiskEscalation: Codable, Equatable, Sendable {
+    /// What kind of consequence this escalation is warning about — the axis the founder's
+    /// consequence rule (2026-08-13) gates on. Sonny asks permission only when an action is
+    /// **destructive** (destroys or replaces existing user data or user-built artifacts) or
+    /// **affects someone other than the user** (send/post/share/publish/purchase). Everything else
+    /// runs without asking and is made legible by the ran-without-asking trace instead.
+    public enum Consequence: String, Codable, CaseIterable, Equatable, Sendable {
+        /// Destroys or replaces something the user already has: a file overwrite, a
+        /// replace-on-save of a routine/workspace/snippet, a deletion. Always asks — there is no
+        /// relaxing this class.
+        case destructive
+        /// Reaches someone other than the user: send, post, share, publish, purchase. **Armed but
+        /// empty today** — no v1 capability can affect anyone but the user, so no construction
+        /// site carries this class yet. It exists now so that when vision actions arrive, their
+        /// escalations classify into a class that already asks, rather than needing the rule
+        /// rebuilt under time pressure.
+        case affectsOthers = "affects_others"
+        /// A fact worth telling the user, not a consent worth interrupting them for: an
+        /// out-of-scope resource, a workspace-entry removal, a whitelist-root widening. Advisory
+        /// escalations still raise `effectiveTier` honestly (the tier stays a true severity
+        /// signal, and the unattended tier-2 ceiling still reads it) — they just don't prompt on
+        /// their own; their reason surfaces on the ran-without-asking trace instead.
+        case advisory
+
+        /// Whether this class keeps the prompt. Exhaustive with no `default:` on purpose: a new
+        /// consequence class must decide whether it asks, or the build fails.
+        var asksFirst: Bool {
+            switch self {
+            case .destructive, .affectsOthers:
+                return true
+            case .advisory:
+                return false
+            }
+        }
+    }
+
     public var fromTier: CapabilityRiskTier
     public var toTier: CapabilityRiskTier
     public var reason: String
+    /// Non-defaulted in the initializer deliberately: every construction site must classify its
+    /// consequence, so a new escalation cannot land unclassified — the same fail-closed shape
+    /// `PlanScopedResources` and the old per-operation classification used. When genuinely unsure,
+    /// classify `.destructive`/`.affectsOthers` (fail closed: ask) and flag it, never `.advisory`.
+    public var consequence: Consequence
 
-    public init(fromTier: CapabilityRiskTier, toTier: CapabilityRiskTier, reason: String) {
+    public init(
+        fromTier: CapabilityRiskTier,
+        toTier: CapabilityRiskTier,
+        reason: String,
+        consequence: Consequence
+    ) {
         self.fromTier = fromTier
         self.toTier = toTier
         self.reason = reason
-    }
-}
-
-/// Which relaxation grants an operation may ever take (SONNY-97, row C).
-///
-/// The verdict grant is protected by the verdict machinery itself — `.opaque` poisons the plan
-/// roll-up, `.unconstrained` and `nil` never qualify. The origin grant has none of that protection,
-/// because it bypasses scope entirely; this set is its fail-closed containment, and the verdict
-/// grant takes the same gate for uniformity. Each bit gates exactly one grant, and they are
-/// independent on purpose: SONNY-98 narrows a boundary-changing workspace edit by dropping
-/// `byDirectUserOrigin` *alone*, leaving `byWorkspaceScope` set, so nothing here may collapse the
-/// two into one "eligible at all" answer (PR #45 review, F2).
-public struct OperationRelaxation: OptionSet, Codable, Equatable, Sendable {
-    public let rawValue: Int
-
-    public init(rawValue: Int) {
-        self.rawValue = rawValue
-    }
-
-    /// The operation may take `.inScopeWorkspace` — the founder charter's verdict grant.
-    public static let byWorkspaceScope = OperationRelaxation(rawValue: 1 << 0)
-    /// The operation may take `.directUserAuthored` — the screen-built-plan origin grant.
-    public static let byDirectUserOrigin = OperationRelaxation(rawValue: 1 << 1)
-
-    public static let all: OperationRelaxation = [.byWorkspaceScope, .byDirectUserOrigin]
-
-    /// The static classification: what each operation may ever take, before any adapter narrows it.
-    ///
-    /// `byWorkspaceScope` is a **denylist** — every operation except `.runRoutine` and
-    /// `.invokeShortcut`. `.runRoutine` loses it deliberately: SONNY-54's founder decision
-    /// (2026-08-06) made the per-routine trust toggle the single door for skipping a routine's
-    /// tier-2 prompt, scheduled *or* manual, and without this exclusion an untrusted routine running
-    /// inside a workspace would auto-run through a second door the founder never opened — on its
-    /// first run, with its arbitrary steps unreviewed. Scope answers "right place", never "right
-    /// severity" — and never "right thing". The cost is recorded and accepted: a user may ask why
-    /// their routine still confirms inside a workspace where typing the same command does not.
-    /// `.invokeShortcut` loses it too — belt-and-braces for the verdict grant (a scoped Shortcut is
-    /// already `.opaque`) but load-bearing for the origin grant, which never consults the verdict.
-    ///
-    /// `byDirectUserOrigin` is an **allowlist** — only `.editWorkspace`, the one operation a screen
-    /// builds field by field today. A future surface's operation joins by conscious classification
-    /// here, never by falling into a wider bucket.
-    ///
-    /// **No `default:` clause, for the reason `PlanScopedResources` already refuses one**: a new
-    /// operation must not be able to land unclassified. When row I adds its vision operation, the
-    /// compiler forces a decision, and classifying it as granting neither is the answer recorded on
-    /// SONNY-92.
-    public static func relaxation(for operation: AgentOperation) -> OperationRelaxation {
-        switch operation {
-        case .editWorkspace:
-            return [.byWorkspaceScope, .byDirectUserOrigin]
-        case .runRoutine, .invokeShortcut:
-            return []
-        case .scanSelectLargestFiles, .createZip, .scanDocx, .convertDocxToPDF, .openHackerNews,
-             .fetchHNHeadlines, .writeMarkdown, .webToMarkdown, .openApp, .openAppSearchURL,
-             .openURL, .playMedia, .getFinderSelection, .revealInFinder, .showPermissionReadiness,
-             .saveRoutine, .createWorkspace, .openWorkspace, .openGeneratedArtifact,
-             .createLocalDraft, .calculateUtility, .lookupClipboardHistory, .expandSnippet,
-             .saveSnippet, .switchRunningApp, .lookupRecentArtifacts, .clarify, .unsupported:
-            return [.byWorkspaceScope]
-        }
+        self.consequence = consequence
     }
 }
 
@@ -518,44 +508,31 @@ public struct CapabilityRiskAssessment: Codable, Equatable, Sendable {
     public var escalations: [CapabilityRiskEscalation]
     /// The plan-level workspace-scope roll-up, or `nil` when the task was assessed `.unscoped`.
     ///
-    /// **Nothing in this branch reads it to relax anything**, and that is the point: row C needs a
-    /// typed input rather than re-deriving scope from escalation strings. `nil` means "no workspace
-    /// was bound", which is not the same as `.unconstrained` ("a workspace was bound and says
-    /// nothing about this kind") — collapsing the two would hand row C a value it cannot act on
-    /// safely, since only one of them ever describes a real boundary.
+    /// **Data, not a gate.** Under the consequence rule (2026-08-13) nothing reads this to decide
+    /// an approval requirement in either direction — the out-of-scope fact travels as an advisory
+    /// escalation whose reason surfaces on the trace, and the verdict itself stays computed and
+    /// stored for the surfaces that render it (the task's binding, chips) and for the future
+    /// vision cage. `nil` means "no workspace was bound", which is not the same as `.unconstrained`
+    /// ("a workspace was bound and says nothing about this kind") — the distinction stays
+    /// uncollapsed because both are facts a surface may need to state accurately.
     ///
     /// Optional and defaulted so every adapter's own `CapabilityRiskAssessment(...)` compiles
     /// unchanged: an adapter assesses one segment and has no plan-level view, so `nil` there is the
     /// honest answer rather than a forgotten one. The executor is the only thing that fills it in.
     public var scopeVerdict: ScopeVerdict?
-    /// The plan-level relaxation-eligibility roll-up (SONNY-97): the intersection, across every
-    /// step, of each operation's static `OperationRelaxation.relaxation(for:)` classification and
-    /// any narrowing the step's own adapter declared. Any step that forbids a grant forbids it for
-    /// the whole plan — the same poison shape `.opaque` already has on the verdict axis.
-    ///
-    /// Optional with the same meaning as `scopeVerdict`'s optionality, and it is call-site
-    /// compatibility, not disk migration (this type is embedded in none of the local stores —
-    /// re-verified on SONNY-97): `nil` from an adapter means "no narrowing declared", which the
-    /// executor's fold treats as identity. An adapter that *does* set it may only narrow what the
-    /// static classification allows — the fold intersects, so widening is structurally
-    /// inexpressible. On an assessment that never went through the executor's fold, `nil` grants
-    /// nothing: the grant computation fails closed rather than inventing an eligibility.
-    public var relaxationEligibility: OperationRelaxation?
 
     public init(
         defaultTier: CapabilityRiskTier,
         effectiveTier: CapabilityRiskTier? = nil,
         approvalCopy: RiskApprovalCopy? = nil,
         escalations: [CapabilityRiskEscalation] = [],
-        scopeVerdict: ScopeVerdict? = nil,
-        relaxationEligibility: OperationRelaxation? = nil
+        scopeVerdict: ScopeVerdict? = nil
     ) {
         self.defaultTier = defaultTier
         self.effectiveTier = effectiveTier ?? Self.highestTier(defaultTier: defaultTier, escalations: escalations)
         self.approvalCopy = approvalCopy
         self.escalations = escalations
         self.scopeVerdict = scopeVerdict
-        self.relaxationEligibility = relaxationEligibility
     }
 
     private static func highestTier(
@@ -569,110 +546,72 @@ public struct CapabilityRiskAssessment: Codable, Equatable, Sendable {
     }
 }
 
-/// The authority context an approval requirement is derived under (SONNY-97, row C): how the plan
-/// came to exist, and whether the user's Safe mode is engaged.
+/// The authority context an approval requirement is derived under: today, whether the user's Safe
+/// mode is engaged; row I's per-app control consent lands here as a further field.
 ///
 /// This is an input to `RiskApprovalPolicy.requirement(for:context:)` and nothing else — it never
-/// reaches `assessRisk`, which stays origin-blind so `effectiveTier` remains a pure function of the
-/// plan. Threaded non-defaulted into `AgentRunner.approvalRequest` and `AgentRunner.execute` for the
-/// same reason `scope:` is: `execute` re-derives the requirement internally, so a context threaded
-/// at one site and defaulted at the other would prompt under one requirement and execute under
-/// another, with green tests and a lying log.
+/// reaches `assessRisk`, so `effectiveTier` remains a pure function of the plan. Threaded
+/// non-defaulted into `AgentRunner.approvalRequest` and `AgentRunner.execute` for the same reason
+/// `scope:` is: `execute` re-derives the requirement internally, so a context threaded at one site
+/// and defaulted at the other would prompt under one requirement and execute under another, with
+/// green tests and a lying log.
+///
+/// The `origin` field the row-C grants read is gone with them (consequence rule, 2026-08-13): the
+/// rule gates on what an action *does*, never on how its plan came to exist, and a dead input left
+/// on a security-relevant context is exactly the dormant policy the pivot was told to remove.
+/// `PreparedPlanSource` itself survives — dispatch, logging and the pending-arm rule still read it.
 public struct ApprovalContext: Equatable, Sendable {
-    public var origin: PreparedPlanSource
-    /// Row H's SONNY-90 supplies the real, Settings-backed value; until then row C's only caller
-    /// writes `false` at one named site (`AgentViewModel.approvalContext(for:)`). When true, the
-    /// requirement is `safeModeRequirement(for:)`'s formula and no grant is ever computed (I5).
+    /// Row H's SONNY-90 supplies the real, Settings-backed value; until then the only production
+    /// writer is one named site (`AgentViewModel.approvalContext()` reading
+    /// `AgentViewModel.safeModeEnabled`). When true, the requirement is
+    /// `safeModeRequirement(for:)`'s formula: everything that could run asks first, tier 4 still
+    /// refuses. Safe mode is the cautious user's opt-back-in to being asked about everything.
     public var safeMode: Bool
     // Row I's SONNY-91 adds `appControlConsent` HERE, as a field this function maps — never as a
     // rule applied to the function's return value, which is the post-hoc clamp I8 forbids.
 
     // Explicit rather than synthesized: the memberwise initializer of a public struct is internal,
     // and `MacAgent` is a separate target.
-    public init(origin: PreparedPlanSource, safeMode: Bool) {
-        self.origin = origin
+    public init(safeMode: Bool) {
         self.safeMode = safeMode
     }
 }
 
-/// Which relaxation applied to a requirement — the *why* behind a prompt that got lighter, kept as
-/// two cases even though they map identically today, because they have different revocation stories
-/// and different user-facing explanations: "because this is inside Client Alpha" and "because you
-/// built this on screen" are different facts, and a user can act on the difference.
-public enum RelaxationGrant: String, Codable, Equatable, Sendable {
-    case none
-    /// The plan-level scope roll-up is `.inScope` — the boundary-earned grant of the founder
-    /// charter (2026-08-04): in-scope tier 2 auto-runs, in-scope tier 3 drops to a lightweight
-    /// confirmation.
-    case inScopeWorkspace = "in_scope_workspace"
-    /// The plan came from `PreparedPlanSource.directUserAction`: the user built it field by field
-    /// on a UI surface, with no natural language interpreted on the way (founder observation,
-    /// 2026-08-07). This grant exists because the verdict grant structurally cannot reach the
-    /// workspace-sheet edit: `edit_workspace` classifies as `.none` scoped resources, so a sheet
-    /// edit's roll-up is never `.inScope`.
-    case directUserAuthored = "direct_user_authored"
-
-    /// The §2.1 grant formula, per-grant eligibility and all (PR #45 review, F2: eligibility is
-    /// tested *per grant*, never once ahead of both — SONNY-98 drops `byDirectUserOrigin` alone on
-    /// a boundary-changing edit, and a single "eligibility forbids it" guard ahead of both branches
-    /// cannot express that).
-    ///
-    /// `.inScopeWorkspace` is tested first so anything surfacing a reason names the stronger,
-    /// boundary-earned grant when both apply.
-    ///
-    /// Only `.inScope` ever grants (I3). The other three verdicts and `nil` fail the equality test
-    /// structurally, and the three-state trap the verdict's own doc comment warns about — `nil`
-    /// ("no workspace bound") versus `.unconstrained` ("bound, and says nothing about this kind") —
-    /// stays uncollapsed because neither compares equal to `.inScope`. A `nil` eligibility (an
-    /// assessment that never went through the executor's fold) grants nothing: fail closed, never
-    /// invented.
-    ///
-    /// **I10, stated as a rule even though SONNY-84 discharges it structurally:** an `.inScope`
-    /// verdict reached through `WorkspaceScope`'s *name-fallback* key must never grant. Since
-    /// SONNY-84, every installed app earns a real `bundle:` key, so a name-fallback match survives
-    /// only for genuinely uninstalled entries — which cannot be running and so cannot produce a
-    /// `.resolvedApp` match at all. Today the sole `.resolvedApp` producer
-    /// (`RunningAppSwitchCapabilityAdapter`) is also tier 1, a tier no grant column touches. A
-    /// future tier bump on any name-fallback-matched operation is a conscious decision against this
-    /// stated rule, not a silent reopening of the imposter gap.
-    static func grant(for assessment: CapabilityRiskAssessment, context: ApprovalContext) -> RelaxationGrant {
-        let eligibility = assessment.relaxationEligibility ?? []
-        if eligibility.contains(.byWorkspaceScope), assessment.scopeVerdict == .inScope {
-            return .inScopeWorkspace
-        }
-        if eligibility.contains(.byDirectUserOrigin), context.origin == .directUserAction {
-            return .directUserAuthored
-        }
-        return .none
-    }
-
-    /// The grant `requirement(for:context:)` actually applied — `.none` under Safe mode, mirroring
-    /// I5's composition rule (the requirement function returns before the grant is computed, so a
-    /// Safe-mode run relaxed nothing and must not report that it did). This is the reporting seam
-    /// `RiskApprovalRequest.relaxationGrant` is filled from; it is never an authorization input.
-    static func applied(for assessment: CapabilityRiskAssessment, context: ApprovalContext) -> RelaxationGrant {
-        context.safeMode ? .none : grant(for: assessment, context: context)
-    }
-}
-
 public extension RiskApprovalPolicy {
-    /// The one public path from an assessment to an approval requirement (SONNY-97, row C — I8:
-    /// exactly one public function produces a `RiskApprovalRequirement`, and no public function
-    /// takes one and returns a different one; per-app consent and every future authority axis lands
-    /// *here*, as an `ApprovalContext` field this mapping reads, never as a rule chained after it).
+    /// The one public path from an assessment to an approval requirement (I8: exactly one public
+    /// function produces a `RiskApprovalRequirement`, and no public function takes one and returns
+    /// a different one; per-app consent and every future authority axis lands *here*, as an
+    /// `ApprovalContext` field this mapping reads, never as a rule chained after it).
     ///
-    /// Body order is the composition rule: Safe mode returns before the grant is computed, so
-    /// "Safe mode wins — relaxation never applies inside it" is structural rather than remembered
-    /// (I5). The switch below is a function of `(effectiveTier, grant)` *on a given policy* —
-    /// `self` is the policy, and two cells read `tier2Mode` exactly as the tier-only baseline
-    /// always has for tiers 1 and 2. That is not a chained rule: no intermediate requirement is
-    /// produced and nothing re-fires.
+    /// **The consequence rule** (founder directive, 2026-08-13, superseding row C's ratified
+    /// scope-conditional relaxation): Sonny asks permission only when an action is *destructive*
+    /// or *affects someone other than the user* — the two `Consequence` classes whose `asksFirst`
+    /// is true. Everything else runs without asking, made legible by the ran-without-asking trace.
     ///
-    /// Relaxation is a requirement override and nothing else: it never writes `effectiveTier` (I1),
-    /// never writes `escalations` and never changes `approvalCopy` (I2) — the assessment passes
-    /// through this function untouched, so relaxation changes the *weight* of the ask, never the
-    /// sentence. No cell refuses that would not have refused before (I4), and no grant cell is ever
-    /// less permissive than its `.none` column (P2).
+    /// Body order is the composition rule: Safe mode returns first, so "Safe mode wins — the rule
+    /// never runs inside it" is structural rather than remembered. The switch below is exhaustive
+    /// over the tier with no `default:`, and the ask term reads only the escalations' consequence
+    /// classes:
+    ///
+    /// - Any escalation whose class asks first (destructive, affects-others) asks, **at every
+    ///   tier that can run**. On tiers 0–2 that term is unreachable through any adapter today —
+    ///   all nine construction sites target tier 3, so a derived `effectiveTier` at or below 2
+    ///   means no escalation fired — but the rule is "asks when destructive", not "asks when
+    ///   destructive and the tier arithmetic agrees", so the term is written where the rule puts
+    ///   it and pinned by a hand-built test. The day an escalation targets tier 2 (a possibility
+    ///   `Coverage.standingGrant`'s comment already records), it asks without anyone remembering
+    ///   to make it.
+    /// - Otherwise tiers 0/1/2 auto-run unconditionally — the policy dials no longer gate them.
+    /// - Advisory-only tier 3 auto-runs, with the ran-without-asking trace naming what was
+    ///   advisory. A tier-3 assessment carrying **no** escalations is unreachable through any
+    ///   adapter today and fails closed to `.explicitApproval`: with nothing classified there is
+    ///   nothing to run silently on.
+    /// - Tier 4 refuses, in every state.
+    ///
+    /// This function never writes the assessment: `effectiveTier` stays an honest severity signal
+    /// for the gates that read it (the unattended tier-2 ceiling above all), and escalation
+    /// sentences reach their surfaces — panel or trace — unedited. The rule changes what asks,
+    /// never what a sentence says.
     func requirement(
         for assessment: CapabilityRiskAssessment,
         context: ApprovalContext
@@ -680,25 +619,13 @@ public extension RiskApprovalPolicy {
         if context.safeMode {
             return safeModeRequirement(for: assessment.effectiveTier)
         }
-        switch (assessment.effectiveTier, RelaxationGrant.grant(for: assessment, context: context)) {
-        case (.tier0, .none), (.tier0, .inScopeWorkspace), (.tier0, .directUserAuthored):
-            return .autoRun
-        case (.tier1, .none), (.tier1, .inScopeWorkspace), (.tier1, .directUserAuthored):
-            return requirement(for: .tier1)
-        case (.tier2, .none):
-            return requirement(for: .tier2)
-        case (.tier2, .inScopeWorkspace), (.tier2, .directUserAuthored):
-            // Relaxation never exceeds the user's own policy (I9): a `previewOnly` tier-2 mode is
-            // the user's own tightening, and a grant must not override it. Unreachable in the
-            // shipped app today — nothing constructs a non-default policy outside tests — but a
-            // dead configuration surface that comes alive later should not silently defeat the
-            // preference it exists to express.
-            return tier2Mode == .previewOnly ? .previewOnly : .autoRun
-        case (.tier3, .none):
-            return requirement(for: .tier3)
-        case (.tier3, .inScopeWorkspace), (.tier3, .directUserAuthored):
-            return .lightweightConfirmation
-        case (.tier4, .none), (.tier4, .inScopeWorkspace), (.tier4, .directUserAuthored):
+        let asksFirst = assessment.escalations.contains { $0.consequence.asksFirst }
+        switch assessment.effectiveTier {
+        case .tier0, .tier1, .tier2:
+            return asksFirst ? .explicitApproval : .autoRun
+        case .tier3:
+            return asksFirst || assessment.escalations.isEmpty ? .explicitApproval : .autoRun
+        case .tier4:
             return .refuse
         }
     }

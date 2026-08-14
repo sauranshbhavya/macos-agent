@@ -31,14 +31,14 @@ final class AgentViewModel: ObservableObject {
     @Published var savedRoutines: [StoredRoutine] = []
     @Published var savedWorkspaces: [StoredWorkspace] = []
     @Published var approvalRequest: RiskApprovalRequest?
-    /// The ran-without-asking trace for the last completed run (SONNY-99), or `nil` when no
-    /// relaxation grant changed that run's outcome. The sentence itself comes from
-    /// `AgentActivityPresentation.relaxationTraceLine` — pure and tested, because no SwiftUI
-    /// inspection harness exists to pin what a view renders. Set only after a granted auto-run
+    /// The ran-without-asking trace for the last completed run (SONNY-99, reshaped by the
+    /// consequence rule 2026-08-13), or `nil` when the run's silence was ordinary — tier 0/1, a
+    /// prompt that was answered, or a routine covered by its own trust toggle. The sentence itself
+    /// comes from `AgentActivityPresentation.ranWithoutAskingLine` — pure and tested, because no
+    /// SwiftUI inspection harness exists to pin what a view renders. Set only after a silent run
     /// actually executed (a run that drifted to a prompt was disclosed by the prompt), cleared at
-    /// the start of every task, and untouched by the scheduled path, which cannot reach a grant
-    /// (I6) and never writes it.
-    @Published private(set) var relaxationTrace: String?
+    /// the start of every task, and untouched by the scheduled path, which never writes it.
+    @Published private(set) var ranWithoutAskingTrace: String?
     @Published var clipboardHistoryEnabled: Bool = true
     @Published var priorTaskContext: PriorTaskContext?
     @Published var taskUsageSummary: TaskUsageSummary = .empty
@@ -145,6 +145,12 @@ final class AgentViewModel: ObservableObject {
     /// through one view model.
     var plannerSelection: String?
     private let userDefaults: UserDefaults
+    /// The one whitelist every path this view model owns reasons with. Injectable so the
+    /// ProductShell suite can drive the *real* dispatch path against a temp directory — the class
+    /// of end-to-end coverage whose absence let a mapping-level green suite coexist with a live
+    /// app that behaved differently (the 2026-08-13 manual-pass finding). `makeExecutor()` and
+    /// `resolveTaskScope` both read it, so the assessment and the scope agree on what a path is.
+    private let whitelist: PathWhitelist
     private var clipboardHistoryTimer: Timer?
     private var routineScheduleTimer: Timer?
     /// Label for the currently-running scheduled routine. Separate from `lastCommand` so a
@@ -327,7 +333,8 @@ final class AgentViewModel: ObservableObject {
         plannerProviderRegistry: PlannerProviderRegistry = .default,
         plannerSelection: String? = ProcessInfo.processInfo
             .environment[AgentViewModel.plannerSelectionEnvironmentKey],
-        userDefaults: UserDefaults = .standard
+        userDefaults: UserDefaults = .standard,
+        whitelist: PathWhitelist = PathWhitelist()
     ) {
         self.userDefaults = userDefaults
         usePointerCursors = userDefaults.object(forKey: UserDefaultsKeys.usePointerCursors) as? Bool ?? true
@@ -359,6 +366,7 @@ final class AgentViewModel: ObservableObject {
         self.taskUsageRecorder = taskUsageRecorder
         self.plannerProviderRegistry = plannerProviderRegistry
         self.plannerSelection = plannerSelection
+        self.whitelist = whitelist
     }
 
     var hasAPIKey: Bool {
@@ -741,7 +749,7 @@ final class AgentViewModel: ObservableObject {
         // A new task starts with no trace: the line describes the run it completed with, and a
         // previous task's trace surviving into this one would claim a silence that has not
         // happened yet.
-        relaxationTrace = nil
+        ranWithoutAskingTrace = nil
 
         defer {
             publishTaskUsageSummary()
@@ -860,7 +868,7 @@ final class AgentViewModel: ObservableObject {
                 for: prepared,
                 logAssessment: true,
                 scope: activeTaskScope,
-                context: approvalContext(for: prepared)
+                context: approvalContext()
             )
             switch request.requirement {
             case .autoRun:
@@ -930,12 +938,11 @@ final class AgentViewModel: ObservableObject {
             if routineTrustApproval == .notRequested {
                 // Read off the prepared run's own source rather than off `autoExecute`, which
                 // describes how the *text* arrived and says nothing true about a run that had no
-                // text to arrive. Reachable for `edit_workspace` since row C (SONNY-97): its floor
-                // is tier 2, which used to pause every such run before this line, but a screen-built
-                // edit now takes the origin grant to `.autoRun` — so the `.directUserAction` branch
-                // below is that path's ordinary confirmation message, not dead plumbing waiting for
-                // §B1's vision envelope. The vision envelope remains the next *caller*; it is no
-                // longer the first.
+                // text to arrive. The `.directUserAction` branch below is the workspace sheet's
+                // ordinary confirmation message — under the consequence rule every sheet edit
+                // auto-runs (tier 2, or tier 3 with only advisory escalations), so every
+                // screen-built dispatch passes through here. The vision envelope remains the next
+                // *caller*; it is no longer the first.
                 if prepared.source == .directUserAction {
                     autoApprovalMessage = "Screen-built action auto-approved execution"
                 } else {
@@ -951,21 +958,17 @@ final class AgentViewModel: ObservableObject {
                 confirmationMessage: autoApprovalMessage,
                 logRiskAssessment: false
             )
-            // Only after the run really executed: a granted auto-run that drifted to a prompt was
-            // disclosed by the prompt, and tracing it as silent would be false. The line is nil for
-            // the trust path structurally — a routine plan's eligibility is empty, so its request
-            // never carries a grant — and nil for tiers that auto-run on their own; the pure
-            // function owns both rules.
-            let boundWorkspaceNameForTrace: String?
-            if case .scoped(let boundScope) = activeTaskScope {
-                boundWorkspaceNameForTrace = boundScope.workspaceName
-            } else {
-                boundWorkspaceNameForTrace = nil
-            }
-            relaxationTrace = AgentActivityPresentation.relaxationTraceLine(
-                grant: request.relaxationGrant,
+            // Only after the run really executed: an auto-run that drifted to a prompt was
+            // disclosed by the prompt, and tracing it as silent would be false. The line is nil
+            // for the trust path (its requirement was an ask the toggle answered, not `.autoRun`)
+            // and nil for tiers that always ran silently; the pure function owns both rules, and
+            // it names the advisory reasons — the sentences the approval panel used to carry.
+            ranWithoutAskingTrace = AgentActivityPresentation.ranWithoutAskingLine(
+                requirement: request.requirement,
                 effectiveTier: request.assessment.effectiveTier,
-                workspaceName: boundWorkspaceNameForTrace
+                advisoryReasons: request.assessment.escalations
+                    .filter { $0.consequence == .advisory }
+                    .map(\.reason)
             )
             finalSummary = result.summary
             suggestions = result.suggestions
@@ -978,18 +981,19 @@ final class AgentViewModel: ObservableObject {
             )
             refreshSavedItems()
         } catch RiskApprovalError.approvalRequired(let request) {
-            // Whatever let this run proceed without a prompt — a routine's trust grant, or a
-            // relaxation grant mapping it to `.autoRun` (SONNY-97) — stopped covering it in the
-            // window between the assessment above and `AgentRunner.execute`'s own re-assessment:
-            // the state-drift class `performApproval` re-arms on ("the zip already exists" landing
-            // mid-flight). Every dispatch through this function has a user present, so it prompts
-            // exactly as an ordinary run would rather than failing. The `where routineTrustApproval
-            // != .notRequested` clause that used to scope this to the trust path is gone
-            // deliberately: a plan that reached `.autoRun` through a row-C grant carries
-            // `.notRequested`, and hard-failing the one drift a user could simply answer was the
-            // gap SONNY-97's contract names. The unattended path is unaffected — it dispatches
-            // through `performScheduledRun`, whose own `RiskApprovalError` catch pauses the
-            // schedule instead (SONNY-31).
+            // Whatever let this run proceed without a prompt — a routine's trust grant, or the
+            // consequence rule mapping it to `.autoRun` — stopped covering it in the window
+            // between the assessment above and `AgentRunner.execute`'s own re-assessment: the
+            // state-drift class `performApproval` re-arms on ("the zip already exists" landing
+            // mid-flight turns an advisory-only or escalation-free run into a destructive one).
+            // Every dispatch through this function has a user present, so it prompts exactly as an
+            // ordinary run would rather than failing. The `where routineTrustApproval !=
+            // .notRequested` clause that used to scope this to the trust path is gone
+            // deliberately: a plan that reached `.autoRun` on its own carries `.notRequested`, and
+            // hard-failing the one drift a user could simply answer was the gap SONNY-97's
+            // contract named. The unattended path is unaffected — it dispatches through
+            // `performScheduledRun`, whose own `RiskApprovalError` catch pauses the schedule
+            // instead (SONNY-31).
             markAllSteps(.pending)
             approvalRequest = request
             pendingCommandForPriorTaskContext = submittedCommand
@@ -1151,8 +1155,9 @@ final class AgentViewModel: ObservableObject {
         // Carries the original run's workspace. `lastAssessedScope` is the post-terminal record of
         // what the last task was assessed under and is deliberately never cleared, which is exactly
         // what makes it readable here — by retry time the live binding is long gone. Without this a
-        // retry of a bound task runs unscoped, so a command that raised a scope prompt the first
-        // time runs silently the second: a relaxation, and the one thing this branch never does.
+        // retry of a bound task runs unscoped, so a run whose first pass surfaced an out-of-scope
+        // fact (once a prompt; an advisory trace line under the consequence rule) would repeat with
+        // that fact silently missing — the two passes must be assessed under the same boundary.
         // Inherited from SONNY-38 rather than introduced here; fixed in-branch per fix-in-branch.
         //
         // Not `fromComposer`: a retry is a re-dispatch, so it still kills any card arm rather than
@@ -1584,11 +1589,13 @@ final class AgentViewModel: ObservableObject {
     /// somewhere.
     ///
     /// **Summons the widget on success, through `widgetPresentationRequest` and never
-    /// `FloatingWidgetWindowController.show()`** (SONNY-25). Not decoration: `edit_workspace` starts
-    /// at tier 2, so *every* edit from this sheet pauses for approval, and the sheet is a modal over
-    /// the very page whose `CommandCenterAttentionPanel` would otherwise show it. The floating
-    /// widget is a separate window and is the one surface a modal cannot cover, so without this the
-    /// user would be left holding an approval with nowhere to answer it.
+    /// `FloatingWidgetWindowController.show()`** (SONNY-25). Not decoration: under the consequence
+    /// rule (2026-08-13) every sheet edit runs without asking, and the widget's result panel — with
+    /// its ran-without-asking trace — is where that silent run is disclosed; the sheet is a modal
+    /// over the very page whose Command Center surfaces would otherwise show it, and the floating
+    /// widget is the one surface a modal cannot cover. (Before the rule, the same summon carried
+    /// the approval prompt these edits used to raise; if a drift re-arm ever prompts mid-edit, it
+    /// still does.)
     /// - Returns: whether the edit was submitted. The picker keeps itself open on `false` rather
     ///   than closing over a refusal — its controls are disabled while a task is in flight, so a
     ///   refusal here means the state changed between the render and the click, and dismissing would
@@ -1809,6 +1816,7 @@ final class AgentViewModel: ObservableObject {
 
     private func makeExecutor() -> AgentActionExecutor {
         AgentActionExecutor(
+            whitelist: whitelist,
             zipArchiver: zipArchiver,
             documentConverter: documentConverter,
             browserOpener: browserOpener,
@@ -2000,19 +2008,28 @@ final class AgentViewModel: ObservableObject {
               let record = try? workspaceStore.workspace(named: resolvedName) else {
             return .unscoped
         }
-        return .scoped(WorkspaceScope(workspace: record))
+        // The injected whitelist, not `WorkspaceScope`'s default: the scope's idea of a valid file
+        // location and the executor's must come from one object, or a test-injected root would
+        // assess under a scope that thinks the same path is inert.
+        return .scoped(WorkspaceScope(workspace: record, whitelist: whitelist))
     }
 
-    /// The authority context every dispatch threads into `AgentRunner` (SONNY-97): the prepared
-    /// run's own stamped origin, and Safe mode.
+    /// Whether Safe mode is engaged — the cautious user's opt-back-in to being asked about
+    /// everything (tiers 0–3 all prompt; tier 4 still refuses). Not persisted and not yet
+    /// user-settable: row H's SONNY-90 builds the Settings surface and backs this property with
+    /// it. It exists now so the real dispatch path is drivable under Safe mode — the
+    /// ProductShell suite sets it directly, which is exactly the seam SONNY-90 will inherit.
+    var safeModeEnabled = false
+
+    /// The authority context every dispatch threads into `AgentRunner`: Safe mode, and nothing
+    /// else today (the consequence rule reads no origin — it gates on what an action does).
     ///
-    /// **`safeMode: false` is written here and nowhere else.** Row H's SONNY-90 replaces this one
-    /// literal with the real Settings-backed value; a second site writing it would be a second
-    /// place that replacement has to find, and the one it misses would run a Safe-mode user's tasks
-    /// under ordinary rules. The origin is read off the prepared run rather than taken as a
-    /// parameter so no call site can claim a stronger origin than `AgentRunner.prepare` stamped.
-    private func approvalContext(for preparedRun: PreparedAgentRun) -> ApprovalContext {
-        ApprovalContext(origin: preparedRun.source, safeMode: false)
+    /// **`safeModeEnabled` is read here and nowhere else.** Row H's SONNY-90 backs that stored
+    /// property with the real Settings surface; a second site reading its own value would be a
+    /// second place that work has to find, and the one it misses would run a Safe-mode user's
+    /// tasks under ordinary rules.
+    private func approvalContext() -> ApprovalContext {
+        ApprovalContext(safeMode: safeModeEnabled)
     }
 
     private func executePreparedRun(
@@ -2034,7 +2051,7 @@ final class AgentViewModel: ObservableObject {
             // same reason: one origin at the prompt and another at execution would derive two
             // different requirements from one run.
             scope: activeTaskScope,
-            context: approvalContext(for: preparedRun)
+            context: approvalContext()
         )
         markAllSteps(.complete)
         // The task itself succeeded; a bookkeeping failure is a storage notice, not a task error.
@@ -2413,13 +2430,14 @@ final class AgentViewModel: ObservableObject {
                 // never name a workspace, and nothing else in a scheduled run carries one — there is
                 // no command text a user typed and no dispatch that named one.
                 //
-                // Together with `source: .instantResolver` above, this is one of the two independent
-                // call-site choices that keep the unattended path outside both relaxation grants
-                // (SONNY-97, I6): an unscoped assessment has no verdict to be `.inScope`, and an
-                // instant-resolver origin never takes the direct-user grant. Neither choice is a
-                // type-level guarantee, which is why a test named for the hazard pins them.
+                // Under the consequence rule this choice also carries the unattended ceiling's
+                // advisory half: an unscoped assessment can produce no out-of-scope advisory, and
+                // `StoredRoutine.forbiddenStepOperations` rejects `edit_workspace`, so no advisory
+                // escalation of any kind is reachable here — every tier-3 an unattended run can
+                // reach still asks, and the `.approved(.tier2)` ceiling below still refuses it.
+                // Reachability, not a type-level guarantee; a test named for the hazard pins it.
                 scope: .unscoped,
-                context: approvalContext(for: prepared)
+                context: approvalContext()
             )
             recordScheduledRunInHistory(name: name, at: occurrence)
             recordScheduledTaskHistory(status: .completed, startedAt: startedAt)
