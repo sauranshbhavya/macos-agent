@@ -35,21 +35,22 @@ struct RiskApprovalTests {
         #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier4), context: context) == .refuse)
     }
 
-    /// The policy dials are inert on the ordinary path under the consequence rule — a tightened
-    /// tier 1 and a preview-only tier 2 both auto-run; the stricter tier-2 dial survives only
-    /// inside Safe mode, where the formula takes the stricter of baseline and floor. (Whether the
-    /// dials should now be deleted outright is the founder's call, flagged in the pivot records.)
+    /// The policy dials were deleted on 2026-08-14 (coordinator- and reviewer-confirmed, founder
+    /// veto open at the PR): one was inert on every path, the other constructible by no site.
+    /// What survives them is pinned instead — the default policy is the whole policy space, and
+    /// `.previewOnly` is a requirement no mapping path can produce anymore, at any tier, in
+    /// either posture.
     @Test
-    func thePolicyDialsAreInertOnTheOrdinaryPath() {
-        let policy = RiskApprovalPolicy(
-            requireApprovalForTier1: true,
-            tier2Mode: .previewOnly
-        )
-
-        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier0), context: ApprovalContext(safeMode: false)) == .autoRun)
-        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier1), context: ApprovalContext(safeMode: false)) == .autoRun)
-        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier2), context: ApprovalContext(safeMode: false)) == .autoRun)
-        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier2), context: ApprovalContext(safeMode: true)) == .previewOnly)
+    func noMappingPathProducesPreviewOnly() {
+        for tier in CapabilityRiskTier.allCases {
+            for safeMode in [false, true] {
+                let requirement = RiskApprovalPolicy.default.requirement(
+                    for: CapabilityRiskAssessment(defaultTier: tier),
+                    context: ApprovalContext(safeMode: safeMode)
+                )
+                #expect(requirement != .previewOnly, "tier \(tier), safeMode \(safeMode)")
+            }
+        }
     }
 
     @Test
@@ -76,8 +77,13 @@ struct RiskApprovalTests {
         )
     }
 
+    /// Four lines, not §11.3's five: the "Data leaves device" line is removed from all normal
+    /// approval surfaces — E9's deliberate, founder-ratified spec deviation (2026-08-08, kept in
+    /// full by C7 on 2026-08-12; SONNY-90's landing). The line survives only inside Safe mode —
+    /// the companion test below — which is the product's one egress disclosure since the founder
+    /// superseded E9's in-product after-the-fact log on 2026-08-14.
     @Test
-    func approvalCopyContainsRequiredUserFacingFields() {
+    func approvalCopyContainsRequiredUserFacingFieldsWithoutTheDataEgressLine() {
         let copy = RiskApprovalCopy(
             actionDescription: "Create a zip archive",
             riskReason: "This writes a new file",
@@ -90,9 +96,39 @@ struct RiskApprovalTests {
             "What Sonny is about to do: Create a zip archive",
             "Why this is risky: This writes a new file",
             "Involves: /Users/test/Desktop/largest.zip",
-            "Data leaves device: no",
             "Undo: Delete the created zip"
         ])
+        // Both truth values, because a "no" leaking onto normal surfaces would be as much a
+        // regression as a "yes".
+        for leaves in [false, true] {
+            var variant = copy
+            variant.dataLeavesDevice = leaves
+            #expect(!variant.lines.joined(separator: "\n").contains("Data leaves device"))
+        }
+    }
+
+    @Test
+    func safeModeLinesRestoreTheDataEgressLineInItsOriginalPosition() {
+        let copy = RiskApprovalCopy(
+            actionDescription: "Create a zip archive",
+            riskReason: "This writes a new file",
+            involvedResource: "/Users/test/Desktop/largest.zip",
+            dataLeavesDevice: true,
+            undoDescription: "Delete the created zip"
+        )
+
+        #expect(copy.safeModeLines == [
+            "What Sonny is about to do: Create a zip archive",
+            "Why this is risky: This writes a new file",
+            "Involves: /Users/test/Desktop/largest.zip",
+            "Data leaves device: yes",
+            "Undo: Delete the created zip"
+        ])
+        #expect(copy.dataLeavesDeviceLine == "Data leaves device: yes")
+
+        var negative = copy
+        negative.dataLeavesDevice = false
+        #expect(negative.safeModeLines.contains("Data leaves device: no"))
     }
 
     // MARK: - SONNY-62: what an approval covers, reason by reason

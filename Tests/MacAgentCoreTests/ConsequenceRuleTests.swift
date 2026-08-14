@@ -133,12 +133,14 @@ struct ConsequenceRuleTests {
 
     // MARK: - The properties the pivot kept
 
-    /// **Safe mode is never more permissive than the same inputs without it** — over every policy
-    /// dial position, every tier, every class combination, on the stated permissiveness rank. The
-    /// `stricter(of:_:)` formula makes this structural; the property pins it against a rewrite.
+    /// **Safe mode is never more permissive than the same inputs without it** — over every tier
+    /// and class combination, on the stated permissiveness rank. The `stricter(of:_:)` formula
+    /// makes this structural; the property pins it against a rewrite. (Until 2026-08-14 this
+    /// also iterated the two policy dials' positions; the dials were deleted with the tri-state
+    /// mode, so `.default` is the whole policy space.)
     @Test
     func safeModeIsNeverMorePermissiveThanTheSameInputsWithoutIt() {
-        for policy in propertyPolicies {
+        for policy in [RiskApprovalPolicy.default] {
             for tier in CapabilityRiskTier.allCases {
                 for combo in Self.classCombos {
                     let assessed = assessment(tier: tier, classes: combo.classes)
@@ -158,7 +160,7 @@ struct ConsequenceRuleTests {
     /// everything does.
     @Test
     func anAllAdvisoryAssessmentNeverAsksOutsideSafeMode() {
-        for policy in propertyPolicies {
+        for policy in [RiskApprovalPolicy.default] {
             for tier in CapabilityRiskTier.allCases {
                 for combo in Self.classCombos where !combo.classes.isEmpty
                     && combo.classes.allSatisfy({ $0 == .advisory }) {
@@ -180,7 +182,7 @@ struct ConsequenceRuleTests {
     /// `refuse`, which is stricter than asking; everywhere else it is an explicit ask.
     @Test
     func anAssessmentCarryingADestructiveOrAffectsOthersEscalationNeverAutoRuns() {
-        for policy in propertyPolicies {
+        for policy in [RiskApprovalPolicy.default] {
             for tier in CapabilityRiskTier.allCases {
                 for combo in Self.classCombos where combo.classes.contains(where: \.asksFirst) {
                     for safeMode in [false, true] {
@@ -266,33 +268,11 @@ struct ConsequenceRuleTests {
         }
     }
 
-    /// The policy dials no longer gate the ordinary path: a tightened tier 1 and a preview-only
-    /// tier 2 both auto-run under the consequence rule. Inside Safe mode the *stricter* dial still
-    /// shows — a preview-only tier-2 policy stays preview-only there, because the formula takes
-    /// the stricter of baseline and floor. `requireApprovalForTier1` now has no observable effect
-    /// anywhere; whether both dials should be deleted outright is flagged for the founder in the
-    /// pivot's records, not decided here.
-    @Test
-    func thePolicyDialsNoLongerGateTheOrdinaryPathAndSurviveOnlyInsideSafeMode() {
-        let tightened = RiskApprovalPolicy(requireApprovalForTier1: true, tier2Mode: .previewOnly)
-
-        #expect(tightened.requirement(
-            for: assessment(tier: .tier1, classes: []),
-            context: ApprovalContext(safeMode: false)
-        ) == .autoRun)
-        #expect(tightened.requirement(
-            for: assessment(tier: .tier2, classes: []),
-            context: ApprovalContext(safeMode: false)
-        ) == .autoRun)
-        #expect(tightened.requirement(
-            for: assessment(tier: .tier2, classes: []),
-            context: ApprovalContext(safeMode: true)
-        ) == .previewOnly)
-        #expect(tightened.requirement(
-            for: assessment(tier: .tier1, classes: []),
-            context: ApprovalContext(safeMode: true)
-        ) == .explicitApproval)
-    }
+    // (The policy-dials survival test that stood here was deleted with its subject on
+    // 2026-08-14: `requireApprovalForTier1` and `tier2Mode` are gone — coordinator- and
+    // reviewer-confirmed, founder veto open at the PR — and the tri-state interaction mode is
+    // the product's one posture dial. `.previewOnly` remains a requirement case and a consent
+    // rank, now producible by no mapping path.)
 
     // MARK: - The rule through the real dispatch machinery
 
@@ -994,14 +974,6 @@ struct ConsequenceRuleTests {
         )
     }
 }
-
-/// Every position of both policy dials, for the property tests: the default, the tightened tier-1
-/// variant, and the preview-only tier-2 variant.
-private let propertyPolicies: [RiskApprovalPolicy] = [
-    .default,
-    RiskApprovalPolicy(requireApprovalForTier1: true, tier2Mode: .lightweightConfirmation),
-    RiskApprovalPolicy(requireApprovalForTier1: false, tier2Mode: .previewOnly)
-]
 
 /// Never called: every test here prepares its plan directly.
 private struct UnusedPlanner: Planning {

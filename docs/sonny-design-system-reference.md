@@ -106,6 +106,16 @@ Layout, top to bottom inside the body panel (24px/30px padding, 16px gap between
 3. **Workspace breakdown** — horizontal progress bars, one row per workspace: small colored swatch (matches a per-workspace color) → workspace name → track → trailing percentage. **Note**: in the wireframe itself, the drawn bar width doesn't precisely match its printed percentage (a wireframe authoring imprecision) — drive the real implementation's width from the actual percentage, not by eyeballing the mock.
 4. **Recent activity list** — simple rows, no dividers: colored status dot (green = completed) + item name + right-aligned relative timestamp (e.g. "Today, 9:41 AM").
 
+### 2.8 Mode segmented control (added 2026-08-14, SONNY-90 as amended)
+
+Source: founder-provided `docs/wireframes/15-SegmentedControl.svg` (also the first wireframe stored inside the repo rather than `~/Desktop/wireframes/`). The Safe | Normal | Power control on Settings › Security & Access, built in `SonnyModeSegmentedControl.swift`:
+
+- **Frame**: 308×36, full stadium (r=18; use `Capsule()`).
+- **Track**: two layered fills — white 2% on the pill shape *plus* white 7% full-bleed, clipped to the pill. Layer both; do not pre-blend into one opacity.
+- **Selected segment**: its own full-height capsule (not inset), `#0091FF` + a white 3.92% overlay. **The blue is this wireframe's own literal.** It coincides with System B's primary-action blue, but its source here is the founder's control SVG — do not import `WidgetTheme` for it, and do not swap in System A's `#5C84FE`.
+- **Dividers**: 1×20 hairlines at white 25%, vertically centered (8px top/bottom inset), drawn **only between two unselected segments** — the export shows no hairline beside the selected capsule.
+- **Labels**: Inter 13 (`SonnyType.body`, per this doc's System A rule — the SVG's glyphs are outlines, ~13px cap metrics), white 85% unselected, pure white on the selected segment.
+
 ---
 
 ## 3. System B — Floating Widget + System Notifications

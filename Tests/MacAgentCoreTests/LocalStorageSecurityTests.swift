@@ -337,6 +337,27 @@ struct LocalStorageSecurityTests {
         #expect(!FileManager.default.fileExists(atPath: last.path))
         #expect(FileManager.default.fileExists(atPath: blocked.path))
     }
+
+    /// The wipe's reach, pinned by count and by name. Relocated here from the deleted ledger
+    /// suite (PR #49 N4): the ninth store's own `urls.count == 9` pin died with it, and without
+    /// a successor a store added to the app but forgotten from this list would vanish from the
+    /// wipe silently. Eight stores is the current whole population.
+    @Test
+    func theWipeReachesExactlyTheEightLocalStores() {
+        let urls = LocalDataDeletionService.defaultStoreFileURLs()
+        #expect(urls.count == 8)
+        let fileNames = Set(urls.map(\.lastPathComponent))
+        #expect(fileNames == [
+            "routines.json",
+            "workspaces.json",
+            "clipboard-history.json",
+            "clipboard-history-settings.json",
+            "snippets.json",
+            "recent-artifacts.json",
+            "shortcuts-run-history.json",
+            "task-history.json"
+        ])
+    }
 }
 
 private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncryption) throws -> [URL] {
