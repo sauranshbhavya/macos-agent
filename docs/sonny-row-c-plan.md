@@ -1,5 +1,24 @@
 # Row C — approval relaxation: the branch plan
 
+> **SUPERSEDED, 2026-08-13 — founder directive, issued after this plan's design shipped and passed
+> review, before merge.** The design below — the two relaxation grants, the `(effectiveTier, grant)`
+> mapping, the eligibility containment, SONNY-98's boundary-changing-edit gating — was implemented
+> on `feature/approval-relaxation-structural`, ratified 2026-08-13, and then replaced on the same
+> branch by the **consequence rule**: Sonny asks permission only when an action is *destructive*
+> (destroys or replaces existing user data or user-built artifacts) or *affects someone other than
+> the user*; everything else runs without asking, made legible by the ran-without-asking trace.
+> The grant machinery is deleted, not dormant. Two of this plan's decisions were consciously
+> superseded with the grants (recorded coordinator calls, founder-vetoable): Q4's
+> dimension-emptying removals now auto-run with the trace, and the whitelist-root add auto-runs
+> with its consequence-naming sentence on the trace. What survives unchanged: the one-public-
+> requirement-function discipline (§3.2/I8), the exhaustive no-default classification shape (now on
+> `CapabilityRiskEscalation.Consequence` rather than per-operation eligibility), Safe mode's
+> first-evaluated formula (§3.1), SONNY-62/97's consent axes, tier-4 refusal, the unattended
+> ceiling, and SONNY-99's trace. Current truth: spec §11.2/§11.3,
+> `docs/sonny-founder-design-decisions.md` → "The consequence rule", and the changelog's row-C
+> supersession block. This document stays frozen as the record of the superseded design and the
+> reasoning that produced it — per its own header, it is not updated further.
+
 Produced by SONNY-13 (planning ticket for roadmap row C), 2026-08-13. Branches:
 `feature/approval-relaxation-structural` and `feature/approval-relaxation-surface`, plus
 `feature/sonny-62-approval-rearm` landing ahead of both. Module: **C — approval relaxation
