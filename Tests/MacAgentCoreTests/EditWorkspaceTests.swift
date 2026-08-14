@@ -1072,6 +1072,133 @@ struct EditWorkspaceTests {
 
     // MARK: - Fixture
 
+    // MARK: - The edits SONNY-98 gated, under the consequence rule (2026-08-13)
+    //
+    // The origin-grant narrowing these edits used to drop is deleted with the grants themselves;
+    // what survives is what the escalations *say* and that none of them prompts. The tests here
+    // pin the surviving facts: the tiers, the exact reasons (they are what the ran-without-asking
+    // trace names), and the `.advisory` class that makes every workspace edit run without asking.
+
+    /// The first entry into an empty dimension is an ordinary tier-2 add — no escalation, nothing
+    /// to say. Under the superseded design this edit dropped the origin grant; under the
+    /// consequence rule it simply runs, like every other add.
+    @Test
+    func addingTheFirstWorkingEntryToAnEmptyDimensionIsAnOrdinaryTierTwoAdd() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        try fixture.store.save(
+            StoredWorkspace(name: "Client Alpha", apps: [], urls: ["https://github.com"])
+        )
+
+        let assessment = try fixture.executor.assessRisk(
+            plan: Fixture.editPlan(addApps: ["Safari"]),
+            scope: .unscoped
+        )
+
+        #expect(assessment.effectiveTier == .tier2)
+        #expect(assessment.escalations.isEmpty)
+    }
+
+    /// **The fixture that separates the two notions of empty**: every list is non-empty, and the
+    /// file-locations list is left holding only an inert entry. Removing the one *working* entry
+    /// empties the dimension by the evaluator's canonical answer — the raw array still has an
+    /// element, and `after.isEmpty` would say nothing was emptied. The dimension-no-longer-
+    /// restricted wording must follow the evaluator, and it is `.advisory`: it surfaces on the
+    /// trace, it no longer prompts.
+    @Test
+    func removingTheLastWorkingEntryIsAnEmptyingByTheEvaluatorsAnswer() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let working = try fixture.makeFolder("ClientAlpha")
+        try fixture.store.save(
+            StoredWorkspace(
+                name: "Client Alpha",
+                apps: ["Safari"],
+                urls: ["https://github.com"],
+                // The first is outside the whitelist, so the evaluator classifies it inert; the
+                // second is the only entry that restricts anything.
+                fileLocations: ["~/Downloads/Alpha", working.path]
+            )
+        )
+
+        let assessment = try fixture.executor.assessRisk(
+            plan: Fixture.editPlan(removeFileLocations: [working.path]),
+            scope: .unscoped
+        )
+
+        #expect(assessment.effectiveTier == .tier3)
+        #expect(assessment.escalations.map(\.reason) == [Self.fileLocationsNoLongerRestrictedReason])
+        #expect(assessment.escalations.map(\.consequence) == [.advisory])
+    }
+
+    /// Adding a `PathWhitelist` root *itself* escalates to tier 3 with a reason naming the
+    /// consequence — the whole territory the entry converts — asserted on the literal string, the
+    /// way every reason in this file is. `.advisory` under the consequence rule: the sentence
+    /// lands on the trace, not a prompt.
+    @Test
+    func addingAWhitelistRootEscalatesToTierThreeWithTheConsequenceNamingReason() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        try fixture.store.save(StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: []))
+        let rootPath = fixture.root.resolvingSymlinksInPath().path
+
+        let assessment = try fixture.executor.assessRisk(
+            plan: Fixture.editPlan(addFileLocations: [rootPath]),
+            scope: .unscoped
+        )
+
+        #expect(assessment.effectiveTier == .tier3)
+        #expect(assessment.escalations.map(\.reason) == [
+            "Adds \(rootPath) itself — not a folder inside it — to workspace Client Alpha's "
+                + "file locations. Everything Sonny may touch under \(rootPath) would count as part "
+                + "of this workspace, so this one entry turns that whole territory into the "
+                + "workspace's boundary."
+        ])
+        #expect(assessment.escalations.map(\.consequence) == [.advisory])
+    }
+
+    /// Folder containment no longer distinguishes an add in either direction — the subsumption
+    /// machinery went with the origin grant it narrowed. Both an added folder that contains a
+    /// stored entry and one inside a stored entry are ordinary tier-2 adds with no escalation;
+    /// only a whitelist *root* itself says anything (the test above).
+    @Test
+    func containmentInEitherDirectionIsAnOrdinaryTierTwoAdd() async throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+        let inner = try fixture.makeFolder("Projects/ClientAlpha")
+        let outer = try fixture.makeFolder("Projects")
+        try fixture.store.save(
+            StoredWorkspace(
+                name: "Client Alpha",
+                apps: ["Safari"],
+                urls: [],
+                fileLocations: [inner.path]
+            )
+        )
+
+        let subsuming = try fixture.executor.assessRisk(
+            plan: Fixture.editPlan(addFileLocations: [outer.path]),
+            scope: .unscoped
+        )
+        #expect(subsuming.effectiveTier == .tier2)
+        #expect(subsuming.escalations.isEmpty)
+
+        try fixture.store.save(
+            StoredWorkspace(
+                name: "Client Beta",
+                apps: ["Safari"],
+                urls: [],
+                fileLocations: [outer.path]
+            )
+        )
+        let contained = try fixture.executor.assessRisk(
+            plan: Fixture.editPlan(workspaceName: "Client Beta", addFileLocations: [inner.path]),
+            scope: .unscoped
+        )
+        #expect(contained.effectiveTier == .tier2)
+        #expect(contained.escalations.isEmpty)
+    }
+
     @MainActor
     private struct Fixture {
         let root: URL

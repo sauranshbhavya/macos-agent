@@ -294,12 +294,20 @@ public final class AgentActionExecutor {
     /// site writes `.unscoped` deliberately or passes a real scope; none of them gets to be silent.
     ///
     /// Scope only ever **raises**. `effectiveTier` is computed as a maximum that now includes the
-    /// scope escalations' `toTier`, so nothing here can lower a tier — which four other things
-    /// depend on staying honest: the unattended gate (`approvedTier >= effectiveTier` against a
-    /// fixed `.approved(.tier2)`), the stale-approval re-check in `AgentRunner.execute`, the
-    /// `risk.assessed`/`risk.escalated` trace, and `UnattendedTrustAdvisory`, which reads
-    /// `effectiveTier` alone. No relaxation of any kind lives here; that is row C's, and the
-    /// `scopeVerdict` roll-up exists to give it a typed input rather than a re-derivation.
+    /// scope escalations' `toTier`, so nothing here can lower a tier — which everything reading
+    /// that field depends on staying honest. The consumer population is larger than any closed
+    /// list stays current with (this comment first said "four things"; row C's planning counted
+    /// 151 references across 24 files at `0fdac1c`): five structural decision gates alone — the
+    /// unattended gate (`approvedTier >= effectiveTier` against a fixed `.approved(.tier2)`), the
+    /// stale-approval re-check in `AgentRunner.execute`, the `risk.assessed`/`risk.escalated`
+    /// trace, `UnattendedTrustAdvisory` (which reads `effectiveTier` alone), and SONNY-54's
+    /// manual-routine-trust check in `AgentViewModel`, whose own comment says it mirrors the
+    /// execute gate — plus the approved-tier write-back, `RiskApprovalError`'s descriptions, and
+    /// the tier handed to `approvalCopy(for:metadata:tier:)` below. The approval decision itself
+    /// lives downstream: `RiskApprovalPolicy.requirement(for:context:)` maps this assessment under
+    /// the consequence rule and never writes it — the tier and every escalation sentence leave
+    /// here honest and arrive at their surfaces (panel or ran-without-asking trace) unedited. The
+    /// `scopeVerdict` roll-up is data for the surfaces and the future vision cage, not a gate.
     public func assessRisk(plan: AgentPlan, scope: TaskWorkspaceScope) throws -> CapabilityRiskAssessment {
         let resolvedPlan = try resolveDefaultOutputs(in: plan)
         // The same scope goes into the nested-plan closure, so a `run_routine` step's stored steps
@@ -458,7 +466,13 @@ public final class AgentActionExecutor {
             CapabilityRiskEscalation(
                 fromTier: fromTier,
                 toTier: .tier3,
-                reason: "\(resource.value) is not part of the \(workspaceScope.workspaceName) workspace."
+                reason: "\(resource.value) is not part of the \(workspaceScope.workspaceName) workspace.",
+                // Consequence rule (2026-08-13): being outside the workspace boundary is a fact
+                // worth surfacing, not a consent worth interrupting for — the action itself
+                // destroys nothing and reaches nobody. The reason lands on the
+                // ran-without-asking trace instead of a prompt; the tier still rises so the
+                // severity signal and the unattended ceiling stay honest.
+                consequence: .advisory
             )
         }
     }
@@ -474,8 +488,7 @@ public final class AgentActionExecutor {
     /// with no resource would violate the type's own invariant to save four lines.
     ///
     /// Folding nested verdicts in at all is what stops a routine laundering the roll-up: without it
-    /// a plan whose routine writes outside the boundary reports `.inScope`, which is precisely the
-    /// input row C would relax on.
+    /// a plan whose routine writes outside the boundary reports `.inScope`.
     private func scopeVerdict(
         findings: [WorkspaceScopeFinding],
         nested: [ScopeVerdict],

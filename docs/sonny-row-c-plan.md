@@ -1,5 +1,24 @@
 # Row C — approval relaxation: the branch plan
 
+> **SUPERSEDED, 2026-08-13 — founder directive, issued after this plan's design shipped and passed
+> review, before merge.** The design below — the two relaxation grants, the `(effectiveTier, grant)`
+> mapping, the eligibility containment, SONNY-98's boundary-changing-edit gating — was implemented
+> on `feature/approval-relaxation-structural`, ratified 2026-08-13, and then replaced on the same
+> branch by the **consequence rule**: Sonny asks permission only when an action is *destructive*
+> (destroys or replaces existing user data or user-built artifacts) or *affects someone other than
+> the user*; everything else runs without asking, made legible by the ran-without-asking trace.
+> The grant machinery is deleted, not dormant. Two of this plan's decisions were consciously
+> superseded with the grants (recorded coordinator calls, founder-vetoable): Q4's
+> dimension-emptying removals now auto-run with the trace, and the whitelist-root add auto-runs
+> with its consequence-naming sentence on the trace. What survives unchanged: the one-public-
+> requirement-function discipline (§3.2/I8), the exhaustive no-default classification shape (now on
+> `CapabilityRiskEscalation.Consequence` rather than per-operation eligibility), Safe mode's
+> first-evaluated formula (§3.1), SONNY-62/97's consent axes, tier-4 refusal, the unattended
+> ceiling, and SONNY-99's trace. Current truth: spec §11.2/§11.3,
+> `docs/sonny-founder-design-decisions.md` → "The consequence rule", and the changelog's row-C
+> supersession block. This document stays frozen as the record of the superseded design and the
+> reasoning that produced it — per its own header, it is not updated further.
+
 Produced by SONNY-13 (planning ticket for roadmap row C), 2026-08-13. Branches:
 `feature/approval-relaxation-structural` and `feature/approval-relaxation-surface`, plus
 `feature/sonny-62-approval-rearm` landing ahead of both. Module: **C — approval relaxation
@@ -615,3 +634,13 @@ findings): §2.1's grant formula now tests eligibility **per grant** (F2), and �
 scheduled-pre-check forward-hazard amendment — carried in the same 2026-08-13 ratification as the ten
 decisions rather than being one of them, and omitted from this document until now (F1). Both are corrections to this artifact, not changes to the ratified design; F3 was
 the branch's own changelog entry, which lives in the changelog. Frozen from here.
+
+**Status update, 2026-08-13 (SONNY-100 — the one line this frozen artifact takes per its own header):**
+branch 1 (`feature/approval-relaxation-structural`, SONNY-97/98/99/100) is complete and in review.
+Implementation followed this plan with four small, named additions rather than divergences, each
+recorded on the tickets: `RiskApprovalRequest` carries the applied grant as a reporting-only field
+(the seam SONNY-99's never-touch list required SONNY-97 to leave), the consent's answered
+requirement is a sibling Optional field rather than a `Coverage` payload, `safeModeFloor` is
+`.explicitApproval` (SONNY-90 owns the floor, never the formula), and the ran-without-asking trace
+additionally gates on tier ≥ 2 so a grant that changed nothing (tiers 0/1 auto-run in every column)
+never traces. Branch 2 is not started.

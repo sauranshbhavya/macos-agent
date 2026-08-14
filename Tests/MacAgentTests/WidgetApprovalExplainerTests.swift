@@ -94,7 +94,8 @@ struct WidgetApprovalExplainerTests {
                 CapabilityRiskEscalation(
                     fromTier: .tier2,
                     toTier: .tier3,
-                    reason: "Zip output already exists at /tmp/a.zip."
+                    reason: "Zip output already exists at /tmp/a.zip.",
+                    consequence: .destructive
                 )
             ]
         )

@@ -154,4 +154,38 @@ enum AgentActivityPresentation {
         .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
         .filter { !$0.isEmpty }
     }
+
+    /// The one-line ran-without-asking trace (SONNY-99, reshaped by the consequence rule
+    /// 2026-08-13): the sentence that lets a person watching a task tell "nothing happened because
+    /// it was low-risk" from "something happened silently because Sonny no longer asks for it".
+    /// When the silent run carried advisory escalations, the trace names them — the out-of-scope
+    /// resource, the workspace-entry removal, the whitelist-root widening — because those are the
+    /// sentences the approval panel used to carry and the user still gets to read them; a silent
+    /// run with nothing advisory states the rule instead.
+    ///
+    /// `nil` unless the silence is new. Two gates, both load-bearing:
+    /// - Only `.autoRun` traces. A run that prompted was disclosed by the prompt; a
+    ///   trust-approved routine run was disclosed by the user's own standing toggle; Safe mode
+    ///   always prompts, so nothing traces inside it.
+    /// - A tier at or below 1 never traces: tiers 0 and 1 always auto-ran, so a trace there would
+    ///   mark a silence that was always ordinary and train the user to ignore the one that is not.
+    ///   At tier 2 and above the silence is the consequence rule's own doing — before it, every
+    ///   such run asked.
+    static func ranWithoutAskingLine(
+        requirement: RiskApprovalRequirement,
+        effectiveTier: CapabilityRiskTier,
+        advisoryReasons: [String]
+    ) -> String? {
+        guard requirement == .autoRun,
+              effectiveTier.rawValue >= CapabilityRiskTier.tier2.rawValue else {
+            return nil
+        }
+        let reasons = advisoryReasons
+            .map { $0.trimmingCharacters(in: .whitespacesAndNewlines) }
+            .filter { !$0.isEmpty }
+        guard !reasons.isEmpty else {
+            return "Ran without asking — nothing here is destructive, and it affects no one else."
+        }
+        return "Ran without asking — worth knowing: " + reasons.joined(separator: " ")
+    }
 }
