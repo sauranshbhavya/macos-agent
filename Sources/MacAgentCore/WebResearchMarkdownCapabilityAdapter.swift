@@ -256,17 +256,26 @@ public struct WebResearchMarkdownCapabilityAdapter: CapabilityAdapter {
         }
     }
 
-    /// A `.writeMarkdown` step is a sink, not a source: without a Hacker News fetch or a
-    /// `.webToMarkdown` step beside it there is nothing to write, and before SONNY-88 the
-    /// solitary shape silently became the Hacker News preset instead of failing. Throwing here —
-    /// `preview` runs inside `AgentActionExecutor.prepare` and again inside `execute` — stops it
-    /// on both paths with an error that names the real problem.
+    /// A `.writeMarkdown` step is a sink, not a source: without a Hacker News fetch beside it
+    /// there is nothing to write, and before SONNY-88 the solitary shape silently became the
+    /// Hacker News preset instead of failing. Throwing here — `preview` runs inside
+    /// `AgentActionExecutor.prepare` and again inside `execute` — stops it on both paths with an
+    /// error that names the real problem.
+    ///
+    /// The message recommends only reachable shapes (PR #49 F4). Its first wording also
+    /// suggested "web_to_markdown in the same plan", which the executor's own segmentation
+    /// rejects: the two operations map to different workflows, so `[web_to_markdown,
+    /// write_markdown]` chains into separate units and the write unit still arrives here alone —
+    /// and rightly so, since `web_to_markdown` writes its own research note and a
+    /// `write_markdown` beside it would be a dangling write with no content, which the executor
+    /// must not silently drop. `hasWebResearch` still short-circuits the unit that genuinely
+    /// contains both (the segment-cutting rules are not this adapter's to assume).
     private func validateMarkdownContentSource(in plan: AgentPlan) throws {
         let hasWriteMarkdown = plan.steps.contains { $0.operation == .writeMarkdown }
         let hasWebResearch = plan.steps.contains { $0.operation == .webToMarkdown }
         if hasWriteMarkdown, !hasWebResearch, !isHackerNewsPreset(plan) {
             throw AgentExecutionError.invalidPlan(
-                "write_markdown needs a content source in the same plan — fetch_hn_headlines for the Hacker News digest, or web_to_markdown for a research note."
+                "write_markdown is the Hacker News digest's write step and needs fetch_hn_headlines in the same plan. For a web research note, use web_to_markdown on its own — it writes its own file."
             )
         }
     }

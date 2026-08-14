@@ -156,16 +156,37 @@ public struct LocalRedactionService: Sendable {
             throw LocalRedactionError.detectionUnavailable(String(describing: error))
         }
 
+        // Detect over the observations' text as ONE document, never line by line (PR #49 F1):
+        // Vision returns one observation per rendered line, and a per-line scan let a
+        // BEGIN→END private-key block match only on its BEGIN line — the key's body lines
+        // shipped unpainted while the report claimed a confidence-1.0 redaction. Joining with
+        // newlines keeps every single-line match working, lets block and context patterns span
+        // lines, and cannot under-match relative to per-line scanning.
+        var joinedText = ""
+        var lineRanges: [Range<String.Index>] = []
+        for (index, observation) in observations.enumerated() {
+            if index > 0 {
+                joinedText += "\n"
+            }
+            let start = joinedText.endIndex
+            joinedText += observation.string
+            lineRanges.append(start..<joinedText.endIndex)
+        }
+
+        let matches = detector.matches(in: joinedText)
         var regions: [CGRect] = []
-        var matches: [SecretTextMatch] = []
-        for observation in observations {
-            let observationMatches = detector.matches(in: observation.string)
-            guard !observationMatches.isEmpty else { continue }
-            // The whole observation box is painted out, not a per-character sub-box — the
-            // cheap over-redaction side of §12.3's tradeoff, with a small pad for the
-            // anti-aliased edges the recognizer's box can clip.
-            regions.append(observation.boundingBox.insetBy(dx: -2, dy: -2))
-            matches.append(contentsOf: observationMatches)
+        var paintedObservations: Set<Int> = []
+        for match in matches {
+            // Every observation the match touches is painted whole — the cheap over-redaction
+            // side of §12.3's tradeoff, with a small pad for the anti-aliased edges the
+            // recognizer's box can clip. A match always overlaps at least one line range (the
+            // joined text is nothing but line ranges and separators), so a reported match is a
+            // painted match by construction — the report cannot claim work that did not happen.
+            for (index, lineRange) in lineRanges.enumerated() where lineRange.overlaps(match.range) {
+                if paintedObservations.insert(index).inserted {
+                    regions.append(observations[index].boundingBox.insetBy(dx: -2, dy: -2))
+                }
+            }
         }
 
         let pngData: Data
@@ -176,6 +197,10 @@ public struct LocalRedactionService: Sendable {
         } else {
             do {
                 (pngData, width, height) = try RedactionImageRenderer.fillRegions(regions, inPNGData: capture.pngData)
+            } catch let error as LocalRedactionError {
+                // Already the renderer's own typed failure — rethrow rather than wrapping the
+                // wording inside itself.
+                throw error
             } catch {
                 // Fail closed again: pixels that could not be painted out are pixels that
                 // do not leave the device.
@@ -248,7 +273,16 @@ enum RedactionImageRenderer {
                 width: region.width,
                 height: region.height
             ).intersection(bounds)
-            guard !flipped.isEmpty else { continue }
+            // A region entirely outside the image cannot be painted, and silently skipping it
+            // would leave the report claiming a redaction that did not happen (PR #49 F8) —
+            // the same false-attestation class as F1, so the same answer: fail closed. The
+            // shipped Vision recognizer cannot produce one (its boxes are normalized then
+            // scaled), but `ImageTextRecognizing` is a public seam and row I plugs into it.
+            guard !flipped.isEmpty else {
+                throw LocalRedactionError.imageRedactionFailed(
+                    "a detected region lies entirely outside the \(width)x\(height) capture"
+                )
+            }
             context.fill(flipped)
         }
 
