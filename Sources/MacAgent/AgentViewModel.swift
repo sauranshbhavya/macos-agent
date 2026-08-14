@@ -304,6 +304,7 @@ final class AgentViewModel: ObservableObject {
         static let usePointerCursors = "com.sonny.preferences.usePointerCursors"
         static let displayFullNames = "com.sonny.preferences.displayFullNames"
         static let hasCompletedFirstApproval = "com.sonny.state.hasCompletedFirstApproval"
+        static let safeModeEnabled = "com.sonny.preferences.safeModeEnabled"
     }
 
     /// The environment variable naming which registered planner provider plans tasks —
@@ -347,6 +348,9 @@ final class AgentViewModel: ObservableObject {
         usePointerCursors = userDefaults.object(forKey: UserDefaultsKeys.usePointerCursors) as? Bool ?? true
         displayFullNames = userDefaults.object(forKey: UserDefaultsKeys.displayFullNames) as? Bool ?? false
         hasCompletedFirstApproval = userDefaults.object(forKey: UserDefaultsKeys.hasCompletedFirstApproval) as? Bool ?? false
+        // `?? false`, unlike the `?? true` preference convention: Safe mode defaults OFF (Normal
+        // is the ratified product), so the missing-key default and the product default agree.
+        safeModeEnabled = userDefaults.object(forKey: UserDefaultsKeys.safeModeEnabled) as? Bool ?? false
         self.audioRecorder = audioRecorder
         self.permissionReadinessService = permissionReadinessService
         self.routineStore = routineStore
@@ -909,8 +913,15 @@ final class AgentViewModel: ObservableObject {
                 // tier-3+ assessment pauses at this prompt exactly as it did before trust covered
                 // manual runs. A standing grant is a tier ceiling, so the reason half of that gate
                 // is vacuous here by construction.
+                //
+                // Safe mode gates this shortcut (SONNY-90): the dial is the user's opt-back-in to
+                // being asked about every attended action, and a per-routine convenience grant
+                // must not quietly override the global caution dial while the user is present to
+                // answer. The unattended scheduled path is deliberately untouched — its standing
+                // tier-2 ceiling and notify-and-pause are the ticket's "no new unattended prompt
+                // class", and a schedule that Safe mode silently suspended would be one.
                 let trustDecision = manualRoutineTrustDecision(for: prepared.plan)
-                if trustDecision.authorizes(request) {
+                if !safeModeEnabled, trustDecision.authorizes(request) {
                     routineTrustApproval = trustDecision
                 } else {
                     approvalRequest = request
@@ -2070,11 +2081,20 @@ final class AgentViewModel: ObservableObject {
     }
 
     /// Whether Safe mode is engaged — the cautious user's opt-back-in to being asked about
-    /// everything (tiers 0–3 all prompt; tier 4 still refuses). Not persisted and not yet
-    /// user-settable: row H's SONNY-90 builds the Settings surface and backs this property with
-    /// it. It exists now so the real dispatch path is drivable under Safe mode — the
-    /// ProductShell suite sets it directly, which is exactly the seam SONNY-90 will inherit.
-    var safeModeEnabled = false
+    /// everything (tiers 0–3 all prompt; tier 4 still refuses), and the only place the
+    /// data-leaves-device label renders (E9's ratified §11.3 deviation). Persisted (SONNY-90) so
+    /// the caution dial survives relaunch — a Safe mode that silently reset to Normal on restart
+    /// would be a caution dial that quietly un-dials itself. Defaults OFF: Normal mode is the
+    /// ratified product default, and Safe mode is an explicit opt-in.
+    ///
+    /// The user-visible toggle is founder-wireframe-gated and not built yet; until it lands the
+    /// writers are tests (driving the real dispatch path through this seam, exactly as the
+    /// consequence-rule suite already does) and the persistence read below.
+    @Published var safeModeEnabled: Bool = false {
+        didSet {
+            userDefaults.set(safeModeEnabled, forKey: UserDefaultsKeys.safeModeEnabled)
+        }
+    }
 
     /// The authority context every dispatch threads into `AgentRunner`: Safe mode, and nothing
     /// else today (the consequence rule reads no origin — it gates on what an action does).

@@ -759,12 +759,15 @@ private struct CommandCenterAttentionPanel: View {
                 .foregroundStyle(SonnyTheme.muted)
         }
 
-        // `approvalCopy.lines` is the same five-line disclosure the risk engine builds for every
-        // surface — what/why/involves/data-leaves-device/undo. Rendered in full here rather than
-        // condensed to the resource name: Command Center has the vertical room the widget's
-        // single-line treatment doesn't, and this may be the only surface an unattended run's
-        // approval is ever read on.
-        ForEach(Array(request.approvalCopy.lines.enumerated()), id: \.offset) { _, line in
+        // The engine's disclosure, rendered in full here rather than condensed to the resource
+        // name: Command Center has the vertical room the widget's single-line treatment doesn't,
+        // and this may be the only surface an unattended run's approval is ever read on. The
+        // line set is mode-selected (SONNY-90): "Data leaves device: yes/no" renders only under
+        // Safe mode — E9's ratified §11.3 deviation.
+        ForEach(Array(AgentActivityPresentation.approvalDisclosureLines(
+            for: request,
+            safeModeEnabled: viewModel.safeModeEnabled
+        ).enumerated()), id: \.offset) { _, line in
             Text(line)
                 .font(SonnyType.micro)
                 .foregroundStyle(SonnyTheme.sidebarNavText)

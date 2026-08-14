@@ -170,14 +170,37 @@ public struct RiskApprovalCopy: Codable, Equatable, Sendable {
         self.undoDescription = undoDescription
     }
 
+    /// The disclosure normal approval surfaces render. "Data leaves device" is deliberately NOT
+    /// among these four — spec §11.3 made it one of five mandatory lines on every approval
+    /// surface, and E9 (founder-ratified 2026-08-08, kept in full by C7 on 2026-08-12) is a
+    /// conscious deviation: the label leaves all normal surfaces and renders only inside Safe
+    /// mode, where `safeModeLines` restores it in its original position. Normal mode's honesty
+    /// lives in the per-run Data-Sent-to-AI ledger (SONNY-88) instead of a pre-run label.
     public var lines: [String] {
         [
             "What Sonny is about to do: \(actionDescription)",
             "Why this is risky: \(riskReason)",
             "Involves: \(involvedResource)",
-            "Data leaves device: \(dataLeavesDevice ? "yes" : "no")",
             "Undo: \(undoDescription)"
         ]
+    }
+
+    /// The Safe-mode disclosure: the same lines with "Data leaves device: yes/no" restored where
+    /// §11.3 put it, sourced from the same bidirectionally-honest classification the
+    /// Data-Sent-to-AI ledger records (SONNY-88 — the classification cannot lie in either
+    /// direction, which is what makes the surviving label worth rendering).
+    public var safeModeLines: [String] {
+        [
+            "What Sonny is about to do: \(actionDescription)",
+            "Why this is risky: \(riskReason)",
+            "Involves: \(involvedResource)",
+            dataLeavesDeviceLine,
+            "Undo: \(undoDescription)"
+        ]
+    }
+
+    public var dataLeavesDeviceLine: String {
+        "Data leaves device: \(dataLeavesDevice ? "yes" : "no")"
     }
 }
 
