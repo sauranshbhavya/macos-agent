@@ -937,13 +937,41 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
-    private func awaitVisionApproval(_ request: RiskApprovalRequest) async -> CapabilityRiskTier? {
+    /// Cancellation-aware for exactly the reason `requestClarification` is, and in the same shape.
+    /// `start()` cancels `currentTask` on every new command, so a bare `withCheckedContinuation`
+    /// here parked `visionApprovalContinuation` forever the moment the user typed anything while a
+    /// vision-delegated approval was on screen — and the *next* run's approval click then hit
+    /// `approvePendingRun`'s vision branch first, resuming that stale continuation with the new
+    /// request's tier and swallowing the click. The guard inside the handler is load-bearing: it is
+    /// what makes a cancellation that races a real approve/deny a no-op rather than a double resume.
+    ///
+    /// `Task.checkCancellation()` after the await, rather than handing `nil` back to the loop:
+    /// `nil` means "the user declined" everywhere else (`cancelCurrentRun`), and the loop answers a
+    /// decline by continuing — one more `activateApp` (a real focus steal, on top of the command the
+    /// user just typed) and another capture on a run that has already been replaced. Throwing ends
+    /// the run at the same point, and with the same "Canceled." summary, that a cancelled
+    /// clarification already does. This deliberately does not touch `cancelCurrentRun`'s vision
+    /// branch: that path returns *before* `currentTask?.cancel()`, so a real deny still resumes with
+    /// `nil` and the loop still continues — the open Cancel-semantics question recorded on SONNY-80,
+    /// which is the founder's to decide, not this fix's.
+    private func awaitVisionApproval(_ request: RiskApprovalRequest) async throws -> CapabilityRiskTier? {
         approvalRequest = request
         finalSummary = "Approval needed before Sonny's coordinator can act."
         logStore.append(.confirm, "Vision-requested coordinator action requires \(request.assessment.effectiveTier.displayName) approval")
-        return await withCheckedContinuation { continuation in
-            visionApprovalContinuation = continuation
+        let approvedTier = await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                visionApprovalContinuation = continuation
+            }
+        } onCancel: {
+            Task { @MainActor in
+                guard let continuation = self.visionApprovalContinuation else { return }
+                self.visionApprovalContinuation = nil
+                self.approvalRequest = nil
+                continuation.resume(returning: nil)
+            }
         }
+        try Task.checkCancellation()
+        return approvedTier
     }
 
     private func prepareVisionCoordinatorRun(command: String) async throws -> (AgentRunner, PreparedAgentRun) {
@@ -2475,7 +2503,7 @@ extension AgentViewModel: VisionActionLoopInteracting {
             case .autoRun:
                 decision = .notRequested
             case .lightweightConfirmation, .explicitApproval:
-                guard let approvedTier = await awaitVisionApproval(approval) else {
+                guard let approvedTier = try await awaitVisionApproval(approval) else {
                     return .failed(reason: "The user declined the coordinator action.")
                 }
                 decision = .approved(approvedTier)
@@ -2497,7 +2525,7 @@ extension AgentViewModel: VisionActionLoopInteracting {
                     )
                     break
                 } catch RiskApprovalError.approvalRequired(let refreshedRequest) {
-                    guard let approvedTier = await awaitVisionApproval(refreshedRequest) else {
+                    guard let approvedTier = try await awaitVisionApproval(refreshedRequest) else {
                         return .failed(reason: "The user declined the coordinator action after its risk changed.")
                     }
                     decision = .approved(approvedTier)
