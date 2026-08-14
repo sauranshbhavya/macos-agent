@@ -488,8 +488,7 @@ public final class AgentActionExecutor {
     /// with no resource would violate the type's own invariant to save four lines.
     ///
     /// Folding nested verdicts in at all is what stops a routine laundering the roll-up: without it
-    /// a plan whose routine writes outside the boundary reports `.inScope`, which is precisely the
-    /// input row C would relax on.
+    /// a plan whose routine writes outside the boundary reports `.inScope`.
     private func scopeVerdict(
         findings: [WorkspaceScopeFinding],
         nested: [ScopeVerdict],
