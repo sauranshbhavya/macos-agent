@@ -206,7 +206,6 @@ private func makeSafeModeFixture() throws -> SafeModeFixture {
                 fileURL: root.appendingPathComponent("shortcuts-run-history.json")
             ),
             taskHistoryStore: TaskHistoryStore(fileURL: root.appendingPathComponent("task-history.json")),
-            aiEgressStore: AIEgressStore(fileURL: root.appendingPathComponent("ai-egress-ledger.json")),
             clipboardHistorySettingsStore: ClipboardHistorySettingsStore(
                 fileURL: root.appendingPathComponent("clipboard-history-settings.json")
             ),
