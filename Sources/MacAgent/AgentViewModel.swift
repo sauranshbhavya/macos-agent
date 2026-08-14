@@ -922,8 +922,26 @@ final class AgentViewModel: ObservableObject {
     }
 
     private func runVisionLoop(_ request: VisionActionRequest) async {
+        await runVisionLoop(request) { try await VisionActionLoop.run($0, interaction: self) }
+    }
+
+    /// The mapping every vision entry point shares — loop summary to `finalSummary`, cancellation to
+    /// "Canceled.", anything else to the transient error channel — with the loop itself injected.
+    ///
+    /// Split out for one reason, stated here rather than twice: SONNY-80's Option A makes
+    /// `cancelCurrentRun` cancel the task a vision run executes inside, and the only production path
+    /// that puts a vision run into `currentTask` is `start()`'s `vision:` branch — which builds a
+    /// real ScreenCaptureKit driver and a live vision-model client, so no test may go near it.
+    /// `VisionActionLoop` already exposes a mock-driver/scripted-decider overload for exactly this;
+    /// this parameter is what lets a test reach it *through* the real view-model mapping instead of
+    /// asserting on a reimplementation of it. Production behavior is unchanged — the private wrapper
+    /// above is the only production caller and passes precisely what this body used to call inline.
+    func runVisionLoop(
+        _ request: VisionActionRequest,
+        using run: (VisionActionRequest) async throws -> VisionActionLoop.RunSummary
+    ) async {
         do {
-            let summary = try await VisionActionLoop.run(request, interaction: self)
+            let summary = try await run(request)
             finalSummary = summary.userSummary
             logStore.append(.summarize, summary.userSummary)
         } catch {
@@ -937,23 +955,39 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
-    /// Cancellation-aware for exactly the reason `requestClarification` is, and in the same shape.
-    /// `start()` cancels `currentTask` on every new command, so a bare `withCheckedContinuation`
-    /// here parked `visionApprovalContinuation` forever the moment the user typed anything while a
-    /// vision-delegated approval was on screen — and the *next* run's approval click then hit
-    /// `approvePendingRun`'s vision branch first, resuming that stale continuation with the new
-    /// request's tier and swallowing the click. The guard inside the handler is load-bearing: it is
-    /// what makes a cancellation that races a real approve/deny a no-op rather than a double resume.
+    /// Companion to the seam above, and the same sanctioned-exception shape as
+    /// `RoutineStore.saveBypassingStepValidation`: a named, documented, deliberately non-`public`
+    /// door rather than an unchecked one. `cancelCurrentRun`'s vision branch cancels `currentTask`,
+    /// and a test that cannot reach `start()`'s vision branch cannot otherwise put anything there —
+    /// so without this, Option A's "one press ends the run" is untestable and would ship on a
+    /// reading of the code. Writes `currentTask` and nothing else: `isRunning` and the rest of a
+    /// run's state stay the caller's, exactly as `performStart` owns them in production.
+    func adoptVisionLoopTaskForTesting(_ task: Task<Void, Never>) {
+        currentTask = task
+    }
+
+    /// Cancellation-aware for exactly the reason `requestClarification` is, and in the same shape: a
+    /// bare `withCheckedContinuation` here parks `visionApprovalContinuation` forever if the run is
+    /// cancelled while its approval is on screen, and since `approvePendingRun` checks that
+    /// continuation first, the *next* run's approval click would resume the stale one with the new
+    /// request's tier and be swallowed. Worth being exact about how that state is reached, because
+    /// the review that found it was not: typing a new command cannot do it — `start()` returns at
+    /// its `isAwaitingApproval` guard, as do `approvePendingRun` and the routine scheduler, long
+    /// before any `currentTask?.cancel()`. The one path that cancels a run from this state is
+    /// `cancelCurrentRun`'s own vision branch below, which is also why the guard inside the handler
+    /// is load-bearing: that branch clears and resumes the continuation itself *before* cancelling,
+    /// and the guard is what keeps the handler from resuming it a second time.
     ///
     /// `Task.checkCancellation()` after the await, rather than handing `nil` back to the loop:
     /// `nil` means "the user declined" everywhere else (`cancelCurrentRun`), and the loop answers a
     /// decline by continuing — one more `activateApp` (a real focus steal, on top of the command the
     /// user just typed) and another capture on a run that has already been replaced. Throwing ends
     /// the run at the same point, and with the same "Canceled." summary, that a cancelled
-    /// clarification already does. This deliberately does not touch `cancelCurrentRun`'s vision
-    /// branch: that path returns *before* `currentTask?.cancel()`, so a real deny still resumes with
-    /// `nil` and the loop still continues — the open Cancel-semantics question recorded on SONNY-80,
-    /// which is the founder's to decide, not this fix's.
+    /// clarification already does. `cancelCurrentRun`'s vision branch now cancels the run too
+    /// (SONNY-80 Option A, founder 2026-08-14), so both exits from this call end the run today —
+    /// but they stay distinct on purpose: `nil` still means "declined" to the two call sites below,
+    /// which is what keeps row I's future labelled deny-this-step control a change to
+    /// `cancelCurrentRun` alone rather than a rewrite of the delegate path.
     private func awaitVisionApproval(_ request: RiskApprovalRequest) async throws -> CapabilityRiskTier? {
         approvalRequest = request
         finalSummary = "Approval needed before Sonny's coordinator can act."
@@ -1010,6 +1044,28 @@ final class AgentViewModel: ObservableObject {
             approvalRequest = nil
             hasCompletedFirstApproval = true
             continuation.resume(returning: nil)
+            // SONNY-80, Option A (founder decision, 2026-08-14): **one press ends the run.** The
+            // resume above still tells the delegate path "declined"; before this line the loop read
+            // that decline as "carry on" and kept clicking, so stopping took a second press — while
+            // the clarification branch directly below has always ended the run on the first. Same
+            // control (all three call sites of this method), two visually identical waiting states,
+            // two meanings; and the state where "keeps going" means a program still moving the real
+            // cursor is the worst possible place for a stop that doesn't stop.
+            //
+            // It lands as a clean end-of-run rather than a torn one because `awaitVisionApproval`'s
+            // `Task.checkCancellation()` turns this into the same `CancellationError` a cancelled
+            // clarification throws — hence the same "Canceled." summary from `runVisionLoop`. The
+            // continuation is cleared and resumed above, before this cancel, so the handler in
+            // `awaitVisionApproval` guards on the same property, finds nothing, and there is exactly
+            // one resume.
+            //
+            // This is not a rejection of decline-and-continue. The founder wants it back in row I as
+            // a *labelled* "deny this step" control beside a labelled stop (SONNY-93 / the E9
+            // table); the switch condition is that UI existing, not a change of mind. When it does,
+            // this rule is not undone — it becomes the semantics of the stop control specifically,
+            // and deny-this-step becomes a second, narrower path that resumes `nil` without
+            // cancelling. See the standing design note on SONNY-80.
+            currentTask?.cancel()
             return
         }
         if let continuation = visionClarificationContinuation {
