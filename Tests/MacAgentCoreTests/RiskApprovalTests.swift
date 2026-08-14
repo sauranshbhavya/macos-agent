@@ -35,21 +35,22 @@ struct RiskApprovalTests {
         #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier4), context: context) == .refuse)
     }
 
-    /// The policy dials are inert on the ordinary path under the consequence rule — a tightened
-    /// tier 1 and a preview-only tier 2 both auto-run; the stricter tier-2 dial survives only
-    /// inside Safe mode, where the formula takes the stricter of baseline and floor. (Whether the
-    /// dials should now be deleted outright is the founder's call, flagged in the pivot records.)
+    /// The policy dials were deleted on 2026-08-14 (coordinator- and reviewer-confirmed, founder
+    /// veto open at the PR): one was inert on every path, the other constructible by no site.
+    /// What survives them is pinned instead — the default policy is the whole policy space, and
+    /// `.previewOnly` is a requirement no mapping path can produce anymore, at any tier, in
+    /// either posture.
     @Test
-    func thePolicyDialsAreInertOnTheOrdinaryPath() {
-        let policy = RiskApprovalPolicy(
-            requireApprovalForTier1: true,
-            tier2Mode: .previewOnly
-        )
-
-        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier0), context: ApprovalContext(safeMode: false)) == .autoRun)
-        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier1), context: ApprovalContext(safeMode: false)) == .autoRun)
-        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier2), context: ApprovalContext(safeMode: false)) == .autoRun)
-        #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier2), context: ApprovalContext(safeMode: true)) == .previewOnly)
+    func noMappingPathProducesPreviewOnly() {
+        for tier in CapabilityRiskTier.allCases {
+            for safeMode in [false, true] {
+                let requirement = RiskApprovalPolicy.default.requirement(
+                    for: CapabilityRiskAssessment(defaultTier: tier),
+                    context: ApprovalContext(safeMode: safeMode)
+                )
+                #expect(requirement != .previewOnly, "tier \(tier), safeMode \(safeMode)")
+            }
+        }
     }
 
     @Test

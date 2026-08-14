@@ -107,7 +107,7 @@ struct ConsequenceRuleDispatchTests {
             )
         )
         fixture.viewModel.refreshSavedItems()
-        fixture.viewModel.safeModeEnabled = true
+        fixture.viewModel.interactionMode = .safe
 
         // 1. In-workspace draft.
         fixture.viewModel.command = "Draft notes in Client Alpha"
