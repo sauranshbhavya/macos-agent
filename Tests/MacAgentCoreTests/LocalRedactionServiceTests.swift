@@ -215,6 +215,27 @@ struct LocalRedactionTextTests {
     }
 
     @Test
+    func mastercardTwoSeriesLuhnPassingCardMasksAboveThreshold() {
+        // Mastercard's 2221–2720 BIN range (issued since 2017) — invisible to the detector's
+        // original first-digit check (PR #49 F2). 2223003122003222 is a published 2-series
+        // test PAN and passes Luhn.
+        let payload = textService().redactText("Card on file 2223003122003222 exp 12/29")
+        #expect(payload.maskedText == "Card on file ••••• exp 12/29")
+        #expect(payload.report == [
+            RedactionReportEntry(detectionClass: .creditCardNumber, count: 1, locationCategory: .text, confidence: 0.95, belowConfidenceThreshold: false)
+        ])
+    }
+
+    @Test
+    func mastercardTwoSeriesLuhnFailingShapeStillRedactsAndFlags() {
+        let payload = textService().redactText("Card on file 2223003122003223 exp 12/29")
+        #expect(payload.maskedText == "Card on file ••••• exp 12/29")
+        #expect(payload.report == [
+            RedactionReportEntry(detectionClass: .creditCardNumber, count: 1, locationCategory: .text, confidence: 0.55, belowConfidenceThreshold: true)
+        ])
+    }
+
+    @Test
     func luhnPassingCardNumberMasksAboveThreshold() {
         let payload = textService().redactText("Card 4111 1111 1111 1111 on file")
         #expect(payload.maskedText == "Card ••••• on file")
@@ -310,6 +331,19 @@ struct LocalRedactionTextTests {
         let payload = textService().redactText("cards 4111 1111 1111 1111 and 4111 1111 1111 1112")
         #expect(payload.report == [
             RedactionReportEntry(detectionClass: .creditCardNumber, count: 2, locationCategory: .text, confidence: 0.55, belowConfidenceThreshold: true)
+        ])
+    }
+
+    @Test
+    func overlapCoalescingMasksTheUnionNotJustTheWinnersOwnRange() {
+        // PR #49 F7: the labeled-token match (0.85) covers "v2.eyJ…" in full; the JWT match
+        // (0.95) starts after "v2.". Winner-take-range once left "v2." in the clear — the
+        // union masks everything either match covered, reported as the winner's class.
+        let payload = textService().redactText("token=v2.eyJhbGciOiJIUzI1NiJ9.eyJzdWIiOiIxMjMifQ.SflKxwRJSM done")
+        #expect(payload.maskedText == "token=••••• done")
+        #expect(payload.maskedText?.contains("v2.") == false)
+        #expect(payload.report == [
+            RedactionReportEntry(detectionClass: .accessToken, count: 1, locationCategory: .text, confidence: 0.95, belowConfidenceThreshold: false)
         ])
     }
 
@@ -423,6 +457,111 @@ struct LocalRedactionImageTests {
         #expect(payload.report == [
             RedactionReportEntry(detectionClass: .creditCardNumber, count: 1, locationCategory: .imageRegion, confidence: 0.55, belowConfidenceThreshold: true)
         ])
+    }
+
+    /// PR #49 F1's defect, pinned shut: Vision hands back one observation per rendered line, so
+    /// a BEGIN→END private-key block arrives split across observations. Per-line detection
+    /// matched only the BEGIN line and shipped the key's body unpainted — while the report
+    /// claimed a confidence-1.0 redaction. Every line the block spans must be painted.
+    @Test
+    func aPrivateKeyBlockSpanningObservationsIsPaintedInFull() async throws {
+        let png = ImageFixtures.solidWhitePNG(width: 500, height: 300)
+        let recognizer = FakeTextRecognizer(observations: [
+            RecognizedTextObservation(string: "-----BEGIN RSA PRIVATE KEY-----", boundingBox: CGRect(x: 20, y: 40, width: 300, height: 24)),
+            RecognizedTextObservation(string: "MIIEowIBAAKCAQEAy7Zt+qFwUvGh/PmxKQ", boundingBox: CGRect(x: 20, y: 80, width: 300, height: 24)),
+            RecognizedTextObservation(string: "kJ3n2/Qv8bFxAoGBAPq3mV4tR+SsdKuwEr", boundingBox: CGRect(x: 20, y: 120, width: 300, height: 24)),
+            RecognizedTextObservation(string: "-----END RSA PRIVATE KEY-----", boundingBox: CGRect(x: 20, y: 160, width: 300, height: 24))
+        ])
+        let service = LocalRedactionService(textRecognizer: recognizer)
+
+        let payload = try await service.redactCapture(capture(png: png, width: 500, height: 300))
+
+        let redacted = try #require(payload.redactedImagePNGData)
+        // Every one of the four lines — the body lines are the key.
+        #expect(ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: 150, yFromTop: 52)))
+        #expect(ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: 150, yFromTop: 92)))
+        #expect(ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: 150, yFromTop: 132)))
+        #expect(ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: 150, yFromTop: 172)))
+        // Untouched corners stay white.
+        #expect(ImageFixtures.isWhite(ImageFixtures.rgb(inPNG: redacted, x: 450, yFromTop: 280)))
+        #expect(payload.report == [
+            RedactionReportEntry(detectionClass: .privateKey, count: 1, locationCategory: .imageRegion, confidence: 1.0, belowConfidenceThreshold: false)
+        ])
+    }
+
+    @Test
+    func anSSNInAnImageIsPaintedAndReported() async throws {
+        let png = ImageFixtures.solidWhitePNG(width: 400, height: 200)
+        let recognizer = FakeTextRecognizer(observations: [
+            RecognizedTextObservation(string: "SSN 123-45-6789", boundingBox: CGRect(x: 40, y: 60, width: 180, height: 24))
+        ])
+        let service = LocalRedactionService(textRecognizer: recognizer)
+
+        let payload = try await service.redactCapture(capture(png: png, width: 400, height: 200))
+
+        let redacted = try #require(payload.redactedImagePNGData)
+        #expect(ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: 130, yFromTop: 72)))
+        #expect(payload.report == [
+            RedactionReportEntry(detectionClass: .socialSecurityNumber, count: 1, locationCategory: .imageRegion, confidence: 0.9, belowConfidenceThreshold: false)
+        ])
+    }
+
+    @Test
+    func aOneTimeCodeInAnImageIsPaintedAndReported() async throws {
+        let png = ImageFixtures.solidWhitePNG(width: 400, height: 200)
+        let recognizer = FakeTextRecognizer(observations: [
+            RecognizedTextObservation(string: "Your verification code is 482913", boundingBox: CGRect(x: 40, y: 60, width: 260, height: 24))
+        ])
+        let service = LocalRedactionService(textRecognizer: recognizer)
+
+        let payload = try await service.redactCapture(capture(png: png, width: 400, height: 200))
+
+        let redacted = try #require(payload.redactedImagePNGData)
+        #expect(ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: 170, yFromTop: 72)))
+        #expect(payload.report == [
+            RedactionReportEntry(detectionClass: .oneTimeCode, count: 1, locationCategory: .imageRegion, confidence: 0.85, belowConfidenceThreshold: false)
+        ])
+    }
+
+    @Test
+    func anAccessTokenInAnImageIsPaintedAndReported() async throws {
+        let png = ImageFixtures.solidWhitePNG(width: 500, height: 200)
+        let recognizer = FakeTextRecognizer(observations: [
+            RecognizedTextObservation(string: "Authorization: Bearer abcDEF123456789012345", boundingBox: CGRect(x: 40, y: 60, width: 380, height: 24))
+        ])
+        let service = LocalRedactionService(textRecognizer: recognizer)
+
+        let payload = try await service.redactCapture(capture(png: png, width: 500, height: 200))
+
+        let redacted = try #require(payload.redactedImagePNGData)
+        #expect(ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: 230, yFromTop: 72)))
+        #expect(payload.report == [
+            RedactionReportEntry(detectionClass: .accessToken, count: 1, locationCategory: .imageRegion, confidence: 0.95, belowConfidenceThreshold: false)
+        ])
+    }
+
+    /// PR #49 F8: a claimed region that lies entirely outside the image cannot be painted, and
+    /// silently skipping it would leave the report attesting a redaction that never happened —
+    /// same honesty class as F1, same answer: fail closed. Unreachable through the shipped
+    /// Vision recognizer; `ImageTextRecognizing` is a public seam row I plugs into.
+    @Test
+    func aRegionEntirelyOutsideTheImageFailsClosed() async {
+        let recognizer = FakeTextRecognizer(observations: [
+            RecognizedTextObservation(string: "password: hunter2", boundingBox: CGRect(x: 400, y: 400, width: 100, height: 20))
+        ])
+        let service = LocalRedactionService(textRecognizer: recognizer)
+        do {
+            _ = try await service.redactCapture(capture(png: ImageFixtures.solidWhitePNG(width: 200, height: 200), width: 200, height: 200))
+            Issue.record("an unpaintable claimed region must never become a payload")
+        } catch let error as LocalRedactionError {
+            guard case .imageRedactionFailed(let reason) = error else {
+                Issue.record("expected imageRedactionFailed, got \(error)")
+                return
+            }
+            #expect(reason.contains("outside"))
+        } catch {
+            Issue.record("expected LocalRedactionError, got \(error)")
+        }
     }
 
     @Test

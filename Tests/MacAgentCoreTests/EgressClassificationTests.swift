@@ -139,7 +139,7 @@ struct SolitaryWriteMarkdownTests {
         let plan = solitaryWriteMarkdownPlan(output: root.appendingPathComponent("note.md"))
 
         #expect(throws: AgentExecutionError.invalidPlan(
-            "write_markdown needs a content source in the same plan — fetch_hn_headlines for the Hacker News digest, or web_to_markdown for a research note."
+            "write_markdown is the Hacker News digest's write step and needs fetch_hn_headlines in the same plan. For a web research note, use web_to_markdown on its own — it writes its own file."
         )) {
             _ = try executor.prepare(plan: plan)
         }

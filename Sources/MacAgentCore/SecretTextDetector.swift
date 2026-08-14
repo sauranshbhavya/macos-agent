@@ -202,7 +202,12 @@ struct SecretTextDetector {
         let candidate = /\b\d(?:[ -]?\d){12,18}\b/
         for match in text.matches(of: candidate) {
             let digits = text[match.range].compactMap(\.wholeNumberValue)
-            guard (13...19).contains(digits.count), [3, 4, 5, 6].contains(digits[0]) else { continue }
+            guard (13...19).contains(digits.count) else { continue }
+            // Leading digits 3/4/5/6 cover Amex/Visa/Mastercard-5/Discover; Mastercard has also
+            // issued the 2221–2720 BIN range since 2017 (PR #49 F2 — a Luhn-valid 2-series PAN
+            // sailed through unmasked because the first-digit check predated the range).
+            let firstFour = digits[0] * 1_000 + digits[1] * 100 + digits[2] * 10 + digits[3]
+            guard [3, 4, 5, 6].contains(digits[0]) || (2221...2720).contains(firstFour) else { continue }
             // Luhn is the validity check that separates "verified card number" from "card-shaped
             // digits": pass sits above the threshold, fail sits below it and still redacts.
             let confidence = Self.passesLuhn(digits) ? 0.95 : 0.55
@@ -251,22 +256,36 @@ struct SecretTextDetector {
         return sum % 10 == 0
     }
 
-    /// Overlapping detections keep the highest-confidence one ("password: eyJa.b.c" is one
-    /// secret, not two), then come back in text order for deterministic masking.
+    /// Overlapping detections merge into ONE match covering the union of their ranges,
+    /// classified and scored by the highest-confidence member ("password: eyJa.b.c" is one
+    /// secret, not two). The union, not the winner's own range (PR #49 F7): keeping only the
+    /// narrower high-confidence range once emitted the wider low-confidence match's remainder
+    /// in the clear — `token=v2.<jwt>` masked to `token=v2.•••••` because the JWT match (0.95)
+    /// starts after the `v2.` the labeled-token match (0.85) covered. Coverage is the
+    /// fail-closed half; the class label is only reporting.
     static func coalesceOverlaps(_ matches: [SecretTextMatch]) -> [SecretTextMatch] {
-        let byConfidence = matches.sorted { first, second in
-            if first.confidence != second.confidence { return first.confidence > second.confidence }
-            return first.range.lowerBound < second.range.lowerBound
-        }
-        var kept: [SecretTextMatch] = []
-        for match in byConfidence {
-            let overlapsKept = kept.contains { existing in
-                match.range.overlaps(existing.range)
+        let byPosition = matches.sorted { first, second in
+            if first.range.lowerBound != second.range.lowerBound {
+                return first.range.lowerBound < second.range.lowerBound
             }
-            if !overlapsKept {
-                kept.append(match)
-            }
+            return first.confidence > second.confidence
         }
-        return kept.sorted { $0.range.lowerBound < $1.range.lowerBound }
+        var merged: [SecretTextMatch] = []
+        for match in byPosition {
+            guard let last = merged.last, last.range.overlaps(match.range) else {
+                merged.append(match)
+                continue
+            }
+            let upperBound = last.range.upperBound < match.range.upperBound
+                ? match.range.upperBound
+                : last.range.upperBound
+            let winner = match.confidence > last.confidence ? match : last
+            merged[merged.count - 1] = SecretTextMatch(
+                detectionClass: winner.detectionClass,
+                range: last.range.lowerBound..<upperBound,
+                confidence: winner.confidence
+            )
+        }
+        return merged
     }
 }

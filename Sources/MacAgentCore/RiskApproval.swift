@@ -192,13 +192,12 @@ public struct RiskApprovalCopy: Codable, Equatable, Sendable {
     /// classification cannot lie in either direction, which is what makes the surviving label
     /// worth rendering).
     public var safeModeLines: [String] {
-        [
-            "What Sonny is about to do: \(actionDescription)",
-            "Why this is risky: \(riskReason)",
-            "Involves: \(involvedResource)",
-            dataLeavesDeviceLine,
-            "Undo: \(undoDescription)"
-        ]
+        // Derived from `lines`, never a second copy of it (PR #49 F11): this is security-bearing
+        // disclosure copy, and a wording edit that landed in one list but not the other would
+        // diverge the two surfaces silently. Index 3 is the label's §11.3 position, before Undo.
+        var all = lines
+        all.insert(dataLeavesDeviceLine, at: 3)
+        return all
     }
 
     public var dataLeavesDeviceLine: String {
