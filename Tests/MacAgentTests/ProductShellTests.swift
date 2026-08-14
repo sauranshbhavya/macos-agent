@@ -512,6 +512,160 @@ struct ProductShellTests {
         #expect(viewModel.activeTaskScope == .unscoped)
     }
 
+    /// **The forcing function for `clearInMemoryLocalDataState`'s hand-written enumeration.**
+    ///
+    /// That enumeration has now been missed three times, always the same way: a new stored property
+    /// lands on `AgentViewModel`, nothing connects it to the local-data wipe, and the wipe keeps
+    /// showing the deleted data's leftovers. `explicitWorkspaceBinding` (SONNY-38's review),
+    /// `pendingWorkspaceBinding` (a new binding field one ticket later), and `ranWithoutAskingTrace`
+    /// (SONNY-99, filed by PR #48's review as F1 — the trace rendered "nothing here is destructive"
+    /// under the deletion summary). Three of one class is a missing test, not three unlucky editors:
+    /// the compiler cannot see the omission, and a reviewer only sees it by reading the wipe against
+    /// the whole class, which is exactly the reading nobody does by default.
+    ///
+    /// This test is that reading, made automatic. It reflects over the *real* instance, so a new
+    /// stored property appears in the population the moment it is declared, and it requires every
+    /// one to sit in exactly one of three named sets. A fourth omission is a red test naming the
+    /// field, not a fourth review finding.
+    ///
+    /// **What it claims, precisely.** It pins *classification*, not behaviour. `clearedByTheWipe` is
+    /// cross-checked against the function's real source in both directions — a clear that is not
+    /// listed fails, and a listing that is not cleared fails — so that set cannot drift from the
+    /// code. The other two sets are decisions recorded with their reasons; whether a given decision
+    /// is the *right* one is what the behavioural tests around the wipe are for
+    /// (`deletingAllLocalDataClearsTheRanWithoutAskingTrace…`,
+    /// `clearingInMemoryStateWithAnApprovalPendingLeavesNoStaleBinding`). What this removes is the
+    /// silent fourth option: landing a field and never deciding at all.
+    @Test
+    func everyAgentViewModelStoredPropertyIsClassifiedAgainstTheLocalDataWipe() throws {
+        // Assigned by `clearInMemoryLocalDataState` itself. Cross-checked against the real source
+        // below, so this list cannot say something the function does not do.
+        let clearedByTheWipe: Set<String> = [
+            "plan",
+            "suggestions",
+            "approvalRequest",
+            "stepStatuses",
+            "priorTaskContext",
+            "taskUsageSummary",
+            "taskHistoryRecords",
+            "clarificationQuestion",
+            "clarificationAnswer",
+            "clarificationAutoExecute",
+            "clarificationWorkspaceBinding",
+            "activeTaskScope",
+            "ranWithoutAskingTrace",
+            "explicitWorkspaceBinding",
+            "pendingWorkspaceBinding",
+            "preparedRun",
+            "runner",
+            "pendingCommandForPriorTaskContext",
+            "pendingTaskHistoryStartedAt",
+            "preserveUsageForNextStart"
+        ]
+
+        // Not assigned by the wipe, but rewritten by the three `refresh…` calls it ends with — from
+        // stores whose files the deletion has just emptied, so they come back as the empty truth
+        // rather than as stale values. Covered, by a different mechanism.
+        let reloadedByTheWipe: Set<String> = [
+            "savedRoutines",              // refreshSavedItems()
+            "savedWorkspaces",            // refreshSavedItems()
+            "clipboardHistoryEnabled",    // refreshClipboardHistoryNotice()
+            "clipboardHistoryTimer",      // ditto, via start/stopClipboardHistoryMonitoring()
+            "localStorageLoadFailures",   // record/clearLocalStorageLoadFailure, inside all three
+            "localStorageNotice"          // ditto, via refreshLocalStorageNotice()
+        ]
+
+        // Deliberately untouched, in four groups.
+        let outsideTheWipe: Set<String> = [
+            // 1. Injected collaborators, timers and observers — not state about a task. (The wipe
+            // does reset the *contents* of `logStore`, `priorTaskContextStore` and
+            // `taskUsageRecorder` through their own APIs; the properties themselves are the
+            // collaborators, not the state.) A new dependency belongs here.
+            "logStore", "currentTask", "audioRecorder", "permissionReadinessService",
+            "routineStore", "workspaceStore", "snippetStore", "recentArtifactStore",
+            "shortcutCatalog", "browserOpener", "appOpener", "fileOpener", "mediaOpener",
+            "runningAppSwitcher", "shortcutInvoker", "finderContextReader", "documentConverter",
+            "zipArchiver", "shortcutRunHistoryStore", "taskHistoryStore",
+            "clipboardHistorySettingsStore", "clipboardHistoryMonitor", "localDataDeletionService",
+            "priorTaskContextStore", "taskUsageRecorder", "plannerProviderRegistry",
+            "plannerSelection", "userDefaults", "whitelist", "routineScheduleTimer", "wakeObserver",
+
+            // 2. Written by `deleteLocalData` itself, immediately after the wipe returns. Clearing
+            // them inside the wipe would be undone one line later.
+            "finalSummary", "errorMessage", "localDataDeletionStatusMessage",
+
+            // 3. Settings, preferences and readiness — none of it is local *data*, and a wipe that
+            // silently reset the user's preferences would be a different feature.
+            "errorIsPersistent", "usePointerCursors", "displayFullNames", "safeModeEnabled",
+            "voiceHotKeyStatus", "voiceHotKeyReady", "permissionItems", "clipboardHistoryPollFailure",
+            "hasCompletedFirstApproval", "widgetPresentationRequest", "scheduledRunNotice",
+            "plannerFallbackNotice",
+
+            // 4. Live-interaction state that cannot be stale when the wipe runs, plus the two slots
+            // whose whole purpose is outliving a task. `deleteLocalData` guards on `!isRunning`, so
+            // the in-flight voice/run flags are already at rest. `lastCommand` and `command` are the
+            // user's own text, not a task artifact. `lastAssessedScope` is documented at its
+            // declaration as deliberately never cleared — `retryLastCommand` reads it after the live
+            // binding is gone, and a workspace name the store no longer has resolves to `.unscoped`
+            // anyway.
+            "command", "lastCommand", "isRunning", "activeTaskOrigin", "lastAssessedScope",
+            "isPreparingVoiceRecording", "isRecordingVoice", "isTranscribingVoice",
+            "isPushToTalkHotKeyDown", "voiceRecordingOrigin", "clarificationOrigin",
+            "scheduledRunDisplayCommand"
+        ]
+
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+
+        // The population: every stored property of the real instance, published or not. Property
+        // wrappers store under a leading underscore, so `_plan` is `plan`.
+        let stored = Set(
+            Mirror(reflecting: fixture.viewModel).children
+                .compactMap(\.label)
+                .map { $0.hasPrefix("_") ? String($0.dropFirst()) : $0 }
+        )
+        #expect(
+            stored.count > 60,
+            "Reflection saw \(stored.count) stored properties — too few to be the real view model."
+        )
+
+        // `clearedByTheWipe` against the function's real body, both directions.
+        let assigned = try Self.assignmentsInClearInMemoryLocalDataState()
+        #expect(
+            assigned == clearedByTheWipe,
+            """
+            `clearInMemoryLocalDataState` and this test's `clearedByTheWipe` list disagree.
+            Cleared in the function but not listed here: \(assigned.subtracting(clearedByTheWipe).sorted()).
+            Listed here but not cleared in the function: \(clearedByTheWipe.subtracting(assigned).sorted()).
+            """
+        )
+
+        // The three sets partition the population: no field in two of them, none in none of them.
+        #expect(clearedByTheWipe.isDisjoint(with: reloadedByTheWipe))
+        #expect(clearedByTheWipe.isDisjoint(with: outsideTheWipe))
+        #expect(reloadedByTheWipe.isDisjoint(with: outsideTheWipe))
+
+        let classified = clearedByTheWipe.union(reloadedByTheWipe).union(outsideTheWipe)
+        #expect(
+            stored.subtracting(classified).isEmpty,
+            """
+            `AgentViewModel` has stored properties this test was never told about: \
+            \(stored.subtracting(classified).sorted()).
+            Put each one in exactly one of `clearedByTheWipe`, `reloadedByTheWipe` or \
+            `outsideTheWipe`, with its reason — and if it is per-task state a surface renders, add \
+            the clear to `clearInMemoryLocalDataState` too. This check exists because that \
+            enumeration has already been missed three times.
+            """
+        )
+        #expect(
+            classified.subtracting(stored).isEmpty,
+            """
+            This test names properties `AgentViewModel` no longer has: \
+            \(classified.subtracting(stored).sorted()). Remove them from their set.
+            """
+        )
+    }
+
     /// SONNY-99's differential-signal rule at the real dispatch surface: a tier-1 run always ran
     /// silently, so a ran-without-asking trace on it would mark a silence that was always ordinary
     /// and teach the user to ignore the one that matters. The silence has to stay ordinary silence.
@@ -1689,6 +1843,53 @@ struct ProductShellTests {
 
         #expect(fixture.viewModel.errorMessage?.contains("Finish or stop the current task") == true)
         #expect(try fixture.workspaceStore.loadAll().count == 1)
+    }
+
+    // MARK: - Source reading, for the local-data-wipe classification test
+
+    /// The identifiers `clearInMemoryLocalDataState` assigns, read out of the real source file.
+    ///
+    /// Read from source rather than observed by behaviour on purpose: the point is to catch a clear
+    /// that exists but was never classified (and a classification with no clear behind it), and both
+    /// of those are invisible to any assertion over values. The body is delimited by the function's
+    /// own closing brace at four-space indentation — the whole body is one flat sequence of
+    /// statements at eight, which the parse below asserts rather than assumes.
+    private static func assignmentsInClearInMemoryLocalDataState() throws -> Set<String> {
+        // <package root>/Tests/MacAgentTests/<this file>
+        let packageRoot = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+        let source = try String(
+            contentsOf: packageRoot
+                .appendingPathComponent("Sources/MacAgent/AgentViewModel.swift"),
+            encoding: .utf8
+        )
+        let lines = source.components(separatedBy: "\n")
+        let start = try #require(
+            lines.firstIndex { $0.hasSuffix("private func clearInMemoryLocalDataState() {") },
+            "`clearInMemoryLocalDataState` was renamed or removed; this test reads it by name."
+        )
+        let body = lines[(start + 1)...].prefix { $0 != "    }" }
+        #expect(
+            body.count > 15,
+            "Read \(body.count) lines of the function body — too few to be the real one."
+        )
+
+        var assigned: Set<String> = []
+        for line in body {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.hasPrefix("//"), let separator = trimmed.range(of: " = ") else {
+                continue
+            }
+            let name = String(trimmed[trimmed.startIndex ..< separator.lowerBound])
+            guard !name.isEmpty,
+                  name.allSatisfy({ $0.isLetter || $0.isNumber || $0 == "_" }) else {
+                continue
+            }
+            assigned.insert(name)
+        }
+        return assigned
     }
 
 }

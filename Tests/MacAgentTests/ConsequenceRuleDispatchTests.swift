@@ -134,6 +134,63 @@ struct ConsequenceRuleDispatchTests {
         #expect(try String(contentsOf: fixture.draftOutput, encoding: .utf8) == "existing draft")
         fixture.viewModel.cancelCurrentRun()
     }
+
+    // MARK: - The trace's lifetime
+
+    /// PR #48, F1 — the trace must not outlive the run it describes into the one deliberately
+    /// destructive thing in the app.
+    ///
+    /// `deleteLocalData` writes its own `finalSummary`, and `WidgetResultPanel` renders
+    /// `ranWithoutAskingTrace` under whatever summary is showing. A trace that survived
+    /// `clearInMemoryLocalDataState` therefore put "nothing here is destructive, and it affects no
+    /// one else" directly beneath "Deleted N local data files." — asserting the opposite of what the
+    /// user had just done, on the one surface the trace exists to be read on.
+    @Test
+    func deletingAllLocalDataClearsTheRanWithoutAskingTraceItWouldOtherwiseRenderUnder() async throws {
+        let fixture = try makeDispatchFixture()
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "Draft notes"
+        fixture.viewModel.start(origin: .widget)
+        try await waitForIdle(fixture.viewModel)
+
+        // Premises, guarded rather than assumed: the trace is really set, on a panel that is really
+        // on screen. Without both, the assertion after the deletion passes for the wrong reason.
+        #expect(fixture.viewModel.ranWithoutAskingTrace
+            == "Ran without asking — nothing here is destructive, and it affects no one else.")
+        #expect(fixture.viewModel.hasVisibleWidgetPanel)
+
+        fixture.viewModel.deleteLocalData()
+
+        // Still a real render — the deletion result is showing, so an uncleared trace would be
+        // visible underneath it rather than merely resident.
+        #expect(fixture.viewModel.finalSummary == "Deleted 0 local data files.")
+        #expect(fixture.viewModel.hasVisibleWidgetPanel)
+        #expect(fixture.viewModel.ranWithoutAskingTrace == nil)
+    }
+
+    /// The sibling clear. The trace has no lifetime of its own: `WidgetResultPanel` is its only
+    /// reader and that panel exists only while `finalSummary` is non-empty, so the widget's
+    /// auto-clear timer has to take both. Left behind, the value can never again be shown with the
+    /// run it describes — it can only reappear attached to someone else's summary, which is the
+    /// shape F1 arrived in.
+    @Test
+    func clearingAStaleTaskOutcomeTakesTheRanWithoutAskingTraceWithIt() async throws {
+        let fixture = try makeDispatchFixture()
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "Draft notes"
+        fixture.viewModel.start(origin: .widget)
+        try await waitForIdle(fixture.viewModel)
+        #expect(fixture.viewModel.ranWithoutAskingTrace
+            == "Ran without asking — nothing here is destructive, and it affects no one else.")
+
+        fixture.viewModel.clearStaleTaskOutcome()
+
+        #expect(fixture.viewModel.finalSummary.isEmpty)
+        #expect(!fixture.viewModel.hasVisibleWidgetPanel)
+        #expect(fixture.viewModel.ranWithoutAskingTrace == nil)
+    }
 }
 
 // MARK: - Fixture
