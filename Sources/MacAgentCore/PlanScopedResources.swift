@@ -185,7 +185,7 @@ public enum PlanScopedResources {
             // whatever the user has highlighted at execution time — anywhere in the whitelist — which
             // is exactly what `.opaque` is for. Emitting `.fileLocation(step.inputPath)` would report
             // a path the adapter ignores; treating the step as knowable would let a plan that reads
-            // arbitrary selected files roll up relaxable.
+            // arbitrary selected files roll up `.inScope`.
             return StepScopedResources(resources: [.app(finderAppName)], isOpaque: true)
 
         case .revealInFinder:
@@ -210,7 +210,7 @@ public enum PlanScopedResources {
             //
             // **The dead argument is not licence to start reporting the handler.** Listability
             // changed; who chose the app did not. Reporting it would also still cost what it always
-            // did — every "produce a file and open it" plan permanently non-relaxable — only now for
+            // did — every "produce a file and open it" plan permanently out of scope — only now for
             // a resource that is wrong rather than merely unremediable.
             return chainedArtifact(step, alongside: [])
 
@@ -273,8 +273,7 @@ public enum PlanScopedResources {
 
         case .invokeShortcut:
             // A black box: Sonny shells to `shortcuts run <name>` and has no visibility into what the
-            // Shortcut touches. Never escalates on scope grounds, never eligible for relaxation, and
-            // it poisons its plan's roll-up so the plan around it can never be relaxed either.
+            // Shortcut touches. Never escalates on scope grounds, and it poisons its plan's roll-up.
             return StepScopedResources(resources: [], isOpaque: true)
 
         case .showPermissionReadiness, .calculateUtility, .lookupClipboardHistory,

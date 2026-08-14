@@ -1112,8 +1112,9 @@ final class AgentViewModel: ObservableObject {
     /// doesn't help, since re-expanding it would show the exact same stale content again (this was
     /// a real, reported bug — a cancellation's "Canceled." banner survived collapsing the widget
     /// multiple times, because collapsing was the only thing this used to do). Clears both
-    /// `errorMessage` and `finalSummary`/`suggestions` unconditionally — whichever pair wasn't
-    /// actually active is already empty, so clearing it too is harmless. Deliberately scoped here,
+    /// `errorMessage` and `finalSummary`/`suggestions`/`ranWithoutAskingTrace` unconditionally —
+    /// whichever pair wasn't actually active is already empty, so clearing it too is harmless
+    /// (see the trace's own note in the body). Deliberately scoped here,
     /// not a broader `reset()`. `FloatingWidgetView`'s timer only ever calls this for `.result`, or
     /// for `.failure` when `errorIsPersistent` is false, so a real configuration problem never gets
     /// silently cleared out from under the user.
@@ -1121,6 +1122,12 @@ final class AgentViewModel: ObservableObject {
         errorMessage = nil
         finalSummary = ""
         suggestions = []
+        // The trace rides on `finalSummary` and has no independent lifetime: `WidgetResultPanel` is
+        // its only reader, and that panel exists only while `finalSummary` is non-empty. Clearing
+        // one and not the other leaves a value that can never be shown with the run it describes and
+        // can only reappear paired with someone else's summary — which is exactly how it reached
+        // `deleteLocalData`'s deletion message (PR #48, F1).
+        ranWithoutAskingTrace = nil
     }
 
     /// The one place `errorMessage` should be set (never assign it directly) — forces every call
@@ -1692,6 +1699,30 @@ final class AgentViewModel: ObservableObject {
         pasteboard.setString(finalSummary, forType: .string)
     }
 
+    /// Wipes the in-memory half of "delete all local data": every slot that describes a task, so
+    /// nothing the deleted files were about survives them on screen.
+    ///
+    /// **This enumeration is hand-written, and it has now been missed three times — read the rule
+    /// below before adding a stored property to this class.** A new field does not arrive here on
+    /// its own, the compiler cannot notice its absence, and the failure mode is never a crash: it is
+    /// a stale sentence rendered next to an unrelated summary, which reads as a statement about that
+    /// summary. The three:
+    ///
+    /// 1. `explicitWorkspaceBinding` — filed by SONNY-38's review against this same function.
+    /// 2. `pendingWorkspaceBinding` — a new binding field one ticket later, the identical omission,
+    ///    which is why the list below is written out rather than trusted.
+    /// 3. `ranWithoutAskingTrace` — SONNY-99's trace, filed by PR #48's review. `deleteLocalData`
+    ///    writes its own `finalSummary`, and `WidgetResultPanel` renders the trace under whatever
+    ///    summary is showing, so a surviving trace put "nothing here is destructive" beneath the one
+    ///    deliberately destructive action in the app.
+    ///
+    /// **The rule, now enforced rather than remembered:** every stored property on this view model
+    /// is classified into exactly one of three sets — cleared here, refreshed by one of the three
+    /// `refresh…` calls at the end of this function, or deliberately kept (dependencies, settings,
+    /// surface preferences). `everyAgentViewModelStoredPropertyIsClassifiedAgainstTheLocalDataWipe`
+    /// (`ProductShellTests`) reflects over the real instance and fails by name on any property in
+    /// none of the three, so a fourth omission is a red test rather than a fourth review finding.
+    /// Adding a field is therefore a decision, not an oversight: put it in a set, with its reason.
     private func clearInMemoryLocalDataState() {
         plan = nil
         suggestions = []
@@ -1705,10 +1736,8 @@ final class AgentViewModel: ObservableObject {
         clarificationAutoExecute = false
         clarificationWorkspaceBinding = nil
         activeTaskScope = .unscoped
+        ranWithoutAskingTrace = nil
         explicitWorkspaceBinding = nil
-        // The pending card slot too. SONNY-38's review filed the identical finding against this
-        // same function for `explicitWorkspaceBinding`; a new binding field added one ticket later
-        // repeated it, which is why the enumeration above is written out rather than trusted.
         pendingWorkspaceBinding = nil
         preparedRun = nil
         runner = nil
