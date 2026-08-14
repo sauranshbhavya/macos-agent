@@ -763,10 +763,10 @@ private struct CommandCenterAttentionPanel: View {
         // name: Command Center has the vertical room the widget's single-line treatment doesn't,
         // and this may be the only surface an unattended run's approval is ever read on. The
         // line set is mode-selected (SONNY-90): "Data leaves device: yes/no" renders only under
-        // Safe mode — E9's ratified §11.3 deviation.
+        // Safe mode — E9's ratified §11.3 deviation; Normal and Power both omit it.
         ForEach(Array(AgentActivityPresentation.approvalDisclosureLines(
             for: request,
-            safeModeEnabled: viewModel.safeModeEnabled
+            safeMode: viewModel.interactionMode == .safe
         ).enumerated()), id: \.offset) { _, line in
             Text(line)
                 .font(SonnyType.micro)
@@ -3620,6 +3620,26 @@ private struct SettingsSecurityAccessPage: View {
         VStack(alignment: .leading, spacing: 0) {
             SettingsPageTitle(title: "Security & Access", subtitle: "Review local readiness")
                 .padding(.bottom, 20)
+
+            SettingsDivider()
+
+            // The product's one posture dial, first on the page — everything below it (grants,
+            // readiness) is detail relative to how much Sonny asks. Placement and the per-mode
+            // line are this session's judgment under the page-by-page best-effort rule; the
+            // control itself is the founder's wireframe, built in SonnyModeSegmentedControl.
+            SettingsSectionBlock(title: "Mode") {
+                VStack(alignment: .leading, spacing: 12) {
+                    SonnyModeSegmentedControl(selection: $viewModel.interactionMode)
+
+                    Text(viewModel.interactionMode.settingsDescription)
+                        .font(SonnyType.micro)
+                        .foregroundStyle(SonnyTheme.muted)
+                        .fixedSize(horizontal: false, vertical: true)
+                }
+                .padding(.vertical, 16)
+            }
+            .padding(.top, 24)
+            .padding(.bottom, 16)
 
             SettingsDivider()
 

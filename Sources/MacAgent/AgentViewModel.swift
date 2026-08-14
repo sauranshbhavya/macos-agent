@@ -298,7 +298,7 @@ final class AgentViewModel: ObservableObject {
         static let usePointerCursors = "com.sonny.preferences.usePointerCursors"
         static let displayFullNames = "com.sonny.preferences.displayFullNames"
         static let hasCompletedFirstApproval = "com.sonny.state.hasCompletedFirstApproval"
-        static let safeModeEnabled = "com.sonny.preferences.safeModeEnabled"
+        static let interactionMode = "com.sonny.preferences.interactionMode"
     }
 
     /// The environment variable naming which registered planner provider plans tasks —
@@ -341,9 +341,12 @@ final class AgentViewModel: ObservableObject {
         usePointerCursors = userDefaults.object(forKey: UserDefaultsKeys.usePointerCursors) as? Bool ?? true
         displayFullNames = userDefaults.object(forKey: UserDefaultsKeys.displayFullNames) as? Bool ?? false
         hasCompletedFirstApproval = userDefaults.object(forKey: UserDefaultsKeys.hasCompletedFirstApproval) as? Bool ?? false
-        // `?? false`, unlike the `?? true` preference convention: Safe mode defaults OFF (Normal
-        // is the ratified product), so the missing-key default and the product default agree.
-        safeModeEnabled = userDefaults.object(forKey: UserDefaultsKeys.safeModeEnabled) as? Bool ?? false
+        // Missing or unrecognized raw value falls to Normal — the ratified product default, so
+        // the missing-key default and the product default agree (the reason the boolean
+        // predecessor deviated from the `?? true` preference convention, carried forward).
+        interactionMode = AgentInteractionMode(
+            rawValue: userDefaults.string(forKey: UserDefaultsKeys.interactionMode) ?? ""
+        ) ?? .normal
         self.audioRecorder = audioRecorder
         self.permissionReadinessService = permissionReadinessService
         self.routineStore = routineStore
@@ -896,7 +899,7 @@ final class AgentViewModel: ObservableObject {
                 // tier-2 ceiling and notify-and-pause are the ticket's "no new unattended prompt
                 // class", and a schedule that Safe mode silently suspended would be one.
                 let trustDecision = manualRoutineTrustDecision(for: prepared.plan)
-                if !safeModeEnabled, trustDecision.authorizes(request) {
+                if interactionMode != .safe, trustDecision.authorizes(request) {
                     routineTrustApproval = trustDecision
                 } else {
                     approvalRequest = request
@@ -913,9 +916,9 @@ final class AgentViewModel: ObservableObject {
                     return
                 }
             case .previewOnly:
-                // Unreachable today: nothing in the app ever builds a `RiskApprovalPolicy` with
-                // `tier2Mode == .previewOnly`, so `AgentRunner` always uses `.default`. The case
-                // still has to be handled because the requirement is public API. It reports
+                // Unreachable today: no path in the mapping produces `.previewOnly` since the
+                // policy dials were deleted (2026-08-14) — the requirement enum keeps the case
+                // as public API and the consent rank still orders it. It reports
                 // through `errorMessage` rather than `finalSummary` so that *if* a policy
                 // control ever makes it reachable, the outcome is actually visible — the widget
                 // and Command Center both surface errors, but neither renders a `.prepared`
@@ -2054,31 +2057,30 @@ final class AgentViewModel: ObservableObject {
         return .scoped(WorkspaceScope(workspace: record, whitelist: whitelist))
     }
 
-    /// Whether Safe mode is engaged — the cautious user's opt-back-in to being asked about
-    /// everything (tiers 0–3 all prompt; tier 4 still refuses), and the only place the
-    /// data-leaves-device label renders (E9's ratified §11.3 deviation). Persisted (SONNY-90) so
-    /// the caution dial survives relaunch — a Safe mode that silently reset to Normal on restart
-    /// would be a caution dial that quietly un-dials itself. Defaults OFF: Normal mode is the
-    /// ratified product default, and Safe mode is an explicit opt-in.
-    ///
-    /// The user-visible toggle is founder-wireframe-gated and not built yet; until it lands the
-    /// writers are tests (driving the real dispatch path through this seam, exactly as the
-    /// consequence-rule suite already does) and the persistence read below.
-    @Published var safeModeEnabled: Bool = false {
+    /// The product's one posture dial — Safe | Normal | Power, the founder's segmented control
+    /// (SONNY-90 as amended 2026-08-14; wireframe `docs/wireframes/15-SegmentedControl.svg`).
+    /// Safe asks before everything attended and is the only place the data-leaves-device label
+    /// renders (E9's ratified §11.3 deviation); Normal is the consequence-rule default; Power is
+    /// identical to Normal today — row 18's mode landing as a setting first, which row I's
+    /// screen-control features gate on. Persisted so the dial survives relaunch — a posture that
+    /// silently reset to Normal on restart would quietly un-dial itself. Defaults to Normal, the
+    /// ratified product default.
+    @Published var interactionMode: AgentInteractionMode = .normal {
         didSet {
-            userDefaults.set(safeModeEnabled, forKey: UserDefaultsKeys.safeModeEnabled)
+            userDefaults.set(interactionMode.rawValue, forKey: UserDefaultsKeys.interactionMode)
         }
     }
 
     /// The authority context every dispatch threads into `AgentRunner`: Safe mode, and nothing
     /// else today (the consequence rule reads no origin — it gates on what an action does).
     ///
-    /// **`safeModeEnabled` is read here and nowhere else.** Row H's SONNY-90 backs that stored
-    /// property with the real Settings surface; a second site reading its own value would be a
-    /// second place that work has to find, and the one it misses would run a Safe-mode user's
-    /// tasks under ordinary rules.
+    /// **`interactionMode` is mapped to the engine here and nowhere else.** A second site
+    /// reading its own value would be a second place that work has to find, and the one it
+    /// misses would run a Safe-mode user's tasks under ordinary rules. The engine's input stays
+    /// row C's boolean seam; Normal and Power both map false (Power diverges at the product
+    /// layer when row I lands, never here).
     private func approvalContext() -> ApprovalContext {
-        ApprovalContext(safeMode: safeModeEnabled)
+        ApprovalContext(safeMode: interactionMode.asksBeforeEveryAction)
     }
 
     private func executePreparedRun(
@@ -2507,7 +2509,8 @@ final class AgentViewModel: ObservableObject {
             // SONNY-31 (chosen over keep-skipping-with-notice and hold-the-approval).
             //
             // All three `RiskApprovalError` cases pause, not just `.approvalRequired`.
-            // `.previewOnly` (a preview-only tier-2 policy) and `.refused` (tier 4) are equally
+            // `.previewOnly` (unproducible since the policy dials' 2026-08-14 deletion, but
+            // still public API) and `.refused` (tier 4) are equally
             // permanent for a run with nobody present to approve anything, and leaving either one
             // on the old skip-forever path would keep this bug alive in two of the three branches
             // that can reach it.

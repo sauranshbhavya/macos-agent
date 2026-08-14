@@ -77,31 +77,19 @@ public enum RiskApprovalRequirement: String, Codable, CaseIterable, Equatable, S
     }
 }
 
-public enum Tier2ApprovalMode: String, Codable, CaseIterable, Equatable, Sendable {
-    case previewOnly = "preview_only"
-    case lightweightConfirmation = "lightweight_confirmation"
-}
-
 public struct RiskApprovalPolicy: Codable, Equatable, Sendable {
     public static let `default` = RiskApprovalPolicy()
 
-    public var requireApprovalForTier1: Bool
-    public var tier2Mode: Tier2ApprovalMode
-
-    public init(
-        requireApprovalForTier1: Bool = false,
-        tier2Mode: Tier2ApprovalMode = .lightweightConfirmation
-    ) {
-        self.requireApprovalForTier1 = requireApprovalForTier1
-        self.tier2Mode = tier2Mode
-    }
+    public init() {}
 
     /// The tier-only baseline. Since the consequence rule (2026-08-13) its sole caller is
-    /// `safeModeRequirement(for:)` — the ordinary path maps tiers directly and no longer consults
-    /// it, which also means `requireApprovalForTier1` has **no observable effect anywhere** (its
-    /// tightening is subsumed by Safe mode's floor) and `tier2Mode == .previewOnly` shows only
-    /// under Safe mode. Both dials are kept pending a founder decision on deleting them — flagged
-    /// in the pivot's closing records rather than removed unilaterally.
+    /// `safeModeRequirement(for:)` — the ordinary path maps tiers directly and no longer
+    /// consults it. The two policy dials that once bent it (`requireApprovalForTier1`,
+    /// `tier2Mode`) were deleted on 2026-08-14 (coordinator- and reviewer-confirmed, founder
+    /// veto open at the PR): the first had no observable effect on any path — its tightening
+    /// lost to Safe mode's stricter floor and the ordinary path ignored it — and the second was
+    /// constructible by no site (`RiskApprovalPolicy(` appeared exactly once in the app, the
+    /// `.default` itself). The tri-state interaction mode is the product's one posture dial.
     ///
     /// **Demoted from `public` on SONNY-97, deliberately.** Tier-only and context-free, any caller
     /// outside this file would be a second public path to a requirement, bypassing Safe mode and
@@ -113,14 +101,9 @@ public struct RiskApprovalPolicy: Codable, Equatable, Sendable {
         case .tier0:
             return .autoRun
         case .tier1:
-            return requireApprovalForTier1 ? .lightweightConfirmation : .autoRun
+            return .autoRun
         case .tier2:
-            switch tier2Mode {
-            case .previewOnly:
-                return .previewOnly
-            case .lightweightConfirmation:
-                return .lightweightConfirmation
-            }
+            return .lightweightConfirmation
         case .tier3:
             return .explicitApproval
         case .tier4:
@@ -135,8 +118,7 @@ public struct RiskApprovalPolicy: Codable, Equatable, Sendable {
     /// contract handed to row H's SONNY-90 (which supplies the real `safeMode` value): a function
     /// returning whatever seemed right per tier could define a Safe mode that is *looser* than the
     /// baseline somewhere — this shape cannot, which is what property P1 pins over the whole
-    /// cross-product. Note the baseline keeps the user's own tightening through the formula:
-    /// a `previewOnly` tier-2 policy stays `previewOnly`, because it is stricter than the floor.
+    /// cross-product.
     private func safeModeRequirement(for tier: CapabilityRiskTier) -> RiskApprovalRequirement {
         .stricter(of: requirement(for: tier), Self.safeModeFloor)
     }
@@ -585,11 +567,13 @@ public struct CapabilityRiskAssessment: Codable, Equatable, Sendable {
 /// on a security-relevant context is exactly the dormant policy the pivot was told to remove.
 /// `PreparedPlanSource` itself survives — dispatch, logging and the pending-arm rule still read it.
 public struct ApprovalContext: Equatable, Sendable {
-    /// Row H's SONNY-90 supplies the real, Settings-backed value; until then the only production
-    /// writer is one named site (`AgentViewModel.approvalContext()` reading
-    /// `AgentViewModel.safeModeEnabled`). When true, the requirement is
-    /// `safeModeRequirement(for:)`'s formula: everything that could run asks first, tier 4 still
-    /// refuses. Safe mode is the cautious user's opt-back-in to being asked about everything.
+    /// True exactly when the user's interaction mode is Safe — the only production writer is the
+    /// one named site (`AgentViewModel.approvalContext()` mapping
+    /// `AgentViewModel.interactionMode` via `AgentInteractionMode.asksBeforeEveryAction`; Normal
+    /// and Power both map false, Power being row 18's mode landing as a setting first). When
+    /// true, the requirement is `safeModeRequirement(for:)`'s formula: everything that could run
+    /// asks first, tier 4 still refuses. Safe mode is the cautious user's opt-back-in to being
+    /// asked about everything.
     public var safeMode: Bool
     // Row I's SONNY-91 adds `appControlConsent` HERE, as a field this function maps — never as a
     // rule applied to the function's return value, which is the post-hoc clamp I8 forbids.

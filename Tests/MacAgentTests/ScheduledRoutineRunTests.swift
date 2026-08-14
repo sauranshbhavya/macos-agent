@@ -145,13 +145,13 @@ struct ScheduledRoutineRunTests {
     /// standing tier-2 grant answers Safe mode's requirement the way it answers any requirement
     /// at or below its ceiling; what a scheduled run cannot satisfy (tier 3+) still pauses via
     /// SONNY-31's existing notify-and-pause, Safe mode or not. The *attended* trust shortcut is
-    /// the half Safe mode does gate — pinned in SafeModeTests, not here.
+    /// the half Safe mode does gate — pinned in InteractionModeTests, not here.
     @Test
     func aBenignTrustedScheduledRunUnderSafeModeStillRunsWithoutPromptOrPause() async throws {
         let fixture = try makeFixture()
         defer { fixture.cleanUp() }
         try fixture.saveRoutine(unattendedTrusted: true)
-        fixture.viewModel.safeModeEnabled = true
+        fixture.viewModel.interactionMode = .safe
 
         fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
         try await fixture.waitForIdle()
