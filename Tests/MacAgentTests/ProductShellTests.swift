@@ -585,7 +585,7 @@ struct ProductShellTests {
             "routineStore", "workspaceStore", "snippetStore", "recentArtifactStore",
             "shortcutCatalog", "browserOpener", "appOpener", "fileOpener", "mediaOpener",
             "runningAppSwitcher", "shortcutInvoker", "finderContextReader", "documentConverter",
-            "zipArchiver", "shortcutRunHistoryStore", "taskHistoryStore",
+            "zipArchiver", "shortcutRunHistoryStore", "taskHistoryStore", "aiEgressStore",
             "clipboardHistorySettingsStore", "clipboardHistoryMonitor", "localDataDeletionService",
             "priorTaskContextStore", "taskUsageRecorder", "plannerProviderRegistry",
             "plannerSelection", "userDefaults", "whitelist", "routineScheduleTimer", "wakeObserver",

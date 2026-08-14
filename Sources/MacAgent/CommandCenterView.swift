@@ -3719,7 +3719,7 @@ private struct SettingsDataPage: View {
                         // next to the label made the row read as too bold/heavy (2026-07-18).
                         SettingsControlLabel(
                             title: "Delete Sonny local data",
-                            detail: "Saved routines, workspaces, clipboard history, snippets, recent artifacts, Shortcut run history, task history, and clipboard settings."
+                            detail: "Saved routines, workspaces, clipboard history, snippets, recent artifacts, Shortcut run history, task history, Data-Sent-to-AI records, and clipboard settings."
                         )
                     } trailing: {
                         Button {
