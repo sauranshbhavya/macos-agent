@@ -64,6 +64,19 @@ public enum VisionDelegationResult: Equatable, Sendable {
     case failed(reason: String)
 }
 
+/// A session paused because the user stopped being there.
+public struct VisionSessionPause: Equatable, Sendable {
+    public let appDisplayName: String
+    public let reason: SessionAttentionState
+    public let iteration: Int
+
+    public init(appDisplayName: String, reason: SessionAttentionState, iteration: Int) {
+        self.appDisplayName = appDisplayName
+        self.reason = reason
+        self.iteration = iteration
+    }
+}
+
 /// What the HUD is told while a session runs.
 public struct VisionSessionProgress: Equatable, Sendable {
     public let appDisplayName: String
@@ -113,6 +126,16 @@ public protocol VisionSessionInteracting: AnyObject {
 
     /// Safe mode's ask before a delegation fires. Returns true to proceed.
     func confirmVisionDelegation(_ request: VisionDelegationRequest) async throws -> Bool
+
+    /// The session paused because the user stopped being there. Returns true when they explicitly
+    /// resume it, false to end it.
+    ///
+    /// **Never resolves on its own.** "The screen unlocked" is not the same event as "the user asked
+    /// Sonny to carry on", and a session that resumed itself the moment a Mac woke would be a program
+    /// moving the cursor of someone who has not yet looked at the screen. E7's requirement is a
+    /// *present* human, and presence is something a person asserts rather than something an idle
+    /// timer infers.
+    func awaitVisionResume(_ pause: VisionSessionPause) async throws -> Bool
 
     /// Progress for the HUD.
     func visionSessionDidProgress(_ progress: VisionSessionProgress)

@@ -158,12 +158,21 @@ struct VisionSessionRunTests {
         }
     }
 
+    /// An attention monitor a test can flip mid-session.
+    private final class SwitchableAttentionMonitor: SessionAttentionMonitoring, @unchecked Sendable {
+        var state: SessionAttentionState = .attended
+        var presentable = true
+        func attentionState() async -> SessionAttentionState { state }
+        func canPresentApproval() async -> Bool { presentable }
+    }
+
     private func makeFixture(
         replies: [String],
         mode: AgentInteractionMode = .normal,
         bundleIdentifier: String = "com.apple.Safari",
         frontmost: String? = nil,
         limits: VisionSessionLimits = VisionSessionLimits(maximumIterations: 4, settleNanoseconds: 0),
+        attention: SessionAttentionMonitoring? = nil,
         /// The planner a *delegated* instruction reaches. `nil` means the unreachable one, which is
         /// correct for every test whose delegations resolve instantly or do not delegate at all.
         delegationPlanner: (any Planning)? = nil
@@ -212,6 +221,7 @@ struct VisionSessionRunTests {
             synthesizer: synthesizer,
             modelClient: model,
             limits: limits,
+            attentionMonitor: attention ?? AlwaysAttendedMonitor(),
             interaction: viewModel
         )
 
@@ -660,6 +670,144 @@ struct VisionSessionRunTests {
 
         #expect(fixture.viewModel.visionDelegationRequest == nil)
         #expect(fixture.model.prompts.count == 1, "the loop must not have asked the model again")
+    }
+
+    // MARK: - Session-bound: pause and explicit resume (SONNY-94)
+
+    /// **The user walking away pauses the session, and only the user resumes it.**
+    ///
+    /// Not ends — pauses. Attention is the one refusal a human can actually answer ("I am back"), so
+    /// the session suspends rather than throwing away work they may still want. Every other
+    /// containment refusal is a fact no answer changes, and those still end.
+    @Test
+    func lockingTheScreenMidSessionPausesAndOnlyAnExplicitResumeContinuesIt() async throws {
+        let attention = SwitchableAttentionMonitor()
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"A","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"click","x":20,"y":20,"target":"B","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"Done."}"#
+            ],
+            attention: attention
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "click two things", appName: "Safari")
+        try await waitUntil("the first click") { fixture.synthesizer.clickCount == 1 }
+
+        attention.state = .screenLocked
+        try await waitUntil("the pause") { fixture.viewModel.visionSessionPause != nil }
+
+        let pause = try #require(fixture.viewModel.visionSessionPause)
+        #expect(pause.reason == .screenLocked)
+        #expect(pause.appDisplayName == "Safari")
+        #expect(fixture.viewModel.hasVisibleWidgetPanel)
+
+        // **Unlocking alone does not resume.** The screen becoming available is not the user asking
+        // Sonny to carry on, and a session that resumed itself here would be moving the cursor of
+        // someone who has not looked at the screen yet.
+        attention.state = .attended
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(fixture.viewModel.visionSessionPause != nil, "only an explicit resume may continue it")
+        #expect(fixture.synthesizer.clickCount == 1, "nothing happened while it waited")
+
+        fixture.viewModel.resolveVisionPause(resuming: true)
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.synthesizer.clickCount == 2)
+        #expect(fixture.viewModel.finalSummary == "Done.")
+    }
+
+    /// Ending a paused session from the pause panel stops it with the attention reason, not a
+    /// generic cancellation — the user is owed the true one.
+    @Test
+    func endingFromThePausePanelStopsTheSessionWithTheAttentionReason() async throws {
+        let attention = SwitchableAttentionMonitor()
+        attention.state = .userIdle
+        let fixture = try makeFixture(
+            replies: [#"{"action":"click","x":10,"y":10,"target":"A","rationale":"r"}"#],
+            attention: attention
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "do a thing", appName: "Safari")
+        try await waitUntil("the pause") { fixture.viewModel.visionSessionPause != nil }
+        #expect(fixture.viewModel.visionSessionPause?.reason == .userIdle)
+
+        fixture.viewModel.resolveVisionPause(resuming: false)
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.viewModel.finalSummary.contains("you have been away"))
+        #expect(fixture.synthesizer.clickCount == 0)
+    }
+
+    /// A resume while the condition still holds pauses again rather than pressing on — the user's
+    /// press is a claim, and the OS is what confirms it.
+    @Test
+    func resumingWhileStillAwayPausesAgainRatherThanPressingOn() async throws {
+        let attention = SwitchableAttentionMonitor()
+        attention.state = .displayAsleep
+        let fixture = try makeFixture(
+            replies: [#"{"action":"click","x":10,"y":10,"target":"A","rationale":"r"}"#],
+            attention: attention
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "do a thing", appName: "Safari")
+        try await waitUntil("the first pause") { fixture.viewModel.visionSessionPause != nil }
+
+        fixture.viewModel.resolveVisionPause(resuming: true)
+        try await waitUntil("the second pause") { fixture.viewModel.visionSessionPause != nil }
+        #expect(fixture.synthesizer.clickCount == 0)
+        #expect(fixture.model.prompts.isEmpty, "nothing was captured or sent while away")
+
+        fixture.viewModel.cancelCurrentRun()
+        try await waitForIdle(fixture.viewModel)
+    }
+
+    /// **§13.1: a tier-3 approval is not shown to a locked screen**, and the session stops rather
+    /// than acting without an answer. Reachable because a screen can lock in the seconds a model
+    /// spent deciding — after the iteration-start check has already passed.
+    @Test
+    func aDestructiveActionComingDueOnALockedScreenStopsRatherThanActing() async throws {
+        let attention = SwitchableAttentionMonitor()
+        let fixture = try makeFixture(
+            replies: [#"{"action":"click","x":10,"y":10,"target":"Delete","consequence":"destructive","rationale":"r"}"#],
+            attention: attention
+        )
+        defer { fixture.tearDown() }
+
+        // Attended at iteration start, but not presentable by the time the approval comes due.
+        attention.presentable = false
+
+        fixture.viewModel.startVisionSession(goal: "delete a thing", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.viewModel.approvalRequest == nil, "no approval may be raised for a locked screen")
+        #expect(fixture.synthesizer.clickCount == 0, "and the action must not run unapproved")
+        #expect(fixture.viewModel.finalSummary.contains("your Mac was locked"))
+    }
+
+    /// The same locked screen does *not* stop an ordinary action, because no approval was coming
+    /// due — the §13.1 gate is about approvals, not about acting.
+    @Test
+    func anOrdinaryActionIsUnaffectedByApprovalPresentability() async throws {
+        let attention = SwitchableAttentionMonitor()
+        attention.presentable = false
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"Bookmarks","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"Done."}"#
+            ],
+            attention: attention
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "browse", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.synthesizer.clickCount == 1)
+        #expect(fixture.viewModel.finalSummary == "Done.")
     }
 
     // MARK: - Containment, live

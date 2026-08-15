@@ -27,6 +27,9 @@ private enum WidgetState {
     /// Safe mode is about to hand an instruction to Sonny's own planner, and is asking first (row I,
     /// SONNY-93; founder decision 4, 2026-08-14). Normal and Power never reach this state.
     case delegationReview(VisionDelegationRequest)
+    /// The session paused because the user stopped being at the Mac (row I, SONNY-94). Resuming is
+    /// an explicit press — nothing here clears itself.
+    case sessionPaused(VisionSessionPause)
     case result(String, RunSuggestion?)
     case failure(String)
 }
@@ -173,7 +176,7 @@ struct FloatingWidgetView: View {
             return true
         case .working:
             return viewModel.activeTaskOrigin != .widget
-        case .permission, .clarification, .captureReview, .delegationReview:
+        case .permission, .clarification, .captureReview, .delegationReview, .sessionPaused:
             return false
         }
     }
@@ -244,6 +247,9 @@ struct FloatingWidgetView: View {
         if let delegation = viewModel.visionDelegationRequest {
             return .delegationReview(delegation)
         }
+        if let pause = viewModel.visionSessionPause {
+            return .sessionPaused(pause)
+        }
         if let approvalRequest = viewModel.approvalRequest {
             return .permission(approvalRequest)
         }
@@ -273,6 +279,7 @@ struct FloatingWidgetView: View {
         case .permission: return 3
         case .captureReview: return 6
         case .delegationReview: return 7
+        case .sessionPaused: return 8
         case .result: return 4
         case .failure: return 5
         }
@@ -284,6 +291,7 @@ struct FloatingWidgetView: View {
             || viewModel.clarificationQuestion != nil
             || viewModel.visionCapturePreview != nil
             || viewModel.visionDelegationRequest != nil
+            || viewModel.visionSessionPause != nil
     }
 
     private func submit() {
@@ -464,6 +472,12 @@ private extension FloatingWidgetView {
                 delegation: delegation,
                 onAllow: { viewModel.resolveVisionDelegation(allowing: true) },
                 onDecline: { viewModel.resolveVisionDelegation(allowing: false) }
+            )
+        case .sessionPaused(let pause):
+            WidgetSessionPausedPanel(
+                pause: pause,
+                onResume: { viewModel.resolveVisionPause(resuming: true) },
+                onEnd: { viewModel.resolveVisionPause(resuming: false) }
             )
         case .result(let summary, let suggestion):
             WidgetResultPanel(
@@ -843,6 +857,54 @@ private struct WidgetDelegationReviewPanel: View {
 
                 Button(action: onAllow) {
                     Text("Use tools")
+                        .font(WidgetType.captionMedium)
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .frame(height: 23)
+                .widgetCircularBackground(tint: WidgetTheme.allowAction)
+            }
+        }
+    }
+}
+
+/// The session paused because the user stopped being at the Mac.
+///
+/// **Resume is a press, never a timer.** The whole point of the pause is that Sonny stopped when the
+/// user did; a panel that resumed itself when the screen unlocked would give that back for nothing.
+private struct WidgetSessionPausedPanel: View {
+    let pause: VisionSessionPause
+    let onResume: () -> Void
+    let onEnd: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Sonny paused controlling \(pause.appDisplayName) because \(pause.reason.userFacingReason).")
+                .font(WidgetType.caption)
+                .foregroundStyle(WidgetTheme.textFull)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("It only runs while you are here. Nothing happened while it waited.")
+                .font(WidgetType.captionSmall)
+                .foregroundStyle(WidgetTheme.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                Spacer(minLength: 8)
+
+                Button(action: onEnd) {
+                    Text("End")
+                        .font(WidgetType.captionMedium)
+                        .foregroundStyle(WidgetTheme.textFull)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .frame(height: 23)
+                .widgetCircularBackground()
+
+                Button(action: onResume) {
+                    Text("Resume")
                         .font(WidgetType.captionMedium)
                         .foregroundStyle(.white)
                 }

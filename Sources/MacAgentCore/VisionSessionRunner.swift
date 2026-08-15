@@ -83,6 +83,7 @@ final class VisionSessionRunner {
         while true {
             iteration += 1
 
+
             if let refusal = await containment.checkIterationStart(
                 iteration: iteration,
                 isCancelled: Task.isCancelled,
@@ -110,6 +111,26 @@ final class VisionSessionRunner {
                     ) {
                         return end(with: stillRefused, iteration: iteration)
                     }
+                } else if case .attentionLost(let state) = refusal {
+                    // **Pause, not stop** (SONNY-94). Attention is the one refusal a human can
+                    // actually answer — they came back — so the session suspends and waits for them
+                    // to say so, rather than ending work they may still want. Every other refusal in
+                    // `checkIterationStart` is a fact no answer changes, and those still end.
+                    let resumed = try await interaction.awaitVisionResume(
+                        VisionSessionPause(
+                            appDisplayName: target.displayName,
+                            reason: state,
+                            iteration: iteration
+                        )
+                    )
+                    guard resumed else {
+                        return end(with: refusal, iteration: iteration)
+                    }
+                    // Re-check rather than trust the resume: the user pressing Resume is a claim that
+                    // they are back, and the OS is the thing that confirms it. A screen still locked
+                    // pauses again, which is a loop the user ends by unlocking or by stopping.
+                    iteration -= 1
+                    continue
                 } else {
                     return end(with: refusal, iteration: iteration)
                 }
@@ -225,6 +246,14 @@ final class VisionSessionRunner {
             }
 
             if let refusal = containment.checkActionAllowed(decision) {
+                return end(with: refusal, iteration: iteration)
+            }
+
+            // §13.1's tier-3 condition, checked here rather than at iteration start because a screen
+            // can lock in the seconds a model spent deciding — and this is the moment an approval
+            // would actually be shown.
+            if VisionConsequenceClassifier.consequence(for: decision).asksFirst,
+               let refusal = await containment.checkApprovalPresentable() {
                 return end(with: refusal, iteration: iteration)
             }
 

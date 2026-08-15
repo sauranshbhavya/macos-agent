@@ -35,6 +35,21 @@ public enum SessionAttentionState: String, Equatable, Sendable {
 
 public protocol SessionAttentionMonitoring: Sendable {
     func attentionState() async -> SessionAttentionState
+
+    /// Whether a mid-loop approval may be put in front of the user at all (spec §13.1's tier-3
+    /// condition: the Mac must be unlocked).
+    ///
+    /// Narrower than ``attentionState()`` on purpose — an *idle* user can still be shown an approval
+    /// and answer it, while a locked screen cannot show one to anybody. Defaulted to the attention
+    /// answer so a conformer that has no separate opinion is not forced to invent one, and the
+    /// default is the conservative direction.
+    func canPresentApproval() async -> Bool
+}
+
+public extension SessionAttentionMonitoring {
+    func canPresentApproval() async -> Bool {
+        await attentionState().isAttended
+    }
 }
 
 /// The default: always attended.
@@ -64,6 +79,9 @@ public enum VisionContainmentRefusal: Equatable, Sendable {
     case approvalDeclined(action: String)
     case approvalRefusedByPolicy(action: String)
     case captureSendDeclined
+    /// A tier-3 approval came due while the Mac was locked. §13.1's condition, as a refusal: an
+    /// approval nobody can see is not an approval, and running without one is not an option.
+    case approvalNotPresentable
 
     /// The sentence the run summary and the transcript carry. Honest about which boundary fired —
     /// "Sonny stopped because you locked your Mac" and "Sonny stopped because it ran out of steps"
@@ -90,6 +108,8 @@ public enum VisionContainmentRefusal: Equatable, Sendable {
             return "Sonny refused this action under the current approval policy: \(action)."
         case .captureSendDeclined:
             return "You chose not to send this screenshot, so the session stopped."
+        case .approvalNotPresentable:
+            return "Sonny needed to ask you about a step, and your Mac was locked. It stopped rather than acting without an answer."
         }
     }
 
@@ -106,6 +126,7 @@ public enum VisionContainmentRefusal: Equatable, Sendable {
         case .approvalDeclined: return "approval_declined"
         case .approvalRefusedByPolicy: return "approval_refused"
         case .captureSendDeclined: return "capture_send_declined"
+        case .approvalNotPresentable: return "approval_not_presentable"
         }
     }
 }
@@ -254,6 +275,15 @@ public struct VisionSessionContainment: Sendable {
                 )
             ]
         )
+    }
+
+    /// Whether an approval may be presented right now — §13.1's tier-3 condition.
+    ///
+    /// Separate from the iteration-start check because it answers a later question: by the time an
+    /// action needs approving, the loop has already passed the attention gate, and a screen can lock
+    /// in the seconds a model spent deciding.
+    public func checkApprovalPresentable() async -> VisionContainmentRefusal? {
+        await attentionMonitor.canPresentApproval() ? nil : .approvalNotPresentable
     }
 
     /// The requirement for a pending action, under this run's authority context.

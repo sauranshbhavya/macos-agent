@@ -126,6 +126,42 @@ extension AgentViewModel: VisionSessionInteracting {
         return allowed
     }
 
+    /// The session paused because the user stopped being at the Mac.
+    ///
+    /// **Nothing resolves this but the user.** No timer, no notification of the screen unlocking, no
+    /// "they moved the mouse so they must be back" — E7's requirement is a *present* human, and
+    /// presence is something a person asserts rather than something an idle timer infers. A session
+    /// that resumed itself the moment a Mac woke would be a program moving the cursor of someone who
+    /// has not yet looked at the screen.
+    func awaitVisionResume(_ pause: VisionSessionPause) async throws -> Bool {
+        visionSessionPause = pause
+        finalSummary = "Sonny paused — \(pause.reason.userFacingReason)."
+
+        let resumed = await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                visionResumeContinuation = continuation
+            }
+        } onCancel: {
+            Task { @MainActor in
+                guard let continuation = self.visionResumeContinuation else { return }
+                self.visionResumeContinuation = nil
+                self.visionSessionPause = nil
+                continuation.resume(returning: false)
+            }
+        }
+
+        try Task.checkCancellation()
+        return resumed
+    }
+
+    /// The user answered the pause. `true` resumes; `false` ends the session.
+    func resolveVisionPause(resuming: Bool) {
+        guard let continuation = visionResumeContinuation else { return }
+        visionResumeContinuation = nil
+        visionSessionPause = nil
+        continuation.resume(returning: resuming)
+    }
+
     // MARK: - Delegation
 
     /// Safe mode's ask before a delegation fires.
@@ -316,6 +352,10 @@ extension AgentViewModel: VisionSessionInteracting {
             redactionService: LocalRedactionService(),
             synthesizer: SystemScreenActionSynthesizer(),
             modelClient: modelClient,
+            // The real monitor, not the always-attended default. SONNY-94's whole point is that a
+            // session stops when the user does, and `AlwaysAttendedMonitor` is correct only for a
+            // build with no way to ask the OS — which this is not.
+            attentionMonitor: SystemSessionAttentionMonitor(),
             interaction: interaction
         )
     }

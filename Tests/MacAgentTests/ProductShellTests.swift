@@ -623,7 +623,8 @@ struct ProductShellTests {
             // until relaunch.
             "visionCapturePreview", "visionSessionProgress", "visionApprovalContinuation",
             "visionCaptureContinuation", "visionSessionEnvironment",
-            "visionDelegationRequest", "visionDelegationContinuation"
+            "visionDelegationRequest", "visionDelegationContinuation",
+            "visionSessionPause", "visionResumeContinuation"
         ]
 
         let fixture = try makeProductShellFixture()
