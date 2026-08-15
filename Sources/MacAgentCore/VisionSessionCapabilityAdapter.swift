@@ -197,9 +197,6 @@ public struct VisionSessionCapabilityAdapter: CapabilityAdapter {
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
         let step = try visionStep(in: plan)
-        guard let environment = context.visionSession else {
-            throw VisionSessionError.visionUnavailable
-        }
         guard let bundleIdentifier = step.resolvedBundleIdentifier else {
             throw VisionSessionError.missingTargetApp
         }
@@ -207,9 +204,16 @@ public struct VisionSessionCapabilityAdapter: CapabilityAdapter {
             bundleIdentifier: bundleIdentifier,
             displayName: step.resolvedAppName ?? bundleIdentifier
         )
-        // The third door. Same rule, third independent check.
+        // **The third door, and it comes before the availability check on purpose.** Ordered the
+        // other way round for one commit, which made the ban conditional on screen control being
+        // configured at all — a build with no `OPENCODE_API_KEY` refused a terminal for the wrong
+        // reason, and would have started refusing for the right one only once someone set the key.
+        // A structural deny should not depend on whether the feature it guards is switched on.
         if let refusal = verdict.refusal {
             throw VisionSessionError.targetNotControllable(refusal)
+        }
+        guard let environment = context.visionSession else {
+            throw VisionSessionError.visionUnavailable
         }
 
         let session = VisionSessionRunner(

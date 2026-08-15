@@ -195,7 +195,15 @@ public struct VisionSessionContainment: Sendable {
             return .targetIneligible(refusal)
         }
         let frontmost = await frontmostBundleIdentifier()
-        guard frontmost == target.bundleIdentifier else {
+        // **Normalized on both sides.** `ScreenControlVerdict.bundleIdentifier` is the normalized
+        // (lowercased, trimmed) spelling, because that is what the deny-list comparison used, while
+        // the OS hands back the bundle's own casing — `com.apple.Safari`. Comparing the two raw was
+        // a real defect for one commit: the check could never pass on a real machine, so no vision
+        // session would ever have got past its first iteration. Caught by
+        // `VisionSessionContainmentTests.anIterationInsideEveryBoundaryIsAllowed`, which is the
+        // happy-path test, which is why it was worth writing one.
+        guard let frontmost,
+              ScreenControlPolicy.normalize(frontmost) == target.bundleIdentifier else {
             return .targetNotFrontmost(expected: target.displayName, actual: frontmost)
         }
         return nil

@@ -677,8 +677,8 @@ final class AgentViewModel: ObservableObject {
         // Which surface built `prebuiltPlan`. Defaulted to `.directUserAction` so SONNY-64's
         // existing callers read unchanged; a vision session passes its own case, because
         // `PreparedPlanSource`'s own rule is that a surface needing to be told apart adds a case
-        // rather than overloading one — and here that is not style, it is the difference between an
-        // origin that appears on a relaxation allowlist and one that never may.
+        // rather than overloading one. See `PreparedPlanSource.visionSession` for why the two are
+        // different claims, and for what happened to the second, stronger reason SONNY-81 gave.
         prebuiltPlanSource: PreparedPlanSource = .directUserAction
     ) {
         if isAwaitingApproval {

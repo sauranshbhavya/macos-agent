@@ -1027,6 +1027,23 @@ public final class AgentActionExecutor {
                 .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
         }
 
+        // Same pin-once discipline as `switch_running_app` above, and it carries more weight here:
+        // the pinned identity is what `ScreenControlPolicy` judges, so a vision plan that skipped
+        // this phase would reach the gates with no identity at all — unpinned, unjudged, and opaque
+        // in a way that hides rather than escalates.
+        //
+        // **This block is the reason the pin exists and it was missing for one commit.** The adapter
+        // had its resolve hook, and nothing called it: this dispatch is a hand-maintained list of
+        // `if`s, not an exhaustive switch, so a new resolver is silently a no-op until someone adds
+        // its line. Caught by `VisionSessionAdapterTests`, which asserts the pin through this real
+        // path rather than by calling the adapter directly — which is exactly why it asserts through
+        // this path.
+        if resolvedPlan.steps.contains(where: { $0.operation == .visionSession }) {
+            resolvedPlan = try capabilityRegistry
+                .adapter(for: .visionSession)
+                .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
+        }
+
         return resolvedPlan
     }
 

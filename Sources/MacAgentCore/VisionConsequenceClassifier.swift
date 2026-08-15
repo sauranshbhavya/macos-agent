@@ -70,31 +70,54 @@ public enum VisionConsequenceClassifier {
     /// labelled Delete" reads very differently to a user than "the model said this is destructive",
     /// and a user who can see which one fired can tell a cautious model from a dangerous button.
     public static func labelConsequence(_ decision: VisionDecision) -> CapabilityRiskEscalation.Consequence {
-        // Only actions that actually drive the machine can have a consequence. A `wait` or a `done`
-        // whose target label happens to read "Delete" is not deleting anything.
-        guard decision.kind.synthesizesInput else {
+        // Each action kind gets the evidence that actually applies to it. Lumping them together was
+        // the first shape of this function and it was wrong in a way worth recording: it ran the
+        // *button* vocabulary over a `type` action's target, which names the field being typed
+        // *into*. A compose box labelled "Message" is not a send button, and classifying every
+        // keystroke into one as affects-others would have put an approval in front of the user for
+        // each character of a draft — the exact over-asking that trains people to click through.
+        switch decision.kind {
+        case .wait, .done, .stuck:
+            // Cannot have a consequence: nothing is driven. A `done` whose target label happens to
+            // read "Delete" is not deleting anything.
+            return .advisory
+
+        case .scroll:
+            // Scrolling changes what is visible and nothing else. There is no label, and no
+            // scroll has ever sent or destroyed anything.
+            return .advisory
+
+        case .type:
+            // **The case no button label names.** A trailing newline is delivered as a real Return
+            // keypress, which is what turns a composed message into a sent one. The field's own
+            // label says nothing about that either way, so it is not consulted.
+            return decision.text?.hasSuffix("\n") == true ? .affectsOthers : .advisory
+
+        case .key:
+            // Return submits whatever has focus. Delete destroys whatever is selected — and, like
+            // Return, it does so with no button and no label anywhere in sight, which is precisely
+            // why enumerating the keys is the only way to catch either.
+            switch decision.key {
+            case .enterKey:
+                return .affectsOthers
+            case .delete:
+                return .destructive
+            case .tab, .escape, .arrowUp, .arrowDown, .arrowLeft, .arrowRight, .none:
+                return .advisory
+            }
+
+        case .click:
+            // The one kind where the target really is a control the user could read, so the label
+            // vocabulary is the evidence.
+            let words = labelWords(in: decision.target)
+            if !words.isDisjoint(with: destructiveLabelWords) {
+                return .destructive
+            }
+            if !words.isDisjoint(with: affectsOthersLabelWords) {
+                return .affectsOthers
+            }
             return .advisory
         }
-
-        // Typed text that ends in a Return is a submit: the newline is delivered as a real Return
-        // keypress, which is what turns a composed message into a sent one. Same for an explicit
-        // Enter press while text is focused. This is the case a label vocabulary alone misses
-        // entirely, because there is no button label involved at all.
-        if decision.kind == .type, decision.text?.hasSuffix("\n") == true {
-            return .affectsOthers
-        }
-        if decision.kind == .key, decision.key == .enterKey {
-            return .affectsOthers
-        }
-
-        let words = labelWords(in: decision.target)
-        if !words.isDisjoint(with: destructiveLabelWords) {
-            return .destructive
-        }
-        if !words.isDisjoint(with: affectsOthersLabelWords) {
-            return .affectsOthers
-        }
-        return .advisory
     }
 
     /// The label split into lowercased alphabetic words.
