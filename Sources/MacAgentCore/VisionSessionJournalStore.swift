@@ -86,6 +86,13 @@ public struct VisionSessionRecord: Codable, Equatable, Identifiable, Sendable {
     /// The §13.5 reason code the session ended with, or `nil` while it is still running.
     public var endReasonCode: String?
     public var endSummary: String?
+    /// What redaction covered in text that belongs to the *session* rather than to any one action —
+    /// the model's closing rationale, and every delegated instruction.
+    ///
+    /// A session-level slot because those strings produce no journal entry of their own: a delegation
+    /// synthesizes no input, and a closing rationale arrives when there is no next action to hang it
+    /// on. Without this, a secret masked out of a rationale would be masked with nothing saying so.
+    public var sessionRedactionSummary: [RedactionReportEntry]
     public var entries: [VisionActionJournalEntry]
 
     public init(
@@ -96,6 +103,7 @@ public struct VisionSessionRecord: Codable, Equatable, Identifiable, Sendable {
         endedAt: Date? = nil,
         endReasonCode: String? = nil,
         endSummary: String? = nil,
+        sessionRedactionSummary: [RedactionReportEntry] = [],
         entries: [VisionActionJournalEntry] = []
     ) {
         self.id = id
@@ -105,11 +113,18 @@ public struct VisionSessionRecord: Codable, Equatable, Identifiable, Sendable {
         self.endedAt = endedAt
         self.endReasonCode = endReasonCode
         self.endSummary = endSummary
+        self.sessionRedactionSummary = sessionRedactionSummary
         self.entries = entries
     }
 }
 
-/// The action journal — the eleventh local store, on the shared pattern exactly.
+/// The action journal — the **ninth** local store, on the shared pattern exactly.
+///
+/// (Called the *eleventh* until PR #50's F8: that ordinal came from SONNY-91's contract, which
+/// counted the V2 ledger the founder deleted and the consent store that was never built.
+/// `LocalDataDeletionService.defaultStoreFileURLs()` returns nine, and
+/// `theWipeReachesExactlyTheNineLocalStores` asserts it. F8 corrected the changelog and the PR body
+/// and missed this copy — the same two-copies failure as F6.)
 ///
 /// **A sibling store rather than an extension of an existing one, and the reasoning is recorded here
 /// because SONNY-96 asks for one decision with reasons.** The ticket offered "extend V2's store or

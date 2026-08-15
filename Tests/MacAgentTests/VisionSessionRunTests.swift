@@ -329,6 +329,45 @@ struct VisionSessionRunTests {
         #expect(fixture.synthesizer.events.filter { $0 == .activated("com.apple.Safari") }.count == 1)
     }
 
+    /// **A `wait` decision waits and then the session carries on** — the one action kind with no
+    /// end-to-end coverage until now (PR #50 cycle-2 residual).
+    ///
+    /// The reviewer mutated the loop's `.wait` arm to fall through to synthesis — the exact edit F2's
+    /// fix names as the failure mode it guards — and the suite stayed green: nothing anywhere
+    /// scripted a `wait`, so `grep '"action":"wait"'` over `Tests/` returned nothing and one of eight
+    /// kinds was unexercised. The guard did fire, so the protection worked; the regression would
+    /// simply have shipped green in a different way.
+    ///
+    /// Asserted on both halves: nothing is synthesized for the wait itself, and the session continues
+    /// to the action after it rather than ending.
+    @Test
+    func aWaitDecisionWaitsAndTheSessionContinues() async throws {
+        let fixture = try makeFixture(replies: [
+            #"{"action":"wait","rationale":"the page is still loading"}"#,
+            #"{"action":"click","x":10,"y":10,"target":"Bookmarks","consequence":"ordinary","rationale":"r"}"#,
+            #"{"action":"done","rationale":"Done."}"#
+        ])
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "wait then click", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        // The wait synthesized nothing, and the click after it still happened.
+        #expect(fixture.synthesizer.clickCount == 1)
+        #expect(fixture.viewModel.finalSummary == "Done.")
+        // Three iterations really ran — the wait cost one, so a wait that silently ended the session
+        // or fell through to synthesis would fail here.
+        #expect(fixture.model.prompts.count == 3)
+
+        // A wait produces no journal entry: it drives nothing, so there is nothing to record.
+        let record = try #require(try fixture.journal.loadAll().first)
+        #expect(record.entries.count == 1)
+        #expect(record.entries.first?.actionType == "click")
+
+        // And the model was told it waited, so the next decision has that context.
+        #expect(try #require(fixture.model.prompts.dropFirst().first).contains("waited for the screen to settle"))
+    }
+
     // MARK: - The consequence rule, mid-loop
 
     /// **A destructive action asks, in Normal mode, mid-loop.** The standing rule the founder kept
@@ -618,7 +657,7 @@ struct VisionSessionRunTests {
 
         try await waitUntil("the delegation question") { fixture.viewModel.visionDelegationRequest != nil }
         let request = try #require(fixture.viewModel.visionDelegationRequest)
-        #expect(request.instruction == "2 + 2")
+        #expect(request.instructionText == "2 + 2")
         #expect(request.appDisplayName == "Safari")
         #expect(fixture.viewModel.hasVisibleWidgetPanel)
 
@@ -1338,6 +1377,93 @@ struct VisionSessionRunTests {
         #expect(fixture.model.prompts.count == 1)
     }
 
+    // MARK: - Screen-derived text never reaches the planner provider (PR #50 cycle-2, F13)
+
+    /// **A secret in the model's closing rationale never reaches the planner.**
+    ///
+    /// The rationale is free text the vision model writes after reading the user's screen, and it
+    /// becomes the run summary — which flows into `PriorTaskContext` and is sent to the *planner*
+    /// provider as a `user` message on the next command within ten minutes. F5 closed the
+    /// screen-text route to the vision provider; this was the same class arriving at a different one.
+    ///
+    /// Driven end to end: a real session finishes with a rationale containing a key, then a real
+    /// follow-up command goes through a recording planner, and the assertion is on what that planner
+    /// was actually handed.
+    @Test
+    func aSecretInTheModelsRationaleNeverReachesThePlanner() async throws {
+        let secret = "sk-rationaleAAAAAAAAAAAAAAAAAAAA1234"
+        let planner = RecordingPlanner()
+        let fixture = try makeFixture(
+            replies: [
+                "{\"action\":\"done\",\"rationale\":\"I read the note. It said the key is \(secret) and I stopped.\"}"
+            ],
+            delegationPlanner: planner
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "read the note", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        // The summary the user sees is already masked.
+        #expect(!fixture.viewModel.finalSummary.contains(secret))
+
+        // And the follow-up command's prior-task context — the thing that actually goes to the
+        // planner — does not carry it either.
+        fixture.viewModel.command = "now do the other thing"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(!planner.contextTexts.isEmpty, "the follow-up must really have carried prior-task context")
+        for text in planner.contextTexts {
+            #expect(!text.contains(secret), "the rationale's secret reached the planner")
+        }
+    }
+
+    /// **A secret in a delegated instruction never reaches the planner**, and the instruction is what
+    /// the planner is literally asked to plan — so this asserts on the command string itself.
+    @Test
+    func aSecretInADelegatedInstructionNeverReachesThePlanner() async throws {
+        let secret = "sk-delegateBBBBBBBBBBBBBBBBBBBB5678"
+        let planner = RecordingPlanner()
+        let fixture = try makeFixture(
+            replies: [
+                "{\"action\":\"delegate\",\"instruction\":\"save a note containing \(secret)\",\"rationale\":\"r\"}",
+                #"{"action":"done","rationale":"Done."}"#
+            ],
+            delegationPlanner: planner
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "save something", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(!planner.commands.isEmpty, "the delegation must really have reached the planner")
+        for command in planner.commands {
+            #expect(!command.contains(secret), "the delegated instruction's secret reached the planner")
+        }
+        // The masking is visible rather than the text being dropped — the planner still gets a
+        // usable instruction, or delegation would be broken rather than safe.
+        #expect(planner.commands.contains { $0.contains("save a note containing") })
+    }
+
+    /// Both redactions are recorded on the session, not silently applied — a secret masked out of a
+    /// rationale with nothing saying so would be a record that under-reports what Sonny did.
+    @Test
+    func sessionLevelRedactionsAreRecordedOnTheJournal() async throws {
+        let secret = "sk-recordCCCCCCCCCCCCCCCCCCCCCC9012"
+        let fixture = try makeFixture(replies: [
+            "{\"action\":\"done\",\"rationale\":\"the key is \(secret)\"}"
+        ])
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "read", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        let record = try #require(try fixture.journal.loadAll().first)
+        #expect(!record.sessionRedactionSummary.isEmpty, "the rationale's redaction must be recorded")
+        #expect(record.endSummary?.contains(secret) == false)
+    }
+
     // MARK: - Egress
 
     /// **Redaction ran on every capture that was sent**, and the model only ever saw the payload it
@@ -1401,6 +1527,30 @@ private struct NestingVisionPlanner: Planning {
                     appName: "Notes",
                     visionGoal: "write a note"
                 )
+            ]
+        )
+    }
+}
+
+/// Records every command and every prior-task context the planner was handed.
+///
+/// The planner is a *different provider* from the vision model, so a secret that never reaches the
+/// vision prompt can still reach this one — which is exactly the route F13 found. Recording both the
+/// command and the context text is what lets a test assert on each independently.
+final class RecordingPlanner: Planning, @unchecked Sendable {
+    private(set) var commands: [String] = []
+    private(set) var contextTexts: [String] = []
+
+    func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
+        commands.append(command)
+        if let priorTaskContext {
+            contextTexts.append(priorTaskContext.plannerContextText)
+        }
+        return AgentPlan(
+            summary: "Noted.",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(id: "note", operation: .calculateUtility, description: "Calculate", searchQuery: "1 + 1")
             ]
         )
     }

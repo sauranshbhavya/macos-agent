@@ -315,13 +315,13 @@ extension AgentViewModel: VisionSessionInteracting {
             // words typed by the user would not. "Planned by whatever would have planned the user's
             // own sentence" has to include the case where nothing plans it at all.
             let prepared: PreparedAgentRun
-            if let resolution = makeInstantCommandResolver().resolve(command: request.instruction) {
+            if let resolution = makeInstantCommandResolver().resolve(command: request.instructionText) {
                 switch resolution {
                 case .plan(let localPlan), .clarify(let localPlan):
                     prepared = try runner.prepare(plan: localPlan, source: .instantResolver)
                 }
             } else {
-                prepared = try await runner.prepare(command: request.instruction)
+                prepared = try await runner.prepare(command: request.instructionText)
             }
 
             if prepared.plan.steps.contains(where: { $0.operation == AgentOperation.visionSession }) {
