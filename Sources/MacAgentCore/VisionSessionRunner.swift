@@ -3,9 +3,24 @@ import Foundation
 
 /// How a session ended.
 public struct VisionSessionOutcome: Equatable, Sendable {
+    /// How a session ended, with the model-authored endings carrying `RedactedPayload` rather than
+    /// `String`.
+    ///
+    /// **The type is the guarantee** (PR #50 cycle-2, F13a). A `.finished`/`.gaveUp` rationale is the
+    /// vision model's own free text, written after reading the user's screen — and it does not stop
+    /// at the summary line. It flows `AgentRunResult.summary` → `recordPriorTaskContext` →
+    /// `PriorTaskContext.plannerContextText` → the **planner** provider, as a `user` message on the
+    /// next command within ten minutes. F5 closed the screen-text route to the *vision* provider and
+    /// this route to a *different* provider was still open.
+    ///
+    /// `RedactedPayload`'s initializer is `fileprivate` to `LocalRedactionService.swift`, so an
+    /// unredacted rationale cannot be put in this enum at all — the same structural non-bypass the
+    /// window title got, rather than a call site somebody has to remember. `.refused` keeps its
+    /// `String` deliberately: that sentence is code-authored by `VisionContainmentRefusal`, never
+    /// model-authored, and giving it the redacted type would imply a provenance it does not have.
     public enum Ending: Equatable, Sendable {
-        case finished(String)
-        case gaveUp(String)
+        case finished(RedactedPayload)
+        case gaveUp(RedactedPayload)
         case refused(VisionContainmentRefusal)
     }
 
@@ -16,11 +31,13 @@ public struct VisionSessionOutcome: Equatable, Sendable {
     public var summary: String {
         switch ending {
         case .finished(let rationale):
-            return rationale.isEmpty ? "Done." : rationale
+            let text = rationale.maskedText ?? ""
+            return text.isEmpty ? "Done." : text
         case .gaveUp(let rationale):
-            return rationale.isEmpty
+            let text = rationale.maskedText ?? ""
+            return text.isEmpty
                 ? "Sonny could not finish this from the screen."
-                : "Sonny stopped: \(rationale)"
+                : "Sonny stopped: \(text)"
         case .refused(let refusal):
             return refusal.userFacingReason
         }
@@ -238,16 +255,25 @@ final class VisionSessionRunner {
 
             switch decision.kind {
             case .done:
-                finishRecord(reasonCode: "completed", summary: decision.rationale)
+                // **The model's closing rationale is redacted before it becomes the run summary.**
+                // That summary reaches the *planner* provider on the next command within ten minutes
+                // (via `recordPriorTaskContext` -> `plannerContextText`), and it is free text written
+                // after reading the user's screen. F5 closed this class for the vision provider; this
+                // is the same class arriving at a different one (PR #50 cycle-2, F13a).
+                let finishedRationale = environment.redactionService.redactText(decision.rationale)
+                record.sessionRedactionSummary += finishedRationale.report
+                finishRecord(reasonCode: "completed", summary: finishedRationale.maskedText ?? "")
                 return VisionSessionOutcome(
-                    ending: .finished(decision.rationale),
+                    ending: .finished(finishedRationale),
                     iterationsRun: iteration,
                     actionsTaken: actionsTaken
                 )
             case .stuck:
-                finishRecord(reasonCode: "gave_up", summary: decision.rationale)
+                let gaveUpRationale = environment.redactionService.redactText(decision.rationale)
+                record.sessionRedactionSummary += gaveUpRationale.report
+                finishRecord(reasonCode: "gave_up", summary: gaveUpRationale.maskedText ?? "")
                 return VisionSessionOutcome(
-                    ending: .gaveUp(decision.rationale),
+                    ending: .gaveUp(gaveUpRationale),
                     iterationsRun: iteration,
                     actionsTaken: actionsTaken
                 )
@@ -264,9 +290,18 @@ final class VisionSessionRunner {
                 guard let instruction = decision.instruction else {
                     continue
                 }
+                // **The delegated instruction is redacted before it reaches the planner.** It is
+                // model-authored from a screen-derived prompt and goes straight to
+                // `AgentRunner.prepare(command:)` — the same standard F5 set, at the same provider
+                // the rationale reaches (PR #50 cycle-2, F13c). The rationale beside it is redacted
+                // too: it comes from the same pen, and treating the two differently would leave a
+                // reader working out which model-authored strings are safe.
+                let redactedInstruction = environment.redactionService.redactText(instruction)
+                let redactedRationale = environment.redactionService.redactText(decision.rationale)
+                record.sessionRedactionSummary += redactedInstruction.report + redactedRationale.report
                 let request = VisionDelegationRequest(
-                    instruction: instruction,
-                    rationale: decision.rationale,
+                    instruction: redactedInstruction,
+                    rationale: redactedRationale,
                     appDisplayName: target.displayName
                 )
                 // Safe mode asks about the delegation itself; Normal and Power never do (founder,
@@ -275,7 +310,7 @@ final class VisionSessionRunner {
                 if interaction.visionApprovalContext().safeMode {
                     let allowed = try await interaction.confirmVisionDelegation(request)
                     guard allowed else {
-                        history.append("iteration \(iteration): you declined to let Sonny's own tools do \u{201C}\(instruction)\u{201D}. Continue from the screen instead, or report stuck.")
+                        history.append("iteration \(iteration): you declined to let Sonny's own tools do \u{201C}\(request.instructionText)\u{201D}. Continue from the screen instead, or report stuck.")
                         continue
                     }
                 }
@@ -289,9 +324,9 @@ final class VisionSessionRunner {
                 )
                 switch try await interaction.runVisionDelegation(request) {
                 case .completed(let summary):
-                    history.append("external result for iteration \(iteration): Sonny's own tools completed \u{201C}\(instruction)\u{201D} — \(summary)")
+                    history.append("external result for iteration \(iteration): Sonny's own tools completed \u{201C}\(request.instructionText)\u{201D} — \(summary)")
                 case .failed(let reason):
-                    history.append("external result for iteration \(iteration): Sonny's own tools could not do \u{201C}\(instruction)\u{201D} — \(reason). Try the on-screen route instead, or report stuck.")
+                    history.append("external result for iteration \(iteration): Sonny's own tools could not do \u{201C}\(request.instructionText)\u{201D} — \(reason). Try the on-screen route instead, or report stuck.")
                 }
                 try await settle()
                 continue

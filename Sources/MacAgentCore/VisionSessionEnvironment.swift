@@ -42,11 +42,25 @@ public struct VisionCapturePreview: Equatable, Sendable {
 
 /// An instruction the vision model wants Sonny's own planner to carry out.
 public struct VisionDelegationRequest: Equatable, Sendable {
-    public let instruction: String
-    public let rationale: String
+    /// The instruction, as a `RedactedPayload` rather than a `String`.
+    ///
+    /// **Structural, for the same reason and by the same mechanism as the rationale above** (PR #50
+    /// cycle-2, F13c). A delegated instruction is model-authored from a screen-derived prompt and
+    /// goes straight to the planner provider — `runVisionDelegation` hands it to
+    /// `AgentRunner.prepare(command:)`. `RedactedPayload`'s initializer is `fileprivate` to
+    /// `LocalRedactionService.swift`, so an unredacted instruction cannot be put in this type.
+    public let instruction: RedactedPayload
+    /// Why the model wants to delegate — model-authored, so redacted for the same reason. It reaches
+    /// the user's screen rather than a provider, but it comes from the same pen and is treated the
+    /// same way rather than needing a reader to work out which strings are which.
+    public let rationale: RedactedPayload
     public let appDisplayName: String
 
-    public init(instruction: String, rationale: String, appDisplayName: String) {
+    /// The instruction as text, for the planner and for display.
+    public var instructionText: String { instruction.maskedText ?? "" }
+    public var rationaleText: String { rationale.maskedText ?? "" }
+
+    public init(instruction: RedactedPayload, rationale: RedactedPayload, appDisplayName: String) {
         self.instruction = instruction
         self.rationale = rationale
         self.appDisplayName = appDisplayName

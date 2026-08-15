@@ -840,13 +840,13 @@ private struct WidgetDelegationReviewPanel: View {
                 .foregroundStyle(WidgetTheme.textFull)
                 .fixedSize(horizontal: false, vertical: true)
 
-            Text(delegation.instruction)
+            Text(delegation.instructionText)
                 .font(WidgetType.captionMedium)
                 .foregroundStyle(WidgetTheme.textFull)
                 .fixedSize(horizontal: false, vertical: true)
 
-            if !delegation.rationale.isEmpty {
-                Text(delegation.rationale)
+            if !delegation.rationaleText.isEmpty {
+                Text(delegation.rationaleText)
                     .font(WidgetType.captionSmall)
                     .foregroundStyle(WidgetTheme.textMuted)
                     .fixedSize(horizontal: false, vertical: true)
