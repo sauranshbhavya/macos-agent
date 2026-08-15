@@ -188,12 +188,23 @@ struct PlannerBoundaryTests {
         )
 
         #expect(excluded == emptyToolOperations)
-        #expect(excluded == [
+
+        // **Row I widened the third leg, and the widening is the point of this block.** Until
+        // SONNY-92 every excluded operation was excluded for one reason: the instant resolver was
+        // its whole front door. `vision_session` is excluded for a second reason — no model text can
+        // name it at all, because `AgentViewModel` builds its plan in Swift and hands it to
+        // `AgentRunner.prepare(plan:source:)`. Splitting the set rather than adding a fifth name to
+        // the old list is what keeps "excluded ⇒ something else reaches it" checkable: each group
+        // has its own obligation below, and an operation added to neither fails here.
+        let resolverFronted: Set<AgentOperation> = [
             .calculateUtility,
             .lookupClipboardHistory,
             .expandSnippet,
             .lookupRecentArtifacts
-        ])
+        ]
+        let swiftDispatchedOnly: Set<AgentOperation> = [.visionSession]
+        #expect(excluded == resolverFronted.union(swiftDispatchedOnly))
+        #expect(resolverFronted.isDisjoint(with: swiftDispatchedOnly))
 
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("PlannerBoundaryTests-\(UUID().uuidString)", isDirectory: true)
@@ -213,13 +224,34 @@ struct PlannerBoundaryTests {
             .expandSnippet: ";sig",
             .lookupRecentArtifacts: "recent artifacts"
         ]
-        #expect(Set(frontDoors.keys) == excluded)
+        #expect(Set(frontDoors.keys) == resolverFronted)
         for (operation, command) in frontDoors {
             guard case .plan(let plan)? = resolver.resolve(command: command) else {
                 Issue.record("\(operation.rawValue) has no instant-resolver front door: \(command) did not resolve.")
                 continue
             }
             #expect(plan.steps.map(\.operation) == [operation], "\(command) must resolve to \(operation.rawValue).")
+        }
+
+        // **The `swiftDispatchedOnly` group's own obligation: no front door but Swift.** The
+        // resolver must not produce a vision step for anything, and the phrasings below are the ones
+        // a reasonable resolver pattern would be most tempted by. This is the pin behind
+        // SONNY-93's "vision-bearing plans come only from the planner" — asserted here, one ticket
+        // early, because the cheapest moment to pin a negative is before anyone has a reason to
+        // break it.
+        for command in [
+            "control Safari",
+            "use Notes to write a note",
+            "click the send button in Discord",
+            "take over Figma",
+            "vision: Safari | go to example.com"
+        ] {
+            if case .plan(let plan)? = resolver.resolve(command: command) {
+                #expect(
+                    !plan.steps.contains { swiftDispatchedOnly.contains($0.operation) },
+                    "the instant resolver must never produce a vision step: \(command)"
+                )
+            }
         }
 
         // The two operations that left the exclusion set: planner-visible and resolver-reachable at

@@ -31,6 +31,17 @@ public enum PreparedPlanSource: String, Equatable, Sendable {
     /// nobody wants to be reviewing under time pressure. A surface that later needs to be told apart
     /// from this one adds its own case; it does not overload this one.
     case directUserAction = "direct_user_action"
+    /// A vision session: the user asked Sonny to act inside an app it has no adapter for, and
+    /// `AgentViewModel` built the one-step plan that starts it (row I, SONNY-92).
+    ///
+    /// **Its own case rather than `.directUserAction`, exactly as that case's own comment
+    /// instructs.** The two are genuinely different claims. `.directUserAction` says a plan was
+    /// constructed field by field with no natural language interpreted on the way; a vision session
+    /// carries the user's goal as free text and hands it to a model that decides what to do with it.
+    /// Overloading would also be the one thing SONNY-81's amendment forbids outright — it would give
+    /// a vision session an origin that appears on relaxation allowlists, and a vision session is
+    /// never relaxation-eligible.
+    case visionSession = "vision_session"
 
     var planLogMessage: String {
         switch self {
@@ -40,6 +51,8 @@ public enum PreparedPlanSource: String, Equatable, Sendable {
             return "Resolved command locally"
         case .directUserAction:
             return "Using the plan this screen built"
+        case .visionSession:
+            return "Starting a screen-control session"
         }
     }
 }

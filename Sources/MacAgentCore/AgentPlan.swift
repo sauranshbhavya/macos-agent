@@ -50,16 +50,42 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
     public var draftContent: String?
     public var shortcutName: String?
     public var shortcutInput: String?
-    /// The running app a `switch_running_app` step will actually activate, pinned exactly once by
-    /// `RunningAppSwitchCapabilityAdapter.resolveDefaultOutputs` — the resolve phase every executor
-    /// gate (`prepare`, `assessRisk`, `execute`) runs before doing anything else (SONNY-58). Nil
-    /// until that phase runs; never emitted by the planner (the operation is schema-excluded) or
-    /// the instant resolver. Once set, the pin is the identity: scope classifies it, the preview
-    /// names it, and execution activates it or fails — nothing re-resolves the query.
+    /// The app a `switch_running_app` step will actually activate, or a `vision_session` step will
+    /// actually control — pinned exactly once, by that operation's adapter's
+    /// `resolveDefaultOutputs`, in the resolve phase every executor gate (`prepare`, `assessRisk`,
+    /// `execute`) runs before doing anything else (SONNY-58). Nil until that phase runs; never
+    /// emitted by the planner and never by the instant resolver, because the key is absent from
+    /// `AgentPlanDecoder.stepKeys` and that check recurses into nested `routineSteps`. Once set, the
+    /// pin is the identity: scope classifies it, the preview names it, and execution activates it or
+    /// fails — nothing re-resolves the query.
+    ///
+    /// **Two writers now, and they are still the only two** (`RunningAppSwitchCapabilityAdapter`,
+    /// `VisionSessionCapabilityAdapter`). Reused rather than paired with a parallel
+    /// `visionTargetBundleIdentifier`, because a second decode-excluded app-identity field would be
+    /// a second thing every hostile-payload test, every scope classifier and every future reader has
+    /// to know about — and the exclusion guarantee is per-key, so a new key is a new place to get it
+    /// wrong. What the two writers share is exactly what this field means: the one app this step is
+    /// pinned to.
     public var resolvedAppName: String?
-    /// The pinned app's bundle identifier — the half of the pin execution activates by and scope
-    /// matching compares first. Written together with `resolvedAppName`, never separately.
+    /// The pinned app's bundle identifier — the half of the pin execution acts by and scope matching
+    /// compares first. Written together with `resolvedAppName`, never separately. For a vision
+    /// session it is also what `ScreenControlPolicy` judges: the terminal ban compares this, never a
+    /// display name.
     public var resolvedBundleIdentifier: String?
+    /// What the user asked Sonny to accomplish inside the target app — the vision session's goal,
+    /// verbatim.
+    ///
+    /// **Decode-excluded in SONNY-92, on purpose and only for now.** The key is absent from
+    /// `AgentPlanDecoder.stepKeys` and from the planner schema, so today a vision step can only be
+    /// built by a Swift call site; SONNY-93 makes `visionSession` planner-visible and moves this
+    /// field into both, owning the golden drift that follows. Until then this stays alongside the
+    /// pins rather than among the planner-facing fields, which is also what keeps SONNY-92's diff
+    /// clear of the goldens its never-touch list assigns to SONNY-93.
+    ///
+    /// Carried as trusted content: it originates from the user's own command, and the vision prompt
+    /// wraps it in `TRUSTED_USER_INSTRUCTION_BEGIN/END` precisely so that everything read off the
+    /// screen can be wrapped as untrusted and told apart from it.
+    public var visionGoal: String?
 
     public init(
         id: String,
@@ -91,7 +117,8 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
         shortcutName: String? = nil,
         shortcutInput: String? = nil,
         resolvedAppName: String? = nil,
-        resolvedBundleIdentifier: String? = nil
+        resolvedBundleIdentifier: String? = nil,
+        visionGoal: String? = nil
     ) {
         self.id = id
         self.operation = operation
@@ -123,6 +150,7 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
         self.shortcutInput = shortcutInput
         self.resolvedAppName = resolvedAppName
         self.resolvedBundleIdentifier = resolvedBundleIdentifier
+        self.visionGoal = visionGoal
     }
 }
 
@@ -156,6 +184,17 @@ public enum AgentOperation: String, Codable, CaseIterable, Sendable {
     case switchRunningApp = "switch_running_app"
     case lookupRecentArtifacts = "lookup_recent_artifacts"
     case invokeShortcut = "invoke_shortcut"
+    /// Sonny acts inside an app it has no adapter for, by looking at the app's window and
+    /// synthesizing real clicks and keystrokes (row I, SONNY-92).
+    ///
+    /// **One operation, not one per action.** A whole session — capture, decide, act, repeat — is a
+    /// single step of a single plan, so the engine assesses it once before anything moves and the
+    /// per-action gating happens inside `VisionSessionCapabilityAdapter`'s containment layer, which
+    /// is engine code calling the same `RiskApprovalPolicy.requirement(for:context:)` every other
+    /// path calls. Modelling each click as its own plan step was the alternative and is wrong: the
+    /// steps are not knowable before the run starts, which is the entire reason this capability
+    /// exists.
+    case visionSession = "vision_session"
     case clarify
     case unsupported
 
@@ -185,13 +224,24 @@ public enum AgentOperation: String, Codable, CaseIterable, Sendable {
     /// being absorbed by a destructive one; the resolver still answers the common phrasings without
     /// a round trip. It stays out of routines all the same — see
     /// `StoredRoutine.forbiddenStepOperations`.
+    ///
+    /// **`visionSession` is excluded for a third reason, and only until SONNY-93.** It is neither an
+    /// instant-resolver shape nor a permanently-hidden capability: it is planner-invisible because
+    /// SONNY-92 builds the capability and SONNY-93 owns the planner vocabulary — the schema enum
+    /// this property feeds is a golden-covered surface, and SONNY-92's never-touch list names those
+    /// goldens as SONNY-93's. So the agreement asserted by `PlannerBoundaryTests` reads, since row
+    /// I: excluded ⇔ *either* the instant resolver is the whole front door *or* the operation is
+    /// dispatched only by a Swift call site inside this app. `visionSession` is the second kind —
+    /// `AgentViewModel` builds its plan field by field and hands it to
+    /// `AgentRunner.prepare(plan:source:)`, so today no model text can name it at all.
     public static var plannerVisibleCases: [AgentOperation] {
         allCases.filter { operation in
             switch operation {
             case .calculateUtility,
                  .lookupClipboardHistory,
                  .expandSnippet,
-                 .lookupRecentArtifacts:
+                 .lookupRecentArtifacts,
+                 .visionSession:
                 return false
             default:
                 return true

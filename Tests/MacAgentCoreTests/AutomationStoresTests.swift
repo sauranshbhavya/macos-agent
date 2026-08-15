@@ -84,7 +84,7 @@ struct AutomationStoresTests {
     /// silent addition fail, and the reason the per-operation tests below can be written as a loop
     /// without being self-fulfilling.
     @Test
-    func theForbiddenStepListIsExactlyTheEightOperationsRoutinesMayNotContain() {
+    func theForbiddenStepListIsExactlyTheNineOperationsRoutinesMayNotContain() {
         #expect(
             StoredRoutine.forbiddenStepOperations == [
                 .saveRoutine,
@@ -93,6 +93,11 @@ struct AutomationStoresTests {
                 .editWorkspace,
                 .openWorkspace,
                 .switchRunningApp,
+                // Row I's third layer of "unattended vision: never". A stored routine structurally
+                // cannot carry a vision step, so the scheduled path can never see one through this
+                // door — independent of the scheduled path's own refusal and of the
+                // `.approved(.tier2)` ceiling a tier-3 vision assessment cannot pass.
+                .visionSession,
                 .clarify,
                 .unsupported
             ]

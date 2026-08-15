@@ -683,14 +683,14 @@ struct WorkspaceScopeTests {
     /// the build until it is classified; this test is the other half — it fails when an existing
     /// case is *re*classified without anyone saying so.
     @Test
-    func everyAgentOperationIsClassifiedAndTheTableCoversAllThirtyOneCases() {
-        #expect(AgentOperation.allCases.count == 31)
+    func everyAgentOperationIsClassifiedAndTheTableCoversAllThirtyTwoCases() {
+        #expect(AgentOperation.allCases.count == 32)
 
         let input = ScopedResource.fileLocation("~/Documents/Input")
         let output = ScopedResource.fileLocation("~/Documents/Output/out.md")
         // The probe sets `contextSource: .finderSelection`, so the four operations that resolve
         // their folder through `FinderSelectionResolver` name Finder here (SONNY-59). Every other
-        // row is unchanged by that field, which is the point of the probe carrying it for all 31.
+        // row is unchanged by that field, which is the point of the probe carrying it for all 32.
         let expected: [AgentOperation: [ScopedResource]] = [
             .scanSelectLargestFiles: [.app("Finder"), input, output],
             .createZip: [.app("Finder"), input, output],
@@ -712,6 +712,10 @@ struct WorkspaceScopeTests {
             .openGeneratedArtifact: [output],
             .createLocalDraft: [output],
             .switchRunningApp: [.app("GitHub")],
+            // Row I. The probe carries an `appName` and no pin, so this is the unpinned arm — the
+            // app is still named (over-reporting escalates; under-reporting silently blesses) and
+            // the step is opaque regardless, which the `isOpaque` assertion below covers.
+            .visionSession: [.app("GitHub")],
             .showPermissionReadiness: [],
             .saveRoutine: [],
             .runRoutine: [],
@@ -741,8 +745,13 @@ struct WorkspaceScopeTests {
             // form and the two chained-artifact operations name their targets — none of those three
             // is opaque here. `get_finder_selection` is opaque whatever the step says, because the
             // adapter reads none of it.
+            // `vision_session` joins the opaque set permanently and for the strongest reason of the
+            // three: its steps are not merely unread by the adapter, they do not exist yet — a model
+            // decides them one screenshot at a time after the run starts. Nothing computed before
+            // the run can enumerate what the session will touch, so it must never roll a plan up to
+            // `.inScope`.
             #expect(
-                classification.isOpaque == [.invokeShortcut, .getFinderSelection].contains(operation),
+                classification.isOpaque == [.invokeShortcut, .getFinderSelection, .visionSession].contains(operation),
                 "\(operation.rawValue)"
             )
         }
