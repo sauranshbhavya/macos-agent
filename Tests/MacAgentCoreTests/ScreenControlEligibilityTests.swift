@@ -37,6 +37,11 @@ struct ScreenControlEligibilityTests {
             #expect(verdict.isEligible == false, "\(bundleIdentifier)")
             #expect(verdict.refusal == .terminal, "\(bundleIdentifier)")
             #expect(verdict.bundleIdentifier == bundleIdentifier, "\(bundleIdentifier)")
+            // And the refusal does not depend on the list's own casing being the one passed in.
+            #expect(
+                ScreenControlPolicy.verdict(bundleIdentifier: bundleIdentifier.uppercased(), displayName: "T").refusal == .terminal,
+                "\(bundleIdentifier)"
+            )
         }
     }
 
@@ -89,9 +94,13 @@ struct ScreenControlEligibilityTests {
         for spelling in spellings {
             let verdict = ScreenControlPolicy.verdict(bundleIdentifier: spelling, displayName: "Terminal")
             #expect(verdict.refusal == .terminal, "\(spelling)")
-            // The verdict reports the normalized spelling, so a caller that pins or logs what it
-            // compared records the same string the comparison used.
-            #expect(verdict.bundleIdentifier == "com.apple.terminal", "\(spelling)")
+            // The verdict reports the identifier **as given**, trimmed but not case-folded — it is
+            // what callers hand to macOS, which keys on the bundle's own spelling. Normalization is
+            // the comparison's business and stays inside it.
+            #expect(
+                verdict.bundleIdentifier == spelling.trimmingCharacters(in: .whitespacesAndNewlines),
+                "\(spelling)"
+            )
         }
     }
 

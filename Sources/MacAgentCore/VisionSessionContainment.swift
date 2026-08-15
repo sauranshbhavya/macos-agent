@@ -195,15 +195,15 @@ public struct VisionSessionContainment: Sendable {
             return .targetIneligible(refusal)
         }
         let frontmost = await frontmostBundleIdentifier()
-        // **Normalized on both sides.** `ScreenControlVerdict.bundleIdentifier` is the normalized
-        // (lowercased, trimmed) spelling, because that is what the deny-list comparison used, while
-        // the OS hands back the bundle's own casing — `com.apple.Safari`. Comparing the two raw was
-        // a real defect for one commit: the check could never pass on a real machine, so no vision
-        // session would ever have got past its first iteration. Caught by
-        // `VisionSessionContainmentTests.anIterationInsideEveryBoundaryIsAllowed`, which is the
-        // happy-path test, which is why it was worth writing one.
+        // **Normalized on both sides, at the comparison.** Launch Services treats bundle
+        // identifiers case-insensitively, so `com.apple.Safari` and `com.apple.safari` name one app
+        // and a raw `==` here would refuse a session for a spelling difference. Normalizing at the
+        // comparison rather than storing a normalized identifier on the verdict is deliberate and
+        // was learned the hard way: the verdict's identifier is what the loop hands to
+        // `SCShareableContent` and `NSRunningApplication`, both of which want the bundle's own
+        // casing, so a normalized one found no window and activated nothing.
         guard let frontmost,
-              ScreenControlPolicy.normalize(frontmost) == target.bundleIdentifier else {
+              ScreenControlPolicy.normalize(frontmost) == ScreenControlPolicy.normalize(target.bundleIdentifier) else {
             return .targetNotFrontmost(expected: target.displayName, actual: frontmost)
         }
         return nil
