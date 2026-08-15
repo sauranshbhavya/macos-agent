@@ -54,6 +54,13 @@ extension AgentViewModel: VisionSessionInteracting {
         approvalContext()
     }
 
+    /// The session's journal id, recorded as soon as it starts so the task-history row this run
+    /// produces can link to it — including when the run is stopped, refused, or fails, which are
+    /// exactly the runs someone most wants to be able to read afterwards.
+    func visionSessionDidStart(id: String) {
+        activeVisionSessionID = id
+    }
+
     func visionSessionDidProgress(_ progress: VisionSessionProgress) {
         let wasLive = isVisionSessionLive
         visionSessionProgress = progress
@@ -423,7 +430,8 @@ extension AgentViewModel: VisionSessionInteracting {
     static func makeVisionEnvironment(
         interaction: any VisionSessionInteracting,
         environment: [String: String] = ProcessInfo.processInfo.environment,
-        userPauseMonitor: UserPausableAttentionMonitor? = nil
+        userPauseMonitor: UserPausableAttentionMonitor? = nil,
+        journalStore: VisionSessionJournalStore? = nil
     ) -> VisionSessionEnvironment? {
         guard let modelClient = try? OpenCodeVisionModelClient(environment: environment) else {
             return nil
@@ -437,6 +445,7 @@ extension AgentViewModel: VisionSessionInteracting {
             // session stops when the user does, and `AlwaysAttendedMonitor` is correct only for a
             // build with no way to ask the OS — which this is not.
             attentionMonitor: userPauseMonitor ?? UserPausableAttentionMonitor(base: SystemSessionAttentionMonitor()),
+            journalStore: journalStore,
             interaction: interaction
         )
     }

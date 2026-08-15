@@ -625,7 +625,8 @@ struct ProductShellTests {
             "visionCaptureContinuation", "visionSessionEnvironment",
             "visionDelegationRequest", "visionDelegationContinuation",
             "visionSessionPause", "visionResumeContinuation",
-            "visionUserPauseMonitor", "visionEmergencyStopHotKey"
+            "visionUserPauseMonitor", "visionEmergencyStopHotKey",
+            "visionSessionJournalStore", "activeVisionSessionID"
         ]
 
         let fixture = try makeProductShellFixture()

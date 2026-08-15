@@ -470,7 +470,7 @@ private struct TasksFoundationView: View {
             viewModel.refreshTaskHistory()
         }
         .sheet(item: $selectedLogEntry) { entry in
-            TaskLogDetailDialog(record: entry.record)
+            TaskLogDetailDialog(record: entry.record, journalStore: viewModel.visionSessionJournalStore)
         }
     }
 
@@ -1566,7 +1566,13 @@ private struct TaskLogEntry: Identifiable {
 /// richer "what did it actually produce" narrative is wanted here later.
 private struct TaskLogDetailDialog: View {
     let record: CompletedTaskRecord
+    /// Read lazily, on appear, and only for a row that says it has a session. A detail dialog that
+    /// decrypted the whole journal for every row would make opening an ordinary task's receipt cost
+    /// a file read it has no use for.
+    let journalStore: VisionSessionJournalStore
     @Environment(\.dismiss) private var dismiss
+    @State private var session: VisionSessionRecord?
+    @State private var journalLoadFailure: String?
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1619,15 +1625,114 @@ private struct TaskLogDetailDialog: View {
             }
             .padding(.horizontal, 28)
 
+            visionSessionSection
+
             Spacer(minLength: 20)
         }
-        .frame(width: 420, height: 320, alignment: .top)
+        .frame(width: 420, height: record.visionSessionID == nil ? 320 : 560, alignment: .top)
         .background(SonnyTheme.ink)
         .overlay(
             RoundedRectangle(cornerRadius: SonnyRadius.container)
                 .stroke(SonnyTheme.border, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+    }
+
+    /// The action journal for this task, when it ran a screen-control session (row I, SONNY-96).
+    ///
+    /// **Read-only, and only what actually happened.** Rows D and E own hiding, deleting and
+    /// rehydration; this ticket only makes the records exist and renders them. A row that ran no
+    /// session shows nothing here at all — not an empty state, which would imply a session with no
+    /// actions rather than no session.
+    @ViewBuilder
+    private var visionSessionSection: some View {
+        if record.visionSessionID != nil {
+            SettingsDivider()
+                .padding(.horizontal, 28)
+                .padding(.top, 8)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text("What Sonny did on screen")
+                    .font(SonnyType.settingsSectionLabel)
+                    .foregroundStyle(SonnyTheme.text)
+
+                if let journalLoadFailure {
+                    // A load failure is a real, visible problem and gets the load-failure wording,
+                    // never silently-empty state — the repo's own rule, and the difference matters
+                    // more here than most places: an empty journal and an unreadable one are very
+                    // different things to tell someone about their own screen.
+                    Text(journalLoadFailure)
+                        .font(SonnyType.micro)
+                        .foregroundStyle(SonnyTheme.warning)
+                        .fixedSize(horizontal: false, vertical: true)
+                } else if let session {
+                    Text("\(session.appDisplayName) — \(session.entries.count) action\(session.entries.count == 1 ? "" : "s")")
+                        .font(SonnyType.micro)
+                        .foregroundStyle(SonnyTheme.muted)
+
+                    ScrollView {
+                        VStack(alignment: .leading, spacing: 0) {
+                            ForEach(Array(session.entries.enumerated()), id: \.offset) { _, entry in
+                                visionEntryRow(entry)
+                                SettingsDivider()
+                            }
+                        }
+                    }
+                    .frame(maxHeight: 180)
+                }
+            }
+            .padding(.horizontal, 28)
+            .padding(.top, 14)
+            .task {
+                guard let id = record.visionSessionID else { return }
+                do {
+                    session = try journalStore.record(withID: id)
+                } catch {
+                    journalLoadFailure =
+                        "This session's record could not be decrypted or decoded: \(error.localizedDescription)"
+                }
+            }
+        }
+    }
+
+    private func visionEntryRow(_ entry: VisionActionJournalEntry) -> some View {
+        VStack(alignment: .leading, spacing: 3) {
+            HStack(spacing: 8) {
+                Text(entry.actionType.capitalized)
+                    .font(SonnyType.itemTitle)
+                    .foregroundStyle(SonnyTheme.text)
+                if !entry.targetDescription.isEmpty {
+                    Text(entry.targetDescription)
+                        .font(SonnyType.micro)
+                        .foregroundStyle(SonnyTheme.muted)
+                        .lineLimit(1)
+                }
+                Spacer(minLength: 8)
+                // The tier and how it was authorized, together — "tier 3, you approved it" is the
+                // pair that makes the row answerable, and either alone is half a fact.
+                Text("\(entry.riskTier.displayName) · \(approvalText(entry.approvalState))")
+                    .font(SonnyType.micro)
+                    .foregroundStyle(entry.consequence == .advisory ? SonnyTheme.muted : SonnyTheme.warning)
+                    .lineLimit(1)
+            }
+            Text(entry.observationAfter)
+                .font(SonnyType.micro)
+                .foregroundStyle(SonnyTheme.muted)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+        .padding(.vertical, 8)
+        .accessibilityElement(children: .combine)
+    }
+
+    private func approvalText(_ state: VisionActionJournalEntry.ApprovalState) -> String {
+        switch state {
+        case .ranWithoutAsking:
+            return "ran without asking"
+        case .approved:
+            return "you approved it"
+        case .coveredByEarlierApproval:
+            return "covered by your earlier approval"
+        }
     }
 
     private func detailRow(label: String, value: String) -> some View {

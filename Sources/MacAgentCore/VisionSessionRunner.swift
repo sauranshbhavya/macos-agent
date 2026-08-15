@@ -57,6 +57,19 @@ final class VisionSessionRunner {
     private var history: [String] = []
     private var actionsTaken = 0
 
+    /// The session's own record, built as the session runs.
+    ///
+    /// **Written here, by engine code, as each action executes** — §13.6's requirement, and the
+    /// difference between an audit surface and a summary. A UI-side reconstruction could only say
+    /// what the code believes it did; this is written from the same values the decision used, at the
+    /// moment it was made.
+    private var record: VisionSessionRecord
+    /// The redaction summary of the capture the current decision came from, carried onto the entry
+    /// so a reader can see what was protected on the picture that produced the action.
+    private var currentRedactionSummary: [RedactionReportEntry] = []
+    /// How the pending action was authorized, decided by `authorize` and read by `perform`.
+    private var pendingApprovalState: VisionActionJournalEntry.ApprovalState = .ranWithoutAsking
+
     init(
         goal: String,
         target: ScreenControlVerdict,
@@ -69,13 +82,40 @@ final class VisionSessionRunner {
         self.environment = environment
         self.containment = containment
         self.log = log
+        self.record = VisionSessionRecord(
+            goal: goal,
+            appDisplayName: target.displayName,
+            startedAt: environment.now()
+        )
     }
 
     func run() async throws -> VisionSessionOutcome {
+        do {
+            return try await runLoop()
+        } catch {
+            // **A thrown exit still leaves a record, and this is the case that matters most.** A
+            // cancelled session — the user pressing stop, or the emergency hotkey — propagates a
+            // `CancellationError` straight past every `end(with:)`, so without this the runs someone
+            // would most want to read afterwards would be exactly the ones that recorded nothing.
+            // Same for a capture failure, a model error, or anything else the loop throws.
+            //
+            // The record is closed with the honest reason rather than a generic one: a cancellation
+            // is `user_stopped`, everything else is `failed` with the error's own text.
+            if error is CancellationError {
+                finishRecord(reasonCode: VisionContainmentRefusal.cancelled.reasonCode, summary: "Stopped.")
+            } else {
+                finishRecord(reasonCode: "failed", summary: error.localizedDescription)
+            }
+            throw error
+        }
+    }
+
+    private func runLoop() async throws -> VisionSessionOutcome {
         guard let interaction = environment.interaction else {
             throw VisionSessionError.visionUnavailable
         }
 
+        interaction.visionSessionDidStart(id: record.id)
         try environment.captureService.preflightScreenRecording()
         try environment.captureService.preflightAccessibilityControl()
 
@@ -143,6 +183,7 @@ final class VisionSessionRunner {
             // of the type the model client will accept, so there is no branch of this loop that can
             // send `capture.pngData` — it does not type-check.
             let payload = try await environment.redactionService.redactCapture(capture)
+            currentRedactionSummary = payload.report
 
             interaction.visionSessionDidProgress(
                 VisionSessionProgress(
@@ -186,12 +227,14 @@ final class VisionSessionRunner {
 
             switch decision.kind {
             case .done:
+                finishRecord(reasonCode: "completed", summary: decision.rationale)
                 return VisionSessionOutcome(
                     ending: .finished(decision.rationale),
                     iterationsRun: iteration,
                     actionsTaken: actionsTaken
                 )
             case .stuck:
+                finishRecord(reasonCode: "gave_up", summary: decision.rationale)
                 return VisionSessionOutcome(
                     ending: .gaveUp(decision.rationale),
                     iterationsRun: iteration,
@@ -296,6 +339,7 @@ final class VisionSessionRunner {
 
         switch requirement {
         case .autoRun:
+            pendingApprovalState = .ranWithoutAsking
             // The ran-without-asking trace: an action that did not ask still says what it did and
             // why it did not have to. This is the whole of E9's transparency posture for Normal mode.
             log(.risk, "risk.ranWithoutAsking: \(decision.actionDescription) — \(containment.escalationReason(for: decision, consequence: VisionConsequenceClassifier.consequence(for: decision)))")
@@ -309,6 +353,7 @@ final class VisionSessionRunner {
             // authorizes the *fresh* request — same rule, same function, as the plan-level gate in
             // `AgentRunner.execute`.
             if carriedConsent.authorizes(request) {
+                pendingApprovalState = .coveredByEarlierApproval
                 log(.risk, "vision: covered by the approval you already gave — \(decision.actionDescription)")
                 return .allowed
             }
@@ -322,6 +367,7 @@ final class VisionSessionRunner {
                 return .refused(.approvalDeclined(action: decision.actionDescription))
             }
             carriedConsent = decisionGiven
+            pendingApprovalState = .approved
             return .allowed
         }
     }
@@ -342,12 +388,17 @@ final class VisionSessionRunner {
                     )
                     actionsTaken += 1
                     history.append("iteration \(iteration): scrolled \(decision.scrollDirection?.rawValue ?? "down")")
+                    journal(decision, imagePoint: nil, observationAfter: "Scrolled at the pointer.")
                 }
                 return
             }
             let imagePoint = CGPoint(x: CGFloat(x), y: CGFloat(y))
             guard VisionPointResolver.isInsideImage(imagePoint, capture: capture) else {
                 history.append("iteration \(iteration): \(decision.kind.rawValue) on \u{201C}\(decision.target)\u{201D} was skipped — the point (\(x), \(y)) is outside the \(capture.pixelWidth)x\(capture.pixelHeight) screenshot. Choose a point visibly inside the new screenshot.")
+                // Journalled even though nothing was synthesized. A skipped action is a thing Sonny
+                // decided and did not do, and a record showing only successes would read as a
+                // cleaner run than the one that happened.
+                journal(decision, imagePoint: imagePoint, observationAfter: "Skipped: the point was outside the captured window.")
                 return
             }
 
@@ -359,16 +410,24 @@ final class VisionSessionRunner {
             )
             switch outcome {
             case .windowDisappeared:
+                journal(decision, imagePoint: imagePoint, observationAfter: "Skipped: the window disappeared before the action was sent.")
                 history.append("iteration \(iteration): the action was skipped — \(target.displayName)'s window disappeared. Reassess from the new screenshot.")
             case .windowResized(let from, let to):
+                journal(decision, imagePoint: imagePoint, observationAfter: "Skipped: the window resized, so the point no longer named the control.")
                 history.append("iteration \(iteration): the action was skipped — the window resized from \(Int(from.width))x\(Int(from.height)) to \(Int(to.width))x\(Int(to.height)) and the layout moved. Reassess from the new screenshot.")
             case .suppressedOwnWindow:
+                journal(decision, imagePoint: imagePoint, observationAfter: "Blocked: the point fell inside Sonny's own window.")
                 history.append("iteration \(iteration): the action was blocked — that part of the screen is covered by Sonny's own window. Pick a different control or report stuck.")
                 try await settle(multiplier: 0.5)
             case .posted(let globalPoint):
                 if decision.kind == .click {
                     try await environment.synthesizer.click(atGlobalPoint: globalPoint)
                     history.append("iteration \(iteration): clicked \u{201C}\(decision.target)\u{201D}")
+                    journal(
+                        decision,
+                        imagePoint: imagePoint,
+                        observationAfter: "Clicked at screen point (\(Int(globalPoint.x)), \(Int(globalPoint.y)))."
+                    )
                 } else {
                     try await environment.synthesizer.scroll(
                         atGlobalPoint: globalPoint,
@@ -376,6 +435,7 @@ final class VisionSessionRunner {
                         amount: 3
                     )
                     history.append("iteration \(iteration): scrolled \(decision.scrollDirection?.rawValue ?? "down")")
+                    journal(decision, imagePoint: imagePoint, observationAfter: "Scrolled in the window.")
                 }
                 actionsTaken += 1
             }
@@ -384,6 +444,13 @@ final class VisionSessionRunner {
             let text = decision.text ?? ""
             try await environment.synthesizer.type(text)
             actionsTaken += 1
+            journal(
+                decision,
+                imagePoint: nil,
+                observationAfter: text.hasSuffix("\n")
+                    ? "Typed the text and pressed Return, which submits in most apps."
+                    : "Typed the text into whatever had keyboard focus."
+            )
             history.append("iteration \(iteration): typed \u{201C}\(VisionDecision.previewText(text))\u{201D}")
 
         case .key:
@@ -392,6 +459,7 @@ final class VisionSessionRunner {
             }
             try await environment.synthesizer.press(key)
             actionsTaken += 1
+            journal(decision, imagePoint: nil, observationAfter: "Pressed \(key.rawValue).")
             history.append("iteration \(iteration): pressed \(key.rawValue)")
 
         case .delegate, .wait, .done, .stuck:
@@ -401,10 +469,57 @@ final class VisionSessionRunner {
 
     private func end(with refusal: VisionContainmentRefusal, iteration: Int) -> VisionSessionOutcome {
         log(.summarize, "vision: \(refusal.reasonCode) — \(refusal.userFacingReason)")
+        finishRecord(reasonCode: refusal.reasonCode, summary: refusal.userFacingReason)
         return VisionSessionOutcome(
             ending: .refused(refusal),
             iterationsRun: iteration,
             actionsTaken: actionsTaken
+        )
+    }
+
+    /// Close and persist the session's record.
+    ///
+    /// **A write failure is reported, never swallowed, and never fails the run.** The session already
+    /// happened; refusing to report it because its record could not be saved would tell the user the
+    /// opposite of the truth. The wording is a write failure's own, not the load-failure banner's —
+    /// those are different things with different correct messages, and conflating them is a bug this
+    /// repo has already had once.
+    private func finishRecord(reasonCode: String, summary: String) {
+        guard let store = environment.journalStore else {
+            return
+        }
+        record.endedAt = environment.now()
+        record.endReasonCode = reasonCode
+        record.endSummary = summary
+        do {
+            try store.save(record)
+        } catch {
+            log(.summarize, "Sonny could not save this session's record: \(error.localizedDescription)")
+        }
+    }
+
+    /// One entry per synthesized action, written at the moment it executed.
+    private func journal(
+        _ decision: VisionDecision,
+        imagePoint: CGPoint?,
+        observationAfter: String
+    ) {
+        let consequence = VisionConsequenceClassifier.consequence(for: decision)
+        record.entries.append(
+            VisionActionJournalEntry(
+                timestamp: environment.now(),
+                appDisplayName: target.displayName,
+                appBundleIdentifier: target.bundleIdentifier,
+                actionType: decision.kind.rawValue,
+                targetDescription: decision.target,
+                imageX: imagePoint.map { Int($0.x) },
+                imageY: imagePoint.map { Int($0.y) },
+                riskTier: containment.assessment(for: decision).effectiveTier,
+                consequence: consequence,
+                approvalState: pendingApprovalState,
+                observationAfter: observationAfter,
+                redactionSummary: currentRedactionSummary
+            )
         )
     }
 
