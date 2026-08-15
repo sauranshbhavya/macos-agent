@@ -259,9 +259,10 @@ public struct RiskApprovalConsent: Codable, Equatable, Sendable {
         /// SONNY-62 the difference cannot change an authorize/deny outcome, and claiming it could
         /// was this file's own first mistake.** For the two to disagree on an outcome, a consent
         /// would need a tier-3 ceiling with an empty acknowledged set. No adapter can produce that
-        /// assessment: no `defaultTier` anywhere can reach tier 3, while all nine
+        /// assessment: no `defaultTier` anywhere can reach tier 3, while all eleven
         /// `CapabilityRiskEscalation` construction sites target tier 3 (the eight counted at
-        /// `04ce7e4` plus SONNY-98's whitelist-root widening; re-swept at `972c62a`) and each
+        /// `04ce7e4`, plus SONNY-98's whitelist-root widening, plus row I's two — the vision
+        /// session's envelope escalation and its per-action one; re-swept at `7f66300`) and each
         /// assessment forwards the escalations of any plan nested inside it — so a tier-3
         /// assessment always carries at least one reason, and a non-empty reason set always means
         /// tier 3.
@@ -271,7 +272,8 @@ public struct RiskApprovalConsent: Codable, Equatable, Sendable {
         /// so required the whole sweep re-run rather than carried — over every `defaultRiskTier`
         /// occurrence and every `CapabilityRiskAssessment` construction site in `Sources/`, rather
         /// than over the adapters that looked relevant; every figure here is the re-measured one.
-        /// All 25 literals are tier 2 or below (7/8/10 across tiers 0/1/2), and the six
+        /// Re-swept again at `7f66300`, when row I's adapter added the twenty-sixth literal.
+        /// All 26 literals are tier 2 or below (7/8/11 across tiers 0/1/2), and the six
         /// `descriptor.defaultRiskTier` forwards each resolve to a `static let` in
         /// `AppWebsiteActionDescriptors` — one of those same literals. **Three**
         /// sites compute the value at assessment time instead of forwarding a literal, not one:
