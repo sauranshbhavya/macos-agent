@@ -92,6 +92,7 @@ public final class AgentActionExecutor {
     private let fileManager: FileManager
     private let now: () -> Date
     private let hotKeyReady: () -> Bool
+    private let visionSession: VisionSessionEnvironment?
 
     public init(
         whitelist: PathWhitelist = PathWhitelist(),
@@ -126,7 +127,12 @@ public final class AgentActionExecutor {
         capabilityRegistry: CapabilityRegistry = .default,
         fileManager: FileManager = .default,
         now: @escaping () -> Date = Date.init,
-        hotKeyReady: @escaping () -> Bool = { true }
+        hotKeyReady: @escaping () -> Bool = { true },
+        // `nil` means this executor has no screen-control wiring, which is the honest state for
+        // `MacAgentCore` on its own and for every test that is not about vision. A vision session
+        // reaching an executor built this way fails loudly with `visionUnavailable` rather than
+        // half-running.
+        visionSession: VisionSessionEnvironment? = nil
     ) {
         self.whitelist = whitelist
         self.inventory = inventory
@@ -163,6 +169,7 @@ public final class AgentActionExecutor {
         self.fileManager = fileManager
         self.now = now
         self.hotKeyReady = hotKeyReady
+        self.visionSession = visionSession
     }
 
     public func prepare(plan: AgentPlan) throws -> PreparedAgentRun {
@@ -1361,7 +1368,8 @@ public final class AgentActionExecutor {
                     throw AgentExecutionError.invalidPlan("Executor is unavailable for nested execution.")
                 }
                 return try await self.execute(plan: plan, preferredBrowser: nestedBrowser, log: log)
-            }
+            },
+            visionSession: visionSession
         )
     }
 

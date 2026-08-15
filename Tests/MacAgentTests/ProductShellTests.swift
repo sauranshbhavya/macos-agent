@@ -611,7 +611,18 @@ struct ProductShellTests {
             "command", "lastCommand", "isRunning", "activeTaskOrigin", "lastAssessedScope",
             "isPreparingVoiceRecording", "isRecordingVoice", "isTranscribingVoice",
             "isPushToTalkHotKeyDown", "voiceRecordingOrigin", "clarificationOrigin",
-            "scheduledRunDisplayCommand"
+            "scheduledRunDisplayCommand",
+
+            // 5. Row I's vision-session state, all four slots of it. Same reasoning as the
+            // in-flight voice flags above, and it holds harder here: `deleteLocalData` guards on
+            // `!isRunning`, and every one of these can only be non-nil while a session is live —
+            // the two continuations are literally a suspended loop, and the preview and progress
+            // are cleared in `performStart`'s own `defer` on every exit. `visionSessionEnvironment`
+            // is not task state at all: it is the injected substrate seam, infrastructure like
+            // `whitelist` in group 1, and wiping it would leave the app unable to run a session
+            // until relaunch.
+            "visionCapturePreview", "visionSessionProgress", "visionApprovalContinuation",
+            "visionCaptureContinuation", "visionSessionEnvironment"
         ]
 
         let fixture = try makeProductShellFixture()
