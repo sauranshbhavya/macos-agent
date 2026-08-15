@@ -62,6 +62,9 @@ struct VisionSessionRunTests {
         /// the change lands at a deterministic point in the loop — a test that flipped it from
         /// outside would be racing the loop it is testing.
         var stealFocusAfterClicks: Int?
+        /// Called after each click, so a test can change the world at a deterministic point in the
+        /// loop rather than racing it from outside.
+        var afterClick: (@Sendable (Int) -> Void)?
 
         init(frontmost: String?) {
             self.frontmost = frontmost
@@ -86,6 +89,7 @@ struct VisionSessionRunTests {
             if let stealFocusAfterClicks, clickCount >= stealFocusAfterClicks {
                 frontmost = "com.apple.Notes"
             }
+            afterClick?(clickCount)
         }
 
         func type(_ text: String) async throws {
@@ -160,6 +164,7 @@ struct VisionSessionRunTests {
         let viewModel: AgentViewModel
         let model: ScriptedVisionModel
         let synthesizer: RecordingSynthesizer
+        let journal: VisionSessionJournalStore
         let root: URL
 
         func tearDown() {
@@ -203,6 +208,7 @@ struct VisionSessionRunTests {
             shortcutCatalog: NoShortcuts(),
             shortcutRunHistoryStore: ShortcutRunHistoryStore(fileURL: root.appendingPathComponent("shortcut-history.json")),
             taskHistoryStore: TaskHistoryStore(fileURL: root.appendingPathComponent("task-history.json")),
+            visionSessionJournalStore: VisionSessionJournalStore(fileURL: root.appendingPathComponent("vision-sessions.json")),
             clipboardHistorySettingsStore: ClipboardHistorySettingsStore(
                 fileURL: root.appendingPathComponent("clipboard-settings.json")
             ),
@@ -222,6 +228,7 @@ struct VisionSessionRunTests {
 
         let model = ScriptedVisionModel(replies)
         let synthesizer = RecordingSynthesizer(frontmost: frontmost)
+        let journal = VisionSessionJournalStore(fileURL: root.appendingPathComponent("vision-sessions.json"))
         viewModel.visionSessionEnvironment = VisionSessionEnvironment(
             captureService: ScreenCaptureService(
                 permissionChecker: permissions ?? GrantedPermissions(),
@@ -233,10 +240,17 @@ struct VisionSessionRunTests {
             limits: limits,
             attentionMonitor: attention ?? AlwaysAttendedMonitor(),
             permissionChecker: permissions ?? GrantedPermissions(),
+            journalStore: journal,
             interaction: viewModel
         )
 
-        return Fixture(viewModel: viewModel, model: model, synthesizer: synthesizer, root: root)
+        return Fixture(
+            viewModel: viewModel,
+            model: model,
+            synthesizer: synthesizer,
+            journal: journal,
+            root: root
+        )
     }
 
     private func waitUntil(
@@ -808,10 +822,12 @@ struct VisionSessionRunTests {
         )
         defer { fixture.tearDown() }
 
+        // Revoked from inside the click, so it lands before the next iteration's poll rather than
+        // racing it.
+        fixture.synthesizer.afterClick = { count in
+            if count == 1 { permissions.accessibilityTrusted = false }
+        }
         fixture.viewModel.startVisionSession(goal: "click things", appName: "Safari")
-        try await waitUntil("the first click") { fixture.synthesizer.clickCount == 1 }
-
-        permissions.accessibilityTrusted = false
         try await waitForIdle(fixture.viewModel)
 
         #expect(fixture.synthesizer.clickCount == 1, "no further action after control was lost")
@@ -839,10 +855,15 @@ struct VisionSessionRunTests {
         )
         defer { fixture.tearDown() }
 
+        // Locked from inside the click, so the change lands before the next iteration's check
+        // rather than racing it — an outside flip could arrive after iteration two had already
+        // passed its attention gate, and the test would then be measuring the race.
+        fixture.synthesizer.afterClick = { count in
+            // Exactly once, so the resume below finds an unlocked Mac rather than re-locking it on
+            // every click.
+            if count == 1 { attention.state = .screenLocked }
+        }
         fixture.viewModel.startVisionSession(goal: "click two things", appName: "Safari")
-        try await waitUntil("the first click") { fixture.synthesizer.clickCount == 1 }
-
-        attention.state = .screenLocked
         try await waitUntil("the pause") { fixture.viewModel.visionSessionPause != nil }
 
         let pause = try #require(fixture.viewModel.visionSessionPause)
@@ -1013,6 +1034,144 @@ struct VisionSessionRunTests {
         #expect(fixture.model.prompts.isEmpty)
         #expect(fixture.synthesizer.events.isEmpty)
         #expect(fixture.viewModel.errorMessage?.contains("never controls a terminal") == true)
+    }
+
+    // MARK: - The action journal (SONNY-96)
+
+    /// **Every synthesized action produces exactly one journal entry**, written by the engine as the
+    /// action executes — the acceptance criterion, and the difference between an audit surface and a
+    /// summary.
+    @Test
+    func everySynthesizedActionProducesExactlyOneJournalEntry() async throws {
+        let fixture = try makeFixture(replies: [
+            #"{"action":"click","x":10,"y":10,"target":"Bookmarks","consequence":"ordinary","rationale":"r"}"#,
+            #"{"action":"type","text":"hello","target":"search","consequence":"ordinary","rationale":"r"}"#,
+            #"{"action":"key","key":"tab","target":"","consequence":"ordinary","rationale":"r"}"#,
+            #"{"action":"done","rationale":"Done."}"#
+        ])
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "do three things", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        let records = try fixture.journal.loadAll()
+        #expect(records.count == 1)
+        let record = try #require(records.first)
+        #expect(record.entries.count == 3)
+        #expect(record.entries.map(\.actionType) == ["click", "type", "key"])
+        #expect(record.goal == "do three things")
+        #expect(record.appDisplayName == "Safari")
+        #expect(record.endReasonCode == "completed")
+        #expect(record.endedAt != nil)
+
+        // Actions that do not drive the machine produce no entry — a `done` is not something Sonny
+        // did to the user's app.
+        #expect(!record.entries.contains { $0.actionType == "done" })
+    }
+
+    /// The entry records the tier the action was *actually* assessed at, including a mid-loop
+    /// escalation — a record of a destructive click that said tier 1 would be a record that hides
+    /// the thing it exists to show.
+    @Test
+    func aMidLoopEscalationIsRecordedAtItsRealTierAndApprovalState() async throws {
+        let fixture = try makeFixture(replies: [
+            #"{"action":"click","x":10,"y":10,"target":"Bookmarks","consequence":"ordinary","rationale":"r"}"#,
+            #"{"action":"click","x":20,"y":20,"target":"Delete","consequence":"destructive","rationale":"r"}"#,
+            #"{"action":"done","rationale":"Done."}"#
+        ])
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "tidy up", appName: "Safari")
+        try await waitUntil("the approval") { fixture.viewModel.approvalRequest != nil }
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        let entries = try #require(try fixture.journal.loadAll().first?.entries)
+        #expect(entries.count == 2)
+
+        #expect(entries[0].riskTier == .tier1)
+        #expect(entries[0].consequence == .advisory)
+        #expect(entries[0].approvalState == .ranWithoutAsking)
+
+        #expect(entries[1].riskTier == .tier3)
+        #expect(entries[1].consequence == .destructive)
+        #expect(entries[1].approvalState == .approved)
+        #expect(entries[1].targetDescription == "Delete")
+        #expect(entries[1].imageX == 20)
+        #expect(entries[1].imageY == 20)
+        #expect(!entries[1].observationAfter.isEmpty)
+    }
+
+    /// A repeat of the same reason rides the earlier approval, and the record says so rather than
+    /// claiming the user was asked twice.
+    @Test
+    func anActionCoveredByAnEarlierApprovalIsRecordedAsSuch() async throws {
+        let send = #"{"action":"click","x":10,"y":10,"target":"Send","consequence":"affects_others","rationale":"r"}"#
+        let fixture = try makeFixture(replies: [send, send, #"{"action":"done","rationale":"Sent."}"#])
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "send twice", appName: "Safari")
+        try await waitUntil("the only approval") { fixture.viewModel.approvalRequest != nil }
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        let entries = try #require(try fixture.journal.loadAll().first?.entries)
+        #expect(entries.count == 2)
+        #expect(entries[0].approvalState == .approved)
+        #expect(entries[1].approvalState == .coveredByEarlierApproval)
+    }
+
+    /// **A stopped session still leaves a record**, with the reason it ended — the runs someone most
+    /// wants to read afterwards are exactly the ones that did not finish cleanly.
+    @Test
+    func aStoppedSessionStillLeavesARecordWithItsReason() async throws {
+        let fixture = try makeFixture(replies: [
+            #"{"action":"click","x":10,"y":10,"target":"Delete","consequence":"destructive","rationale":"r"}"#
+        ])
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "delete a thing", appName: "Safari")
+        try await waitUntil("the approval") { fixture.viewModel.approvalRequest != nil }
+        fixture.viewModel.cancelCurrentRun()
+        try await waitForIdle(fixture.viewModel)
+
+        let record = try #require(try fixture.journal.loadAll().first)
+        #expect(record.endReasonCode == "user_stopped")
+        // The declined action never ran, so it left no entry — the record shows what happened, not
+        // what was proposed.
+        #expect(record.entries.isEmpty)
+    }
+
+    /// **The task-history row links to the journal**, and a non-vision row does not — the linkage
+    /// decision rows D and E inherit.
+    @Test
+    func aVisionTasksHistoryRowLinksToItsJournalAndAnOrdinaryRowDoesNot() async throws {
+        let fixture = try makeFixture(replies: [
+            #"{"action":"click","x":10,"y":10,"target":"A","consequence":"ordinary","rationale":"r"}"#,
+            #"{"action":"done","rationale":"Done."}"#
+        ])
+        defer { fixture.tearDown() }
+
+        // An ordinary task first, so the negative half is asserted against a real row rather than
+        // an absence.
+        fixture.viewModel.command = "2 + 2"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        fixture.viewModel.startVisionSession(goal: "click a thing", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        let rows = fixture.viewModel.taskHistoryRecords
+        let visionRow = try #require(rows.first { $0.command.contains("Control Safari") })
+        let ordinaryRow = try #require(rows.first { $0.command == "2 + 2" })
+
+        let sessionID = try #require(visionRow.visionSessionID)
+        #expect(ordinaryRow.visionSessionID == nil)
+
+        // And the link resolves to the session that actually ran.
+        let record = try #require(try fixture.journal.record(withID: sessionID))
+        #expect(record.appDisplayName == "Safari")
+        #expect(record.entries.count == 1)
     }
 
     // MARK: - Egress

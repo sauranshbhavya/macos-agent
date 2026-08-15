@@ -139,6 +139,9 @@ final class AgentViewModel: ObservableObject {
     /// combination taken from every other app forever, in exchange for a control that matters for
     /// the seconds Sonny is actually moving the cursor.
     var visionEmergencyStopHotKey: EmergencyStopHotKey?
+    /// The journal id of the session this task is running, or `nil`. Read once when the task's
+    /// history row is written, then cleared with the rest of the per-task state.
+    var activeVisionSessionID: String?
     private let audioRecorder: AudioCommandRecorder
     private let permissionReadinessService: PermissionReadinessService
     private let routineStore: RoutineStore
@@ -163,6 +166,9 @@ final class AgentViewModel: ObservableObject {
     private let zipArchiver: any ZipArchiving
     private let shortcutRunHistoryStore: ShortcutRunHistoryStore
     private let taskHistoryStore: TaskHistoryStore
+    /// The action journal (row I, SONNY-96). Injected like every other store so a test writes to its
+    /// own file rather than the user's.
+    let visionSessionJournalStore: VisionSessionJournalStore
     private let clipboardHistorySettingsStore: ClipboardHistorySettingsStore
     private let clipboardHistoryMonitor: ClipboardHistoryMonitor
     private let localDataDeletionService: LocalDataDeletionService
@@ -356,6 +362,7 @@ final class AgentViewModel: ObservableObject {
         zipArchiver: any ZipArchiving = ProcessZipArchiver(),
         shortcutRunHistoryStore: ShortcutRunHistoryStore = ShortcutRunHistoryStore(),
         taskHistoryStore: TaskHistoryStore = TaskHistoryStore(),
+        visionSessionJournalStore: VisionSessionJournalStore = VisionSessionJournalStore(),
         clipboardHistorySettingsStore: ClipboardHistorySettingsStore = ClipboardHistorySettingsStore(),
         clipboardHistoryMonitor: ClipboardHistoryMonitor? = nil,
         localDataDeletionService: LocalDataDeletionService = LocalDataDeletionService(),
@@ -395,6 +402,7 @@ final class AgentViewModel: ObservableObject {
         self.zipArchiver = zipArchiver
         self.shortcutRunHistoryStore = shortcutRunHistoryStore
         self.taskHistoryStore = taskHistoryStore
+        self.visionSessionJournalStore = visionSessionJournalStore
         self.clipboardHistorySettingsStore = clipboardHistorySettingsStore
         self.clipboardHistoryMonitor = clipboardHistoryMonitor
             ?? ClipboardHistoryMonitor(settingsStore: clipboardHistorySettingsStore)
@@ -823,6 +831,10 @@ final class AgentViewModel: ObservableObject {
             // user's own apps on every exit, including the ones nobody planned for.
             releaseEmergencyStopHotKey()
             visionUserPauseMonitor?.clearPause()
+            // Cleared *after* the history row is written by `recordTaskHistoryIfTerminal`, which
+            // runs earlier in this same exit path — so the row carries the link and the next task
+            // starts with none.
+            activeVisionSessionID = nil
             // Per-task, cleared at every terminal exit — and deliberately *not* when the task is
             // merely paused. An approval or a clarification is the same task waiting on the user,
             // and it has to resume under the scope it was assessed with; clearing here would let
@@ -2022,7 +2034,11 @@ final class AgentViewModel: ObservableObject {
     /// nothing.
     private func makeLiveVisionEnvironment() -> VisionSessionEnvironment? {
         let monitor = UserPausableAttentionMonitor(base: SystemSessionAttentionMonitor())
-        guard let environment = Self.makeVisionEnvironment(interaction: self, userPauseMonitor: monitor) else {
+        guard let environment = Self.makeVisionEnvironment(
+            interaction: self,
+            userPauseMonitor: monitor,
+            journalStore: visionSessionJournalStore
+        ) else {
             return nil
         }
         visionUserPauseMonitor = monitor
@@ -2501,7 +2517,12 @@ final class AgentViewModel: ObservableObject {
                     // Derived from origin rather than threaded through every call site — origin
                     // already records who started this run, and a second parameter saying the same
                     // thing is a second thing to forget to pass.
-                    trigger: activeTaskOrigin == .scheduled ? .scheduled : .manual
+                    trigger: activeTaskOrigin == .scheduled ? .scheduled : .manual,
+                    // The link, written on every terminal exit including the failures — a link
+                    // present only on clean finishes would be missing from exactly the runs someone
+                    // most wants to read afterwards. `nil` for every task that ran no session, which
+                    // is every task the product had before row I.
+                    visionSessionID: activeVisionSessionID
                 )
             )
             refreshTaskHistory()

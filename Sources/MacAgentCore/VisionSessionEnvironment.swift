@@ -140,6 +140,14 @@ public protocol VisionSessionInteracting: AnyObject {
     /// Progress for the HUD.
     func visionSessionDidProgress(_ progress: VisionSessionProgress)
 
+    /// The session's journal id, handed over as soon as the session starts, so the task-history row
+    /// this run produces can link to it.
+    ///
+    /// Reported at *start* rather than at end because a session that is stopped, refused or crashes
+    /// still did things worth recording, and a link written only on a clean finish is a link missing
+    /// from exactly the runs someone would most want to read.
+    func visionSessionDidStart(id: String)
+
     /// The authority context this run is executing under — the same value the plan-level approval
     /// was derived from.
     ///
@@ -174,6 +182,11 @@ public struct VisionSessionEnvironment {
     /// Polled every iteration for the Accessibility grant. Injected so a test can revoke it
     /// mid-session without touching the real System Settings.
     public var permissionChecker: any ScreenCapturePermissionChecking
+    /// Where the action journal is written. `nil` in a build with no journal wiring; a session then
+    /// runs and records nothing, which is honest rather than silently half-recorded.
+    public var journalStore: VisionSessionJournalStore?
+    /// The clock the journal timestamps with. Injected for the same reason every other store's is.
+    public var now: @Sendable () -> Date
     public weak var interaction: (any VisionSessionInteracting)?
 
     public init(
@@ -184,6 +197,8 @@ public struct VisionSessionEnvironment {
         limits: VisionSessionLimits = .default,
         attentionMonitor: any SessionAttentionMonitoring = AlwaysAttendedMonitor(),
         permissionChecker: any ScreenCapturePermissionChecking = SystemScreenCapturePermissionChecker(),
+        journalStore: VisionSessionJournalStore? = nil,
+        now: @escaping @Sendable () -> Date = Date.init,
         interaction: (any VisionSessionInteracting)?
     ) {
         self.captureService = captureService
@@ -193,6 +208,8 @@ public struct VisionSessionEnvironment {
         self.limits = limits
         self.attentionMonitor = attentionMonitor
         self.permissionChecker = permissionChecker
+        self.journalStore = journalStore
+        self.now = now
         self.interaction = interaction
     }
 }
