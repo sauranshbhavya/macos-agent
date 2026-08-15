@@ -174,10 +174,13 @@ public struct WebResearchSynthesisPrompt: Equatable, Sendable {
 }
 
 public enum WebResearchPromptBuilder {
-    public static let observedBeginDelimiter = "UNTRUSTED_OBSERVED_CONTENT_BEGIN"
-    public static let observedEndDelimiter = "UNTRUSTED_OBSERVED_CONTENT_END"
-    public static let trustedInstructionBeginDelimiter = "TRUSTED_USER_INSTRUCTION_BEGIN"
-    public static let trustedInstructionEndDelimiter = "TRUSTED_USER_INSTRUCTION_END"
+    // Forwarded to `UntrustedContentBoundary` by row I, which promoted these out of this type when
+    // screen content became the second untrusted source. Kept as names on this type so every
+    // existing caller and test reads unchanged — the values are the same values, from one place.
+    public static let observedBeginDelimiter = UntrustedContentBoundary.observedBeginDelimiter
+    public static let observedEndDelimiter = UntrustedContentBoundary.observedEndDelimiter
+    public static let trustedInstructionBeginDelimiter = UntrustedContentBoundary.trustedInstructionBeginDelimiter
+    public static let trustedInstructionEndDelimiter = UntrustedContentBoundary.trustedInstructionEndDelimiter
 
     public static func prompt(
         trustedPlan: AgentPlan,

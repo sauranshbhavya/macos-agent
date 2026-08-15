@@ -239,6 +239,34 @@ public enum PlanScopedResources {
             // unresolvable query never earns a verdict a resolved app would have to spend.
             return .knowable(apps(step.appName ?? step.searchQuery))
 
+        case .visionSession:
+            // **Opaque, permanently, and not for lack of information about the app.** The pinned
+            // target is perfectly knowable — it is right there on the step, same as
+            // `switch_running_app` above — and it is reported, so a workspace whose scope excludes
+            // the target still escalates through row B's machinery. What is *not* knowable is
+            // everything the session goes on to touch: a vision session's whole premise is that the
+            // steps are decided one screenshot at a time, by a model, after the run starts. Nothing
+            // computed before the run can enumerate the files it opens, the URLs it visits or the
+            // records it edits inside that app.
+            //
+            // That is the exact condition `.opaque` names, and it is why `get_finder_selection`
+            // above is opaque too. Reporting the app while staying opaque is the honest pair:
+            // over-reporting escalates, under-reporting silently blesses — and a vision session must
+            // never roll a plan up to `.inScope`, because "in scope" would be a claim about
+            // resources nobody has seen yet.
+            if let bundleIdentifier = step.resolvedBundleIdentifier {
+                return StepScopedResources(
+                    resources: [
+                        .resolvedApp(
+                            bundleIdentifier: bundleIdentifier,
+                            displayName: step.resolvedAppName ?? bundleIdentifier
+                        )
+                    ],
+                    isOpaque: true
+                )
+            }
+            return StepScopedResources(resources: apps(step.appName), isOpaque: true)
+
         case .openWorkspace:
             // Its real resources are the *stored* workspace record's apps and URLs, not the step's
             // fields — and this classifier is pure, with no store to read. Resolving them belongs to

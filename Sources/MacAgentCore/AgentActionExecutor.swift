@@ -593,6 +593,8 @@ public final class AgentActionExecutor {
             return try previewCapability(for: .openWorkspace, plan: plan)
         case .invokeShortcut:
             return try previewCapability(for: .invokeShortcut, plan: plan)
+        case .visionSession:
+            return try previewCapability(for: .visionSession, plan: plan)
         case .chain:
             return try previewChain(plan)
         }
@@ -667,6 +669,8 @@ public final class AgentActionExecutor {
             return try await executeCapability(for: .openWorkspace, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .invokeShortcut:
             return try await executeCapability(for: .invokeShortcut, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+        case .visionSession:
+            return try await executeCapability(for: .visionSession, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .chain:
             return try await executeChain(resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         }
@@ -699,6 +703,7 @@ public final class AgentActionExecutor {
         case editWorkspace
         case openWorkspace
         case invokeShortcut
+        case visionSession
         case chain
     }
 
@@ -806,6 +811,8 @@ public final class AgentActionExecutor {
             return .openWorkspace
         case .invokeShortcut:
             return .invokeShortcut
+        case .visionSession:
+            return .visionSession
         case .unsupported:
             throw AgentExecutionError.unsupported("Unsupported operation.")
         }
@@ -1159,7 +1166,12 @@ public final class AgentActionExecutor {
         .openAppSearchURL,
         .openURL,
         .playMedia,
-        .invokeShortcut
+        .invokeShortcut,
+        // A vision session sends a screenshot of the user's app window to the vision model on every
+        // iteration. This is the most literal egress in the product — redacted first (SONNY-89's
+        // structural non-bypass), but pixels of the user's screen all the same — so Safe mode's
+        // "Data leaves device: yes" line must read yes, and does.
+        .visionSession
     ]
 
     /// `AgentStep.searchQuery` is reused by several operations for a value that is not a search

@@ -119,7 +119,15 @@ private enum ImageFixtures {
 }
 
 private func capture(png: Data, width: Int, height: Int, bundleID: String = "com.example.notes") -> CapturedWindowImage {
-    CapturedWindowImage(pngData: png, pixelWidth: width, pixelHeight: height, bundleIdentifier: bundleID, windowTitle: "Fixture")
+    CapturedWindowImage(
+        pngData: png,
+        pixelWidth: width,
+        pixelHeight: height,
+        bundleIdentifier: bundleID,
+        windowTitle: "Fixture",
+        windowID: 1,
+        windowFrame: CGRect(x: 0, y: 0, width: CGFloat(width), height: CGFloat(height))
+    )
 }
 
 private func textService() -> LocalRedactionService {

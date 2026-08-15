@@ -200,6 +200,15 @@ public struct CapabilityExecutionContext {
     public var assessNestedPlan: AssessNestedPlan
     public var previewNestedPlan: PreviewNestedPlan
     public var executeNestedPlan: ExecuteNestedPlan
+    /// Everything a vision session needs from outside this module, or `nil` when this build has no
+    /// screen-control wiring.
+    ///
+    /// One aggregate rather than six fields, and defaulted to `nil` rather than non-defaulted,
+    /// because the failure mode here is the opposite of `taskScope`'s: a construction site that
+    /// forgets this gets a vision session that *refuses to run* with
+    /// `VisionSessionError.visionUnavailable`, which is loud. A site that forgot a `taskScope` got a
+    /// silently unchecked routine, which is why that one is non-defaulted and this one is not.
+    public var visionSession: VisionSessionEnvironment?
 
     public init(
         whitelist: PathWhitelist,
@@ -243,7 +252,8 @@ public struct CapabilityExecutionContext {
         taskScope: TaskWorkspaceScope,
         assessNestedPlan: @escaping AssessNestedPlan,
         previewNestedPlan: @escaping PreviewNestedPlan,
-        executeNestedPlan: @escaping ExecuteNestedPlan
+        executeNestedPlan: @escaping ExecuteNestedPlan,
+        visionSession: VisionSessionEnvironment? = nil
     ) {
         self.whitelist = whitelist
         self.inventory = inventory
@@ -281,6 +291,7 @@ public struct CapabilityExecutionContext {
         self.assessNestedPlan = assessNestedPlan
         self.previewNestedPlan = previewNestedPlan
         self.executeNestedPlan = executeNestedPlan
+        self.visionSession = visionSession
     }
 }
 

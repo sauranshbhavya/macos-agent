@@ -111,6 +111,13 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
         .editWorkspace,
         .openWorkspace,
         .switchRunningApp,
+        // A stored routine structurally cannot carry a vision session (E7 as ratified, row I). This
+        // is the *third* independent layer of "unattended vision: never" — the other two being the
+        // scheduled path's explicit refusal and its fixed `.approved(.tier2)` ceiling, which a
+        // tier-3 vision assessment cannot pass. Listed here so the scheduled path can never even see
+        // a vision step through this door, whatever happens to the other two, and so no single
+        // regression unbars unattended screen control.
+        .visionSession,
         .clarify,
         .unsupported
     ]

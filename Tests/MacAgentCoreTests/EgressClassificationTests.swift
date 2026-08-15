@@ -31,6 +31,12 @@ struct EgressClassificationTests {
         case .openHackerNews, .fetchHNHeadlines, .webToMarkdown, .openAppSearchURL, .openURL,
              .playMedia, .invokeShortcut:
             return .alwaysLeavesDevice
+        // Row I. Every iteration sends a screenshot of the user's app window to the vision model —
+        // redacted first, but redaction removes secrets, not the picture. "Always", not
+        // "dependsOnSavedContent": a session that ends at iteration one still sent iteration one's
+        // capture, so there is no shape of this operation that egresses nothing.
+        case .visionSession:
+            return .alwaysLeavesDevice
         case .openWorkspace, .runRoutine:
             return .dependsOnSavedContent
         case .scanSelectLargestFiles, .createZip, .scanDocx, .convertDocxToPDF, .openApp,
@@ -59,7 +65,8 @@ struct EgressClassificationTests {
                 #expect(!inSet, "\(operation.rawValue) must not be in dataEgressOperations")
             }
         }
-        #expect(AgentActionExecutor.dataEgressOperations.count == 7)
+        // 7 before row I; the eighth is `.visionSession`. Re-measured, not incremented on faith.
+        #expect(AgentActionExecutor.dataEgressOperations.count == 8)
     }
 }
 
