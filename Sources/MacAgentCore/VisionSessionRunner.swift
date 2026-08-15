@@ -432,7 +432,29 @@ final class VisionSessionRunner {
                 try await settle(multiplier: 0.5)
             case .posted(let globalPoint):
                 if decision.kind == .click {
-                    try await environment.synthesizer.click(atGlobalPoint: globalPoint)
+                    do {
+                        try await environment.synthesizer.click(atGlobalPoint: globalPoint)
+                    } catch {
+                        // **A stop landing inside the click still delivered one** (PR #50 review,
+                        // F11). `ClickEventSequence` posts `leftMouseDown`, sleeps 80ms, and on
+                        // cancellation posts `leftMouseUp` before rethrowing — so the target app
+                        // received a complete down/up pair, which is a real click. Before this, the
+                        // throw propagated past `journal(...)` and the record showed nothing: the run
+                        // someone stopped mid-click was the one whose record was silently incomplete,
+                        // and it is the run they would most want to read.
+                        //
+                        // Journalled with what actually happened, then rethrown so the stop still
+                        // ends the session. `actionsTaken` is incremented for the same reason: an
+                        // action that reached the machine counts, however it ended.
+                        journal(
+                            decision,
+                            imagePoint: imagePoint,
+                            observationAfter: "Clicked at screen point (\(Int(globalPoint.x)), \(Int(globalPoint.y))) — "
+                                + "then the run was stopped mid-click. The mouse button was released."
+                        )
+                        actionsTaken += 1
+                        throw error
+                    }
                     history.append("iteration \(iteration): clicked \u{201C}\(decision.target)\u{201D}")
                     journal(
                         decision,

@@ -90,6 +90,10 @@ struct VisionSessionRunTests {
                 frontmost = "com.apple.Notes"
             }
             afterClick?(clickCount)
+            if let throwsAfterDeliveringClick {
+                self.throwsAfterDeliveringClick = nil
+                throw throwsAfterDeliveringClick
+            }
         }
 
         func type(_ text: String) async throws {
@@ -103,6 +107,12 @@ struct VisionSessionRunTests {
         func scroll(atGlobalPoint point: CGPoint?, direction: VisionScrollDirection, amount: Int) async throws {
             events.append(.scrolled(direction))
         }
+
+        /// Makes the *next* click behave the way a real one interrupted by a stop does: the target
+        /// app receives a complete down/up pair — `ClickEventSequence` guarantees the button comes
+        /// back up — and then the call throws. Recording the click before throwing is the whole
+        /// point: the click happened.
+        var throwsAfterDeliveringClick: Error?
 
         var clickCount: Int { events.filter { if case .clicked = $0 { return true } else { return false } }.count }
     }
@@ -577,9 +587,13 @@ struct VisionSessionRunTests {
         #expect(fixture.synthesizer.clickCount == 0)
         // The delegation cost one iteration, and its result came back as observed history the model
         // could read on the next turn.
+        // `try #require` before indexing, not `#expect` (PR #50 review, F12): `#expect` is
+        // non-fatal in Swift Testing, so a soft count assertion followed by a hard index traps the
+        // *whole process* on regression, and every test scheduled after it never runs.
         #expect(fixture.model.prompts.count == 2)
-        #expect(fixture.model.prompts[1].contains("Sonny's own tools completed"))
-        #expect(fixture.model.prompts[1].contains("4"))
+        let secondPrompt = try #require(fixture.model.prompts.dropFirst().first)
+        #expect(secondPrompt.contains("Sonny's own tools completed"))
+        #expect(secondPrompt.contains("4"))
         #expect(fixture.viewModel.finalSummary == "Finished.")
     }
 
@@ -627,7 +641,7 @@ struct VisionSessionRunTests {
         // The delegated instruction really ran, through the instant resolver a typed "2 + 2" would
         // have taken — no model round trip for arithmetic.
         #expect(fixture.model.prompts.count == 2)
-        #expect(fixture.model.prompts[1].contains("4"))
+        #expect(try #require(fixture.model.prompts.dropFirst().first).contains("4"))
     }
 
     /// **Declining a delegation is not stopping.** The loop is told, and continues from the screen —
@@ -660,7 +674,7 @@ struct VisionSessionRunTests {
         try await waitUntil("the second capture preview") { fixture.viewModel.visionCapturePreview != nil }
         fixture.viewModel.resolveVisionCapturePreview(allowing: true)
         try await waitUntil("the second prompt") { fixture.model.prompts.count == 2 }
-        #expect(fixture.model.prompts[1].contains("you declined"))
+        #expect(try #require(fixture.model.prompts.dropFirst().first).contains("you declined"))
         fixture.viewModel.cancelCurrentRun()
         try await waitForIdle(fixture.viewModel)
     }
@@ -688,7 +702,7 @@ struct VisionSessionRunTests {
 
         #expect(fixture.model.prompts.count == 2)
         // The loop was told the delegation could not be done, in the words the guard produces...
-        #expect(fixture.model.prompts[1].contains("second screen-control session"))
+        #expect(try #require(fixture.model.prompts.dropFirst().first).contains("second screen-control session"))
         // ...and it carried on rather than nesting: one session, one iteration cap, one summary.
         #expect(fixture.viewModel.finalSummary == "Finished on screen.")
         #expect(fixture.synthesizer.events.filter { $0 == .activated("com.apple.Safari") }.count == 1)
@@ -1200,18 +1214,20 @@ struct VisionSessionRunTests {
 
         let entries = try #require(try fixture.journal.loadAll().first?.entries)
         #expect(entries.count == 2)
+        let ordinary = try #require(entries.first)
+        let destructive = try #require(entries.dropFirst().first)
 
-        #expect(entries[0].riskTier == .tier1)
-        #expect(entries[0].consequence == .advisory)
-        #expect(entries[0].approvalState == .ranWithoutAsking)
+        #expect(ordinary.riskTier == .tier1)
+        #expect(ordinary.consequence == .advisory)
+        #expect(ordinary.approvalState == .ranWithoutAsking)
 
-        #expect(entries[1].riskTier == .tier3)
-        #expect(entries[1].consequence == .destructive)
-        #expect(entries[1].approvalState == .approved)
-        #expect(entries[1].targetDescription == "Delete")
-        #expect(entries[1].imageX == 20)
-        #expect(entries[1].imageY == 20)
-        #expect(!entries[1].observationAfter.isEmpty)
+        #expect(destructive.riskTier == .tier3)
+        #expect(destructive.consequence == .destructive)
+        #expect(destructive.approvalState == .approved)
+        #expect(destructive.targetDescription == "Delete")
+        #expect(destructive.imageX == 20)
+        #expect(destructive.imageY == 20)
+        #expect(!destructive.observationAfter.isEmpty)
     }
 
     /// A repeat of the same reason rides the earlier approval, and the record says so rather than
@@ -1229,8 +1245,8 @@ struct VisionSessionRunTests {
 
         let entries = try #require(try fixture.journal.loadAll().first?.entries)
         #expect(entries.count == 2)
-        #expect(entries[0].approvalState == .approved)
-        #expect(entries[1].approvalState == .coveredByEarlierApproval)
+        #expect(try #require(entries.first).approvalState == .approved)
+        #expect(try #require(entries.dropFirst().first).approvalState == .coveredByEarlierApproval)
     }
 
     /// **A stopped session still leaves a record**, with the reason it ended — the runs someone most
@@ -1284,6 +1300,42 @@ struct VisionSessionRunTests {
         let record = try #require(try fixture.journal.record(withID: sessionID))
         #expect(record.appDisplayName == "Safari")
         #expect(record.entries.count == 1)
+    }
+
+    /// **A click interrupted by a stop is still journalled** (PR #50 review, F11).
+    ///
+    /// `ClickEventSequence` posts `leftMouseDown`, sleeps 80ms, and on cancellation posts
+    /// `leftMouseUp` before rethrowing — so the target app receives a complete down/up pair, which is
+    /// a real click. The throw used to propagate past `journal(...)`, so the record showed nothing:
+    /// the one run whose record was silently incomplete was the run someone stopped mid-click, which
+    /// is the run they would most want to read. It also contradicted SONNY-96's own criterion — every
+    /// synthesized action produces exactly one entry — and its own stated principle, that a record
+    /// showing only what succeeded reads as a cleaner run than the one that happened.
+    @Test
+    func aClickInterruptedByAStopIsStillRecordedInTheJournal() async throws {
+        let fixture = try makeFixture(replies: [
+            #"{"action":"click","x":10,"y":10,"target":"A","consequence":"ordinary","rationale":"r"}"#,
+            #"{"action":"done","rationale":"should never be reached"}"#
+        ])
+        defer { fixture.tearDown() }
+        fixture.synthesizer.throwsAfterDeliveringClick = CancellationError()
+
+        fixture.viewModel.startVisionSession(goal: "click a thing", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        // The click really was delivered — that is the premise, not an incidental.
+        #expect(fixture.synthesizer.clickCount == 1)
+
+        let record = try #require(try fixture.journal.loadAll().first)
+        let entry = try #require(record.entries.first)
+        #expect(record.entries.count == 1, "the delivered click must appear exactly once")
+        #expect(entry.actionType == "click")
+        #expect(entry.imageX == 10)
+        #expect(entry.observationAfter.contains("stopped mid-click"))
+        #expect(entry.observationAfter.contains("button was released"))
+        // And the session ended on the stop rather than continuing to the next scripted reply.
+        #expect(record.endReasonCode == "user_stopped")
+        #expect(fixture.model.prompts.count == 1)
     }
 
     // MARK: - Egress

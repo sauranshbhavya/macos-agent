@@ -75,12 +75,18 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
     /// What the user asked Sonny to accomplish inside the target app — the vision session's goal,
     /// verbatim.
     ///
-    /// **Decode-excluded in SONNY-92, on purpose and only for now.** The key is absent from
-    /// `AgentPlanDecoder.stepKeys` and from the planner schema, so today a vision step can only be
-    /// built by a Swift call site; SONNY-93 makes `visionSession` planner-visible and moves this
-    /// field into both, owning the golden drift that follows. Until then this stays alongside the
-    /// pins rather than among the planner-facing fields, which is also what keeps SONNY-92's diff
-    /// clear of the goldens its never-touch list assigns to SONNY-93.
+    /// **Decodable, and deliberately unlike the two pin fields above it.** SONNY-92 landed this
+    /// field decode-*excluded* — absent from `AgentPlanDecoder.stepKeys` and from the planner schema
+    /// — because that ticket's never-touch list assigned the goldens to SONNY-93. SONNY-93 then made
+    /// `visionSession` planner-visible and moved the goal into both, three commits later on the same
+    /// branch. This comment still described the SONNY-92 state at `6c3e4ad`, telling a reader
+    /// auditing the single-sourcing guarantee the opposite of the truth about a security-relevant key
+    /// set (PR #50 review, F10).
+    ///
+    /// The asymmetry that *is* true, and is the thing worth auditing: **the goal is the planner's to
+    /// write, the identity is the resolver's alone.** `visionGoal` is in `stepKeys`;
+    /// `resolvedAppName` and `resolvedBundleIdentifier` are not, at any nesting depth. Pinned by
+    /// `theGoalDecodesWhileThePinsStayResolverOnly`.
     ///
     /// Carried as trusted content: it originates from the user's own command, and the vision prompt
     /// wraps it in `TRUSTED_USER_INSTRUCTION_BEGIN/END` precisely so that everything read off the
