@@ -928,6 +928,38 @@ public final class AgentActionExecutor {
                 .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
         }
 
+        // **Whole-plan, and that is the entire point of it being here rather than in
+        // `resolveUnitDefaultOutputs` where it started (PR #50 review, F1).**
+        //
+        // A vision step's target may be named by its own `appName` *or* by an app an earlier step in
+        // the same plan put on screen — SONNY-93's contracted inheritance. `segmentPlans(in:)` splits
+        // on workflow, and `open_app` and `vision_session` are different workflows, so a per-unit
+        // resolver is handed a plan containing only the vision step: `precededBy` is always empty,
+        // the inheritance can never fire, and the adapter's clarification then replaced the *whole*
+        // mixed plan. "Open Notes and write my standup there" answered "Which app should Sonny
+        // control?" — after the user had already said Notes.
+        //
+        // The same reasoning `edit_workspace` above is here for: this is the only place an adapter is
+        // handed the whole plan, and a rule about a step's *relationship to other steps* is
+        // unenforceable from inside a single unit.
+        //
+        // The clarification early-return inside the segment loop does not cover this block, so it is
+        // handled explicitly: a vision plan with no resolvable target still fails to a clarification
+        // that replaces the whole plan, which is the never-frontmost rule and must not be lost by
+        // moving the dispatch.
+        if resolvedPlan.steps.contains(where: { $0.operation == .visionSession }) {
+            resolvedPlan = try capabilityRegistry
+                .adapter(for: .visionSession)
+                .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
+            if let clarification = resolvedPlan.steps.first(where: { $0.operation == .clarify }) {
+                return AgentPlan(
+                    summary: resolvedPlan.summary,
+                    requiresConfirmation: false,
+                    steps: [clarification]
+                )
+            }
+        }
+
         return resolvedPlan
     }
 
@@ -1027,22 +1059,8 @@ public final class AgentActionExecutor {
                 .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
         }
 
-        // Same pin-once discipline as `switch_running_app` above, and it carries more weight here:
-        // the pinned identity is what `ScreenControlPolicy` judges, so a vision plan that skipped
-        // this phase would reach the gates with no identity at all — unpinned, unjudged, and opaque
-        // in a way that hides rather than escalates.
-        //
-        // **This block is the reason the pin exists and it was missing for one commit.** The adapter
-        // had its resolve hook, and nothing called it: this dispatch is a hand-maintained list of
-        // `if`s, not an exhaustive switch, so a new resolver is silently a no-op until someone adds
-        // its line. Caught by `VisionSessionAdapterTests`, which asserts the pin through this real
-        // path rather than by calling the adapter directly — which is exactly why it asserts through
-        // this path.
-        if resolvedPlan.steps.contains(where: { $0.operation == .visionSession }) {
-            resolvedPlan = try capabilityRegistry
-                .adapter(for: .visionSession)
-                .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
-        }
+        // `vision_session` is deliberately NOT resolved here — see the whole-plan block at the end
+        // of `resolveDefaultOutputs(in:)`. It needs to see steps this unit does not contain.
 
         return resolvedPlan
     }

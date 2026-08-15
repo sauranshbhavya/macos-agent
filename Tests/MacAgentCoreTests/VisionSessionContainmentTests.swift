@@ -320,12 +320,31 @@ struct VisionSessionContainmentTests {
         #expect(!fromModel.contains("labelled"))
     }
 
-    /// The action-type allowlist accepts exactly the closed vocabulary and nothing else.
+    /// **The last check before synthesis, in both directions.**
+    ///
+    /// The old version of this test asserted only the allow direction, against a check that could
+    /// never refuse — `allCases.contains` on a closed enum (PR #50 review, F2). It was titled
+    /// "accepts exactly the closed vocabulary and nothing else", a claim it could not make. Now the
+    /// check guards a real invariant — only kinds that drive the machine reach input synthesis — so
+    /// the refusing direction exists and is asserted first, because that is the half that can fail.
     @Test
-    func everyDeclaredActionKindIsAllowed() {
+    func onlyInputSynthesizingKindsMayReachSynthesis() {
         let containment = Self.containment()
-        for kind in VisionActionKind.allCases {
+
+        for kind in VisionActionKind.allCases where !kind.synthesizesInput {
+            #expect(
+                containment.checkActionAllowed(Self.decision(kind)) == .actionTypeNotAllowed(kind.rawValue),
+                "\(kind) does not drive the machine and must be refused here"
+            )
+        }
+
+        for kind in VisionActionKind.allCases where kind.synthesizesInput {
             #expect(containment.checkActionAllowed(Self.decision(kind)) == nil, "\(kind)")
         }
+
+        // Both directions are non-empty, so neither loop above is vacuously satisfied — the failure
+        // this test exists to catch is a `synthesizesInput` that answers the same for everything.
+        #expect(VisionActionKind.allCases.contains { $0.synthesizesInput })
+        #expect(VisionActionKind.allCases.contains { !$0.synthesizesInput })
     }
 }

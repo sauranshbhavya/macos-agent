@@ -305,14 +305,30 @@ public struct VisionSessionContainment: Sendable {
         return nil
     }
 
-    /// The action-type allowlist.
+    /// The last check before input synthesis: **this kind must be one that drives the machine.**
     ///
-    /// Redundant with `VisionActionKind` being a closed enum, and kept anyway: the enum stops a model
-    /// naming an unknown verb, while this stops a *known* verb being used by a session that should
-    /// not have it. They fail differently and the second one is the one that survives someone adding
-    /// a case to the enum.
+    /// **This check was a tautology and is now real** (PR #50 review, F2). It read
+    /// `VisionActionKind.allCases.contains(decision.kind)`, which is true for every value of a closed
+    /// enum by construction — the whole body could return `nil` with the suite green, and its own doc
+    /// comment claimed it "survives someone adding a case to the enum" when `allCases` grows with the
+    /// enum and a new case would be auto-allowed. Dead safety code that reads like a guarantee is
+    /// worse than no code, and this branch has now met that shape three times.
+    ///
+    /// **What it guards instead, which is a real invariant with a real failure mode.** The loop
+    /// reaches this line only after a `switch` that is supposed to have narrowed to the four
+    /// input-synthesizing kinds; `wait`, `done`, `stuck` and `delegate` are handled and `continue`
+    /// before it. If that switch is ever edited so a non-synthesizing kind falls through — a `wait`
+    /// arm that stops `continue`-ing, a new kind added to the wrong group — the run would try to
+    /// synthesize an action for a decision that names none, with coordinates and a target that mean
+    /// nothing. This refuses that, and unlike the old body it can actually return non-`nil`.
+    ///
+    /// It is deliberately *not* a configurable allowlist. SONNY-92 contracted an "allowed action-type
+    /// set {click, type, scroll, key, wait}", and the honest reading is that the set is enforced —
+    /// by the closed enum, by `VisionDecisionParser` throwing on an unrecognized action, and by the
+    /// loop's exhaustive switch — rather than by a knob no caller varies. Adding one would be
+    /// speculative generality dressed as a boundary, which is the same mistake in a new coat.
     public func checkActionAllowed(_ decision: VisionDecision) -> VisionContainmentRefusal? {
-        guard VisionActionKind.allCases.contains(decision.kind) else {
+        guard decision.kind.synthesizesInput else {
             return .actionTypeNotAllowed(decision.kind.rawValue)
         }
         return nil
