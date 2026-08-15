@@ -2,7 +2,10 @@ import Combine
 import Foundation
 import Testing
 @testable import MacAgent
-import MacAgentCore
+// `@testable` since SONNY-94: the belt's test needs `RoutineStore.saveBypassingStepValidation`,
+// the module-internal sanctioned door for writing a routine `save` would refuse. Nothing else
+// in this file depends on internal access.
+@testable import MacAgentCore
 
 /// Branch 10 checkpoint 3 — the unattended execution path.
 ///
@@ -53,6 +56,85 @@ struct ScheduledRoutineRunTests {
         #expect(!notice.contains("is not part of the"))
         // And the run left no binding behind on the shared view model.
         #expect(fixture.viewModel.activeTaskScope == .unscoped)
+    }
+
+    // MARK: - Unattended vision: never (SONNY-94, the belt)
+
+    /// **The belt: an explicit refusal that names the reason.**
+    ///
+    /// The other two layers would each stop this on their own — a routine cannot legally carry a
+    /// vision step, and the `.approved(.tier2)` ceiling cannot cover a tier-3 assessment — which is
+    /// exactly why this test has to reach past them with the sanctioned bypass to exercise the belt
+    /// at all. What the belt adds is *legibility*: the ceiling produces "approval required" and the
+    /// store produces "unsafe routine step", and neither tells a user that screen control is a thing
+    /// Sonny will not do while they are away.
+    @Test
+    func aScheduledRoutineCarryingAVisionStepIsRefusedAndItsScheduleIsPaused() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.saveRoutineBypassingValidation(
+            unattendedTrusted: true,
+            steps: [
+                AgentStep(
+                    id: "vision",
+                    operation: .visionSession,
+                    description: "Control Safari",
+                    appName: "Safari",
+                    visionGoal: "do a thing"
+                )
+            ]
+        )
+
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
+        try await fixture.waitForIdle()
+
+        let notice = try #require(fixture.viewModel.scheduledRunNotice)
+        // The reason is named, in the user's terms.
+        #expect(notice.contains("control an app on screen"))
+        #expect(notice.contains("while you are here"))
+        // SONNY-31's notify-and-pause semantics, not a silent skip that repeats forever: the
+        // schedule is off, so the user hears this once rather than every occurrence.
+        let saved = try #require(try fixture.routineStore.routine(named: "Morning"))
+        #expect(saved.schedule?.isEnabled == false)
+        // And nothing ran: no approval was raised for nobody to answer, and no session started.
+        #expect(fixture.viewModel.approvalRequest == nil)
+        #expect(fixture.viewModel.visionSessionProgress == nil)
+    }
+
+    /// **The trust toggle is not a grant for screen control**, and neither setting of it runs one.
+    ///
+    /// The two settings refuse for *different* reasons and that is worth pinning rather than
+    /// flattening: untrusted is refused before the run is even attempted (it is not set to run
+    /// unattended at all), trusted gets as far as the belt and is refused by it. What matters is
+    /// that no setting of this toggle reaches a session — a future reading of "trusted" as "run
+    /// anything" fails on the second half.
+    @Test
+    func neitherSettingOfTheTrustToggleUnbarsScheduledScreenControl() async throws {
+        let visionStep = AgentStep(
+            id: "vision",
+            operation: .visionSession,
+            description: "Control Safari",
+            appName: "Safari",
+            visionGoal: "do a thing"
+        )
+
+        let untrusted = try makeFixture()
+        defer { untrusted.cleanUp() }
+        try untrusted.saveRoutineBypassingValidation(unattendedTrusted: false, steps: [visionStep])
+        untrusted.viewModel.checkScheduledRoutines(now: untrusted.tenAM)
+        try await untrusted.waitForIdle()
+        let untrustedNotice = try #require(untrusted.viewModel.scheduledRunNotice)
+        #expect(untrustedNotice.contains("not set to run unattended"))
+        #expect(untrusted.viewModel.visionSessionProgress == nil)
+
+        let trusted = try makeFixture()
+        defer { trusted.cleanUp() }
+        try trusted.saveRoutineBypassingValidation(unattendedTrusted: true, steps: [visionStep])
+        trusted.viewModel.checkScheduledRoutines(now: trusted.tenAM)
+        try await trusted.waitForIdle()
+        let trustedNotice = try #require(trusted.viewModel.scheduledRunNotice)
+        #expect(trustedNotice.contains("control an app on screen"))
+        #expect(trusted.viewModel.visionSessionProgress == nil)
     }
 
     @Test
@@ -1295,6 +1377,26 @@ struct ScheduledRoutineRunTests {
                 operation: .calculateUtility,
                 description: "Calculate 1 + 1.",
                 searchQuery: "1 + 1"
+            )
+        }
+
+        /// Save a routine the store's own step validation would refuse.
+        ///
+        /// The single sanctioned bypass (`RoutineStore.saveBypassingStepValidation`, internal to
+        /// `MacAgentCore` and documented there as a deliberate greppable door). Needed because
+        /// SONNY-94's belt is a check on a state the *other two layers make unreachable* — a routine
+        /// carrying a vision step cannot be authored legally — and a belt whose test cannot reach it
+        /// is a belt nobody can tell is buckled.
+        func saveRoutineBypassingValidation(unattendedTrusted: Bool, steps: [AgentStep]) throws {
+            var schedule = RoutineSchedule(
+                cadence: .daily,
+                hour: 9,
+                minute: 0,
+                unattendedTrusted: unattendedTrusted
+            )
+            schedule.setEnabled(true, now: enabledAt)
+            try routineStore.saveBypassingStepValidation(
+                StoredRoutine(name: "Morning", steps: steps, schedule: schedule)
             )
         }
 

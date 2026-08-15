@@ -39,6 +39,9 @@ final class AgentViewModel: ObservableObject {
     /// The delegation waiting for a Safe-mode answer, or `nil`. Safe mode only — founder decision 4
     /// (2026-08-14) has Safe ask before a delegation fires while Normal and Power never do.
     @Published var visionDelegationRequest: VisionDelegationRequest?
+    /// A session paused because the user stopped being at the Mac, or `nil`. Resuming is an explicit
+    /// action (SONNY-94): nothing here resolves on a timer or on the screen simply unlocking.
+    @Published var visionSessionPause: VisionSessionPause?
     /// The ran-without-asking trace for the last completed run (SONNY-99, reshaped by the
     /// consequence rule 2026-08-13), or `nil` when the run's silence was ordinary — tier 0/1, a
     /// prompt that was answered, or a routine covered by its own trust toggle. The sentence itself
@@ -128,6 +131,7 @@ final class AgentViewModel: ObservableObject {
     var visionApprovalContinuation: CheckedContinuation<RiskApprovalDecision?, Never>?
     var visionCaptureContinuation: CheckedContinuation<Bool, Never>?
     var visionDelegationContinuation: CheckedContinuation<Bool, Never>?
+    var visionResumeContinuation: CheckedContinuation<Bool, Never>?
     private let audioRecorder: AudioCommandRecorder
     private let permissionReadinessService: PermissionReadinessService
     private let routineStore: RoutineStore
@@ -624,7 +628,7 @@ final class AgentViewModel: ObservableObject {
         // Row I's two Safe-mode questions, first for the same reason the three below them are
         // unconditional: each is a parked continuation waiting on a human, and a session whose
         // question the widget declined to render would simply hang.
-        if visionCapturePreview != nil || visionDelegationRequest != nil {
+        if visionCapturePreview != nil || visionDelegationRequest != nil || visionSessionPause != nil {
             return true
         }
         if approvalRequest != nil {
@@ -807,6 +811,7 @@ final class AgentViewModel: ObservableObject {
             visionSessionProgress = nil
             visionCapturePreview = nil
             visionDelegationRequest = nil
+            visionSessionPause = nil
             // Per-task, cleared at every terminal exit — and deliberately *not* when the task is
             // merely paused. An approval or a clarification is the same task waiting on the user,
             // and it has to resume under the scope it was assessed with; clearing here would let
@@ -1153,6 +1158,16 @@ final class AgentViewModel: ObservableObject {
         if let continuation = visionDelegationContinuation {
             visionDelegationContinuation = nil
             visionDelegationRequest = nil
+            continuation.resume(returning: false)
+            currentTask?.cancel()
+            return
+        }
+        // Stopping a paused session ends it, which is the only thing stop can honestly mean here:
+        // the alternative reading — "stop pausing" — is what Resume is for, and it has its own
+        // control.
+        if let continuation = visionResumeContinuation {
+            visionResumeContinuation = nil
+            visionSessionPause = nil
             continuation.resume(returning: false)
             currentTask?.cancel()
             return
@@ -2631,6 +2646,42 @@ final class AgentViewModel: ObservableObject {
             // into the generic catch below.)
             if let question = prepared.clarificationQuestion {
                 scheduledRunNotice = "“\(name)” was not run because Sonny needed to ask something first: \(question)"
+                return
+            }
+
+            // **Unattended vision: never — the belt** (SONNY-94, E7 as ratified under C8).
+            //
+            // The other two layers are structural and would each stop this on their own: a stored
+            // routine cannot carry a vision step at all (`StoredRoutine.forbiddenStepOperations`),
+            // and the `.approved(.tier2)` ceiling below cannot cover a tier-3 vision assessment.
+            // This layer is neither — it is an *explicit* refusal that names the reason, and it
+            // exists precisely because the other two are silent about theirs: a plan blocked by the
+            // ceiling produces "approval required", a plan blocked by the routine store produces
+            // "unsafe routine step", and neither tells a user that screen control is a thing Sonny
+            // will not do while they are away.
+            //
+            // Three layers, three pins, so no single regression unbars unattended screen control.
+            // This one is deliberately the least load-bearing and the most legible.
+            //
+            // A present human is an authority requirement, not an accuracy hedge: their presence is
+            // the whole basis on which a program is allowed to move their cursor, and no amount of
+            // model quality substitutes for it. So this refuses in *every* mode, Power included,
+            // and there is no toggle anywhere that turns it off.
+            // **Checked against the routine's own steps, not only the prepared plan** — and that
+            // distinction is the whole reason this check needed writing twice. The scheduled path
+            // prepares a one-step `run_routine` plan, so a vision step carried by the routine lives
+            // *inside* the stored record and never appears in `prepared.plan.steps` at all. A belt
+            // that looked only at the prepared plan would have been unreachable code that read like
+            // a guarantee.
+            let carriesVision = routine.steps.contains { $0.operation == .visionSession }
+                || (routine.steps.compactMap(\.routineSteps).flatMap { $0 }).contains { $0.operation == .visionSession }
+                || prepared.plan.steps.contains { $0.operation == .visionSession }
+            if carriesVision {
+                logStore.append(.summarize, "Scheduled run refused: screen control never runs unattended")
+                pauseSchedule(
+                    routineNamed: name,
+                    because: "It needs to control an app on screen, and Sonny only does that while you are here."
+                )
                 return
             }
 
