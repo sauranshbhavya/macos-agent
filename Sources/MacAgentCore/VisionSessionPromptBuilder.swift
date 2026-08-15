@@ -17,16 +17,28 @@ import Foundation
 /// itself changing because a window said so. The first is a model using a tool; the second is an
 /// attacker picking the objective. Nothing here lets observed content do the second.
 public enum VisionSessionPromptBuilder {
+    /// Build one iteration's prompt.
+    ///
+    /// **`redactedObserved` is a `RedactedPayload`, and the type is the guarantee** (PR #50 review,
+    /// F5). This used to take `windowTitle` and `history` as plain strings and assemble them here,
+    /// which meant the window title — screen-derived text, read off whatever window happens to be in
+    /// front — went to the vision model in the clear on every iteration, while *the same characters
+    /// rendered inside the capture* were OCR'd and painted over. One send, two halves, disagreeing
+    /// about the same string. `LocalRedactionService.redactText` existed with zero call sites.
+    ///
+    /// Taking the payload rather than a `String` gives the text the same structural non-bypass the
+    /// image already had: a `RedactedPayload`'s initializer is `fileprivate` to
+    /// `LocalRedactionService.swift`, so the only way to call this is to have redacted first — an
+    /// unredacted title does not compile rather than failing a review.
     public static func decisionPrompt(
         goal: String,
         appDisplayName: String,
-        windowTitle: String?,
+        redactedObserved: RedactedPayload,
         imageWidth: Int,
-        imageHeight: Int,
-        history: [String]
+        imageHeight: Int
     ) -> String {
         let observed = UntrustedContentBoundary.observedContent(
-            observedBlock(windowTitle: windowTitle, history: history),
+            redactedObserved.maskedText ?? "",
             id: "screen",
             source: "screenshot-of-\(appDisplayName)"
         )
@@ -67,7 +79,10 @@ public enum VisionSessionPromptBuilder {
         """
     }
 
-    static func observedBlock(windowTitle: String?, history: [String]) -> String {
+    /// The observed material, assembled but **not yet redacted** — the caller hands this to
+    /// `LocalRedactionService.redactText` and passes the result to `decisionPrompt`. Kept separate so
+    /// the assembly stays testable and the redaction stays unskippable.
+    public static func observedBlock(windowTitle: String?, history: [String]) -> String {
         var lines: [String] = []
         lines.append("Window title: \(windowTitle ?? "unknown")")
         if history.isEmpty {

@@ -15,6 +15,21 @@ enum EmergencyStopHotKeyError: Error, LocalizedError {
     }
 }
 
+/// The registration itself, as a seam.
+///
+/// **Exists so the wiring can be tested without any test taking a real global shortcut** (PR #50
+/// review, F4). A test process that called `RegisterEventHotKey` would either steal `Ctrl-Opt-Esc`
+/// from the developer's machine for the duration of the suite or fail in CI — so no test may
+/// construct the real one, and that is exactly why removing the registration call from
+/// `visionSessionDidProgress` left the whole suite green while `Ctrl-Opt-Esc` silently never
+/// registered for any session.
+protocol EmergencyStopHotKeyRegistering: AnyObject {
+    // `@MainActor` on the requirement rather than the protocol: isolating the whole protocol
+    // isolates every conformer, and this class's `deinit` unregisters Carbon handles from a
+    // nonisolated context — which a main-actor class may not do.
+    @MainActor init(onStop: @escaping @MainActor () -> Void) throws
+}
+
 /// The global hotkey that stops a screen-control session from anywhere.
 ///
 /// **Registered only while a session is live, and that is a deliberate bound rather than a
@@ -33,7 +48,7 @@ enum EmergencyStopHotKeyError: Error, LocalizedError {
 /// Escape rather than a letter: it is the one key every user already reads as "stop", it needs no
 /// learning, and Control-Option-Escape is close enough to macOS's own force-quit shortcut to feel
 /// like the same category of action without colliding with it (that one is Command-Option-Escape).
-final class EmergencyStopHotKey: @unchecked Sendable {
+final class EmergencyStopHotKey: EmergencyStopHotKeyRegistering, @unchecked Sendable {
     static let displayName = "Ctrl-Opt-Esc"
 
     /// Distinct from `PushToTalkHotKey`'s identifier under the same signature, so the shared handler

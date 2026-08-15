@@ -43,15 +43,16 @@ public struct SystemSessionAttentionMonitor: SessionAttentionMonitoring {
         }
 
         public static let live = Environment(
+            // The OS read and the *policy* applied to it are separated on purpose (PR #50 review,
+            // F3). This closure is now only the read; `isScreenLocked(fromSessionDictionary:)` below
+            // is the decision, and it is a pure function a test can drive. Before the split, the
+            // fail-closed branch had zero coverage — flipping it to fail *open* left the whole suite
+            // green, because every test reaches this type through the injected `Environment` seam,
+            // which is precisely what replaces this closure.
             isScreenLocked: {
-                // `CGSessionCopyCurrentDictionary` is the documented way to ask, and its
-                // `CGSSessionScreenIsLocked` key is simply absent when the screen is not locked —
-                // so the absence is a real "no", not a failure to read.
-                guard let session = CGSessionCopyCurrentDictionary() as? [String: Any] else {
-                    // **Fail closed.** Unable to tell means unable to justify moving the cursor.
-                    return true
-                }
-                return (session["CGSSessionScreenIsLocked"] as? Int) == 1
+                SystemSessionAttentionMonitor.isScreenLocked(
+                    fromSessionDictionary: CGSessionCopyCurrentDictionary() as? [String: Any]
+                )
             },
             isDisplayAsleep: {
                 // A sleeping display cannot be captured, and a user who cannot see the screen cannot
@@ -67,6 +68,24 @@ public struct SystemSessionAttentionMonitor: SessionAttentionMonitoring {
                 )
             }
         )
+    }
+
+    /// Whether the screen is locked, given whatever `CGSessionCopyCurrentDictionary` returned.
+    ///
+    /// **Fail closed: `nil` means locked.** Unable to tell whether someone is watching is unable to
+    /// justify moving their cursor, and this is the one branch of the whole attention story where
+    /// the safe answer and the convenient answer differ. A missing `CGSSessionScreenIsLocked` key in
+    /// a dictionary that *was* returned is a real "not locked", not a failure to read — the key is
+    /// simply absent when the screen is unlocked — so the two absences are deliberately treated
+    /// differently and both are pinned.
+    ///
+    /// Pure, static, and reachable from a test without a real display: this exists as its own
+    /// function because the live closure it came out of could not be observed at all.
+    static func isScreenLocked(fromSessionDictionary session: [String: Any]?) -> Bool {
+        guard let session else {
+            return true
+        }
+        return (session["CGSSessionScreenIsLocked"] as? Int) == 1
     }
 
     private let environment: Environment
