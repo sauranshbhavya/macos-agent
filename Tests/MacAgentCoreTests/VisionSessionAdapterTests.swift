@@ -15,6 +15,11 @@ struct VisionSessionAdapterTests {
         bundleIdentifier: "com.apple.Safari",
         applicationURL: URL(fileURLWithPath: "/Applications/Safari.app")
     )
+    private static let notes = InstalledApp(
+        displayName: "Notes",
+        bundleIdentifier: "com.apple.Notes",
+        applicationURL: URL(fileURLWithPath: "/Applications/Notes.app")
+    )
     private static let terminal = InstalledApp(
         displayName: "Terminal",
         bundleIdentifier: "com.apple.Terminal",
@@ -43,12 +48,26 @@ struct VisionSessionAdapterTests {
     /// and a test that called the adapter directly would be testing a path production never takes.
     private static func executor(
         installed: [InstalledApp],
+        running: [InstalledApp] = [],
         vision: VisionSessionEnvironment? = nil
     ) -> AgentActionExecutor {
         AgentActionExecutor(
             installedAppResolver: InstalledAppResolver(source: FixedAppSource(installed)),
+            runningAppSwitcher: FixedRunningApps(running),
             visionSession: vision
         )
+    }
+
+    /// A running-app universe a test states rather than inherits — `switch_running_app`'s own
+    /// resolver refuses an app that is not running, and which apps happen to be open on the machine
+    /// running the suite is not something a test may depend on.
+    private final class FixedRunningApps: RunningAppSwitching {
+        private let apps: [InstalledApp]
+        init(_ apps: [InstalledApp]) { self.apps = apps }
+        func runningApps() -> [RunningApp] {
+            apps.map { RunningApp(displayName: $0.displayName, bundleIdentifier: $0.bundleIdentifier, processIdentifier: 0) }
+        }
+        func activate(bundleIdentifier: String) async throws {}
     }
 
     // MARK: - Resolve-phase pinning (SONNY-58 discipline)
@@ -91,22 +110,129 @@ struct VisionSessionAdapterTests {
         #expect(prepared.clarificationQuestion?.contains("Which app") == true)
     }
 
-    /// The plan's own opening steps can name the target, so "open Notes, then write my standup
-    /// there" does not need the app repeated on the remainder.
+    /// **Inheritance, through the real executor** — the mixed plan a user actually gets.
+    ///
+    /// This test replaced one that called `VisionSessionCapabilityAdapter.targetName(for:precededBy:)`
+    /// directly (PR #50 review, F1). That version passed while the feature was broken through every
+    /// user-reachable path: the resolve dispatch lived in `resolveUnitDefaultOutputs`, which runs
+    /// **per segment**, and `open_app` and `vision_session` are different workflows — so the adapter
+    /// only ever saw a plan containing the vision step alone, `precededBy` was always empty, and the
+    /// whole mixed plan collapsed to "Which app should Sonny control?" after the user had already
+    /// said Notes.
+    ///
+    /// It is the third defect on this branch hidden by a test written against a component rather
+    /// than a path, and it is the reason this one asserts on the *prepared plan*: both steps survive,
+    /// and the vision step carries the pin.
     @Test
-    func aVisionStepInheritsItsTargetFromThePlansOwnOpeningSteps() {
-        let notes = AgentStep(id: "1", operation: .openApp, description: "Open Notes", appName: "Notes")
-        let switchTo = AgentStep(id: "2", operation: .switchRunningApp, description: "Focus Safari", appName: "Safari")
-        var vision = AgentStep(id: "3", operation: .visionSession, description: "d", visionGoal: "g")
-        vision.appName = nil
+    func aMixedPlanInheritsItsVisionTargetFromAnEarlierStepThroughTheRealExecutor() throws {
+        let plan = AgentPlan(
+            summary: "Open Notes and write today's standup there.",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(id: "1", operation: .openApp, description: "Open Notes", appName: "Notes"),
+                // Deliberately no `appName`: the whole point is that the earlier step supplies it.
+                AgentStep(
+                    id: "2",
+                    operation: .visionSession,
+                    description: "Write the standup",
+                    visionGoal: "write today's standup as a new note"
+                )
+            ]
+        )
 
-        #expect(VisionSessionCapabilityAdapter.targetName(for: vision, precededBy: [notes]) == "Notes")
-        // Last one wins: after "open Notes, focus Safari", the remainder happens in Safari.
-        #expect(VisionSessionCapabilityAdapter.targetName(for: vision, precededBy: [notes, switchTo]) == "Safari")
-        // The step's own name always wins over anything inherited.
-        var named = vision
-        named.appName = "Figma"
-        #expect(VisionSessionCapabilityAdapter.targetName(for: named, precededBy: [notes, switchTo]) == "Figma")
+        let prepared = try Self.executor(installed: [Self.safari, Self.notes]).prepare(plan: plan)
+
+        // The supported step is still there — the old behaviour discarded it along with everything
+        // else when the clarification replaced the plan.
+        #expect(prepared.plan.steps.map(\.operation) == [.openApp, .visionSession])
+        #expect(prepared.clarificationQuestion == nil)
+
+        let visionStep = try #require(prepared.plan.steps.last)
+        #expect(visionStep.resolvedAppName == "Notes")
+        #expect(visionStep.resolvedBundleIdentifier == "com.apple.Notes")
+    }
+
+    /// A `switch_running_app` step supplies the target too, and the *last* one wins: after
+    /// "open Notes, focus Safari, then do X", X happens in Safari.
+    @Test
+    func theLastAppNamingStepBeforeTheVisionStepWins() throws {
+        let plan = AgentPlan(
+            summary: "Open Notes, focus Safari, then act.",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(id: "1", operation: .openApp, description: "Open Notes", appName: "Notes"),
+                AgentStep(id: "2", operation: .switchRunningApp, description: "Focus Safari", appName: "Safari"),
+                AgentStep(id: "3", operation: .visionSession, description: "Act", visionGoal: "do a thing")
+            ]
+        )
+
+        let prepared = try Self.executor(
+            installed: [Self.safari, Self.notes],
+            running: [Self.safari]
+        ).prepare(plan: plan)
+        let visionStep = try #require(prepared.plan.steps.last)
+        #expect(visionStep.resolvedBundleIdentifier == "com.apple.Safari")
+    }
+
+    /// The step's own name always wins over anything inherited.
+    @Test
+    func aVisionStepsOwnAppNameOutranksAnEarlierStepsThroughTheRealExecutor() throws {
+        let plan = AgentPlan(
+            summary: "Open Notes, then act in Safari.",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(id: "1", operation: .openApp, description: "Open Notes", appName: "Notes"),
+                AgentStep(
+                    id: "2",
+                    operation: .visionSession,
+                    description: "Act",
+                    appName: "Safari",
+                    visionGoal: "do a thing"
+                )
+            ]
+        )
+
+        let prepared = try Self.executor(installed: [Self.safari, Self.notes]).prepare(plan: plan)
+        let visionStep = try #require(prepared.plan.steps.last)
+        #expect(visionStep.resolvedBundleIdentifier == "com.apple.Safari")
+    }
+
+    /// **The reviewer's own safety probe, kept as a test.** A mixed plan whose earlier step opens a
+    /// terminal must not inherit it into a controllable session. Now that inheritance actually works,
+    /// this is the case that could have turned a broken feature into a hole — it does not: the
+    /// inherited target is judged by the same ban as a named one.
+    @Test
+    func aMixedPlanCannotInheritATerminalAsItsVisionTarget() {
+        let plan = AgentPlan(
+            summary: "Open Terminal and do a thing.",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(id: "1", operation: .openApp, description: "Open Terminal", appName: "Terminal"),
+                AgentStep(id: "2", operation: .visionSession, description: "Act", visionGoal: "run a command")
+            ]
+        )
+
+        #expect(throws: VisionSessionError.targetNotControllable(.terminal)) {
+            _ = try Self.executor(installed: [Self.safari, Self.terminal]).prepare(plan: plan)
+        }
+    }
+
+    /// Only steps that put a *named* app on screen can answer, through the real path: a plan whose
+    /// earlier steps name no app still fails to a clarification rather than to whatever is frontmost.
+    @Test
+    func aMixedPlanWhoseEarlierStepsNameNoAppStillClarifies() throws {
+        let plan = AgentPlan(
+            summary: "Open a workspace and do a thing.",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(id: "1", operation: .openWorkspace, description: "Open Research", workspaceName: "Research"),
+                AgentStep(id: "2", operation: .visionSession, description: "Act", visionGoal: "do a thing")
+            ]
+        )
+
+        let prepared = try Self.executor(installed: [Self.safari, Self.notes]).prepare(plan: plan)
+        #expect(prepared.plan.steps.map(\.operation) == [.clarify])
+        #expect(prepared.clarificationQuestion?.contains("Which app") == true)
     }
 
     /// Only steps that put a *named* app on screen can answer. A workspace opens several and names
