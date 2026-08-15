@@ -625,7 +625,7 @@ struct ProductShellTests {
             "visionCaptureContinuation", "visionSessionEnvironment",
             "visionDelegationRequest", "visionDelegationContinuation",
             "visionSessionPause", "visionResumeContinuation",
-            "visionUserPauseMonitor", "visionEmergencyStopHotKey",
+            "visionUserPauseMonitor", "visionEmergencyStopHotKey", "visionEmergencyStopHotKeyFactory",
             "visionSessionJournalStore", "activeVisionSessionID"
         ]
 

@@ -135,6 +135,29 @@ struct VisionSessionRunTests {
         )!
     }
 
+    /// Stands in for the real Carbon registration, so the *wiring* can be pinned without any test
+    /// taking a real global shortcut (PR #50 review, F4).
+    /// Counts registrations for one test.
+    ///
+    /// Per-test rather than a static counter: Swift Testing runs tests in parallel, and a shared
+    /// static made `builtCount` read 2 in a test that registered once. A counter that can be
+    /// polluted by a neighbouring test is a counter that cannot support the assertion it exists for.
+    private final class StopHotKeyLedger: @unchecked Sendable {
+        private(set) var built = 0
+        func recordBuild() { built += 1 }
+    }
+
+    private final class FakeStopHotKey: EmergencyStopHotKeyRegistering {
+        private let onStop: @MainActor () -> Void
+
+        init(onStop: @escaping @MainActor () -> Void) throws {
+            self.onStop = onStop
+        }
+
+        /// Fires the handler the way a real `Ctrl-Opt-Esc` press would.
+        @MainActor func press() { onStop() }
+    }
+
     /// Grants that a test can take away mid-session.
     private final class RevocablePermissions: ScreenCapturePermissionChecking, @unchecked Sendable {
         var accessibilityTrusted = true
@@ -697,6 +720,91 @@ struct VisionSessionRunTests {
         #expect(fixture.model.prompts.count == 1, "the loop must not have asked the model again")
     }
 
+    // MARK: - The emergency-stop hotkey's wiring (PR #50 review, F4)
+
+    /// **A live session really registers the hotkey, and every exit releases it.**
+    ///
+    /// Nothing asserted this before: removing the `registerEmergencyStopHotKey()` call from
+    /// `visionSessionDidProgress` left the whole suite green, so `Ctrl-Opt-Esc` could have silently
+    /// never registered for any session. The tests that existed called `emergencyStopVisionSession()`
+    /// directly, which exercises the *handler* and says nothing about whether anything is listening.
+    ///
+    /// SONNY-95's closing comment claimed `isVisionSessionLive` is "the one definition both the HUD's
+    /// visibility and the hotkey's registration window read, so the two cannot drift". The HUD half
+    /// was pinned; this is the other half.
+    @Test
+    func aLiveSessionRegistersTheEmergencyStopHotKeyAndEveryExitReleasesIt() async throws {
+        let ledger = StopHotKeyLedger()
+        let fixture = try makeFixture(replies: [
+            #"{"action":"click","x":10,"y":10,"target":"A","consequence":"ordinary","rationale":"r"}"#,
+            #"{"action":"done","rationale":"Done."}"#
+        ])
+        defer { fixture.tearDown() }
+        fixture.viewModel.visionEmergencyStopHotKeyFactory = { onStop in
+            ledger.recordBuild()
+            return try FakeStopHotKey(onStop: onStop)
+        }
+
+        #expect(fixture.viewModel.visionEmergencyStopHotKey == nil, "nothing is held outside a session")
+
+        fixture.viewModel.startVisionSession(goal: "click a thing", appName: "Safari")
+        try await waitUntil("the hotkey to be registered") { fixture.viewModel.visionEmergencyStopHotKey != nil }
+        #expect(ledger.built == 1, "exactly one registration per session, not one per iteration")
+
+        try await waitForIdle(fixture.viewModel)
+
+        // Released on exit — a permanently-held global shortcut is a key combination taken from every
+        // other app on the machine, so the release matters as much as the registration.
+        #expect(fixture.viewModel.visionEmergencyStopHotKey == nil)
+        #expect(ledger.built == 1)
+    }
+
+    /// **The registered hotkey is wired to the stop, not merely constructed.** Pressing it ends the
+    /// run — asserted through the object the production path actually built, rather than by calling
+    /// the view model's method directly the way the older tests do.
+    @Test
+    func pressingTheRegisteredHotKeyStopsTheSession() async throws {
+        let keepClicking = #"{"action":"click","x":10,"y":10,"target":"A","consequence":"ordinary","rationale":"r"}"#
+        let fixture = try makeFixture(
+            replies: Array(repeating: keepClicking, count: 8),
+            limits: VisionSessionLimits(maximumIterations: 8, settleNanoseconds: 40_000_000)
+        )
+        defer { fixture.tearDown() }
+        fixture.viewModel.visionEmergencyStopHotKeyFactory = { try FakeStopHotKey(onStop: $0) }
+
+        fixture.viewModel.startVisionSession(goal: "click forever", appName: "Safari")
+        try await waitUntil("the first click") { fixture.synthesizer.clickCount == 1 }
+
+        let hotKey = try #require(fixture.viewModel.visionEmergencyStopHotKey as? FakeStopHotKey)
+        hotKey.press()
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.synthesizer.clickCount <= 2, "actual: \(fixture.synthesizer.clickCount)")
+        #expect(fixture.viewModel.visionSessionProgress == nil)
+    }
+
+    /// A refused session never reaches the loop, so it must never take the shortcut either.
+    @Test
+    func aRefusedSessionNeverRegistersTheHotKey() async throws {
+        let ledger = StopHotKeyLedger()
+        let fixture = try makeFixture(
+            replies: [#"{"action":"click","x":1,"y":1,"target":"OK","rationale":"r"}"#],
+            bundleIdentifier: "com.apple.Terminal",
+            frontmost: "com.apple.Terminal"
+        )
+        defer { fixture.tearDown() }
+        fixture.viewModel.visionEmergencyStopHotKeyFactory = { onStop in
+            ledger.recordBuild()
+            return try FakeStopHotKey(onStop: onStop)
+        }
+
+        fixture.viewModel.startVisionSession(goal: "run a command", appName: "Terminal")
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(ledger.built == 0)
+        #expect(fixture.viewModel.visionEmergencyStopHotKey == nil)
+    }
+
     // MARK: - The HUD (SONNY-95)
 
     /// **Power without covertness.** While Sonny controls an app the HUD says so, says which app,
@@ -757,10 +865,14 @@ struct VisionSessionRunTests {
         defer { fixture.tearDown() }
         fixture.viewModel.visionUserPauseMonitor = attention
 
+        // Paused from inside the click, so it lands before the next iteration's attention check
+        // rather than racing it — an outside call could arrive after iteration two had already
+        // passed its gate, and the test would then be measuring the race. Same fix as the lock and
+        // revocation tests above.
+        fixture.synthesizer.afterClick = { count in
+            if count == 1 { attention.pause() }
+        }
         fixture.viewModel.startVisionSession(goal: "click two things", appName: "Safari")
-        try await waitUntil("the first click") { fixture.synthesizer.clickCount == 1 }
-
-        fixture.viewModel.pauseVisionSession()
         try await waitUntil("the pause") { fixture.viewModel.visionSessionPause != nil }
         #expect(fixture.viewModel.visionSessionPause?.reason == .userPaused)
 

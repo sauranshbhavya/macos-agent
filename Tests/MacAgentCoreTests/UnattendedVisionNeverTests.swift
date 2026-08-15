@@ -235,12 +235,39 @@ struct SystemSessionAttentionMonitorTests {
         #expect(await Self.monitor(idleSeconds: timeout).attentionState() == .userIdle)
     }
 
-    /// **Fail closed.** A live lock check that cannot read the session dictionary answers "locked",
-    /// because unable-to-tell means unable to justify moving the cursor. Driven through the seam
-    /// rather than by breaking CoreGraphics, so what is pinned is the *policy* the live closure
-    /// implements.
+    /// **Fail closed, tested on the live policy itself** (PR #50 review, F3).
+    ///
+    /// The previous version of this test drove the injected `Environment` seam — which is exactly
+    /// what *replaces* the live closure — so it asserted nothing about the production read at all.
+    /// Flipping the real branch to fail *open* left the whole suite green, and its two assertions
+    /// were duplicates of `eachConditionIsDetectedIndependently`. The policy is now a pure static
+    /// function over what `CGSessionCopyCurrentDictionary` returned, and this drives that function.
+    ///
+    /// Three cases, and the middle one is why the two absences are not collapsed: a dictionary that
+    /// could not be read at all means locked, while a dictionary that *was* read and simply has no
+    /// `CGSSessionScreenIsLocked` key means unlocked — the key is absent whenever the screen is not
+    /// locked, so treating that as a failure would pause every session forever.
     @Test
-    func anUnreadableLockStateIsTreatedAsLocked() async {
+    func theLiveScreenLockPolicyFailsClosedOnlyWhenItCannotRead() {
+        // Cannot read → locked. This is the assertion that dies if the branch ever fails open.
+        #expect(SystemSessionAttentionMonitor.isScreenLocked(fromSessionDictionary: nil))
+
+        // Read, key absent → not locked.
+        #expect(!SystemSessionAttentionMonitor.isScreenLocked(fromSessionDictionary: [:]))
+        #expect(!SystemSessionAttentionMonitor.isScreenLocked(fromSessionDictionary: ["CGSSessionOnConsoleKey": 1]))
+
+        // Read, key present → whatever it says.
+        #expect(SystemSessionAttentionMonitor.isScreenLocked(fromSessionDictionary: ["CGSSessionScreenIsLocked": 1]))
+        #expect(!SystemSessionAttentionMonitor.isScreenLocked(fromSessionDictionary: ["CGSSessionScreenIsLocked": 0]))
+
+        // A key of an unexpected type is not a truthy lock signal, and not a crash.
+        #expect(!SystemSessionAttentionMonitor.isScreenLocked(fromSessionDictionary: ["CGSSessionScreenIsLocked": "yes"]))
+    }
+
+    /// The injected seam still behaves, which is a different claim from the one above and worth
+    /// keeping separate: this pins the wiring, that pins the policy.
+    @Test
+    func anInjectedLockedStateReachesBothAnswers() async {
         #expect(await Self.monitor(locked: true).attentionState() == .screenLocked)
         #expect(await Self.monitor(locked: true).canPresentApproval() == false)
     }

@@ -183,7 +183,6 @@ final class VisionSessionRunner {
             // of the type the model client will accept, so there is no branch of this loop that can
             // send `capture.pngData` — it does not type-check.
             let payload = try await environment.redactionService.redactCapture(capture)
-            currentRedactionSummary = payload.report
 
             interaction.visionSessionDidProgress(
                 VisionSessionProgress(
@@ -212,13 +211,25 @@ final class VisionSessionRunner {
                 }
             }
 
+            // **The observed text is redacted too, not just the pixels** (PR #50 review, F5). The
+            // window title is screen-derived — an app names its own window, and a title carries
+            // document names, mail subjects, customer names, and sometimes an ID or an email — and it
+            // used to leave the machine in the clear beside a carefully redacted image. The history
+            // is screen-derived for the same reason: its entries quote control labels the model read
+            // off the window.
+            let redactedObserved = environment.redactionService.redactText(
+                VisionSessionPromptBuilder.observedBlock(windowTitle: capture.windowTitle, history: history)
+            )
+            // Both halves of the send are recorded, so a journal entry says what was covered on the
+            // picture *and* in the text that went with it.
+            currentRedactionSummary = payload.report + redactedObserved.report
+
             let prompt = VisionSessionPromptBuilder.decisionPrompt(
                 goal: goal,
                 appDisplayName: target.displayName,
-                windowTitle: capture.windowTitle,
+                redactedObserved: redactedObserved,
                 imageWidth: payload.imagePixelWidth ?? capture.pixelWidth,
-                imageHeight: payload.imagePixelHeight ?? capture.pixelHeight,
-                history: history
+                imageHeight: payload.imagePixelHeight ?? capture.pixelHeight
             )
             log(.observe, "vision: iteration \(iteration) — sending a redacted capture of \(target.displayName)")
             let reply = try await environment.modelClient.decide(prompt: prompt, payload: payload)

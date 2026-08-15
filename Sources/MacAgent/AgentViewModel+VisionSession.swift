@@ -83,7 +83,7 @@ extension AgentViewModel: VisionSessionInteracting {
             return
         }
         do {
-            visionEmergencyStopHotKey = try EmergencyStopHotKey { [weak self] in
+            visionEmergencyStopHotKey = try visionEmergencyStopHotKeyFactory { [weak self] in
                 self?.emergencyStopVisionSession()
             }
             logStore.append(.observe, "vision: \(EmergencyStopHotKey.displayName) stops this session")

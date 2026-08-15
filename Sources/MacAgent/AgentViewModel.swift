@@ -138,7 +138,13 @@ final class AgentViewModel: ObservableObject {
     /// Registered only while a session is live — a permanently-held global shortcut is a key
     /// combination taken from every other app forever, in exchange for a control that matters for
     /// the seconds Sonny is actually moving the cursor.
-    var visionEmergencyStopHotKey: EmergencyStopHotKey?
+    var visionEmergencyStopHotKey: (any EmergencyStopHotKeyRegistering)?
+    /// How the emergency-stop hotkey is built. Injected so a test can pin the *wiring* — that a live
+    /// session really registers one and every exit releases it — without any test taking a real
+    /// global shortcut. Defaults to the real Carbon registration.
+    var visionEmergencyStopHotKeyFactory: (@MainActor (@escaping @MainActor () -> Void) throws -> any EmergencyStopHotKeyRegistering) = { onStop in
+        try EmergencyStopHotKey(onStop: onStop)
+    }
     /// The journal id of the session this task is running, or `nil`. Read once when the task's
     /// history row is written, then cleared with the rest of the per-task state.
     var activeVisionSessionID: String?
