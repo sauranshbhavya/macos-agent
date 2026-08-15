@@ -1106,12 +1106,45 @@ public final class AgentActionExecutor {
 
     private func actionDescription(for plan: AgentPlan, metadata: [CapabilityMetadata]) -> String {
         let summary = plan.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base: String
         if !summary.isEmpty {
-            return summary
+            base = summary
+        } else {
+            let names = unique(metadata.map(\.displayName))
+            base = names.isEmpty ? "Run the prepared plan" : names.joined(separator: ", ")
         }
 
-        let names = unique(metadata.map(\.displayName))
-        return names.isEmpty ? "Run the prepared plan" : names.joined(separator: ", ")
+        guard let split = Self.visionSplitDisclosure(for: plan) else {
+            return base
+        }
+        return "\(base) \(split)"
+    }
+
+    /// **One plan, both halves disclosed** (SONNY-93).
+    ///
+    /// A mixed plan runs some steps through precise, previewable, individually-gated adapters and
+    /// one step by a model looking at a window and deciding what to click. Those are very different
+    /// things to agree to, and the plan summary — written by the planner, describing the *goal* —
+    /// says nothing about the difference. So when a prompt fires at all, its copy names it.
+    ///
+    /// Appended to the summary rather than replacing it, and appended in the *executor* rather than
+    /// carried on the adapter's own `approvalCopy`, because the plan-level assessment builds its copy
+    /// fresh from the whole plan and an adapter's copy never reaches a plan-level prompt. Returns
+    /// `nil` for every plan with no vision step, which is every plan the product had before row I.
+    static func visionSplitDisclosure(for plan: AgentPlan) -> String? {
+        guard let vision = plan.steps.first(where: { $0.operation == .visionSession }) else {
+            return nil
+        }
+        let app = vision.resolvedAppName ?? vision.appName ?? "an app"
+        let goal = (vision.visionGoal ?? vision.description).trimmingCharacters(in: .whitespacesAndNewlines)
+        let supportedCount = plan.steps.filter { $0.operation != .visionSession && $0.operation != .clarify }.count
+
+        if supportedCount == 0 {
+            return "Sonny will do this by controlling \(app) directly — clicking and typing in its window the way you would."
+        }
+        let stepWord = supportedCount == 1 ? "step" : "steps"
+        return "Sonny will do \(supportedCount) \(stepWord) with its own tools, then attempt "
+            + "\u{201C}\(goal)\u{201D} by controlling \(app) directly — clicking and typing in its window."
     }
 
     private func riskReason(for tier: CapabilityRiskTier) -> String {

@@ -49,11 +49,47 @@ public struct VisionSessionCapabilityAdapter: CapabilityAdapter {
         displayName: "Control an app",
         description: "Act inside any app by looking at its window and clicking and typing in it.",
         operations: [.visionSession],
-        // Empty deliberately, and only until SONNY-93. The operation is excluded from
-        // `plannerVisibleCases` in SONNY-92, and `PlannerBoundaryTests` pins the agreement between
-        // those two facts — so a tool here without the schema entry would break that pin, in the
-        // direction of telling the model about a word the schema will not let it say.
-        plannerTools: [],
+        plannerTools: [
+            AgentTool(
+                operation: .visionSession,
+                name: "Control an app by looking at it",
+                // **This description is the decomposition, and it is the whole product change
+                // SONNY-93 makes.** Before it, a command that was half-expressible in Sonny's own
+                // adapters and half not got rejected wholesale: the planner had no word for the
+                // remainder, so it either dropped the request or spent it on whichever operation the
+                // sentence vaguely fit. Now it emits the supported steps *plus* one vision remainder,
+                // and the user sees one plan.
+                //
+                // Every sentence here reaches the model verbatim
+                // (`ToolRegistry.plannerDescription` -> `OpenAIPlanner.systemPrompt`), so the two
+                // rules that matter most are stated as rules rather than implied. **Last resort**,
+                // because a precise adapter is previewable and gated and this is neither. **Always
+                // names its app**, because the spike's own canonical failure was a vision fallback
+                // that defaulted to whatever was frontmost and typed shell commands into a live
+                // terminal — the product has no frontmost fallback at all, so a plan that names no
+                // app fails to a clarification rather than to whatever happens to be in front.
+                description: """
+                Last resort, for the part of a request Sonny's other tools cannot express. Sonny \
+                looks at the named app's window and decides each click and keystroke from what it \
+                sees. Prefer any other tool that does the job precisely. Decompose: emit the steps \
+                the precise tools can do, then at most ONE vision_session step for the remainder. \
+                Always set appName to the app to control — never leave it out and never expect \
+                Sonny to use whatever app happens to be in front; if you cannot name one, ask a \
+                clarify question instead. Never target a terminal app; Sonny refuses those. Set \
+                visionGoal to what should be accomplished in that app, in one sentence.
+                """,
+                requiredFields: ["appName", "visionGoal"],
+                sideEffects: [
+                    "Clicks and types inside the named app, as the user would",
+                    "Sends redacted screenshots of that app's window to Sonny's vision model"
+                ],
+                dryRunBehavior: "Describe the app and the goal; take no screenshot and touch nothing.",
+                examples: [
+                    "send a message to Priya in Discord",
+                    "set the theme to dark in Figma"
+                ]
+            )
+        ],
         // Both, and this is the only capability that needs both: Screen Recording to see the
         // window, Accessibility to send real input into it. `.descriptiveOnly` is the enforcement
         // vocabulary this metadata has — the real enforcement is the pair of preflights at the top
@@ -87,9 +123,18 @@ public struct VisionSessionCapabilityAdapter: CapabilityAdapter {
         var resolved = plan
         for index in resolved.steps.indices where resolved.steps[index].operation == .visionSession {
             let step = resolved.steps[index]
-            let rawName = (step.appName ?? "").trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !rawName.isEmpty else {
-                throw VisionSessionError.missingTargetApp
+            // **Never frontmost.** The name comes from the step, or from an app the plan's own
+            // earlier steps put on screen, or from nowhere — and "nowhere" is a clarification, not a
+            // fallback. This is the iTerm2 lesson as structure: the spike's vision fallback defaulted
+            // to whatever was frontmost and typed shell commands into a live terminal, and the reason
+            // that cannot happen here is not a better default, it is that there is no default to
+            // misfire. Nothing in this file reads frontmost state; the only frontmost read in the
+            // whole vision path is `VisionSessionContainment`'s per-iteration *boundary*, which
+            // refuses when the pinned app is not in front rather than adopting whatever is.
+            guard let rawName = Self.targetName(for: step, precededBy: Array(resolved.steps[..<index])) else {
+                return Self.clarifyPlan(
+                    question: "Which app should Sonny control to do that? Name the app and I will work inside it."
+                )
             }
             guard let app = context.installedAppResolver.resolve(rawName) else {
                 throw VisionSessionError.targetAppNotInstalled(rawName)
@@ -237,6 +282,53 @@ public struct VisionSessionCapabilityAdapter: CapabilityAdapter {
     }
 
     // MARK: - Helpers
+
+    /// Which app this vision step means: its own `appName`, or the app the plan's own earlier steps
+    /// put on screen. `nil` when neither answers, which is a clarification.
+    ///
+    /// **Only the plan's own steps, and only ones that actually surface an app.** A mixed plan like
+    /// "open Notes, then write my standup there" is the case this exists for: the planner names the
+    /// app once, in the step that opens it, and repeating it on the remainder would be a second place
+    /// for the two to disagree. Reading anything *outside* the plan — the frontmost app, the last
+    /// task's app, a running-app list — would be a fallback, and this capability has none.
+    static func targetName(for step: AgentStep, precededBy earlier: [AgentStep]) -> String? {
+        if let named = step.appName?.trimmingCharacters(in: .whitespacesAndNewlines), !named.isEmpty {
+            return named
+        }
+        // Last one wins: with "open Notes, open Safari, then do X", X happens in Safari.
+        for earlierStep in earlier.reversed() {
+            switch earlierStep.operation {
+            case .openApp, .switchRunningApp:
+                if let name = earlierStep.appName?.trimmingCharacters(in: .whitespacesAndNewlines),
+                   !name.isEmpty {
+                    return name
+                }
+            default:
+                // Exhaustive by omission is fine here and an exhaustive switch would be worse: the
+                // question is not "what does every operation do" but "which operations put a *named*
+                // app on screen", and only these two do. `open_workspace` opens several at once and
+                // names none of them in the step, so it cannot answer this question — a plan that
+                // opens a workspace and then wants a vision remainder has to name the app.
+                continue
+            }
+        }
+        return nil
+    }
+
+    static func clarifyPlan(question: String) -> AgentPlan {
+        AgentPlan(
+            summary: "Clarification needed.",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(
+                    id: "clarify-vision-target",
+                    operation: .clarify,
+                    description: "Ask which app to control.",
+                    question: question
+                )
+            ]
+        )
+    }
 
     private func visionStep(in plan: AgentPlan) throws -> AgentStep {
         guard let step = plan.steps.first(where: { $0.operation == .visionSession }) else {

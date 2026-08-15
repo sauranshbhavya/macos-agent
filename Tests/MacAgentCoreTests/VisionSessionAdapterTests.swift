@@ -72,13 +72,100 @@ struct VisionSessionAdapterTests {
         }
     }
 
+    // MARK: - Never frontmost (SONNY-93)
+
+    /// **A plan with no resolvable target fails to a clarification, never to whatever is in front.**
+    ///
+    /// This is the iTerm2 lesson as structure. The spike's vision fallback defaulted to the frontmost
+    /// app and typed shell commands into a live terminal; what stops that here is not a better
+    /// default but the absence of one.
     @Test
-    func resolveFailsWhenNoAppIsNamed() {
+    func aVisionStepWithNoResolvableTargetFailsToAClarification() throws {
         var plan = Self.plan(app: "Safari")
         plan.steps[0].appName = "   "
-        #expect(throws: VisionSessionError.missingTargetApp) {
-            _ = try Self.executor(installed: [Self.safari]).prepare(plan: plan)
+
+        let prepared = try Self.executor(installed: [Self.safari]).prepare(plan: plan)
+
+        #expect(prepared.clarificationQuestion != nil)
+        #expect(prepared.plan.steps.map(\.operation) == [.clarify])
+        #expect(prepared.clarificationQuestion?.contains("Which app") == true)
+    }
+
+    /// The plan's own opening steps can name the target, so "open Notes, then write my standup
+    /// there" does not need the app repeated on the remainder.
+    @Test
+    func aVisionStepInheritsItsTargetFromThePlansOwnOpeningSteps() {
+        let notes = AgentStep(id: "1", operation: .openApp, description: "Open Notes", appName: "Notes")
+        let switchTo = AgentStep(id: "2", operation: .switchRunningApp, description: "Focus Safari", appName: "Safari")
+        var vision = AgentStep(id: "3", operation: .visionSession, description: "d", visionGoal: "g")
+        vision.appName = nil
+
+        #expect(VisionSessionCapabilityAdapter.targetName(for: vision, precededBy: [notes]) == "Notes")
+        // Last one wins: after "open Notes, focus Safari", the remainder happens in Safari.
+        #expect(VisionSessionCapabilityAdapter.targetName(for: vision, precededBy: [notes, switchTo]) == "Safari")
+        // The step's own name always wins over anything inherited.
+        var named = vision
+        named.appName = "Figma"
+        #expect(VisionSessionCapabilityAdapter.targetName(for: named, precededBy: [notes, switchTo]) == "Figma")
+    }
+
+    /// Only steps that put a *named* app on screen can answer. A workspace opens several and names
+    /// none of them in the step, so it cannot — and the honest outcome is a clarification.
+    @Test
+    func onlyStepsThatNameAnAppCanSupplyTheTarget() {
+        var vision = AgentStep(id: "2", operation: .visionSession, description: "d", visionGoal: "g")
+        vision.appName = nil
+
+        let nonAnswers: [AgentStep] = [
+            AgentStep(id: "1", operation: .openWorkspace, description: "d", workspaceName: "Research"),
+            AgentStep(id: "1", operation: .openURL, description: "d", targetURL: "https://example.com"),
+            AgentStep(id: "1", operation: .createLocalDraft, description: "d", draftTitle: "t", draftContent: "c"),
+            // An open_app step with no name of its own answers nothing either.
+            AgentStep(id: "1", operation: .openApp, description: "d", appName: "  ")
+        ]
+        for step in nonAnswers {
+            #expect(
+                VisionSessionCapabilityAdapter.targetName(for: vision, precededBy: [step]) == nil,
+                "\(step.operation.rawValue)"
+            )
         }
+    }
+
+    /// **Nothing in the resolution path reads frontmost state**, and the pin is a sweep rather than a
+    /// reading of the file — the point of a negative claim is that its evidence lives everywhere you
+    /// did not look. The one legitimate frontmost read in the whole vision path is the containment
+    /// layer's per-iteration *boundary*, which refuses when the pinned app is not in front rather
+    /// than adopting whatever is.
+    @Test
+    func noFrontmostStateIsReadAnywhereInTheResolutionPath() throws {
+        let sources = [
+            "Sources/MacAgentCore/VisionSessionCapabilityAdapter.swift",
+            "Sources/MacAgentCore/VisionSessionRunner.swift",
+            "Sources/MacAgentCore/VisionSessionPromptBuilder.swift"
+        ]
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+
+        for relative in sources {
+            let text = try String(contentsOf: root.appendingPathComponent(relative), encoding: .utf8)
+            let code = text
+                .split(separator: "\n", omittingEmptySubsequences: false)
+                .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+                .joined(separator: "\n")
+            #expect(!code.contains("frontmostApplication"), "\(relative)")
+            #expect(!code.contains("VisionFallbackAppHint"), "\(relative)")
+        }
+
+        // And the containment layer's own frontmost read is a refusal, never an adoption: the check
+        // compares against the *pinned* target and returns a refusal, so there is no assignment of a
+        // discovered app to anything.
+        let containment = try String(
+            contentsOf: root.appendingPathComponent("Sources/MacAgentCore/VisionSessionContainment.swift"),
+            encoding: .utf8
+        )
+        #expect(containment.contains("targetNotFrontmost"))
     }
 
     // MARK: - The terminal ban, at each of its three doors
@@ -212,19 +299,23 @@ struct VisionSessionAdapterTests {
         }
     }
 
-    /// The goal is decode-excluded too, for SONNY-92's duration — a vision step can only be built in
-    /// Swift, so nothing a model writes can name it.
+    /// **The goal is the planner's to write; the pins are the resolver's alone.** SONNY-93 made the
+    /// operation planner-visible and moved `visionGoal` into the decodable set with it — and the two
+    /// pin fields deliberately did not move, which is the asymmetry this test exists to hold.
     @Test
-    func theVisionGoalIsDecodeExcludedWhileTheOperationIsPlannerInvisible() {
-        #expect(!AgentOperation.plannerVisibleCases.contains(.visionSession))
-        let payload = """
+    func theGoalDecodesWhileThePinsStayResolverOnly() throws {
+        #expect(AgentOperation.plannerVisibleCases.contains(.visionSession))
+
+        let plan = try AgentPlanDecoder.decodeStrict(from: """
         {"summary":"x","requiresConfirmation":false,"steps":[
           {"id":"1","operation":"vision_session","description":"d","appName":"Safari","visionGoal":"do a thing"}
         ]}
-        """
-        #expect(throws: AgentPlanDecodingError.unexpectedStepKey("visionGoal")) {
-            _ = try AgentPlanDecoder.decodeStrict(from: payload)
-        }
+        """)
+        let step = try #require(plan.steps.first)
+        #expect(step.visionGoal == "do a thing")
+        #expect(step.appName == "Safari")
+        #expect(step.resolvedBundleIdentifier == nil)
+        #expect(step.resolvedAppName == nil)
     }
 
     /// A vision step cannot be stored in a routine — the third layer of "unattended vision: never",
@@ -277,5 +368,129 @@ struct VisionSessionAdapterTests {
     @Test
     func aVisionSessionIsClassifiedAsLeavingTheDevice() {
         #expect(AgentActionExecutor.dataEgressOperations.contains(.visionSession))
+    }
+}
+
+/// SONNY-93: one plan, one assessment, both halves disclosed.
+///
+/// A mixed plan runs some steps through precise, previewable, individually-gated adapters and one
+/// step by a model looking at a window. Those are very different things to agree to, and the plan
+/// summary — written by the planner, describing the goal — says nothing about the difference.
+@MainActor
+@Suite
+struct MixedVisionPlanTests {
+    private static let safari = InstalledApp(
+        displayName: "Safari",
+        bundleIdentifier: "com.apple.Safari",
+        applicationURL: URL(fileURLWithPath: "/Applications/Safari.app")
+    )
+    private static let notes = InstalledApp(
+        displayName: "Notes",
+        bundleIdentifier: "com.apple.Notes",
+        applicationURL: URL(fileURLWithPath: "/Applications/Notes.app")
+    )
+
+    private static func executor() -> AgentActionExecutor {
+        AgentActionExecutor(
+            installedAppResolver: InstalledAppResolver(source: FixedAppSource([safari, notes]))
+        )
+    }
+
+    private static func mixedPlan() -> AgentPlan {
+        AgentPlan(
+            summary: "Open Notes and write today's standup there.",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(id: "1", operation: .openApp, description: "Open Notes", appName: "Notes"),
+                AgentStep(
+                    id: "2",
+                    operation: .visionSession,
+                    description: "Write the standup",
+                    appName: "Notes",
+                    visionGoal: "write today's standup as a new note"
+                )
+            ]
+        )
+    }
+
+    /// **One assessment for the whole plan**, unioning the supported steps' tiers with the vision
+    /// step's — not two assessments, and not a second gate.
+    @Test
+    func aMixedPlanIsAssessedAsOneUnit() throws {
+        let assessment = try Self.executor().assessRisk(plan: Self.mixedPlan(), scope: .unscoped)
+
+        // Tier 3 comes from the vision half; `open_app` alone is tier 1. The union takes the higher.
+        #expect(assessment.effectiveTier == .tier3)
+        #expect(assessment.escalations.contains { $0.consequence == .advisory })
+        // And the whole plan reads as leaving the device, because half of it does.
+        #expect(assessment.approvalCopy?.dataLeavesDevice == true)
+    }
+
+    /// The disclosure names both halves, the app, and the goal.
+    @Test
+    func theDisclosureNamesBothHalvesTheAppAndTheGoal() throws {
+        let assessment = try Self.executor().assessRisk(plan: Self.mixedPlan(), scope: .unscoped)
+        let description = try #require(assessment.approvalCopy?.actionDescription)
+
+        // The planner's own summary survives — the split is appended, never a replacement.
+        #expect(description.contains("Open Notes and write today's standup there."))
+        #expect(description.contains("1 step with its own tools"))
+        #expect(description.contains("write today's standup as a new note"))
+        #expect(description.contains("controlling Notes directly"))
+    }
+
+    /// A plan that is *only* a vision step says so plainly rather than counting zero other steps.
+    @Test
+    func aVisionOnlyPlanGetsItsOwnSentenceRatherThanACountOfZero() {
+        let plan = AgentPlan(
+            summary: "Set the theme to dark in Safari.",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(
+                    id: "1",
+                    operation: .visionSession,
+                    description: "d",
+                    appName: "Safari",
+                    visionGoal: "set the theme to dark"
+                )
+            ]
+        )
+        let disclosure = try? #require(AgentActionExecutor.visionSplitDisclosure(for: plan))
+        #expect(disclosure?.contains("by controlling Safari directly") == true)
+        #expect(disclosure?.contains("steps with its own tools") == false)
+    }
+
+    /// **Every plan without a vision step is untouched**, which is every plan the product had before
+    /// row I. Asserted as a negative over a spread of ordinary shapes, because a disclosure that
+    /// leaked into unrelated approvals would be a change to copy nobody reviewed.
+    @Test
+    func noOrdinaryPlanGainsAVisionDisclosure() {
+        let ordinary: [AgentPlan] = [
+            AgentPlan(summary: "Open Safari.", requiresConfirmation: false, steps: [
+                AgentStep(id: "1", operation: .openApp, description: "d", appName: "Safari")
+            ]),
+            AgentPlan(summary: "Save a draft.", requiresConfirmation: false, steps: [
+                AgentStep(id: "1", operation: .createLocalDraft, description: "d", draftTitle: "t", draftContent: "c")
+            ]),
+            AgentPlan(summary: "Ask.", requiresConfirmation: false, steps: [
+                AgentStep(id: "1", operation: .clarify, description: "d", question: "Which folder?")
+            ])
+        ]
+        for plan in ordinary {
+            #expect(AgentActionExecutor.visionSplitDisclosure(for: plan) == nil, "\(plan.summary)")
+        }
+    }
+
+    /// The pinned name outranks the raw one, so a disclosure names the app that will actually be
+    /// controlled rather than the word the planner happened to write (SONNY-58 again).
+    @Test
+    func theDisclosureNamesThePinnedAppNotTheRawQuery() throws {
+        var plan = Self.mixedPlan()
+        plan.steps[1].appName = "notes"
+        let prepared = try Self.executor().prepare(plan: plan)
+
+        let disclosure = try #require(AgentActionExecutor.visionSplitDisclosure(for: prepared.plan))
+        #expect(disclosure.contains("controlling Notes directly"))
+        #expect(!disclosure.contains("controlling notes directly"))
     }
 }

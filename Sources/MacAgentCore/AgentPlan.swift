@@ -225,23 +225,18 @@ public enum AgentOperation: String, Codable, CaseIterable, Sendable {
     /// a round trip. It stays out of routines all the same — see
     /// `StoredRoutine.forbiddenStepOperations`.
     ///
-    /// **`visionSession` is excluded for a third reason, and only until SONNY-93.** It is neither an
-    /// instant-resolver shape nor a permanently-hidden capability: it is planner-invisible because
-    /// SONNY-92 builds the capability and SONNY-93 owns the planner vocabulary — the schema enum
-    /// this property feeds is a golden-covered surface, and SONNY-92's never-touch list names those
-    /// goldens as SONNY-93's. So the agreement asserted by `PlannerBoundaryTests` reads, since row
-    /// I: excluded ⇔ *either* the instant resolver is the whole front door *or* the operation is
-    /// dispatched only by a Swift call site inside this app. `visionSession` is the second kind —
-    /// `AgentViewModel` builds its plan field by field and hands it to
-    /// `AgentRunner.prepare(plan:source:)`, so today no model text can name it at all.
+    /// `visionSession` sat in this list for exactly one ticket. SONNY-92 built the capability with
+    /// the operation excluded, because the schema enum this property feeds is a golden-covered
+    /// surface and that ticket's never-touch list assigned the goldens to SONNY-93; SONNY-93 gives
+    /// the planner the word, and owns the golden drift that follows. The exclusion set is back to
+    /// its one meaning: the instant resolver is the whole of the operation's front door.
     public static var plannerVisibleCases: [AgentOperation] {
         allCases.filter { operation in
             switch operation {
             case .calculateUtility,
                  .lookupClipboardHistory,
                  .expandSnippet,
-                 .lookupRecentArtifacts,
-                 .visionSession:
+                 .lookupRecentArtifacts:
                 return false
             default:
                 return true
@@ -322,7 +317,10 @@ public enum AgentPlanDecoder {
         "draftTitle",
         "draftContent",
         "shortcutName",
-        "shortcutInput"
+        "shortcutInput",
+        // Row I, SONNY-93. The pins beside it (`resolvedAppName`, `resolvedBundleIdentifier`) stay
+        // absent — the goal is the planner's to write, the identity is the resolver's alone.
+        "visionGoal"
     ]
 
     public static func decodeStrict(from data: Data) throws -> AgentPlan {
@@ -422,7 +420,8 @@ public enum AgentPlanSchema {
         "draftTitle",
         "draftContent",
         "shortcutName",
-        "shortcutInput"
+        "shortcutInput",
+        "visionGoal"
     ]
 
     public static func responseFormat() -> [String: Any] {
@@ -586,6 +585,10 @@ public enum AgentPlanSchema {
             "shortcutInput": [
                 "type": ["string", "null"],
                 "description": "Simple text input to pass to invoke_shortcut through a temporary input file, or null."
+            ],
+            "visionGoal": [
+                "type": ["string", "null"],
+                "description": "What vision_session should accomplish inside the named app, in one sentence, or null. Sonny reads the app's window and decides each click and keystroke from what it sees."
             ]
         ]
     }

@@ -95,16 +95,11 @@ struct CapabilityRegistryTests {
             #expect(metadata.executorLocation == .localMac)
             #expect(CapabilityRiskTier.allCases.contains(metadata.defaultRiskTier))
             if metadata.plannerTools.isEmpty {
-                // **An adapter with no planner tools has to be reachable some other way, and its id
-                // has to say which.** Until row I there was one such way — the instant resolver —
-                // so this read `local.instant.` alone. `vision_session` is the second: no model text
-                // can name it, because `AgentViewModel` builds its plan in Swift. Naming the two
-                // prefixes rather than dropping the assertion keeps the invariant checkable; an
-                // adapter that is tool-less for a *third* reason still has to come here and say so.
-                #expect(
-                    metadata.id.hasPrefix("local.instant.") || metadata.id.hasPrefix("local.screen."),
-                    "\(metadata.id)"
-                )
+                // Back to the one prefix. SONNY-92 widened this to allow `local.screen.` while the
+                // vision adapter was deliberately tool-less; SONNY-93 gave it a planner tool, so
+                // that allowance became unreachable — and an unreachable permission in a forcing
+                // test is a hole waiting for the next adapter that wants one.
+                #expect(metadata.id.hasPrefix("local.instant."), "\(metadata.id)")
             } else {
                 #expect(metadata.operations.map(\.rawValue).sorted() == metadata.plannerTools.map(\.operation.rawValue).sorted())
             }
