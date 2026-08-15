@@ -107,30 +107,17 @@ public struct SystemScreenActionSynthesizer: ScreenActionSynthesizing {
         guard let source = CGEventSource(stateID: .hidSystemState) else {
             throw ScreenActionSynthesisError.eventSourceUnavailable
         }
-        func post(_ type: CGEventType) {
-            CGEvent(
-                mouseEventSource: source,
-                mouseType: type,
-                mouseCursorPosition: point,
-                mouseButton: .left
-            )?.post(tap: .cghidEventTap)
-        }
-
-        post(.mouseMoved)
-        try await Task.sleep(nanoseconds: 60_000_000)
-        post(.leftMouseDown)
-        do {
-            try await Task.sleep(nanoseconds: 80_000_000)
-        } catch {
-            // **The mouse-up guarantee.** A cancellation landing inside this sleep must never leave
-            // the synthetic left button held down at the HID level — the user would be left with a
-            // machine that drags everything it touches, from a run they just stopped. Post the up
-            // event, then propagate. Inherited from the experiment branch, where this was learned
-            // the hard way, and required by SONNY-92 as a tested contract rather than a habit.
-            post(.leftMouseUp)
-            throw error
-        }
-        post(.leftMouseUp)
+        try await ClickEventSequence.run(
+            post: { type in
+                CGEvent(
+                    mouseEventSource: source,
+                    mouseType: type,
+                    mouseCursorPosition: point,
+                    mouseButton: .left
+                )?.post(tap: .cghidEventTap)
+            },
+            sleep: { try await Task.sleep(nanoseconds: $0) }
+        )
     }
 
     public func type(_ text: String) async throws {
@@ -216,6 +203,44 @@ public struct SystemScreenActionSynthesizer: ScreenActionSynthesizing {
     }
 }
 #endif
+
+/// The order of events one synthetic click posts, and what happens when a cancellation lands in the
+/// middle of it.
+///
+/// **Extracted from the poster so the mouse-up guarantee is testable at the synthesis seam**, which
+/// SONNY-92 requires as a contract rather than a habit. No test in this repo may post a real HID
+/// event, so the only way to assert "the button always comes back up" is for the sequence to be a
+/// pure function over an injected poster and an injected sleep. The production caller supplies the
+/// real two; a test supplies a recorder and a sleep that throws.
+enum ClickEventSequence {
+    /// How long the button is held down. Long enough for the target app to register a real click,
+    /// short enough not to read as a press-and-hold.
+    static let holdNanoseconds: UInt64 = 80_000_000
+    /// A settle after the move, so the app under the pointer has processed the hover before the
+    /// button goes down.
+    static let moveSettleNanoseconds: UInt64 = 60_000_000
+
+    static func run(
+        post: (CGEventType) -> Void,
+        sleep: (UInt64) async throws -> Void
+    ) async throws {
+        post(.mouseMoved)
+        try await sleep(moveSettleNanoseconds)
+        post(.leftMouseDown)
+        do {
+            try await sleep(holdNanoseconds)
+        } catch {
+            // **The mouse-up guarantee.** A cancellation landing inside the hold must never leave
+            // the synthetic left button held down at the HID level — the user would be left with a
+            // machine that drags everything it touches, from a run they just stopped. Post the up
+            // event, then propagate. Inherited from the experiment branch, where it was learned the
+            // hard way.
+            post(.leftMouseUp)
+            throw error
+        }
+        post(.leftMouseUp)
+    }
+}
 
 public enum ScreenActionSynthesisError: Error, Equatable, LocalizedError {
     case eventSourceUnavailable
