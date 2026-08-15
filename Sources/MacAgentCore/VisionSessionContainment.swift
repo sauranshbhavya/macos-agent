@@ -319,6 +319,8 @@ public struct VisionSessionContainment: Sendable {
             return "Sonny cannot undo typing. \(target.displayName)'s own undo may be able to."
         case .click, .key, .scroll:
             return "Sonny cannot undo this. Whatever \(target.displayName) does in response is up to \(target.displayName)."
+        case .delegate:
+            return "Whatever Sonny's own tools do is undone the way that action is normally undone."
         case .wait, .done, .stuck:
             return "Nothing to undo."
         }

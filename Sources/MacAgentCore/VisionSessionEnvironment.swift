@@ -40,6 +40,30 @@ public struct VisionCapturePreview: Equatable, Sendable {
     }
 }
 
+/// An instruction the vision model wants Sonny's own planner to carry out.
+public struct VisionDelegationRequest: Equatable, Sendable {
+    public let instruction: String
+    public let rationale: String
+    public let appDisplayName: String
+
+    public init(instruction: String, rationale: String, appDisplayName: String) {
+        self.instruction = instruction
+        self.rationale = rationale
+        self.appDisplayName = appDisplayName
+    }
+}
+
+/// How a delegation turned out, in terms the vision model can act on.
+///
+/// **Every outcome comes back as a result, not as a throw** — except a real cancellation, which the
+/// conformer rethrows. A delegated plan that was refused, declined, or simply failed is information
+/// the model should have and continue from, exactly like a click that missed: the session's next
+/// move might be to do the thing on screen instead. Only the user stopping the run ends it.
+public enum VisionDelegationResult: Equatable, Sendable {
+    case completed(summary: String)
+    case failed(reason: String)
+}
+
 /// What the HUD is told while a session runs.
 public struct VisionSessionProgress: Equatable, Sendable {
     public let appDisplayName: String
@@ -75,6 +99,20 @@ public protocol VisionSessionInteracting: AnyObject {
 
     /// Safe mode's pre-send capture preview. Returns true to send.
     func confirmVisionCaptureBeforeSending(_ preview: VisionCapturePreview) async throws -> Bool
+
+    /// Run an instruction the vision model handed to Sonny's planner, mid-session.
+    ///
+    /// **Engine-routed, and the conformer owns that.** The instruction is planned, prepared,
+    /// assessed and executed through the ordinary `AgentRunner` path, so whatever the delegated plan
+    /// *does* meets the consequence rule the same way a typed command would. What the founder's
+    /// 2026-08-14 decision removed is a prompt about the delegation itself in Normal and Power —
+    /// not the gate on its contents.
+    ///
+    /// Safe mode asks first, via ``confirmVisionDelegation(_:)`` below.
+    func runVisionDelegation(_ request: VisionDelegationRequest) async throws -> VisionDelegationResult
+
+    /// Safe mode's ask before a delegation fires. Returns true to proceed.
+    func confirmVisionDelegation(_ request: VisionDelegationRequest) async throws -> Bool
 
     /// Progress for the HUD.
     func visionSessionDidProgress(_ progress: VisionSessionProgress)

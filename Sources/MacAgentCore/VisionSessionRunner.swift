@@ -180,6 +180,46 @@ final class VisionSessionRunner {
                 history.append("iteration \(iteration): waited for the screen to settle — \(decision.rationale)")
                 try await settle(multiplier: 2)
                 continue
+            case .delegate:
+                // **One iteration, no recursion, engine-routed.** The delegation costs an iteration
+                // like any other decision, so a model that only delegates still hits the cap; the
+                // result rejoins as observed history and the next iteration starts from a fresh
+                // screenshot, which is why both no-change trackers are irrelevant here — nothing was
+                // clicked.
+                guard let instruction = decision.instruction else {
+                    continue
+                }
+                let request = VisionDelegationRequest(
+                    instruction: instruction,
+                    rationale: decision.rationale,
+                    appDisplayName: target.displayName
+                )
+                // Safe mode asks about the delegation itself; Normal and Power never do (founder,
+                // 2026-08-14). What the delegated plan *does* is gated in every mode by the ordinary
+                // plan-level gate inside `runVisionDelegation`.
+                if interaction.visionApprovalContext().safeMode {
+                    let allowed = try await interaction.confirmVisionDelegation(request)
+                    guard allowed else {
+                        history.append("iteration \(iteration): you declined to let Sonny's own tools do \u{201C}\(instruction)\u{201D}. Continue from the screen instead, or report stuck.")
+                        continue
+                    }
+                }
+                interaction.visionSessionDidProgress(
+                    VisionSessionProgress(
+                        appDisplayName: target.displayName,
+                        iteration: iteration,
+                        maximumIterations: containment.limits.maximumIterations,
+                        currentAction: decision.actionDescription
+                    )
+                )
+                switch try await interaction.runVisionDelegation(request) {
+                case .completed(let summary):
+                    history.append("external result for iteration \(iteration): Sonny's own tools completed \u{201C}\(instruction)\u{201D} — \(summary)")
+                case .failed(let reason):
+                    history.append("external result for iteration \(iteration): Sonny's own tools could not do \u{201C}\(instruction)\u{201D} — \(reason). Try the on-screen route instead, or report stuck.")
+                }
+                try await settle()
+                continue
             case .click, .type, .scroll, .key:
                 break
             }
@@ -325,7 +365,7 @@ final class VisionSessionRunner {
             actionsTaken += 1
             history.append("iteration \(iteration): pressed \(key.rawValue)")
 
-        case .wait, .done, .stuck:
+        case .delegate, .wait, .done, .stuck:
             break
         }
     }

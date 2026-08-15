@@ -126,6 +126,151 @@ extension AgentViewModel: VisionSessionInteracting {
         return allowed
     }
 
+    // MARK: - Delegation
+
+    /// Safe mode's ask before a delegation fires.
+    ///
+    /// Founder decision 4 (2026-08-14): Safe mode always asks about the delegation itself; Normal
+    /// and Power never do. Rendered on the clarification surface rather than the approval one, and
+    /// deliberately: this is not a risk question — the risk question is asked, in every mode, about
+    /// whatever the delegated plan turns out to *do*. This one asks whether Sonny should use its own
+    /// tools at all instead of clicking, and a Safe-mode user answering it is choosing a method.
+    func confirmVisionDelegation(_ request: VisionDelegationRequest) async throws -> Bool {
+        visionDelegationRequest = request
+        finalSummary = "Sonny wants to use its own tools for one step."
+
+        let allowed = await withTaskCancellationHandler {
+            await withCheckedContinuation { continuation in
+                visionDelegationContinuation = continuation
+            }
+        } onCancel: {
+            Task { @MainActor in
+                guard let continuation = self.visionDelegationContinuation else { return }
+                self.visionDelegationContinuation = nil
+                self.visionDelegationRequest = nil
+                continuation.resume(returning: false)
+            }
+        }
+
+        // Same placement and same reason as the other two parked questions: a cancellation resumes
+        // with `false`, which is also what declining looks like, and only this turns a stopped run
+        // into a stopped run rather than a declined delegation the loop would carry on from.
+        try Task.checkCancellation()
+        return allowed
+    }
+
+    /// The user answered the Safe-mode delegation question.
+    func resolveVisionDelegation(allowing allowed: Bool) {
+        guard let continuation = visionDelegationContinuation else { return }
+        visionDelegationContinuation = nil
+        visionDelegationRequest = nil
+        continuation.resume(returning: allowed)
+    }
+
+    /// Run a delegated instruction through the ordinary engine path.
+    ///
+    /// **This is the whole of "engine-routed, never around it" for delegation.** The instruction is
+    /// planned by the real planner, prepared by the real runner, assessed by the real executor and
+    /// gated by `RiskApprovalPolicy.requirement(for:context:)` — so a delegated "delete my drafts"
+    /// meets exactly the approval a typed "delete my drafts" would. The founder's decision removed a
+    /// prompt about *delegating*, never the gate on what the delegation does.
+    ///
+    /// **No recursion, checked rather than assumed.** A delegated plan carrying a vision step is
+    /// refused before it is prepared. Without that, a model could delegate its way into a second
+    /// session inside the first, each with its own iteration cap, and the cap would stop bounding
+    /// anything.
+    func runVisionDelegation(_ request: VisionDelegationRequest) async throws -> VisionDelegationResult {
+        do {
+            // The same executor factory and the same planner registry the ordinary path uses
+            // (SONNY-85) — a delegated instruction is planned by whatever would have planned the
+            // user's own sentence, and runs through the executor a typed command would.
+            let runner = try makeDelegationRunner()
+
+            // **The instant resolver first, exactly as a typed command gets it.** `performStart`
+            // tries it before reaching for a planner, and `AgentRunner.prepare(command:)` does not —
+            // so without this line a delegated "2 + 2" would take a model round trip that the same
+            // words typed by the user would not. "Planned by whatever would have planned the user's
+            // own sentence" has to include the case where nothing plans it at all.
+            let prepared: PreparedAgentRun
+            if let resolution = makeInstantCommandResolver().resolve(command: request.instruction) {
+                switch resolution {
+                case .plan(let localPlan), .clarify(let localPlan):
+                    prepared = try runner.prepare(plan: localPlan, source: .instantResolver)
+                }
+            } else {
+                prepared = try await runner.prepare(command: request.instruction)
+            }
+
+            if prepared.plan.steps.contains(where: { $0.operation == AgentOperation.visionSession }) {
+                return .failed(
+                    reason: "Sonny does not start a second screen-control session from inside one."
+                )
+            }
+            if let question = prepared.clarificationQuestion {
+                // A clarification the vision model cannot answer. Handing the question back as a
+                // result rather than putting it to the user keeps one question on screen at a time,
+                // and the model is the one that chose this instruction — it can pick a better one or
+                // go back to the screen.
+                return .failed(reason: "Sonny's tools need more detail: \(question)")
+            }
+
+            let scope = activeTaskScope
+            let context = approvalContext()
+            let request0 = try runner.approvalRequest(
+                for: prepared,
+                logAssessment: true,
+                scope: scope,
+                context: context
+            )
+
+            var decision: RiskApprovalDecision = .notRequested
+            switch request0.requirement {
+            case .autoRun:
+                break
+            case .lightweightConfirmation, .explicitApproval:
+                guard let approved = try await requestVisionActionApproval(request0) else {
+                    return .failed(reason: "You declined that.")
+                }
+                decision = approved
+            case .previewOnly:
+                return .failed(reason: "That is limited to preview under the current approval policy.")
+            case .refuse:
+                return .failed(reason: "Sonny refused that under the current approval policy.")
+            }
+
+            // The stale-approval re-arm, on this path too: `execute` re-assesses fresh and throws
+            // when the world drifted, and the user answers the *new* request rather than the old one
+            // being silently spent on it.
+            while true {
+                do {
+                    let result = try await runner.execute(
+                        prepared,
+                        approvalDecision: decision,
+                        confirmationMessage: "Approved a step Sonny's tools ran during screen control",
+                        logRiskAssessment: true,
+                        scope: scope,
+                        context: context
+                    )
+                    refreshSavedItems()
+                    if let artifactFailure = runner.lastRecentArtifactFailure {
+                        recordLocalStorageWriteFailure(artifactFailure)
+                    }
+                    return .completed(summary: result.summary)
+                } catch RiskApprovalError.approvalRequired(let refreshed) {
+                    guard let approved = try await requestVisionActionApproval(refreshed) else {
+                        return .failed(reason: "You declined that after its risk changed.")
+                    }
+                    decision = approved
+                }
+            }
+        } catch let error where isCancellationError(error) {
+            // The one outcome that is not information for the model: the user stopped the run.
+            throw error
+        } catch {
+            return .failed(reason: error.localizedDescription)
+        }
+    }
+
     // MARK: - The user's answers
 
     /// The user allowed the pending vision action. Called by the same control that approves any
