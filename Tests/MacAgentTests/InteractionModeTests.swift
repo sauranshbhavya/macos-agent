@@ -101,8 +101,13 @@ struct InteractionModeTests {
 
     /// The coordinator's bound on Power, final (PR #49 addendum N3): Power NEVER changes the ask
     /// posture. An assessment carrying a destructive or affects-others escalation asks in all
-    /// three modes, at every tier that can run — Power's only delta, now and at row I, is which
-    /// capabilities are gated on it, never whether consequences ask.
+    /// three modes, at every tier that can run.
+    ///
+    /// Row I is where that bound stopped being theoretical and became the whole design. This
+    /// comment used to add "Power's only delta, now and at row I, is which capabilities are gated
+    /// on it" — the founder removed even that on 2026-08-14: screen control runs in all three
+    /// modes, Power gates nothing, and the consequence rule keeps asking mid-loop in every one of
+    /// them.
     @Test
     func destructiveAndAffectsOthersAskInAllThreeModes() {
         for mode in AgentInteractionMode.allCases {
@@ -183,7 +188,9 @@ struct InteractionModeTests {
 
     /// Power is identical to Normal today — row 18's mode landing as a setting first. The same
     /// tier-0 command that Safe gates runs straight through under BOTH other modes, so selecting
-    /// Power changes nothing until row I's screen-control features gate on it.
+    /// Power changes nothing. Row I did not change that either: this comment used to end "until row
+    /// I's screen-control features gate on it", and screen control ended up gated on no mode at all
+    /// (founder, 2026-08-14).
     @Test
     func normalAndPowerRunTheSameCommandWithoutAsking() async throws {
         for mode in [AgentInteractionMode.normal, .power] {

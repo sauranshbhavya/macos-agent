@@ -2061,8 +2061,10 @@ final class AgentViewModel: ObservableObject {
     /// (SONNY-90 as amended 2026-08-14; wireframe `docs/wireframes/15-SegmentedControl.svg`).
     /// Safe asks before everything attended and is the only place the data-leaves-device label
     /// renders (E9's ratified §11.3 deviation); Normal is the consequence-rule default; Power is
-    /// identical to Normal today — row 18's mode landing as a setting first, which row I's
-    /// screen-control features gate on. Persisted so the dial survives relaunch — a posture that
+    /// identical to Normal today — row 18's mode landing as a setting first, gating nothing (this
+    /// sentence used to say row I's screen-control features gate on it; the founder decided on
+    /// 2026-08-14 that screen control works in all three modes, and only Safe asks about it).
+    /// Persisted so the dial survives relaunch — a posture that
     /// silently reset to Normal on restart would quietly un-dial itself. Defaults to Normal, the
     /// ratified product default.
     @Published var interactionMode: AgentInteractionMode = .normal {
@@ -2077,8 +2079,9 @@ final class AgentViewModel: ObservableObject {
     /// **`interactionMode` is mapped to the engine here and nowhere else.** A second site
     /// reading its own value would be a second place that work has to find, and the one it
     /// misses would run a Safe-mode user's tasks under ordinary rules. The engine's input stays
-    /// row C's boolean seam; Normal and Power both map false (Power diverges at the product
-    /// layer when row I lands, never here).
+    /// row C's boolean seam; Normal and Power both map false, and row I did not change that —
+    /// screen control runs in every mode, so Safe's existing "ask about everything" posture is
+    /// exactly what makes Safe the only mode that asks about a vision action.
     private func approvalContext() -> ApprovalContext {
         ApprovalContext(safeMode: interactionMode.asksBeforeEveryAction)
     }
