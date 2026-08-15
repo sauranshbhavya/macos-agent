@@ -42,9 +42,17 @@ public enum ScreenControlRefusal: String, CaseIterable, Equatable, Sendable {
 /// payload carrying `isEligible: true` for a terminal. Row I's pinned fields are resolver-only for
 /// the same reason (SONNY-58 discipline) — this type simply has no decode path to exclude.
 public struct ScreenControlVerdict: Equatable, Sendable {
-    /// The bundle identifier this verdict was computed for, already normalized
-    /// (``ScreenControlPolicy/normalize(_:)``) — so a caller that logs or pins it records the same
-    /// spelling the check compared.
+    /// The bundle identifier this verdict was computed for, **as given** — trimmed, but with its own
+    /// casing intact.
+    ///
+    /// **Not the normalized form, and that was a real bug for one commit.** Normalization exists for
+    /// the deny-list comparison and lives inside it; storing the lowercased result here made the
+    /// verdict's identifier unusable for the thing callers actually do with it, which is talk to
+    /// macOS. `NSRunningApplication`, `SCShareableContent` and `NSWorkspace` all key on the bundle's
+    /// own spelling, so a session pointed at `com.apple.safari` found no window, activated nothing,
+    /// and failed on its first iteration with "no on-screen window was found". Anything comparing
+    /// this against another identifier normalizes *both sides* — see
+    /// `VisionSessionContainment.checkIterationStart`.
     public let bundleIdentifier: String
     public let displayName: String
     /// `nil` exactly when Sonny may control this app. There is no third state: ``isEligible`` is
@@ -129,11 +137,11 @@ public enum ScreenControlPolicy {
     /// holds. Both doors funnel here, so there is one comparison and one normalization, not two
     /// that drift.
     public static func verdict(bundleIdentifier: String, displayName: String) -> ScreenControlVerdict {
-        let normalized = normalize(bundleIdentifier)
+        let trimmed = bundleIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
         return ScreenControlVerdict(
-            bundleIdentifier: normalized,
+            bundleIdentifier: trimmed,
             displayName: displayName,
-            refusal: terminalBundleIdentifiers.contains(normalized) ? .terminal : nil
+            refusal: terminalBundleIdentifiers.contains(normalize(bundleIdentifier)) ? .terminal : nil
         )
     }
 
