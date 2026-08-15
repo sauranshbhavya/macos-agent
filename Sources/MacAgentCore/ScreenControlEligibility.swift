@@ -137,18 +137,26 @@ public enum ScreenControlPolicy {
         )
     }
 
-    /// Trim, precompose, lowercase — in that order.
+    /// Trim, then lowercase.
     ///
     /// Bundle identifiers reaching the second door are strings carried through a run rather than
     /// values just read from Launch Services, so the comparison tolerates the shapes a carried
-    /// string picks up: surrounding whitespace, a decomposed Unicode form, and the case-insensitive
-    /// matching Launch Services itself does (`com.apple.Terminal` and `com.apple.terminal` name one
-    /// app). `String.lowercased()` is locale-independent in Swift — deliberately not
+    /// string picks up: surrounding whitespace, and the case-insensitive matching Launch Services
+    /// itself does (`com.apple.Terminal` and `com.apple.terminal` name one app).
+    /// `String.lowercased()` is locale-independent in Swift — deliberately not
     /// `NSString.lowercased(with:)`, whose Turkish `I` would fold to `ı` and miss.
+    ///
+    /// **A Unicode precomposition step was written here and then removed, deliberately.** The worry
+    /// was a decomposed spelling (`e` + U+0301 rather than `é`) slipping past set membership. It
+    /// cannot: Swift's `String` compares and *hashes* by canonical equivalence, so the two spellings
+    /// are one key in a `Set<String>` despite differing in byte length — measured, not assumed
+    /// (13 vs 14 UTF-8 bytes, `==` true, `hashValue` equal, `Set.contains` true). Adding
+    /// `precomposedStringWithCanonicalMapping` would have been a line that looks load-bearing,
+    /// changes no answer, and quietly teaches the next reader that Swift needs help here. Recorded
+    /// rather than silently omitted, so that reader does not add it back.
     static func normalize(_ bundleIdentifier: String) -> String {
         bundleIdentifier
             .trimmingCharacters(in: .whitespacesAndNewlines)
-            .precomposedStringWithCanonicalMapping
             .lowercased()
     }
 }

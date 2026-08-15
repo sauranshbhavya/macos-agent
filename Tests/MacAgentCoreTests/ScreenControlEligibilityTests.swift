@@ -171,6 +171,37 @@ struct ScreenControlEligibilityTests {
         #expect(ScreenControlPolicy.verdict(bundleIdentifier: "   ", displayName: "").isEligible)
     }
 
+    /// The normalizer's two steps, pinned directly.
+    @Test
+    func theNormalizerTrimsAndLowercases() {
+        #expect(ScreenControlPolicy.normalize("  com.Example.App \n") == "com.example.app")
+        #expect(ScreenControlPolicy.normalize("\tcom.EXAMPLE.app") == "com.example.app")
+        // Locale-independent lowercasing: a Turkish-locale fold would send "I" to "ı" and miss.
+        #expect(ScreenControlPolicy.normalize("COM.ITERM.APP") == "com.iterm.app")
+    }
+
+    /// Why the normalizer has no Unicode-precomposition step, pinned as the measurement that
+    /// settled it rather than as a sentence in a comment.
+    ///
+    /// A decomposed spelling of a deny-list identifier is the obvious way to try to slip past set
+    /// membership. Swift closes it without help: `String` compares *and hashes* by canonical
+    /// equivalence, so two spellings that differ in byte length are one key in a `Set<String>`.
+    /// This test exists so that if that ever stopped being true, the failure would land here — on
+    /// the assumption itself — rather than as a quietly controllable terminal.
+    @Test
+    func swiftStringSetMembershipIsAlreadyCanonicalEquivalenceSafe() {
+        let decomposed = "com.cafe\u{0301}.app"
+        let precomposed = "com.caf\u{00E9}.app"
+
+        // Genuinely different byte sequences...
+        #expect(Array(decomposed.utf8).count == 14)
+        #expect(Array(precomposed.utf8).count == 13)
+        // ...that Swift treats as one string, one hash, one set key.
+        #expect(decomposed == precomposed)
+        #expect(decomposed.hashValue == precomposed.hashValue)
+        #expect(Set([precomposed]).contains(decomposed))
+    }
+
     // MARK: - The verdict type's own guarantees
 
     /// `isEligible` is derived from `refusal`, not stored beside it, so the two can never disagree.
