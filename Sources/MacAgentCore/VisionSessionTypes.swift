@@ -15,6 +15,21 @@ public enum VisionActionKind: String, CaseIterable, Equatable, Sendable {
     case scroll
     case key
     case wait
+    /// Hand a bounded instruction to Sonny's own planner, mid-run.
+    ///
+    /// **A real product feature, ratified by the founder on 2026-08-14**, and the one action here
+    /// that does not touch the screen at all. When part of the goal is better done by Sonny's
+    /// precise tools than by clicking — open another app, fetch a page, write a file — the vision
+    /// model says so instead of hunting for a button. The result comes back as observed content and
+    /// the session continues from a fresh screenshot.
+    ///
+    /// **This is not "obey text found on a screen", and the distinction is the whole of E9's
+    /// surviving rule.** Delegation is the model choosing a *means* toward the user's own goal;
+    /// obeying screen text would be the goal itself changing because a window said so. A model using
+    /// a tool, versus an attacker picking the objective. What bounds it: the registered tools, the
+    /// consequence rule applied to whatever the delegated plan does, the iteration cap, and no
+    /// recursion — a delegated plan carrying a vision step is refused.
+    case delegate
     case done
     case stuck
 
@@ -26,7 +41,10 @@ public enum VisionActionKind: String, CaseIterable, Equatable, Sendable {
         switch self {
         case .click, .type, .scroll, .key:
             return true
-        case .wait, .done, .stuck:
+        // `delegate` drives Sonny's own engine rather than the machine, so it raises no approval of
+        // its own here — what the *delegated plan* does is gated by the ordinary plan-level gate,
+        // which is the point of routing it through the engine at all.
+        case .delegate, .wait, .done, .stuck:
             return false
         }
     }
@@ -70,6 +88,8 @@ public struct VisionDecision: Equatable, Sendable {
     /// The model's own reading of what this action would do. Advisory input to the consequence
     /// classifier, never the whole of it — see ``VisionConsequenceClassifier``.
     public var declaredConsequence: CapabilityRiskEscalation.Consequence?
+    /// The bounded instruction a `delegate` action hands to Sonny's planner.
+    public var instruction: String?
 
     public init(
         kind: VisionActionKind,
@@ -80,7 +100,8 @@ public struct VisionDecision: Equatable, Sendable {
         scrollDirection: VisionScrollDirection? = nil,
         target: String = "",
         rationale: String = "",
-        declaredConsequence: CapabilityRiskEscalation.Consequence? = nil
+        declaredConsequence: CapabilityRiskEscalation.Consequence? = nil,
+        instruction: String? = nil
     ) {
         self.kind = kind
         self.x = x
@@ -91,6 +112,7 @@ public struct VisionDecision: Equatable, Sendable {
         self.target = target
         self.rationale = rationale
         self.declaredConsequence = declaredConsequence
+        self.instruction = instruction
     }
 
     /// A short, human sentence naming what this action does — the line the HUD shows and the
@@ -105,6 +127,8 @@ public struct VisionDecision: Equatable, Sendable {
             return "Scroll \(scrollDirection?.rawValue ?? "down")"
         case .key:
             return "Press \(key?.rawValue ?? "a key")"
+        case .delegate:
+            return "Ask Sonny's own tools to \(instruction ?? "do something")"
         case .wait:
             return "Wait for the screen to settle"
         case .done:
@@ -181,7 +205,8 @@ public enum VisionDecisionParser {
             scrollDirection: (object["direction"] as? String).flatMap { VisionScrollDirection(rawValue: $0.lowercased()) },
             target: (object["target"] as? String) ?? "",
             rationale: (object["rationale"] as? String) ?? "",
-            declaredConsequence: declaredConsequence(object["consequence"] as? String)
+            declaredConsequence: declaredConsequence(object["consequence"] as? String),
+            instruction: object["instruction"] as? String
         )
 
         switch kind {
@@ -200,6 +225,11 @@ public enum VisionDecisionParser {
         case .scroll:
             guard decision.scrollDirection != nil else {
                 throw VisionDecisionParseError.missingField(action: kind.rawValue, field: "direction")
+            }
+        case .delegate:
+            guard let instruction = decision.instruction?.trimmingCharacters(in: .whitespacesAndNewlines),
+                  !instruction.isEmpty else {
+                throw VisionDecisionParseError.missingField(action: kind.rawValue, field: "instruction")
             }
         case .wait, .done, .stuck:
             break

@@ -77,7 +77,11 @@ public enum VisionConsequenceClassifier {
         // keystroke into one as affects-others would have put an approval in front of the user for
         // each character of a draft — the exact over-asking that trains people to click through.
         switch decision.kind {
-        case .wait, .done, .stuck:
+        // `delegate` is gated where it actually acts. The delegated plan goes through the ordinary
+        // plan-level gate — `assessRisk`, then `RiskApprovalPolicy.requirement(for:context:)` — so
+        // classifying the delegation *itself* as destructive would ask twice about one thing, and
+        // classifying it destructive when the plan turns out to be a file read would be a lie.
+        case .delegate, .wait, .done, .stuck:
             // Cannot have a consequence: nothing is driven. A `done` whose target label happens to
             // read "Delete" is not deleting anything.
             return .advisory

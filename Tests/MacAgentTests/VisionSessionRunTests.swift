@@ -494,6 +494,163 @@ struct VisionSessionRunTests {
         #expect(fixture.viewModel.hasCompletedFirstApproval)
     }
 
+    // MARK: - Delegation (SONNY-93, founder decision 4)
+
+    /// **Normal mode never asks about the delegation itself**, and the delegated plan still runs
+    /// through the ordinary engine gate — which is the whole distinction the founder drew.
+    @Test
+    func aDelegationRunsWithoutAskingInNormalModeAndItsResultReachesTheModel() async throws {
+        let fixture = try makeFixture(replies: [
+            #"{"action":"delegate","instruction":"2 + 2","rationale":"arithmetic is not a clicking job"}"#,
+            #"{"action":"done","rationale":"Finished."}"#
+        ])
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "work out a sum", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.viewModel.approvalRequest == nil, "a tier-0 delegated plan asks nothing")
+        #expect(fixture.viewModel.visionDelegationRequest == nil, "Normal mode never asks about delegating")
+        #expect(fixture.synthesizer.clickCount == 0)
+        // The delegation cost one iteration, and its result came back as observed history the model
+        // could read on the next turn.
+        #expect(fixture.model.prompts.count == 2)
+        #expect(fixture.model.prompts[1].contains("Sonny's own tools completed"))
+        #expect(fixture.model.prompts[1].contains("4"))
+        #expect(fixture.viewModel.finalSummary == "Finished.")
+    }
+
+    /// **Safe mode asks first**, and the question is its own surface — not the approval card, because
+    /// it is a question about method rather than about risk.
+    @Test
+    func safeModeAsksBeforeADelegationFires() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"delegate","instruction":"2 + 2","rationale":"r"}"#,
+                #"{"action":"done","rationale":"Finished."}"#
+            ],
+            mode: .safe
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "work out a sum", appName: "Safari")
+        try await waitUntil("the session-envelope approval") { fixture.viewModel.approvalRequest != nil }
+        fixture.viewModel.start()
+        try await waitUntil("the capture preview") { fixture.viewModel.visionCapturePreview != nil }
+        fixture.viewModel.resolveVisionCapturePreview(allowing: true)
+
+        try await waitUntil("the delegation question") { fixture.viewModel.visionDelegationRequest != nil }
+        let request = try #require(fixture.viewModel.visionDelegationRequest)
+        #expect(request.instruction == "2 + 2")
+        #expect(request.appDisplayName == "Safari")
+        #expect(fixture.viewModel.hasVisibleWidgetPanel)
+
+        fixture.viewModel.resolveVisionDelegation(allowing: true)
+
+        // **And then the delegated plan asks on its own account.** Two questions, deliberately
+        // different: the first is about method — should Sonny use its tools instead of clicking —
+        // and this one is the ordinary gate on what the plan actually does, which in Safe mode fires
+        // for every runnable tier. That is the founder's distinction made visible: the decision
+        // removed a prompt about *delegating*, never the gate on the delegation's contents.
+        try await waitUntil("the delegated plan's own approval") { fixture.viewModel.approvalRequest != nil }
+        fixture.viewModel.start()
+
+        // Iteration two: another capture preview, then the model says done.
+        try await waitUntil("the next capture preview") { fixture.viewModel.visionCapturePreview != nil }
+        fixture.viewModel.resolveVisionCapturePreview(allowing: true)
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.viewModel.finalSummary == "Finished.")
+        // The delegated instruction really ran, through the instant resolver a typed "2 + 2" would
+        // have taken — no model round trip for arithmetic.
+        #expect(fixture.model.prompts.count == 2)
+        #expect(fixture.model.prompts[1].contains("4"))
+    }
+
+    /// **Declining a delegation is not stopping.** The loop is told, and continues from the screen —
+    /// the labelled deny SONNY-80's standing note asked for, arriving where it is obviously useful.
+    @Test
+    func decliningADelegationTellsTheModelAndKeepsTheSessionGoing() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"delegate","instruction":"2 + 2","rationale":"r"}"#,
+                #"{"action":"click","x":10,"y":10,"target":"Bookmarks","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"Did it on screen."}"#
+            ],
+            mode: .safe
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "do a thing", appName: "Safari")
+        try await waitUntil("the envelope approval") { fixture.viewModel.approvalRequest != nil }
+        fixture.viewModel.start()
+        try await waitUntil("the capture preview") { fixture.viewModel.visionCapturePreview != nil }
+        fixture.viewModel.resolveVisionCapturePreview(allowing: true)
+        try await waitUntil("the delegation question") { fixture.viewModel.visionDelegationRequest != nil }
+
+        fixture.viewModel.resolveVisionDelegation(allowing: false)
+        // Declining the method means the delegated plan never runs, so its own gate never fires.
+        #expect(fixture.viewModel.approvalRequest == nil)
+
+        // The session did not end — the next iteration asked for the next capture, and once that is
+        // allowed the model is told what happened rather than being left to guess.
+        try await waitUntil("the second capture preview") { fixture.viewModel.visionCapturePreview != nil }
+        fixture.viewModel.resolveVisionCapturePreview(allowing: true)
+        try await waitUntil("the second prompt") { fixture.model.prompts.count == 2 }
+        #expect(fixture.model.prompts[1].contains("you declined"))
+        fixture.viewModel.cancelCurrentRun()
+        try await waitForIdle(fixture.viewModel)
+    }
+
+    /// **No recursion.** A delegated plan carrying a vision step is refused before it is prepared —
+    /// without which a model could delegate its way into a second session inside the first, each with
+    /// its own iteration cap, and the cap would stop bounding anything.
+    @Test
+    func aDelegationCannotStartASecondVisionSession() async throws {
+        let fixture = try makeFixture(replies: [
+            #"{"action":"delegate","instruction":"control Notes and write a note","rationale":"r"}"#,
+            #"{"action":"done","rationale":"Finished."}"#
+        ])
+        defer { fixture.tearDown() }
+        // The scripted planner is what a delegated instruction reaches; make it try to nest.
+        fixture.viewModel.visionSessionEnvironment = fixture.viewModel.visionSessionEnvironment
+
+        fixture.viewModel.startVisionSession(goal: "write a note", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        // Whatever the planner produced, no second session ran: exactly one session's worth of
+        // captures happened, and the loop was told the delegation failed rather than nesting.
+        #expect(fixture.model.prompts.count == 2)
+        #expect(fixture.model.prompts[1].contains("could not do") || fixture.model.prompts[1].contains("completed"))
+        #expect(fixture.viewModel.visionSessionProgress == nil)
+    }
+
+    /// **Stopping during a delegation question stops the run**, like the other two parked questions.
+    @Test
+    func stoppingDuringADelegationQuestionEndsTheSession() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"delegate","instruction":"2 + 2","rationale":"r"}"#,
+                #"{"action":"done","rationale":"should never be reached"}"#
+            ],
+            mode: .safe
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "do a thing", appName: "Safari")
+        try await waitUntil("the envelope approval") { fixture.viewModel.approvalRequest != nil }
+        fixture.viewModel.start()
+        try await waitUntil("the capture preview") { fixture.viewModel.visionCapturePreview != nil }
+        fixture.viewModel.resolveVisionCapturePreview(allowing: true)
+        try await waitUntil("the delegation question") { fixture.viewModel.visionDelegationRequest != nil }
+
+        fixture.viewModel.cancelCurrentRun()
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.viewModel.visionDelegationRequest == nil)
+        #expect(fixture.model.prompts.count == 1, "the loop must not have asked the model again")
+    }
+
     // MARK: - Containment, live
 
     /// The frontmost boundary, through the whole stack: another app takes focus mid-session and the

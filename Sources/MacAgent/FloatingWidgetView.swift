@@ -24,6 +24,9 @@ private enum WidgetState {
     /// that outranked it would leave a Safe-mode session suspended with nothing on screen able to
     /// answer it.
     case captureReview(VisionCapturePreview)
+    /// Safe mode is about to hand an instruction to Sonny's own planner, and is asking first (row I,
+    /// SONNY-93; founder decision 4, 2026-08-14). Normal and Power never reach this state.
+    case delegationReview(VisionDelegationRequest)
     case result(String, RunSuggestion?)
     case failure(String)
 }
@@ -170,7 +173,7 @@ struct FloatingWidgetView: View {
             return true
         case .working:
             return viewModel.activeTaskOrigin != .widget
-        case .permission, .clarification, .captureReview:
+        case .permission, .clarification, .captureReview, .delegationReview:
             return false
         }
     }
@@ -238,6 +241,9 @@ struct FloatingWidgetView: View {
         if let preview = viewModel.visionCapturePreview {
             return .captureReview(preview)
         }
+        if let delegation = viewModel.visionDelegationRequest {
+            return .delegationReview(delegation)
+        }
         if let approvalRequest = viewModel.approvalRequest {
             return .permission(approvalRequest)
         }
@@ -266,6 +272,7 @@ struct FloatingWidgetView: View {
         case .clarification: return 2
         case .permission: return 3
         case .captureReview: return 6
+        case .delegationReview: return 7
         case .result: return 4
         case .failure: return 5
         }
@@ -276,6 +283,7 @@ struct FloatingWidgetView: View {
             || viewModel.isAwaitingApproval
             || viewModel.clarificationQuestion != nil
             || viewModel.visionCapturePreview != nil
+            || viewModel.visionDelegationRequest != nil
     }
 
     private func submit() {
@@ -450,6 +458,12 @@ private extension FloatingWidgetView {
                 preview: preview,
                 onSend: { viewModel.resolveVisionCapturePreview(allowing: true) },
                 onDecline: { viewModel.resolveVisionCapturePreview(allowing: false) }
+            )
+        case .delegationReview(let delegation):
+            WidgetDelegationReviewPanel(
+                delegation: delegation,
+                onAllow: { viewModel.resolveVisionDelegation(allowing: true) },
+                onDecline: { viewModel.resolveVisionDelegation(allowing: false) }
             )
         case .result(let summary, let suggestion):
             WidgetResultPanel(
@@ -763,6 +777,72 @@ private struct WidgetCaptureReviewPanel: View {
 
                 Button(action: onSend) {
                     Text("Send")
+                        .font(WidgetType.captionMedium)
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .frame(height: 23)
+                .widgetCircularBackground(tint: WidgetTheme.allowAction)
+            }
+        }
+    }
+}
+
+/// Safe mode is about to let Sonny use its own tools for one step instead of clicking.
+///
+/// **Declining here is not stopping.** This panel is the first place in the product where a labelled
+/// "keep clicking" sits beside a labelled allow — SONNY-80's standing note asked for exactly that
+/// distinction, deferred until a surface could carry it honestly, and a delegation is where it is
+/// obviously useful: "no, do not use your tools for that, try it on screen" is a real answer. The
+/// stop control still stops (it is `cancelCurrentRun`, unchanged); this one only answers the
+/// question.
+private struct WidgetDelegationReviewPanel: View {
+    let delegation: VisionDelegationRequest
+    let onAllow: () -> Void
+    let onDecline: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Sonny wants to use its own tools for one step instead of clicking in \(delegation.appDisplayName).")
+                .font(WidgetType.caption)
+                .foregroundStyle(WidgetTheme.textFull)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text(delegation.instruction)
+                .font(WidgetType.captionMedium)
+                .foregroundStyle(WidgetTheme.textFull)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if !delegation.rationale.isEmpty {
+                Text(delegation.rationale)
+                    .font(WidgetType.captionSmall)
+                    .foregroundStyle(WidgetTheme.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            // Said plainly, because it is the thing a user most needs to know to answer: allowing
+            // this does not skip the ordinary approval on whatever it turns out to do.
+            Text("Anything it does still asks you first if it would delete something or reach someone else.")
+                .font(WidgetType.captionSmall)
+                .foregroundStyle(WidgetTheme.secondaryCircular)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                Spacer(minLength: 8)
+
+                Button(action: onDecline) {
+                    Text("Keep clicking")
+                        .font(WidgetType.captionMedium)
+                        .foregroundStyle(WidgetTheme.textFull)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .frame(height: 23)
+                .widgetCircularBackground()
+
+                Button(action: onAllow) {
+                    Text("Use tools")
                         .font(WidgetType.captionMedium)
                         .foregroundStyle(.white)
                 }

@@ -622,7 +622,8 @@ struct ProductShellTests {
             // `whitelist` in group 1, and wiping it would leave the app unable to run a session
             // until relaunch.
             "visionCapturePreview", "visionSessionProgress", "visionApprovalContinuation",
-            "visionCaptureContinuation", "visionSessionEnvironment"
+            "visionCaptureContinuation", "visionSessionEnvironment",
+            "visionDelegationRequest", "visionDelegationContinuation"
         ]
 
         let fixture = try makeProductShellFixture()
