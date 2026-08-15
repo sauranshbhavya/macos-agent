@@ -7,9 +7,12 @@ import Foundation
 /// app catalog." was the sentence a user got for asking to open an app they had installed. C12
 /// (ratified 2026-08-12) dissolved that gate: launching an installed app is tier-1, low-authority
 /// work, and the membership check was a capability hedge from the era of not "pretending to support
-/// arbitrary app automation *yet*". Consent stays where authority actually lives — *controlling* an
-/// app (E6, row I) — and nothing about this capability's tier, permissions or gating changed with the
-/// gate's removal.
+/// arbitrary app automation *yet*". Authority stays where it actually lives — *controlling* an app
+/// rather than launching one — and nothing about this capability's tier, permissions or gating
+/// changed with the gate's removal. Row I settled what "controlling" costs, and it is not consent
+/// either: the founder removed per-app control consent on 2026-08-14, leaving `ScreenControlPolicy`'s
+/// terminal ban as the only app-identity gate anywhere in the product. Launching a terminal remains
+/// ordinary tier-1 work — this adapter is untouched by that ban, deliberately.
 ///
 /// The type is named for what it does now. Renamed from `OpenAllowlistedAppCapabilityAdapter`, and
 /// the capability identifier with it (`local.apps.open-allowlisted-app` -> `local.apps.open-app`),

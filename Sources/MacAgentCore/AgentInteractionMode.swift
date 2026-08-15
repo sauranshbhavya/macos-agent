@@ -9,13 +9,24 @@ import Foundation
 /// - `normal` is the default: the consequence rule — ask only when an action is destructive or
 ///   affects someone other than the user.
 /// - `power` is **identical to Normal today, by design**: roadmap row 18's mode landing as a
-///   setting first. Row I's screen-control features gate on it when they arrive (recorded on
-///   SONNY-23 and SONNY-91/92); until then selecting it changes nothing, and
-///   `settingsDescription` says so rather than implying otherwise.
+///   setting first. Its future meaning is deliberately open, and `settingsDescription` promises
+///   nothing rather than implying a capability behind it.
+///
+/// **Screen control is not gated on Power, and this comment used to say it was.** Until row I it
+/// read "row I's screen-control features gate on it when they arrive", and the Power segment's own
+/// description told the user screen control would "unlock here" — recorded that way on SONNY-23 and
+/// SONNY-91/92 before the founder decided otherwise on 2026-08-14. The ratified rule: screen
+/// control works in **all three modes**. Safe is the only one that asks about it — before every
+/// vision action, and showing each capture before it is sent — while Normal and Power run vision
+/// actions silently. What still asks in every mode, Power included, is the standing consequence
+/// rule: a destructive or affects-others action asks, mid-loop included. So Power buys the user
+/// nothing here, which is why the copy no longer offers it.
 ///
 /// The approval engine's input stays `ApprovalContext.safeMode: Bool` — row C's seam, which this
-/// enum maps onto via `asksBeforeEveryAction` at the one deriving site. The engine distinguishes
-/// exactly two postures today; the third exists at the product layer, where row I will read it.
+/// enum maps onto via `asksBeforeEveryAction` at the one deriving site. That mapping is unchanged
+/// by the above and is what makes "Safe asks about vision, Normal and Power do not" fall out of the
+/// existing engine rather than needing a fourth posture: the engine distinguishes exactly two
+/// postures, and the third stays a product-layer name with no engine meaning yet.
 public enum AgentInteractionMode: String, Codable, CaseIterable, Equatable, Sendable {
     case safe
     case normal
@@ -48,7 +59,11 @@ public enum AgentInteractionMode: String, Codable, CaseIterable, Equatable, Send
         case .normal:
             return "Sonny asks only when an action is destructive or affects someone other than you."
         case .power:
-            return "Runs exactly like Normal today — screen-control features will unlock here when they arrive."
+            // Promises nothing. The previous sentence promised screen control would unlock here,
+            // which the founder's 2026-08-14 decision made false — screen control works in every
+            // mode — and a settings description that names a capability the segment does not gate
+            // is the kind of copy a user reasonably acts on.
+            return "Runs exactly like Normal today. Reserved for more advanced controls as Sonny grows."
         }
     }
 }

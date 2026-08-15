@@ -93,7 +93,7 @@ public struct RiskApprovalPolicy: Codable, Equatable, Sendable {
     ///
     /// **Demoted from `public` on SONNY-97, deliberately.** Tier-only and context-free, any caller
     /// outside this file would be a second public path to a requirement, bypassing Safe mode and
-    /// every future `ApprovalContext` field (per-app consent lands there on row I). `private`
+    /// every future `ApprovalContext` field. `private`
     /// scopes it to this file, so the compiler — not a convention — is what enforces "exactly one
     /// public function produces a `RiskApprovalRequirement`" (I8).
     private func requirement(for tier: CapabilityRiskTier) -> RiskApprovalRequirement {
@@ -295,8 +295,8 @@ public struct RiskApprovalConsent: Codable, Equatable, Sendable {
     public var coverage: Coverage
     /// The *requirement* the user actually answered — the third axis (SONNY-97), recorded because
     /// the requirement stopped being a pure function of the tier: first through row C's grants
-    /// (since superseded), now through `ApprovalContext` (Safe mode today, per-app consent on row
-    /// I) and the escalations' consequence classes. A consent given to a lighter ask must never be
+    /// (since superseded), now through `ApprovalContext` (Safe mode) and the escalations'
+    /// consequence classes. A consent given to a lighter ask must never be
     /// spent on a stricter one at equal tier, whatever produced the difference — the axis is
     /// defense-in-depth for every context field that will ever bend the mapping.
     ///
@@ -553,7 +553,16 @@ public struct CapabilityRiskAssessment: Codable, Equatable, Sendable {
 }
 
 /// The authority context an approval requirement is derived under: today, whether the user's Safe
-/// mode is engaged; row I's per-app control consent lands here as a further field.
+/// mode is engaged, and nothing else.
+///
+/// **Row I was expected to add a per-app control consent field here, and does not.** SONNY-91 was
+/// contracted as a durable per-app grant that would land as an `appControlConsent` field this
+/// function maps. The founder superseded that contract on 2026-08-14: Sonny may control any
+/// installed app without asking, so there is no grant, nothing to revoke, and no consent axis for
+/// this struct to carry. The one control-authority rule that survived — terminals are never
+/// controllable — is not a context field either, because it is not a question anyone is asked:
+/// `ScreenControlPolicy` refuses at the target, and the refusal reaches this function the ordinary
+/// way, as a tier-4 assessment that `.refuse`s in every mode.
 ///
 /// This is an input to `RiskApprovalPolicy.requirement(for:context:)` and nothing else — it never
 /// reaches `assessRisk`, so `effectiveTier` remains a pure function of the plan. Threaded
@@ -575,8 +584,10 @@ public struct ApprovalContext: Equatable, Sendable {
     /// asks first, tier 4 still refuses. Safe mode is the cautious user's opt-back-in to being
     /// asked about everything.
     public var safeMode: Bool
-    // Row I's SONNY-91 adds `appControlConsent` HERE, as a field this function maps — never as a
-    // rule applied to the function's return value, which is the post-hoc clamp I8 forbids.
+    // A future authority axis lands HERE, as a field this function maps — never as a rule applied
+    // to the function's return value, which is the post-hoc clamp I8 forbids. (This comment named
+    // row I's `appControlConsent` as the next such field; see the type's doc comment for why that
+    // field was superseded rather than built.)
 
     // Explicit rather than synthesized: the memberwise initializer of a public struct is internal,
     // and `MacAgent` is a separate target.
@@ -588,8 +599,8 @@ public struct ApprovalContext: Equatable, Sendable {
 public extension RiskApprovalPolicy {
     /// The one public path from an assessment to an approval requirement (I8: exactly one public
     /// function produces a `RiskApprovalRequirement`, and no public function takes one and returns
-    /// a different one; per-app consent and every future authority axis lands *here*, as an
-    /// `ApprovalContext` field this mapping reads, never as a rule chained after it).
+    /// a different one; every future authority axis lands *here*, as an `ApprovalContext` field
+    /// this mapping reads, never as a rule chained after it).
     ///
     /// **The consequence rule** (founder directive, 2026-08-13, superseding row C's ratified
     /// scope-conditional relaxation): Sonny asks permission only when an action is *destructive*
