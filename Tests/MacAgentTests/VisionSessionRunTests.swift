@@ -163,7 +163,10 @@ struct VisionSessionRunTests {
         mode: AgentInteractionMode = .normal,
         bundleIdentifier: String = "com.apple.Safari",
         frontmost: String? = nil,
-        limits: VisionSessionLimits = VisionSessionLimits(maximumIterations: 4, settleNanoseconds: 0)
+        limits: VisionSessionLimits = VisionSessionLimits(maximumIterations: 4, settleNanoseconds: 0),
+        /// The planner a *delegated* instruction reaches. `nil` means the unreachable one, which is
+        /// correct for every test whose delegations resolve instantly or do not delegate at all.
+        delegationPlanner: (any Planning)? = nil
     ) throws -> Fixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("VisionSessionRunTests-\(UUID().uuidString)", isDirectory: true)
@@ -188,7 +191,9 @@ struct VisionSessionRunTests {
             priorTaskContextStore: PriorTaskContextStore(),
             taskUsageRecorder: TaskUsageRecorder(),
             plannerProviderRegistry: PlannerProviderRegistry(
-                defaultProvider: PlannerProvider(id: "unused", displayName: "Unused") { _ in UnreachableVisionPlanner() }
+                defaultProvider: PlannerProvider(id: "unused", displayName: "Unused") { _ in
+                    delegationPlanner ?? UnreachableVisionPlanner()
+                }
             ),
             plannerSelection: nil,
             userDefaults: userDefaults,
@@ -607,22 +612,28 @@ struct VisionSessionRunTests {
     /// its own iteration cap, and the cap would stop bounding anything.
     @Test
     func aDelegationCannotStartASecondVisionSession() async throws {
-        let fixture = try makeFixture(replies: [
-            #"{"action":"delegate","instruction":"control Notes and write a note","rationale":"r"}"#,
-            #"{"action":"done","rationale":"Finished."}"#
-        ])
+        // **The planner really does return a vision-bearing plan here.** An earlier version of this
+        // test let the delegation reach the unreachable planner, which threw — so the delegation
+        // failed for the wrong reason and the recursion guard was never executed. A mutation that
+        // deleted the guard passed the whole suite. This planner is what makes the test bite.
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"delegate","instruction":"control Notes and write a note","rationale":"r"}"#,
+                #"{"action":"done","rationale":"Finished on screen."}"#
+            ],
+            delegationPlanner: NestingVisionPlanner()
+        )
         defer { fixture.tearDown() }
-        // The scripted planner is what a delegated instruction reaches; make it try to nest.
-        fixture.viewModel.visionSessionEnvironment = fixture.viewModel.visionSessionEnvironment
 
         fixture.viewModel.startVisionSession(goal: "write a note", appName: "Safari")
         try await waitForIdle(fixture.viewModel)
 
-        // Whatever the planner produced, no second session ran: exactly one session's worth of
-        // captures happened, and the loop was told the delegation failed rather than nesting.
         #expect(fixture.model.prompts.count == 2)
-        #expect(fixture.model.prompts[1].contains("could not do") || fixture.model.prompts[1].contains("completed"))
-        #expect(fixture.viewModel.visionSessionProgress == nil)
+        // The loop was told the delegation could not be done, in the words the guard produces...
+        #expect(fixture.model.prompts[1].contains("second screen-control session"))
+        // ...and it carried on rather than nesting: one session, one iteration cap, one summary.
+        #expect(fixture.viewModel.finalSummary == "Finished on screen.")
+        #expect(fixture.synthesizer.events.filter { $0 == .activated("com.apple.Safari") }.count == 1)
     }
 
     /// **Stopping during a delegation question stops the run**, like the other two parked questions.
@@ -752,6 +763,28 @@ struct VisionSessionRunTests {
             #expect(prompt.contains(UntrustedContentBoundary.trustedInstructionBeginDelimiter))
             #expect(prompt.contains("click a thing"))
         }
+    }
+}
+
+/// A planner that answers every instruction with a vision-bearing plan.
+///
+/// Exists for exactly one test: the recursion guard cannot be exercised unless something actually
+/// tries to nest.
+private struct NestingVisionPlanner: Planning {
+    func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
+        AgentPlan(
+            summary: "Control Notes",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(
+                    id: "nested-1",
+                    operation: .visionSession,
+                    description: "Control Notes",
+                    appName: "Notes",
+                    visionGoal: "write a note"
+                )
+            ]
+        )
     }
 }
 
