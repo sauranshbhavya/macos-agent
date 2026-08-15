@@ -273,3 +273,64 @@ struct VisionDecisionAndGeometryTests {
         #expect(!VisionPointResolver.isInsideImage(CGPoint(x: -1, y: 10), capture: capture))
     }
 }
+
+/// SONNY-92: the mouse-up guarantee, at the synthesis seam.
+///
+/// The ticket asks for this as a *tested contract* rather than a habit, and no test in this repo may
+/// post a real HID event — so `ClickEventSequence` is a pure function over an injected poster and an
+/// injected sleep, and this is what that extraction is for.
+@Suite
+struct ClickEventSequenceTests {
+    private final class Recorder: @unchecked Sendable {
+        private(set) var posted: [CGEventType] = []
+        func post(_ type: CGEventType) { posted.append(type) }
+    }
+
+    /// The ordinary sequence: move, down, up.
+    @Test
+    func anUninterruptedClickPostsMoveDownAndUp() async throws {
+        let recorder = Recorder()
+        try await ClickEventSequence.run(post: recorder.post, sleep: { _ in })
+        #expect(recorder.posted == [.mouseMoved, .leftMouseDown, .leftMouseUp])
+    }
+
+    /// **The guarantee.** A cancellation landing inside the hold still releases the button before it
+    /// propagates. Without this the user is left with a machine that drags everything it touches,
+    /// from a run they just stopped — and the run they stopped is exactly when this happens.
+    @Test
+    func aCancellationDuringTheHoldStillReleasesTheButton() async {
+        let recorder = Recorder()
+        do {
+            try await ClickEventSequence.run(
+                post: recorder.post,
+                // Throws only on the hold, not on the move settle, so the cancellation lands in the
+                // one window where the button is actually down.
+                sleep: { nanoseconds in
+                    if nanoseconds == ClickEventSequence.holdNanoseconds {
+                        throw CancellationError()
+                    }
+                }
+            )
+            Issue.record("the cancellation must propagate")
+        } catch is CancellationError {
+            // Expected.
+        } catch {
+            Issue.record("expected CancellationError, got \(error)")
+        }
+
+        #expect(recorder.posted == [.mouseMoved, .leftMouseDown, .leftMouseUp])
+        #expect(recorder.posted.last == .leftMouseUp, "the button must never be left down")
+    }
+
+    /// A cancellation *before* the button goes down posts no up event, because there is nothing
+    /// held. Pinned so the fix stays targeted rather than becoming an unconditional extra event.
+    @Test
+    func aCancellationBeforeTheButtonGoesDownPostsNoUpEvent() async {
+        let recorder = Recorder()
+        try? await ClickEventSequence.run(
+            post: recorder.post,
+            sleep: { _ in throw CancellationError() }
+        )
+        #expect(recorder.posted == [.mouseMoved])
+    }
+}
