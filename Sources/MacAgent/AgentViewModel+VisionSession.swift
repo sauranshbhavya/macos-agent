@@ -55,7 +55,84 @@ extension AgentViewModel: VisionSessionInteracting {
     }
 
     func visionSessionDidProgress(_ progress: VisionSessionProgress) {
+        let wasLive = isVisionSessionLive
         visionSessionProgress = progress
+        // Registered on the first progress report of a session rather than at dispatch, so the
+        // window is exactly "Sonny is actually driving" — a session that failed at resolve or was
+        // refused at the gate never takes the combination at all.
+        if !wasLive {
+            registerEmergencyStopHotKey()
+        }
+    }
+
+    /// Take `Ctrl-Opt-Esc` for the duration of the session.
+    ///
+    /// A failure here is recorded and swallowed rather than surfaced: the hotkey is one of three
+    /// ways to stop a session (the HUD's Stop and the widget's existing cancel are the others), and
+    /// refusing to run because a convenience shortcut was already taken by another app would be a
+    /// worse product than running without it.
+    func registerEmergencyStopHotKey() {
+        guard visionEmergencyStopHotKey == nil else {
+            return
+        }
+        do {
+            visionEmergencyStopHotKey = try EmergencyStopHotKey { [weak self] in
+                self?.emergencyStopVisionSession()
+            }
+            logStore.append(.observe, "vision: \(EmergencyStopHotKey.displayName) stops this session")
+        } catch {
+            logStore.append(
+                .observe,
+                "vision: could not register \(EmergencyStopHotKey.displayName) - \(error.localizedDescription)"
+            )
+        }
+    }
+
+    /// Give the combination back. Called from the one place a session can end.
+    func releaseEmergencyStopHotKey() {
+        visionEmergencyStopHotKey = nil
+    }
+
+    // MARK: - The HUD's own controls
+
+    /// The user pressed Pause on the HUD.
+    ///
+    /// Routed through the attention monitor rather than a separate mechanism, so a user-initiated
+    /// pause reaches the loop by exactly the path a locked screen does — the loop freezes at the top
+    /// of the next iteration, captures nothing, synthesizes nothing, and waits for an explicit
+    /// resume. One paused state, not two that have to agree (SONNY-95: "shares the session-attention
+    /// pause machinery").
+    func pauseVisionSession() {
+        visionUserPauseMonitor?.pause()
+    }
+
+    /// The emergency stop, from the hotkey or from the HUD.
+    ///
+    /// **Deliberately the same call as every other stop.** §13.5's invariant is one implementation
+    /// of "control was lost, for any reason", and a bespoke emergency path would be the second stop
+    /// path — which is always the one that turns out not to release the mouse button. What
+    /// `cancelCurrentRun` gives this for free: the parked-question branches resume before
+    /// cancelling so there is exactly one resume, `Task.checkCancellation` turns it into the same
+    /// `CancellationError` a cancelled clarification throws, and `ClickEventSequence` posts
+    /// `leftMouseUp` before propagating so the button is never left down.
+    func emergencyStopVisionSession() {
+        guard isVisionSessionLive else {
+            return
+        }
+        logStore.append(.summarize, "vision: user_stopped - emergency stop")
+        cancelCurrentRun()
+    }
+
+    /// Whether a screen-control session is live in any of its states — running, paused, or holding
+    /// one of its three questions.
+    ///
+    /// The hotkey's registration window and the HUD's visibility both read this, so "live" has one
+    /// definition rather than two that drift.
+    var isVisionSessionLive: Bool {
+        visionSessionProgress != nil
+            || visionSessionPause != nil
+            || visionCapturePreview != nil
+            || visionDelegationRequest != nil
     }
 
     /// A mid-loop approval, on the same surface every other approval uses.
@@ -159,6 +236,9 @@ extension AgentViewModel: VisionSessionInteracting {
         guard let continuation = visionResumeContinuation else { return }
         visionResumeContinuation = nil
         visionSessionPause = nil
+        // Cleared on both answers. On a resume it is what lets the loop proceed; on an end it stops
+        // a stale flag outliving the session that set it.
+        visionUserPauseMonitor?.clearPause()
         continuation.resume(returning: resuming)
     }
 
@@ -342,7 +422,8 @@ extension AgentViewModel: VisionSessionInteracting {
     /// telling lands.
     static func makeVisionEnvironment(
         interaction: any VisionSessionInteracting,
-        environment: [String: String] = ProcessInfo.processInfo.environment
+        environment: [String: String] = ProcessInfo.processInfo.environment,
+        userPauseMonitor: UserPausableAttentionMonitor? = nil
     ) -> VisionSessionEnvironment? {
         guard let modelClient = try? OpenCodeVisionModelClient(environment: environment) else {
             return nil
@@ -355,7 +436,7 @@ extension AgentViewModel: VisionSessionInteracting {
             // The real monitor, not the always-attended default. SONNY-94's whole point is that a
             // session stops when the user does, and `AlwaysAttendedMonitor` is correct only for a
             // build with no way to ask the OS — which this is not.
-            attentionMonitor: SystemSessionAttentionMonitor(),
+            attentionMonitor: userPauseMonitor ?? UserPausableAttentionMonitor(base: SystemSessionAttentionMonitor()),
             interaction: interaction
         )
     }

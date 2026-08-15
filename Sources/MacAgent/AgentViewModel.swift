@@ -132,6 +132,13 @@ final class AgentViewModel: ObservableObject {
     var visionCaptureContinuation: CheckedContinuation<Bool, Never>?
     var visionDelegationContinuation: CheckedContinuation<Bool, Never>?
     var visionResumeContinuation: CheckedContinuation<Bool, Never>?
+    /// The wrapper the HUD's Pause writes to, held so the resume path can clear it. Set when the
+    /// vision environment is built; `nil` in a build with no screen-control wiring.
+    var visionUserPauseMonitor: UserPausableAttentionMonitor?
+    /// Registered only while a session is live — a permanently-held global shortcut is a key
+    /// combination taken from every other app forever, in exchange for a control that matters for
+    /// the seconds Sonny is actually moving the cursor.
+    var visionEmergencyStopHotKey: EmergencyStopHotKey?
     private let audioRecorder: AudioCommandRecorder
     private let permissionReadinessService: PermissionReadinessService
     private let routineStore: RoutineStore
@@ -812,6 +819,10 @@ final class AgentViewModel: ObservableObject {
             visionCapturePreview = nil
             visionDelegationRequest = nil
             visionSessionPause = nil
+            // The one place a session ends, whatever ended it — so the combination goes back to the
+            // user's own apps on every exit, including the ones nobody planned for.
+            releaseEmergencyStopHotKey()
+            visionUserPauseMonitor?.clearPause()
             // Per-task, cleared at every terminal exit — and deliberately *not* when the task is
             // merely paused. An approval or a clarification is the same task waiting on the user,
             // and it has to resume under the scope it was assessed with; clearing here would let
@@ -2004,6 +2015,20 @@ final class AgentViewModel: ObservableObject {
         return selected.planner
     }
 
+    /// Builds the live vision environment and keeps a handle on the pause wrapper the HUD writes to.
+    ///
+    /// The handle is why this is not inline: `pauseVisionSession()` needs the *same* monitor the
+    /// running session is consulting, and a second one built later would be a Pause button wired to
+    /// nothing.
+    private func makeLiveVisionEnvironment() -> VisionSessionEnvironment? {
+        let monitor = UserPausableAttentionMonitor(base: SystemSessionAttentionMonitor())
+        guard let environment = Self.makeVisionEnvironment(interaction: self, userPauseMonitor: monitor) else {
+            return nil
+        }
+        visionUserPauseMonitor = monitor
+        return environment
+    }
+
     func makeExecutor() -> AgentActionExecutor {
         AgentActionExecutor(
             whitelist: whitelist,
@@ -2033,7 +2058,7 @@ final class AgentViewModel: ObservableObject {
             // above. A vision session dispatched into an executor built that way fails loudly with
             // `visionUnavailable` rather than half-running; `visionSessionEnvironment` is an
             // injectable seam so a test supplies its own substrate and never touches the machine.
-            visionSession: visionSessionEnvironment ?? Self.makeVisionEnvironment(interaction: self)
+            visionSession: visionSessionEnvironment ?? makeLiveVisionEnvironment()
         )
     }
 

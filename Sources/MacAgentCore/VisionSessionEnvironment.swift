@@ -171,6 +171,9 @@ public struct VisionSessionEnvironment {
     public var modelClient: any VisionModelDeciding
     public var limits: VisionSessionLimits
     public var attentionMonitor: any SessionAttentionMonitoring
+    /// Polled every iteration for the Accessibility grant. Injected so a test can revoke it
+    /// mid-session without touching the real System Settings.
+    public var permissionChecker: any ScreenCapturePermissionChecking
     public weak var interaction: (any VisionSessionInteracting)?
 
     public init(
@@ -180,6 +183,7 @@ public struct VisionSessionEnvironment {
         modelClient: any VisionModelDeciding,
         limits: VisionSessionLimits = .default,
         attentionMonitor: any SessionAttentionMonitoring = AlwaysAttendedMonitor(),
+        permissionChecker: any ScreenCapturePermissionChecking = SystemScreenCapturePermissionChecker(),
         interaction: (any VisionSessionInteracting)?
     ) {
         self.captureService = captureService
@@ -188,6 +192,7 @@ public struct VisionSessionEnvironment {
         self.modelClient = modelClient
         self.limits = limits
         self.attentionMonitor = attentionMonitor
+        self.permissionChecker = permissionChecker
         self.interaction = interaction
     }
 }

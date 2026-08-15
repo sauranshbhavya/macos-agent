@@ -131,6 +131,15 @@ struct VisionSessionRunTests {
         )!
     }
 
+    /// Grants that a test can take away mid-session.
+    private final class RevocablePermissions: ScreenCapturePermissionChecking, @unchecked Sendable {
+        var accessibilityTrusted = true
+        func hasScreenRecordingPermission() -> Bool { true }
+        func requestScreenRecordingPermission() -> Bool { true }
+        func isAccessibilityTrusted() -> Bool { accessibilityTrusted }
+        func requestAccessibilityTrust() -> Bool { accessibilityTrusted }
+    }
+
     private struct GrantedPermissions: ScreenCapturePermissionChecking {
         func hasScreenRecordingPermission() -> Bool { true }
         func requestScreenRecordingPermission() -> Bool { true }
@@ -173,6 +182,7 @@ struct VisionSessionRunTests {
         frontmost: String? = nil,
         limits: VisionSessionLimits = VisionSessionLimits(maximumIterations: 4, settleNanoseconds: 0),
         attention: SessionAttentionMonitoring? = nil,
+        permissions: (any ScreenCapturePermissionChecking)? = nil,
         /// The planner a *delegated* instruction reaches. `nil` means the unreachable one, which is
         /// correct for every test whose delegations resolve instantly or do not delegate at all.
         delegationPlanner: (any Planning)? = nil
@@ -214,7 +224,7 @@ struct VisionSessionRunTests {
         let synthesizer = RecordingSynthesizer(frontmost: frontmost)
         viewModel.visionSessionEnvironment = VisionSessionEnvironment(
             captureService: ScreenCaptureService(
-                permissionChecker: GrantedPermissions(),
+                permissionChecker: permissions ?? GrantedPermissions(),
                 backend: FakeCaptureBackend(bundleIdentifier: bundleIdentifier)
             ),
             redactionService: LocalRedactionService(textRecognizer: EmptyRecognizer()),
@@ -222,6 +232,7 @@ struct VisionSessionRunTests {
             modelClient: model,
             limits: limits,
             attentionMonitor: attention ?? AlwaysAttendedMonitor(),
+            permissionChecker: permissions ?? GrantedPermissions(),
             interaction: viewModel
         )
 
@@ -670,6 +681,142 @@ struct VisionSessionRunTests {
 
         #expect(fixture.viewModel.visionDelegationRequest == nil)
         #expect(fixture.model.prompts.count == 1, "the loop must not have asked the model again")
+    }
+
+    // MARK: - The HUD (SONNY-95)
+
+    /// **Power without covertness.** While Sonny controls an app the HUD says so, says which app,
+    /// says what it is doing, and clears when the session ends.
+    @Test
+    func theHudRendersForALiveSessionAndClearsWhenItEnds() async throws {
+        let fixture = try makeFixture(replies: [
+            #"{"action":"click","x":10,"y":10,"target":"Bookmarks","consequence":"ordinary","rationale":"r"}"#,
+            #"{"action":"done","rationale":"Done."}"#
+        ])
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "open bookmarks", appName: "Safari")
+        try await waitUntil("the HUD") { fixture.viewModel.visionSessionProgress != nil }
+
+        let progress = try #require(fixture.viewModel.visionSessionProgress)
+        #expect(progress.appDisplayName == "Safari")
+        #expect(progress.iteration == 1)
+        #expect(progress.maximumIterations == 4)
+        #expect(!progress.currentAction.isEmpty)
+        #expect(fixture.viewModel.hasVisibleWidgetPanel)
+        #expect(fixture.viewModel.isVisionSessionLive)
+
+        try await waitForIdle(fixture.viewModel)
+        #expect(fixture.viewModel.visionSessionProgress == nil)
+        #expect(!fixture.viewModel.isVisionSessionLive)
+    }
+
+    /// The action line names the action Sonny is about to take, not a generic "working".
+    @Test
+    func theHudsActionLineNamesTheActualAction() async throws {
+        let fixture = try makeFixture(replies: [
+            #"{"action":"click","x":10,"y":10,"target":"Reading List","consequence":"ordinary","rationale":"r"}"#,
+            #"{"action":"done","rationale":"Done."}"#
+        ])
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "open the reading list", appName: "Safari")
+        try await waitUntil("the action line") {
+            fixture.viewModel.visionSessionProgress?.currentAction.contains("Reading List") == true
+        }
+        try await waitForIdle(fixture.viewModel)
+    }
+
+    /// **Pause from the HUD shares the attention machinery**, so a user-initiated pause reaches the
+    /// loop by exactly the path a locked screen does — one paused state, not two that must agree.
+    @Test
+    func pausingFromTheHudFreezesTheLoopAndWaitsForAnExplicitResume() async throws {
+        let attention = UserPausableAttentionMonitor(base: AlwaysAttendedMonitor())
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"A","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"click","x":20,"y":20,"target":"B","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"Done."}"#
+            ],
+            attention: attention
+        )
+        defer { fixture.tearDown() }
+        fixture.viewModel.visionUserPauseMonitor = attention
+
+        fixture.viewModel.startVisionSession(goal: "click two things", appName: "Safari")
+        try await waitUntil("the first click") { fixture.synthesizer.clickCount == 1 }
+
+        fixture.viewModel.pauseVisionSession()
+        try await waitUntil("the pause") { fixture.viewModel.visionSessionPause != nil }
+        #expect(fixture.viewModel.visionSessionPause?.reason == .userPaused)
+
+        // Frozen: no capture, no synthesis, until the user says otherwise.
+        try await Task.sleep(for: .milliseconds(80))
+        #expect(fixture.synthesizer.clickCount == 1)
+
+        fixture.viewModel.resolveVisionPause(resuming: true)
+        try await waitForIdle(fixture.viewModel)
+        #expect(fixture.synthesizer.clickCount == 2)
+    }
+
+    /// **Stop halts before the next action**, not after the whole session — cooperative cancellation
+    /// between iterations, which plan §B5 left as a NOT-VERIFIED question and this ticket turns into
+    /// a tested requirement.
+    @Test
+    func stopHaltsBeforeTheNextActionRatherThanAfterTheSession() async throws {
+        let keepClicking = #"{"action":"click","x":10,"y":10,"target":"A","consequence":"ordinary","rationale":"r"}"#
+        let fixture = try makeFixture(
+            replies: Array(repeating: keepClicking, count: 8),
+            limits: VisionSessionLimits(maximumIterations: 8, settleNanoseconds: 40_000_000)
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "click forever", appName: "Safari")
+        try await waitUntil("the first click") { fixture.synthesizer.clickCount == 1 }
+
+        fixture.viewModel.emergencyStopVisionSession()
+        try await waitForIdle(fixture.viewModel)
+
+        // The clicks stop essentially where the press landed — nowhere near the cap of 8.
+        #expect(fixture.synthesizer.clickCount <= 2, "actual: \(fixture.synthesizer.clickCount)")
+        #expect(fixture.viewModel.visionSessionProgress == nil)
+    }
+
+    /// The emergency stop is inert when no session is live, so a stray hotkey press cannot cancel
+    /// the user's ordinary task.
+    @Test
+    func theEmergencyStopDoesNothingWhenNoSessionIsLive() async throws {
+        let fixture = try makeFixture(replies: [])
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.emergencyStopVisionSession()
+
+        #expect(!fixture.viewModel.isRunning)
+        #expect(fixture.viewModel.finalSummary.isEmpty)
+        #expect(fixture.viewModel.errorMessage == nil)
+    }
+
+    /// **Permission revocation takes the same stop path.** §13.5's invariant is one implementation of
+    /// "control was lost, for any reason" — with a distinct reason code and copy routing the user to
+    /// the Permission Center.
+    @Test
+    func revokingAccessibilityMidSessionStopsItAndRoutesToThePermissionCenter() async throws {
+        let permissions = RevocablePermissions()
+        let fixture = try makeFixture(
+            replies: Array(repeating: #"{"action":"click","x":10,"y":10,"target":"A","consequence":"ordinary","rationale":"r"}"#, count: 4),
+            permissions: permissions
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "click things", appName: "Safari")
+        try await waitUntil("the first click") { fixture.synthesizer.clickCount == 1 }
+
+        permissions.accessibilityTrusted = false
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.synthesizer.clickCount == 1, "no further action after control was lost")
+        #expect(fixture.viewModel.finalSummary.contains("permission to control your Mac was turned off"))
+        #expect(fixture.viewModel.finalSummary.contains("Permission Center"))
     }
 
     // MARK: - Session-bound: pause and explicit resume (SONNY-94)

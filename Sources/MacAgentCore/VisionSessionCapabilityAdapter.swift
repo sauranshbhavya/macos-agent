@@ -268,7 +268,8 @@ public struct VisionSessionCapabilityAdapter: CapabilityAdapter {
             containment: VisionSessionContainment(
                 target: verdict,
                 limits: environment.limits,
-                attentionMonitor: environment.attentionMonitor
+                attentionMonitor: environment.attentionMonitor,
+                permissionChecker: environment.permissionChecker
             ),
             log: log
         )

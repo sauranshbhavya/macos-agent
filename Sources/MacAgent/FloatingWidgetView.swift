@@ -30,6 +30,9 @@ private enum WidgetState {
     /// The session paused because the user stopped being at the Mac (row I, SONNY-94). Resuming is
     /// an explicit press — nothing here clears itself.
     case sessionPaused(VisionSessionPause)
+    /// Sonny is controlling an app right now (row I, SONNY-95). The HUD: what it is doing, in which
+    /// app, with Pause and Stop always reachable.
+    case controlling(VisionSessionProgress)
     case result(String, RunSuggestion?)
     case failure(String)
 }
@@ -176,7 +179,7 @@ struct FloatingWidgetView: View {
             return true
         case .working:
             return viewModel.activeTaskOrigin != .widget
-        case .permission, .clarification, .captureReview, .delegationReview, .sessionPaused:
+        case .permission, .clarification, .captureReview, .delegationReview, .sessionPaused, .controlling:
             return false
         }
     }
@@ -250,6 +253,12 @@ struct FloatingWidgetView: View {
         if let pause = viewModel.visionSessionPause {
             return .sessionPaused(pause)
         }
+        // Below the three parked questions and above `.working`: a question waiting on the user
+        // outranks a progress line, and a vision session's progress line outranks the generic
+        // working panel, which would otherwise say "Sonny is working" while it moves the cursor.
+        if let progress = viewModel.visionSessionProgress {
+            return .controlling(progress)
+        }
         if let approvalRequest = viewModel.approvalRequest {
             return .permission(approvalRequest)
         }
@@ -280,6 +289,7 @@ struct FloatingWidgetView: View {
         case .captureReview: return 6
         case .delegationReview: return 7
         case .sessionPaused: return 8
+        case .controlling: return 9
         case .result: return 4
         case .failure: return 5
         }
@@ -292,6 +302,7 @@ struct FloatingWidgetView: View {
             || viewModel.visionCapturePreview != nil
             || viewModel.visionDelegationRequest != nil
             || viewModel.visionSessionPause != nil
+            || viewModel.visionSessionProgress != nil
     }
 
     private func submit() {
@@ -478,6 +489,12 @@ private extension FloatingWidgetView {
                 pause: pause,
                 onResume: { viewModel.resolveVisionPause(resuming: true) },
                 onEnd: { viewModel.resolveVisionPause(resuming: false) }
+            )
+        case .controlling(let progress):
+            WidgetControllingPanel(
+                progress: progress,
+                onPause: { viewModel.pauseVisionSession() },
+                onStop: { viewModel.emergencyStopVisionSession() }
             )
         case .result(let summary, let suggestion):
             WidgetResultPanel(
@@ -913,6 +930,82 @@ private struct WidgetSessionPausedPanel: View {
                 .frame(height: 23)
                 .widgetCircularBackground(tint: WidgetTheme.allowAction)
             }
+        }
+    }
+}
+
+/// **The HUD: power without covertness.**
+///
+/// While Sonny controls an app it says so, says which app, says what it is doing right now, and puts
+/// Pause and Stop where the user can reach them. That is the whole requirement, and it is a product
+/// requirement rather than a courtesy: a program moving someone's cursor with no visible statement of
+/// what it is doing is the shape this feature must never take.
+///
+/// **No wireframe** — the founder put row I's UI on session judgment on 2026-08-14, with a dedicated
+/// whole-product UI/UX pass before release. Built to System B's tokens and to the panels around it,
+/// deliberately plainly, and a candidate for that pass rather than a finished design.
+private struct WidgetControllingPanel: View {
+    let progress: VisionSessionProgress
+    let onPause: () -> Void
+    let onStop: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                // Amber, not the failure red: this is Sonny doing something unusual, not something
+                // going wrong — the same distinction the approval panel's escalation line draws.
+                Image(systemName: "cursorarrow.rays")
+                    .font(.system(size: 12))
+                    .foregroundStyle(WidgetTheme.secondaryCircular)
+
+                (Text("Sonny is controlling ").font(WidgetType.caption)
+                    + Text(progress.appDisplayName).font(WidgetType.captionMedium))
+                    .foregroundStyle(WidgetTheme.textFull)
+                    .lineLimit(1)
+            }
+
+            Text(progress.currentAction)
+                .font(WidgetType.captionSmall)
+                .foregroundStyle(WidgetTheme.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                Text("Step \(progress.iteration) of \(progress.maximumIterations)")
+                    .font(WidgetType.captionSmall)
+                    .foregroundStyle(WidgetTheme.textMuted)
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                Button(action: onPause) {
+                    Text("Pause")
+                        .font(WidgetType.captionMedium)
+                        .foregroundStyle(WidgetTheme.textFull)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .frame(height: 23)
+                .widgetCircularBackground()
+                .accessibilityLabel("Pause Sonny controlling \(progress.appDisplayName)")
+
+                Button(action: onStop) {
+                    Text("Stop")
+                        .font(WidgetType.captionMedium)
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .frame(height: 23)
+                .widgetCircularBackground(tint: WidgetTheme.errorGlyph)
+                .accessibilityLabel("Stop Sonny controlling \(progress.appDisplayName)")
+            }
+
+            // The hotkey, said once and quietly. During a session the pointer is not the user's to
+            // aim, so the keyboard is the one input path that is reliably theirs — and a control
+            // nobody knows about is not a control.
+            Text("\(EmergencyStopHotKey.displayName) stops it from anywhere.")
+                .font(WidgetType.captionSmall)
+                .foregroundStyle(WidgetTheme.textMuted)
         }
     }
 }

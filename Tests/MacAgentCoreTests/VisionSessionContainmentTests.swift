@@ -168,6 +168,13 @@ struct VisionSessionContainmentTests {
 
     // MARK: - Every refusal is legible
 
+    /// **The §13.5 reason taxonomy, pinned as a whole** (SONNY-95).
+    ///
+    /// Every way a session can end has its own code and its own sentence, and the codes are
+    /// distinct — a record that said `user_stopped` for a revoked permission would be a record that
+    /// misleads whoever reads it months later. Listed exhaustively rather than sampled, and the
+    /// count is asserted, so a new ending has to come here and choose a code rather than silently
+    /// borrowing one.
     @Test
     func everyRefusalCarriesADistinctReasonCodeAndANonEmptySentence() {
         let refusals: [VisionContainmentRefusal] = [
@@ -179,8 +186,30 @@ struct VisionSessionContainmentTests {
             .actionTypeNotAllowed("launch_missiles"),
             .approvalDeclined(action: "Click Delete"),
             .approvalRefusedByPolicy(action: "Click Send"),
-            .captureSendDeclined
+            .captureSendDeclined,
+            .approvalNotPresentable,
+            .permissionRevoked
         ]
+        #expect(refusals.count == 11)
+
+        // The two §13.5 names the spec calls out by hand, so a rename fails here rather than in a
+        // record nobody reads until they need it.
+        #expect(VisionContainmentRefusal.cancelled.reasonCode == "user_stopped")
+        #expect(VisionContainmentRefusal.permissionRevoked.reasonCode == "permission_revoked")
+
+        // Control lost for any reason is one invariant with distinct codes — the codes differ, the
+        // handling does not.
+        #expect(VisionContainmentRefusal.permissionRevoked.reasonCode != VisionContainmentRefusal.cancelled.reasonCode)
+        #expect(VisionContainmentRefusal.permissionRevoked.userFacingReason.contains("Permission Center"))
+
+        // Every attention state contributes its own sentence to the pause copy, so a paused session
+        // never says the wrong reason.
+        for state in [SessionAttentionState.screenLocked, .displayAsleep, .userIdle, .userPaused] {
+            #expect(
+                VisionContainmentRefusal.attentionLost(state).userFacingReason.contains(state.userFacingReason),
+                "\(state)"
+            )
+        }
         let codes = refusals.map(\.reasonCode)
         #expect(Set(codes).count == codes.count, "reason codes must be distinct: \(codes)")
         for refusal in refusals {

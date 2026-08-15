@@ -16,6 +16,14 @@ public enum SessionAttentionState: String, Equatable, Sendable {
     case screenLocked = "screen_locked"
     case displayAsleep = "display_asleep"
     case userIdle = "user_idle"
+    /// The user pressed Pause on the HUD.
+    ///
+    /// **A `SessionAttentionState` rather than a separate mechanism**, because it wants exactly the
+    /// same behaviour: freeze the loop, capture nothing, synthesize nothing, and wait for an explicit
+    /// resume. Sharing the machinery is SONNY-95's own instruction ("shares the session-attention
+    /// pause machinery") and it means there is one paused state to reason about rather than two that
+    /// have to agree.
+    case userPaused = "user_paused"
 
     public var isAttended: Bool { self == .attended }
 
@@ -29,6 +37,8 @@ public enum SessionAttentionState: String, Equatable, Sendable {
             return "your display went to sleep"
         case .userIdle:
             return "you have been away for a while"
+        case .userPaused:
+            return "you paused it"
         }
     }
 }
@@ -61,6 +71,46 @@ public struct AlwaysAttendedMonitor: SessionAttentionMonitoring {
     public func attentionState() async -> SessionAttentionState { .attended }
 }
 
+/// The user's own Pause, layered over whatever else is watching.
+///
+/// A wrapper rather than a fourth condition inside `SystemSessionAttentionMonitor`, because the two
+/// answer to different things: that one reads the OS, this one reads a button. Composing them keeps
+/// each honest about what it knows, and means the HUD's Pause reaches the loop through exactly the
+/// path a locked screen does — one paused state, not two that have to agree.
+public final class UserPausableAttentionMonitor: SessionAttentionMonitoring, @unchecked Sendable {
+    private let base: any SessionAttentionMonitoring
+    private let lock = NSLock()
+    private var paused = false
+
+    public init(base: any SessionAttentionMonitoring) {
+        self.base = base
+    }
+
+    public func pause() {
+        lock.withLock { paused = true }
+    }
+
+    /// Cleared by the resume path, so a resumed session does not immediately re-pause on a stale
+    /// flag. The loop re-checks the *base* monitor after a resume regardless, which is what keeps
+    /// "resumed while still locked" pausing again.
+    public func clearPause() {
+        lock.withLock { paused = false }
+    }
+
+    public func attentionState() async -> SessionAttentionState {
+        if lock.withLock({ paused }) {
+            return .userPaused
+        }
+        return await base.attentionState()
+    }
+
+    public func canPresentApproval() async -> Bool {
+        // A user who paused is present by definition — pausing is something only someone at the Mac
+        // does — so presentability follows the base monitor alone.
+        await base.canPresentApproval()
+    }
+}
+
 // MARK: - Refusals
 
 /// Why the containment layer stopped a session, or declined one action within it.
@@ -82,6 +132,14 @@ public enum VisionContainmentRefusal: Equatable, Sendable {
     /// A tier-3 approval came due while the Mac was locked. §13.1's condition, as a refusal: an
     /// approval nobody can see is not an approval, and running without one is not an option.
     case approvalNotPresentable
+    /// Control was lost: the Accessibility grant Sonny needs to synthesize input went away
+    /// mid-session — System Settings, an MDM push, or an OS re-prompt.
+    ///
+    /// **The same stop path as a manual emergency stop, deliberately.** §13.5's invariant is "control
+    /// was lost, for any reason" — one implementation, distinct reason codes. A revocation that had
+    /// its own bespoke teardown would be a second stop path, and the second stop path is always the
+    /// one that turns out not to release the mouse button.
+    case permissionRevoked
 
     /// The sentence the run summary and the transcript carry. Honest about which boundary fired —
     /// "Sonny stopped because you locked your Mac" and "Sonny stopped because it ran out of steps"
@@ -110,6 +168,9 @@ public enum VisionContainmentRefusal: Equatable, Sendable {
             return "You chose not to send this screenshot, so the session stopped."
         case .approvalNotPresentable:
             return "Sonny needed to ask you about a step, and your Mac was locked. It stopped rather than acting without an answer."
+        case .permissionRevoked:
+            return "Sonny stopped because its permission to control your Mac was turned off. "
+                + "Turn Accessibility back on in the Permission Center to use screen control again."
         }
     }
 
@@ -127,6 +188,7 @@ public enum VisionContainmentRefusal: Equatable, Sendable {
         case .approvalRefusedByPolicy: return "approval_refused"
         case .captureSendDeclined: return "capture_send_declined"
         case .approvalNotPresentable: return "approval_not_presentable"
+        case .permissionRevoked: return "permission_revoked"
         }
     }
 }
@@ -173,17 +235,20 @@ public struct VisionSessionContainment: Sendable {
     public let target: ScreenControlVerdict
     private let policy: RiskApprovalPolicy
     private let attentionMonitor: any SessionAttentionMonitoring
+    private let permissionChecker: any ScreenCapturePermissionChecking
 
     public init(
         target: ScreenControlVerdict,
         limits: VisionSessionLimits = .default,
         policy: RiskApprovalPolicy = .default,
-        attentionMonitor: any SessionAttentionMonitoring = AlwaysAttendedMonitor()
+        attentionMonitor: any SessionAttentionMonitoring = AlwaysAttendedMonitor(),
+        permissionChecker: any ScreenCapturePermissionChecking = SystemScreenCapturePermissionChecker()
     ) {
         self.target = target
         self.limits = limits
         self.policy = policy
         self.attentionMonitor = attentionMonitor
+        self.permissionChecker = permissionChecker
     }
 
     // MARK: Per-iteration boundaries
@@ -204,6 +269,16 @@ public struct VisionSessionContainment: Sendable {
         }
         guard iteration <= limits.maximumIterations else {
             return .iterationCapReached(cap: limits.maximumIterations)
+        }
+        // **Polled, because macOS pushes no reliable revocation callback.** Defense in depth rather
+        // than the primary mechanism: revoking Accessibility usually kills event synthesis anyway,
+        // and the point of noticing is to stop with an honest sentence and a route to fix it rather
+        // than to grind out iterations whose clicks silently go nowhere.
+        //
+        // Ahead of the attention check on purpose: a user who revoked the grant while also being
+        // away is owed the actionable reason, not the one that resolves itself when they sit down.
+        guard permissionChecker.isAccessibilityTrusted() else {
+            return .permissionRevoked
         }
         let attention = await attentionMonitor.attentionState()
         guard attention.isAttended else {
