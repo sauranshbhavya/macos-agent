@@ -92,19 +92,43 @@ public enum ScreenControlPolicy {
     /// on a Mac with Warp or Ghostty installed. The founder's own wording ("extensible") is what
     /// this list is; adding an entry is a one-line change with no other moving part.
     ///
-    /// **Evidence, stated honestly.** `com.apple.Terminal` was read off
-    /// `/System/Applications/Utilities/Terminal.app/Contents/Info.plist` on the development machine
-    /// at `25fb29c`; it is the only one of these installed there. Every other identifier comes from
-    /// its project's published bundle configuration, not from a bundle inspected on this machine. A
-    /// wrong identifier here fails *open* — it protects nothing — which is exactly why the entries
-    /// are listed rather than pattern-matched, and why a correction is cheap.
+    /// **Evidence, split by how it was obtained — one verified, nine not.**
     ///
-    /// **What this list cannot do, said plainly rather than discovered later.** It bans terminal
-    /// *applications*. It does not and cannot ban a shell embedded inside an app that is not one —
-    /// VS Code's integrated terminal, a JetBrains run console, a notebook cell. Nothing in an app's
-    /// bundle identity distinguishes "has a shell inside it" from "does not", so no static list
-    /// reaches that case; row I's in-loop model-side recognition is where that risk is addressed,
-    /// as defense in depth, and it is not claimed here as a guarantee.
+    /// - **Verified from a bundle on this machine (1):** `com.apple.terminal`, read off
+    ///   `/System/Applications/Utilities/Terminal.app/Contents/Info.plist` on the development
+    ///   machine at `25fb29c`. It is the only entry here that is installed there.
+    /// - **From each project's published bundle configuration, not inspected on any machine (9):**
+    ///   iTerm2, Warp, Ghostty, kitty, Alacritty, WezTerm, Hyper, Tabby, Terminus.
+    ///
+    /// The split is recorded rather than averaged into "these are the terminal identifiers" because
+    /// the two claims have different strengths and a reader deciding whether to trust an entry
+    /// deserves to know which kind it is. A wrong identifier fails *open* — it protects nothing
+    /// rather than banning something wrongly — which is why the entries are listed rather than
+    /// pattern-matched, and why a correction is cheap. `theEvidenceSplitMatchesTheList` fails if
+    /// this list changes without this record changing with it.
+    ///
+    /// ## What this list cannot do — two gaps, both real, said plainly rather than discovered later
+    ///
+    /// **1. A terminal nobody listed is controllable.** This is a *name*-based deny list, and a
+    /// name-based deny list is never complete: a terminal emulator released tomorrow, or shipped
+    /// today under an identifier no one here thought of, is not on it and Sonny will control it. The
+    /// categorical rule the founder ratified — "terminals are never controllable" — is therefore
+    /// enforced by an enumeration that cannot in principle be exhaustive, and that gap does not
+    /// close by adding entries; it only narrows. Nothing about this is a defect in the list. It is
+    /// what a deny list *is*, stated so nobody later reads a passing test suite as proof of the
+    /// categorical claim. **Filed as its own ticket (SONNY-102) rather than left implied** — the
+    /// alternatives to enumeration (a heuristic on bundle metadata, an allow-list inversion, an
+    /// AX-tree signal) are real design work with real costs, and they are not row I's.
+    ///
+    /// **2. A shell inside an app that is not a terminal is controllable.** VS Code's integrated
+    /// terminal, a JetBrains run console, a notebook cell. Nothing in an app's bundle identity
+    /// distinguishes "has a shell inside it" from "does not", so no static list reaches that case at
+    /// all — this one does not even narrow with more entries.
+    ///
+    /// Row I's in-loop model-side recognition is where both risks are actually addressed, as defense
+    /// in depth. It is not claimed here as a guarantee, and it must never become the load-bearing
+    /// check: a static comparison cannot be talked out of its answer by anything on screen, and that
+    /// is the whole reason this list is what the ban rests on.
     public static let terminalBundleIdentifiers: Set<String> = [
         "com.apple.terminal",          // Terminal (macOS)
         "com.googlecode.iterm2",       // iTerm2

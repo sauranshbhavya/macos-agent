@@ -77,6 +77,61 @@ struct ScreenControlEligibilityTests {
         #expect(ScreenControlPolicy.verdict(for: Self.app("iTerm", "com.googlecode.iterm2")).refusal == .terminal)
     }
 
+    /// **The evidence split, pinned so the record cannot drift from the list.**
+    ///
+    /// The founder ratified the ten-entry list on the condition that the record says which single
+    /// identifier was verified from a bundle on this machine and which nine came from published
+    /// project configuration. That is a claim about the list's *contents*, so it rots the moment
+    /// someone appends an eleventh entry and leaves the doc comment alone — which is exactly the
+    /// failure mode a comment cannot defend against and a test can. Adding or removing an entry
+    /// fails here until the evidence record is updated with it.
+    @Test
+    func theEvidenceSplitMatchesTheList() {
+        // Verified on the development machine at `25fb29c`, from the bundle's own Info.plist.
+        let verifiedOnThisMachine: Set<String> = ["com.apple.terminal"]
+        // Taken from each project's published bundle configuration; no bundle was inspected.
+        let fromPublishedConfiguration: Set<String> = [
+            "com.googlecode.iterm2",
+            "dev.warp.warp-stable",
+            "com.mitchellh.ghostty",
+            "net.kovidgoyal.kitty",
+            "org.alacritty",
+            "com.github.wez.wezterm",
+            "co.zeit.hyper",
+            "org.tabby",
+            "org.eugeny.terminus"
+        ]
+
+        #expect(verifiedOnThisMachine.count == 1)
+        #expect(fromPublishedConfiguration.count == 9)
+        #expect(verifiedOnThisMachine.isDisjoint(with: fromPublishedConfiguration))
+        #expect(
+            verifiedOnThisMachine.union(fromPublishedConfiguration) == ScreenControlPolicy.terminalBundleIdentifiers,
+            "the deny list and the evidence record in its doc comment have diverged"
+        )
+    }
+
+    /// **A name-based deny list is never complete, and the record says so.**
+    ///
+    /// Asserted as behaviour rather than left to prose: a terminal emulator nobody listed *is*
+    /// controllable, and this test is the executable statement of that. It is deliberately not a
+    /// failing test or a TODO — the gap is inherent to enumeration, does not close by adding
+    /// entries, and closing it properly is SONNY-102's design work rather than row I's. What this
+    /// pins is that nobody later reads a green suite as proof of the categorical claim.
+    @Test
+    func aTerminalNobodyListedIsControllableAndThatIsTheKnownGap() {
+        let unlisted = Self.app("Brand New Terminal", "com.example.brandnewterm")
+        let verdict = ScreenControlPolicy.verdict(for: unlisted)
+
+        #expect(verdict.isEligible, "an unlisted terminal is controllable — the enumeration gap, stated")
+        #expect(verdict.refusal == nil)
+
+        // And the gap narrows, never closes, by adding entries: the same app named by a listed
+        // identifier is refused, which is the only lever the list has.
+        let listed = Self.app("Brand New Terminal", "com.apple.Terminal")
+        #expect(ScreenControlPolicy.verdict(for: listed).refusal == .terminal)
+    }
+
     /// Launch Services treats bundle identifiers case-insensitively, and a string carried through a
     /// run picks up whitespace and decomposed Unicode forms. Each of those is a way to spell
     /// `com.apple.Terminal` that must not evade the check.
