@@ -617,6 +617,12 @@ final class AgentViewModel: ObservableObject {
     /// `FloatingWidgetView`'s private `state`/`showsPanel` precedence exactly — keep both in sync if
     /// either changes.
     var hasVisibleWidgetPanel: Bool {
+        // Row I's Safe-mode capture review, first for the same reason the three below it are
+        // unconditional: it is a parked continuation waiting on a human, and a session whose
+        // question the widget declined to render would simply hang.
+        if visionCapturePreview != nil {
+            return true
+        }
         if approvalRequest != nil {
             return true
         }

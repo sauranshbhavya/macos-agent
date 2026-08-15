@@ -416,6 +416,35 @@ struct VisionSessionRunTests {
         #expect(fixture.synthesizer.clickCount == 1)
     }
 
+    /// **The widget must render the capture question, or a Safe-mode session hangs.**
+    ///
+    /// `hasVisibleWidgetPanel` is the single source of truth for both the widget's panel and
+    /// `FloatingWidgetWindowController`'s compositing decision, so a parked continuation the panel
+    /// declines to show is a session suspended with nothing on screen able to answer it. Pinned
+    /// beside the other three unconditional states for the same reason they are.
+    @Test
+    func theWidgetPanelIsVisibleWhileACaptureIsWaitingToBeReviewed() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"Done."}"#],
+            mode: .safe
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "look", appName: "Safari")
+        try await waitUntil("the session-envelope approval") { fixture.viewModel.approvalRequest != nil }
+        fixture.viewModel.start()
+        try await waitUntil("the capture preview") { fixture.viewModel.visionCapturePreview != nil }
+
+        #expect(fixture.viewModel.hasVisibleWidgetPanel)
+        // And the composer stays closed while the question is open, so a user cannot start a second
+        // task on top of a suspended session.
+        #expect(fixture.viewModel.isRunning)
+
+        fixture.viewModel.resolveVisionCapturePreview(allowing: true)
+        try await waitForIdle(fixture.viewModel)
+        #expect(fixture.viewModel.visionCapturePreview == nil)
+    }
+
     /// Declining the capture ends the session — there is no next step that does not begin with
     /// sending one.
     @Test

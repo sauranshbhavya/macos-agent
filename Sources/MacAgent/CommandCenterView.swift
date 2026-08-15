@@ -3703,6 +3703,38 @@ private struct SettingsSecurityAccessPage: View {
                 .padding(.vertical, 16)
             }
             .padding(.top, 24)
+            .padding(.bottom, 16)
+
+            SettingsDivider()
+
+            // Row I (SONNY-92), and it carries more weight than its size suggests: with per-app
+            // control consent deleted by the founder on 2026-08-14, this is the **only** place the
+            // product states how far screen control reaches. There is no grant list, because there
+            // are no grants; there is no revoke, because there is nothing to revoke. What a user
+            // can act on is knowing the reach and knowing the one boundary — so both are stated
+            // plainly, and neither is a toggle pretending to be a choice.
+            SettingsSectionBlock(title: "Screen Control") {
+                VStack(alignment: .leading, spacing: 14) {
+                    SettingsControlLabel(
+                        title: "Which apps Sonny can control",
+                        detail: "Once Screen Recording and Accessibility are granted, Sonny can control any app installed on this Mac — clicking, typing and scrolling in it the way you would. It says which app it is controlling while it does, and you can stop it at any time."
+                    )
+
+                    SettingsDivider()
+
+                    SettingsControlLabel(
+                        title: "Terminals, never",
+                        detail: "Sonny will never control Terminal, iTerm, or any other terminal app. Anything typed into one runs with your full account authority, outside every permission Sonny has — so this is not something you can turn on."
+                    )
+
+                    SettingsControlLabel(
+                        title: "What leaves your Mac",
+                        detail: "To act in an app, Sonny takes a picture of that app's window and sends it to its vision model. Passwords, keys and codes it can recognise are blacked out first. In Safe mode you see each picture before it is sent."
+                    )
+                }
+                .padding(.vertical, 16)
+            }
+            .padding(.top, 24)
         }
         .frame(maxWidth: 760, alignment: .topLeading)
         .onAppear {

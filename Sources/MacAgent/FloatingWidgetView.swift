@@ -14,6 +14,16 @@ private enum WidgetState {
     case working
     case clarification(String)
     case permission(RiskApprovalRequest)
+    /// Safe mode is about to send a screenshot of an app, and is showing it first (row I, SONNY-92;
+    /// founder decision 2, 2026-08-14).
+    ///
+    /// A seventh state rather than a variant of `.permission`, because it is answering a different
+    /// question — "may this leave your Mac" rather than "may Sonny do this" — and because its own
+    /// controls are Send/Don't send, not Allow/Deny. It sits above `.permission` in the precedence
+    /// below for the reason every precedence here exists: it is a parked continuation, so a state
+    /// that outranked it would leave a Safe-mode session suspended with nothing on screen able to
+    /// answer it.
+    case captureReview(VisionCapturePreview)
     case result(String, RunSuggestion?)
     case failure(String)
 }
@@ -160,7 +170,7 @@ struct FloatingWidgetView: View {
             return true
         case .working:
             return viewModel.activeTaskOrigin != .widget
-        case .permission, .clarification:
+        case .permission, .clarification, .captureReview:
             return false
         }
     }
@@ -225,6 +235,9 @@ struct FloatingWidgetView: View {
     }
 
     private var state: WidgetState {
+        if let preview = viewModel.visionCapturePreview {
+            return .captureReview(preview)
+        }
         if let approvalRequest = viewModel.approvalRequest {
             return .permission(approvalRequest)
         }
@@ -252,13 +265,17 @@ struct FloatingWidgetView: View {
         case .working: return 1
         case .clarification: return 2
         case .permission: return 3
+        case .captureReview: return 6
         case .result: return 4
         case .failure: return 5
         }
     }
 
     private var isTaskInFlight: Bool {
-        viewModel.isRunning || viewModel.isAwaitingApproval || viewModel.clarificationQuestion != nil
+        viewModel.isRunning
+            || viewModel.isAwaitingApproval
+            || viewModel.clarificationQuestion != nil
+            || viewModel.visionCapturePreview != nil
     }
 
     private func submit() {
@@ -427,6 +444,12 @@ private extension FloatingWidgetView {
                 safeMode: viewModel.interactionMode == .safe,
                 onAllow: { viewModel.start() },
                 onDeny: { viewModel.cancelCurrentRun() }
+            )
+        case .captureReview(let preview):
+            WidgetCaptureReviewPanel(
+                preview: preview,
+                onSend: { viewModel.resolveVisionCapturePreview(allowing: true) },
+                onDecline: { viewModel.resolveVisionCapturePreview(allowing: false) }
             )
         case .result(let summary, let suggestion):
             WidgetResultPanel(
@@ -661,6 +684,91 @@ private struct WidgetPermissionPanel: View {
                 }
                 .buttonStyle(.plain)
                 .frame(width: 23, height: 23)
+                .widgetCircularBackground(tint: WidgetTheme.allowAction)
+            }
+        }
+    }
+}
+
+// MARK: - Safe-mode capture review (no wireframe — best-effort, per founder decision 5)
+
+/// What Sonny is about to send, shown before it is sent.
+///
+/// Safe mode only. Founder decision 5 (2026-08-14) put row I's UI on session judgment with no
+/// wireframe gate, and a dedicated whole-product UI/UX pass before release — so this is built to
+/// System B's tokens and to the panels around it, deliberately plainly, and it is a candidate for
+/// that pass rather than a finished design.
+///
+/// **The thumbnail is the redacted bytes, not the original.** Showing the user one picture and
+/// sending another would make the preview a lie about the thing it previews, which is the whole
+/// reason a pre-send preview exists.
+private struct WidgetCaptureReviewPanel: View {
+    let preview: VisionCapturePreview
+    let onSend: () -> Void
+    let onDecline: () -> Void
+
+    /// One line naming what redaction found and covered, or nothing when it found nothing.
+    ///
+    /// "Nothing found" is deliberately left unsaid rather than stated as a reassurance: redaction
+    /// covers the classes `SecretTextDetector` knows about, and a cheerful "no secrets found" would
+    /// read as a guarantee about the whole screenshot that no detector can make.
+    private var redactionLine: String? {
+        guard !preview.redactionReport.isEmpty else { return nil }
+        let total = preview.redactionReport.reduce(0) { $0 + $1.count }
+        return total == 1
+            ? "1 possible secret was blacked out before this was prepared."
+            : "\(total) possible secrets were blacked out before this was prepared."
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Sonny wants to send this picture of \(preview.appDisplayName) to its vision model.")
+                .font(WidgetType.caption)
+                .foregroundStyle(WidgetTheme.textFull)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let data = preview.redactedPNGData, let image = NSImage(data: data) {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: 160)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .accessibilityLabel("Screenshot of \(preview.appDisplayName) that Sonny is about to send")
+            }
+
+            if let redactionLine {
+                Text(redactionLine)
+                    .font(WidgetType.captionSmall)
+                    .foregroundStyle(WidgetTheme.secondaryCircular)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 8) {
+                Text("Step \(preview.iteration) of \(preview.appDisplayName)")
+                    .font(WidgetType.captionSmall)
+                    .foregroundStyle(WidgetTheme.textMuted)
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                Button(action: onDecline) {
+                    Text("Don\u{2019}t send")
+                        .font(WidgetType.captionMedium)
+                        .foregroundStyle(WidgetTheme.textFull)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .frame(height: 23)
+                .widgetCircularBackground()
+
+                Button(action: onSend) {
+                    Text("Send")
+                        .font(WidgetType.captionMedium)
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .frame(height: 23)
                 .widgetCircularBackground(tint: WidgetTheme.allowAction)
             }
         }
