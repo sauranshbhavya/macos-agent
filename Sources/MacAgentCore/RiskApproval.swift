@@ -260,6 +260,9 @@ public struct RiskApprovalConsent: Codable, Equatable, Sendable {
         /// was this file's own first mistake.** For the two to disagree on an outcome, a consent
         /// would need a tier-3 ceiling with an empty acknowledged set. No adapter can produce that
         /// assessment: no `defaultTier` anywhere can reach tier 3, while all eleven
+        /// (**this phrase has two copies — the other is on `requirement(for:context:)` below, and
+        /// row I corrected only this one, leaving them disagreeing at `6c3e4ad`; PR #50 review, F6.
+        /// Any future re-count has to move both**)
         /// `CapabilityRiskEscalation` construction sites target tier 3 (the eight counted at
         /// `04ce7e4`, plus SONNY-98's whitelist-root widening, plus row I's two — the vision
         /// session's envelope escalation and its per-action one; re-swept at `7f66300`) and each
@@ -616,7 +619,7 @@ public extension RiskApprovalPolicy {
     ///
     /// - Any escalation whose class asks first (destructive, affects-others) asks, **at every
     ///   tier that can run**. On tiers 0–2 that term is unreachable through any adapter today —
-    ///   all nine construction sites target tier 3, so a derived `effectiveTier` at or below 2
+    ///   all eleven construction sites target tier 3, so a derived `effectiveTier` at or below 2
     ///   means no escalation fired — but the rule is "asks when destructive", not "asks when
     ///   destructive and the tier arithmetic agrees", so the term is written where the rule puts
     ///   it and pinned by a hand-built test. The day an escalation targets tier 2 (a possibility
