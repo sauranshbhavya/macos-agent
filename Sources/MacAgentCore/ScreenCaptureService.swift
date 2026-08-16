@@ -92,19 +92,37 @@ public struct CapturedWindowImage: Equatable, Sendable {
     public var pixelHeight: Int
     public var bundleIdentifier: String
     public var windowTitle: String?
+    /// The captured window's identifier, and its frame in global (top-left origin) points **at the
+    /// moment of capture**.
+    ///
+    /// Added by row I, and only row I reads them: an acting loop has to translate a point the model
+    /// picked *in the image* back to a point on the screen, and it cannot do that from pixel
+    /// dimensions alone. `windowID` is what lets the loop re-read the frame immediately before it
+    /// synthesizes anything — the frame here is already stale by the time a model has answered, and
+    /// clicking through a stale frame is how a click lands somewhere nobody chose.
+    ///
+    /// Non-defaulted in the initializer on purpose. Both are only meaningful for a real capture of a
+    /// real window, and a defaulted `.zero` frame would be a plausible-looking value that silently
+    /// maps every image point onto the top-left corner of the screen.
+    public var windowID: UInt32
+    public var windowFrame: CGRect
 
     public init(
         pngData: Data,
         pixelWidth: Int,
         pixelHeight: Int,
         bundleIdentifier: String,
-        windowTitle: String?
+        windowTitle: String?,
+        windowID: UInt32,
+        windowFrame: CGRect
     ) {
         self.pngData = pngData
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
         self.bundleIdentifier = bundleIdentifier
         self.windowTitle = windowTitle
+        self.windowID = windowID
+        self.windowFrame = windowFrame
     }
 }
 
@@ -218,7 +236,9 @@ public struct ScreenCaptureService: Sendable {
             pixelWidth: image.pixelWidth,
             pixelHeight: image.pixelHeight,
             bundleIdentifier: bundleIdentifier,
-            windowTitle: chosen.title
+            windowTitle: chosen.title,
+            windowID: chosen.windowID,
+            windowFrame: chosen.frame
         )
     }
 }

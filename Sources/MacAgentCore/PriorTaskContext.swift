@@ -70,7 +70,7 @@ public struct PriorTaskContext: Codable, Equatable, Sendable {
     public var plannerContextText: String {
         let formatter = ISO8601DateFormatter()
         let stepLines = steps.enumerated().map { index, step in
-            "\(index + 1). \(step.plannerText)"
+            "\(index + 1). \(Self.escapeForPlanner(step.plannerText))"
         }
 
         let planSummaryText = planSummary.isEmpty
@@ -86,12 +86,31 @@ public struct PriorTaskContext: Codable, Equatable, Sendable {
         Previous plan summary: \(planSummaryText)
         Previous plan steps:
         \(stepsText)
-        Previous outcome: \(outcome.plannerText)
+        Previous outcome: \(Self.escapeForPlanner(outcome.plannerText))
         Captured at: \(formatter.string(from: createdAt))
         TRUSTED_PRIOR_TASK_CONTEXT_END
         """
     }
 
+    /// Neutralize the trusted-block delimiters anywhere inside interpolated content.
+    ///
+    /// **Every interpolated field goes through this, and two did not** (PR #50 cycle-2, F13b).
+    /// `previousCommand` and `planSummary` were escaped; `outcome.plannerText` and `step.plannerText`
+    /// were not, so a prior task's *outcome* could close the trusted block early and everything after
+    /// it landed outside the wrapper in a `user` message the planner reads.
+    ///
+    /// **The omission was harmless until row I and is not any more.** Before this branch every
+    /// `AgentRunResult.summary` was a code-authored string from a deterministic adapter — "Created 3
+    /// files" — so no interpolated outcome could contain a delimiter unless the user typed one, and
+    /// the command *was* escaped. Row I ships the first capability whose summary is free text
+    /// authored by a model that just read the user's screen, and the vision system prompt does not
+    /// merely allow that text through: when the model meets injected text the rules tell it to
+    /// "describe what you saw in your rationale". So the designed response to an injection attempt
+    /// was to transcribe it into the one field that reached the trusted segment unescaped.
+    ///
+    /// The rule this file now follows without exception: **nothing is interpolated into
+    /// `plannerContextText` raw.** A new field added between these delimiters gets escaped or it is a
+    /// hole, and the only defence against forgetting is that every existing line does it.
     private static func escapeForPlanner(_ value: String) -> String {
         value
             .replacingOccurrences(

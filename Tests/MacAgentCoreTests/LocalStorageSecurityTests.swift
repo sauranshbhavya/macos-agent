@@ -341,12 +341,15 @@ struct LocalStorageSecurityTests {
     /// The wipe's reach, pinned by count and by name. Relocated here from the deleted ledger
     /// suite (PR #49 N4): the ninth store's own `urls.count == 9` pin died with it, and without
     /// a successor a store added to the app but forgotten from this list would vanish from the
-    /// wipe silently. Eight stores is the current whole population.
+    /// wipe silently. Nine stores is the current whole population, since row I's action journal.
     @Test
-    func theWipeReachesExactlyTheEightLocalStores() {
+    func theWipeReachesExactlyTheNineLocalStores() {
         let urls = LocalDataDeletionService.defaultStoreFileURLs()
-        #expect(urls.count == 8)
+        #expect(urls.count == 9)
         let fileNames = Set(urls.map(\.lastPathComponent))
+        // Nine since row I: `vision-sessions.json` is the action journal (SONNY-96). A wipe that
+        // left a record of every click Sonny made inside the user's apps would be the loudest
+        // possible failure of a privacy wipe.
         #expect(fileNames == [
             "routines.json",
             "workspaces.json",
@@ -355,7 +358,8 @@ struct LocalStorageSecurityTests {
             "snippets.json",
             "recent-artifacts.json",
             "shortcuts-run-history.json",
-            "task-history.json"
+            "task-history.json",
+            "vision-sessions.json"
         ])
     }
 }
@@ -532,13 +536,16 @@ private func assertTaskHistoryMigration(root: URL, encryption: LocalStorageEncry
     try expectEncryptedFile(url, hiding: marker)
 }
 
-private func testEncryption() -> LocalStorageEncryption {
+/// Internal rather than file-private since row I: `VisionSessionJournalTests` pins the ninth
+/// store's pattern conformance and needs the same two helpers. Sharing them is the point — a second
+/// copy would be a second definition of "encrypted on disk" that could drift from this one.
+func testEncryption() -> LocalStorageEncryption {
     LocalStorageEncryption(
         keyManager: FixedLocalStorageKeyManager(bytes: Data(repeating: 0x42, count: 32))
     )
 }
 
-private func expectEncryptedFile(_ url: URL, hiding plaintext: String) throws {
+func expectEncryptedFile(_ url: URL, hiding plaintext: String) throws {
     let raw = try Data(contentsOf: url)
     #expect(raw.starts(with: LocalStorageEncryption.fileHeader))
     #expect(raw.range(of: Data(plaintext.utf8)) == nil)
