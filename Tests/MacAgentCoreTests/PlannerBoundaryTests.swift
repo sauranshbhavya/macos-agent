@@ -110,7 +110,8 @@ struct PlannerBoundaryTests {
             "draftTitle",
             "draftContent",
             "shortcutName",
-            "shortcutInput"
+            "shortcutInput",
+            "visionGoal"
         ])
 
         let stepProperties = try #require(stepItems["properties"] as? [String: Any])
@@ -188,12 +189,21 @@ struct PlannerBoundaryTests {
         )
 
         #expect(excluded == emptyToolOperations)
-        #expect(excluded == [
+
+        // **The set is back to one meaning, and the round trip is worth recording.** SONNY-92
+        // built the vision capability with the operation excluded and split this set in two —
+        // resolver-fronted, and Swift-dispatched-only — because that ticket's never-touch list
+        // assigned the goldens to SONNY-93. SONNY-93 gave the planner the word, so the second group
+        // is empty again and the agreement reads as it always did: excluded ⇔ the instant resolver
+        // is the whole of the operation's front door.
+        let resolverFronted: Set<AgentOperation> = [
             .calculateUtility,
             .lookupClipboardHistory,
             .expandSnippet,
             .lookupRecentArtifacts
-        ])
+        ]
+        #expect(excluded == resolverFronted)
+        #expect(!excluded.contains(.visionSession))
 
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("PlannerBoundaryTests-\(UUID().uuidString)", isDirectory: true)
@@ -220,6 +230,25 @@ struct PlannerBoundaryTests {
                 continue
             }
             #expect(plan.steps.map(\.operation) == [operation], "\(command) must resolve to \(operation.rawValue).")
+        }
+
+        // **SONNY-93's "vision-bearing plans come only from the planner", as a pin.** The instant
+        // resolver must not produce a vision step for anything, and the phrasings below are the ones
+        // a reasonable resolver pattern would be most tempted by. Now that the operation is
+        // planner-visible this is the assertion that keeps the second front door closed.
+        for command in [
+            "control Safari",
+            "use Notes to write a note",
+            "click the send button in Discord",
+            "take over Figma",
+            "vision: Safari | go to example.com"
+        ] {
+            if case .plan(let plan)? = resolver.resolve(command: command) {
+                #expect(
+                    !plan.steps.contains { $0.operation == .visionSession },
+                    "the instant resolver must never produce a vision step: \(command)"
+                )
+            }
         }
 
         // The two operations that left the exclusion set: planner-visible and resolver-reachable at
@@ -520,6 +549,12 @@ private let expectedDefaultPlannerDescription = """
   side effects: run Shortcut
   dry run: Show the Shortcut name and input without running it.
   examples: Run my Morning Routine shortcut | Run shortcut Resize Image with input ~/Desktop/photo.png
+- vision_session: Control an app by looking at it
+  description: Last resort, for the part of a request Sonny's other tools cannot express. Sonny looks at the named app's window and decides each click and keystroke from what it sees. Prefer any other tool that does the job precisely. Decompose: emit the steps the precise tools can do, then at most ONE vision_session step for the remainder. Always set appName to the app to control — never leave it out and never expect Sonny to use whatever app happens to be in front; if you cannot name one, ask a clarify question instead. Never target a terminal app; Sonny refuses those. Set visionGoal to what should be accomplished in that app, in one sentence.
+  required fields: appName, visionGoal
+  side effects: Clicks and types inside the named app, as the user would, Sends redacted screenshots of that app's window to Sonny's vision model
+  dry run: Describe the app and the goal; take no screenshot and touch nothing.
+  examples: send a message to Priya in Discord | set the theme to dark in Figma
 - clarify: Ask clarification
   description: Ask a short question when a required folder, app, count, or output destination is missing or ambiguous.
   required fields: question

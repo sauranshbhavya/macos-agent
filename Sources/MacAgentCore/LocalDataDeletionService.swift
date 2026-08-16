@@ -84,6 +84,9 @@ public struct LocalDataDeletionService: @unchecked Sendable {
 
     public static func defaultStoreFileURLs(fileManager: FileManager = .default) -> [URL] {
         [
+            // Row I's action journal. A wipe that left a record of every click Sonny made inside the
+            // user's apps would be the loudest possible failure of a privacy wipe.
+            VisionSessionJournalStore(fileManager: fileManager).fileURL,
             RoutineStore(fileManager: fileManager).fileURL,
             WorkspaceStore(fileManager: fileManager).fileURL,
             ClipboardHistoryStore(fileManager: fileManager).fileURL,

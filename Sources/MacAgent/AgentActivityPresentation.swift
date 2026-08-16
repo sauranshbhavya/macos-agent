@@ -33,6 +33,12 @@ enum AgentActivityPresentation {
             return "Find recent results"
         case .invokeShortcut:
             return "Run \(step.shortcutName ?? "Shortcut")"
+        case .visionSession:
+            // The pinned name when the resolve phase has run, the user's raw word before it. Named
+            // rather than generic ("Control an app") because this string is what the widget shows
+            // while Sonny is moving the real cursor, and the app it is moving it in is the single
+            // most important thing to say.
+            return "Control \(step.resolvedAppName ?? step.appName ?? "app")"
         case .playMedia:
             return "Play \(step.mediaTitle ?? "music")"
         case .scanSelectLargestFiles:

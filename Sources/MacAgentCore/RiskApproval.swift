@@ -93,7 +93,7 @@ public struct RiskApprovalPolicy: Codable, Equatable, Sendable {
     ///
     /// **Demoted from `public` on SONNY-97, deliberately.** Tier-only and context-free, any caller
     /// outside this file would be a second public path to a requirement, bypassing Safe mode and
-    /// every future `ApprovalContext` field (per-app consent lands there on row I). `private`
+    /// every future `ApprovalContext` field. `private`
     /// scopes it to this file, so the compiler — not a convention — is what enforces "exactly one
     /// public function produces a `RiskApprovalRequirement`" (I8).
     private func requirement(for tier: CapabilityRiskTier) -> RiskApprovalRequirement {
@@ -259,9 +259,13 @@ public struct RiskApprovalConsent: Codable, Equatable, Sendable {
         /// SONNY-62 the difference cannot change an authorize/deny outcome, and claiming it could
         /// was this file's own first mistake.** For the two to disagree on an outcome, a consent
         /// would need a tier-3 ceiling with an empty acknowledged set. No adapter can produce that
-        /// assessment: no `defaultTier` anywhere can reach tier 3, while all nine
+        /// assessment: no `defaultTier` anywhere can reach tier 3, while all eleven
+        /// (**this phrase has two copies — the other is on `requirement(for:context:)` below, and
+        /// row I corrected only this one, leaving them disagreeing at `6c3e4ad`; PR #50 review, F6.
+        /// Any future re-count has to move both**)
         /// `CapabilityRiskEscalation` construction sites target tier 3 (the eight counted at
-        /// `04ce7e4` plus SONNY-98's whitelist-root widening; re-swept at `972c62a`) and each
+        /// `04ce7e4`, plus SONNY-98's whitelist-root widening, plus row I's two — the vision
+        /// session's envelope escalation and its per-action one; re-swept at `7f66300`) and each
         /// assessment forwards the escalations of any plan nested inside it — so a tier-3
         /// assessment always carries at least one reason, and a non-empty reason set always means
         /// tier 3.
@@ -271,7 +275,8 @@ public struct RiskApprovalConsent: Codable, Equatable, Sendable {
         /// so required the whole sweep re-run rather than carried — over every `defaultRiskTier`
         /// occurrence and every `CapabilityRiskAssessment` construction site in `Sources/`, rather
         /// than over the adapters that looked relevant; every figure here is the re-measured one.
-        /// All 25 literals are tier 2 or below (7/8/10 across tiers 0/1/2), and the six
+        /// Re-swept again at `7f66300`, when row I's adapter added the twenty-sixth literal.
+        /// All 26 literals are tier 2 or below (7/8/11 across tiers 0/1/2), and the six
         /// `descriptor.defaultRiskTier` forwards each resolve to a `static let` in
         /// `AppWebsiteActionDescriptors` — one of those same literals. **Three**
         /// sites compute the value at assessment time instead of forwarding a literal, not one:
@@ -295,8 +300,8 @@ public struct RiskApprovalConsent: Codable, Equatable, Sendable {
     public var coverage: Coverage
     /// The *requirement* the user actually answered — the third axis (SONNY-97), recorded because
     /// the requirement stopped being a pure function of the tier: first through row C's grants
-    /// (since superseded), now through `ApprovalContext` (Safe mode today, per-app consent on row
-    /// I) and the escalations' consequence classes. A consent given to a lighter ask must never be
+    /// (since superseded), now through `ApprovalContext` (Safe mode) and the escalations'
+    /// consequence classes. A consent given to a lighter ask must never be
     /// spent on a stricter one at equal tier, whatever produced the difference — the axis is
     /// defense-in-depth for every context field that will ever bend the mapping.
     ///
@@ -553,7 +558,16 @@ public struct CapabilityRiskAssessment: Codable, Equatable, Sendable {
 }
 
 /// The authority context an approval requirement is derived under: today, whether the user's Safe
-/// mode is engaged; row I's per-app control consent lands here as a further field.
+/// mode is engaged, and nothing else.
+///
+/// **Row I was expected to add a per-app control consent field here, and does not.** SONNY-91 was
+/// contracted as a durable per-app grant that would land as an `appControlConsent` field this
+/// function maps. The founder superseded that contract on 2026-08-14: Sonny may control any
+/// installed app without asking, so there is no grant, nothing to revoke, and no consent axis for
+/// this struct to carry. The one control-authority rule that survived — terminals are never
+/// controllable — is not a context field either, because it is not a question anyone is asked:
+/// `ScreenControlPolicy` refuses at the target, and the refusal reaches this function the ordinary
+/// way, as a tier-4 assessment that `.refuse`s in every mode.
 ///
 /// This is an input to `RiskApprovalPolicy.requirement(for:context:)` and nothing else — it never
 /// reaches `assessRisk`, so `effectiveTier` remains a pure function of the plan. Threaded
@@ -575,8 +589,10 @@ public struct ApprovalContext: Equatable, Sendable {
     /// asks first, tier 4 still refuses. Safe mode is the cautious user's opt-back-in to being
     /// asked about everything.
     public var safeMode: Bool
-    // Row I's SONNY-91 adds `appControlConsent` HERE, as a field this function maps — never as a
-    // rule applied to the function's return value, which is the post-hoc clamp I8 forbids.
+    // A future authority axis lands HERE, as a field this function maps — never as a rule applied
+    // to the function's return value, which is the post-hoc clamp I8 forbids. (This comment named
+    // row I's `appControlConsent` as the next such field; see the type's doc comment for why that
+    // field was superseded rather than built.)
 
     // Explicit rather than synthesized: the memberwise initializer of a public struct is internal,
     // and `MacAgent` is a separate target.
@@ -588,8 +604,8 @@ public struct ApprovalContext: Equatable, Sendable {
 public extension RiskApprovalPolicy {
     /// The one public path from an assessment to an approval requirement (I8: exactly one public
     /// function produces a `RiskApprovalRequirement`, and no public function takes one and returns
-    /// a different one; per-app consent and every future authority axis lands *here*, as an
-    /// `ApprovalContext` field this mapping reads, never as a rule chained after it).
+    /// a different one; every future authority axis lands *here*, as an `ApprovalContext` field
+    /// this mapping reads, never as a rule chained after it).
     ///
     /// **The consequence rule** (founder directive, 2026-08-13, superseding row C's ratified
     /// scope-conditional relaxation): Sonny asks permission only when an action is *destructive*
@@ -603,7 +619,7 @@ public extension RiskApprovalPolicy {
     ///
     /// - Any escalation whose class asks first (destructive, affects-others) asks, **at every
     ///   tier that can run**. On tiers 0–2 that term is unreachable through any adapter today —
-    ///   all nine construction sites target tier 3, so a derived `effectiveTier` at or below 2
+    ///   all eleven construction sites target tier 3, so a derived `effectiveTier` at or below 2
     ///   means no escalation fired — but the rule is "asks when destructive", not "asks when
     ///   destructive and the tier arithmetic agrees", so the term is written where the rule puts
     ///   it and pinned by a hand-built test. The day an escalation targets tier 2 (a possibility

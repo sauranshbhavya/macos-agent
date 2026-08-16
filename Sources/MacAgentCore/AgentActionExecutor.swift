@@ -92,6 +92,7 @@ public final class AgentActionExecutor {
     private let fileManager: FileManager
     private let now: () -> Date
     private let hotKeyReady: () -> Bool
+    private let visionSession: VisionSessionEnvironment?
 
     public init(
         whitelist: PathWhitelist = PathWhitelist(),
@@ -126,7 +127,12 @@ public final class AgentActionExecutor {
         capabilityRegistry: CapabilityRegistry = .default,
         fileManager: FileManager = .default,
         now: @escaping () -> Date = Date.init,
-        hotKeyReady: @escaping () -> Bool = { true }
+        hotKeyReady: @escaping () -> Bool = { true },
+        // `nil` means this executor has no screen-control wiring, which is the honest state for
+        // `MacAgentCore` on its own and for every test that is not about vision. A vision session
+        // reaching an executor built this way fails loudly with `visionUnavailable` rather than
+        // half-running.
+        visionSession: VisionSessionEnvironment? = nil
     ) {
         self.whitelist = whitelist
         self.inventory = inventory
@@ -163,6 +169,7 @@ public final class AgentActionExecutor {
         self.fileManager = fileManager
         self.now = now
         self.hotKeyReady = hotKeyReady
+        self.visionSession = visionSession
     }
 
     public func prepare(plan: AgentPlan) throws -> PreparedAgentRun {
@@ -593,6 +600,8 @@ public final class AgentActionExecutor {
             return try previewCapability(for: .openWorkspace, plan: plan)
         case .invokeShortcut:
             return try previewCapability(for: .invokeShortcut, plan: plan)
+        case .visionSession:
+            return try previewCapability(for: .visionSession, plan: plan)
         case .chain:
             return try previewChain(plan)
         }
@@ -667,6 +676,8 @@ public final class AgentActionExecutor {
             return try await executeCapability(for: .openWorkspace, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .invokeShortcut:
             return try await executeCapability(for: .invokeShortcut, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+        case .visionSession:
+            return try await executeCapability(for: .visionSession, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         case .chain:
             return try await executeChain(resolvedPlan, preferredBrowser: preferredBrowser, log: log)
         }
@@ -699,6 +710,7 @@ public final class AgentActionExecutor {
         case editWorkspace
         case openWorkspace
         case invokeShortcut
+        case visionSession
         case chain
     }
 
@@ -806,6 +818,8 @@ public final class AgentActionExecutor {
             return .openWorkspace
         case .invokeShortcut:
             return .invokeShortcut
+        case .visionSession:
+            return .visionSession
         case .unsupported:
             throw AgentExecutionError.unsupported("Unsupported operation.")
         }
@@ -914,6 +928,38 @@ public final class AgentActionExecutor {
                 .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
         }
 
+        // **Whole-plan, and that is the entire point of it being here rather than in
+        // `resolveUnitDefaultOutputs` where it started (PR #50 review, F1).**
+        //
+        // A vision step's target may be named by its own `appName` *or* by an app an earlier step in
+        // the same plan put on screen — SONNY-93's contracted inheritance. `segmentPlans(in:)` splits
+        // on workflow, and `open_app` and `vision_session` are different workflows, so a per-unit
+        // resolver is handed a plan containing only the vision step: `precededBy` is always empty,
+        // the inheritance can never fire, and the adapter's clarification then replaced the *whole*
+        // mixed plan. "Open Notes and write my standup there" answered "Which app should Sonny
+        // control?" — after the user had already said Notes.
+        //
+        // The same reasoning `edit_workspace` above is here for: this is the only place an adapter is
+        // handed the whole plan, and a rule about a step's *relationship to other steps* is
+        // unenforceable from inside a single unit.
+        //
+        // The clarification early-return inside the segment loop does not cover this block, so it is
+        // handled explicitly: a vision plan with no resolvable target still fails to a clarification
+        // that replaces the whole plan, which is the never-frontmost rule and must not be lost by
+        // moving the dispatch.
+        if resolvedPlan.steps.contains(where: { $0.operation == .visionSession }) {
+            resolvedPlan = try capabilityRegistry
+                .adapter(for: .visionSession)
+                .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
+            if let clarification = resolvedPlan.steps.first(where: { $0.operation == .clarify }) {
+                return AgentPlan(
+                    summary: resolvedPlan.summary,
+                    requiresConfirmation: false,
+                    steps: [clarification]
+                )
+            }
+        }
+
         return resolvedPlan
     }
 
@@ -1013,6 +1059,9 @@ public final class AgentActionExecutor {
                 .resolveDefaultOutputs(in: resolvedPlan, context: capabilityContext(scope: .unscoped))
         }
 
+        // `vision_session` is deliberately NOT resolved here — see the whole-plan block at the end
+        // of `resolveDefaultOutputs(in:)`. It needs to see steps this unit does not contain.
+
         return resolvedPlan
     }
 
@@ -1075,12 +1124,45 @@ public final class AgentActionExecutor {
 
     private func actionDescription(for plan: AgentPlan, metadata: [CapabilityMetadata]) -> String {
         let summary = plan.summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        let base: String
         if !summary.isEmpty {
-            return summary
+            base = summary
+        } else {
+            let names = unique(metadata.map(\.displayName))
+            base = names.isEmpty ? "Run the prepared plan" : names.joined(separator: ", ")
         }
 
-        let names = unique(metadata.map(\.displayName))
-        return names.isEmpty ? "Run the prepared plan" : names.joined(separator: ", ")
+        guard let split = Self.visionSplitDisclosure(for: plan) else {
+            return base
+        }
+        return "\(base) \(split)"
+    }
+
+    /// **One plan, both halves disclosed** (SONNY-93).
+    ///
+    /// A mixed plan runs some steps through precise, previewable, individually-gated adapters and
+    /// one step by a model looking at a window and deciding what to click. Those are very different
+    /// things to agree to, and the plan summary — written by the planner, describing the *goal* —
+    /// says nothing about the difference. So when a prompt fires at all, its copy names it.
+    ///
+    /// Appended to the summary rather than replacing it, and appended in the *executor* rather than
+    /// carried on the adapter's own `approvalCopy`, because the plan-level assessment builds its copy
+    /// fresh from the whole plan and an adapter's copy never reaches a plan-level prompt. Returns
+    /// `nil` for every plan with no vision step, which is every plan the product had before row I.
+    static func visionSplitDisclosure(for plan: AgentPlan) -> String? {
+        guard let vision = plan.steps.first(where: { $0.operation == .visionSession }) else {
+            return nil
+        }
+        let app = vision.resolvedAppName ?? vision.appName ?? "an app"
+        let goal = (vision.visionGoal ?? vision.description).trimmingCharacters(in: .whitespacesAndNewlines)
+        let supportedCount = plan.steps.filter { $0.operation != .visionSession && $0.operation != .clarify }.count
+
+        if supportedCount == 0 {
+            return "Sonny will do this by controlling \(app) directly — clicking and typing in its window the way you would."
+        }
+        let stepWord = supportedCount == 1 ? "step" : "steps"
+        return "Sonny will do \(supportedCount) \(stepWord) with its own tools, then attempt "
+            + "\u{201C}\(goal)\u{201D} by controlling \(app) directly — clicking and typing in its window."
     }
 
     private func riskReason(for tier: CapabilityRiskTier) -> String {
@@ -1159,7 +1241,12 @@ public final class AgentActionExecutor {
         .openAppSearchURL,
         .openURL,
         .playMedia,
-        .invokeShortcut
+        .invokeShortcut,
+        // A vision session sends a screenshot of the user's app window to the vision model on every
+        // iteration. This is the most literal egress in the product — redacted first (SONNY-89's
+        // structural non-bypass), but pixels of the user's screen all the same — so Safe mode's
+        // "Data leaves device: yes" line must read yes, and does.
+        .visionSession
     ]
 
     /// `AgentStep.searchQuery` is reused by several operations for a value that is not a search
@@ -1349,7 +1436,8 @@ public final class AgentActionExecutor {
                     throw AgentExecutionError.invalidPlan("Executor is unavailable for nested execution.")
                 }
                 return try await self.execute(plan: plan, preferredBrowser: nestedBrowser, log: log)
-            }
+            },
+            visionSession: visionSession
         )
     }
 

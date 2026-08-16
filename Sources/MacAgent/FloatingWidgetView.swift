@@ -14,6 +14,25 @@ private enum WidgetState {
     case working
     case clarification(String)
     case permission(RiskApprovalRequest)
+    /// Safe mode is about to send a screenshot of an app, and is showing it first (row I, SONNY-92;
+    /// founder decision 2, 2026-08-14).
+    ///
+    /// A seventh state rather than a variant of `.permission`, because it is answering a different
+    /// question — "may this leave your Mac" rather than "may Sonny do this" — and because its own
+    /// controls are Send/Don't send, not Allow/Deny. It sits above `.permission` in the precedence
+    /// below for the reason every precedence here exists: it is a parked continuation, so a state
+    /// that outranked it would leave a Safe-mode session suspended with nothing on screen able to
+    /// answer it.
+    case captureReview(VisionCapturePreview)
+    /// Safe mode is about to hand an instruction to Sonny's own planner, and is asking first (row I,
+    /// SONNY-93; founder decision 4, 2026-08-14). Normal and Power never reach this state.
+    case delegationReview(VisionDelegationRequest)
+    /// The session paused because the user stopped being at the Mac (row I, SONNY-94). Resuming is
+    /// an explicit press — nothing here clears itself.
+    case sessionPaused(VisionSessionPause)
+    /// Sonny is controlling an app right now (row I, SONNY-95). The HUD: what it is doing, in which
+    /// app, with Pause and Stop always reachable.
+    case controlling(VisionSessionProgress)
     case result(String, RunSuggestion?)
     case failure(String)
 }
@@ -160,7 +179,7 @@ struct FloatingWidgetView: View {
             return true
         case .working:
             return viewModel.activeTaskOrigin != .widget
-        case .permission, .clarification:
+        case .permission, .clarification, .captureReview, .delegationReview, .sessionPaused, .controlling:
             return false
         }
     }
@@ -225,6 +244,21 @@ struct FloatingWidgetView: View {
     }
 
     private var state: WidgetState {
+        if let preview = viewModel.visionCapturePreview {
+            return .captureReview(preview)
+        }
+        if let delegation = viewModel.visionDelegationRequest {
+            return .delegationReview(delegation)
+        }
+        if let pause = viewModel.visionSessionPause {
+            return .sessionPaused(pause)
+        }
+        // Below the three parked questions and above `.working`: a question waiting on the user
+        // outranks a progress line, and a vision session's progress line outranks the generic
+        // working panel, which would otherwise say "Sonny is working" while it moves the cursor.
+        if let progress = viewModel.visionSessionProgress {
+            return .controlling(progress)
+        }
         if let approvalRequest = viewModel.approvalRequest {
             return .permission(approvalRequest)
         }
@@ -252,13 +286,23 @@ struct FloatingWidgetView: View {
         case .working: return 1
         case .clarification: return 2
         case .permission: return 3
+        case .captureReview: return 6
+        case .delegationReview: return 7
+        case .sessionPaused: return 8
+        case .controlling: return 9
         case .result: return 4
         case .failure: return 5
         }
     }
 
     private var isTaskInFlight: Bool {
-        viewModel.isRunning || viewModel.isAwaitingApproval || viewModel.clarificationQuestion != nil
+        viewModel.isRunning
+            || viewModel.isAwaitingApproval
+            || viewModel.clarificationQuestion != nil
+            || viewModel.visionCapturePreview != nil
+            || viewModel.visionDelegationRequest != nil
+            || viewModel.visionSessionPause != nil
+            || viewModel.visionSessionProgress != nil
     }
 
     private func submit() {
@@ -427,6 +471,30 @@ private extension FloatingWidgetView {
                 safeMode: viewModel.interactionMode == .safe,
                 onAllow: { viewModel.start() },
                 onDeny: { viewModel.cancelCurrentRun() }
+            )
+        case .captureReview(let preview):
+            WidgetCaptureReviewPanel(
+                preview: preview,
+                onSend: { viewModel.resolveVisionCapturePreview(allowing: true) },
+                onDecline: { viewModel.resolveVisionCapturePreview(allowing: false) }
+            )
+        case .delegationReview(let delegation):
+            WidgetDelegationReviewPanel(
+                delegation: delegation,
+                onAllow: { viewModel.resolveVisionDelegation(allowing: true) },
+                onDecline: { viewModel.resolveVisionDelegation(allowing: false) }
+            )
+        case .sessionPaused(let pause):
+            WidgetSessionPausedPanel(
+                pause: pause,
+                onResume: { viewModel.resolveVisionPause(resuming: true) },
+                onEnd: { viewModel.resolveVisionPause(resuming: false) }
+            )
+        case .controlling(let progress):
+            WidgetControllingPanel(
+                progress: progress,
+                onPause: { viewModel.pauseVisionSession() },
+                onStop: { viewModel.emergencyStopVisionSession() }
             )
         case .result(let summary, let suggestion):
             WidgetResultPanel(
@@ -663,6 +731,281 @@ private struct WidgetPermissionPanel: View {
                 .frame(width: 23, height: 23)
                 .widgetCircularBackground(tint: WidgetTheme.allowAction)
             }
+        }
+    }
+}
+
+// MARK: - Safe-mode capture review (no wireframe — best-effort, per founder decision 5)
+
+/// What Sonny is about to send, shown before it is sent.
+///
+/// Safe mode only. Founder decision 5 (2026-08-14) put row I's UI on session judgment with no
+/// wireframe gate, and a dedicated whole-product UI/UX pass before release — so this is built to
+/// System B's tokens and to the panels around it, deliberately plainly, and it is a candidate for
+/// that pass rather than a finished design.
+///
+/// **The thumbnail is the redacted bytes, not the original.** Showing the user one picture and
+/// sending another would make the preview a lie about the thing it previews, which is the whole
+/// reason a pre-send preview exists.
+private struct WidgetCaptureReviewPanel: View {
+    let preview: VisionCapturePreview
+    let onSend: () -> Void
+    let onDecline: () -> Void
+
+    /// One line naming what redaction found and covered, or nothing when it found nothing.
+    ///
+    /// "Nothing found" is deliberately left unsaid rather than stated as a reassurance: redaction
+    /// covers the classes `SecretTextDetector` knows about, and a cheerful "no secrets found" would
+    /// read as a guarantee about the whole screenshot that no detector can make.
+    private var redactionLine: String? {
+        guard !preview.redactionReport.isEmpty else { return nil }
+        let total = preview.redactionReport.reduce(0) { $0 + $1.count }
+        return total == 1
+            ? "1 possible secret was blacked out before this was prepared."
+            : "\(total) possible secrets were blacked out before this was prepared."
+    }
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Sonny wants to send this picture of \(preview.appDisplayName) to its vision model.")
+                .font(WidgetType.caption)
+                .foregroundStyle(WidgetTheme.textFull)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if let data = preview.redactedPNGData, let image = NSImage(data: data) {
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fit)
+                    .frame(maxWidth: .infinity, maxHeight: 160)
+                    .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+                    .accessibilityLabel("Screenshot of \(preview.appDisplayName) that Sonny is about to send")
+            }
+
+            if let redactionLine {
+                Text(redactionLine)
+                    .font(WidgetType.captionSmall)
+                    .foregroundStyle(WidgetTheme.secondaryCircular)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            HStack(spacing: 8) {
+                Text("Step \(preview.iteration) of \(preview.appDisplayName)")
+                    .font(WidgetType.captionSmall)
+                    .foregroundStyle(WidgetTheme.textMuted)
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                Button(action: onDecline) {
+                    Text("Don\u{2019}t send")
+                        .font(WidgetType.captionMedium)
+                        .foregroundStyle(WidgetTheme.textFull)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .frame(height: 23)
+                .widgetCircularBackground()
+
+                Button(action: onSend) {
+                    Text("Send")
+                        .font(WidgetType.captionMedium)
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .frame(height: 23)
+                .widgetCircularBackground(tint: WidgetTheme.allowAction)
+            }
+        }
+    }
+}
+
+/// Safe mode is about to let Sonny use its own tools for one step instead of clicking.
+///
+/// **Declining here is not stopping.** This panel is the first place in the product where a labelled
+/// "keep clicking" sits beside a labelled allow — SONNY-80's standing note asked for exactly that
+/// distinction, deferred until a surface could carry it honestly, and a delegation is where it is
+/// obviously useful: "no, do not use your tools for that, try it on screen" is a real answer. The
+/// stop control still stops (it is `cancelCurrentRun`, unchanged); this one only answers the
+/// question.
+private struct WidgetDelegationReviewPanel: View {
+    let delegation: VisionDelegationRequest
+    let onAllow: () -> Void
+    let onDecline: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Sonny wants to use its own tools for one step instead of clicking in \(delegation.appDisplayName).")
+                .font(WidgetType.caption)
+                .foregroundStyle(WidgetTheme.textFull)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text(delegation.instructionText)
+                .font(WidgetType.captionMedium)
+                .foregroundStyle(WidgetTheme.textFull)
+                .fixedSize(horizontal: false, vertical: true)
+
+            if !delegation.rationaleText.isEmpty {
+                Text(delegation.rationaleText)
+                    .font(WidgetType.captionSmall)
+                    .foregroundStyle(WidgetTheme.textMuted)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+
+            // Said plainly, because it is the thing a user most needs to know to answer: allowing
+            // this does not skip the ordinary approval on whatever it turns out to do.
+            Text("Anything it does still asks you first if it would delete something or reach someone else.")
+                .font(WidgetType.captionSmall)
+                .foregroundStyle(WidgetTheme.secondaryCircular)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                Spacer(minLength: 8)
+
+                Button(action: onDecline) {
+                    Text("Keep clicking")
+                        .font(WidgetType.captionMedium)
+                        .foregroundStyle(WidgetTheme.textFull)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .frame(height: 23)
+                .widgetCircularBackground()
+
+                Button(action: onAllow) {
+                    Text("Use tools")
+                        .font(WidgetType.captionMedium)
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .frame(height: 23)
+                .widgetCircularBackground(tint: WidgetTheme.allowAction)
+            }
+        }
+    }
+}
+
+/// The session paused because the user stopped being at the Mac.
+///
+/// **Resume is a press, never a timer.** The whole point of the pause is that Sonny stopped when the
+/// user did; a panel that resumed itself when the screen unlocked would give that back for nothing.
+private struct WidgetSessionPausedPanel: View {
+    let pause: VisionSessionPause
+    let onResume: () -> Void
+    let onEnd: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text("Sonny paused controlling \(pause.appDisplayName) because \(pause.reason.userFacingReason).")
+                .font(WidgetType.caption)
+                .foregroundStyle(WidgetTheme.textFull)
+                .fixedSize(horizontal: false, vertical: true)
+
+            Text("It only runs while you are here. Nothing happened while it waited.")
+                .font(WidgetType.captionSmall)
+                .foregroundStyle(WidgetTheme.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                Spacer(minLength: 8)
+
+                Button(action: onEnd) {
+                    Text("End")
+                        .font(WidgetType.captionMedium)
+                        .foregroundStyle(WidgetTheme.textFull)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .frame(height: 23)
+                .widgetCircularBackground()
+
+                Button(action: onResume) {
+                    Text("Resume")
+                        .font(WidgetType.captionMedium)
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .frame(height: 23)
+                .widgetCircularBackground(tint: WidgetTheme.allowAction)
+            }
+        }
+    }
+}
+
+/// **The HUD: power without covertness.**
+///
+/// While Sonny controls an app it says so, says which app, says what it is doing right now, and puts
+/// Pause and Stop where the user can reach them. That is the whole requirement, and it is a product
+/// requirement rather than a courtesy: a program moving someone's cursor with no visible statement of
+/// what it is doing is the shape this feature must never take.
+///
+/// **No wireframe** — the founder put row I's UI on session judgment on 2026-08-14, with a dedicated
+/// whole-product UI/UX pass before release. Built to System B's tokens and to the panels around it,
+/// deliberately plainly, and a candidate for that pass rather than a finished design.
+private struct WidgetControllingPanel: View {
+    let progress: VisionSessionProgress
+    let onPause: () -> Void
+    let onStop: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack(spacing: 8) {
+                // Amber, not the failure red: this is Sonny doing something unusual, not something
+                // going wrong — the same distinction the approval panel's escalation line draws.
+                Image(systemName: "cursorarrow.rays")
+                    .font(.system(size: 12))
+                    .foregroundStyle(WidgetTheme.secondaryCircular)
+
+                (Text("Sonny is controlling ").font(WidgetType.caption)
+                    + Text(progress.appDisplayName).font(WidgetType.captionMedium))
+                    .foregroundStyle(WidgetTheme.textFull)
+                    .lineLimit(1)
+            }
+
+            Text(progress.currentAction)
+                .font(WidgetType.captionSmall)
+                .foregroundStyle(WidgetTheme.textMuted)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                Text("Step \(progress.iteration) of \(progress.maximumIterations)")
+                    .font(WidgetType.captionSmall)
+                    .foregroundStyle(WidgetTheme.textMuted)
+                    .lineLimit(1)
+
+                Spacer(minLength: 8)
+
+                Button(action: onPause) {
+                    Text("Pause")
+                        .font(WidgetType.captionMedium)
+                        .foregroundStyle(WidgetTheme.textFull)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .frame(height: 23)
+                .widgetCircularBackground()
+                .accessibilityLabel("Pause Sonny controlling \(progress.appDisplayName)")
+
+                Button(action: onStop) {
+                    Text("Stop")
+                        .font(WidgetType.captionMedium)
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .frame(height: 23)
+                .widgetCircularBackground(tint: WidgetTheme.errorGlyph)
+                .accessibilityLabel("Stop Sonny controlling \(progress.appDisplayName)")
+            }
+
+            // The hotkey, said once and quietly. During a session the pointer is not the user's to
+            // aim, so the keyboard is the one input path that is reliably theirs — and a control
+            // nobody knows about is not a control.
+            Text("\(EmergencyStopHotKey.displayName) stops it from anywhere.")
+                .font(WidgetType.captionSmall)
+                .foregroundStyle(WidgetTheme.textMuted)
         }
     }
 }

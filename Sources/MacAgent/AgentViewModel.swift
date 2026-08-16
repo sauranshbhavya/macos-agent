@@ -31,6 +31,17 @@ final class AgentViewModel: ObservableObject {
     @Published var savedRoutines: [StoredRoutine] = []
     @Published var savedWorkspaces: [StoredWorkspace] = []
     @Published var approvalRequest: RiskApprovalRequest?
+    /// The Safe-mode capture preview waiting for an answer, or `nil`. Safe mode only — founder
+    /// decision 2 (2026-08-14) has Safe show each capture before it is sent.
+    @Published var visionCapturePreview: VisionCapturePreview?
+    /// What the running vision session is doing, for the HUD. `nil` when no session is live.
+    @Published var visionSessionProgress: VisionSessionProgress?
+    /// The delegation waiting for a Safe-mode answer, or `nil`. Safe mode only — founder decision 4
+    /// (2026-08-14) has Safe ask before a delegation fires while Normal and Power never do.
+    @Published var visionDelegationRequest: VisionDelegationRequest?
+    /// A session paused because the user stopped being at the Mac, or `nil`. Resuming is an explicit
+    /// action (SONNY-94): nothing here resolves on a timer or on the screen simply unlocking.
+    @Published var visionSessionPause: VisionSessionPause?
     /// The ran-without-asking trace for the last completed run (SONNY-99, reshaped by the
     /// consequence rule 2026-08-13), or `nil` when the run's silence was ordinary — tier 0/1, a
     /// prompt that was answered, or a routine covered by its own trust toggle. The sentence itself
@@ -97,7 +108,10 @@ final class AgentViewModel: ObservableObject {
     /// 2026-07-24 — see `docs/sonny-founder-design-decisions.md`). Flips permanently the first time
     /// the user resolves *any* approval, allow or deny — "shown once, ever," not "shown until
     /// dismissed." `private(set)`: only `performApproval`/`cancelCurrentRun`'s deny branch, the two
-    /// real resolution points, should ever flip it.
+    /// real resolution points, should ever flip it — plus `markFirstApprovalCompleted()`, the third,
+    /// added by row I for a mid-loop vision approval. The setter stays `private(set)` and that third
+    /// point is a named door rather than a widened setter, so the list of things that may flip this
+    /// is still enumerable by reading this comment.
     @Published private(set) var hasCompletedFirstApproval: Bool = false {
         didSet {
             userDefaults.set(hasCompletedFirstApproval, forKey: UserDefaultsKeys.hasCompletedFirstApproval)
@@ -109,6 +123,31 @@ final class AgentViewModel: ObservableObject {
     private var preparedRun: PreparedAgentRun?
     private var runner: AgentRunner?
     private var currentTask: Task<Void, Never>?
+    /// The parked mid-loop vision approval, and the parked Safe-mode capture preview.
+    ///
+    /// `var` rather than `private var` so the vision extension in
+    /// `AgentViewModel+VisionSession.swift` can reach them — Swift's `private` is file-scoped, and
+    /// the alternative was putting 200 lines of vision code in this 2,600-line file.
+    var visionApprovalContinuation: CheckedContinuation<RiskApprovalDecision?, Never>?
+    var visionCaptureContinuation: CheckedContinuation<Bool, Never>?
+    var visionDelegationContinuation: CheckedContinuation<Bool, Never>?
+    var visionResumeContinuation: CheckedContinuation<Bool, Never>?
+    /// The wrapper the HUD's Pause writes to, held so the resume path can clear it. Set when the
+    /// vision environment is built; `nil` in a build with no screen-control wiring.
+    var visionUserPauseMonitor: UserPausableAttentionMonitor?
+    /// Registered only while a session is live — a permanently-held global shortcut is a key
+    /// combination taken from every other app forever, in exchange for a control that matters for
+    /// the seconds Sonny is actually moving the cursor.
+    var visionEmergencyStopHotKey: (any EmergencyStopHotKeyRegistering)?
+    /// How the emergency-stop hotkey is built. Injected so a test can pin the *wiring* — that a live
+    /// session really registers one and every exit releases it — without any test taking a real
+    /// global shortcut. Defaults to the real Carbon registration.
+    var visionEmergencyStopHotKeyFactory: (@MainActor (@escaping @MainActor () -> Void) throws -> any EmergencyStopHotKeyRegistering) = { onStop in
+        try EmergencyStopHotKey(onStop: onStop)
+    }
+    /// The journal id of the session this task is running, or `nil`. Read once when the task's
+    /// history row is written, then cleared with the rest of the per-task state.
+    var activeVisionSessionID: String?
     private let audioRecorder: AudioCommandRecorder
     private let permissionReadinessService: PermissionReadinessService
     private let routineStore: RoutineStore
@@ -133,6 +172,9 @@ final class AgentViewModel: ObservableObject {
     private let zipArchiver: any ZipArchiving
     private let shortcutRunHistoryStore: ShortcutRunHistoryStore
     private let taskHistoryStore: TaskHistoryStore
+    /// The action journal (row I, SONNY-96). Injected like every other store so a test writes to its
+    /// own file rather than the user's.
+    let visionSessionJournalStore: VisionSessionJournalStore
     private let clipboardHistorySettingsStore: ClipboardHistorySettingsStore
     private let clipboardHistoryMonitor: ClipboardHistoryMonitor
     private let localDataDeletionService: LocalDataDeletionService
@@ -326,6 +368,7 @@ final class AgentViewModel: ObservableObject {
         zipArchiver: any ZipArchiving = ProcessZipArchiver(),
         shortcutRunHistoryStore: ShortcutRunHistoryStore = ShortcutRunHistoryStore(),
         taskHistoryStore: TaskHistoryStore = TaskHistoryStore(),
+        visionSessionJournalStore: VisionSessionJournalStore = VisionSessionJournalStore(),
         clipboardHistorySettingsStore: ClipboardHistorySettingsStore = ClipboardHistorySettingsStore(),
         clipboardHistoryMonitor: ClipboardHistoryMonitor? = nil,
         localDataDeletionService: LocalDataDeletionService = LocalDataDeletionService(),
@@ -365,6 +408,7 @@ final class AgentViewModel: ObservableObject {
         self.zipArchiver = zipArchiver
         self.shortcutRunHistoryStore = shortcutRunHistoryStore
         self.taskHistoryStore = taskHistoryStore
+        self.visionSessionJournalStore = visionSessionJournalStore
         self.clipboardHistorySettingsStore = clipboardHistorySettingsStore
         self.clipboardHistoryMonitor = clipboardHistoryMonitor
             ?? ClipboardHistoryMonitor(settingsStore: clipboardHistorySettingsStore)
@@ -464,7 +508,8 @@ final class AgentViewModel: ObservableObject {
         origin: TaskOrigin = .commandCenter,
         workspaceBinding: String? = nil,
         fromComposer: Bool = false,
-        prebuiltPlan: AgentPlan? = nil
+        prebuiltPlan: AgentPlan? = nil,
+        prebuiltPlanSource: PreparedPlanSource = .directUserAction
     ) -> Bool {
         guard !isAwaitingApproval else {
             logStore.append(.observe, "Not started: an approval is still waiting for your answer.")
@@ -476,7 +521,8 @@ final class AgentViewModel: ObservableObject {
             origin: origin,
             workspaceBinding: workspaceBinding,
             fromComposer: fromComposer,
-            prebuiltPlan: prebuiltPlan
+            prebuiltPlan: prebuiltPlan,
+            prebuiltPlanSource: prebuiltPlanSource
         )
         guard command == commandText else {
             return true
@@ -600,6 +646,12 @@ final class AgentViewModel: ObservableObject {
     /// `FloatingWidgetView`'s private `state`/`showsPanel` precedence exactly — keep both in sync if
     /// either changes.
     var hasVisibleWidgetPanel: Bool {
+        // Row I's two Safe-mode questions, first for the same reason the three below them are
+        // unconditional: each is a parked continuation waiting on a human, and a session whose
+        // question the widget declined to render would simply hang.
+        if visionCapturePreview != nil || visionDelegationRequest != nil || visionSessionPause != nil {
+            return true
+        }
         if approvalRequest != nil {
             return true
         }
@@ -656,7 +708,13 @@ final class AgentViewModel: ObservableObject {
         origin: TaskOrigin = .commandCenter,
         workspaceBinding: String? = nil,
         fromComposer: Bool = false,
-        prebuiltPlan: AgentPlan? = nil
+        prebuiltPlan: AgentPlan? = nil,
+        // Which surface built `prebuiltPlan`. Defaulted to `.directUserAction` so SONNY-64's
+        // existing callers read unchanged; a vision session passes its own case, because
+        // `PreparedPlanSource`'s own rule is that a surface needing to be told apart adds a case
+        // rather than overloading one. See `PreparedPlanSource.visionSession` for why the two are
+        // different claims, and for what happened to the second, stronger reason SONNY-81 gave.
+        prebuiltPlanSource: PreparedPlanSource = .directUserAction
     ) {
         if isAwaitingApproval {
             approvePendingRun()
@@ -710,7 +768,8 @@ final class AgentViewModel: ObservableObject {
                 submittedCommand: submittedCommand,
                 autoExecute: autoExecute,
                 origin: origin,
-                prebuiltPlan: prebuiltPlan
+                prebuiltPlan: prebuiltPlan,
+                prebuiltPlanSource: prebuiltPlanSource
             )
         }
     }
@@ -721,7 +780,7 @@ final class AgentViewModel: ObservableObject {
     /// cancellation lands. Catching only `CancellationError` meant a cancel that happened mid-network-
     /// call fell through to the generic failure path: styled red, a Retry button, "cancelled" as the
     /// error text — a deliberate user cancellation rendered as if it were a real failure.
-    private func isCancellationError(_ error: Error) -> Bool {
+    func isCancellationError(_ error: Error) -> Bool {
         error is CancellationError || (error as? URLError)?.code == .cancelled
     }
 
@@ -729,7 +788,8 @@ final class AgentViewModel: ObservableObject {
         submittedCommand: String,
         autoExecute: Bool,
         origin: TaskOrigin,
-        prebuiltPlan: AgentPlan? = nil
+        prebuiltPlan: AgentPlan? = nil,
+        prebuiltPlanSource: PreparedPlanSource = .directUserAction
     ) async {
         activeTaskOrigin = origin
         errorMessage = nil
@@ -757,11 +817,30 @@ final class AgentViewModel: ObservableObject {
         // previous task's trace surviving into this one would claim a silence that has not
         // happened yet.
         ranWithoutAskingTrace = nil
+        // Same reasoning as the trace: the HUD line describes a session that is live, and a
+        // previous session's line surviving into a new task would claim Sonny is controlling an app
+        // it is not.
+        visionSessionProgress = nil
 
         defer {
             publishTaskUsageSummary()
             isRunning = false
             currentTask = nil
+            // Cleared on *every* exit of this function, unlike the scope below — a paused vision
+            // session does not reach here at all (the loop is still suspended inside `execute`), so
+            // reaching this line always means the session is over, however it ended.
+            visionSessionProgress = nil
+            visionCapturePreview = nil
+            visionDelegationRequest = nil
+            visionSessionPause = nil
+            // The one place a session ends, whatever ended it — so the combination goes back to the
+            // user's own apps on every exit, including the ones nobody planned for.
+            releaseEmergencyStopHotKey()
+            visionUserPauseMonitor?.clearPause()
+            // Cleared *after* the history row is written by `recordTaskHistoryIfTerminal`, which
+            // runs earlier in this same exit path — so the row carries the link and the next task
+            // starts with none.
+            activeVisionSessionID = nil
             // Per-task, cleared at every terminal exit — and deliberately *not* when the task is
             // merely paused. An approval or a clarification is the same task waiting on the user,
             // and it has to resume under the scope it was assessed with; clearing here would let
@@ -805,7 +884,7 @@ final class AgentViewModel: ObservableObject {
                     logStore: logStore,
                     recentArtifactStore: recentArtifactStore
                 )
-                prepared = try runner.prepare(plan: prebuiltPlan, source: .directUserAction)
+                prepared = try runner.prepare(plan: prebuiltPlan, source: prebuiltPlanSource)
             } else if let resolution = makeInstantCommandResolver().resolve(command: submittedCommand) {
                 runner = AgentRunner(
                     planner: InstantOnlyFallbackPlanner(),
@@ -1068,6 +1147,61 @@ final class AgentViewModel: ObservableObject {
     }
 
     func cancelCurrentRun() {
+        // **One press ends the run** — the experiment's Option A, ratified by the founder on
+        // 2026-08-14 and inherited here as the semantics of the stop control. The continuation is
+        // cleared and resumed *before* the cancel, so `requestVisionActionApproval`'s own handler
+        // guards on the same property, finds nothing, and there is exactly one resume; the
+        // `Task.checkCancellation()` after that await then turns this into the same
+        // `CancellationError` a cancelled clarification throws, so the run ends with the same honest
+        // "Stopped." rather than reading the `nil` as "the user declined this one action, carry on".
+        //
+        // A stop control that visibly fails to stop is the most expensive surprise a program moving
+        // the user's real cursor can produce, which is why decline-and-continue is not folded in
+        // here. The founder wants that capability back as a *labelled* "deny this step" control
+        // beside a labelled stop (SONNY-80's standing note); when it lands it is a second, narrower
+        // entry point that resumes `nil` without cancelling — not a change to this one.
+        if let continuation = visionApprovalContinuation {
+            visionApprovalContinuation = nil
+            approvalRequest = nil
+            markFirstApprovalCompleted()
+            continuation.resume(returning: nil)
+            currentTask?.cancel()
+            return
+        }
+        // The Safe-mode capture preview is the other parked question a session can hold. Cancelling
+        // it means "do not send this", which ends the session — there is no next step that does not
+        // begin with sending a capture.
+        if let continuation = visionCaptureContinuation {
+            visionCaptureContinuation = nil
+            visionCapturePreview = nil
+            continuation.resume(returning: false)
+            currentTask?.cancel()
+            return
+        }
+        // The third parked question a session can hold. Cancelling it stops the run rather than
+        // declining the delegation and carrying on, for the same reason the two above it do: a stop
+        // control has to stop. Declining without stopping is `resolveVisionDelegation(allowing:)`,
+        // which is a *different control* — the labelled deny SONNY-80's standing note asks for,
+        // arriving here first because a delegation is the one place declining-and-continuing is
+        // obviously useful and has an obvious label.
+        if let continuation = visionDelegationContinuation {
+            visionDelegationContinuation = nil
+            visionDelegationRequest = nil
+            continuation.resume(returning: false)
+            currentTask?.cancel()
+            return
+        }
+        // Stopping a paused session ends it, which is the only thing stop can honestly mean here:
+        // the alternative reading — "stop pausing" — is what Resume is for, and it has its own
+        // control.
+        if let continuation = visionResumeContinuation {
+            visionResumeContinuation = nil
+            visionSessionPause = nil
+            continuation.resume(returning: false)
+            currentTask?.cancel()
+            return
+        }
+
         if isAwaitingApproval {
             if let preparedRun, let pendingCommandForPriorTaskContext {
                 recordPriorTaskContext(
@@ -1150,7 +1284,7 @@ final class AgentViewModel: ObservableObject {
     /// errors in this app are one-off task/validation outcomes, not environment problems; the small
     /// number of genuinely persistent cases (missing API key, denied mic permission, unavailable
     /// hotkey) pass `persistent: true` explicitly.
-    private func setError(_ message: String, persistent: Bool = false) {
+    func setError(_ message: String, persistent: Bool = false) {
         errorMessage = message
         errorIsPersistent = persistent
     }
@@ -1843,11 +1977,11 @@ final class AgentViewModel: ObservableObject {
 
     /// A local-store *write* failure, which needs its own accurate wording — the load-failure
     /// text ("could not be decrypted or decoded") describes the wrong problem entirely.
-    private func recordLocalStorageWriteFailure(_ description: String) {
+    func recordLocalStorageWriteFailure(_ description: String) {
         localStorageNotice = description
     }
 
-    private func makeInstantCommandResolver() -> InstantCommandResolver {
+    func makeInstantCommandResolver() -> InstantCommandResolver {
         InstantCommandResolver(
             snippetStore: snippetStore,
             recentArtifactStore: recentArtifactStore,
@@ -1857,7 +1991,67 @@ final class AgentViewModel: ObservableObject {
         )
     }
 
-    private func makeExecutor() -> AgentActionExecutor {
+    /// A test-supplied vision substrate, or `nil` to build the live one.
+    ///
+    /// Injected rather than defaulted for the same reason every other machine-touching seam on this
+    /// class is: the live environment posts real mouse events, and a test that reached it would move
+    /// the developer's cursor. No test in this repo may construct `SystemScreenActionSynthesizer`.
+    var visionSessionEnvironment: VisionSessionEnvironment?
+
+    /// Internal rather than `private` so the vision extension in another file can build the
+    /// executor a delegated plan runs through — the *same* executor factory the ordinary path uses,
+    /// which is what makes "a delegated command meets the gate a typed one would" true by
+    /// construction rather than by a parallel wiring that has to be kept in step.
+    /// The planner a delegated vision instruction is planned by — the same registry call, with the
+    /// same selection, that plans a typed command.
+    ///
+    /// One named door rather than widening `plannerProviderRegistry`, `plannerSelection` and
+    /// `taskUsageRecorder` to internal: what the vision extension needs is a planner, not three
+    /// fields, and keeping the registry call in this file is what makes "a delegated instruction is
+    /// planned by whatever would have planned the user's own sentence" true by construction. The
+    /// fallback notice is surfaced here too, exactly as the ordinary path surfaces it.
+    /// The whole runner a delegated instruction goes through — same executor factory, same planner
+    /// registry, same log store, same artifact store as the ordinary path.
+    func makeDelegationRunner() throws -> AgentRunner {
+        AgentRunner(
+            planner: try makeDelegationPlanner(),
+            executor: makeExecutor(),
+            logStore: logStore,
+            recentArtifactStore: recentArtifactStore
+        )
+    }
+
+    private func makeDelegationPlanner() throws -> any Planning {
+        let selected = try plannerProviderRegistry.makePlanner(
+            selection: plannerSelection,
+            usageRecorder: taskUsageRecorder
+        )
+        if let notice = selected.fallbackNotice {
+            plannerFallbackNotice = notice
+            logStore.append(.plan, notice)
+        }
+        return selected.planner
+    }
+
+    /// Builds the live vision environment and keeps a handle on the pause wrapper the HUD writes to.
+    ///
+    /// The handle is why this is not inline: `pauseVisionSession()` needs the *same* monitor the
+    /// running session is consulting, and a second one built later would be a Pause button wired to
+    /// nothing.
+    private func makeLiveVisionEnvironment() -> VisionSessionEnvironment? {
+        let monitor = UserPausableAttentionMonitor(base: SystemSessionAttentionMonitor())
+        guard let environment = Self.makeVisionEnvironment(
+            interaction: self,
+            userPauseMonitor: monitor,
+            journalStore: visionSessionJournalStore
+        ) else {
+            return nil
+        }
+        visionUserPauseMonitor = monitor
+        return environment
+    }
+
+    func makeExecutor() -> AgentActionExecutor {
         AgentActionExecutor(
             whitelist: whitelist,
             zipArchiver: zipArchiver,
@@ -1881,7 +2075,12 @@ final class AgentViewModel: ObservableObject {
             shortcutCatalog: shortcutCatalog,
             shortcutInvoker: shortcutInvoker,
             shortcutRunHistoryStore: shortcutRunHistoryStore,
-            hotKeyReady: { [weak self] in self?.voiceHotKeyReady ?? true }
+            hotKeyReady: { [weak self] in self?.voiceHotKeyReady ?? true },
+            // `nil` when OPENCODE_API_KEY is unset — the same degradation shape as the Tavily key
+            // above. A vision session dispatched into an executor built that way fails loudly with
+            // `visionUnavailable` rather than half-running; `visionSessionEnvironment` is an
+            // injectable seam so a test supplies its own substrate and never touches the machine.
+            visionSession: visionSessionEnvironment ?? makeLiveVisionEnvironment()
         )
     }
 
@@ -2061,8 +2260,10 @@ final class AgentViewModel: ObservableObject {
     /// (SONNY-90 as amended 2026-08-14; wireframe `docs/wireframes/15-SegmentedControl.svg`).
     /// Safe asks before everything attended and is the only place the data-leaves-device label
     /// renders (E9's ratified §11.3 deviation); Normal is the consequence-rule default; Power is
-    /// identical to Normal today — row 18's mode landing as a setting first, which row I's
-    /// screen-control features gate on. Persisted so the dial survives relaunch — a posture that
+    /// identical to Normal today — row 18's mode landing as a setting first, gating nothing (this
+    /// sentence used to say row I's screen-control features gate on it; the founder decided on
+    /// 2026-08-14 that screen control works in all three modes, and only Safe asks about it).
+    /// Persisted so the dial survives relaunch — a posture that
     /// silently reset to Normal on restart would quietly un-dial itself. Defaults to Normal, the
     /// ratified product default.
     @Published var interactionMode: AgentInteractionMode = .normal {
@@ -2077,9 +2278,22 @@ final class AgentViewModel: ObservableObject {
     /// **`interactionMode` is mapped to the engine here and nowhere else.** A second site
     /// reading its own value would be a second place that work has to find, and the one it
     /// misses would run a Safe-mode user's tasks under ordinary rules. The engine's input stays
-    /// row C's boolean seam; Normal and Power both map false (Power diverges at the product
-    /// layer when row I lands, never here).
-    private func approvalContext() -> ApprovalContext {
+    /// row C's boolean seam; Normal and Power both map false, and row I did not change that —
+    /// screen control runs in every mode, so Safe's existing "ask about everything" posture is
+    /// exactly what makes Safe the only mode that asks about a vision action.
+    // Internal rather than `private`: the vision extension lives in another file and
+    // `visionApprovalContext()` forwards to this one function, which is what keeps the
+    // "mapped to the engine here and nowhere else" rule true across the split.
+    /// The third real approval-resolution point: a user answering a mid-loop vision approval.
+    ///
+    /// It is a real resolution by the flag's own definition — "the first time the user resolves
+    /// *any* approval, allow or deny" — and a vision session is where a user is most likely to meet
+    /// their first approval, since it is the one capability that asks mid-run.
+    func markFirstApprovalCompleted() {
+        hasCompletedFirstApproval = true
+    }
+
+    func approvalContext() -> ApprovalContext {
         ApprovalContext(safeMode: interactionMode.asksBeforeEveryAction)
     }
 
@@ -2113,6 +2327,17 @@ final class AgentViewModel: ObservableObject {
     }
 
     private func approvePendingRun() {
+        // **The vision branch first, and it must be first.** A mid-loop vision approval writes the
+        // same `approvalRequest` every other approval writes — deliberately, so one approval surface
+        // serves both — which means every Allow control in the app routes here while a session is
+        // paused. The guard below would then fall through to `isRunning`, which is *true* during a
+        // session, and silently do nothing: the user would press Allow and watch nothing happen.
+        // Worse, if it did not, `preparedRun` and `runner` are the vision plan's own, so approving
+        // would start a second vision session on top of the paused one.
+        if let approvalRequest, visionApprovalContinuation != nil {
+            resolveVisionApproval(approving: approvalRequest)
+            return
+        }
         guard !isRunning, let preparedRun, let runner, let approvalRequest else {
             return
         }
@@ -2298,7 +2523,12 @@ final class AgentViewModel: ObservableObject {
                     // Derived from origin rather than threaded through every call site — origin
                     // already records who started this run, and a second parameter saying the same
                     // thing is a second thing to forget to pass.
-                    trigger: activeTaskOrigin == .scheduled ? .scheduled : .manual
+                    trigger: activeTaskOrigin == .scheduled ? .scheduled : .manual,
+                    // The link, written on every terminal exit including the failures — a link
+                    // present only on clean finishes would be missing from exactly the runs someone
+                    // most wants to read afterwards. `nil` for every task that ran no session, which
+                    // is every task the product had before row I.
+                    visionSessionID: activeVisionSessionID
                 )
             )
             refreshTaskHistory()
@@ -2468,6 +2698,42 @@ final class AgentViewModel: ObservableObject {
             // into the generic catch below.)
             if let question = prepared.clarificationQuestion {
                 scheduledRunNotice = "“\(name)” was not run because Sonny needed to ask something first: \(question)"
+                return
+            }
+
+            // **Unattended vision: never — the belt** (SONNY-94, E7 as ratified under C8).
+            //
+            // The other two layers are structural and would each stop this on their own: a stored
+            // routine cannot carry a vision step at all (`StoredRoutine.forbiddenStepOperations`),
+            // and the `.approved(.tier2)` ceiling below cannot cover a tier-3 vision assessment.
+            // This layer is neither — it is an *explicit* refusal that names the reason, and it
+            // exists precisely because the other two are silent about theirs: a plan blocked by the
+            // ceiling produces "approval required", a plan blocked by the routine store produces
+            // "unsafe routine step", and neither tells a user that screen control is a thing Sonny
+            // will not do while they are away.
+            //
+            // Three layers, three pins, so no single regression unbars unattended screen control.
+            // This one is deliberately the least load-bearing and the most legible.
+            //
+            // A present human is an authority requirement, not an accuracy hedge: their presence is
+            // the whole basis on which a program is allowed to move their cursor, and no amount of
+            // model quality substitutes for it. So this refuses in *every* mode, Power included,
+            // and there is no toggle anywhere that turns it off.
+            // **Checked against the routine's own steps, not only the prepared plan** — and that
+            // distinction is the whole reason this check needed writing twice. The scheduled path
+            // prepares a one-step `run_routine` plan, so a vision step carried by the routine lives
+            // *inside* the stored record and never appears in `prepared.plan.steps` at all. A belt
+            // that looked only at the prepared plan would have been unreachable code that read like
+            // a guarantee.
+            let carriesVision = routine.steps.contains { $0.operation == .visionSession }
+                || (routine.steps.compactMap(\.routineSteps).flatMap { $0 }).contains { $0.operation == .visionSession }
+                || prepared.plan.steps.contains { $0.operation == .visionSession }
+            if carriesVision {
+                logStore.append(.summarize, "Scheduled run refused: screen control never runs unattended")
+                pauseSchedule(
+                    routineNamed: name,
+                    because: "It needs to control an app on screen, and Sonny only does that while you are here."
+                )
                 return
             }
 

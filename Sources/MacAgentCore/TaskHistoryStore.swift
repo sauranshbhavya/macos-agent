@@ -19,6 +19,27 @@ public struct CompletedTaskRecord: Codable, Equatable, Sendable {
     /// `decodeIfPresent` reasoning as `StoredWorkspace.teamType`. Absent means manual, which is
     /// what every pre-existing record is.
     public var trigger: TaskTrigger?
+    /// The screen-control session this task ran, if it ran one — the key into
+    /// `VisionSessionJournalStore` (row I, SONNY-96).
+    ///
+    /// **The linkage decision, recorded here because rows D and E inherit it.** The alternatives were
+    /// an optional field like this one and a pure side-store lookup keyed on the record's natural
+    /// identity. The field wins on two grounds. First, `CompletedTaskRecord` has no id: a side-store
+    /// lookup would have to key on `(command, startedAt)`, a compound natural key that two identical
+    /// commands started in the same second collide on and that any future edit to either field
+    /// silently breaks. Second, a task detail view has to know *whether* a journal exists before it
+    /// can decide to offer the affordance, and with a pure side store that question costs a full
+    /// decrypt-and-scan of every session on every row render.
+    ///
+    /// Optional, per the twice-documented `AutomationStores.swift` decode rule: every
+    /// `task-history.json` written before row I has no such key, and a non-Optional field with a
+    /// Swift-side default would throw `keyNotFound` on all of them. Absent means "this task ran no
+    /// screen-control session", which is what every pre-existing record is.
+    ///
+    /// **The record holds the link, the side store holds the content** — deliberately, so deleting
+    /// the journal (rows D/E) leaves task history intact and merely un-followable, rather than
+    /// tearing rows out of a history the journal was never the point of.
+    public var visionSessionID: String?
 
     public init(
         command: String,
@@ -26,7 +47,8 @@ public struct CompletedTaskRecord: Codable, Equatable, Sendable {
         completedAt: Date,
         outcomeStatus: PriorTaskOutcomeStatus,
         workspaceName: String? = nil,
-        trigger: TaskTrigger? = nil
+        trigger: TaskTrigger? = nil,
+        visionSessionID: String? = nil
     ) {
         self.command = command.trimmingCharacters(in: .whitespacesAndNewlines)
         self.startedAt = startedAt
@@ -34,6 +56,7 @@ public struct CompletedTaskRecord: Codable, Equatable, Sendable {
         self.outcomeStatus = outcomeStatus
         self.workspaceName = workspaceName
         self.trigger = trigger
+        self.visionSessionID = visionSessionID
     }
 
     public var effectiveTrigger: TaskTrigger {
