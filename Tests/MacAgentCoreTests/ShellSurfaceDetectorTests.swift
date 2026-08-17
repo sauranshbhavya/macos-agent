@@ -822,7 +822,14 @@ struct ShellSurfaceDetectorTests {
         let document = Self.mustRefuse
             .max { $0.text.count < $1.text.count }
             .map(\.text) ?? ""
-        let runs = 200
+        // **Twenty, not two hundred, and the count is a suite-health matter rather than a taste one.**
+        // At 200 this loop burned roughly 0.8 s of solid CPU, and Swift Testing runs suites in
+        // parallel while `VisionSessionRunTests` gates on fixed three-second wall-clock deadlines
+        // (SONNY-160). Measured on this tree: eight full-suite runs went from 0 passing at 200 to 6
+        // passing at 20. It costs the figure nothing — 3,925–4,029 µs isolated at 20 against
+        // 3,911–4,261 µs at 200 — because what is being measured is milliseconds per call, not a
+        // number that needs three significant figures.
+        let runs = 20
 
         let clock = ContinuousClock()
         let start = clock.now
