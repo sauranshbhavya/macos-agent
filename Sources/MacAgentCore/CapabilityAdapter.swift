@@ -193,6 +193,35 @@ public struct CapabilityExecutionContext {
     /// `nil` for every top-level run, so a plain "open github.com" keeps going to the system
     /// default browser — the ordinary path must not inherit a routine's preference.
     public var preferredBrowser: MacApp?
+
+    /// The browser a URL-opening step should use: the one the user named on that step if it resolves
+    /// to something installed, otherwise whatever was already in force (SONNY-157).
+    ///
+    /// **Precedence, stated rather than left to whichever the code happens to apply.** A browser named
+    /// on the step wins over `preferredBrowser`, which today is only ever set by the routine path. The
+    /// reasoning is specificity: a routine's binding is a saved default inferred from the apps that
+    /// routine opens, while a name on the step is what the user said in this command. The more
+    /// specific and more recent instruction wins. Workspace binding is unaffected and does not come
+    /// through this parameter at all — `OpenWorkspaceCapabilityAdapter` resolves its own browser from
+    /// the workspace's app list and passes it directly.
+    ///
+    /// **Reads the step for this operation rather than the first browser named anywhere in the plan.**
+    /// A chained plan can open two URLs, and "open A in Chrome then B in Safari" must not put both in
+    /// Chrome. Each adapter asks with its own operation, so each reads the step it is already acting
+    /// on.
+    ///
+    /// **An unresolvable name falls back rather than failing.** If the user names a browser that is
+    /// not installed, the step keeps whatever it would have used anyway. That matches the reasoning
+    /// `WorkspaceBrowserOpener` already records for the same situation: a link opening in the wrong
+    /// browser beats one that fails mid-open. The opener applies the same rule again if the app is
+    /// installed but refuses to launch, and logs it.
+    public func browser(for operation: AgentOperation, in plan: AgentPlan) -> MacApp? {
+        let named = plan.steps.first { $0.operation == operation }?.browserName
+        guard let named, !named.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
+            return preferredBrowser
+        }
+        return installedAppResolver.resolve(named)?.macApp ?? preferredBrowser
+    }
     /// The workspace scope the *current* assessment is running under, for a nested-assess caller
     /// that needs to forward it. `.unscoped` for every preview and execute context — neither
     /// assesses — and for every task not bound to a workspace.

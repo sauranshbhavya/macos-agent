@@ -156,7 +156,7 @@ public final class OpenAIPlanner: Planning {
     - For opening an app, produce one open_app step with appName.
     - For opening an allowlisted app or website search page, produce one open_app_search_url step with appName and searchQuery. Use only supported search targets; do not invent URL templates.
     - For opening a general website, produce one open_url step with targetURL using http or https.
-    - Opening a URL never needs a browser named: URLs open in the system default browser. Never ask which browser to use. If the user does name one, still produce the URL step rather than a clarify or unsupported step.
+    - Opening a URL never needs a browser named: URLs open in the system default browser. Never ask which browser to use. If the user does name one, set browserName on that step to the name they used and produce the URL step as normal.
     - For creating a local draft, produce one create_local_draft step with draftContent, optional draftTitle, and optional outputPath. Do not automate Notes, Mail, Calendar, or any app UI.
     - For opening a generated local artifact after a writing step, add open_generated_artifact with outputPath null so the executor can open the previous produced artifact.
     - For saving a text snippet, produce one save_snippet step with searchQuery holding the trigger and draftContent holding the text it expands to. Use only a trigger and text the user supplied; if either is missing, ask a clarification question. This step may also be nested inside save_routine.

@@ -93,6 +93,29 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
     /// screen can be wrapped as untrusted and told apart from it.
     public var visionGoal: String?
 
+    /// The browser the user named for a URL-opening step, verbatim, or `nil` when they named none.
+    ///
+    /// **Planner-visible, like `visionGoal` and unlike the two resolver pins above it.** The model is
+    /// the only thing that sees the command text, so it is the only thing that can tell "open
+    /// example.com in Chrome" from "open example.com". So this key is in `AgentPlanDecoder.stepKeys`
+    /// and in the schema; it is not a second decode-excluded app-identity field, which
+    /// `resolvedAppName`'s own comment warns against adding.
+    ///
+    /// **A name, not an identity, and deliberately not resolved here.** It holds what the user said.
+    /// `CapabilityExecutionContext.browser(named:)` turns it into a `MacApp` at execution time
+    /// through the same `installedAppResolver` every other app-name path uses; if it resolves to
+    /// nothing installed, the step falls back to the system default rather than failing, which is the
+    /// behaviour `WorkspaceBrowserOpener` already documents for a workspace naming a browser that is
+    /// not there.
+    ///
+    /// **Not gated on `WorkspaceBrowserCatalog`.** That catalog answers "which of these apps is the
+    /// browser", which is the question a workspace's app list poses and this field does not — the
+    /// user already said which one. Gating on it would refuse a browser outside its five bundle
+    /// identifiers for no reason the user could see, and reusing a definition for a question it was
+    /// not built to answer is its own kind of drift.
+    public var browserName: String?
+
+
     public init(
         id: String,
         operation: AgentOperation,
@@ -122,6 +145,7 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
         draftContent: String? = nil,
         shortcutName: String? = nil,
         shortcutInput: String? = nil,
+        browserName: String? = nil,
         resolvedAppName: String? = nil,
         resolvedBundleIdentifier: String? = nil,
         visionGoal: String? = nil
@@ -154,6 +178,7 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
         self.draftContent = draftContent
         self.shortcutName = shortcutName
         self.shortcutInput = shortcutInput
+        self.browserName = browserName
         self.resolvedAppName = resolvedAppName
         self.resolvedBundleIdentifier = resolvedBundleIdentifier
         self.visionGoal = visionGoal
@@ -296,6 +321,7 @@ public enum AgentPlanDecoder {
     ]
 
     private static let stepKeys: Set<String> = [
+        "browserName",
         "id",
         "operation",
         "description",
@@ -427,7 +453,8 @@ public enum AgentPlanSchema {
         "draftContent",
         "shortcutName",
         "shortcutInput",
-        "visionGoal"
+        "visionGoal",
+        "browserName"
     ]
 
     public static func responseFormat() -> [String: Any] {
@@ -591,6 +618,10 @@ public enum AgentPlanSchema {
             "shortcutInput": [
                 "type": ["string", "null"],
                 "description": "Simple text input to pass to invoke_shortcut through a temporary input file, or null."
+            ],
+            "browserName": [
+                "type": ["string", "null"],
+                "description": "The browser the user named for a URL-opening step, exactly as they said it (for example \"Chrome\", \"Safari\"), or null when they named none."
             ],
             "visionGoal": [
                 "type": ["string", "null"],
