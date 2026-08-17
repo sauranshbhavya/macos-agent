@@ -1,0 +1,23 @@
+# The codesign identity that scripts/package-app.sh signs MacAgent.app with.
+#
+# This file is the single configuration value for signing. Nothing else in scripts/ names an
+# identity, so moving from the local development certificate to a real Developer ID one is a change
+# to the line below and nothing else.
+#
+# Format: the first line that is neither blank nor a full-line comment is the identity name, passed
+# verbatim to `codesign --sign`. The literal value `-` means ad-hoc signing, which is what this repo
+# did before SONNY-153 — see that ticket before choosing it, because ad-hoc signing loses every
+# macOS permission grant on every rebuild.
+#
+# The value below is a certificate created on the developer's own Mac by
+# scripts/create-signing-identity.sh. Its private key never leaves the login keychain, is never
+# committed, and is not a distribution identity — it does nothing for anyone installing Sonny.
+# The name here is not a secret: codesign prints it on every signed app.
+#
+# NOT the release requirement. SONNY-106 section E requires a Developer ID signed AND notarized
+# build, gated on the founder's Apple Developer enrolment (section F). A local certificate
+# satisfies neither. When the enrolment completes, replace the line below with the Developer ID
+# Application identity name — and note that notarization is a separate step this repo does not
+# have yet.
+
+Sonny Local Dev

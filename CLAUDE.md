@@ -25,6 +25,7 @@ app-bundle identity — `UNUserNotificationCenter`, the microphone permission pr
 and either fail silently or crash outright without it. To manually test any of that, package and
 run a real `.app` instead:
 ```
+./scripts/create-signing-identity.sh # once per Mac, from a terminal — see below
 ./scripts/package-app.sh            # add "release" for a release build
 open .build/arm64-apple-macosx/debug/MacAgent.app
 # or, to see console output live:
@@ -33,8 +34,26 @@ open .build/arm64-apple-macosx/debug/MacAgent.app
 `Packaging/Info.plist` is the bundle's real `Info.plist` (`CFBundleIdentifier`,
 `NSMicrophoneUsageDescription`, `NSAppleEventsUsageDescription`) — update it if a new capability
 needs its own usage-description key, the same class of requirement that made this necessary in the
-first place. The script ad-hoc-codesigns the assembled bundle; no Apple Developer account needed
-for local testing.
+first place.
+
+The bundle is signed with the identity named in `Packaging/signing-identity`, which is the single
+place any signing identity is configured — swapping the local development certificate for a real
+Developer ID one is a change to that one line. `./scripts/create-signing-identity.sh` creates the
+local certificate and is run once per machine; `package-app.sh` refuses to package rather than
+falling back to ad-hoc signing if the identity is missing. **This is not the release requirement** —
+SONNY-106 section E still needs a Developer ID signed *and notarized* build, gated on the founder's
+Apple Developer enrolment, and a local certificate satisfies neither.
+
+Ad-hoc signing was what this replaced (SONNY-153), and the reason matters for anyone tempted to put
+it back: an ad-hoc signature has no identity, so macOS keys every permission grant to that one
+build's hash. Every rebuild then silently loses Screen Recording, Accessibility, Microphone and
+Desktop access while System Settings still shows the switches on — which made the founder's manual
+pass, the only verification some behavior ever gets, impossible.
+
+One gotcha for agent sessions: the first `codesign` after the certificate is created blocks on a GUI
+dialog asking whether codesign may use the key. In a non-interactive session that reads as a hang
+with no output. `create-signing-identity.sh` raises that dialog deliberately when run from a
+terminal so it is answered once, at setup, rather than mid-build.
 
 ## Conventions
 
