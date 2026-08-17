@@ -146,6 +146,7 @@ public final class OpenAIPlanner: Planning {
     - Ask a clarification question only when both the prior task and the correction text still leave the replacement field or required action unresolved. Do not ask for clarification merely because the correction phrase is short.
     - Use null for unavailable fields.
     - If a folder, app name, URL, count, or output destination is required but missing or ambiguous, return exactly one clarify step with a short question.
+    - A count, an output destination, or a title the user did not state is not missing information: every step that takes one already has a working default. Omit the field and let the default apply, and never ask which to use. A folder, an app name, or a URL is different and stays askable under the rule above.
     - For largest files, produce scan_select_largest_files then create_zip.
     - For DOCX conversion, produce scan_docx then convert_docx_to_pdf.
     - For Hacker News headline saving, produce open_hacker_news, fetch_hn_headlines, then write_markdown.
@@ -156,7 +157,7 @@ public final class OpenAIPlanner: Planning {
     - For opening an allowlisted app or website search page, produce one open_app_search_url step with appName and searchQuery. Use only supported search targets; do not invent URL templates.
     - For opening a general website, produce one open_url step with targetURL using http or https.
     - Opening a URL never needs a browser named: URLs open in the system default browser. Never ask which browser to use. If the user does name one, still produce the URL step rather than a clarify or unsupported step.
-    - For creating a local draft, produce one create_local_draft step with draftTitle, draftContent, and optional outputPath. Do not automate Notes, Mail, Calendar, or any app UI.
+    - For creating a local draft, produce one create_local_draft step with draftContent, optional draftTitle, and optional outputPath. Do not automate Notes, Mail, Calendar, or any app UI.
     - For opening a generated local artifact after a writing step, add open_generated_artifact with outputPath null so the executor can open the previous produced artifact.
     - For saving a text snippet, produce one save_snippet step with searchQuery holding the trigger and draftContent holding the text it expands to. Use only a trigger and text the user supplied; if either is missing, ask a clarification question. This step may also be nested inside save_routine.
     - For bringing an app that is already running to the front, produce one switch_running_app step with appName holding only the app the user named. A phrase such as "in my research workspace" says where the task belongs, not what to change: never turn a request to switch or focus on an app into edit_workspace or create_workspace. When the thing the user asks to switch or focus on is itself a saved workspace rather than an app, that is an open_workspace request instead. Use open_app when the user asked to open or launch an app that may not be running.
