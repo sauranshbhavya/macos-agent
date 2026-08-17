@@ -32,9 +32,18 @@ public enum ShellSurfaceSignal: String, CaseIterable, Equatable, Sendable {
     /// **Structure, not a sigil.** The address-shaped part alone is nowhere near enough — "Hi team,
     /// alice@example.com says the build is 50% faster" carries an address and a `%` and is not a
     /// prompt. What is required is a prompt's *shape*: an identity, then a path (either after a
-    /// colon or as its own whitespace-delimited token), then a terminating sigil. In prose the sigil
-    /// is glued to a digit (`50%`, `80%`) or is separated from the address by ordinary words, and
-    /// neither parses.
+    /// colon or as its own whitespace-delimited token), then a terminating sigil **separated from
+    /// that path by whitespace, or glued only to a closing bracket**. In prose the sigil is glued to
+    /// a digit — which is exactly what "priya@acme.io 82% open" is, and what a prompt never is
+    /// (PR #57 N1).
+    ///
+    /// **A minimal prompt counts only when it repeats and ends at a waiting prompt** (PR #57 N2).
+    /// Plenty of shells print nothing but `$ ` or `% `, and the deny list cannot help there because
+    /// this check exists for shells running *inside* something else. A single `$ npm install` is a
+    /// documentation page and must stay invisible; a `$ `/`% ` line occurring at least
+    /// ``ShellSurfaceDetector/minimumMinimalPromptLines`` times **whose last occurrence is bare** is
+    /// a scrollback ending at a prompt waiting for input — a shape prose does not produce and a live
+    /// terminal almost always does.
     case interactivePrompt = "interactive_prompt"
 
     /// A command that a shell has actually been asked to run: a recognised command name in the
@@ -54,6 +63,17 @@ public enum ShellSurfaceSignal: String, CaseIterable, Equatable, Sendable {
     /// notebook `!pip install` fires this with no prompt anywhere. That independence is the
     /// difference between this and the `promptScrollback` signal deleted before the first commit,
     /// which was the *same* predicate counted a second time.
+    ///
+    /// **The independence is partial on the prompt path, and that is stated rather than implied**
+    /// (PR #57 N1). Where this fires from a prompt line it is computed *from* the prompt ranges, so
+    /// a prompt-pattern misfire can produce both signals off one line with no second opinion. That
+    /// derivation is inherent to the case it exists for — a command typed at a prompt is on the
+    /// prompt's own line, which is what makes an idle terminal panel refuse — so it cannot be fixed
+    /// by requiring different lines. What was done instead is to shrink the shared failure mode
+    /// until it is hard to reach: the sigil may no longer be glued to a digit, and the command must
+    /// be the **first** token after the prompt rather than any of the ~90 names appearing anywhere
+    /// in the remainder. The residual is recorded on the ticket with the string that still reaches
+    /// it.
     case commandRunInAShell = "command_run_in_a_shell"
 
     /// The shape of a directory listing: a permission string with a link count, or a `total <n>`
@@ -164,6 +184,12 @@ struct ShellSurfaceDetector {
     /// for. Tune the signals.
     static let signalThreshold = 2
 
+    /// How many `$ `/`% ` line-starts a document needs before they are read as a scrollback rather
+    /// than as a documentation example — see ``minimalPromptRanges(in:)``. Two, because one is what
+    /// a docs page shows and two is already more than prose produces by accident; the trailing
+    /// bare-prompt requirement is what carries the rest of the weight.
+    static let minimumMinimalPromptLines = 2
+
     /// The commands whose appearance **at a prompt** counts as
     /// ``ShellSurfaceSignal/commandRunInAShell``.
     ///
@@ -250,7 +276,12 @@ struct ShellSurfaceDetector {
         // "alice@example.com says the build is 50% faster" the only token that can occupy the path
         // slot is `says`, and no sigil follows it. In prose a `%` is glued to a digit; in a prompt it
         // is a token of its own.
-        let spacedForm = /(?m)[A-Za-z0-9._-]+@[A-Za-z0-9._-]+[ \t]+[~\/A-Za-z0-9._\]-]{1,60}[ \t]*[$%#](?=[ \t]|$)/
+        // Two variants rather than one with `[ \t]*`, because the difference is the whole guard: a
+        // prompt separates its path from its sigil with whitespace (`user@host dir % `), or closes a
+        // bracket against it (`[user@host dir]$ `). Prose glues the sigil to a digit — "priya@acme.io
+        // 82% open" — and neither variant admits that (PR #57 N1).
+        let spacedForm = /(?m)[A-Za-z0-9._-]+@[A-Za-z0-9._-]+[ \t]+[~\/A-Za-z0-9._-]{1,60}[ \t]+[$%#](?=[ \t]|$)/
+        let bracketedForm = /(?m)[A-Za-z0-9._-]+@[A-Za-z0-9._-]+[ \t]+[~\/A-Za-z0-9._-]{1,60}\][$%#](?=[ \t]|$)/
         // A shell with no prompt customisation at all: `bash-5.2$`, `sh-3.2#`.
         let bareShell = /(?m)^[ \t]{0,8}-?(?:bash|zsh|sh|ksh|csh|tcsh|dash|fish)-[0-9][0-9.]*[$#](?=[ \t]|$)/
         // oh-my-zsh's arrow, and **only** that glyph. `▶` is the macOS/Xcode/GitHub/Notion disclosure
@@ -258,16 +289,50 @@ struct ShellSurfaceDetector {
         // quotation mark, and `❯` is a common chevron bullet — all three were accepted here once and
         // each refused ordinary pages on its own (PR #57 F1). Consequence, stated rather than
         // discovered: a starship prompt, whose default glyph is `❯`, is not recognised as a prompt.
-        let arrowPrompt = /(?m)^[ \t]{0,8}\u{279C}[ \t]/
+        // The arrow prompt swallows oh-my-zsh's own decorations — the directory, the `git:(branch)`
+        // segment, the ✗/✓ status — so that, as with every other pattern here, the range ends where
+        // the *command* begins. That is what lets ``hasCommandRunInAShell`` read the first token
+        // rather than scanning a whole line for any command name (PR #57 N1).
+        let arrowPrompt = /(?m)^[ \t]{0,8}\u{279C}[ \t]+[A-Za-z0-9._~\/-]+(?:[ \t]+git:\([^)\n]{0,40}\))?(?:[ \t]+[\u{2717}\u{2713}])?[ \t]*/
         let powerShell = /(?m)^[ \t]{0,8}PS [A-Za-z]:\\[^\n]{0,120}>(?=[ \t]|$)/
 
         var ranges: [Range<String.Index>] = []
         for match in text.matches(of: colonForm) { ranges.append(match.range) }
         for match in text.matches(of: spacedForm) { ranges.append(match.range) }
+        for match in text.matches(of: bracketedForm) { ranges.append(match.range) }
         for match in text.matches(of: bareShell) { ranges.append(match.range) }
         for match in text.matches(of: arrowPrompt) { ranges.append(match.range) }
         for match in text.matches(of: powerShell) { ranges.append(match.range) }
+        ranges.append(contentsOf: minimalPromptRanges(in: text))
         return ranges
+    }
+
+    /// Prompts that are nothing but a sigil — `$ `, `% ` — which are only prompts when they repeat
+    /// and the last of them is waiting for input.
+    ///
+    /// **Why repetition, and why the trailing bare one** (PR #57 N2). A lone `$ npm install` is what
+    /// every documentation page, README and changelog uses to show a reader what to type, so a
+    /// single occurrence has to stay invisible. Several occurrences *plus a final bare sigil* is a
+    /// scrollback that ends where the cursor sits — a shape a comment block does not have. Both
+    /// halves are load-bearing and were measured: without repetition the docs page refuses; without
+    /// the trailing bare prompt, a LaTeX or config comment block (`% cache settings` / `%` /
+    /// `% clear on restart`) refuses.
+    ///
+    /// **`#` and `❯` are deliberately not here.** `#` is Markdown's heading marker and the comment
+    /// marker of most config formats; a root prompt arrives as `root@host:/#` through the colon form
+    /// anyway. `❯` is a chevron bullet — the measured cost of admitting it is that a bullet list
+    /// ending in an empty bullet refuses, which is the F1 class this branch already paid for once.
+    /// The consequence is that a **starship or pure prompt is not recognised**, recorded as a bound
+    /// rather than inherited.
+    private static func minimalPromptRanges(in text: String) -> [Range<String.Index>] {
+        let minimal = /(?m)^[ \t]{0,8}[$%](?=[ \t]|$)/
+        let hits = text.matches(of: minimal).map(\.range)
+        guard hits.count >= minimumMinimalPromptLines, let last = hits.last else {
+            return []
+        }
+        let lineEnd = text[last.upperBound...].firstIndex(of: "\n") ?? text.endIndex
+        let waiting = text[last.upperBound..<lineEnd].allSatisfy { $0 == " " || $0 == "\t" }
+        return waiting ? hits : []
     }
 
     // MARK: - Per-signal detection
@@ -275,7 +340,7 @@ struct ShellSurfaceDetector {
     private static func hasCommandRunInAShell(_ text: String, prompts: [Range<String.Index>]) -> Bool {
         for prompt in prompts {
             let lineEnd = text[prompt.upperBound...].firstIndex(of: "\n") ?? text.endIndex
-            if commandTokens(in: text[prompt.upperBound..<lineEnd]) {
+            if beginsWithACommand(text[prompt.upperBound..<lineEnd]) {
                 return true
             }
         }
@@ -285,10 +350,18 @@ struct ShellSurfaceDetector {
         return text.matches(of: notebookEscape).contains { isCommand(String($0.output.1)) }
     }
 
-    private static func commandTokens(in remainder: Substring) -> Bool {
-        remainder
+    /// Whether what was typed at a prompt **starts with** a command.
+    ///
+    /// **First token, not any token** (PR #57 N1). Scanning the whole remainder meant one ordinary
+    /// English word anywhere on a line the prompt pattern had misread was enough — which is how
+    /// "billing@acme.io Total $ 400 please open the invoice" refused, on `open`. A shell puts the
+    /// command immediately after the prompt, so requiring that costs nothing real and removes a
+    /// large share of the surface the prompt pattern shares with this one.
+    private static func beginsWithACommand(_ remainder: Substring) -> Bool {
+        let first = remainder
             .split(whereSeparator: { !($0.isLetter || $0.isNumber || $0 == "." || $0 == "/" || $0 == "-" || $0 == "_") })
-            .contains { isCommand(String($0)) }
+            .first
+        return first.map { isCommand(String($0)) } ?? false
     }
 
     private static func isCommand(_ token: String) -> Bool {
