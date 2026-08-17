@@ -40,6 +40,56 @@ struct AgentPlanDecoderTests {
         #expect(plan.steps[0].count == 3)
     }
 
+    /// **The schema and the decoder have to agree about `browserName`, or plans fail at runtime**
+    /// (SONNY-157). The schema tells the model it may send the key; `AgentPlanDecoder.stepKeys` is an
+    /// allowlist that rejects any step key it does not know. Adding a field to one and not the other
+    /// is the drift this pins: a plan carrying the key would be refused wholesale, which presents as
+    /// the planner failing rather than as a missing browser.
+    @Test
+    func decodesTheBrowserNameAStepCarries() throws {
+        let json = """
+        {
+          "summary": "Open the release notes in Chrome.",
+          "requiresConfirmation": false,
+          "steps": [
+            {
+              "id": "open",
+              "operation": "open_url",
+              "description": "Open the release notes.",
+              "targetURL": "https://example.com/notes",
+              "browserName": "Chrome"
+            }
+          ]
+        }
+        """
+
+        let plan = try AgentPlanDecoder.decodeStrict(from: json)
+
+        #expect(plan.steps[0].browserName == "Chrome")
+    }
+
+    /// The same key omitted decodes to `nil` rather than failing — the ordinary case, and the one
+    /// SONNY-152's guarantee rests on.
+    @Test
+    func aStepWithNoBrowserNameDecodesToNil() throws {
+        let json = """
+        {
+          "summary": "Open the release notes.",
+          "requiresConfirmation": false,
+          "steps": [
+            {
+              "id": "open",
+              "operation": "open_url",
+              "description": "Open the release notes.",
+              "targetURL": "https://example.com/notes"
+            }
+          ]
+        }
+        """
+
+        #expect(try AgentPlanDecoder.decodeStrict(from: json).steps[0].browserName == nil)
+    }
+
     @Test
     func rejectsUnexpectedTopLevelKey() throws {
         let json = """

@@ -289,6 +289,115 @@ struct AgentActionExecutorTests {
         #expect(fileOpener.openedFiles.allSatisfy { FileManager.default.fileExists(atPath: $0.path) })
     }
 
+    // MARK: - A browser named on the step (SONNY-157)
+
+    private func openURLPlan(_ url: String, browserName: String? = nil) -> AgentPlan {
+        AgentPlan(
+            summary: "Open \(url).",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(
+                    id: "open",
+                    operation: .openURL,
+                    description: "Open \(url).",
+                    targetURL: url,
+                    browserName: browserName
+                )
+            ]
+        )
+    }
+
+    /// **The gap SONNY-152 found and refused to close, now closed.** Before this, naming a browser
+    /// did nothing: `AgentStep` had no field to carry one, and the only non-nil `preferredBrowser`
+    /// anywhere in `Sources/` was the routine path — so "open example.com in Chrome" opened in the
+    /// system default and the words "in Chrome" were silently dropped.
+    @Test
+    func aBrowserNamedOnTheStepIsWhereTheURLOpens() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let opener = RecordingBrowserOpener()
+        let executor = makeExecutor(root: root, browserOpener: opener)
+
+        _ = try await executor.execute(plan: openURLPlan("https://example.com", browserName: "Chrome")) { _, _ in }
+
+        #expect(opener.openedURLs == [URL(string: "https://example.com")!])
+        #expect(opener.openedBrowsers.map(\.?.bundleIdentifier) == ["com.google.Chrome"])
+    }
+
+    /// **SONNY-152's guarantee, pinned at the execution layer rather than only in the prompt.** A
+    /// command naming no browser must still reach the system default, which the opener represents as
+    /// `nil`. This is the half that must not regress while the other half is being built.
+    @Test
+    func noBrowserNamedStillOpensInTheSystemDefault() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let opener = RecordingBrowserOpener()
+        let executor = makeExecutor(root: root, browserOpener: opener)
+
+        _ = try await executor.execute(plan: openURLPlan("https://example.com")) { _, _ in }
+
+        #expect(opener.openedBrowsers == [nil])
+    }
+
+    /// **The step wins over a routine's binding, and the precedence is stated rather than emergent.**
+    /// A routine's browser is a default inferred from the apps that routine opens; a name on the step
+    /// is what the user said in this command. The more specific instruction wins.
+    ///
+    /// Exercised through the same `preferredBrowser` parameter `RunRoutineCapabilityAdapter` uses —
+    /// the only non-nil caller in `Sources/` — so this is the real collision and not a simulated one.
+    @Test
+    func aBrowserNamedOnTheStepWinsOverARoutinesBinding() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let opener = RecordingBrowserOpener()
+        let executor = makeExecutor(root: root, browserOpener: opener)
+        let routineBrowser = MacApp(displayName: "Safari", bundleIdentifier: "com.apple.Safari")
+
+        _ = try await executor.execute(
+            plan: openURLPlan("https://example.com", browserName: "Chrome"),
+            preferredBrowser: routineBrowser
+        ) { _, _ in }
+
+        #expect(opener.openedBrowsers.map(\.?.bundleIdentifier) == ["com.google.Chrome"])
+    }
+
+    /// And the routine's binding still applies when the step names nothing — the founder's
+    /// 2026-08-04 decision is untouched by this change.
+    @Test
+    func aRoutinesBindingStillAppliesWhenTheStepNamesNoBrowser() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let opener = RecordingBrowserOpener()
+        let executor = makeExecutor(root: root, browserOpener: opener)
+        let routineBrowser = MacApp(displayName: "Safari", bundleIdentifier: "com.apple.Safari")
+
+        _ = try await executor.execute(
+            plan: openURLPlan("https://example.com"),
+            preferredBrowser: routineBrowser
+        ) { _, _ in }
+
+        #expect(opener.openedBrowsers.map(\.?.bundleIdentifier) == ["com.apple.Safari"])
+    }
+
+    /// **A name that resolves to nothing installed falls back rather than failing.** Same reasoning
+    /// `WorkspaceBrowserOpener` already records for a workspace naming an absent browser: a link
+    /// opening in the wrong browser beats one that fails mid-open. Here the fallback is the system
+    /// default, because no routine binding was in force.
+    @Test
+    func anUnresolvableBrowserNameFallsBackInsteadOfFailing() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let opener = RecordingBrowserOpener()
+        let executor = makeExecutor(root: root, browserOpener: opener)
+
+        _ = try await executor.execute(
+            plan: openURLPlan("https://example.com", browserName: "Netscape Navigator")
+        ) { _, _ in }
+
+        #expect(opener.openedURLs == [URL(string: "https://example.com")!])
+        #expect(opener.openedBrowsers == [nil])
+    }
+
     @Test
     func runRoutineWrappingOpenURLReportsDataLeavingDevice() throws {
         let root = try makeDirectory()
