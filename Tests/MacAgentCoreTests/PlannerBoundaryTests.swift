@@ -40,7 +40,7 @@ struct PlannerBoundaryTests {
         - For opening an app, produce one open_app step with appName.
         - For opening an allowlisted app or website search page, produce one open_app_search_url step with appName and searchQuery. Use only supported search targets; do not invent URL templates.
         - For opening a general website, produce one open_url step with targetURL using http or https.
-        - Opening a URL never needs a browser named: URLs open in the system default browser. Never ask which browser to use. If the user does name one, still produce the URL step rather than a clarify or unsupported step.
+        - Opening a URL never needs a browser named: URLs open in the system default browser. Never ask which browser to use. If the user does name one, set browserName on that step to the name they used and produce the URL step as normal.
         - For creating a local draft, produce one create_local_draft step with draftContent, optional draftTitle, and optional outputPath. Do not automate Notes, Mail, Calendar, or any app UI.
         - For opening a generated local artifact after a writing step, add open_generated_artifact with outputPath null so the executor can open the previous produced artifact.
         - For saving a text snippet, produce one save_snippet step with searchQuery holding the trigger and draftContent holding the text it expands to. Use only a trigger and text the user supplied; if either is missing, ask a clarification question. This step may also be nested inside save_routine.
@@ -113,7 +113,8 @@ struct PlannerBoundaryTests {
             "draftContent",
             "shortcutName",
             "shortcutInput",
-            "visionGoal"
+            "visionGoal",
+            "browserName"
         ])
 
         let stepProperties = try #require(stepItems["properties"] as? [String: Any])
@@ -195,11 +196,16 @@ struct PlannerBoundaryTests {
         #expect(prompt.contains("URLs open in the system default browser"))
         // Direction 2 — the question this ticket exists to stop.
         #expect(prompt.contains("Never ask which browser to use"))
-        // Direction 3 — a named browser must not become a clarify or an unsupported step. Naming one
-        // has no routing effect today (there is no browser field on `AgentStep`, and the only
-        // non-nil `preferredBrowser` in `Sources/` is the routine path), so the rule deliberately
-        // promises no routing — only that the page still opens.
-        #expect(prompt.contains("still produce the URL step rather than a clarify or unsupported step"))
+        // Direction 3 — a named browser is carried rather than dropped.
+        //
+        // **This assertion changed in SONNY-157 and the change is the point.** When SONNY-152 wrote
+        // it, naming a browser had no routing effect anywhere: `AgentStep` had no browser field and
+        // the only non-nil `preferredBrowser` in `Sources/` was the routine path. So the rule
+        // deliberately promised nothing — only that the page still opened rather than becoming a
+        // clarify or an unsupported step — precisely so the prompt could not claim routing the
+        // system could not do. SONNY-157 built the routing, so the prompt now says the true thing.
+        // The promise got stronger; it was never wrong.
+        #expect(prompt.contains("set browserName on that step to the name they used and produce the URL step as normal"))
         // Direction 4 — and none of that was bought by weakening the general clarify rule.
         #expect(prompt.contains("If a folder, app name, URL, count, or output destination is required but missing or ambiguous, return exactly one clarify step"))
     }
