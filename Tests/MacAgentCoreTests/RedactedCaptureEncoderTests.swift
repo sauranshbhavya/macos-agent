@@ -251,6 +251,54 @@ struct RedactedCaptureEncoderTests {
         return buffer as Data
     }
 
+    /// **A painted region survives the lossy branch — the combination that is the common production
+    /// path and had no test.**
+    ///
+    /// Every fixture that produced a painted region chose PNG (flat two-tone content is lossless
+    /// compression's best case), and every fixture that reached JPEG was handed a recognizer that
+    /// found nothing. So the redaction guarantee — the structural one the whole product rests on —
+    /// was only ever exercised against a lossless encoder, while SONNY-114's own measurements say
+    /// three of five real captures ship as JPEG. Pinned here rather than left to hold by luck: a
+    /// future change to the quality, the ladder, or the format-choice rule cannot quietly start
+    /// leaving legible pixels under a black rectangle.
+    ///
+    /// The fixture is uniform noise with a pure-white block planted as the secret, which makes both
+    /// halves of the assertion sharp. Noise is what forces the lossy branch, and white on noise is
+    /// the highest-contrast thing that could survive the paint — if any of it did, the region's
+    /// brightest channel would be near 255 rather than near zero. The second assertion is what stops
+    /// a "paint everything" regression from passing: outside the region the noise is still there.
+    @Test
+    func aPaintedRegionIsStillOpaqueAfterTheLossyEncoding() async throws {
+        let width = 600
+        let height = 400
+        let secret = CGRect(x: 180, y: 140, width: 240, height: 120)
+        let png = ImageFixtures.noiseWithWhiteBlockPNG(width: width, height: height, block: secret)
+        let recognizer = StubRecognizer(observations: [
+            RecognizedTextObservation(string: "sk-Ab12Cd34Ef56Gh78Ij90", boundingBox: secret)
+        ])
+
+        let payload = try await LocalRedactionService(textRecognizer: recognizer)
+            .redactCapture(fixtureCapture(png: png, width: width, height: height))
+        let sent = try #require(payload.redactedImageData)
+
+        // The branch this test exists for. If the format choice ever changes for this fixture the
+        // test stops covering what it claims to, so it says so loudly rather than passing on.
+        #expect(payload.imageMediaType == .jpeg, "this fixture must reach the lossy branch")
+        #expect(payload.imagePixelWidth == width, "and must not be resampled, or the region moves")
+        #expect(payload.report.contains { $0.detectionClass == .apiKey })
+
+        // Inset past the painted rectangle's own edges, where JPEG's ringing against the surrounding
+        // noise lives. What is under test is the region's interior, not the codec's edge behaviour.
+        let interior = secret.insetBy(dx: 8, dy: 8)
+        let brightestInside = ImageFixtures.maximumChannel(inImageData: sent, region: interior)
+        print("EGRESS-PAINTED-REGION-BRIGHTEST-CHANNEL: \(brightestInside) (jpeg q80, 600x400 noise, 224x104 interior)")
+        #expect(brightestInside <= 48, "something under the redaction is still showing: \(brightestInside)")
+
+        // And the rest of the picture was not blacked out along with it.
+        let elsewhere = CGRect(x: 0, y: 0, width: 160, height: 120)
+        #expect(ImageFixtures.maximumChannel(inImageData: sent, region: elsewhere) > 200)
+    }
+
     // MARK: - The flatten
 
     /// The opaque canvas is required by the format choice — JPEG cannot carry alpha, so without it

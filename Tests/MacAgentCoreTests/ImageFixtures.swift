@@ -123,6 +123,26 @@ extension ImageFixtures {
         return png(from: ctx)
     }
 
+    /// Deterministic noise with a pure-white block planted in it, positioned in image space
+    /// (top-left origin).
+    ///
+    /// The one fixture that reaches the *lossy* branch while carrying something to redact: noise is
+    /// what makes JPEG the smaller encoding, and white on noise is the highest-contrast thing that
+    /// could survive a paint that failed.
+    static func noiseWithWhiteBlockPNG(width: Int, height: Int, block: CGRect) -> Data {
+        let noise = uniformNoisePNG(width: width, height: height)
+        let ctx = context(width: width, height: height)
+        ctx.draw(decoded(noise), in: CGRect(x: 0, y: 0, width: width, height: height))
+        ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+        ctx.fill(CGRect(
+            x: block.minX,
+            y: CGFloat(height) - block.maxY,
+            width: block.width,
+            height: block.height
+        ))
+        return png(from: ctx)
+    }
+
     /// A pure-red block on white, positioned in image space (top-left origin).
     ///
     /// Red is the tracer for the resample-after-redaction ordering test: the pipeline paints the
@@ -146,6 +166,42 @@ extension ImageFixtures {
     static func decoded(_ data: Data) -> CGImage {
         let source = CGImageSourceCreateWithData(data as CFData, nil)!
         return CGImageSourceCreateImageAtIndex(source, 0, nil)!
+    }
+
+    /// The brightest channel value anywhere inside a region, addressed in image space (x from the
+    /// left, y from the top).
+    ///
+    /// Reads every pixel in the region rather than sampling a grid, because the question it answers —
+    /// "is any of what was underneath still showing" — is a question about the worst pixel, and a
+    /// sample that missed it would answer the wrong one. Clamped to the image, so a caller may pass a
+    /// region in the *source's* coordinates against a resampled payload and get a meaningful answer
+    /// for the overlap.
+    static func maximumChannel(inImageData data: Data, region: CGRect) -> Int {
+        let image = decoded(data)
+        let bounds = CGRect(x: 0, y: 0, width: image.width, height: image.height)
+        let clamped = region.intersection(bounds)
+        guard !clamped.isNull, !clamped.isEmpty else { return 0 }
+
+        var buffer = [UInt8](repeating: 0, count: image.width * image.height * 4)
+        let ctx = CGContext(
+            data: &buffer,
+            width: image.width,
+            height: image.height,
+            bitsPerComponent: 8,
+            bytesPerRow: image.width * 4,
+            space: CGColorSpace(name: CGColorSpace.sRGB)!,
+            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+        )!
+        ctx.draw(image, in: bounds)
+
+        var maximum = 0
+        for y in Int(clamped.minY)..<Int(clamped.maxY) {
+            for x in Int(clamped.minX)..<Int(clamped.maxX) {
+                let offset = (y * image.width + x) * 4
+                maximum = max(maximum, Int(buffer[offset]), Int(buffer[offset + 1]), Int(buffer[offset + 2]))
+            }
+        }
+        return maximum
     }
 
     /// Every pixel's red dominance — how far red exceeds the larger of green and blue, which is 0
