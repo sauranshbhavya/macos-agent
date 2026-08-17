@@ -167,7 +167,12 @@ public struct FileInventory {
     /// interfering with the skip rule: a document whose *preferred* destination already exists is
     /// still skipped, exactly as before, and never renames. Only a collision with another document
     /// of the same run renames, and only ever onto a name nothing occupies.
-    public func docxFiles(in folder: URL, outputFolder: URL? = nil, mockDestinations: Bool = false) throws -> [DocxRecord] {
+    public func docxFiles(
+        in folder: URL,
+        outputFolder: URL? = nil,
+        mockDestinations: Bool = false,
+        destinationsClaimedEarlierInThisRun: Set<String> = []
+    ) throws -> [DocxRecord] {
         let sources = try regularFiles(in: folder)
             .filter { record in
                 record.url.pathExtension.lowercased() == "docx" &&
@@ -175,7 +180,7 @@ public struct FileInventory {
             }
             .sorted { $0.url.path < $1.url.path }
 
-        var claimedDestinations: Set<String> = []
+        var claimedDestinations = destinationsClaimedEarlierInThisRun
         var records: [DocxRecord] = []
         for source in sources {
             let basename = source.url.deletingPathExtension().lastPathComponent
@@ -184,7 +189,12 @@ public struct FileInventory {
                 Self.pdfName(stem: basename, mockDestinations: mockDestinations)
             )
 
-            if fileManager.fileExists(atPath: preferred.path) {
+            // **A file this run already wrote is not "already exists"** (SONNY-76). The skip rule is
+            // for a PDF that predates the run; a destination an earlier unit of this same chain
+            // claimed has to rename instead, or the user is told their second document was skipped
+            // for a file they never had — and is a PDF short.
+            if fileManager.fileExists(atPath: preferred.path),
+               !claimedDestinations.contains(DestinationKey.folded(preferred.path)) {
                 records.append(
                     DocxRecord(
                         sourceURL: source.url,

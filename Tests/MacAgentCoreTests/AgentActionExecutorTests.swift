@@ -1618,6 +1618,69 @@ struct AgentActionExecutorTests {
         ))
     }
 
+    // MARK: - SONNY-76: a chain's later units know what its earlier units wrote
+
+    /// **The user asked for two PDFs, got one, and was told the second was "skipped because a PDF
+    /// already exists" — pointing at the PDF this same run had written seconds earlier.**
+    ///
+    /// After SONNY-34 a two-folder conversion is two `[scan_docx, convert]` units, so the second
+    /// re-scans an output folder the first has already written into. `skippedBecausePDFExists` is
+    /// `fileManager.fileExists`, which cannot tell a file that predates the run from one this run
+    /// made, so the second document was skipped rather than renamed.
+    ///
+    /// Asserted on the pairs and on the summary, because the misleading sentence was half the bug:
+    /// a fix that produced both PDFs while still calling one "skipped" would leave the user with an
+    /// explanation that names a file they never had.
+    @Test
+    func aSecondUnitRenamesAroundThePDFTheFirstUnitJustWrote() async throws {
+        let fixture = try twoFolderChainFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let executor = makeExecutor(root: fixture.root, documentConverter: FakeDocumentConverter())
+
+        let result = try await executor.execute(plan: fixture.plan) { _, _ in }
+
+        #expect(FileManager.default.fileExists(atPath: fixture.outputFolder.appendingPathComponent("report.pdf").path))
+        #expect(FileManager.default.fileExists(atPath: fixture.outputFolder.appendingPathComponent("report-2.pdf").path))
+        #expect(conversionTails(in: result) == [
+            "ClientA/report.docx -> PDFs/report.pdf",
+            "ClientB/report.docx -> PDFs/report-2.pdf"
+        ])
+        #expect(!result.summary.contains("Skipped 1"))
+        #expect(result.summary.contains("Renamed 1 output"))
+    }
+
+    /// **The skip rule itself is untouched: a PDF that really did predate the run is still skipped.**
+    /// This is the half the fix could most easily have broken — treating every existing file as
+    /// "ours" would convert over documents the user already had.
+    @Test
+    func aPDFThatPredatesTheRunIsStillSkipped() async throws {
+        let fixture = try twoFolderChainFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        try write("pre-existing", to: fixture.outputFolder.appendingPathComponent("report.pdf"))
+        let executor = makeExecutor(root: fixture.root, documentConverter: FakeDocumentConverter())
+
+        let result = try await executor.execute(plan: fixture.plan) { _, _ in }
+
+        #expect(result.summary.contains("Skipped 1"))
+        #expect(try String(contentsOf: fixture.outputFolder.appendingPathComponent("report.pdf"), encoding: .utf8) == "pre-existing")
+    }
+
+    /// **The preview and the run agree about what the second unit will write.** Threading the claimed
+    /// set through `executeChain` alone would have left the approval panel naming `report.pdf` while
+    /// the run wrote `report-2.pdf` — a plan promising one file and writing another, which is exactly
+    /// what `aChainWritesOnlyFilesThePreparedPlanAlreadyNamed` forbids.
+    @Test
+    func theChainsPreviewNamesTheRenamedDestinationTheRunWillWrite() throws {
+        let fixture = try twoFolderChainFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let executor = makeExecutor(root: fixture.root, documentConverter: FakeDocumentConverter())
+
+        let writes = try executor.preview(plan: fixture.plan).flatMap(\.writes)
+
+        #expect(writes.contains { $0.hasSuffix("PDFs/report.pdf") })
+        #expect(writes.contains { $0.hasSuffix("PDFs/report-2.pdf") })
+    }
+
     // MARK: - SONNY-79: uniqueness folds the way the filesystem does
 
     /// **The pre-fix production failure, surviving in a narrow band until now.** `DestinationKey`
@@ -4513,6 +4576,46 @@ struct AgentActionExecutorTests {
         let subB: URL
         let outputFolder: URL
         let plan: AgentPlan
+    }
+
+    /// Two folders, one output folder, one document of the same name in each — expressed as a chain
+    /// of two `[scan_docx, convert]` units, which is what a two-folder conversion becomes after
+    /// SONNY-34 and what makes this different from `collidingDocxFixture`'s single scan.
+    private func twoFolderChainFixture() throws -> CollidingDocxFixture {
+        let root = try makeDirectory()
+        let clientA = root.appendingPathComponent("ClientA", isDirectory: true)
+        let clientB = root.appendingPathComponent("ClientB", isDirectory: true)
+        let outputFolder = root.appendingPathComponent("PDFs", isDirectory: true)
+        for directory in [clientA, clientB, outputFolder] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        try write("docx-a", to: clientA.appendingPathComponent("report.docx"))
+        try write("docx-b", to: clientB.appendingPathComponent("report.docx"))
+
+        func pair(_ id: String, _ folder: URL) -> [AgentStep] {
+            [
+                AgentStep(id: "scan-\(id)", operation: .scanDocx, description: "Scan DOCX.", inputPath: folder.path),
+                AgentStep(
+                    id: "convert-\(id)",
+                    operation: .convertDocxToPDF,
+                    description: "Convert DOCX.",
+                    inputPath: folder.path,
+                    outputPath: outputFolder.path
+                )
+            ]
+        }
+
+        return CollidingDocxFixture(
+            root: root,
+            subA: clientA,
+            subB: clientB,
+            outputFolder: outputFolder,
+            plan: AgentPlan(
+                summary: "Convert the Word documents in both folders to PDF.",
+                requiresConfirmation: true,
+                steps: pair("a", clientA) + pair("b", clientB)
+            )
+        )
     }
 
     private func collidingDocxFixture(nameA: String = "report", nameB: String = "report") throws -> CollidingDocxFixture {

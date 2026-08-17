@@ -538,7 +538,10 @@ public final class AgentActionExecutor {
         return try chainSegments(in: plan)
     }
 
-    public func preview(plan: AgentPlan) throws -> [ActionPreview] {
+    public func preview(
+        plan: AgentPlan,
+        destinationsClaimedEarlierInThisRun: Set<String> = []
+    ) throws -> [ActionPreview] {
         switch try workflow(in: plan) {
         case .clarify:
             guard let question = try clarificationQuestion(in: plan) else {
@@ -551,57 +554,57 @@ public final class AgentActionExecutor {
                 )
             ]
         case .largestFiles:
-            return try previewCapability(for: .scanSelectLargestFiles, plan: plan)
+            return try previewCapability(for: .scanSelectLargestFiles, plan: plan, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun)
         case .docx:
-            return try previewCapability(for: .scanDocx, plan: plan)
+            return try previewCapability(for: .scanDocx, plan: plan, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun)
         case .hackerNews:
-            return try previewCapability(for: .openHackerNews, plan: plan)
+            return try previewCapability(for: .openHackerNews, plan: plan, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun)
         case .webResearch:
-            return try previewCapability(for: .webToMarkdown, plan: plan)
+            return try previewCapability(for: .webToMarkdown, plan: plan, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun)
         case .openApp:
-            return try previewCapability(for: .openApp, plan: plan)
+            return try previewCapability(for: .openApp, plan: plan, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun)
         case .openAppSearchURL:
-            return try previewCapability(for: .openAppSearchURL, plan: plan)
+            return try previewCapability(for: .openAppSearchURL, plan: plan, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun)
         case .openURL:
-            return try previewCapability(for: .openURL, plan: plan)
+            return try previewCapability(for: .openURL, plan: plan, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun)
         case .openGeneratedArtifact:
-            return try previewCapability(for: .openGeneratedArtifact, plan: plan)
+            return try previewCapability(for: .openGeneratedArtifact, plan: plan, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun)
         case .createLocalDraft:
-            return try previewCapability(for: .createLocalDraft, plan: plan)
+            return try previewCapability(for: .createLocalDraft, plan: plan, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun)
         case .calculator:
-            return try previewCapability(for: .calculateUtility, plan: plan)
+            return try previewCapability(for: .calculateUtility, plan: plan, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun)
         case .clipboardHistory:
-            return try previewCapability(for: .lookupClipboardHistory, plan: plan)
+            return try previewCapability(for: .lookupClipboardHistory, plan: plan, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun)
         case .snippetSave:
-            return try previewCapability(for: .saveSnippet, plan: plan)
+            return try previewCapability(for: .saveSnippet, plan: plan, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun)
         case .snippetExpansion:
-            return try previewCapability(for: .expandSnippet, plan: plan)
+            return try previewCapability(for: .expandSnippet, plan: plan, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun)
         case .runningAppSwitch:
-            return try previewCapability(for: .switchRunningApp, plan: plan)
+            return try previewCapability(for: .switchRunningApp, plan: plan, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun)
         case .recentArtifacts:
-            return try previewCapability(for: .lookupRecentArtifacts, plan: plan)
+            return try previewCapability(for: .lookupRecentArtifacts, plan: plan, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun)
         case .mediaOpen:
-            return try previewCapability(for: .playMedia, plan: plan)
+            return try previewCapability(for: .playMedia, plan: plan, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun)
         case .finderSelection:
-            return try previewCapability(for: .getFinderSelection, plan: plan)
+            return try previewCapability(for: .getFinderSelection, plan: plan, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun)
         case .revealInFinder:
-            return try previewCapability(for: .revealInFinder, plan: plan)
+            return try previewCapability(for: .revealInFinder, plan: plan, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun)
         case .permissionReadiness:
-            return try previewCapability(for: .showPermissionReadiness, plan: plan)
+            return try previewCapability(for: .showPermissionReadiness, plan: plan, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun)
         case .saveRoutine:
-            return try previewCapability(for: .saveRoutine, plan: plan)
+            return try previewCapability(for: .saveRoutine, plan: plan, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun)
         case .runRoutine:
-            return try previewCapability(for: .runRoutine, plan: plan)
+            return try previewCapability(for: .runRoutine, plan: plan, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun)
         case .createWorkspace:
-            return try previewCapability(for: .createWorkspace, plan: plan)
+            return try previewCapability(for: .createWorkspace, plan: plan, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun)
         case .editWorkspace:
-            return try previewCapability(for: .editWorkspace, plan: plan)
+            return try previewCapability(for: .editWorkspace, plan: plan, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun)
         case .openWorkspace:
-            return try previewCapability(for: .openWorkspace, plan: plan)
+            return try previewCapability(for: .openWorkspace, plan: plan, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun)
         case .invokeShortcut:
-            return try previewCapability(for: .invokeShortcut, plan: plan)
+            return try previewCapability(for: .invokeShortcut, plan: plan, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun)
         case .visionSession:
-            return try previewCapability(for: .visionSession, plan: plan)
+            return try previewCapability(for: .visionSession, plan: plan, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun)
         case .chain:
             return try previewChain(plan)
         }
@@ -618,6 +621,7 @@ public final class AgentActionExecutor {
     public func execute(
         plan: AgentPlan,
         preferredBrowser: MacApp? = nil,
+        destinationsClaimedEarlierInThisRun: Set<String> = [],
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
         let resolvedPlan = try resolveDefaultOutputs(in: plan)
@@ -627,59 +631,59 @@ public final class AgentActionExecutor {
         case .clarify:
             throw AgentExecutionError.missingClarificationQuestion
         case .largestFiles:
-            return try await executeCapability(for: .scanSelectLargestFiles, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeCapability(for: .scanSelectLargestFiles, plan: resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         case .docx:
-            return try await executeCapability(for: .scanDocx, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeCapability(for: .scanDocx, plan: resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         case .hackerNews:
-            return try await executeCapability(for: .openHackerNews, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeCapability(for: .openHackerNews, plan: resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         case .webResearch:
-            return try await executeCapability(for: .webToMarkdown, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeCapability(for: .webToMarkdown, plan: resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         case .openApp:
-            return try await executeCapability(for: .openApp, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeCapability(for: .openApp, plan: resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         case .openAppSearchURL:
-            return try await executeCapability(for: .openAppSearchURL, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeCapability(for: .openAppSearchURL, plan: resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         case .openURL:
-            return try await executeCapability(for: .openURL, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeCapability(for: .openURL, plan: resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         case .openGeneratedArtifact:
-            return try await executeCapability(for: .openGeneratedArtifact, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeCapability(for: .openGeneratedArtifact, plan: resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         case .createLocalDraft:
-            return try await executeCapability(for: .createLocalDraft, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeCapability(for: .createLocalDraft, plan: resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         case .calculator:
-            return try await executeCapability(for: .calculateUtility, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeCapability(for: .calculateUtility, plan: resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         case .clipboardHistory:
-            return try await executeCapability(for: .lookupClipboardHistory, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeCapability(for: .lookupClipboardHistory, plan: resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         case .snippetSave:
-            return try await executeCapability(for: .saveSnippet, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeCapability(for: .saveSnippet, plan: resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         case .snippetExpansion:
-            return try await executeCapability(for: .expandSnippet, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeCapability(for: .expandSnippet, plan: resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         case .runningAppSwitch:
-            return try await executeCapability(for: .switchRunningApp, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeCapability(for: .switchRunningApp, plan: resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         case .recentArtifacts:
-            return try await executeCapability(for: .lookupRecentArtifacts, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeCapability(for: .lookupRecentArtifacts, plan: resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         case .mediaOpen:
-            return try await executeCapability(for: .playMedia, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeCapability(for: .playMedia, plan: resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         case .finderSelection:
-            return try await executeCapability(for: .getFinderSelection, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeCapability(for: .getFinderSelection, plan: resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         case .revealInFinder:
-            return try await executeCapability(for: .revealInFinder, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeCapability(for: .revealInFinder, plan: resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         case .permissionReadiness:
-            return try await executeCapability(for: .showPermissionReadiness, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeCapability(for: .showPermissionReadiness, plan: resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         case .saveRoutine:
-            return try await executeCapability(for: .saveRoutine, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeCapability(for: .saveRoutine, plan: resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         case .runRoutine:
-            return try await executeCapability(for: .runRoutine, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeCapability(for: .runRoutine, plan: resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         case .createWorkspace:
-            return try await executeCapability(for: .createWorkspace, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeCapability(for: .createWorkspace, plan: resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         case .editWorkspace:
-            return try await executeCapability(for: .editWorkspace, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeCapability(for: .editWorkspace, plan: resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         case .openWorkspace:
-            return try await executeCapability(for: .openWorkspace, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeCapability(for: .openWorkspace, plan: resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         case .invokeShortcut:
-            return try await executeCapability(for: .invokeShortcut, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeCapability(for: .invokeShortcut, plan: resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         case .visionSession:
-            return try await executeCapability(for: .visionSession, plan: resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeCapability(for: .visionSession, plan: resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         case .chain:
-            return try await executeChain(resolvedPlan, preferredBrowser: preferredBrowser, log: log)
+            return try await executeChain(resolvedPlan, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun, log: log)
         }
     }
 
@@ -1071,21 +1075,40 @@ public final class AgentActionExecutor {
         }
     }
 
-    private func previewCapability(for operation: AgentOperation, plan: AgentPlan) throws -> [ActionPreview] {
+    private func previewCapability(
+        for operation: AgentOperation,
+        plan: AgentPlan,
+        destinationsClaimedEarlierInThisRun: Set<String> = []
+    ) throws -> [ActionPreview] {
         try capabilityRegistry
             .adapter(for: operation)
-            .preview(plan: plan, context: capabilityContext(scope: .unscoped))
+            .preview(
+                plan: plan,
+                context: capabilityContext(
+                    destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun,
+                    scope: .unscoped
+                )
+            )
     }
 
     private func executeCapability(
         for operation: AgentOperation,
         plan: AgentPlan,
         preferredBrowser: MacApp?,
+        destinationsClaimedEarlierInThisRun: Set<String> = [],
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
         try await capabilityRegistry
             .adapter(for: operation)
-            .execute(plan: plan, context: capabilityContext(preferredBrowser: preferredBrowser, scope: .unscoped), log: log)
+            .execute(
+                plan: plan,
+                context: capabilityContext(
+                    preferredBrowser: preferredBrowser,
+                    destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun,
+                    scope: .unscoped
+                ),
+                log: log
+            )
     }
 
     private func capabilityAdapters(in plan: AgentPlan) throws -> [any CapabilityAdapter] {
@@ -1383,6 +1406,7 @@ public final class AgentActionExecutor {
 
     private func capabilityContext(
         preferredBrowser: MacApp? = nil,
+        destinationsClaimedEarlierInThisRun: Set<String> = [],
         scope: TaskWorkspaceScope
     ) -> CapabilityExecutionContext {
         CapabilityExecutionContext(
@@ -1418,6 +1442,7 @@ public final class AgentActionExecutor {
             now: now,
             hotKeyReady: hotKeyReady,
             preferredBrowser: preferredBrowser,
+            destinationsClaimedEarlierInThisRun: destinationsClaimedEarlierInThisRun,
             taskScope: scope,
             assessNestedPlan: { [weak self] plan, nestedScope in
                 guard let self else {
@@ -1445,10 +1470,19 @@ public final class AgentActionExecutor {
         var previews: [ActionPreview] = []
         var previousArtifactPath: String?
 
+        // The same accumulation as `executeChain`, over what each unit *says* it will write. Without
+        // it the preview and the run disagree about the second unit — the panel names `report.pdf`
+        // and the run writes `report-2.pdf` — and a plan that promises one file and writes another is
+        // the shape `aChainWritesOnlyFilesThePreparedPlanAlreadyNamed` exists to forbid.
+        var claimed: Set<String> = []
+
         for segment in try chainSegments(in: plan) {
             let resolved = resolvePreviousArtifactPathIfNeeded(in: segment, previousArtifactPath: previousArtifactPath)
-            let segmentPreviews = try preview(plan: resolved)
+            let segmentPreviews = try preview(plan: resolved, destinationsClaimedEarlierInThisRun: claimed)
             previews.append(contentsOf: segmentPreviews)
+            for written in segmentPreviews.flatMap(\.writes) {
+                claimed.insert(DestinationKey.folded(written))
+            }
             if let producedPath = segmentPreviews.flatMap(\.writes).last {
                 previousArtifactPath = producedPath
             }
@@ -1460,16 +1494,25 @@ public final class AgentActionExecutor {
     private func executeChain(
         _ plan: AgentPlan,
         preferredBrowser: MacApp?,
+        destinationsClaimedEarlierInThisRun: Set<String> = [],
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
         var summaries: [String] = []
         var suggestions: [RunSuggestion] = []
         var previews: [ActionPreview] = []
         var previousArtifactPath: String?
+        // Every destination earlier units of this chain have written, folded (SONNY-76). Accumulated
+        // from the previews each unit actually produced rather than through a second return channel,
+        // so it covers writes from any capability: a PDF this run made is this run's whether a
+        // conversion or something else made it.
+        var claimed = destinationsClaimedEarlierInThisRun
 
         for segment in try chainSegments(in: plan) {
             let resolved = resolvePreviousArtifactPathIfNeeded(in: segment, previousArtifactPath: previousArtifactPath)
-            let result = try await execute(plan: resolved, preferredBrowser: preferredBrowser, log: log)
+            let result = try await execute(plan: resolved, preferredBrowser: preferredBrowser, destinationsClaimedEarlierInThisRun: claimed, log: log)
+            for written in result.previews.flatMap(\.writes) {
+                claimed.insert(DestinationKey.folded(written))
+            }
             summaries.append(result.summary)
             suggestions.append(contentsOf: result.suggestions)
             // Accumulate each segment's real result previews — re-running previewChain after
