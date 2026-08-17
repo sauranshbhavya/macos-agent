@@ -3,6 +3,34 @@ import Foundation
 import Testing
 @testable import MacAgentCore
 
+/// **The Accessibility grant as a stated value rather than a reading of this Mac** (SONNY-103).
+///
+/// `VisionSessionContainment` defaults its checker to `SystemScreenCapturePermissionChecker`, which
+/// answers `AXIsProcessTrusted()` — a fact about whichever process happens to be running the suite.
+/// macOS grants Accessibility per responsible process, so one unchanged tree passed from the
+/// founder's terminal and failed 22 issues from an agent session's, every one of them
+/// `.permissionRevoked` returned before the boundary the test was written to pin. (Measured at main
+/// `9a84e3b`: 1203 tests / 90 suites / 22 issues from a process where `AXIsProcessTrusted()`
+/// answered false, against 1203 / 90 / exit 0 from one where it answered true.) A suite whose result
+/// depends on machine state is not evidence — and this one failed in the flattering direction as
+/// well, because a defect that made the containment refuse everything would have looked exactly like
+/// a missing grant.
+///
+/// One flag, because the containment asks exactly one question. The screen-recording members answer
+/// alike to satisfy the protocol rather than inventing a second axis nothing here reads.
+///
+/// File-scoped rather than nested because both suites that drive `checkIterationStart` need it —
+/// this file's and `UnattendedVisionNeverTests`' — and two copies of the same stub is how one of
+/// them ends up still reading the machine.
+struct FixedAccessibilityGrant: ScreenCapturePermissionChecking {
+    let trusted: Bool
+
+    func hasScreenRecordingPermission() -> Bool { trusted }
+    @discardableResult func requestScreenRecordingPermission() -> Bool { trusted }
+    func isAccessibilityTrusted() -> Bool { trusted }
+    @discardableResult func requestAccessibilityTrust() -> Bool { trusted }
+}
+
 /// SONNY-92: the containment layer, one check at a time.
 ///
 /// Each per-iteration boundary gets its own test that fails for its own reason. A single
@@ -19,14 +47,27 @@ struct VisionSessionContainmentTests {
         applicationURL: URL(fileURLWithPath: "/Applications/Safari.app")
     )
 
+    private static let terminal = InstalledApp(
+        displayName: "Terminal",
+        bundleIdentifier: "com.apple.Terminal",
+        applicationURL: URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
+    )
+
+    /// **The only place this file builds a containment** (SONNY-103), so that no test can fall back
+    /// to a default seam by forgetting to pass one. Every input the containment reads — the target,
+    /// the cap, attention, and the Accessibility grant — is stated here as a value, and not one of
+    /// them is read from the machine running the suite.
     private static func containment(
+        target: InstalledApp = safari,
         limits: VisionSessionLimits = .default,
-        attention: SessionAttentionState = .attended
+        attention: SessionAttentionState = .attended,
+        accessibilityTrusted: Bool = true
     ) -> VisionSessionContainment {
         VisionSessionContainment(
-            target: ScreenControlPolicy.verdict(for: safari),
+            target: ScreenControlPolicy.verdict(for: target),
             limits: limits,
-            attentionMonitor: FixedAttentionMonitor(attention)
+            attentionMonitor: FixedAttentionMonitor(attention),
+            permissionChecker: FixedAccessibilityGrant(trusted: accessibilityTrusted)
         )
     }
 
@@ -132,12 +173,7 @@ struct VisionSessionContainmentTests {
     /// could not notice a pin being wrong.
     @Test
     func aTerminalTargetRefusesAtEveryIterationNotJustTheFirst() async {
-        let terminal = InstalledApp(
-            displayName: "Terminal",
-            bundleIdentifier: "com.apple.Terminal",
-            applicationURL: URL(fileURLWithPath: "/System/Applications/Utilities/Terminal.app")
-        )
-        let containment = VisionSessionContainment(target: ScreenControlPolicy.verdict(for: terminal))
+        let containment = Self.containment(target: Self.terminal)
 
         for iteration in [1, 2, 7] {
             let refusal = await containment.checkIterationStart(
@@ -164,6 +200,66 @@ struct VisionSessionContainmentTests {
             frontmostBundleIdentifier: Self.frontmost("com.apple.Notes")
         )
         #expect(refusal == .attentionLost(.screenLocked))
+    }
+
+    // MARK: - The Accessibility grant, in both directions
+
+    /// **The revoked-grant branch, stated on purpose rather than arrived at by accident**
+    /// (SONNY-103).
+    ///
+    /// Every other test in this file states the grant as held, because each is written to reach a
+    /// later boundary. Stubbing it trusted everywhere and stopping there would leave this branch
+    /// unexercised — the same hole moved rather than closed — so the refusing direction gets its own
+    /// test, asserted against the very call the allowing direction makes.
+    @Test
+    func aRevokedAccessibilityGrantRefusesTheIterationAndAHeldGrantDoesNot() async {
+        let revoked = await Self.containment(accessibilityTrusted: false).checkIterationStart(
+            iteration: 1,
+            isCancelled: false,
+            frontmostBundleIdentifier: Self.frontmost("com.apple.Safari")
+        )
+        #expect(revoked == .permissionRevoked)
+
+        // Identical inputs, grant held: the boundary list runs to the end and allows the iteration.
+        // The two answers differing is what shows the containment reads the injected value rather
+        // than this Mac's TCC state, and neither half can pass vacuously while the other holds.
+        let held = await Self.containment(accessibilityTrusted: true).checkIterationStart(
+            iteration: 1,
+            isCancelled: false,
+            frontmostBundleIdentifier: Self.frontmost("com.apple.Safari")
+        )
+        #expect(held == nil)
+    }
+
+    /// Where the revocation check sits in the order — claimed by the production comment, pinned by
+    /// nothing until now.
+    ///
+    /// Ahead of attention, eligibility and frontmost: a user who revoked the grant while also being
+    /// away is owed the reason they can act on, not the one that resolves itself when they sit back
+    /// down. Behind cancellation, which stays the answer for anyone who pressed stop.
+    @Test
+    func aRevokedGrantOutranksAttentionAndTheTargetChecksButNotCancellation() async {
+        // Every later boundary would refuse too — away from the Mac, a banned target, and the wrong
+        // app in front — so the ordering alone decides what comes back.
+        let containment = Self.containment(
+            target: Self.terminal,
+            attention: .screenLocked,
+            accessibilityTrusted: false
+        )
+
+        let running = await containment.checkIterationStart(
+            iteration: 1,
+            isCancelled: false,
+            frontmostBundleIdentifier: Self.frontmost("com.apple.Notes")
+        )
+        #expect(running == .permissionRevoked)
+
+        let stopped = await containment.checkIterationStart(
+            iteration: 1,
+            isCancelled: true,
+            frontmostBundleIdentifier: Self.frontmost("com.apple.Notes")
+        )
+        #expect(stopped == .cancelled)
     }
 
     // MARK: - Every refusal is legible
