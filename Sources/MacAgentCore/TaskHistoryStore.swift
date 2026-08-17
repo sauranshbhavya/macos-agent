@@ -140,7 +140,29 @@ public struct TaskHistoryStore: @unchecked Sendable {
     /// `record(_:)` is **307 ms** median. Worth noting the cost does *not* scale with the bytes:
     /// eleven times the file for 2.4 times the time, because encryption and I/O throughput dominate
     /// the per-record JSON work. Both figures argue the same way — keep the cap.
-    public static let maxItems = 10_000
+    ///
+    /// **The shipped number, and the only one any production path uses.** Enumerated at `5bbe380`:
+    /// the three places that build a `TaskHistoryStore` outside tests — `AgentViewModel`'s default
+    /// parameter, `LocalDataDeletionService.defaultStoreFileURLs()` and
+    /// `LocalStore.fileURL(fileManager:)` — all take this default and none passes a cap.
+    public static let defaultMaxItems = 10_000
+
+    /// This store's cap, defaulting to `defaultMaxItems`.
+    ///
+    /// **Injectable for one reason: so a test can exercise eviction without ten thousand records**
+    /// (SONNY-161). Pinning the eviction had cost about 0.33 s of solid CPU per test — four JSON
+    /// passes over a few megabytes — and two such tests running inside a parallel suite stole enough
+    /// time to break the wall-clock deadlines in `VisionSessionRunTests`. Eviction logic does not
+    /// care what the number is, so the tests now use a small one and
+    /// `theShippedCapIsTenThousandAndNoProductionPathOverridesIt` pins the real value separately.
+    ///
+    /// This is not a way to change the shipped cap. That value is the founder's decision of
+    /// 2026-08-16 (SONNY-119), and it is `defaultMaxItems` above.
+    ///
+    /// Floored at 1: a store built with 0 would evict everything on the next write, which is silent
+    /// data loss rather than a small cap. Clamping keeps a mistyped test cheap instead of crashing
+    /// an app that never passes this argument at all.
+    public let maxItems: Int
 
     public let fileURL: URL
     private let fileManager: FileManager
@@ -149,10 +171,12 @@ public struct TaskHistoryStore: @unchecked Sendable {
     public init(
         fileURL: URL? = nil,
         fileManager: FileManager = .default,
-        encryption: LocalStorageEncryption = .shared
+        encryption: LocalStorageEncryption = .shared,
+        maxItems: Int = Self.defaultMaxItems
     ) {
         self.fileManager = fileManager
         self.encryption = encryption
+        self.maxItems = max(1, maxItems)
         if let fileURL {
             self.fileURL = fileURL
         } else {
@@ -245,13 +269,13 @@ public struct TaskHistoryStore: @unchecked Sendable {
     }
 
     private func capped(_ records: [CompletedTaskRecord]) -> [CompletedTaskRecord] {
-        guard records.count > Self.maxItems else {
+        guard records.count > maxItems else {
             return records
         }
         return Array(
             records
                 .sorted { $0.completedAt < $1.completedAt }
-                .suffix(Self.maxItems)
+                .suffix(maxItems)
         )
     }
 

@@ -10,10 +10,15 @@ import Testing
 /// eviction nothing asserts is an eviction that can quietly change, and row D's search is about to
 /// make a promise this cap bounds.
 struct TaskHistoryRetentionTests {
-    /// Seeded straight into the file rather than through `record(_:)` ten thousand times, because
-    /// `record(_:)` decodes and re-encrypts the whole file per call — 10,000 of those is quadratic
-    /// and would put minutes into the suite to exercise one `Array.suffix`. Eviction lives in
-    /// `record(_:)`, so the test still goes through it, once, against a file already past the cap.
+    /// The cap under test is a small injected one, not the shipped 10,000 (SONNY-161). Eviction
+    /// logic does not care what the number is, and pinning it with ten thousand records cost about
+    /// 0.33 s of solid CPU per test — enough, inside a parallel suite, to break the wall-clock
+    /// deadlines in `VisionSessionRunTests`. The shipped value is pinned separately, and far more
+    /// cheaply, by `theShippedCapIsTenThousandAndNoProductionPathOverridesIt`.
+    ///
+    /// Still seeded straight into the file rather than through `record(_:)` once per record:
+    /// `record(_:)` decodes and re-encrypts the whole file per call. Eviction lives in `record(_:)`,
+    /// so the test goes through it once, against a file already past the cap.
     ///
     /// The seed is written **newest-first**, deliberately. Eviction has to be by `completedAt` and
     /// not by position in the file: on a descending file, a `suffix(maxItems)` that skipped the sort
@@ -24,17 +29,18 @@ struct TaskHistoryRetentionTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let encryption = testEncryption()
         let url = root.appendingPathComponent("task-history.json")
+        let cap = Self.testCap
         let overflow = 5
-        let seeded = (0..<(TaskHistoryStore.maxItems + overflow)).map { seededRecord(index: $0) }
+        let seeded = (0..<(cap + overflow)).map { seededRecord(index: $0) }
         try seed(seeded.reversed(), to: url, encryption: encryption)
-        let store = TaskHistoryStore(fileURL: url, encryption: encryption)
+        let store = TaskHistoryStore(fileURL: url, encryption: encryption, maxItems: cap)
 
-        let newest = seededRecord(index: TaskHistoryStore.maxItems + overflow)
+        let newest = seededRecord(index: cap + overflow)
         try store.record(newest)
 
         let all = try store.loadAll()
         let survivingIDs = Set(all.compactMap(\.id))
-        #expect(all.count == TaskHistoryStore.maxItems)
+        #expect(all.count == cap)
 
         // Six went over the cap, so the six oldest by completedAt are the six that left — asserted
         // by identity, since a count alone cannot tell which end was cut.
@@ -62,17 +68,40 @@ struct TaskHistoryRetentionTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let encryption = testEncryption()
         let url = root.appendingPathComponent("task-history.json")
-        let seeded = (0..<(TaskHistoryStore.maxItems - 1)).map { seededRecord(index: $0) }
+        let cap = Self.testCap
+        let seeded = (0..<(cap - 1)).map { seededRecord(index: $0) }
         try seed(seeded, to: url, encryption: encryption)
-        let store = TaskHistoryStore(fileURL: url, encryption: encryption)
+        let store = TaskHistoryStore(fileURL: url, encryption: encryption, maxItems: cap)
 
-        try store.record(seededRecord(index: TaskHistoryStore.maxItems - 1))
+        try store.record(seededRecord(index: cap - 1))
 
         let all = try store.loadAll()
-        #expect(all.count == TaskHistoryStore.maxItems)
+        #expect(all.count == cap)
         // The very oldest is still here, which is the whole point of the assertion.
         #expect(all.contains { $0.id == seeded[0].id })
         #expect(all.first?.command == "task 0")
+    }
+
+    /// The eviction tests above run against a small injected cap, so this is what keeps the shipped
+    /// number honest. It costs no I/O at all.
+    ///
+    /// **The value is the founder's decision of 2026-08-16 (SONNY-119), not an implementation
+    /// detail.** Injectability exists for the tests; if this assertion ever fails, the question is
+    /// whether the founder moved the cap, not whether the test needs updating.
+    @Test
+    func theShippedCapIsTenThousandAndNoProductionPathOverridesIt() throws {
+        #expect(TaskHistoryStore.defaultMaxItems == 10_000)
+
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        // Built the way production builds it — no cap argument anywhere.
+        #expect(TaskHistoryStore().maxItems == 10_000)
+        #expect(TaskHistoryStore(fileManager: .default).maxItems == 10_000)
+        #expect(TaskHistoryStore(fileURL: root.appendingPathComponent("t.json")).maxItems == 10_000)
+
+        // And the floor, so a mistyped cap cannot silently mean "keep nothing".
+        #expect(TaskHistoryStore(fileURL: root.appendingPathComponent("t.json"), maxItems: 0).maxItems == 1)
+        #expect(TaskHistoryStore(fileURL: root.appendingPathComponent("t.json"), maxItems: -5).maxItems == 1)
     }
 
     // MARK: - The deliberate differential lifetime
@@ -202,6 +231,11 @@ struct TaskHistoryRetentionTests {
     }
 
     // MARK: - Fixtures
+
+    /// Big enough that eviction has several records to choose between and an ordering mistake is
+    /// visible; small enough that the whole suite costs microseconds. The number itself carries no
+    /// meaning — that is the point of injecting it.
+    private static let testCap = 12
 
     private func seededRecord(index: Int) -> CompletedTaskRecord {
         let completedAt = Date(timeInterval: TimeInterval(index), since: .retentionFixture)
