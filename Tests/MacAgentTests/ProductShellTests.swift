@@ -548,6 +548,7 @@ struct ProductShellTests {
             "priorTaskContext",
             "taskUsageSummary",
             "taskHistoryRecords",
+            "taskHistoryQuery",
             "clarificationQuestion",
             "clarificationAnswer",
             "clarificationAutoExecute",

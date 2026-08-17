@@ -415,7 +415,7 @@ private struct TasksFoundationView: View {
                     // persistent-active-workspace affordance (see the task-to-workspace
                     // association decision in the changelog), so only the trailing
                     // filter/search icons are built here.
-                    TasksToolbarRow()
+                    TasksToolbarRow(viewModel: viewModel)
 
                     // Outside the In Progress group on purpose: that group only exists while a
                     // task is active, so nesting the storage notice inside it would hide a
@@ -443,7 +443,8 @@ private struct TasksFoundationView: View {
                         collapseState: collapseState,
                         onToggleSection: toggleSection,
                         onSelect: { selectedLogEntry = logEntry(for: $0) },
-                        onDelete: { viewModel.deleteTask($0) }
+                        onDelete: { viewModel.deleteTask($0) },
+                        emptyState: TaskSearchPresentation.emptyState(query: viewModel.taskHistoryQuery)
                     )
                     .padding(.bottom, 24)
                 }
@@ -515,11 +516,25 @@ private struct TasksFoundationView: View {
         )
     }
 
-    /// Display-only windowing (inspired by Wispr Flow's ~90-day home-page history) — this page's
-    /// own list only shows the last 90 days. Nothing is deleted: `viewModel.taskHistoryRecords`
-    /// itself is untouched, so Insights and everything else still sees the complete history.
+    /// Display-only windowing — this page's own list shows the last 30 days when the search field is
+    /// empty, and everything the store holds when it is not. Both halves live in
+    /// `TaskHistorySearch.visibleRecords`, so the rule that search reaches past the window is pinned
+    /// by the suite rather than by this view.
+    ///
+    /// Nothing here deletes anything, and `viewModel.taskHistoryRecords` is untouched, so Insights,
+    /// the workspace breakdown and the per-workspace counts read the whole store either way —
+    /// narrowing the window and typing a query both move exactly this list and nothing else.
+    ///
+    /// This comment used to end "so Insights and everything else still sees the complete history".
+    /// That was false and predates row D: `TaskHistoryStore` evicts oldest-first at its cap, so the
+    /// whole *store* is not the whole history. The true statement is the one above — every other
+    /// consumer sees the store rather than this slice. (SONNY-118.)
     private var displayedRecords: [CompletedTaskRecord] {
-        TaskHistoryDisplayWindow.withinWindow(viewModel.taskHistoryRecords, now: Date())
+        TaskHistorySearch.visibleRecords(
+            viewModel.taskHistoryRecords,
+            query: viewModel.taskHistoryQuery,
+            now: Date()
+        )
     }
 
     /// The write is unconditional and immediate rather than debounced or deferred to `onDisappear`:
@@ -536,15 +551,48 @@ private struct TasksFoundationView: View {
 }
 
 private struct TasksToolbarRow: View {
+    @ObservedObject var viewModel: AgentViewModel
+    @FocusState private var isFocused: Bool
+
     var body: some View {
         HStack(spacing: 8) {
             Spacer()
-            // Filter icon deliberately dropped (2026-07-18 review) — no filter feature exists or
-            // is planned yet. Search stays as a real, named backlog item: see
-            // docs/sonny-ui-backend-gaps.md for the task-search feature this button needs wired up.
-            Image(systemName: "magnifyingglass")
-                .font(SonnyType.icon(12, weight: .medium))
-                .foregroundStyle(SonnyTheme.muted)
+            // The magnifying glass was decorative until SONNY-118 — no tap target, no state, no
+            // matching behind it. The filter icon beside it stays deliberately dropped (2026-07-18
+            // review): no filter feature exists or is planned.
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(SonnyType.icon(12, weight: .medium))
+                    .foregroundStyle(SonnyTheme.muted)
+
+                TextField(TaskSearchPresentation.fieldPrompt, text: $viewModel.taskHistoryQuery)
+                    .textFieldStyle(.plain)
+                    .font(SonnyType.micro)
+                    .foregroundStyle(SonnyTheme.text)
+                    .focused($isFocused)
+                    .frame(width: 150)
+                    .accessibilityLabel(TaskSearchPresentation.fieldPrompt)
+
+                if !viewModel.taskHistoryQuery.isEmpty {
+                    Button {
+                        viewModel.taskHistoryQuery = ""
+                        isFocused = true
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(SonnyType.icon(11, weight: .medium))
+                            .foregroundStyle(SonnyTheme.muted)
+                    }
+                    .buttonStyle(.plain)
+                    .sonnyPointerCursor()
+                    .accessibilityLabel("Clear search")
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .overlay(
+                RoundedRectangle(cornerRadius: SonnyRadius.container)
+                    .stroke(isFocused ? SonnyTheme.accent : SonnyTheme.border, lineWidth: 1)
+            )
         }
         .padding(.leading, 30)
         .padding(.trailing, 24)
@@ -1407,6 +1455,9 @@ private struct TaskHistoryGroupedPanel: View {
     let onToggleSection: (String) -> Void
     let onSelect: (CompletedTaskRecord) -> Void
     let onDelete: (CompletedTaskRecord) -> Void
+    /// Passed in rather than derived here, because "no results" and "nothing has ever run" are the
+    /// same empty array and only the caller knows which one it is holding.
+    let emptyState: TaskSearchPresentation.EmptyState
 
     private var sections: [TaskSectionPresentation] {
         TaskSectionPresentation.sections(
@@ -1418,10 +1469,10 @@ private struct TaskHistoryGroupedPanel: View {
     var body: some View {
         if records.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
-                Text("No completed tasks yet")
+                Text(emptyState.title)
                     .font(SonnyType.bodyEmphasis)
                     .foregroundStyle(SonnyTheme.text)
-                Text("Run or cancel a Sonny task and it will appear here.")
+                Text(emptyState.detail)
                     .font(SonnyType.micro)
                     .foregroundStyle(SonnyTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)

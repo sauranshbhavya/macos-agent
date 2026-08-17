@@ -54,6 +54,17 @@ final class AgentViewModel: ObservableObject {
     @Published var priorTaskContext: PriorTaskContext?
     @Published var taskUsageSummary: TaskUsageSummary = .empty
     @Published var taskHistoryRecords: [CompletedTaskRecord] = []
+    /// The Tasks page's search query.
+    ///
+    /// On the view model rather than local to the view, per `.claude/rules/macagent-ui-conventions.md`'s
+    /// shared-state rule: both surfaces observe this one instance, and new page state lives here even
+    /// when it feels surface-local. It also outlives a page switch, so a query survives a trip to
+    /// Insights and back rather than silently clearing.
+    ///
+    /// Deliberately not persisted. A search is a thing the user is doing now, not a preference —
+    /// reopening Sonny to a filtered task list with no memory of having typed anything would read as
+    /// a bug.
+    @Published var taskHistoryQuery: String = ""
     /// Local-storage health, kept deliberately separate from `errorMessage`: a corrupt store or
     /// a failed save is about Sonny's own data, not about the task the user just ran, and must
     /// never make a successful task read as failed. Rendered as its own notice on both surfaces.
@@ -1950,6 +1961,11 @@ final class AgentViewModel: ObservableObject {
         priorTaskContext = nil
         taskUsageSummary = .empty
         taskHistoryRecords = []
+        // Cleared with the records it filters, not left behind. A stale query over an emptied
+        // history would put the Tasks page in its "No matching tasks — try a different word" state,
+        // when the honest thing to tell someone who just erased everything is that there is nothing
+        // there at all.
+        taskHistoryQuery = ""
         clarificationQuestion = nil
         clarificationAnswer = ""
         clarificationAutoExecute = false
