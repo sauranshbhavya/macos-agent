@@ -601,6 +601,145 @@ struct LocalRedactionLiveVisionTests {
     }
 }
 
+// MARK: - The shell verdict on the payload (SONNY-139)
+
+/// The screen check where it is actually produced. ``ShellSurfaceDetectorTests`` covers what counts
+/// as a shell; this covers that a capture's payload carries the answer, and that the recognized text
+/// it was computed from does not come with it.
+struct CaptureShellVerdictTests {
+    private static func observations(_ screen: String) -> [RecognizedTextObservation] {
+        screen.split(separator: "\n", omittingEmptySubsequences: false).enumerated().map { index, line in
+            RecognizedTextObservation(
+                string: String(line),
+                boundingBox: CGRect(x: 8, y: 8 + 18 * index, width: 300, height: 16)
+            )
+        }
+    }
+
+    private static func service(reading screen: String) -> LocalRedactionService {
+        LocalRedactionService(textRecognizer: FakeTextRecognizer(observations: observations(screen)))
+    }
+
+    @Test
+    func aCaptureOfAShellCarriesTheVerdictOnItsPayload() async throws {
+        let service = Self.service(reading: """
+        Last login: Sat Aug 16 09:14:22 on ttys000
+        sauransh@Mac macos-agent % ./scripts/deploy.sh
+        zsh: permission denied: ./scripts/deploy.sh
+        """)
+
+        let payload = try await service.redactCapture(
+            capture(png: ImageFixtures.solidWhitePNG(width: 400, height: 300), width: 400, height: 300)
+        )
+
+        #expect(payload.shellSurface.showsShell)
+        #expect(payload.shellSurface.signals == [.interactivePrompt, .shellDiagnostic, .sessionBanner])
+    }
+
+    @Test
+    func aCaptureOfAnOrdinaryWindowCarriesAVerdictThatSaysSo() async throws {
+        let service = Self.service(reading: """
+        Reading List — Safari
+        Building a Mac agent, and what npm has to do with it
+        """)
+
+        let payload = try await service.redactCapture(
+            capture(png: ImageFixtures.solidWhitePNG(width: 400, height: 300), width: 400, height: 300)
+        )
+
+        #expect(payload.shellSurface.showsShell == false)
+        #expect(payload.shellSurface.signals.isEmpty)
+    }
+
+    /// **Every observation is read, not just the first.** Neither line below reaches the threshold on
+    /// its own; together they do. A service that handed the detector one observation, or the first
+    /// one, would leave this at a single sign and let the session run.
+    @Test
+    func theVerdictIsComputedOverEveryObservationTogether() async throws {
+        let promptOnly = Self.service(reading: "sauransh@Mac macos-agent % ")
+        let diagnosticOnly = Self.service(reading: "zsh: permission denied: ./scripts/deploy.sh")
+        let both = Self.service(reading: """
+        sauransh@Mac macos-agent % ./scripts/deploy.sh
+        zsh: permission denied: ./scripts/deploy.sh
+        """)
+        let png = ImageFixtures.solidWhitePNG(width: 400, height: 300)
+
+        let first = try await promptOnly.redactCapture(capture(png: png, width: 400, height: 300))
+        let second = try await diagnosticOnly.redactCapture(capture(png: png, width: 400, height: 300))
+        let together = try await both.redactCapture(capture(png: png, width: 400, height: 300))
+
+        #expect(first.shellSurface.signals == [.interactivePrompt])
+        #expect(first.shellSurface.showsShell == false)
+        #expect(second.shellSurface.signals == [.shellDiagnostic])
+        #expect(second.shellSurface.showsShell == false)
+        #expect(together.shellSurface.signals == [.interactivePrompt, .shellDiagnostic])
+        #expect(together.shellSurface.showsShell)
+    }
+
+    /// **The recognized text does not leave with the verdict, and the type is what says so.** A
+    /// capture payload's `maskedText` is `nil` — there is no text field on it at all — so the only
+    /// thing that crosses this boundary about what the screen said is at most six fixed strings from
+    /// a closed enum. The image is redacted separately and is not text.
+    @Test
+    func noRecognisedTextLeavesTheServiceWithTheVerdict() async throws {
+        let secretiveShell = """
+        sauransh@Mac macos-agent % export API_KEY=sk-Abc123Def456Ghi789JklMno012Pqr
+        zsh: permission denied: ./scripts/deploy.sh
+        """
+        let payload = try await Self.service(reading: secretiveShell).redactCapture(
+            capture(png: ImageFixtures.solidWhitePNG(width: 400, height: 300), width: 400, height: 300)
+        )
+
+        #expect(payload.maskedText == nil)
+        #expect(payload.shellSurface.showsShell)
+        // Everything the verdict carries, spelled out: signal names from the enum, nothing else.
+        for signal in payload.shellSurface.signals {
+            #expect(ShellSurfaceSignal.allCases.contains(signal))
+            #expect(secretiveShell.contains(signal.rawValue) == false)
+        }
+    }
+
+    /// **A recognizer that throws produces no payload at all** — so there is no verdict to misread
+    /// as permission. The fail-closed property this check inherits, asserted at the level it lives
+    /// at; `anUnreadableScreenEndsTheSessionRatherThanProducingANoShellVerdict` asserts the session
+    /// consequence through the real runner.
+    @Test
+    func aRecognizerThatThrowsProducesNoPayloadRatherThanACleanVerdict() async throws {
+        let service = LocalRedactionService(textRecognizer: FakeTextRecognizer(error: FakeOCRFailure()))
+        await #expect(throws: LocalRedactionError.self) {
+            _ = try await service.redactCapture(
+                capture(png: ImageFixtures.solidWhitePNG(width: 400, height: 300), width: 400, height: 300)
+            )
+        }
+    }
+
+    /// The real recognizer, on a real rendered terminal window, through the real service — the one
+    /// test here that does not fake the OCR seam. Everything above establishes what the detector
+    /// concludes; this establishes that Vision reads a terminal well enough for it to conclude it.
+    @Test
+    func theRealRecognizerReadsARenderedTerminalWellEnoughToRefuseIt() async throws {
+        let png = ImageFixtures.renderedTextPNG(
+            width: 900,
+            height: 300,
+            lines: [
+                ("Last login: Sat Aug 16 09:14:22 on ttys000", CGPoint(x: 20, y: 60)),
+                ("sauransh@Mac macos-agent % ls -la", CGPoint(x: 20, y: 140)),
+                ("total 48", CGPoint(x: 20, y: 220))
+            ],
+            fontSize: 24
+        )
+
+        let payload = try await LocalRedactionService().redactCapture(
+            capture(png: png, width: 900, height: 300)
+        )
+
+        #expect(
+            payload.shellSurface.showsShell,
+            "real OCR read: \(payload.shellSurface.signals.map(\.rawValue))"
+        )
+    }
+}
+
 // MARK: - Structural non-bypass
 
 struct RedactedPayloadStructureTests {

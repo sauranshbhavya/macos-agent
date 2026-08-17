@@ -65,6 +65,27 @@ public struct RedactedPayload: Equatable, Sendable {
     public let imagePixelHeight: Int?
     public let sourceBundleIdentifier: String?
     public let report: [RedactionReportEntry]
+    /// Whether the text this payload was built from came off a shell (SONNY-139).
+    ///
+    /// **Produced here so the text it was read from stays here.** The recognized screen text is the
+    /// most sensitive thing this service touches and it never leaves the type; what leaves is a
+    /// closed vocabulary of at most six signal names. That is row I's most expensive lesson applied
+    /// in advance: a structural guarantee is only as wide as the type that carries it, and F5's fix
+    /// was correct for the one parameter it constrained while the same class of text left by two
+    /// other doors that took plain `String`s.
+    ///
+    /// **Non-optional, never defaulted, and there is deliberately no "could not tell" case.** An
+    /// `Optional` here — or a third enum state — would be permission granted by omission: a `nil`
+    /// that a reader treats as "no shell" is exactly the answer an unreadable screen must not
+    /// produce. The unreadable case is already handled a level up and it throws:
+    /// ``LocalRedactionError/detectionUnavailable(_:)`` means no payload exists at all.
+    ///
+    /// Every producer in this file fills it from ``ShellSurfaceDetector`` over the text it actually
+    /// had, so the field is a true statement about *this* payload rather than a capture-only
+    /// special case with an inert value on the other path. Which payload's verdict is acted on is
+    /// the runner's decision, not this type's: ``VisionSessionRunner`` reads the one built from the
+    /// capture it is about to act inside.
+    public let shellSurface: ShellSurfaceVerdict
 
     fileprivate init(
         maskedText: String?,
@@ -73,7 +94,8 @@ public struct RedactedPayload: Equatable, Sendable {
         imagePixelWidth: Int?,
         imagePixelHeight: Int?,
         sourceBundleIdentifier: String?,
-        report: [RedactionReportEntry]
+        report: [RedactionReportEntry],
+        shellSurface: ShellSurfaceVerdict
     ) {
         self.maskedText = maskedText
         self.redactedImageData = redactedImageData
@@ -82,6 +104,7 @@ public struct RedactedPayload: Equatable, Sendable {
         self.imagePixelHeight = imagePixelHeight
         self.sourceBundleIdentifier = sourceBundleIdentifier
         self.report = report
+        self.shellSurface = shellSurface
     }
 }
 
@@ -154,7 +177,11 @@ public struct LocalRedactionService: Sendable {
             imagePixelWidth: nil,
             imagePixelHeight: nil,
             sourceBundleIdentifier: nil,
-            report: report(from: matches, category: .text)
+            report: report(from: matches, category: .text),
+            // Over the text as given, not the masked form: masking replaces a secret with bullets
+            // and would erase nothing a shell signal reads, but the verdict should describe what was
+            // actually looked at.
+            shellSurface: ShellSurfaceDetector.verdict(for: text)
         )
     }
 
@@ -234,7 +261,13 @@ public struct LocalRedactionService: Sendable {
             imagePixelWidth: encodedImage.pixelWidth,
             imagePixelHeight: encodedImage.pixelHeight,
             sourceBundleIdentifier: capture.bundleIdentifier,
-            report: report(from: matches, category: .imageRegion)
+            report: report(from: matches, category: .imageRegion),
+            // **The shell verdict, from the observations already in hand** (SONNY-139). No second
+            // OCR pass, no new network call, no new model call and no new permission — the
+            // recognition above already ran, and `joinedText` is already in memory. It reads the
+            // joined document rather than the observations one at a time, for the reason the
+            // detector above it does.
+            shellSurface: ShellSurfaceDetector.verdict(for: joinedText)
         )
     }
 

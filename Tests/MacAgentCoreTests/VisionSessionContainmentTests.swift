@@ -271,12 +271,21 @@ struct VisionSessionContainmentTests {
     /// misleads whoever reads it months later. Listed exhaustively rather than sampled, and the
     /// count is asserted, so a new ending has to come here and choose a code rather than silently
     /// borrowing one.
+    ///
+    /// **That last sentence was a promise this test could not keep, and now it can** (SONNY-139).
+    /// The list below is hand-written, so `screenShowsShell` was added to the enum and this test
+    /// stayed green — the "exhaustively" claim was true of how the list was *written* and not of
+    /// anything enforced. ``expectedReasonCode(for:)`` closes that: it is an exhaustive `switch`, so
+    /// a new refusal case now fails to compile here, in the file whose job is to make sure it picked
+    /// a code. Same shape, and same reason, as `identifierProducing(_:)` in
+    /// `ScreenControlEligibilityTests`.
     @Test
     func everyRefusalCarriesADistinctReasonCodeAndANonEmptySentence() {
         let refusals: [VisionContainmentRefusal] = [
             .iterationCapReached(cap: 12),
             .cancelled,
             .targetIneligible(.terminal),
+            .screenShowsShell(ShellSurfaceDetector.verdict(for: "user@host ~ %\nzsh: command not found: x")),
             .targetNotFrontmost(expected: "Safari", actual: "Notes"),
             .attentionLost(.screenLocked),
             .actionTypeNotAllowed("launch_missiles"),
@@ -286,7 +295,21 @@ struct VisionSessionContainmentTests {
             .approvalNotPresentable,
             .permissionRevoked
         ]
-        #expect(refusals.count == 11)
+        #expect(refusals.count == 12)
+        for refusal in refusals {
+            #expect(refusal.reasonCode == Self.expectedReasonCode(for: refusal))
+        }
+
+        // **The two refusals that both mean "this is a shell" stay distinguishable.** The static
+        // deny list and the screen check enforce one rule at two different doors, and a record that
+        // could not tell them apart could not say which one held. Different codes, different
+        // sentences, and both say the thing that makes the rule categorical.
+        let byName = VisionContainmentRefusal.targetIneligible(.terminal)
+        let byScreen = refusals[3]
+        #expect(byName.reasonCode != byScreen.reasonCode)
+        #expect(byName.userFacingReason != byScreen.userFacingReason)
+        #expect(byName.userFacingReason.contains("This is not something you can allow."))
+        #expect(byScreen.userFacingReason.contains("This is not something you can allow."))
 
         // The two §13.5 names the spec calls out by hand, so a rename fails here rather than in a
         // record nobody reads until they need it.
@@ -311,6 +334,30 @@ struct VisionSessionContainmentTests {
         for refusal in refusals {
             #expect(!refusal.userFacingReason.isEmpty, "\(refusal)")
             #expect(!refusal.reasonCode.isEmpty, "\(refusal)")
+        }
+    }
+
+    /// The reason code each refusal is supposed to carry, written out by hand a second time.
+    ///
+    /// **The duplication is the mechanism, not an accident.** This exists to be an exhaustive
+    /// `switch`: a case added to `VisionContainmentRefusal` stops this file compiling, which is what
+    /// makes the test above's "a new ending has to come here" true rather than aspirational. It also
+    /// catches a code changed in production without anyone deciding to change it, since the two
+    /// copies then disagree.
+    private static func expectedReasonCode(for refusal: VisionContainmentRefusal) -> String {
+        switch refusal {
+        case .iterationCapReached: return "iteration_cap_reached"
+        case .cancelled: return "user_stopped"
+        case .targetIneligible: return "target_ineligible"
+        case .screenShowsShell: return "screen_shows_shell"
+        case .targetNotFrontmost: return "target_not_frontmost"
+        case .attentionLost: return "attention_lost"
+        case .actionTypeNotAllowed: return "action_not_allowed"
+        case .approvalDeclined: return "approval_declined"
+        case .approvalRefusedByPolicy: return "approval_refused"
+        case .captureSendDeclined: return "capture_send_declined"
+        case .approvalNotPresentable: return "approval_not_presentable"
+        case .permissionRevoked: return "permission_revoked"
         }
     }
 
