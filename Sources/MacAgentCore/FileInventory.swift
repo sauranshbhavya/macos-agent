@@ -16,25 +16,69 @@ import Foundation
 ///   version ran `precomposedStringWithCanonicalMapping` here and a comment credited it with handling
 ///   that case; it was a no-op for the comparison it served, and it is gone rather than kept as
 ///   belt-and-braces, because a call that reads like the mechanism and is not is worse than no call.
-/// - **Not caught:** pairs whose full case folding *expands*, where the filesystem folds and this does
-///   not — `Straße.pdf` and `STRASSE.pdf` are one file on disk and two keys here, as are ligature
-///   pairs such as `ﬁ`/`fi`. For that input class the pre-fix behavior survives: both records claim
-///   distinct destinations, neither is flagged as renamed, and the batch aborts partway with nothing
-///   in the summary explaining why. **Nothing is destroyed** — both shipped converters refuse an
-///   occupied destination rather than overwriting it — so the capability's "never overwrites"
-///   invariant and its no-`assessRisk` decision are untouched. Filed as SONNY-79. (PR #41 cycle-3, R1.)
+/// - *Caught since SONNY-79:* pairs whose full case folding **expands** — `Straße.pdf` against
+///   `STRASSE.pdf`, and ligature pairs such as `ﬁ`/`fi`. `lowercased()` left `ß` alone while mapping
+///   `SS` to `ss`, so these were one file on disk and two keys here; the batch then aborted partway
+///   with nothing in the summary explaining why. The fold below closes that, and the table on
+///   `folded` records what was measured against the volume itself.
 ///
-/// **Folded unconditionally rather than probed per volume.** On a case-sensitive volume the only cost
-/// is a rename that was not strictly required, which the summary announces either way; getting it
-/// wrong in the other direction loses the fix entirely on the volume nearly every user has.
-///
-/// Used by `FileInventory.docxFiles` and by `AgentActionExecutor`'s within-plan output-path
-/// disambiguation. The two keep separate *policies* — the docx side must also avoid names that exist
-/// on disk, the executor side must never consult disk or it would suppress the tier-3 "output already
-/// exists" escalation — but they must agree on what "the same destination" means.
+/// The full reasoning, the measurement and the two folds that were tried and rejected live on
+/// `DestinationKey.folded` rather than being repeated here.
 enum DestinationKey {
+    /// Folds a destination path the way the filesystem does.
+    ///
+    /// **`.caseInsensitive` alone, and `locale: nil` — both halves were measured rather than
+    /// reasoned about** (SONNY-79). The previous `lowercased()` under-folded: it leaves `ß` as `ß`
+    /// while mapping `SS` to `ss`, so `Straße.pdf` and `STRASSE.pdf` were two keys here and one file
+    /// on disk. Measured on APFS at `06297f1`, comparing each candidate fold against what the volume
+    /// itself answers by writing one name and asking `fileExists` for the other:
+    ///
+    /// | pair | filesystem | `lowercased()` | `.caseInsensitive` |
+    /// |---|---|---|---|
+    /// | `Straße` / `STRASSE` | same | **differs** | same |
+    /// | `ﬁle` / `file` | same | **differs** | same |
+    /// | `ﬀ` / `ff` | same | **differs** | same |
+    /// | `Report` / `report` | same | same | same |
+    /// | `café` / `CAFÉ` | same | same | same |
+    /// | `café` / `cafe` | differs | differs | differs |
+    /// | NFC `café` / NFD `café` | same | same | same |
+    /// | `İstanbul` / `istanbul` | differs | differs | differs |
+    /// | `ırmak` / `IRMAK` | differs | differs | differs |
+    /// | `ΟΔΟΣ` / `οδός` | differs | differs | differs |
+    /// | `Ｒeport` / `Report` | differs | differs | differs |
+    /// | Kelvin sign `K` / `k` | same | same | same |
+    ///
+    /// Twelve classes, agreement on all twelve.
+    ///
+    /// **Two tempting additions were measured and rejected, and that is the point of recording the
+    /// table.** Adding `.diacriticInsensitive` folds `café.pdf` and `cafe.pdf` together, which the
+    /// filesystem does *not* — it would rename a document that never needed renaming. Passing
+    /// `locale: .current` instead of `nil` folds `İstanbul` and `istanbul` together under a Turkish
+    /// locale, which the filesystem also does not — so this would misbehave only for Turkish users,
+    /// which is exactly the kind of bug that ships. Both appear in this repo's *search* fold
+    /// (`RecentArtifactStore`), correctly: a user typing "cafe" to find "café" wants diacritic
+    /// insensitivity, and search is locale-shaped. **That recipe answers a different question and
+    /// borrowing it here would have been wrong in two directions at once.**
+    ///
+    /// **What is still not claimed.** This is agreement with the volumes measured, not a reproduction
+    /// of any filesystem's folding table. A volume whose folding differs from Foundation's
+    /// `.caseInsensitive` fold is not ruled out, and the failure mode there is unchanged from before:
+    /// the batch aborts at the converter rather than overwriting, because both shipped converters
+    /// refuse an occupied destination. Nothing is destroyed either way.
+    ///
+    /// **Folded unconditionally rather than probed per volume.** On a case-sensitive volume the only
+    /// cost is a rename that was not strictly required, which the summary announces either way;
+    /// getting it wrong in the other direction loses the fix entirely on the volume nearly every user
+    /// has.
+    ///
+    /// Used by `FileInventory.docxFiles` and by `AgentActionExecutor`'s within-plan output-path
+    /// disambiguation. The two keep separate *policies* — the docx side must also avoid names that
+    /// exist on disk, the executor side must never consult disk or it would suppress the tier-3
+    /// "output already exists" escalation — but they must agree on what "the same destination" means,
+    /// and this is that agreement. Note that folding is a pure string operation: the executor side
+    /// still touches no disk.
     static func folded(_ path: String) -> String {
-        path.lowercased()
+        path.folding(options: [.caseInsensitive], locale: nil)
     }
 }
 
