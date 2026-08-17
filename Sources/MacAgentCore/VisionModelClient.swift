@@ -69,9 +69,24 @@ public struct OpenCodeVisionModelClient: VisionModelDeciding {
     ///
     /// The refusal itself is unchanged and still deliberate: a capture that exceeds this fails the
     /// whole iteration with a clear message rather than becoming a truncated upload with an obscure
-    /// one. What changed is that the ladder now has to exhaust every rung down to half scale before
-    /// it can happen — on the encoder's own worst case (uniform noise at Pro Display XDR point size)
-    /// the ladder lands at 880,346 bytes, so this is a backstop rather than a path users meet.
+    /// one. What changed is what has to happen first. The ladder returns the **first** rung whose
+    /// encoding fits, so most captures never leave the top one; reaching this refusal means every
+    /// rung was tried and every one came back over budget, and the encoder then hands back the
+    /// smallest it managed rather than throwing, precisely so the message a user sees is this one.
+    ///
+    /// **How much headroom that leaves, measured rather than estimated.** The seeded uniform-noise
+    /// fixture at a 27-inch 5K display's point resolution — the encoder's worst case among the
+    /// reproducible ones, since noise is the content no encoder can compress — encodes to
+    /// **2,781,667 bytes at its full 2560x1440, without the ladder resampling at all**, at
+    /// `6201e45`. `theShippingPolicyKeepsEvenItsWorstCaseUnderTheCeiling` prints that figure on
+    /// every run, so it is regenerable rather than a number frozen into a comment.
+    ///
+    /// Larger point resolutions than 5K do reach the resampling rungs on noise, and no figure is
+    /// quoted for them here: the ones SONNY-114 measured came from a one-off random image nobody can
+    /// reproduce, and an unreproducible number in a comment is worth less than the absence of one.
+    /// What holds regardless is the shape — this is a backstop rather than a path users meet, since
+    /// no real screen produces incompressible content and every real capture measured for SONNY-114
+    /// fitted the top rung with room to spare.
     public static let maximumImageBytes = VisionCaptureEgressPolicy.default.maximumImageBytes
 
     public static let defaultEndpoint = URL(string: "https://opencode.ai/zen/go/v1/responses")!
