@@ -34,12 +34,18 @@ behind the backend. Three need none and stay local by decision.
 | `OpenAIPlanner` | `OPENAI_API_KEY` | `OpenAIPlanner.swift:41`, `:43`, `:68` | `POST /v1/plan` |
 | `CerebrasPlanner` | `CEREBRAS_API_KEY` | `CerebrasPlanner.swift:51`, `:53`, `:81` | `POST /v1/plan` |
 | `OpenAITranscriber` | `OPENAI_API_KEY` | `OpenAITranscriber.swift:41`, `:43`, `:74` | `POST /v1/transcriptions` |
-| `VisionModelClient` (`OpenCodeVisionModelClient`) | `OPENCODE_API_KEY` | `VisionModelClient.swift:94`, `:92`, `:152` | `POST /v1/screen/analyze` |
+| `VisionModelClient` (`OpenCodeVisionModelClient`) | `OPENCODE_API_KEY` | `VisionModelClient.swift:111`, `:92`, `:152` | `POST /v1/screen/analyze` |
 | `WebResearchSynthesizer` (`OpenAIWebResearchSynthesizer`) | `OPENAI_API_KEY` | `WebResearchSynthesizer.swift:320`, `:322`, `:345` | `POST /v1/research/synthesize` |
 | `TavilySearchProvider` | `TAVILY_API_KEY` | `TavilySearchProvider.swift:39`, `:40`, `:65` | `POST /v1/search` |
 
 Both planners map to the same endpoint. That is the point: after SONNY-132 the client names a route
 and the server names a provider, so "which planner" stops being a client concept.
+
+One row is shaped differently and the table would mislead without the note. The other five read their
+key as a defaulted `apiKey` init parameter, so the "key" column is the read itself.
+`OpenCodeVisionModelClient` takes a whole `environment` dictionary instead (`VisionModelClient.swift:104`)
+and reads the key out of it at `:111`; the variable's *name* is a separate constant at `:94`. The
+column cites `:111`, the read, for parity with the others.
 
 ### 1.2 What does not cross it
 
@@ -133,8 +139,13 @@ Everything in section 2 applies to every endpoint unless an endpoint says otherw
 | `Content-Encoding` | optional | `gzip` — see section 6.4 |
 | `Accept-Encoding` | every request | should include `gzip` |
 
-`GET /v1/meta`, `GET /v1/health`, `POST /v1/auth/email/start` and `POST /v1/auth/email/verify` take
-no `Authorization`.
+**Section 4.1's `Auth` column is the single source of truth for which endpoints need a Bearer token.**
+Restating a partial list here is how a client ends up attaching an access token to the calls made
+before it has one. For convenience, the endpoints that carry no `Authorization` header at all are
+`GET /v1/meta`, `GET /v1/health`, `POST /v1/auth/email/start`, `POST /v1/auth/email/verify`,
+`POST /v1/auth/oauth/google`, `POST /v1/auth/oauth/apple` and `POST /v1/auth/refresh` — the last of
+these authenticates with the refresh token in its body and deliberately sends no header, so that an
+expired or missing access token can never be the reason a refresh fails.
 
 ### 2.3 Response headers
 
@@ -153,23 +164,31 @@ SONNY-134's support lookup answerable without a database trawl.
 
 ### 2.4 Fields every content-bearing request carries
 
-The five model routes (`/v1/plan`, `/v1/research/synthesize`, `/v1/transcriptions`, `/v1/search`,
-`/v1/screen/analyze`) all carry these. They are **required**, not defaulted — see 2.4.2.
+The five model routes are `/v1/plan`, `/v1/research/synthesize`, `/v1/transcriptions`, `/v1/search`
+and `/v1/screen/analyze`.
 
-| Field | Type | Meaning |
-|---|---|---|
-| `task_id` | string | The local task this request belongs to. Section 5.1 |
-| `retention` | `"standard"` \| `"none"` | Section 10.1 |
-| `session_id` | string, optional | Screen-control session. Section 5.2 |
-| `session_iteration` | integer, optional | 1-based, screen-control only |
+| Field | Required on | Type | Meaning |
+|---|---|---|---|
+| `task_id` | all five | string | The local task this request belongs to. Section 5.1 |
+| `retention` | all five | `"standard"` \| `"none"` | Section 10.1. **Never defaulted** — see 2.4.2 |
+| `session_id` | `/v1/screen/analyze` only | string | Screen-control session. Section 5.2. Absent on the other four |
+| `session_iteration` | `/v1/screen/analyze` only | integer | 1-based. Absent on the other four |
+
+`task_id` and `retention` are required on all five and are never defaulted. `session_id` and
+`session_iteration` are required on `/v1/screen/analyze` and do not appear at all on the other four —
+there is no session to name. Section 4's per-route bodies show this concretely.
 
 #### 2.4.1 What the client supplies and what the server derives
 
 Stated because two sessions will otherwise build two different metering shapes. The client supplies
-`task_id`, `retention`, `session_id`, `session_iteration`, the `Idempotency-Key`, and the content.
-Everything else on a metering event — user, provider, model, token counts, durations, byte counts,
-outcome — is the server's, derived from the authenticated session and the upstream call. The client
-never reports its own usage numbers to the server; a client-reported bill is not a bill.
+`task_id`, `retention`, `session_id`, `session_iteration`, the content, and — from the headers of
+2.2 — the `Idempotency-Key`, `Sonny-Client-Version` and `Sonny-Platform`. On `/v1/screen/analyze` it
+also supplies the image's `pixel_width` and `pixel_height`, which it is the only side that knows
+(4.5). Everything else on a metering event — user, provider, model, token counts, durations, byte
+counts, outcome — is the server's, derived from the authenticated session and the upstream call.
+
+**The client never reports its own usage numbers to the server.** A client-reported bill is not a
+bill.
 
 #### 2.4.2 `retention` has no default
 
@@ -192,8 +211,9 @@ have. An omitted privacy field must be a loud error, not a quiet guess.
   (section 5); keeping the access token opaque is what stops the client making entitlement decisions
   from an authentication artifact.
 - **Refresh token** — long-lived, opaque, rotated on every use, stored in the Keychain through the
-  existing `KeychainSecretStore` (`KeychainSecretStore.swift:4-7`) as a new account on the existing
-  store, following the DI pattern `LocalStorageEncryptionKeyManager` already uses
+  existing `KeychainSecretStore` (the concrete struct at `KeychainSecretStore.swift:21`, behind the
+  `KeychainSecretStoring` protocol at `:4-7`) as a new account on the existing store, following the
+  DI pattern `LocalStorageEncryptionKeyManager` already uses
   (`LocalStorageEncryption.swift:39-40` for the naming precedent). It is not a new store and must not
   become a variant of the pattern.
 
@@ -271,6 +291,50 @@ can change.
 The concrete skew tolerance is SONNY-135's to set and test at both edges; the mechanism is fixed
 here so that SONNY-127 and SONNY-135 use the same one.
 
+### 3.6 The auth endpoint shapes
+
+`POST /v1/auth/email/start` — request a sign-in code.
+
+```json
+{ "email": "…" }
+```
+```json
+{ "request_id": "…", "expires_in": 600 }
+```
+
+**The response is identical whether or not that address has an account.** An endpoint that answers
+differently is an account-existence oracle for anyone who finds it. Code lifetime, per-address and
+per-source rate limits are SONNY-127's — an unlimited code endpoint is a free email-sending service
+for whoever finds that instead.
+
+`POST /v1/auth/email/verify` — exchange a code for tokens.
+
+```json
+{ "email": "…", "code": "…" }
+```
+
+Returns the token response of 3.2 on success. On failure it returns one of three distinct codes —
+`auth.code_invalid`, `auth.code_expired`, `auth.code_used` — because SONNY-127 has to rate-limit them
+differently and SONNY-128 has to say three different things to the user. Codes are single-use, so a
+replay of this call returns the stored original result — including the original failure — and never
+un-consumes a code. Section 9.3 has the whole retry table.
+
+`POST /v1/auth/oauth/google` and `POST /v1/auth/oauth/apple` — the body is whatever the provider's
+flow yields and is SONNY-129's to fix, once that ticket has established which Sign in with Apple
+mechanism actually works for a Developer-ID-signed, non-App-Store Mac app. Both return the same token
+response of 3.2, and both land on the same account as an email sign-in for the same person, per the
+identity-linking rule SONNY-127 owns. This contract fixes the paths and the response so the sign-in
+surface does not have to be rebuilt when they arrive.
+
+`POST /v1/auth/refresh` — `{ "refresh_token": "…" }`, returning the token response of 3.2 with a new
+refresh token. Rotation, overlap and reuse detection are in 3.3.
+
+`POST /v1/auth/signout` — no body. Revokes this session's refresh-token family server-side and
+returns `204`. The client clears its Keychain entry and touches nothing else (3.3).
+
+`GET /v1/health` — liveness and a build identifier, unauthenticated. Its shape is SONNY-126's; it is
+listed here only so nobody adds a second one.
+
 ---
 
 ## 4. Endpoints
@@ -279,7 +343,7 @@ here so that SONNY-127 and SONNY-135 use the same one.
 
 | Method and path | Auth | Purpose | Owner |
 |---|---|---|---|
-| `GET /v1/meta` | none | Version negotiation, entitlement verification keys, server time | SONNY-126 |
+| `GET /v1/meta` | none | Version negotiation, entitlement verification keys, server time | **no owner yet — see below** |
 | `GET /v1/health` | none | Liveness and build identifier | SONNY-126 |
 | `POST /v1/auth/email/start` | none | Request a sign-in code | SONNY-127 |
 | `POST /v1/auth/email/verify` | none | Exchange a code for tokens | SONNY-127 |
@@ -295,6 +359,16 @@ here so that SONNY-127 and SONNY-135 use the same one.
 | `POST /v1/search` | yes | Web search | SONNY-130 |
 | `POST /v1/screen/analyze` | yes | Screen control | SONNY-131 |
 | `DELETE /v1/tasks/{task_id}` | yes | Delete this task's retained content | SONNY-134 |
+
+**`GET /v1/meta` and the version gate have no owning ticket, and that is a gap in row 12's ticket
+set rather than an open question here.** Writing section 8 is what exposed it. SONNY-126 builds "one
+health endpoint that returns a version identifier" and its non-goals say "any endpoint beyond health"
+explicitly, so `/v1/meta` is outside it; and pulling all fourteen row-12 tickets and searching them
+for `/v1/meta`, `api_version`, `minimum_supported_client`, `version.unsupported` and
+`Sonny-Deprecation` returns nothing outside this document. Three things therefore need an owner: the
+endpoint itself, the middleware that answers `410 version.unsupported` on every route, and the
+deprecation headers. Filed as **SONNY-155**, Backlog and untriaged, for the founder to assign;
+creation is memory, assignment is authority.
 
 ### 4.2 One body shape, two text routes
 
@@ -322,6 +396,11 @@ routing, metering and pricing them separately.
   (`OpenAIPlanner.swift:129`) for the planner's system message, `WebResearchPromptBuilder` for
   synthesis, including its `TRUSTED_USER_INSTRUCTION` and `UNTRUSTED_OBSERVED_CONTENT` wrapping. The
   server forwards the text; it never edits, re-wraps or re-orders it.
+- `response_schema_name` is a short, stable identifier for the schema — `"agent_plan"` for the
+  planner, `"web_research_note"` for synthesis, matching the names the client's own schema builders
+  already use (`AgentPlanSchema.responseFormat()` at `AgentPlan.swift:433`,
+  `WebResearchNoteSchema.responseFormat()`). It is required, and it is what a provider adapter that
+  needs a named schema or a named tool uses. It is never rendered anywhere.
 - `response_schema` is a JSON Schema. The server maps it to whichever structured-output mechanism the
   chosen provider has — `text.format` with `type: "json_schema"` on one, tool-use on another, a
   prompt suffix on a third, as `CerebrasPlanner` already does today
@@ -614,7 +693,7 @@ Enforced by the server, respected by the client. Measured on the **decoded** bod
 
 | Route | Limit | Where the number comes from |
 |---|---|---|
-| `POST /v1/screen/analyze` | 4,500,000 bytes | Derived below |
+| `POST /v1/screen/analyze` | 4,200,000 bytes | Derived below |
 | `POST /v1/transcriptions` | 10 MiB (10,485,760) | Backstop for an unbounded recording, until SONNY-130's duration cap |
 | `POST /v1/research/synthesize` | 4 MiB (4,194,304) | Full readable text of every fetched page |
 | every other route | 1 MiB (1,048,576) | Typical planner body is tens of KB |
@@ -631,17 +710,22 @@ Those three inherited figures are SONNY-114's, not this ticket's, and they carry
 ceiling and the 4,673-character prompt were measured at `e260575` and re-verified after that branch's
 rebase at `b07bee8`; the largest JSON body across all fifteen of its fixtures, 3,512,879 bytes, was
 measured at `e260575`. The branch merged to `main` at `6f89a5d`, where `maximumImageBytes` is still
-3,000,000 — re-verified for this document. 4,500,000 leaves roughly 490,000 bytes of headroom over
-the largest body the client can build.
+3,000,000 — re-verified for this document. 4,200,000 leaves roughly 190,000 bytes of headroom over
+the largest body the client can build, which is about forty times the measured prompt.
+
+**The limit is set as low as the client's own ceiling allows, on purpose.** Every byte of headroom
+above what the client can actually produce is a byte that eliminates hosts for nothing. Rounding this
+up to a comfortable-looking figure would quietly narrow SONNY-125's shortlist, which is a host
+decision, and not this document's to make.
 
 **This number and SONNY-114's are one number.** If `maximumImageBytes` ever moves, this limit is
 re-derived in the same change. A server limit sized for an old client ceiling is a limit that means
 nothing, which is the same failure SONNY-114 fixed on the client side.
 
-**This is the figure SONNY-125 has to prove lands.** A host that cannot carry a 4,500,000-byte
-request body, at the wall-clock the route needs (section 11), is not a candidate — whatever else it
-offers. That is a constraint this contract places on the host decision, not a number taken from any
-host's documentation.
+**This is the figure SONNY-125 has to prove lands**, at the wall-clock the route needs (section 12).
+A host that cannot carry it is not a candidate, whatever else it offers. That is a constraint this
+contract places on the host decision, and it is derived from Sonny's own code rather than read off
+any host's documentation — which is also why it is not a round number.
 
 ### 6.2 Over the limit
 
@@ -704,10 +788,14 @@ breaking change (section 8.2).
 
 ### 7.2 The taxonomy
 
-The seven cases the founder required are distinguishable by `code`, not by status — several share a
-status on purpose, because HTTP has fewer meanings than this product has outcomes. "What the user
-gets" describes the outcome, not the literal wording; the wording is SONNY-128's for sign-in and
-SONNY-136's for everything else.
+The seven cases **SONNY-124's own scoped requirements** name are distinguishable by `code`, not by
+status — several share a status on purpose, because HTTP has fewer meanings than this product has
+outcomes. (Attribution matters in this repo: the seven-case list is that ticket's scoping language,
+not a founder decision. The founder decisions this document carries are the ones marked as such —
+the credential boundary, retention, the sign-in set, the provider set, fail-closed-for-gated-only,
+delete-everywhere, the "Don't save this task" naming and enforcement, and website-only training
+consent.) "What the user gets" describes the outcome, not the literal wording; the wording is
+SONNY-128's for sign-in and SONNY-136's for everything else.
 
 | # | Case | Status | `code` | Retryable | Client does | What the user gets |
 |---|---|---|---|---|---|---|
@@ -760,8 +848,20 @@ additively:
 - may add a response field
 - may add a new `code` to an error family, if it is a *narrowing* of an existing one and old clients
   behave sanely on the family
-- may change any value the contract already calls server-controlled: limits inside their stated
-  bounds, timeouts, `grace_seconds`, `skew_tolerance_seconds`, provider, model
+- may change any value the contract already calls server-controlled: `grace_seconds`,
+  `skew_tolerance_seconds`, provider, model, and request-size limits **upward**
+- may **lower** a server deadline freely
+
+Two of those carry a bound, because without it an additive change breaks a shipped client:
+
+- **A request-size limit may rise but never fall.** Lowering one turns requests a shipped client
+  believes are legal into `413`s it cannot avoid, which is a breaking change however it is dressed.
+- **A server total deadline may only rise while it stays below the client timeout section 12 states
+  for that route.** Section 12's governing rule — the client's timeout is always longer than the
+  server's total deadline — is what makes a slow request surface as a typed `504` rather than as a
+  transport timeout the client cannot tell apart from a dead network. Raising a deadline past that
+  point silently inverts it for every shipped client. Doing so is a breaking change, and the client
+  timeout has to move in the same change to this document.
 
 Clients ignore unknown response fields (2.1). That is what makes all of the above safe.
 
@@ -866,11 +966,25 @@ looks similar.
 | `POST /v1/auth/refresh` | yes, with the same key | Rotation plus the overlap window (3.3) means a lost response does not cost the session |
 | `POST /v1/auth/email/start` | yes, with the same key | Without the key, a retry sends a second code and races the first |
 | `POST /v1/auth/email/verify` | **no** | A code is single-use by design (SONNY-127). The idempotency record returns the original *result*, including the original failure; it does not un-consume a code |
+| `POST /v1/auth/oauth/google`, `POST /v1/auth/oauth/apple` | **open** | These flows typically carry a single-use provider authorization code, in which case they behave like `email/verify` rather than like `email/start`. SONNY-129 settles it when it settles the body shape (3.6), and records which |
+| `POST /v1/auth/signout` | yes | Revoking an already-revoked family succeeds |
 | `DELETE /v1/tasks/{task_id}`, `DELETE /v1/account` | yes | Naturally idempotent; a second delete succeeds with `requests_deleted: 0` |
 
-A `429`, a `502`, a `503` and a `504` are retryable. A `400`, `401` on a fresh token, `403`, `404`,
-`409`, `410` and `413` are not — retrying any of them produces the identical failure and burns a
-round trip.
+**Retry is decided by `code`, never by status.** Several statuses carry more than one code with
+opposite semantics, which is the whole reason section 7's taxonomy keys off `code` — and a client
+that retried on status would retry `provider.rejected`, a 502 whose retry is guaranteed to fail
+identically.
+
+- Retryable: `limit.rate` (after `Retry-After`), `provider.unavailable`, `provider.timeout`,
+  `server.error`, `server.unavailable`, `client.offline`, and `auth.token_expired` after exactly one
+  refresh.
+- Not retryable: `request.invalid`, `auth.unauthenticated`, `auth.token_revoked`,
+  `entitlement.required`, `entitlement.expired`, `limit.spend`, `request.too_large`,
+  `provider.rejected`, `resource.not_found`, `idempotency.conflict` on a differing body, and
+  `version.unsupported`. Retrying any of these produces the identical failure and burns a round trip.
+
+The one exception to "never by status" is a response with no parseable body at all, which the client
+treats as `server.error` and may retry once.
 
 ---
 
@@ -1032,11 +1146,21 @@ own opaque transport timeout, which it cannot tell apart from a dead network.
 | `POST /v1/plan` | 60 s | 75 s | 90 s |
 | `POST /v1/transcriptions` | 60 s | 75 s | 90 s |
 | `POST /v1/search` | 20 s | 25 s | 30 s |
-| auth, account, meta, delete | 10 s | 15 s | 20 s |
+| auth, account, meta, health, delete | 10 s | 15 s | 20 s |
 
 The vision and synthesis routes get the longest budgets because they genuinely take longest: a vision
 call carries megabytes upstream and waits on a large model, and a session spends up to twelve of them
 in sequence.
+
+**These deadlines constrain the host exactly as section 6.1's size limit does, and for the same
+reason.** A platform that terminates a request before its route's total deadline turns a slow-but-
+working model call into a failure the user experiences as Sonny giving up. So SONNY-125 has two
+things to prove and not one: that a 4,200,000-byte body lands, and that a request may sit for 105
+seconds waiting on a deliberately slow upstream without the platform cutting it off. Both numbers are
+derived from what Sonny does — the payload from the client's own encoder ceiling, the deadline from
+how long a large vision model actually takes — and neither is read off any host's documentation. That
+ticket's own scoped requirements already ask for both measurements; this is the contract stating what
+the answers have to clear.
 
 Three rules alongside the table:
 
@@ -1064,7 +1188,9 @@ that was overlooked.
 
 | Open | Owner |
 |---|---|
-| The host, and proving a 4,500,000-byte body lands on it at these timeouts | SONNY-125 |
+| The host, and proving a 4,200,000-byte body lands on it, and that a request may sit 105 s on a slow upstream | SONNY-125 |
+| **Who builds `GET /v1/meta`, the `410 version.unsupported` gate, and the deprecation headers** | **nobody yet** — SONNY-155, Backlog, untriaged (4.1) |
+| Whether the OAuth sign-in calls are replay-safe (9.3) | SONNY-129, alongside the body shape |
 | Server language, framework, database, deploy path, migrations, credential rotation | SONNY-126 |
 | The per-user spend-cap mechanism, and what happens when two requests from one user race it | SONNY-125 names it, SONNY-135 implements it |
 | The identity-linking rule, and how it survives Hide My Email relay addresses | SONNY-127 |
@@ -1088,6 +1214,10 @@ that was overlooked.
 
 Append-only, newest last. A change here is a change to what twelve tickets were written against, so
 it carries a date, a reason, and the ticket that prompted it.
+
+The log starts once the document is merged. Iteration inside SONNY-124's own branch — including its
+pre-merge review round — is part of "created" and does not get a row; a changelog that recorded the
+author's own drafting would bury the changes a downstream session actually has to notice.
 
 | Date | Change | Ticket |
 |---|---|---|
