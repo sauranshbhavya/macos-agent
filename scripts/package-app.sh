@@ -1,5 +1,5 @@
 #!/bin/bash
-# Packages the MacAgent executable into a real, ad-hoc-signed MacAgent.app bundle.
+# Packages the MacAgent executable into a real, code-signed MacAgent.app bundle.
 #
 # Why this exists: several macOS APIs Sonny depends on (UNUserNotificationCenter for system
 # notifications, AVCaptureDevice's microphone permission prompt, NSAppleEventsUsageDescription-
@@ -12,6 +12,10 @@
 # when you want to manually test bundle-dependent behavior, not a replacement for the normal dev
 # loop.
 #
+# Signing identity: read from Packaging/signing-identity, which is the one place it is named.
+# First run on a new Mac needs ./scripts/create-signing-identity.sh — read that script's header for
+# why ad-hoc signing was replaced (SONNY-153) and for what the local certificate is and is not.
+#
 # Usage: ./scripts/package-app.sh [debug|release]
 # Output: .build/<triple>/<configuration>/MacAgent.app — launch with `open` or run the binary
 # inside it directly (Contents/MacOS/MacAgent) to see console output live.
@@ -21,6 +25,35 @@ set -euo pipefail
 CONFIGURATION="${1:-debug}"
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 cd "$ROOT_DIR"
+
+# shellcheck source=lib/signing.sh
+. "$ROOT_DIR/scripts/lib/signing.sh"
+
+SIGN_IDENTITY="$(sonny_read_signing_identity "$ROOT_DIR")"
+
+if sonny_signing_identity_is_adhoc "$SIGN_IDENTITY"; then
+  echo "warning: $SONNY_SIGNING_IDENTITY_FILE selects ad-hoc signing." >&2
+  echo "         Every macOS permission grant (Screen Recording, Accessibility, Microphone," >&2
+  echo "         Desktop folder) will be lost the next time this app is rebuilt. See SONNY-153." >&2
+elif ! sonny_signing_identity_present "$SIGN_IDENTITY"; then
+  cat >&2 <<EOF
+error: codesign cannot find the signing identity '$SIGN_IDENTITY'.
+
+       $SONNY_SIGNING_IDENTITY_FILE names it, but it is not in this Mac's keychain.
+
+       If this is a development machine, create it once:
+           ./scripts/create-signing-identity.sh
+
+       If that file has been switched to an Apple-issued Developer ID identity, install the
+       certificate from the Apple Developer account first — this script cannot create that one.
+
+       Refusing to fall back to ad-hoc signing: an ad-hoc build loses every macOS permission grant
+       on every rebuild, silently, while System Settings keeps showing the switches on. That
+       failure is what SONNY-153 removed, and it is not worth reintroducing quietly to save a
+       packaging run.
+EOF
+  exit 1
+fi
 
 echo "==> Building MacAgent ($CONFIGURATION)"
 swift build --configuration "$CONFIGURATION"
@@ -69,13 +102,20 @@ cp -R "$RESOURCE_BUNDLE" "$RESOURCES_DIR/MacAgent_MacAgent.bundle"
 sign_app() {
   xattr -cr "$APP_DIR"
   if [ -f "$ENTITLEMENTS" ]; then
-    codesign --force --deep --sign - --entitlements "$ENTITLEMENTS" "$APP_DIR"
+    codesign --force --deep --sign "$SIGN_IDENTITY" --entitlements "$ENTITLEMENTS" "$APP_DIR"
   else
-    codesign --force --deep --sign - "$APP_DIR"
+    codesign --force --deep --sign "$SIGN_IDENTITY" "$APP_DIR"
   fi
 }
 
-echo "==> Code signing (ad hoc, with xattr-strip retries)"
+echo "==> Code signing as '$SIGN_IDENTITY' (with xattr-strip retries)"
+if ! sonny_signing_identity_is_adhoc "$SIGN_IDENTITY"; then
+  # If codesign has never been authorised to use this key, macOS blocks here on a GUI dialog and
+  # this script produces no further output until someone clicks it — a hang with no explanation,
+  # which is exactly how it presented the first time. Say so before it can happen.
+  echo "    (if this stops here, macOS is asking whether codesign may use the key —"
+  echo "     answer it with \"Always Allow\", or run ./scripts/create-signing-identity.sh)"
+fi
 SIGN_ATTEMPTS=5
 attempt=1
 while true; do
@@ -93,6 +133,23 @@ done
 
 echo "==> Verifying signature"
 codesign --verify --verbose "$APP_DIR"
+
+# Print the designated requirement, because it — not the identity name — is what macOS actually
+# keys permission grants to. A requirement that is a bare `cdhash H"..."` means the grants will not
+# survive the next rebuild; anything naming an identifier and a certificate means they will.
+echo "==> Designated requirement (what macOS keys permission grants to)"
+# An ad-hoc signature's requirement prints commented out — `# designated => cdhash H"..."` — while
+# a certificate's prints bare: `designated => identifier "..." and certificate leaf = H"..."`.
+# Matching only the bare form silently dropped the ad-hoc case, which is the one this warning
+# exists for. Tolerate the leading `#`.
+REQUIREMENT="$(codesign -d -r- "$APP_DIR" 2>/dev/null | grep -E '^#?[[:space:]]*designated' || true)"
+echo "${REQUIREMENT:-  (none reported)}"
+case "$REQUIREMENT" in
+  *"cdhash"*)
+    echo "warning: this build's grants are pinned to its own hash and will be lost on the next" >&2
+    echo "         rebuild. See SONNY-153 and ./scripts/create-signing-identity.sh." >&2
+    ;;
+esac
 
 echo "==> Done: $APP_DIR"
 echo "Launch with: open \"$APP_DIR\""
