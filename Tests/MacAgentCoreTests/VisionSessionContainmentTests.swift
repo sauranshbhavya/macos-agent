@@ -271,22 +271,45 @@ struct VisionSessionContainmentTests {
     /// misleads whoever reads it months later. Listed exhaustively rather than sampled, and the
     /// count is asserted, so a new ending has to come here and choose a code rather than silently
     /// borrowing one.
+    ///
+    /// **That last sentence was a promise this test could not keep, and it took two rounds to make
+    /// it true** (SONNY-139, PR #57 F5).
+    ///
+    /// Round one: the list was hand-written, so `screenShowsShell` was added to the enum and this
+    /// test stayed green — "exhaustively" was true of how the list had been *typed* and not of
+    /// anything enforced. ``expectedReasonCode(for:)`` was added, an exhaustive `switch`, so a new
+    /// case fails to compile here. Round two, the reviewer's finding: that forces the author into
+    /// this file but not into the *array*. A new case could be given a `switch` arm and never a
+    /// sample, and then its distinct-code and non-empty-sentence assertions would simply never run,
+    /// with a literal `== 12` still passing.
+    ///
+    /// Closed by ``Sample``, which is `CaseIterable` because it carries no associated values. The
+    /// array is built from `Sample.allCases`, so there is no hand-written list and no literal count;
+    /// ``expectedReasonCode(for:)`` maps the real enum back to a `Sample`, so a new refusal case
+    /// fails to compile until it has one; and ``sample(_:)`` maps each `Sample` to a value, so a new
+    /// `Sample` fails to compile until it has a refusal. Neither direction can be satisfied without
+    /// the other. Same family as `identifierProducing(_:)` in `ScreenControlEligibilityTests`.
     @Test
     func everyRefusalCarriesADistinctReasonCodeAndANonEmptySentence() {
-        let refusals: [VisionContainmentRefusal] = [
-            .iterationCapReached(cap: 12),
-            .cancelled,
-            .targetIneligible(.terminal),
-            .targetNotFrontmost(expected: "Safari", actual: "Notes"),
-            .attentionLost(.screenLocked),
-            .actionTypeNotAllowed("launch_missiles"),
-            .approvalDeclined(action: "Click Delete"),
-            .approvalRefusedByPolicy(action: "Click Send"),
-            .captureSendDeclined,
-            .approvalNotPresentable,
-            .permissionRevoked
-        ]
-        #expect(refusals.count == 11)
+        let refusals = Sample.allCases.map(Self.sample)
+        // Not a literal: the count is whatever the enum has, and the mapping below is what forces a
+        // new case to appear here at all.
+        #expect(refusals.count == Sample.allCases.count)
+        #expect(Set(refusals.map { Self.expectedReasonCode(for: $0) }).count == Sample.allCases.count)
+        for refusal in refusals {
+            #expect(refusal.reasonCode == Self.expectedReasonCode(for: refusal).rawValue)
+        }
+
+        // **The two refusals that both mean "this is a shell" stay distinguishable.** The static
+        // deny list and the screen check enforce one rule at two different doors, and a record that
+        // could not tell them apart could not say which one held. Different codes, different
+        // sentences, and both say the thing that makes the rule categorical.
+        let byName = Self.sample(.targetIneligible)
+        let byScreen = Self.sample(.screenShowsShell)
+        #expect(byName.reasonCode != byScreen.reasonCode)
+        #expect(byName.userFacingReason != byScreen.userFacingReason)
+        #expect(byName.userFacingReason.contains("This is not something you can allow."))
+        #expect(byScreen.userFacingReason.contains("This is not something you can allow."))
 
         // The two §13.5 names the spec calls out by hand, so a rename fails here rather than in a
         // record nobody reads until they need it.
@@ -311,6 +334,70 @@ struct VisionSessionContainmentTests {
         for refusal in refusals {
             #expect(!refusal.userFacingReason.isEmpty, "\(refusal)")
             #expect(!refusal.reasonCode.isEmpty, "\(refusal)")
+        }
+    }
+
+    /// One tag per `VisionContainmentRefusal` case, with the reason code that case must carry.
+    ///
+    /// `CaseIterable` is the whole point and is only possible because these carry no associated
+    /// values — which is exactly why the real enum cannot be `CaseIterable` and needs this stand-in.
+    /// The raw values are the second, independent copy of the reason codes: production changing one
+    /// without anyone deciding to makes the two disagree.
+    private enum Sample: String, CaseIterable {
+        case iterationCapReached = "iteration_cap_reached"
+        case cancelled = "user_stopped"
+        case targetIneligible = "target_ineligible"
+        case screenShowsShell = "screen_shows_shell"
+        case targetNotFrontmost = "target_not_frontmost"
+        case attentionLost = "attention_lost"
+        case actionTypeNotAllowed = "action_not_allowed"
+        case approvalDeclined = "approval_declined"
+        case approvalRefusedByPolicy = "approval_refused"
+        case captureSendDeclined = "capture_send_declined"
+        case approvalNotPresentable = "approval_not_presentable"
+        case permissionRevoked = "permission_revoked"
+    }
+
+    /// A representative value for each tag. Exhaustive over ``Sample``, so a tag with no sample does
+    /// not compile.
+    private static func sample(_ tag: Sample) -> VisionContainmentRefusal {
+        switch tag {
+        case .iterationCapReached: return .iterationCapReached(cap: 12)
+        case .cancelled: return .cancelled
+        case .targetIneligible: return .targetIneligible(.terminal)
+        case .screenShowsShell:
+            return .screenShowsShell(
+                ShellSurfaceDetector.verdict(for: "user@host ~ % ls\nzsh: command not found: x")
+            )
+        case .targetNotFrontmost: return .targetNotFrontmost(expected: "Safari", actual: "Notes")
+        case .attentionLost: return .attentionLost(.screenLocked)
+        case .actionTypeNotAllowed: return .actionTypeNotAllowed("launch_missiles")
+        case .approvalDeclined: return .approvalDeclined(action: "Click Delete")
+        case .approvalRefusedByPolicy: return .approvalRefusedByPolicy(action: "Click Send")
+        case .captureSendDeclined: return .captureSendDeclined
+        case .approvalNotPresentable: return .approvalNotPresentable
+        case .permissionRevoked: return .permissionRevoked
+        }
+    }
+
+    /// The tag a refusal belongs to. Exhaustive over `VisionContainmentRefusal`, so a case added to
+    /// the production enum does not compile until it has a tag here — and a tag does not compile
+    /// until ``sample(_:)`` gives it a value, which is what puts it in the array the assertions run
+    /// over.
+    private static func expectedReasonCode(for refusal: VisionContainmentRefusal) -> Sample {
+        switch refusal {
+        case .iterationCapReached: return .iterationCapReached
+        case .cancelled: return .cancelled
+        case .targetIneligible: return .targetIneligible
+        case .screenShowsShell: return .screenShowsShell
+        case .targetNotFrontmost: return .targetNotFrontmost
+        case .attentionLost: return .attentionLost
+        case .actionTypeNotAllowed: return .actionTypeNotAllowed
+        case .approvalDeclined: return .approvalDeclined
+        case .approvalRefusedByPolicy: return .approvalRefusedByPolicy
+        case .captureSendDeclined: return .captureSendDeclined
+        case .approvalNotPresentable: return .approvalNotPresentable
+        case .permissionRevoked: return .permissionRevoked
         }
     }
 

@@ -123,6 +123,24 @@ public enum VisionContainmentRefusal: Equatable, Sendable {
     case iterationCapReached(cap: Int)
     case cancelled
     case targetIneligible(ScreenControlRefusal)
+    /// The captured window is showing a shell (SONNY-139).
+    ///
+    /// **A second refusal on the same rule, never a replacement for the first.**
+    /// ``ScreenControlPolicy/terminalBundleIdentifiers`` refuses ten named terminal apps and refuses
+    /// them first — at three doors and again at the top of every iteration, above this one. A static
+    /// bundle comparison cannot be talked out of its answer by anything rendered, while this reads
+    /// exactly the surface an attacker controls, so this is layered after the list and is never a
+    /// reason to shorten it. What it buys is the ground a name list cannot reach: a terminal nobody
+    /// listed, and a shell running *inside* an app that is not a terminal.
+    ///
+    /// **Ends the session rather than declining the one action**, matching every other case here.
+    /// The next capture is one scroll away from the same shell, and the doc comment above already
+    /// says why none of these re-prompts. Founder decision 2026-08-16, made conditional on the
+    /// capture being scoped to the target app's own window — `SCContentFilter(desktopIndependentWindow:)`,
+    /// the only content filter in the repository — so a terminal sitting behind Chrome cannot end a
+    /// Chrome session. **Any change that widens the capture invalidates that and must revisit this
+    /// case rather than route around it.**
+    case screenShowsShell(ShellSurfaceVerdict)
     case targetNotFrontmost(expected: String, actual: String?)
     case attentionLost(SessionAttentionState)
     case actionTypeNotAllowed(String)
@@ -152,6 +170,16 @@ public enum VisionContainmentRefusal: Equatable, Sendable {
             return "Stopped."
         case .targetIneligible(let refusal):
             return refusal.userFacingReason
+        case .screenShowsShell:
+            // The same authority reason `ScreenControlRefusal.terminal` gives, said about a window
+            // rather than an app — it is the same rule, and a user who met both sentences should
+            // recognize them as one. It names the fact that fired and stops; how Sonny knows is not
+            // in the product (founder, 2026-08-14: no how-it-works copy in the app). One string for
+            // the panel and for the recorded reason, deliberately: a refusal the log describes
+            // differently from the panel is a refusal nobody can audit.
+            return "Sonny stopped because that window is showing a shell — anything typed into one "
+                + "runs with your full account authority, outside every permission Sonny has. This "
+                + "is not something you can allow."
         case .targetNotFrontmost(let expected, let actual):
             let actualName = actual.map { "\($0) is" } ?? "something else is"
             return "Sonny stopped because \(expected) is no longer the app in front — \(actualName). "
@@ -181,6 +209,7 @@ public enum VisionContainmentRefusal: Equatable, Sendable {
         case .iterationCapReached: return "iteration_cap_reached"
         case .cancelled: return "user_stopped"
         case .targetIneligible: return "target_ineligible"
+        case .screenShowsShell: return "screen_shows_shell"
         case .targetNotFrontmost: return "target_not_frontmost"
         case .attentionLost: return "attention_lost"
         case .actionTypeNotAllowed: return "action_not_allowed"

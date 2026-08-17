@@ -215,6 +215,72 @@ struct VisionSessionRunTests {
         }
     }
 
+    /// Reads a different screen on each capture, so a test can put a shell on screen at a chosen
+    /// iteration rather than only at the first (SONNY-139).
+    ///
+    /// The last script entry repeats once the script runs out, which is what a screen that stopped
+    /// changing looks like — the alternative, returning nothing, would silently un-show a shell.
+    private final class ScriptedRecognizer: ImageTextRecognizing, @unchecked Sendable {
+        private let screens: [String]
+        private(set) var calls = 0
+
+        init(_ screens: [String]) {
+            self.screens = screens
+        }
+
+        func recognizeText(inPNGData: Data, pixelWidth: Int, pixelHeight: Int) async throws -> [RecognizedTextObservation] {
+            defer { calls += 1 }
+            let screen = screens[min(calls, screens.count - 1)]
+            // One observation per line, with a plausible box — the shape `VisionImageTextRecognizer`
+            // produces. The boxes matter only because the redaction painter uses them; no test here
+            // plants a secret.
+            return screen.split(separator: "\n", omittingEmptySubsequences: false).enumerated().map { index, line in
+                RecognizedTextObservation(
+                    string: String(line),
+                    boundingBox: CGRect(x: 8, y: 8 + 18 * index, width: 700, height: 16)
+                )
+            }
+        }
+    }
+
+    /// Vision OCR that cannot run. The point of the fixture is that this must not become a "no
+    /// shell" answer.
+    private struct ThrowingRecognizer: ImageTextRecognizing {
+        struct Unavailable: Error {}
+        func recognizeText(inPNGData: Data, pixelWidth: Int, pixelHeight: Int) async throws -> [RecognizedTextObservation] {
+            throw Unavailable()
+        }
+    }
+
+    /// A terminal window, as the recognizer would read it. Two independent signs — a prompt line and
+    /// the shell's own error message — which is the threshold, not a landslide.
+    private static let shellScreen = """
+    Last login: Sat Aug 16 09:14:22 on ttys000
+    sauransh@Mac macos-agent % ./scripts/deploy.sh
+    zsh: permission denied: ./scripts/deploy.sh
+    sauransh@Mac macos-agent %
+    """
+
+    /// An ordinary window with words on it, including one that is a command name — so a passing
+    /// shell test cannot be explained by "any text at all refuses".
+    private static let ordinaryScreen = """
+    Reading List — Safari
+    Bookmarks   History   Reading List
+    Building a Mac agent, and what npm has to do with it
+    """
+
+    /// **A VS Code window with its terminal panel open and nothing having gone wrong** — manual-test
+    /// item 2, and the case PR #57's F2 found the session ran straight through. Nothing on this
+    /// screen has failed: no diagnostic, no banner, no `ls -l` output. Its two signs are a real
+    /// prompt and a command typed at it.
+    private static let idleTerminalPanelScreen = """
+    EXPLORER                    deploy.sh
+    PROBLEMS   OUTPUT   TERMINAL   PORTS
+    sauransh@Mac macos-agent % ls
+    README.md  Sources  Tests  docs
+    sauransh@Mac macos-agent %
+    """
+
     // MARK: - Fixture
 
     private struct Fixture {
@@ -251,7 +317,10 @@ struct VisionSessionRunTests {
         /// The egress encoding policy. The default is the shipping one, under which an 800x600
         /// fixture never resamples; a test that wants the resampled path supplies a budget the
         /// ladder cannot meet.
-        egressPolicy: VisionCaptureEgressPolicy = .default
+        egressPolicy: VisionCaptureEgressPolicy = .default,
+        /// What the OCR pass reads off each capture. The default finds nothing, which is a window
+        /// with no secrets and no shell on it; SONNY-139's tests supply screens instead.
+        recognizer: (any ImageTextRecognizing)? = nil
     ) throws -> Fixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("VisionSessionRunTests-\(UUID().uuidString)", isDirectory: true)
@@ -295,7 +364,10 @@ struct VisionSessionRunTests {
                 permissionChecker: permissions ?? GrantedPermissions(),
                 backend: FakeCaptureBackend(bundleIdentifier: bundleIdentifier)
             ),
-            redactionService: LocalRedactionService(textRecognizer: EmptyRecognizer(), egressPolicy: egressPolicy),
+            redactionService: LocalRedactionService(
+                textRecognizer: recognizer ?? EmptyRecognizer(),
+                egressPolicy: egressPolicy
+            ),
             synthesizer: synthesizer,
             modelClient: model,
             limits: limits,
@@ -1658,6 +1730,202 @@ struct VisionSessionRunTests {
             #expect(prompt.contains(UntrustedContentBoundary.trustedInstructionBeginDelimiter))
             #expect(prompt.contains("click a thing"))
         }
+    }
+
+    // MARK: - The screen check (SONNY-139)
+
+    /// The sentence under test, taken from the production enum rather than written out here — so a
+    /// test cannot pass against copy that drifted, and so the panel and the record are compared
+    /// against **one** expression rather than two hand-copied strings that could diverge.
+    private static var shellRefusalSentence: String {
+        VisionContainmentRefusal
+            .screenShowsShell(ShellSurfaceDetector.verdict(for: shellScreen))
+            .userFacingReason
+    }
+
+    /// **A window showing a shell ends the session, in every mode**, before anything is sent and
+    /// before anything is clicked.
+    ///
+    /// All three modes, because Power is the reason this check exists: it asks about no app, so the
+    /// ten-name deny list is otherwise the only thing standing there, and a terminal nobody listed
+    /// reaches the loop unchallenged. Safe is here for the opposite reason — its capture-review
+    /// prompt sits *below* the shell check, so a shell must not even get as far as asking the user
+    /// whether to send a picture of it.
+    ///
+    /// **Safe mode's session-envelope approval comes first and is answered here**, because it is a
+    /// *plan*-level gate that fires before the loop starts — it is not the per-app control consent
+    /// row J's later branches add, which is the prompt the design says the first capture precedes.
+    /// The two are easy to read as contradicting each other and do not.
+    ///
+    /// Asserted on all four surfaces that have to agree: nothing reached the model, nothing reached
+    /// the machine, the sentence the user reads, and the sentence the record keeps.
+    @Test(arguments: [AgentInteractionMode.safe, .normal, .power])
+    func aWindowShowingAShellEndsTheSessionInEveryMode(mode: AgentInteractionMode) async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"click","x":10,"y":10,"target":"OK","consequence":"ordinary","rationale":"r"}"#],
+            mode: mode,
+            recognizer: ScriptedRecognizer([Self.shellScreen])
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "run the deploy script", appName: "Safari")
+        if mode == .safe {
+            try await waitUntil("the session-envelope approval") { fixture.viewModel.approvalRequest != nil }
+            #expect(fixture.model.prompts.isEmpty)
+            fixture.viewModel.start()
+        }
+        try await waitForIdle(fixture.viewModel)
+
+        // Nothing left the device and nothing touched the machine.
+        #expect(fixture.model.prompts.isEmpty)
+        #expect(fixture.model.payloads.isEmpty)
+        #expect(fixture.synthesizer.events.filter { $0 != .activated("com.apple.Safari") }.isEmpty)
+        // Safe mode's capture review never opened: the shell check runs before it.
+        #expect(fixture.viewModel.visionCapturePreview == nil)
+        #expect(fixture.viewModel.approvalRequest == nil)
+
+        // The user-facing surface and the recorded reason, asserted as the same string.
+        #expect(fixture.viewModel.finalSummary == Self.shellRefusalSentence)
+        let record = try #require(try fixture.journal.loadAll().first)
+        #expect(record.endSummary == Self.shellRefusalSentence)
+        #expect(record.endReasonCode == "screen_shows_shell")
+        #expect(record.entries.isEmpty)
+    }
+
+    /// **An editor with its terminal panel open, where nothing has failed, ends the session** — the
+    /// embedded-shell case this ticket exists for, driven through the real runner (PR #57 F2).
+    ///
+    /// The detector-level corpus pins the signals; this pins that the session actually stops. Before
+    /// the fix this screen reached one sign and the session ran on: manual-test item 2 would have
+    /// passed or failed depending on whether the founder's last command happened to error, which is
+    /// not a property anything should depend on.
+    @Test
+    func anEditorWithATerminalPanelEndsTheSessionEvenWhenNothingHasFailed() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"click","x":10,"y":10,"target":"Run","consequence":"ordinary","rationale":"r"}"#],
+            recognizer: ScriptedRecognizer([Self.idleTerminalPanelScreen])
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "run the tests", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.model.prompts.isEmpty)
+        #expect(fixture.synthesizer.clickCount == 0)
+        #expect(fixture.viewModel.finalSummary == Self.shellRefusalSentence)
+        let record = try #require(try fixture.journal.loadAll().first)
+        #expect(record.endReasonCode == "screen_shows_shell")
+    }
+
+    /// **The same screen without the shell proceeds normally**, which is what stops the test above
+    /// from passing for the wrong reason. A capture that carries recognized text, goes through the
+    /// same recognizer seam and the same redaction path, and simply is not a shell, reaches the
+    /// model and produces a click.
+    @Test
+    func anOrdinaryWindowWithTextOnItIsUnaffectedByTheScreenCheck() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"Reading List","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"Opened."}"#
+            ],
+            recognizer: ScriptedRecognizer([Self.ordinaryScreen])
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "open my reading list", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.model.prompts.count == 2)
+        #expect(fixture.synthesizer.clickCount == 1)
+        #expect(fixture.viewModel.finalSummary == "Opened.")
+    }
+
+    /// **Every capture, not only the first.** A screen changes under you, so an answer computed once
+    /// per session is an answer that cannot notice a shell opening in a window it already cleared.
+    ///
+    /// The shell appears on the *third* capture: two ordinary iterations run and click, and the
+    /// third ends the session. A check wired to run once would let all three through, and a check
+    /// wired to the wrong iteration would stop at the wrong count — so the click count is asserted
+    /// exactly rather than as "some clicks happened".
+    @Test
+    func theScreenCheckRunsOnEveryCaptureNotOnlyTheFirst() async throws {
+        let click = #"{"action":"click","x":10,"y":10,"target":"Next","consequence":"ordinary","rationale":"r"}"#
+        let fixture = try makeFixture(
+            replies: [click, click, click, click],
+            recognizer: ScriptedRecognizer([
+                Self.ordinaryScreen,
+                Self.ordinaryScreen,
+                Self.shellScreen
+            ])
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "keep going", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.synthesizer.clickCount == 2)
+        #expect(fixture.model.prompts.count == 2)
+        #expect(fixture.viewModel.finalSummary == Self.shellRefusalSentence)
+        let record = try #require(try fixture.journal.loadAll().first)
+        #expect(record.endReasonCode == "screen_shows_shell")
+        // The two clicks that did happen are in the record; the refusal added no entry of its own.
+        #expect(record.entries.count == 2)
+    }
+
+    /// **An unreadable screen is not permission.** This is asserted as *the session ends*, never as
+    /// "the verdict came back no-shell" — the distinction is the whole content of failing closed,
+    /// and a check that answered "no shell" when it could not see would be the worst possible
+    /// outcome.
+    ///
+    /// The property is inherited rather than re-implemented: `redactCapture` throws
+    /// `detectionUnavailable` when recognition fails, and the runner propagates it. A mutation that
+    /// deleted that propagation — `try?` with a default, or a recognizer failure mapped to an empty
+    /// observation list — would make this test fail, because the session would run on and click.
+    @Test
+    func anUnreadableScreenEndsTheSessionRatherThanProducingANoShellVerdict() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"click","x":10,"y":10,"target":"OK","consequence":"ordinary","rationale":"r"}"#],
+            recognizer: ThrowingRecognizer()
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "do something", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        // Nothing was sent, nothing was clicked, and the run did not quietly succeed.
+        #expect(fixture.model.prompts.isEmpty)
+        #expect(fixture.synthesizer.clickCount == 0)
+        #expect(fixture.viewModel.errorMessage?.contains("could not scan this capture") == true)
+        let record = try #require(try fixture.journal.loadAll().first)
+        #expect(record.endReasonCode == "failed")
+        #expect(record.entries.isEmpty)
+    }
+
+    /// **The static deny list still refuses first, and the screen check did not replace it.** A
+    /// terminal app is refused at the adapter's door with the *terminal* sentence, never the shell
+    /// one — so the two refusals stay distinguishable in the record and in the panel, and a reader
+    /// can tell which boundary fired.
+    ///
+    /// This is the ordering constraint as behaviour: the deny list answers before a capture is ever
+    /// taken, which is why the recognizer below is never even asked.
+    @Test
+    func aListedTerminalIsStillRefusedByNameBeforeAnyCaptureIsTaken() async throws {
+        let recognizer = ScriptedRecognizer([Self.shellScreen])
+        let fixture = try makeFixture(
+            replies: [#"{"action":"click","x":1,"y":1,"target":"OK","rationale":"r"}"#],
+            bundleIdentifier: "com.apple.Terminal",
+            frontmost: "com.apple.Terminal",
+            recognizer: recognizer
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "run a command", appName: "Terminal")
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(recognizer.calls == 0)
+        #expect(fixture.model.prompts.isEmpty)
+        #expect(fixture.viewModel.errorMessage?.contains("never controls a terminal") == true)
+        #expect(fixture.viewModel.errorMessage?.contains("that window is showing a shell") == false)
     }
 }
 
