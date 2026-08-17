@@ -255,6 +255,37 @@ public enum ScreenActionSynthesisError: Error, Equatable, LocalizedError {
 
 // MARK: - Coordinate resolution
 
+/// The pixel dimensions of the image the model was actually shown.
+///
+/// **A type of its own, because since SONNY-114 there are two plausible answers to "how big is the
+/// screenshot" and only one of them is right here.** The capture has pixel dimensions; the image that
+/// left the device has pixel dimensions; they are equal for every capture measured on real hardware
+/// and they stop being equal the moment the egress ladder has to resample one to fit its byte budget.
+/// Every coordinate the model returns is named in *this* space — it is the space the prompt told the
+/// model about — so a resolver that scaled from the capture's own pixel count would translate a
+/// resampled iteration's clicks to the wrong place, in proportion to how far it was resampled. Two
+/// `Int` parameters would have let that mistake be made silently at a call site.
+public struct SentImageSize: Equatable, Sendable {
+    public let pixelWidth: Int
+    public let pixelHeight: Int
+
+    public init(pixelWidth: Int, pixelHeight: Int) {
+        self.pixelWidth = pixelWidth
+        self.pixelHeight = pixelHeight
+    }
+
+    /// The size of the image a redacted payload carries — the only honest source for it, since the
+    /// payload is what actually goes on the wire.
+    ///
+    /// `nil` for a text-only payload, which carries no image and therefore no coordinate space.
+    public init?(payload: RedactedPayload) {
+        guard let width = payload.imagePixelWidth, let height = payload.imagePixelHeight else {
+            return nil
+        }
+        self.init(pixelWidth: width, pixelHeight: height)
+    }
+}
+
 /// Translates a point the model picked *in the screenshot* into a point on the screen.
 ///
 /// Kept as a free function over plain values — no OS calls, no state — because this is the one piece
@@ -275,8 +306,24 @@ public enum VisionPointResolver {
     /// resize.
     public static let resizeTolerance: CGFloat = 2
 
+    /// The scale comes from ``SentImageSize``, never from the capture's own pixel count.
+    ///
+    /// **The two are the same number for every capture measured on real hardware and they are not the
+    /// same number by construction** (SONNY-114): the egress ladder resamples when an encoded capture
+    /// will not fit its byte budget, and after that the model is looking at — and naming coordinates
+    /// in — a smaller grid than the one ScreenCaptureKit produced. `windowFrame.width / sentPixelWidth`
+    /// is points-per-*sent*-pixel, which is what turns the model's point back into a screen point.
+    ///
+    /// **What the resampling costs a click, exactly.** The model can only name whole pixels, and a
+    /// named pixel maps to that pixel's leading edge rather than its centre, so the resolved point
+    /// lands short of the model's true target by at most one *sent* pixel — a point when nothing was
+    /// resampled, two points at the ladder's 0.5 floor. A macOS control is at
+    /// least 20 points on its short edge and the model is told to aim at the middle of the glyphs, so
+    /// this cannot move a click off its target. Pinned by
+    /// `theResolvedPointStaysWithinOneSentPixelOfTheModelsTargetAtEveryLadderScale`.
     public static func resolve(
         imagePoint: CGPoint,
+        sentImageSize: SentImageSize,
         capture: CapturedWindowImage,
         freshFrame: CGRect?,
         ownWindowFrames: [CGRect]
@@ -288,12 +335,12 @@ public enum VisionPointResolver {
               abs(freshFrame.height - capture.windowFrame.height) <= resizeTolerance else {
             return .windowResized(from: capture.windowFrame.size, to: freshFrame.size)
         }
-        guard capture.pixelWidth > 0, capture.pixelHeight > 0 else {
+        guard sentImageSize.pixelWidth > 0, sentImageSize.pixelHeight > 0 else {
             return .windowDisappeared
         }
 
-        let scaleX = capture.windowFrame.width / CGFloat(capture.pixelWidth)
-        let scaleY = capture.windowFrame.height / CGFloat(capture.pixelHeight)
+        let scaleX = capture.windowFrame.width / CGFloat(sentImageSize.pixelWidth)
+        let scaleY = capture.windowFrame.height / CGFloat(sentImageSize.pixelHeight)
         let globalPoint = CGPoint(
             x: freshFrame.origin.x + imagePoint.x * scaleX,
             y: freshFrame.origin.y + imagePoint.y * scaleY
@@ -305,14 +352,16 @@ public enum VisionPointResolver {
         return .posted(globalPoint: globalPoint)
     }
 
-    /// Whether an image point lies inside the captured image at all.
+    /// Whether an image point lies inside the image the model was sent.
     ///
     /// Separate from `resolve` because an out-of-bounds coordinate is a *model* error worth telling
     /// the model about ("you named a point outside the screenshot"), while the outcomes above are
-    /// *world* changes worth telling it something different ("the window moved").
-    public static func isInsideImage(_ point: CGPoint, capture: CapturedWindowImage) -> Bool {
+    /// *world* changes worth telling it something different ("the window moved"). Bounded against the
+    /// sent size for the same reason `resolve` scales by it: the model was told those dimensions and
+    /// answered inside them, so the capture's own would be checking a claim nobody made.
+    public static func isInsideImage(_ point: CGPoint, sentImageSize: SentImageSize) -> Bool {
         point.x >= 0 && point.y >= 0
-            && point.x < CGFloat(capture.pixelWidth)
-            && point.y < CGFloat(capture.pixelHeight)
+            && point.x < CGFloat(sentImageSize.pixelWidth)
+            && point.y < CGFloat(sentImageSize.pixelHeight)
     }
 }

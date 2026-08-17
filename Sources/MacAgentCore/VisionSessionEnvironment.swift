@@ -13,7 +13,12 @@ import Foundation
 public struct VisionCapturePreview: Equatable, Sendable {
     public let appDisplayName: String
     public let windowTitle: String?
-    public let redactedPNGData: Data?
+    /// The redacted image bytes, in whatever format the egress encoder chose — PNG or JPEG. Named
+    /// for what it is rather than `…PNGData` (SONNY-114) for the same reason
+    /// ``RedactedPayload/redactedImageData`` is: half of real captures ship as the other one.
+    public let redactedImageData: Data?
+    /// The pixel dimensions of the image that will be sent, which is what this preview renders — not
+    /// the capture's own, when the egress ladder had to resample it.
     public let pixelWidth: Int
     public let pixelHeight: Int
     /// What redaction found and painted over, so the user can see the preview is not merely a
@@ -24,7 +29,7 @@ public struct VisionCapturePreview: Equatable, Sendable {
     public init(
         appDisplayName: String,
         windowTitle: String?,
-        redactedPNGData: Data?,
+        redactedImageData: Data?,
         pixelWidth: Int,
         pixelHeight: Int,
         redactionReport: [RedactionReportEntry],
@@ -32,7 +37,7 @@ public struct VisionCapturePreview: Equatable, Sendable {
     ) {
         self.appDisplayName = appDisplayName
         self.windowTitle = windowTitle
-        self.redactedPNGData = redactedPNGData
+        self.redactedImageData = redactedImageData
         self.pixelWidth = pixelWidth
         self.pixelHeight = pixelHeight
         self.redactionReport = redactionReport

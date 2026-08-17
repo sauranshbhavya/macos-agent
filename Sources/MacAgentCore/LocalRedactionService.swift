@@ -1,7 +1,5 @@
 import CoreGraphics
 import Foundation
-import ImageIO
-import UniformTypeIdentifiers
 
 // MARK: - Report
 
@@ -51,7 +49,18 @@ public struct RedactionReportEntry: Codable, Equatable, Sendable {
 /// (they are Codable on their own); the payload never does.
 public struct RedactedPayload: Equatable, Sendable {
     public let maskedText: String?
-    public let redactedImagePNGData: Data?
+    /// The redacted image, in whatever format ``imageMediaType`` names.
+    ///
+    /// Not `…PNGData` any more (SONNY-114): the egress encoder picks between PNG and JPEG per
+    /// capture, so a name that asserted one of them would be wrong on roughly half of real captures.
+    public let redactedImageData: Data?
+    /// What ``redactedImageData`` actually is. `nil` exactly when there is no image.
+    public let imageMediaType: VisionCaptureMediaType?
+    /// The pixel dimensions of the image **as encoded**, which since SONNY-114 may be smaller than
+    /// the capture's own when the ladder had to resample to fit the byte budget.
+    ///
+    /// This is the coordinate space the model is told about and the space every coordinate it
+    /// returns lives in — see ``VisionPointResolver/resolve(imagePoint:sentImageSize:capture:freshFrame:ownWindowFrames:)``.
     public let imagePixelWidth: Int?
     public let imagePixelHeight: Int?
     public let sourceBundleIdentifier: String?
@@ -59,14 +68,16 @@ public struct RedactedPayload: Equatable, Sendable {
 
     fileprivate init(
         maskedText: String?,
-        redactedImagePNGData: Data?,
+        redactedImageData: Data?,
+        imageMediaType: VisionCaptureMediaType?,
         imagePixelWidth: Int?,
         imagePixelHeight: Int?,
         sourceBundleIdentifier: String?,
         report: [RedactionReportEntry]
     ) {
         self.maskedText = maskedText
-        self.redactedImagePNGData = redactedImagePNGData
+        self.redactedImageData = redactedImageData
+        self.imageMediaType = imageMediaType
         self.imagePixelWidth = imagePixelWidth
         self.imagePixelHeight = imagePixelHeight
         self.sourceBundleIdentifier = sourceBundleIdentifier
@@ -121,13 +132,16 @@ public struct LocalRedactionService: Sendable {
     private let textRecognizer: any ImageTextRecognizing
     private let detector = SecretTextDetector()
     private let confidenceThreshold: Double
+    private let egressPolicy: VisionCaptureEgressPolicy
 
     public init(
         textRecognizer: any ImageTextRecognizing = VisionImageTextRecognizer(),
-        confidenceThreshold: Double = LocalRedactionService.defaultConfidenceThreshold
+        confidenceThreshold: Double = LocalRedactionService.defaultConfidenceThreshold,
+        egressPolicy: VisionCaptureEgressPolicy = .default
     ) {
         self.textRecognizer = textRecognizer
         self.confidenceThreshold = confidenceThreshold
+        self.egressPolicy = egressPolicy
     }
 
     public func redactText(_ text: String) -> RedactedPayload {
@@ -135,7 +149,8 @@ public struct LocalRedactionService: Sendable {
         let masked = SecretTextDetector.mask(matches: matches, in: text)
         return RedactedPayload(
             maskedText: masked,
-            redactedImagePNGData: nil,
+            redactedImageData: nil,
+            imageMediaType: nil,
             imagePixelWidth: nil,
             imagePixelHeight: nil,
             sourceBundleIdentifier: nil,
@@ -189,30 +204,35 @@ public struct LocalRedactionService: Sendable {
             }
         }
 
-        let pngData: Data
-        let width: Int
-        let height: Int
-        if regions.isEmpty {
-            (pngData, width, height) = (capture.pngData, capture.pixelWidth, capture.pixelHeight)
-        } else {
-            do {
-                (pngData, width, height) = try RedactionImageRenderer.fillRegions(regions, inPNGData: capture.pngData)
-            } catch let error as LocalRedactionError {
-                // Already the renderer's own typed failure — rethrow rather than wrapping the
-                // wording inside itself.
-                throw error
-            } catch {
-                // Fail closed again: pixels that could not be painted out are pixels that
-                // do not leave the device.
-                throw LocalRedactionError.imageRedactionFailed(String(describing: error))
-            }
+        // **One path, painted then encoded, whether or not anything was found.** A clean capture
+        // used to short-circuit straight to `capture.pngData`, which meant the bytes that left the
+        // device were whatever ScreenCaptureKit happened to produce — full-resolution PNG, the
+        // ~12 MB request SONNY-114 was filed about. It also meant the encoding a capture shipped in
+        // depended on whether it contained a secret, which is not a property anything should depend
+        // on. `render(paintingRegions:…)` takes an empty region list perfectly well.
+        let encodedImage: EncodedVisionCapture
+        do {
+            encodedImage = try RedactedCaptureEncoder.render(
+                paintingRegions: regions,
+                inPNGData: capture.pngData,
+                policy: egressPolicy
+            )
+        } catch let error as LocalRedactionError {
+            // Already the encoder's own typed failure — rethrow rather than wrapping the
+            // wording inside itself.
+            throw error
+        } catch {
+            // Fail closed again: pixels that could not be painted out are pixels that
+            // do not leave the device.
+            throw LocalRedactionError.imageRedactionFailed(String(describing: error))
         }
 
         return RedactedPayload(
             maskedText: nil,
-            redactedImagePNGData: pngData,
-            imagePixelWidth: width,
-            imagePixelHeight: height,
+            redactedImageData: encodedImage.data,
+            imageMediaType: encodedImage.mediaType,
+            imagePixelWidth: encodedImage.pixelWidth,
+            imagePixelHeight: encodedImage.pixelHeight,
             sourceBundleIdentifier: capture.bundleIdentifier,
             report: report(from: matches, category: .imageRegion)
         )
@@ -231,76 +251,5 @@ public struct LocalRedactionService: Sendable {
                 )
             }
             .sorted { $0.detectionClass.rawValue < $1.detectionClass.rawValue }
-    }
-}
-
-// MARK: - Region painting
-
-enum RedactionImageRenderer {
-    /// Paints the given top-left-origin pixel rects with opaque black and re-encodes as PNG.
-    ///
-    /// Opaque fill rather than a Gaussian blur is a deliberate call: a blur is a convolution
-    /// with residual information (partially invertible on text-sized regions), while a fill is
-    /// provably zero-information — the fail-closed reading of §12.3's "blur". The product
-    /// language stays "redacted".
-    static func fillRegions(_ regions: [CGRect], inPNGData pngData: Data) throws -> (Data, Int, Int) {
-        guard let source = CGImageSourceCreateWithData(pngData as CFData, nil),
-              let image = CGImageSourceCreateImageAtIndex(source, 0, nil) else {
-            throw LocalRedactionError.imageRedactionFailed("the capture data is not a decodable image")
-        }
-        let width = image.width
-        let height = image.height
-        guard let context = CGContext(
-            data: nil,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: CGColorSpace(name: CGColorSpace.sRGB)!,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        ) else {
-            throw LocalRedactionError.imageRedactionFailed("no drawing context for \(width)x\(height)")
-        }
-
-        context.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-        context.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 1))
-        let bounds = CGRect(x: 0, y: 0, width: width, height: height)
-        for region in regions {
-            // Top-left-origin rect → CoreGraphics bottom-left-origin space, clamped to the image.
-            let flipped = CGRect(
-                x: region.minX,
-                y: CGFloat(height) - region.maxY,
-                width: region.width,
-                height: region.height
-            ).intersection(bounds)
-            // A region entirely outside the image cannot be painted, and silently skipping it
-            // would leave the report claiming a redaction that did not happen (PR #49 F8) —
-            // the same false-attestation class as F1, so the same answer: fail closed. The
-            // shipped Vision recognizer cannot produce one (its boxes are normalized then
-            // scaled), but `ImageTextRecognizing` is a public seam and row I plugs into it.
-            guard !flipped.isEmpty else {
-                throw LocalRedactionError.imageRedactionFailed(
-                    "a detected region lies entirely outside the \(width)x\(height) capture"
-                )
-            }
-            context.fill(flipped)
-        }
-
-        guard let redacted = context.makeImage(), let data = Self.pngData(from: redacted) else {
-            throw LocalRedactionError.imageRedactionFailed("the redacted image could not be encoded as PNG")
-        }
-        return (data, width, height)
-    }
-
-    private static func pngData(from image: CGImage) -> Data? {
-        let data = NSMutableData()
-        guard let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil) else {
-            return nil
-        }
-        CGImageDestinationAddImage(destination, image, nil)
-        guard CGImageDestinationFinalize(destination) else {
-            return nil
-        }
-        return data as Data
     }
 }
