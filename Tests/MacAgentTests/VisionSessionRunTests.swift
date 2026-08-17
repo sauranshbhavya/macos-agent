@@ -1,5 +1,6 @@
 import CoreGraphics
 import Foundation
+import ImageIO
 import Testing
 @testable import MacAgent
 @testable import MacAgentCore
@@ -134,15 +135,38 @@ struct VisionSessionRunTests {
         func frontToBackLayerZeroWindowIDs() async -> [UInt32] { [1] }
 
         func captureImage(of window: ScreenCaptureWindowInfo) async throws -> ScreenCaptureBackendImage {
-            ScreenCaptureBackendImage(pngData: Self.onePixelPNG, pixelWidth: 800, pixelHeight: 600)
+            ScreenCaptureBackendImage(pngData: Self.windowPNG, pixelWidth: 800, pixelHeight: 600)
         }
 
-        /// A real, decodable 1x1 PNG. The redaction renderer only runs when a region is detected, and
-        /// no test here detects one, but a capture that is not a PNG at all would be a fixture that
-        /// tests a different failure than the one intended.
-        static let onePixelPNG = Data(
-            base64Encoded: "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg=="
-        )!
+        /// A real, decodable 800x600 PNG — the size this backend claims to have captured.
+        ///
+        /// **It used to be a 1x1 PNG carrying a declared 800x600, and that mismatch was harmless only
+        /// by accident** (SONNY-114). The old redaction path re-encoded the image only when a region
+        /// was detected, and no test here detects one, so nothing ever decoded the bytes and noticed.
+        /// The egress encoder decodes every capture, so the payload's dimensions are now the image's
+        /// own — a 1x1 fixture would tell the model it was looking at a one-pixel screenshot and put
+        /// every coordinate in these tests out of bounds. A fixture that lies about its own size is a
+        /// fixture that tests something other than what it claims.
+        static let windowPNG: Data = {
+            let context = CGContext(
+                data: nil,
+                width: 800,
+                height: 600,
+                bitsPerComponent: 8,
+                bytesPerRow: 0,
+                space: CGColorSpace(name: CGColorSpace.sRGB)!,
+                bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
+            )!
+            context.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
+            context.fill(CGRect(x: 0, y: 0, width: 800, height: 600))
+            context.setFillColor(CGColor(red: 0.15, green: 0.15, blue: 0.18, alpha: 1))
+            context.fill(CGRect(x: 40, y: 40, width: 200, height: 60))
+            let buffer = NSMutableData()
+            let destination = CGImageDestinationCreateWithData(buffer, "public.png" as CFString, 1, nil)!
+            CGImageDestinationAddImage(destination, context.makeImage()!, nil)
+            _ = CGImageDestinationFinalize(destination)
+            return buffer as Data
+        }()
     }
 
     /// Stands in for the real Carbon registration, so the *wiring* can be pinned without any test
@@ -223,7 +247,11 @@ struct VisionSessionRunTests {
         permissions: (any ScreenCapturePermissionChecking)? = nil,
         /// The planner a *delegated* instruction reaches. `nil` means the unreachable one, which is
         /// correct for every test whose delegations resolve instantly or do not delegate at all.
-        delegationPlanner: (any Planning)? = nil
+        delegationPlanner: (any Planning)? = nil,
+        /// The egress encoding policy. The default is the shipping one, under which an 800x600
+        /// fixture never resamples; a test that wants the resampled path supplies a budget the
+        /// ladder cannot meet.
+        egressPolicy: VisionCaptureEgressPolicy = .default
     ) throws -> Fixture {
         let root = FileManager.default.temporaryDirectory
             .appendingPathComponent("VisionSessionRunTests-\(UUID().uuidString)", isDirectory: true)
@@ -267,7 +295,7 @@ struct VisionSessionRunTests {
                 permissionChecker: permissions ?? GrantedPermissions(),
                 backend: FakeCaptureBackend(bundleIdentifier: bundleIdentifier)
             ),
-            redactionService: LocalRedactionService(textRecognizer: EmptyRecognizer()),
+            redactionService: LocalRedactionService(textRecognizer: EmptyRecognizer(), egressPolicy: egressPolicy),
             synthesizer: synthesizer,
             modelClient: model,
             limits: limits,
@@ -510,7 +538,7 @@ struct VisionSessionRunTests {
         let preview = try #require(fixture.viewModel.visionCapturePreview)
         #expect(preview.appDisplayName == "Safari")
         #expect(preview.iteration == 1)
-        #expect(preview.redactedPNGData != nil)
+        #expect(preview.redactedImageData != nil)
         #expect(fixture.model.prompts.isEmpty, "nothing may be sent before the user has seen it")
 
         fixture.viewModel.resolveVisionCapturePreview(allowing: true)
@@ -1483,9 +1511,83 @@ struct VisionSessionRunTests {
 
         #expect(fixture.model.payloads.count == 3)
         for payload in fixture.model.payloads {
-            #expect(payload.redactedImagePNGData != nil)
+            #expect(payload.redactedImageData != nil)
             #expect(payload.sourceBundleIdentifier == "com.apple.Safari")
         }
+    }
+
+    /// **A resampled capture's coordinates come back through the size the model was shown, end to
+    /// end** (SONNY-114). This is the test that would have caught the bug the resampling could have
+    /// introduced, and it runs through the real runner rather than the resolver alone.
+    ///
+    /// The capture is 800x600 pixels over an 800x600-point window; the egress ladder is given a
+    /// budget it cannot meet, so it resamples to its 0.5 floor and the model is shown 400x300. The
+    /// model then names (100, 75) — the middle of what it saw, which is the middle of the window,
+    /// which is (200, 150) on screen. A resolver still scaling by the capture's own pixel count would
+    /// have clicked (100, 75): inside the window, plausible, and half as far in as intended.
+    ///
+    /// Everything the model was told and everything recorded about its answer belongs to the same
+    /// space, so the prompt's declared dimensions and the journal's image coordinates are asserted
+    /// here too — three surfaces that have to agree, and used to read from two different sources.
+    @Test
+    func aResampledCaptureResolvesItsClickThroughTheSizeTheModelWasShown() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":100,"y":75,"target":"Middle","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"Done."}"#
+            ],
+            egressPolicy: VisionCaptureEgressPolicy(
+                maximumImageBytes: 1,
+                ladder: VisionCaptureEgressPolicy.default.ladder
+            )
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "click the middle", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        let payload = try #require(fixture.model.payloads.first)
+        #expect(payload.imagePixelWidth == 400)
+        #expect(payload.imagePixelHeight == 300)
+
+        let prompt = try #require(fixture.model.prompts.first)
+        #expect(prompt.contains("400x300 pixels"))
+        #expect(prompt.contains("0 <= x < 400"))
+        #expect(!prompt.contains("800x600 pixels"))
+
+        #expect(fixture.synthesizer.events.contains(.clicked(CGPoint(x: 200, y: 150))))
+
+        let record = try #require(try fixture.journal.loadAll().first)
+        let entry = try #require(record.entries.first)
+        #expect(entry.imageX == 100)
+        #expect(entry.imageY == 75)
+        #expect(entry.observationAfter.contains("(200, 150)"))
+    }
+
+    /// The bounds the model is held to are the ones it was given. A point inside the capture but
+    /// outside the resampled image it actually saw is a point it never could have meant, and the
+    /// history line sent back names the size it was shown rather than the capture's.
+    @Test
+    func aPointOutsideTheResampledImageIsSkippedAndReportedInTheSizeTheModelWasGiven() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":500,"y":75,"target":"Far","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"Done."}"#
+            ],
+            egressPolicy: VisionCaptureEgressPolicy(
+                maximumImageBytes: 1,
+                ladder: VisionCaptureEgressPolicy.default.ladder
+            )
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "click out of bounds", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.synthesizer.clickCount == 0)
+        let secondPrompt = try #require(fixture.model.prompts.dropFirst().first)
+        #expect(secondPrompt.contains("outside the 400x300 screenshot"))
+        #expect(!secondPrompt.contains("outside the 800x600 screenshot"))
     }
 
     /// Every prompt the model received carried the boundary — asserted over the real prompts a real

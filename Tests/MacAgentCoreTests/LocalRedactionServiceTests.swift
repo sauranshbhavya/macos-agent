@@ -25,99 +25,6 @@ private final class FakeTextRecognizer: ImageTextRecognizing, @unchecked Sendabl
 
 private struct FakeOCRFailure: Error {}
 
-private enum ImageFixtures {
-    static func context(width: Int, height: Int) -> CGContext {
-        CGContext(
-            data: nil,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: 0,
-            space: CGColorSpace(name: CGColorSpace.sRGB)!,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        )!
-    }
-
-    static func png(from context: CGContext) -> Data {
-        let image = context.makeImage()!
-        let data = NSMutableData()
-        let destination = CGImageDestinationCreateWithData(data, UTType.png.identifier as CFString, 1, nil)!
-        CGImageDestinationAddImage(destination, image, nil)
-        _ = CGImageDestinationFinalize(destination)
-        return data as Data
-    }
-
-    static func solidWhitePNG(width: Int, height: Int) -> Data {
-        let ctx = context(width: width, height: height)
-        ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
-        ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
-        return png(from: ctx)
-    }
-
-    /// White top half, black bottom half — in *image* terms (what a human sees). Drawn via CG
-    /// coordinates where y=0 is the bottom, so the black fill covers CG y 0..<height/2.
-    static func whiteOverBlackPNG(width: Int, height: Int) -> Data {
-        let ctx = context(width: width, height: height)
-        ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
-        ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
-        ctx.setFillColor(CGColor(red: 0, green: 0, blue: 0, alpha: 1))
-        ctx.fill(CGRect(x: 0, y: 0, width: width, height: height / 2))
-        return png(from: ctx)
-    }
-
-    /// Renders dark text lines on a white background. `topLeft` positions are in image space
-    /// (top-left origin); the CoreText baseline is placed relative to them.
-    static func renderedTextPNG(width: Int, height: Int, lines: [(text: String, topLeft: CGPoint)], fontSize: CGFloat = 32) -> Data {
-        let ctx = context(width: width, height: height)
-        ctx.setFillColor(CGColor(red: 1, green: 1, blue: 1, alpha: 1))
-        ctx.fill(CGRect(x: 0, y: 0, width: width, height: height))
-
-        let font = CTFontCreateWithName("Menlo" as CFString, fontSize, nil)
-        for line in lines {
-            let attributes = [
-                kCTFontAttributeName: font,
-                kCTForegroundColorAttributeName: CGColor(red: 0, green: 0, blue: 0, alpha: 1)
-            ] as CFDictionary
-            let attributed = CFAttributedStringCreate(nil, line.text as CFString, attributes)!
-            let ctLine = CTLineCreateWithAttributedString(attributed)
-            // Convert the image-space top-left to a CG-space baseline: the baseline sits one
-            // font-size below the top-left corner.
-            ctx.textPosition = CGPoint(x: line.topLeft.x, y: CGFloat(height) - line.topLeft.y - fontSize)
-            CTLineDraw(ctLine, ctx)
-        }
-        return png(from: ctx)
-    }
-
-    /// Samples one pixel, addressed in image space (x from the left, y from the top).
-    static func rgb(inPNG data: Data, x: Int, yFromTop: Int) -> (r: Int, g: Int, b: Int) {
-        let source = CGImageSourceCreateWithData(data as CFData, nil)!
-        let image = CGImageSourceCreateImageAtIndex(source, 0, nil)!
-        let width = image.width
-        let height = image.height
-        var buffer = [UInt8](repeating: 0, count: width * height * 4)
-        let ctx = CGContext(
-            data: &buffer,
-            width: width,
-            height: height,
-            bitsPerComponent: 8,
-            bytesPerRow: width * 4,
-            space: CGColorSpace(name: CGColorSpace.sRGB)!,
-            bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue
-        )!
-        ctx.draw(image, in: CGRect(x: 0, y: 0, width: width, height: height))
-        let offset = (yFromTop * width + x) * 4
-        return (Int(buffer[offset]), Int(buffer[offset + 1]), Int(buffer[offset + 2]))
-    }
-
-    static func isBlack(_ rgb: (r: Int, g: Int, b: Int)) -> Bool {
-        rgb.r < 30 && rgb.g < 30 && rgb.b < 30
-    }
-
-    static func isWhite(_ rgb: (r: Int, g: Int, b: Int)) -> Bool {
-        rgb.r > 225 && rgb.g > 225 && rgb.b > 225
-    }
-}
-
 private func capture(png: Data, width: Int, height: Int, bundleID: String = "com.example.notes") -> CapturedWindowImage {
     CapturedWindowImage(
         pngData: png,
@@ -368,7 +275,7 @@ struct LocalRedactionTextTests {
     @Test
     func textPayloadCarriesNoImageFields() {
         let payload = textService().redactText("password: hunter2")
-        #expect(payload.redactedImagePNGData == nil)
+        #expect(payload.redactedImageData == nil)
         #expect(payload.imagePixelWidth == nil)
         #expect(payload.imagePixelHeight == nil)
         #expect(payload.sourceBundleIdentifier == nil)
@@ -404,7 +311,7 @@ struct LocalRedactionImageTests {
 
         let payload = try await service.redactCapture(capture(png: png, width: 400, height: 300))
 
-        let redacted = try #require(payload.redactedImagePNGData)
+        let redacted = try #require(payload.redactedImageData)
         #expect(ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: 150, yFromTop: 55)))
         #expect(ImageFixtures.isWhite(ImageFixtures.rgb(inPNG: redacted, x: 10, yFromTop: 10)))
         #expect(ImageFixtures.isWhite(ImageFixtures.rgb(inPNG: redacted, x: 350, yFromTop: 250)))
@@ -417,9 +324,17 @@ struct LocalRedactionImageTests {
         #expect(payload.maskedText == nil)
     }
 
+    /// A capture with nothing to hide keeps every pixel — and is still re-encoded for egress.
+    ///
+    /// **This used to assert byte-identity with the input PNG, and that assertion had to go**
+    /// (SONNY-114). The old pipeline short-circuited a clean capture straight to `capture.pngData`,
+    /// which is exactly why an unbounded full-resolution PNG was what left the device on the common
+    /// path — most captures contain no secret at all. Byte-identity was pinning the bug. What is
+    /// worth pinning is the property that motivated it: a capture with nothing to redact comes back
+    /// *visually unchanged*, at its own dimensions, with an empty report.
     @Test
-    func cleanObservationsLeaveTheImageBytesUntouched() async throws {
-        let png = ImageFixtures.solidWhitePNG(width: 200, height: 150)
+    func cleanObservationsLeaveEveryPixelWhereItWasWhileStillBeingEncodedForEgress() async throws {
+        let png = ImageFixtures.whiteOverBlackPNG(width: 200, height: 150)
         let recognizer = FakeTextRecognizer(observations: [
             RecognizedTextObservation(string: "Quarterly report draft", boundingBox: CGRect(x: 10, y: 10, width: 150, height: 20))
         ])
@@ -427,8 +342,16 @@ struct LocalRedactionImageTests {
 
         let payload = try await service.redactCapture(capture(png: png, width: 200, height: 150))
 
-        #expect(payload.redactedImagePNGData == png)
         #expect(payload.report.isEmpty)
+        #expect(payload.imagePixelWidth == 200)
+        #expect(payload.imagePixelHeight == 150)
+        let redacted = try #require(payload.redactedImageData)
+        // Two-tone fixture, so a lossless encoding is the smaller one and the comparison is exact.
+        #expect(payload.imageMediaType == .png)
+        #expect(ImageFixtures.isWhite(ImageFixtures.rgb(inPNG: redacted, x: 100, yFromTop: 10)))
+        #expect(ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: 100, yFromTop: 140)))
+        #expect(ImageFixtures.isWhite(ImageFixtures.rgb(inPNG: redacted, x: 0, yFromTop: 0)))
+        #expect(ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: 199, yFromTop: 149)))
     }
 
     @Test
@@ -442,7 +365,7 @@ struct LocalRedactionImageTests {
 
         let payload = try await service.redactCapture(capture(png: png, width: 400, height: 300))
 
-        let redacted = try #require(payload.redactedImagePNGData)
+        let redacted = try #require(payload.redactedImageData)
         #expect(ImageFixtures.isWhite(ImageFixtures.rgb(inPNG: redacted, x: 90, yFromTop: 32)))
         #expect(ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: 90, yFromTop: 212)))
         #expect(payload.report == [
@@ -460,7 +383,7 @@ struct LocalRedactionImageTests {
 
         let payload = try await service.redactCapture(capture(png: png, width: 400, height: 300))
 
-        let redacted = try #require(payload.redactedImagePNGData)
+        let redacted = try #require(payload.redactedImageData)
         #expect(ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: 190, yFromTop: 113)))
         #expect(payload.report == [
             RedactionReportEntry(detectionClass: .creditCardNumber, count: 1, locationCategory: .imageRegion, confidence: 0.55, belowConfidenceThreshold: true)
@@ -484,7 +407,7 @@ struct LocalRedactionImageTests {
 
         let payload = try await service.redactCapture(capture(png: png, width: 500, height: 300))
 
-        let redacted = try #require(payload.redactedImagePNGData)
+        let redacted = try #require(payload.redactedImageData)
         // Every one of the four lines — the body lines are the key.
         #expect(ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: 150, yFromTop: 52)))
         #expect(ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: 150, yFromTop: 92)))
@@ -507,7 +430,7 @@ struct LocalRedactionImageTests {
 
         let payload = try await service.redactCapture(capture(png: png, width: 400, height: 200))
 
-        let redacted = try #require(payload.redactedImagePNGData)
+        let redacted = try #require(payload.redactedImageData)
         #expect(ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: 130, yFromTop: 72)))
         #expect(payload.report == [
             RedactionReportEntry(detectionClass: .socialSecurityNumber, count: 1, locationCategory: .imageRegion, confidence: 0.9, belowConfidenceThreshold: false)
@@ -524,7 +447,7 @@ struct LocalRedactionImageTests {
 
         let payload = try await service.redactCapture(capture(png: png, width: 400, height: 200))
 
-        let redacted = try #require(payload.redactedImagePNGData)
+        let redacted = try #require(payload.redactedImageData)
         #expect(ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: 170, yFromTop: 72)))
         #expect(payload.report == [
             RedactionReportEntry(detectionClass: .oneTimeCode, count: 1, locationCategory: .imageRegion, confidence: 0.85, belowConfidenceThreshold: false)
@@ -541,7 +464,7 @@ struct LocalRedactionImageTests {
 
         let payload = try await service.redactCapture(capture(png: png, width: 500, height: 200))
 
-        let redacted = try #require(payload.redactedImagePNGData)
+        let redacted = try #require(payload.redactedImageData)
         #expect(ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: 230, yFromTop: 72)))
         #expect(payload.report == [
             RedactionReportEntry(detectionClass: .accessToken, count: 1, locationCategory: .imageRegion, confidence: 0.95, belowConfidenceThreshold: false)
@@ -620,7 +543,7 @@ struct LocalRedactionImageTests {
 
         let payload = try await service.redactCapture(capture(png: png, width: 300, height: 300))
 
-        let redacted = try #require(payload.redactedImagePNGData)
+        let redacted = try #require(payload.redactedImageData)
         #expect(ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: 5, yFromTop: 5)))
         #expect(ImageFixtures.isWhite(ImageFixtures.rgb(inPNG: redacted, x: 5, yFromTop: 295)))
     }
@@ -644,7 +567,7 @@ struct LocalRedactionLiveVisionTests {
         #expect(payload.report.contains { $0.detectionClass == .apiKey })
         // The rendered line starts at x=40 with a ~19pt Menlo advance per glyph at 32pt; the
         // middle of the line is comfortably inside the painted observation box.
-        let redacted = try #require(payload.redactedImagePNGData)
+        let redacted = try #require(payload.redactedImageData)
         #expect(ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: 300, yFromTop: 96)))
         // Far corner stays untouched.
         #expect(ImageFixtures.isWhite(ImageFixtures.rgb(inPNG: redacted, x: 880, yFromTop: 190)))
