@@ -2724,6 +2724,59 @@ struct AgentActionExecutorTests {
         #expect(details.contains { $0.contains("Another app is using Control-Option-Space") })
     }
 
+    /// **The screen-permission seam is injected, and load-bearing** (SONNY-123).
+    ///
+    /// Before this, nothing in the suite passed a permission service, so `AgentActionExecutor`'s
+    /// default built a live one and the Accessibility and Screen Recording items answered from
+    /// whatever this Mac happened to have granted. No assertion flipped on it yet — which is
+    /// precisely why it was worth closing rather than leaving: the seam was open, and the next
+    /// assertion written against one of these items would have become machine-dependent silently.
+    /// That is exactly how SONNY-103 happened, and SONNY-106 section D states the general rule on
+    /// the reasoning that a suite whose result changes with the machine running it cannot be
+    /// evidence.
+    ///
+    /// It asserts both directions — a granted checker must produce the granted copy, a refused one
+    /// the refused copy — so the service ignoring its injected checker fails here.
+    ///
+    /// **What it cannot do, established by mutation rather than assumed.** It does not catch
+    /// `makeExecutor`'s default being reverted to a live `PermissionReadinessService`. Reverting
+    /// that default and running this test passes: both halves pass their checker explicitly, so the
+    /// default is never exercised, and even a test that omitted the argument could not tell an
+    /// injected `true` from a machine that really has both grants. The first draft of this comment
+    /// claimed the opposite; the mutation disproved it.
+    ///
+    /// So the protection is not detection, it is inheritance: `makeExecutor` now defaults to a
+    /// deterministic service, and every test built on it gets machine-independence without asking.
+    /// A future test that wants a specific grant state says so at its call site, the way this one
+    /// does.
+    ///
+    /// **What this does not close, stated so it is not mistaken for done.** `microphoneStatus()`
+    /// calls `AVCaptureDevice.authorizationStatus(for: .audio)` directly, with no seam to inject, so
+    /// the suite still makes that one live authorization read. Closing it needs a production change
+    /// to `PermissionReadinessService`, which SONNY-123 records and which this test-only work was
+    /// not scoped to make.
+    @Test
+    func permissionReadinessAnswersFromTheInjectedCheckerRatherThanThisMac() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let granted = makeExecutor(
+            root: root,
+            permissionReadinessService: .deterministic(accessibilityTrusted: true, screenRecordingGranted: true)
+        )
+        let grantedDetails = try granted.preview(plan: permissionReadinessPlan()).flatMap(\.details)
+        #expect(grantedDetails.contains { $0.contains("Accessibility is trusted for the current process.") })
+        #expect(grantedDetails.contains { $0.contains("Screen Recording is granted.") })
+
+        let refused = makeExecutor(
+            root: root,
+            permissionReadinessService: .deterministic(accessibilityTrusted: false, screenRecordingGranted: false)
+        )
+        let refusedDetails = try refused.preview(plan: permissionReadinessPlan()).flatMap(\.details)
+        #expect(refusedDetails.contains { $0.contains("Screen-acting tools need Accessibility.") })
+        #expect(refusedDetails.contains { $0.contains("Screen-aware tools need Screen Recording.") })
+    }
+
     @Test
     func webResearchSearchQueryUsesInjectedProviderAndWritesMarkdown() async throws {
         let root = try makeDirectory()
@@ -4180,7 +4233,8 @@ struct AgentActionExecutorTests {
         shortcutCatalog: any ShortcutCatalogProviding = FakeShortcutCatalog(names: []),
         shortcutRunHistoryStore: ShortcutRunHistoryStore? = nil,
         now: @escaping () -> Date = Date.init,
-        hotKeyReady: @escaping () -> Bool = { true }
+        hotKeyReady: @escaping () -> Bool = { true },
+        permissionReadinessService: PermissionReadinessService = .deterministic()
     ) -> AgentActionExecutor {
         AgentActionExecutor(
             whitelist: PathWhitelist(roots: [root]),
@@ -4197,6 +4251,7 @@ struct AgentActionExecutorTests {
             spotifyPlaybackProvider: spotifyPlaybackProvider,
             appleMusicPlaybackProvider: appleMusicPlaybackProvider,
             finderContextReader: finderContextReader,
+            permissionReadinessService: permissionReadinessService,
             routineStore: routineStore ?? RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
             workspaceStore: workspaceStore ?? WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json")),
             webPageLoader: webPageLoader,
