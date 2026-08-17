@@ -532,6 +532,33 @@ struct ShellSurfaceDetectorTests {
         )
     }
 
+    /// **A prompt that ends its own line is still a prompt, in both address forms.**
+    ///
+    /// Found by a surviving mutation rather than by reading (cycle-2 battery, mutation 14): dropping
+    /// `(?m)` from the colon-form pattern changed nothing anywhere in the suite. The reason is that
+    /// the `$` in the trailing lookahead means end of *input* without it, so every prompt the corpus
+    /// contained still matched — each was either followed by a space or was the document's last
+    /// line. The uncovered case is the ordinary one: a shell that has printed its prompt and is
+    /// waiting, with scrollback below it. The spaced form was already covered by
+    /// `theBoundaryIsTwoDistinctSignalsFromBothSides`; the colon form was not, and both are pinned
+    /// here so neither can regress alone.
+    @Test
+    func aPromptEndingItsLineMidDocumentIsStillAPrompt() {
+        let colonForm = ShellSurfaceDetector.verdict(for: """
+        deploy@staging:~$
+        zsh: command not found: sonny
+        """)
+        #expect(colonForm.signals == [.interactivePrompt, .shellDiagnostic])
+        #expect(colonForm.showsShell)
+
+        let spacedForm = ShellSurfaceDetector.verdict(for: """
+        sauransh@Mac macos-agent %
+        zsh: command not found: sonny
+        """)
+        #expect(spacedForm.signals == [.interactivePrompt, .shellDiagnostic])
+        #expect(spacedForm.showsShell)
+    }
+
     /// A shebang names an interpreter and is not one being invoked. Both halves asserted, so the
     /// exclusion cannot be deleted without a failure and cannot be widened into "any interpreter
     /// path is ignored" either.
