@@ -157,6 +157,41 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/sonny-152-default-browser
+Status: complete
+Date: 2026-08-17
+Tickets: SONNY-152 (the planner stopped to ask which browser to open a URL in, when the capability already falls back to the system default). Spawned **SONNY-157** and **SONNY-158** (both Backlog, untriaged).
+Reviewed by: fresh session (per WORKFLOW.md step 7) — pending at PR open.
+
+Spec sections covered: none new. This is planner vocabulary inside §8's planning surface; no capability, schema or risk behaviour changed.
+Files changed: `Sources/MacAgentCore/OpenAIPlanner.swift` (one line added to the system prompt string — no code), `Tests/MacAgentCoreTests/PlannerBoundaryTests.swift` (the golden updated to match, plus one new test). Nothing else.
+Tests: `env CLANG_MODULE_CACHE_PATH=… swift test --disable-sandbox -Xswiftc -F …` (CLAUDE.md's exact flagged command) -> pass, **1224 tests in 92 suites**, exit 0, at `680af70`. Branch-point baseline at `2c6d0fc` was 1223 in 92 suites, so this branch is +1 test and +0 suites — the one test it adds. `swift build` clean.
+
+Behavior added:
+- The planner is told that opening a URL never needs a browser named, that URLs open in the system default browser, and that it must never ask which browser to use. One bullet, placed beside the `open_url` rule.
+
+Behavior preserved (required, no blanket claims):
+- **Workspace browser binding.** `WorkspaceBrowserCatalog.firstBrowser(in:)` resolved at `OpenWorkspaceCapabilityAdapter.swift:100` — untouched, because no Swift outside the prompt string changed.
+- **Routine browser binding.** `RunRoutineCapabilityAdapter.browser(for:context:)` (`:140-144`) reaching the executor at `AgentActionExecutor.swift:1438` — untouched, same reason. Both are the founder's 2026-08-04 decision with its recorded caveat about reaching only the injected browser-opener seam and not `.playMedia`.
+- **The general clarify rule still names "app name".** Deliberate, and pinned — see the architectural note below.
+- **The planner schema is not touched at all.** No new field, no new operation, no change to `stepRequiredKeys` or `plannerVisibleCases`. `responseFormatPreservesStrictAgentPlanSchemaShape` and `plannerExclusionsAgreeWithEmptyToolAdaptersAndWithInstantResolverCoverage` are untouched and still pass.
+- **The other five tests on the planner prompt surface.** `defaultToolRegistryPlannerDescriptionMatchesGolden` (tool descriptions unchanged), `theSwitchRuleForbidsTheMisrouteWithoutForbiddingAGenuineWorkspaceOpen` and `ToolRegistryTests` (substring assertions), `CerebrasPlannerTests`' two prompt assertions (which compare against `OpenAIPlanner.systemPrompt` dynamically and so track the change), and the app-vocabulary sweep — the new line uses neither "allowlist" nor "supported app(s)", which is a constraint that test imposes on wording.
+
+Architectural decisions / pitfalls discovered (required):
+- **The prompt was not silent on this. It was pointing the other way, and that is the more useful finding.** The ticket recorded that nothing told the planner what to do, so it treated a missing browser as information worth asking for. True about the outcome, and it understates the cause. Two lines that both reach the assembled prompt name an *app* as exactly the thing to ask about — the general clarify rule at `OpenAIPlanner.swift:148` ("folder, app name, URL, count, or output destination"), and the clarify tool's own description at `DefaultCapabilityAdapters.swift:44`, interpolated through `ToolRegistry.plannerDescription` at `OpenAIPlanner.swift:134`. A browser is an app; no app was named; the rule said ask. **The model was following its instructions, not improvising into a vacuum.** That upgrades the founder's generalisation from "an unstated default reads as missing information" to something predictable: *a general clarify rule listing broad nouns will capture every unstated default that happens to be one of those nouns.* SONNY-158 is the sweep that falls out of it, and it found four more — output destination (three capabilities), three separate count defaults, and a draft title — where "count" and "output destination" are verbatim in that same list.
+- **The tempting fix was the wrong one, and it is pinned against.** Striking "app name" from the clarify rule stops this question by also stopping the ones `open_app` and `switch_running_app` genuinely need — trading a loud bug for a quiet one. The specific rule overrides the general one instead, which is the shape the prompt already uses at `:146` for correction phrases. `theBrowserDefaultIsStatedWithoutWeakeningTheGeneralClarifyRule`'s fourth assertion fails if a later edit reaches for the general rule again; verified by mutation, not assumed.
+- **The ticket asked to preserve a behaviour that does not exist, and saying so was the point.** "A command that DOES name a browser still routes there" is listed as one of two things the fix must not break. It is not true at `2c6d0fc`, established three ways: `AgentStep` has 28 fields and none is a browser (the only "browser" in `AgentPlan.swift` is prose at `:504` describing `targetURL`); exactly one site in `Sources/` sets `preferredBrowser` non-nil, `AgentActionExecutor.swift:1438`, the routine path; and an ordinary command passes nil straight through `OpenSafeURLCapabilityAdapter.swift:51` / `OpenAppSearchURLCapabilityAdapter.swift:55` to the system default. The `open_app`-then-`open_url` chain does not rescue it either — the second step still passes nil. So the new rule deliberately **promises no routing**: it says only that a named browser must not become a clarify or unsupported step, so the page still opens. Filed as SONNY-157 rather than built, because closing it needs a schema field or an adapter change and this ticket was scoped to vocabulary.
+- **Both mutations were run, because a passing assertion on prompt text is nearly free and proves nothing.** Removing the new bullet fails the golden and three of the new test's four directions; narrowing the general clarify rule fails the golden and the fourth. Neither failure mode is theoretical — the second is the fix a later session is most likely to reach for.
+
+Known limitations / deferred scope:
+- A user who names a browser still gets the system default, silently. Better than the pointless question it replaces, still not right, and filed as SONNY-157 with what closing it would take.
+- SONNY-158's four candidates are found by mechanism, not reproduced in the wild the way this one was. Worth knowing before anyone treats that list as five confirmed defects.
+- No agent can drive the live app, so whether the model actually stops asking is the founder's attended run rather than something this suite can show. That is the point of the manual-test items on the ticket: a prompt change is only ever evidenced by a real model.
+
+Open questions (required): none. The fix, its wording and what it deliberately does not promise are all decided and recorded on SONNY-152.
+
+Next branch: unchanged by this. This is an out-of-row friction fix found during SONNY-114's manual pass; the locked roadmap's rows D, E, J and 12 are unaffected.
+
 ### Branch: docs/row-12-api-contract
 Status: complete
 Date: 2026-08-17
