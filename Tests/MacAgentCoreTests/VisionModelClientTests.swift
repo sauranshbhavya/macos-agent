@@ -136,6 +136,12 @@ struct VisionModelClientTests {
         let payload = try await LocalRedactionService(textRecognizer: SilentRecognizer())
             .redactCapture(fixtureCapture(png: png, width: 2_560, height: 1_440))
         let bytes = try #require(payload.redactedImageData).count
+        // Printed rather than asserted at a literal, following `redactionLatencyIsBoundedOnA
+        // RepresentativeCapture`'s precedent: the ceiling is the contract, the exact figure is a
+        // measurement that belongs in the record with the SHA it was taken at. The doc comment on
+        // `maximumImageBytes` quotes this line.
+        print("EGRESS-WORST-CASE-BYTES: \(bytes) at \(payload.imagePixelWidth ?? 0)x\(payload.imagePixelHeight ?? 0), "
+            + "\(payload.imageMediaType?.rawValue ?? "?") (seeded uniform noise, 2560x1440 source)")
         #expect(bytes <= OpenCodeVisionModelClient.maximumImageBytes)
 
         Self.respondAndCapture()
