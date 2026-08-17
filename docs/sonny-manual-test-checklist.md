@@ -220,6 +220,23 @@ and explains it.
 known race where Finder/Spotlight re-stamp the fresh `.app` with `com.apple.FinderInfo` xattrs
 between signing attempts, but it's not impossible for it to still lose that race.
 
+**Release builds sign differently from debug, and that is deliberate (SONNY-156).** Everything above
+is the `debug` loop and is unchanged. `./scripts/package-app.sh release` additionally signs with the
+hardened runtime and with `Packaging/MacAgent.entitlements`, both of which Apple's notarization
+requires, and then checks its own work: it refuses to finish if the sealed bundle carries
+`com.apple.security.get-task-allow` (which notarization rejects) or if the hardened runtime is
+missing. A clean release run prints `com.apple.security.get-task-allow: absent`, `hardened runtime:
+on`, and the two entitlements it sealed. **A release build is still not distributable** — it is
+signed with the local development certificate, so Gatekeeper refuses it on any other Mac, and
+notarization has never been run. See §0a and `Packaging/signing-identity`.
+
+**If a release build behaves differently from a debug one, suspect the hardened runtime first.** It
+restricts things debug does not: microphone access and Apple Events are the two Sonny uses, which is
+why `Packaging/MacAgent.entitlements` grants both. If voice input or Finder/Word automation works in
+debug and fails in release, that file is where to look, and it is worth reporting rather than
+working around — whether the Apple Events entitlement is needed at all is an open question that only
+a real notarized build settles.
+
 **After every fix lands going forward:** repeat steps 3-5 (kill stale instance → rebuild → launch).
 Re-testing against a stale binary will waste your time chasing "bugs" that are already fixed.
 

@@ -16,6 +16,16 @@
 # First run on a new Mac needs ./scripts/create-signing-identity.sh — read that script's header for
 # why ad-hoc signing was replaced (SONNY-153) and for what the local certificate is and is not.
 #
+# Release entitlements and hardening: read from Packaging/MacAgent.entitlements, which is the one
+# place they are named (SONNY-156). Release adds the hardened runtime and that file; debug keeps
+# SwiftPM's own generated plist and no hardening, unchanged. After signing, this script reads the
+# entitlements back off the bundle and refuses to finish if a release build carries
+# com.apple.security.get-task-allow or is missing the hardened runtime — both are notarization
+# blockers that would otherwise surface as a confusing rejection from Apple rather than here.
+#
+# Neither this script nor anything else in the repo notarizes. That step does not exist yet and is
+# gated on the founder's Apple Developer enrolment; SONNY-106 section E is the condition it serves.
+#
 # Usage: ./scripts/package-app.sh [debug|release]
 # Output: .build/<triple>/<configuration>/MacAgent.app — launch with `open` or run the binary
 # inside it directly (Contents/MacOS/MacAgent) to see console output live.
@@ -62,6 +72,39 @@ BIN_PATH="$(swift build --configuration "$CONFIGURATION" --show-bin-path)"
 EXECUTABLE="$BIN_PATH/MacAgent"
 RESOURCE_BUNDLE="$BIN_PATH/MacAgent_MacAgent.bundle"
 ENTITLEMENTS="$BIN_PATH/MacAgent-entitlement.plist"
+RELEASE_ENTITLEMENTS="$ROOT_DIR/Packaging/MacAgent.entitlements"
+
+# Signing differs by configuration, and only for release (SONNY-156).
+#
+# Debug keeps exactly what it had: SwiftPM's own generated entitlement plist, whose single key is
+# `com.apple.security.get-task-allow` — the thing that lets a debugger attach — and no hardened
+# runtime. That is the founder's daily loop and this change deliberately leaves it alone.
+#
+# Release signs with the hardened runtime, which notarization requires, and with the committed
+# Packaging/MacAgent.entitlements rather than anything SwiftPM generated. Read that file for why
+# each key is in it; the short version is that hardened runtime restricts microphone access and
+# Apple Events, both of which Sonny uses, so the flag cannot be added on its own.
+#
+# Measured at 7b9fec9: SwiftPM writes MacAgent-entitlement.plist for debug and NOT for release, so
+# release never carried get-task-allow to begin with. That was an accident of the toolchain rather
+# than a decision — nothing in this repo checked it. The verification step after signing is what
+# turns it into a checked property.
+if [ "$CONFIGURATION" = "release" ]; then
+  if [ ! -f "$RELEASE_ENTITLEMENTS" ]; then
+    echo "error: release entitlements not found at $RELEASE_ENTITLEMENTS" >&2
+    echo "       A release build must be signed with a known entitlement set, not with whatever" >&2
+    echo "       SwiftPM happened to generate. See SONNY-156." >&2
+    exit 1
+  fi
+  SIGN_ENTITLEMENTS="$RELEASE_ENTITLEMENTS"
+  # Deliberately a plain string rather than an array: this script runs under macOS's /bin/bash 3.2,
+  # where expanding an empty array under `set -u` is an unbound-variable error. The value is a
+  # controlled literal, so the unquoted expansion below is the intended word split.
+  SIGN_OPTIONS="--options runtime"
+else
+  SIGN_ENTITLEMENTS="$ENTITLEMENTS"
+  SIGN_OPTIONS=""
+fi
 
 if [ ! -x "$EXECUTABLE" ]; then
   echo "error: built executable not found at $EXECUTABLE" >&2
@@ -101,10 +144,11 @@ cp -R "$RESOURCE_BUNDLE" "$RESOURCES_DIR/MacAgent_MacAgent.bundle"
 # attempt wins the race.
 sign_app() {
   xattr -cr "$APP_DIR"
-  if [ -f "$ENTITLEMENTS" ]; then
-    codesign --force --deep --sign "$SIGN_IDENTITY" --entitlements "$ENTITLEMENTS" "$APP_DIR"
+  # shellcheck disable=SC2086 # $SIGN_OPTIONS is a controlled literal; the word split is intended.
+  if [ -n "$SIGN_ENTITLEMENTS" ] && [ -f "$SIGN_ENTITLEMENTS" ]; then
+    codesign --force --deep --sign "$SIGN_IDENTITY" $SIGN_OPTIONS --entitlements "$SIGN_ENTITLEMENTS" "$APP_DIR"
   else
-    codesign --force --deep --sign "$SIGN_IDENTITY" "$APP_DIR"
+    codesign --force --deep --sign "$SIGN_IDENTITY" $SIGN_OPTIONS "$APP_DIR"
   fi
 }
 
@@ -133,6 +177,66 @@ done
 
 echo "==> Verifying signature"
 codesign --verify --verbose "$APP_DIR"
+
+# What the bundle is actually sealed with, read back off the signature rather than inferred from
+# what was passed in (SONNY-156). `codesign -d --entitlements` prints `Executable=...` on stderr and
+# the plist on stdout, so stderr is dropped here.
+echo "==> Verifying entitlements"
+SEALED_ENTITLEMENTS="$(codesign -d --entitlements - --xml "$APP_DIR" 2>/dev/null || true)"
+
+# The notarization blocker this check exists for. Apple's notary service rejects any submission
+# carrying com.apple.security.get-task-allow, and it presents as a confusing rejection rather than
+# as an obvious build-script problem. Fail here instead, where the cause is on screen.
+#
+# Checked for every configuration, not just release. Debug is *expected* to carry it and says so
+# below; the point of checking both is that this script stops being the thing that has to remember
+# which configuration is which.
+case "$SEALED_ENTITLEMENTS" in
+  *get-task-allow*)
+    if [ "$CONFIGURATION" = "release" ]; then
+      cat >&2 <<EOF
+error: this release bundle is sealed with com.apple.security.get-task-allow.
+
+       Apple's notary service rejects any submission carrying it, so this build cannot be
+       notarized. Refusing to finish rather than handing over a bundle that fails later, at a
+       step where the cause is much harder to see.
+
+       Nothing should have put it there: release signs with $RELEASE_ENTITLEMENTS, which omits it.
+       Check whether SwiftPM has started generating MacAgent-entitlement.plist for release — it did
+       not at 7b9fec9 — and whether something is passing that file through. See SONNY-156.
+EOF
+      exit 1
+    fi
+    echo "    com.apple.security.get-task-allow: present (expected for debug — lets a debugger attach)"
+    ;;
+  *)
+    echo "    com.apple.security.get-task-allow: absent"
+    ;;
+esac
+
+if [ "$CONFIGURATION" = "release" ]; then
+  # Hardened runtime is the other notarization requirement, and it is a signature flag rather than
+  # anything visible in the entitlements, so it is checked separately. `codesign -d -v` prints it as
+  # `flags=0x10000(runtime)`.
+  #
+  # The output is captured first and matched second, deliberately. Piping straight into `grep -q`
+  # looks tidier and is wrong here: this script runs under `set -o pipefail`, `grep -q` exits the
+  # moment it matches, and `codesign` then dies of SIGPIPE — so the pipeline reports failure exactly
+  # when the match succeeds. That inverted check reported a correctly hardened bundle as unhardened
+  # on the first run of this code, which is a false negative on a release gate.
+  CODESIGN_INFO="$(codesign -d -v "$APP_DIR" 2>&1 || true)"
+  if printf '%s\n' "$CODESIGN_INFO" | grep -q 'flags=[^ ]*runtime'; then
+    echo "    hardened runtime: on"
+  else
+    echo "error: this release bundle is not signed with the hardened runtime." >&2
+    echo "       Notarization requires it. Expected codesign to report flags=0x10000(runtime)." >&2
+    echo "       See SONNY-156." >&2
+    exit 1
+  fi
+  echo "    sealed entitlements:"
+  echo "$SEALED_ENTITLEMENTS" | /usr/bin/plutil -p - 2>/dev/null | sed 's/^/      /' \
+    || echo "      (could not pretty-print; raw plist above)"
+fi
 
 # Print the designated requirement, because it — not the identity name — is what macOS actually
 # keys permission grants to. A requirement that is a bare `cdhash H"..."` means the grants will not
