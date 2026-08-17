@@ -157,6 +157,43 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/sonny-157-named-browser
+Status: complete
+Date: 2026-08-17
+Tickets: SONNY-157 (naming a browser in an ordinary command had no effect — the URL opened in the system default regardless). Spawned nothing.
+Reviewed by: fresh session (per WORKFLOW.md step 7) — pending at PR open.
+
+Spec sections covered: none new. §8's planning surface and the URL-opening capabilities.
+Files changed: `Sources/MacAgentCore/` — `AgentPlan.swift` (the field, the schema property, both key lists), `CapabilityAdapter.swift` (the resolution helper), `OpenAIPlanner.swift` (one prompt sentence), `OpenSafeURLCapabilityAdapter.swift`, `OpenAppSearchURLCapabilityAdapter.swift`, `WebResearchMarkdownCapabilityAdapter.swift` (one call site each). `Tests/MacAgentCoreTests/` — `AgentActionExecutorTests.swift`, `AgentPlanDecoderTests.swift`, `PlannerBoundaryTests.swift`.
+Tests: CLAUDE.md's exact flagged command -> pass, **1233 tests in 92 suites**, exit 0, at `1dc988c`. Branch-point baseline at `f01fa0a` was 1226 in 92: +7 tests, +0 suites — five on the executor, two on the decoder.
+
+Behavior added:
+- `AgentStep.browserName` carries the browser the user named, and a URL-opening step routes there.
+
+Behavior preserved (required, no blanket claims):
+- **SONNY-152's guarantee, now pinned at the execution layer and not only in the prompt.** A step naming no browser still reaches the system default — `noBrowserNamedStillOpensInTheSystemDefault` asserts the opener receives `nil`.
+- **Routine binding.** Still applies when the step names nothing, asserted through the same `preferredBrowser` parameter `RunRoutineCapabilityAdapter` uses — the real collision, not a simulated one.
+- **Workspace binding.** Untouched and does not come through that parameter at all: `OpenWorkspaceCapabilityAdapter` resolves its own browser from the workspace's app list and passes it directly. No file in that path changed.
+- **The planner schema's strictness.** `additionalProperties: false` and the every-key-required rule are intact; the new key is in `stepRequiredKeys`, `AgentPlanDecoder.stepKeys` and `baseStepProperties` together.
+
+Architectural decisions / pitfalls discovered (required):
+- **Three enumerations re-verified at `f01fa0a`, with one correction to the ticket.** `AgentStep` has **31** stored properties, not the 28 the ticket recorded at `2c6d0fc` — `resolvedAppName`, `resolvedBundleIdentifier` and `visionGoal` were not in its list. Still none is a browser. The other two hold exactly: one non-nil `preferredBrowser` site (`AgentActionExecutor.swift:1438`), and the adapters hand nil through. **A third consumer the ticket missed:** `WebResearchMarkdownCapabilityAdapter.swift:320`, the Hacker News open, also reads `context.preferredBrowser`; it is wired the same way here.
+- **Planner-visible, not decode-excluded, and the file says why.** `resolvedAppName`'s own comment warns against adding "a second decode-excluded app-identity field", because the exclusion guarantee is per-key and a new key is a new place to get it wrong. This field is the opposite case: the model is the only thing that sees the command text, so it is the only thing that can tell "open example.com in Chrome" from "open example.com". It belongs in both key lists, like `visionGoal`.
+- **Precedence decided rather than emergent: the step beats the routine.** A routine's browser is a default inferred from the apps that routine opens; a name on the step is what the user said in this command. The more specific and more recent instruction wins. `aBrowserNamedOnTheStepWinsOverARoutinesBinding` pins it, and inverting the helper fails that test and only that test.
+- **Per-operation, not per-plan.** The helper reads the step for the operation being executed rather than the first `browserName` anywhere in the plan, so "open A in Chrome then B in Safari" cannot put both in Chrome. Each adapter asks with its own operation, so each reads the step it is already acting on.
+- **Deliberately not gated on `WorkspaceBrowserCatalog`, and this is the judgment most worth reviewing.** The ticket advised reusing it as the definition of browser-capable, and that advice guards against a second definition. But the catalog answers "which of *these* apps is the browser" — the question a workspace's app list poses. When the user names one, that question does not arise. Gating on its five bundle identifiers would refuse a browser the user explicitly asked for, with no visible reason, for browsers like Vivaldi or Orion that Launch Services opens fine. No second definition is created because none is needed.
+- **An unresolvable name falls back rather than failing**, matching what `WorkspaceBrowserOpener` already documents for a workspace naming an absent browser: a link opening in the wrong browser beats one that fails mid-open. The opener applies the same rule again, with a log, if the app is installed but refuses to launch.
+- **A previous ticket's test assertion was changed, not deleted, and the distinction matters.** SONNY-152's third direction asserted that a named browser "still produce the URL step rather than a clarify or unsupported step" — worded that way precisely so the prompt could not claim routing the system could not do. It now asserts the routing sentence. **The promise got stronger; it was never wrong**, and the test's comment records the arc so a later reader does not read the edit as a correction.
+- **Four mutations, all reverted.** Reverting one adapter to `context.preferredBrowser` fails the two routing tests and none of the other three. Inverting precedence fails only the precedence test. Dropping the key from `AgentPlanDecoder.stepKeys` fails the decode test and not the omitted-key one — the schema/decoder drift that would otherwise present as the planner failing wholesale rather than as a missing browser.
+
+Known limitations / deferred scope:
+- **No model has been asked to fill the field.** The suite proves the schema offers it, the decoder accepts it and the executor routes on it; whether a real planner sets `browserName` from "in Chrome" is the founder's attended run and is the manual-test list's first item.
+- Only the three URL-opening seams honour it. `play_media` opens on a different seam by an explicit earlier decision (SONNY-51) and is untouched.
+
+Open questions (required): none. The three decisions this ticket flagged as needing one — precedence, not-installed behaviour, and whether to reuse the browser catalog — are each decided above with their reasoning.
+
+Next branch: unchanged. Rows D, E, J and 12 are unaffected.
+
 ### Branch: fix/machine-state-tests
 Status: complete
 Date: 2026-08-17
