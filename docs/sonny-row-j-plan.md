@@ -384,12 +384,14 @@ as a candidate for later hardening, not as an omission.
 already happens on every capture; the marginal cost is pattern matching over strings already in
 memory.
 
-**A committed baseline for the existing pass exists:** the `feature/vision-foundations` entry in
-`docs/sonny-v1-implementation-changelog.md` (line 2729 as of this branch's own commit `28f615c`,
-which added a roadmap row above it and shifted the old citation by one) records **374 ms** end-to-end
-at `4e430f0` — real Vision OCR, detect, paint and re-encode, 800×600, four lines, two planted secrets
-— printed by `redactionLatencyIsBoundedOnARepresentativeCapture`. `4e430f0` is an ancestor of
-`9a84e3b`. Search for the test name rather than the line if it has moved again. The implementation ticket re-measures against that figure so
+**A committed baseline for the existing pass exists.** Find it by searching for the test name, not by
+line number — this citation has already moved twice in two days, once when this branch added a
+roadmap row above it and once when row 12's planning branch merged 45 lines above it. **Locator: the
+`feature/vision-foundations` entry of `docs/sonny-v1-implementation-changelog.md`, in the `Tests:`
+paragraph, the sentence printed by `redactionLatencyIsBoundedOnARepresentativeCapture`.** It records
+**374 ms** end-to-end at `4e430f0` — real Vision OCR, detect, paint and re-encode, 800×600, four
+lines, two planted secrets. `4e430f0` is an ancestor of `9a84e3b`. At this branch's rebase onto
+`8e22dab` it sits at line 2774; treat that as an aid, not the citation. The implementation ticket re-measures against that figure so
 the added cost is a delta against a known number rather than a fresh claim.
 
 **Per action, not per session.** A screen changes under you, so a once-per-session answer has a real
