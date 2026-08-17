@@ -10,6 +10,47 @@ public enum TaskTrigger: String, Codable, Equatable, Sendable {
 }
 
 public struct CompletedTaskRecord: Codable, Equatable, Sendable {
+    /// This record's own identity, and the only safe way to address one.
+    ///
+    /// **Why a stored id rather than the natural key the app used to fake.** Before row D there was
+    /// none, so the UI invented one twice — `TaskLogEntry.id` as
+    /// `"\(startedAt.timeIntervalSince1970)-\(command)"` and the history list's `ForEach(id:)` on
+    /// `startedAt` alone. Both are `(command, startedAt)` compound keys, and this store persists
+    /// dates with plain `.iso8601` and no fractional-seconds option, which truncates to whole
+    /// seconds. Two runs of the same command started inside one second therefore land on the same
+    /// key, and a delete built on it can delete the wrong twin. That is demonstrated, not assumed:
+    /// `twinsThatCollideOnTheOldCompoundKeyStillHaveSeparateIds` round-trips two runs started 400ms
+    /// apart through this store and gets one timestamp back.
+    ///
+    /// **The precedent, at the strength the record actually supports.** The deleted egress ledger
+    /// reached for the same `startedAt` join key and replaced it with an id, after mutation E10
+    /// survived its battery "because both stores persist ISO8601 and whole-second truncation makes
+    /// date equality unable to see sub-second drift" (`docs/sonny-v1-implementation-changelog.md`).
+    /// Read that entry's PR #49 correction alongside it: finding F6, in the same document, records
+    /// the E10 sentence as **overstated** — E10-as-written removed its own target once the join was
+    /// an id, and the whole-second assertion it survived was deleted with the dispatch suite. So the
+    /// precedent is that this key was abandoned here once for this reason, not that it is on record
+    /// as having corrupted data. The reason to abandon it again is the collision above.
+    ///
+    /// **Why not just widen the timestamp.** Adding fractional seconds to the encoder was the
+    /// obvious alternative and is the wrong fix, though not for the reason it first looks like:
+    /// checked on this repo's toolchain at 6f89a5d (Apple Swift 6.3.3), `JSONDecoder`'s `.iso8601`
+    /// strategy reads a fractional-seconds timestamp back happily, so the migration would in fact
+    /// survive the files already on disk. It is the wrong fix because it does not buy identity.
+    /// `(command, startedAt)` stays a *natural* key at any precision: it breaks the moment either
+    /// field is edited, and two runs that genuinely begin at the same instant still collide. An id
+    /// is identity; a timestamp is data that happens to be unique most of the time.
+    ///
+    /// Optional, per the twice-documented `AutomationStores.swift` decode rule and the precedent of
+    /// `trigger` and `visionSessionID` below: every `task-history.json` written before this branch
+    /// has no such key, and a non-Optional field with a Swift-side default would still throw
+    /// `keyNotFound` on all of them. `nil` therefore means only "written before ids existed" —
+    /// `TaskHistoryStore.loadAll()` backfills one and rewrites the file, so after a single
+    /// successful load no record is left without an id.
+    ///
+    /// The initializer defaults to a fresh `UUID().uuidString` (evaluated per call), so every
+    /// record written from here on has one before it ever reaches disk.
+    public var id: String?
     public var command: String
     public var startedAt: Date
     public var completedAt: Date
@@ -42,6 +83,7 @@ public struct CompletedTaskRecord: Codable, Equatable, Sendable {
     public var visionSessionID: String?
 
     public init(
+        id: String? = UUID().uuidString,
         command: String,
         startedAt: Date,
         completedAt: Date,
@@ -50,6 +92,7 @@ public struct CompletedTaskRecord: Codable, Equatable, Sendable {
         trigger: TaskTrigger? = nil,
         visionSessionID: String? = nil
     ) {
+        self.id = id
         self.command = command.trimmingCharacters(in: .whitespacesAndNewlines)
         self.startedAt = startedAt
         self.completedAt = completedAt
@@ -108,7 +151,51 @@ public struct TaskHistoryStore: @unchecked Sendable {
             from: data,
             decoder: .taskHistoryISO8601
         )
-        return decoded.migratingLegacyPlaintext(store: "task history", write: write)
+        let migrated = decoded.migratingLegacyPlaintext(store: "task history", write: write)
+        return backfillingMissingIDs(migrated)
+    }
+
+    /// Gives every record written before `CompletedTaskRecord.id` existed one, and rewrites the
+    /// file so the id is stable from then on. After one *successful* load nothing is left without an
+    /// id, which is what makes a record addressable at all — see the field's own doc comment for
+    /// why the compound natural key it replaces could not be addressed safely.
+    ///
+    /// The stability is bought by the rewrite, so a store whose rewrite keeps failing hands out a
+    /// fresh id per load rather than a stable one. That is the honest consequence of the retry
+    /// contract below and not a second failure mode to design around: the only thing that keeps a
+    /// rewrite failing is a store directory nothing can write to, and a task history nothing can
+    /// write to has already stopped recording tasks.
+    ///
+    /// Deliberately shaped like `migratingLegacyPlaintext`, including its behaviour when the
+    /// rewrite fails: **a failed rewrite is not a load failure and must not be reported as one.**
+    /// The decode succeeded, so the data is intact and usable; writes are atomic, so a failed one
+    /// leaves the original file exactly as it was; and the backfill retries for free on the next
+    /// load. Throwing here would make callers discard records that had just decoded correctly and
+    /// show the "could not be decrypted or decoded" banner, which is wrong on both counts.
+    ///
+    /// The two upgrades are separate writes rather than one because they are separate conditions —
+    /// a file can need either, both, or neither. A file needing both is written twice on that one
+    /// load, both times atomically, and only on that load.
+    private func backfillingMissingIDs(_ records: [CompletedTaskRecord]) -> [CompletedTaskRecord] {
+        guard records.contains(where: { $0.id == nil }) else {
+            return records
+        }
+
+        let backfilled = records.map { record -> CompletedTaskRecord in
+            guard record.id == nil else {
+                return record
+            }
+            var withID = record
+            withID.id = UUID().uuidString
+            return withID
+        }
+
+        do {
+            try write(backfilled)
+        } catch {
+            LocalStorageMigrationLog.recordDeferredIDBackfill(store: "task history", error: error)
+        }
+        return backfilled
     }
 
     private func capped(_ records: [CompletedTaskRecord]) -> [CompletedTaskRecord] {
