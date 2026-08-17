@@ -157,6 +157,51 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/sonny-153-stable-signing
+Status: complete
+Date: 2026-08-17
+Tickets: SONNY-153 (ad-hoc code signing was silently destroying every macOS permission grant on every rebuild, which made the founder's manual pass — the only verification some behaviour ever gets — impossible)
+Reviewed by: fresh session (per WORKFLOW.md step 7) — pending at PR open
+
+Spec sections covered: none. This is build tooling and the human manual-test procedure. No product behaviour changed and no Swift was touched.
+Files changed: new: `Packaging/signing-identity`, `scripts/create-signing-identity.sh`, `scripts/lib/signing.sh`; modified: `scripts/package-app.sh`, `docs/sonny-manual-test-checklist.md` (§0 split into 0a one-time setup / 0b rebuild loop, plus two troubleshooting entries), `CLAUDE.md` (the packaging paragraph, which claimed ad-hoc signing and "no Apple Developer account needed" — the first half became false with this change). `Sources/` and `Tests/` untouched, deliberately: the ticket named them out of scope and nothing here needed them.
+Tests: `env CLANG_MODULE_CACHE_PATH=… swift test --disable-sandbox -Xswiftc -F …` (CLAUDE.md's exact flagged command) -> pass, **1223 tests in 92 suites**, exit 0, measured on this branch's working tree over `6f89a5d`. Note for a reviewer comparing entries: the entry below records 1222 at `b07bee8`, and the difference is one test that landed on that same branch afterwards — `6201e45`, "pin a painted redaction region through the lossy encoding" — before PR #55 merged as `6f89a5d`. The diff here touches no file under `Sources/` or `Tests/` at all, so this branch adds nothing to the count and 1223 is `6f89a5d`'s own number. **The 1222 above was first written from the neighbouring entry rather than from a run, and corrected once the run finished** — the count-first rule biting on a number that looked safe to predict.
+
+Behavior added:
+- The signing identity is one configuration value, `Packaging/signing-identity`, read by both scripts through `scripts/lib/signing.sh`. Nothing else names an identity, so swapping the local development certificate for a real Developer ID one is a one-line change to that file.
+- `scripts/create-signing-identity.sh` creates a self-signed code-signing certificate in the login keychain, idempotently, and forces the one-time codesign authorisation dialog to happen during setup.
+- `scripts/package-app.sh` signs with that identity, **refuses to package** if it is missing rather than silently falling back to ad-hoc, prints the resulting designated requirement, and warns when that requirement is a bare `cdhash`.
+- `docs/sonny-manual-test-checklist.md` §0a: the exact commands the founder runs once — create the certificate, `tccutil reset All com.sonny.MacAgent`, repackage, re-grant.
+
+Behavior preserved (required, no blanket claims):
+- **The xattr-strip retry loop.** `codesign` still refuses to seal a bundle carrying `com.apple.FinderInfo`, macOS can still re-stamp a fresh `.app` asynchronously, and the five-attempt strip-and-sign loop is unchanged — only the `--sign` argument inside `sign_app()` moved from `-` to the configured identity.
+- **The entitlements branch.** `MacAgent-entitlement.plist` is still passed when SwiftPM generates it (it does, for debug: one key, `com.apple.security.get-task-allow`) and still omitted when it does not.
+- **The resource-bundle placement.** `Contents/Resources/MacAgent_MacAgent.bundle`, and the reason it cannot sit at the bundle root, are untouched.
+- **`codesign --verify --verbose` still passes**, including `--deep --strict`, on a bundle signed with an untrusted self-signed certificate — measured before the change was written, not assumed.
+- **Ad-hoc signing remains reachable** by setting the config value to `-`, so nothing is locked away; it now warns twice about what it costs.
+- **`swift build` and `swift test` are untouched.** Packaging was and remains an optional extra step.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+- **An ad-hoc signature's designated requirement is a bare build hash, and TCC keys grants to it.** Measured: `codesign -d -r-` on an ad-hoc bundle prints `# designated => cdhash H"41bdd194…"` and nothing else — no identifier, no certificate. macOS stores that as the grant's requirement, so any change to the binary revokes the grant. The OS says so in as many words; `/usr/bin/log show --predicate 'process == "tccd"' --info` during the founder's failing session produced 24 lines of `Failed to match existing code requirement for subject com.sonny.MacAgent`, each printing the two hashes it compared.
+- **It was never only the two permissions on the onboarding panel.** Those 24 lines cover four services — Accessibility 10, Screen Recording 6, Microphone 4, Desktop folder 4 — and carry five distinct hashes. One appears in all 24 (the running build); the other four appear exactly as often as their own service, meaning each permission was pinned to a different, long-gone build. Voice commands and Desktop file access had been failing the same way, unnoticed, because nothing surfaces them the way the onboarding panel surfaces the other two.
+- **Worktrees change the binary even when the source is identical.** The built executable embeds exactly one absolute path — its own `MacAgent_MacAgent.bundle` inside its own worktree. Same source, different worktree, different bytes, different hash.
+- **The cdhash is path-independent, which kills the obvious cheap fix.** Copying a signed bundle elsewhere leaves its hash unchanged, so packaging to one stable path does nothing for grant survival. That option was measured and then dropped by founder decision rather than argued about.
+- **A repackage with no source change is deterministic.** Two consecutive `package-app.sh` runs produced the identical `41bdd194…`. Only a code change breaks the grant — which is every rebuild that matters.
+- **`security find-identity -v` cannot see a locally created identity.** `-v` filters to certificates with a trusted chain; a self-signed one has none, so `-v -p codesigning` reports it absent while `-p codesigning` lists it as `(CSSMERR_TP_NOT_TRUSTED)` — and codesign signs with it regardless. Detection code that uses `-v` will conclude the identity is missing forever. `sonny_signing_identity_present` deliberately omits it.
+- **macOS's Security framework cannot read OpenSSL 3's default PKCS#12 encoding.** `security import` fails with "MAC verification failed during PKCS12 import (wrong password?)", which reads like a passphrase bug and is not one. `-legacy -keypbe PBE-SHA1-3DES -certpbe PBE-SHA1-3DES -macalg sha1` is required.
+- **Neither `-A` nor `-T /usr/bin/codesign` on import prevents the key-access dialog** — the modern partition list overrides both. Until codesign is authorised, every build blocks on a GUI dialog. This presented as `package-app.sh` hanging with no output whatsoever, which is why the setup script now raises that dialog on purpose and `package-app.sh` prints a line explaining a stall before it can happen. The alternative, `security set-key-partition-list`, needs the login keychain password, and a script that asks for that is worse than a dialog macOS asks for itself.
+- **An ad-hoc requirement prints commented out and a certificate's does not** — `# designated => cdhash …` versus `designated => identifier …`. A `grep '^designated'` silently drops exactly the case the warning exists for. Caught by testing the ad-hoc branch rather than only the happy path.
+- **`com.apple.security.get-task-allow` will block notarization later.** SwiftPM generates that entitlement for debug builds and `package-app.sh` passes it through. It is correct today and harmless with a local certificate, but Apple rejects notarization of anything carrying it. Filed as its own ticket rather than fixed here — notarization is SONNY-106 section E's work, not this ticket's.
+
+Known limitations / deferred scope:
+- **This is not the v1 release requirement and must not be recorded as satisfying it.** SONNY-106 section E requires a Developer ID signed *and notarized* build; section F tracks the Apple Developer enrolment that gates it (started 2026-08-17, not complete). A self-signed local certificate does nothing for anyone else installing Sonny — Gatekeeper still refuses these builds on any other Mac. Stated at the founder's explicit instruction, in the config file, both scripts, `CLAUDE.md` and the manual-test checklist, precisely so a later reader cannot tick the condition off the back of this work.
+- **End-to-end grant persistence is confirmed only in mechanism, not in the live app.** What is measured is that the designated requirement no longer moves when the build does — including a deliberate binary change that shifted the hash while the requirement stayed byte-identical. That a real TCC grant then survives a rebuild is the founder's manual-test item, because no agent can drive the app.
+- The in-app "your grant belongs to a different build" notice was declined (see below); the same information went into the manual-test checklist's troubleshooting instead.
+
+Open questions (required, write "none" if true): none. All four options in SONNY-153's description were put to the founder and decided on 2026-08-17; the decisions and their reasoning are on the ticket. Two are worth restating here because they are product-level rather than tooling-level. First, **the 2026-08-14 no-explanatory-copy rule covers how-it-works explanations, not only data-sent-to-AI copy** — explaining code signing in the product is squarely the former, and the narrower reading of that rule is "fair on the letter and wrong on the intent" (founder, 2026-08-17). Second, **the venue was wrong rather than the need** — the information helps a developer, not a user, so it belongs in the manual-test documentation where the people who hit it will look.
+
+Next branch: unchanged by this. The locked roadmap's next rows (D, E, J, 12) are unaffected; this branch only removes an obstacle in front of every one of their manual passes.
+
 ### Branch: fix/sonny-114-capture-payload
 Status: complete
 Date: 2026-08-17
