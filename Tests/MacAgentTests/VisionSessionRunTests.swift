@@ -314,22 +314,71 @@ struct VisionSessionRunTests {
         )
     }
 
+    /// How long these helpers wait before declaring a hang (SONNY-159, SONNY-160, SONNY-161).
+    ///
+    /// **This is a deadlock backstop, not a timing assertion, and the distinction is the whole
+    /// point.** Nothing in this suite is asserting that the vision loop is fast; every test here
+    /// asserts what it *did*. A deadline exists only so that a genuine hang fails the run instead of
+    /// wedging it forever. Read that way, the old three and four seconds were far too tight — they
+    /// were close enough to real running time that they fired on a busy machine, which turned a
+    /// backstop into a measurement of the hardware.
+    ///
+    /// **Why it fired.** This suite is `@MainActor` and Swift Testing runs suites concurrently, so
+    /// every `@MainActor` test in this target interleaves on one actor; any test doing sustained
+    /// synchronous work anywhere in the target pushes its neighbours toward their deadlines. The
+    /// failures were never wrong answers — always `waitUntil` timeouts, on a test that varied
+    /// between runs, with labels spread across the whole file. That spread is the signature of
+    /// starvation rather than of one slow path.
+    ///
+    /// **The measured cost of getting this wrong.** On `main` at `89e317b`, twelve consecutive
+    /// full-suite runs at ordinary load produced eleven passes and one failure — 42 issues in the
+    /// failing run, 7.656 s against a 5.2–5.5 s norm. SONNY-159 measured the same rate more
+    /// carefully on a quiet machine: 17 of 18 on `main` at `7b9fec9`, and 15 of 16 on
+    /// `feature/terminal-screen-check` at `315419e`, indistinguishable at that sample size. Its
+    /// worst observed run produced 88 issues. SONNY-161 then measured the other direction: two
+    /// legitimately heavy task-history tests were enough to take the failure rate from zero in four
+    /// runs to one in three.
+    ///
+    /// **Why the number below is a backstop and not a tuned threshold.** Tuning against a threshold
+    /// nobody has measured is what SONNY-161 rejected, correctly. This is not that: the worst
+    /// per-test wall clock observed across every run in those three investigations is under eight
+    /// seconds, and thirty is roughly four times that. It is not chosen to be "enough" for a
+    /// particular machine — it is chosen to be so far outside the range of *any* observed real
+    /// completion that a failure here means the loop is stuck, which is the only thing this deadline
+    /// was ever meant to catch.
+    ///
+    /// **What did not change, deliberately.** Not one test's assertions, and not the polling
+    /// interval. Raising a backstop cannot make a passing test pass "more" — a test that completes
+    /// still completes at exactly the same moment and asserts exactly what it did before. The only
+    /// behaviour that changes is what happens when the condition never becomes true, and there the
+    /// change is from "fail after 3 s, possibly because another test was busy" to "fail after 30 s,
+    /// which means it is genuinely stuck."
+    private static let hangBackstop: TimeInterval = 30
+
     private func waitUntil(
         _ description: String,
-        timeout: TimeInterval = 3,
+        timeout: TimeInterval = Self.hangBackstop,
         _ condition: @MainActor () -> Bool
     ) async throws {
         let deadline = Date(timeIntervalSinceNow: timeout)
         while !condition() {
             if Date() > deadline {
-                Issue.record("timed out waiting for: \(description)")
+                // Says what a failure here means, because the previous message did not and the
+                // cost of that was concrete: sessions reasoned about whether a red suite was
+                // theirs, and one made changes on the misdiagnosis before reverting them.
+                Issue.record("""
+                    timed out after \(Int(timeout))s waiting for: \(description).
+                    This deadline is a deadlock backstop, not a timing assertion — at this length it \
+                    should only fire when the vision loop is genuinely stuck, not when the machine \
+                    is busy. Treat it as a real failure and look for what is not completing.
+                    """)
                 return
             }
             try await Task.sleep(for: .milliseconds(5))
         }
     }
 
-    private func waitForIdle(_ viewModel: AgentViewModel, timeout: TimeInterval = 4) async throws {
+    private func waitForIdle(_ viewModel: AgentViewModel, timeout: TimeInterval = Self.hangBackstop) async throws {
         try await waitUntil("the run to finish", timeout: timeout) { !viewModel.isRunning }
     }
 
