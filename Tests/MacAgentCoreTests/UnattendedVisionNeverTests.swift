@@ -124,14 +124,33 @@ struct UnattendedVisionNeverTests {
         func canPresentApproval() async -> Bool { presentable }
     }
 
+    /// **The one place this file builds a containment** (SONNY-103), for the same reason
+    /// ``VisionSessionContainmentTests`` has one: left to its default, `permissionChecker` reads
+    /// `AXIsProcessTrusted()`, and `checkIterationStart` consults it *ahead of* the attention check
+    /// these tests exist to pin. Three of that ticket's 22 machine-dependent failures were here
+    /// (measured at main `9a84e3b`) — a locked Mac reported as a revoked grant, on any process
+    /// without the grant.
+    ///
+    /// The grant is stated on every construction, including the two that only reach
+    /// ``VisionSessionContainment/checkApprovalPresentable()`` and so do not read it today. Leaving
+    /// those on the live default would keep the seam open two lines from the one that closed it, and
+    /// the next test written here would inherit it.
+    private static func containment(
+        attention: SessionAttentionState,
+        presentable: Bool = true
+    ) -> VisionSessionContainment {
+        VisionSessionContainment(
+            target: ScreenControlPolicy.verdict(for: safari),
+            attentionMonitor: FixedMonitor(attention, presentable: presentable),
+            permissionChecker: FixedAccessibilityGrant(trusted: true)
+        )
+    }
+
     /// Each of the three conditions pauses, and names itself.
     @Test
     func lockSleepAndIdleEachPauseTheSessionWithTheirOwnReason() async {
         for state in [SessionAttentionState.screenLocked, .displayAsleep, .userIdle] {
-            let containment = VisionSessionContainment(
-                target: ScreenControlPolicy.verdict(for: Self.safari),
-                attentionMonitor: FixedMonitor(state)
-            )
+            let containment = Self.containment(attention: state)
             let refusal = await containment.checkIterationStart(
                 iteration: 1,
                 isCancelled: false,
@@ -149,16 +168,10 @@ struct UnattendedVisionNeverTests {
     /// tier-3 action there stops rather than acting without an answer.
     @Test
     func anApprovalIsNotPresentableWhileTheMacIsLocked() async {
-        let locked = VisionSessionContainment(
-            target: ScreenControlPolicy.verdict(for: Self.safari),
-            attentionMonitor: FixedMonitor(.screenLocked, presentable: false)
-        )
+        let locked = Self.containment(attention: .screenLocked, presentable: false)
         #expect(await locked.checkApprovalPresentable() == .approvalNotPresentable)
 
-        let unlocked = VisionSessionContainment(
-            target: ScreenControlPolicy.verdict(for: Self.safari),
-            attentionMonitor: FixedMonitor(.attended, presentable: true)
-        )
+        let unlocked = Self.containment(attention: .attended, presentable: true)
         #expect(await unlocked.checkApprovalPresentable() == nil)
 
         // Idle but unlocked: paused by the attention check, and yet an approval *would* still be
