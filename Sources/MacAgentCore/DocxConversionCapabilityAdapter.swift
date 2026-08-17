@@ -58,7 +58,8 @@ public struct DocxConversionCapabilityAdapter: CapabilityAdapter {
         let records = try context.inventory.docxFiles(
             in: spec.folder,
             outputFolder: spec.outputFolder,
-            mockDestinations: spec.usesMockDestinations
+            mockDestinations: spec.usesMockDestinations,
+            destinationsClaimedEarlierInThisRun: context.destinationsClaimedEarlierInThisRun
         )
         guard !records.isEmpty else {
             throw AgentExecutionError.noMatchingFiles("No .docx files were found in \(spec.folder.path).")

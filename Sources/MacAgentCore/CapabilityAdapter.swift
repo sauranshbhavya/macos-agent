@@ -194,6 +194,21 @@ public struct CapabilityExecutionContext {
     /// default browser — the ordinary path must not inherit a routine's preference.
     public var preferredBrowser: MacApp?
 
+    /// Destination paths, `DestinationKey.folded`, that earlier units of this same chain have already
+    /// claimed or written (SONNY-76).
+    ///
+    /// **Empty for a single-unit plan, which is every plan that is not a chain.** It exists because a
+    /// two-folder DOCX conversion into one output folder is two `[scan_docx, convert]` units after
+    /// SONNY-34, so the second unit re-scans after the first has written. Without this it saw the
+    /// first unit's PDF as a file that predated the run, reported the second document "skipped
+    /// because a PDF already exists", and left the user a document short with an explanation pointing
+    /// at a file they never had.
+    ///
+    /// Accumulated from what each unit's previews say they write, so it needs no second return
+    /// channel and covers writes from any capability rather than only the docx one — a PDF this run
+    /// produced is this run's whether a conversion or something else made it.
+    public var destinationsClaimedEarlierInThisRun: Set<String>
+
     /// The browser a URL-opening step should use: the one the user named on that step if it resolves
     /// to something installed, otherwise whatever was already in force (SONNY-157).
     ///
@@ -272,6 +287,7 @@ public struct CapabilityExecutionContext {
         now: @escaping () -> Date = Date.init,
         hotKeyReady: @escaping () -> Bool = { true },
         preferredBrowser: MacApp? = nil,
+        destinationsClaimedEarlierInThisRun: Set<String> = [],
         // Non-defaulted, on the same reasoning as `assessRisk(plan:scope:)` and both `AgentRunner`
         // entry points, and for a failure that is one layer quieter than either: a second
         // construction site omitting this would leave `taskScope` at `.unscoped`, which turns
@@ -316,6 +332,7 @@ public struct CapabilityExecutionContext {
         self.now = now
         self.hotKeyReady = hotKeyReady
         self.preferredBrowser = preferredBrowser
+        self.destinationsClaimedEarlierInThisRun = destinationsClaimedEarlierInThisRun
         self.taskScope = taskScope
         self.assessNestedPlan = assessNestedPlan
         self.previewNestedPlan = previewNestedPlan
