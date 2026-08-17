@@ -104,15 +104,13 @@ current test data doing it.
 ### 0a. One-time setup on this Mac — do this before anything else, once (added 2026-08-17, SONNY-153)
 
 **Skip this and every permission you grant will be thrown away the next time the app is rebuilt.**
-Run this check first:
 
-```bash
-security find-identity -p codesigning | grep "Sonny Local Dev"
-```
-
-If that prints nothing, the setup below has not been done on this Mac yet. If it prints a line —
-including one ending `(CSSMERR_TP_NOT_TRUSTED)`, which is normal and fine — you are already set up
-and can go straight to §0b.
+Just run step 1 below. It does nothing it has already done, so running it when you did not need to
+costs a second and nothing else. Do not try to decide in advance whether you need it —
+`security find-identity -p codesigning | grep "Sonny Local Dev"` tells you whether the certificate
+exists, which is only half the setup: the other half is answering the keychain dialog, and a
+certificate that exists with the dialog unanswered looks identical in that listing while still
+blocking every build.
 
 ```bash
 # 1. Create the certificate the app is signed with. Run this in a real terminal window: macOS
