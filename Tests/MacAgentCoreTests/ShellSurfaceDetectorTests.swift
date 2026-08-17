@@ -9,27 +9,43 @@ import Testing
 /// direction. Tuning happens against the fixtures, never against a recollection of what a shell
 /// looks like.
 ///
+/// **Half of it exists because the first version of this corpus could not fail** (PR #57 review,
+/// F3). The negative half had no UI glyph row, no address-shaped token in prose beside a `%`, and no
+/// quoted line whose first word was in the command vocabulary; the positive half had no shell in
+/// which nothing had gone wrong. So it passed while the detector refused documentation pages and
+/// allowed idle terminal panels. Every fixture marked *(F1)* or *(F2)* below is one that would have
+/// failed against the committed detector at `9cacfc0`, and several are the reviewer's own repros
+/// verbatim.
+///
 /// What is asserted, said plainly because it is easy to over-claim: **not** that every shell on
 /// every screen is caught. A shell that is not rendered is not seen, and this check reads exactly
 /// the surface an attacker controls, which is why the static ten-name deny list stays the primary
 /// refusal and why SONNY-102 stays open. What is asserted is that this corpus lands on the right
-/// side of a threshold that is a named constant, from both directions.
+/// side of a threshold that is a named constant, from both directions, **with the exact signal set
+/// pinned on both halves** — a must-refuse fixture that started refusing for a different reason, or
+/// drifted down to exactly two, used to pass silently.
 @Suite
 struct ShellSurfaceDetectorTests {
     /// One screen, as the OCR pass would join it: one line per recognized line, in reading order.
+    ///
+    /// `signals` is the exact expected set, on both halves. The negative half is not simply "empty":
+    /// a docs page legitimately reaching one sign is a different fact from one reaching none, and
+    /// collapsing them would hide a drift toward the threshold.
     struct Fixture {
         let name: String
-        /// What Sonny must do about it. `true` means the session ends.
-        let refuses: Bool
+        let signals: [ShellSurfaceSignal]
         let text: String
+
+        var refuses: Bool { signals.count >= ShellSurfaceDetector.signalThreshold }
     }
 
-    // MARK: - The corpus
+    // MARK: - Must refuse
 
-    /// **Must refuse.** The five the ticket names, plus two that exist because they are the ground a
-    /// name list cannot reach at all: an unlisted terminal, and a shell reached over ssh.
+    /// The five the ticket names, plus the two that are the ground a name list cannot reach at all,
+    /// plus four *(F2)* cases where **nothing on screen has failed** — which is the ordinary state of
+    /// a terminal and was the state in which the committed detector let all of them through.
     static let mustRefuse: [Fixture] = [
-        Fixture(name: "Terminal", refuses: true, text: """
+        Fixture(name: "Terminal", signals: [.interactivePrompt, .commandRunInAShell, .sessionBanner], text: """
         Last login: Sat Aug 16 09:14:22 on ttys000
         sauransh@Mac ~ % cd Desktop/macos-agent
         sauransh@Mac macos-agent % git status
@@ -38,76 +54,176 @@ struct ShellSurfaceDetectorTests {
         sauransh@Mac macos-agent %
         """),
 
-        Fixture(name: "iTerm", refuses: true, text: """
-        sauransh@Mac:~/dev/macos-agent$ ls -la
-        total 48
-        drwxr-xr-x  12 sauransh  staff   384 16 Aug 09:12 .
-        -rw-r--r--@  1 sauransh  staff  1284 15 Aug 21:03 README.md
-        sauransh@Mac:~/dev/macos-agent$ ./scripts/plane
-        zsh: no such file or directory: ./scripts/plane
-        sauransh@Mac:~/dev/macos-agent$
-        """),
+        Fixture(
+            name: "iTerm",
+            signals: [.interactivePrompt, .commandRunInAShell, .commandOutputListing, .shellDiagnostic],
+            text: """
+            sauransh@Mac:~/dev/macos-agent$ ls -la
+            total 48
+            drwxr-xr-x  12 sauransh  staff   384 16 Aug 09:12 .
+            -rw-r--r--@  1 sauransh  staff  1284 15 Aug 21:03 README.md
+            sauransh@Mac:~/dev/macos-agent$ ./scripts/plane
+            zsh: no such file or directory: ./scripts/plane
+            sauransh@Mac:~/dev/macos-agent$
+            """
+        ),
 
         // The whole VS Code window, not just its panel — which is what a window capture contains.
         // The editor half carries a shebang on purpose: the same `#!/bin/bash` that must not make an
         // editor refuse on its own does not make this one refuse either, and the panel below it does
         // the refusing.
-        Fixture(name: "VS Code integrated terminal panel", refuses: true, text: """
-        EXPLORER                    deploy.sh
-        MACOS-AGENT                   1  #!/bin/bash
-          Sources                     2  set -euo pipefail
-        PROBLEMS   OUTPUT   TERMINAL   PORTS
-        sauransh@Mac macos-agent % swift build
-        Building for debugging...
-        Build complete!
-        sauransh@Mac macos-agent % ./scripts/deploy.sh
-        zsh: permission denied: ./scripts/deploy.sh
-        sauransh@Mac macos-agent %
-        """),
+        Fixture(
+            name: "VS Code integrated terminal panel, a command failed",
+            signals: [.interactivePrompt, .commandRunInAShell, .shellDiagnostic],
+            text: """
+            EXPLORER                    deploy.sh
+            MACOS-AGENT                   1  #!/bin/bash
+              Sources                     2  set -euo pipefail
+            PROBLEMS   OUTPUT   TERMINAL   PORTS
+            sauransh@Mac macos-agent % swift build
+            Building for debugging...
+            Build complete!
+            sauransh@Mac macos-agent % ./scripts/deploy.sh
+            zsh: permission denied: ./scripts/deploy.sh
+            sauransh@Mac macos-agent %
+            """
+        ),
 
-        Fixture(name: "JetBrains run console", refuses: true, text: """
-        IntelliJ IDEA — macos-agent
-        Run:   deploy  ×
-        /bin/bash /Users/sauransh/dev/macos-agent/scripts/deploy.sh
-        + echo 'Deploying to staging'
-        Deploying to staging
-        deploy@staging: Permission denied (publickey).
-        Process finished with exit code 255
-        """),
+        // **(F2)** The same panel with the failure removed and nothing else changed. This is the
+        // ordinary case — an editor with a terminal open and the last command having worked — and it
+        // is manual-test item 2. At `9cacfc0` it reached one sign and Sonny proceeded, so whether the
+        // headline gap was closed depended on whether the founder's last command happened to error.
+        Fixture(
+            name: "VS Code integrated terminal panel, nothing failed (F2)",
+            signals: [.interactivePrompt, .commandRunInAShell],
+            text: """
+            EXPLORER                    deploy.sh
+            MACOS-AGENT                   1  #!/bin/bash
+              Sources                     2  set -euo pipefail
+            PROBLEMS   OUTPUT   TERMINAL   PORTS
+            sauransh@Mac macos-agent % ls
+            README.md  Sources  Tests  docs
+            sauransh@Mac macos-agent %
+            """
+        ),
 
-        Fixture(name: "notebook cell running shell", refuses: true, text: """
-        deploy-notebook.ipynb — Jupyter
-        In [3]: !ls -la build
-                total 12
-                drwxr-xr-x  3 sauransh staff   96 17 Aug 09:02 .
-        In [4]: %%bash
-                scp build/app.tar.gz deploy@staging:/srv/app/
-                deploy@staging: Permission denied (publickey).
-        """),
+        // **(F2)** A long-running process in the panel: no prompt returned, no output shaped like a
+        // listing, nothing failed.
+        Fixture(
+            name: "VS Code integrated terminal panel, a dev server running (F2)",
+            signals: [.interactivePrompt, .commandRunInAShell],
+            text: """
+            PROBLEMS   OUTPUT   TERMINAL   PORTS
+            sauransh@Mac macos-agent % npm run dev
+            VITE v5.4.2  ready in 412 ms
+            Local:   http://localhost:5173/
+            """
+        ),
+
+        Fixture(
+            name: "JetBrains run console, the script failed",
+            signals: [.shellDiagnostic, .sessionBanner, .shellInterpreterInvocation],
+            text: """
+            IntelliJ IDEA — macos-agent
+            Run:   deploy  ×
+            /bin/bash /Users/sauransh/dev/macos-agent/scripts/deploy.sh
+            + echo 'Deploying to staging'
+            Deploying to staging
+            deploy@staging: Permission denied (publickey).
+            Process finished with exit code 255
+            """
+        ),
+
+        // **(F2)** The same console on a clean run. It survived at `9cacfc0` too, but on two signals
+        // that have nothing to do with the command succeeding, so it is pinned here to keep that a
+        // fact rather than a coincidence.
+        Fixture(
+            name: "JetBrains run console, the script succeeded (F2)",
+            signals: [.sessionBanner, .shellInterpreterInvocation],
+            text: """
+            IntelliJ IDEA — macos-agent
+            Run:   deploy  ×
+            /bin/bash /Users/sauransh/dev/macos-agent/scripts/deploy.sh
+            Deploying to staging
+            Process finished with exit code 0
+            """
+        ),
+
+        Fixture(
+            name: "notebook cell running shell",
+            signals: [.commandRunInAShell, .commandOutputListing, .shellDiagnostic, .shellInterpreterInvocation],
+            text: """
+            deploy-notebook.ipynb — Jupyter
+            In [3]: !ls -la build
+                    total 12
+                    drwxr-xr-x  3 sauransh staff   96 17 Aug 09:02 .
+            In [4]: %%bash
+                    scp build/app.tar.gz deploy@staging:/srv/app/
+                    deploy@staging: Permission denied (publickey).
+            """
+        ),
+
+        // **(F2)** The same notebook with the listing flag and the failure removed.
+        Fixture(
+            name: "notebook cell running shell, nothing failed (F2)",
+            signals: [.commandRunInAShell, .shellInterpreterInvocation],
+            text: """
+            deploy-notebook.ipynb — Jupyter
+            In [3]: !ls build
+                    app.tar.gz  manifest.json
+            In [4]: %%bash
+                    echo done
+            """
+        ),
 
         // The gap the deny list narrows and never closes: a terminal nobody listed. Its prompt is
         // oh-my-zsh's, which no bundle identifier would have told anyone about.
-        Fixture(name: "an unlisted terminal running oh-my-zsh", refuses: true, text: """
-        \u{279C}  macos-agent git:(main) \u{2717} swift test
-        Test run with 1223 tests in 92 suites passed
-        \u{279C}  macos-agent git:(main) \u{2717} exit
-        logout
-        """),
+        Fixture(
+            name: "an unlisted terminal running oh-my-zsh",
+            signals: [.interactivePrompt, .commandRunInAShell, .sessionBanner],
+            text: """
+            \u{279C}  macos-agent git:(main) \u{2717} swift test
+            Test run with 1223 tests in 92 suites passed
+            \u{279C}  macos-agent git:(main) \u{2717} exit
+            logout
+            """
+        ),
 
-        Fixture(name: "an ssh session inside an unlisted terminal", refuses: true, text: """
-        sauransh@Mac ~ % ssh deploy@staging.example.com
-        Last login: Fri Aug 15 22:10:04 2026 from 10.0.0.4
-        deploy@staging:~$ uptime
-        deploy@staging:~$ exit
-        Connection to staging.example.com closed.
-        """)
+        Fixture(
+            name: "an ssh session inside an unlisted terminal",
+            signals: [.interactivePrompt, .commandRunInAShell, .sessionBanner],
+            text: """
+            sauransh@Mac ~ % ssh deploy@staging.example.com
+            Last login: Fri Aug 15 22:10:04 2026 from 10.0.0.4
+            deploy@staging:~$ uptime
+            deploy@staging:~$ exit
+            Connection to staging.example.com closed.
+            """
+        ),
+
+        // A bracketed prompt, which is the default on most Linux distributions and has no space
+        // between the closing bracket and the sigil.
+        Fixture(
+            name: "a bracketed Linux prompt",
+            signals: [.interactivePrompt, .commandRunInAShell],
+            text: """
+            [sauransh@build-01 macos-agent]$ make release
+            cc -O2 -o build/app src/main.c
+            [sauransh@build-01 macos-agent]$
+            """
+        )
     ]
 
-    /// **Must not refuse.** The three the ticket names, plus four more that are the same shape as
-    /// something a user does every day. Over-refusing is the correct direction of error for a
-    /// categorical rule, and it still has a real product cost, which is what the threshold is for.
+    // MARK: - Must not refuse
+
+    /// The three the ticket names, plus eight more. Six of the eight are *(F1)* — the reviewer's own
+    /// repros, each of which refused at `9cacfc0`, all now landing at zero. Over-refusing is the
+    /// correct direction of error for a categorical rule and it still has a real product cost: every
+    /// one of these ends the session with "Sonny stopped because that window is showing a shell …
+    /// This is not something you can allow", which is a hard, unappealable stop saying something
+    /// untrue about a docs page or a Slack thread.
     static let mustNotRefuse: [Fixture] = [
-        Fixture(name: "a documentation page showing $ npm install", refuses: false, text: """
+        Fixture(name: "a documentation page showing $ npm install", signals: [], text: """
         Getting Started — Sonny Docs
         Installation
         Install the command line tool with npm:
@@ -117,7 +233,69 @@ struct ShellSurfaceDetectorTests {
         Requirements: macOS 14 or later, Node 20 or later.
         """),
 
-        Fixture(name: "a chat message quoting a command", refuses: false, text: """
+        // **(F1)** The reviewer's repro A, verbatim. A disclosure triangle is not a prompt.
+        Fixture(name: "a documentation page with a disclosure triangle (F1)", signals: [], text: """
+        Getting Started
+        \u{25B6} Advanced options
+        Install with:
+        $ brew install sonny
+        """),
+
+        // **(F1)** The reviewer's repro B, verbatim — pure ASCII, no glyph anywhere, so it stands
+        // whatever Vision does or does not transcribe. An address-shaped token, a percent sign in
+        // prose, and a quoted line whose first word is in the command vocabulary.
+        Fixture(name: "a chat window with an address and a quoted reply (F1)", signals: [], text: """
+        Priya  10:15 AM
+        bob@acme.com is at 90% context already
+        > go ahead and ship it
+        Sauransh  10:16 AM
+        ok
+        """),
+
+        // **(F1)**
+        Fixture(name: "a GitHub issue page with a collapsed section (F1)", signals: [], text: """
+        Bug: install fails on macOS 15
+        \u{25B6} Show 12 more comments
+        Repro:
+        $ npm install -g sonny
+        npm warn deprecated glob@7
+        """),
+
+        // **(F1)**
+        Fixture(name: "a Notion runbook with a collapsed section (F1)", signals: [], text: """
+        Staging rollout runbook
+        \u{25B6} Rollback steps
+        To roll forward:
+        $ kubectl rollout restart deploy/api
+        """),
+
+        // **(F1)** Chevron bullets are a slide-deck convention. This is also the fixture that
+        // records the cost of dropping `❯` from the prompt glyphs: a starship prompt is not
+        // recognised, and this page is the reason.
+        Fixture(name: "a slide deck with chevron bullets (F1)", signals: [], text: """
+        Roadmap FY26
+        \u{276F} ship the agent
+        \u{276F} land the backend
+        > go deeper next quarter
+        """),
+
+        // **(F1)**
+        Fixture(name: "a mail thread with an address and a percentage (F1)", signals: [], text: """
+        Re: rollout — Mail
+        priya@acme.io wrote: we are at 80% of the rollout
+        > open the PR when you get a chance
+        Thanks, will do after standup.
+        """),
+
+        // **(F1)** Two shapes that each fired the old prompt pattern on their own: an address
+        // followed by a `#`, and an address on a line carrying a percentage.
+        Fixture(name: "prose carrying an address, a hash and a percentage (F1)", signals: [], text: """
+        Support
+        ping support@example.com # if it breaks
+        Hi team - alice@example.com says the build is 50% faster now.
+        """),
+
+        Fixture(name: "a chat message quoting a command", signals: [], text: """
         Sauransh   10:14 AM
         can you run `git push origin main` once CI goes green?
         Priya   10:15 AM
@@ -129,9 +307,8 @@ struct ShellSurfaceDetectorTests {
 
         // **The sharpest false positive in the set.** A `.sh` file open in an editor is not an
         // interactive shell. Line 11 is there deliberately: `deploy@$1:$APP_DIR/` is the closest
-        // thing in ordinary shell source to a `user@host:path$` prompt, and the prompt pattern must
-        // not read it as one.
-        Fixture(name: "an editor displaying shell script source", refuses: false, text: """
+        // thing in ordinary shell source to a `user@host:path$` prompt.
+        Fixture(name: "an editor displaying shell script source", signals: [], text: """
         deploy.sh — macos-agent
           1  #!/bin/bash
           2  set -euo pipefail
@@ -149,7 +326,7 @@ struct ShellSurfaceDetectorTests {
          14  echo "Deployed to $1"
         """),
 
-        Fixture(name: "a README rendered in a browser", refuses: false, text: """
+        Fixture(name: "a README rendered in a browser", signals: [], text: """
         macos-agent / README.md
         Building
         Run swift build, then swift test with the flags below. Plain swift test
@@ -160,9 +337,7 @@ struct ShellSurfaceDetectorTests {
         Open a pull request against main. Every commit message names its ticket.
         """),
 
-        // Quoted reply lines start with `>`, which is a prompt sigil. This is the reason
-        // `shellCommandNames` is a vocabulary rather than "any word after a sigil".
-        Fixture(name: "an email thread with quoted reply lines", refuses: false, text: """
+        Fixture(name: "an email thread with quoted reply lines", signals: [], text: """
         Re: staging deploy — Mail
         From: Priya
         > can you run the deploy script tonight?
@@ -171,7 +346,7 @@ struct ShellSurfaceDetectorTests {
         exit criteria are the same as last time.
         """),
 
-        Fixture(name: "a Dockerfile open in an editor", refuses: false, text: """
+        Fixture(name: "a Dockerfile open in an editor", signals: [], text: """
         Dockerfile — macos-agent
         FROM node:20-alpine
         WORKDIR /srv/app
@@ -184,7 +359,7 @@ struct ShellSurfaceDetectorTests {
 
         // Sonny's own Settings page, which talks about terminals at length. A check that fired on
         // the product's own copy would end a session started from the window explaining the rule.
-        Fixture(name: "Sonny's own Security & Access settings page", refuses: false, text: """
+        Fixture(name: "Sonny's own Security & Access settings page", signals: [], text: """
         Security & Access
         Screen Control
         Once Screen Recording and Accessibility are granted, Sonny can control any
@@ -198,19 +373,19 @@ struct ShellSurfaceDetectorTests {
 
     // MARK: - The corpus, asserted
 
+    /// **The exact signal set, both halves.** Asserting only `showsShell` let a must-refuse fixture
+    /// drift to a different pair, or down to exactly two, without a failure (PR #57 F3).
     @Test(arguments: ShellSurfaceDetectorTests.corpus.map(\.name))
-    func everyCorpusFixtureLandsOnTheSideItMust(name: String) throws {
+    func everyCorpusFixtureProducesExactlyTheSignalsItShould(name: String) throws {
         let fixture = try #require(Self.corpus.first { $0.name == name })
         let verdict = ShellSurfaceDetector.verdict(for: fixture.text)
-        #expect(
-            verdict.showsShell == fixture.refuses,
-            "\(fixture.name): showsShell=\(verdict.showsShell), signals=\(verdict.signals.map(\.rawValue))"
-        )
+        #expect(verdict.signals == fixture.signals, "\(fixture.name)")
+        #expect(verdict.showsShell == fixture.refuses, "\(fixture.name)")
     }
 
-    /// The editor case, asserted by name because the ticket names it — and asserted on the signal
-    /// count rather than only on the verdict, because "does not refuse" would also be true of a
-    /// fixture sitting at exactly one sign for a reason nobody intended.
+    /// The editor case, asserted by name because the ticket names it, and on emptiness rather than
+    /// on the verdict — "does not refuse" would also be true of a fixture sitting at exactly one
+    /// sign for a reason nobody intended.
     @Test
     func aShellScriptOpenInAnEditorIsNotAnInteractiveShell() throws {
         let fixture = try #require(
@@ -221,6 +396,140 @@ struct ShellSurfaceDetectorTests {
         // Zero, not one: nothing in shell *source* is evidence of a shell *running*. The shebang is
         // excluded, and `deploy@$1:$APP_DIR/` is not a prompt.
         #expect(verdict.signals.isEmpty)
+    }
+
+    /// **An idle terminal panel refuses.** The ticket's headline gap and manual-test item 2, pinned
+    /// as a minimal pair so the reason is unmistakable: the same panel differs only in whether a
+    /// command has been typed at the prompt.
+    @Test
+    func anIdleTerminalPanelRefusesWhetherOrNotAnythingFailed() {
+        let nothingTyped = """
+        PROBLEMS   OUTPUT   TERMINAL   PORTS
+        sauransh@Mac macos-agent %
+        """
+        let afterALS = """
+        PROBLEMS   OUTPUT   TERMINAL   PORTS
+        sauransh@Mac macos-agent % ls
+        README.md  Sources  Tests  docs
+        sauransh@Mac macos-agent %
+        """
+        #expect(ShellSurfaceDetector.verdict(for: nothingTyped).signals == [.interactivePrompt])
+        #expect(ShellSurfaceDetector.verdict(for: nothingTyped).showsShell == false)
+        #expect(
+            ShellSurfaceDetector.verdict(for: afterALS).signals == [.interactivePrompt, .commandRunInAShell]
+        )
+        #expect(ShellSurfaceDetector.verdict(for: afterALS).showsShell)
+    }
+
+    /// **The five commands the recorded bound was wrong about** (PR #57 F2). Each is a full shell
+    /// session where nothing failed and no listing was printed, and each used to reach one sign and
+    /// proceed. Pinned individually rather than as a corpus entry, because the claim they falsified
+    /// is in three durable records and the correction needs something executable behind it.
+    @Test(arguments: [
+        "sauransh@Mac ~ % ls\nREADME.md  Sources  Tests  docs\nsauransh@Mac ~ %",
+        "sauransh@Mac ~ % cd Desktop\nsauransh@Mac Desktop %",
+        "sauransh@Mac p % git status\nOn branch main\nnothing to commit, working tree clean\nsauransh@Mac p %",
+        "sauransh@Mac p % swift build\nBuilding for debugging...\nBuild complete!\nsauransh@Mac p %",
+        "sauransh@Mac p % python3 train.py\nEpoch 1/10 loss 0.42\nsauransh@Mac p %"
+    ])
+    func aSucceedingCommandAtAPromptIsTwoSigns(screen: String) {
+        let verdict = ShellSurfaceDetector.verdict(for: screen)
+        #expect(verdict.signals == [.interactivePrompt, .commandRunInAShell], "\(screen)")
+        #expect(verdict.showsShell, "\(screen)")
+    }
+
+    /// **What is still one sign, stated as a test rather than as prose.** These are the honest bounds
+    /// of the two-signs rule, and they are the replacement for the claim F2 found to be false. A
+    /// prompt with nothing typed at it, and a prompt carrying a command the vocabulary does not
+    /// know, both proceed.
+    @Test
+    func aPromptAloneAndAnUnrecognisedCommandBothStayAtOneSign() {
+        let bare = ShellSurfaceDetector.verdict(for: "sauransh@Mac macos-agent %")
+        #expect(bare.signals == [.interactivePrompt])
+        #expect(bare.showsShell == false)
+
+        let unknownCommand = ShellSurfaceDetector.verdict(
+            for: "sauransh@Mac p % mytool --deploy staging\nok\nsauransh@Mac p %"
+        )
+        #expect(unknownCommand.signals == [.interactivePrompt])
+        #expect(unknownCommand.showsShell == false)
+
+        // But an unrecognised command *executed by path* is still two, because `./` is a shell
+        // construct rather than a name that has to be listed.
+        let byPath = ShellSurfaceDetector.verdict(
+            for: "sauransh@Mac p % ./mytool --deploy\nok\nsauransh@Mac p %"
+        )
+        #expect(byPath.signals == [.interactivePrompt, .commandRunInAShell])
+        #expect(byPath.showsShell)
+    }
+
+    /// **A prompt sigil is only a prompt in a prompt's shape.** The bare-sigil line is how a docs
+    /// page, a README and a chat message show a reader what to type, and it is not evidence of
+    /// anything on its own.
+    @Test
+    func aBareSigilAtLineStartIsNotAPrompt() {
+        for line in ["$ npm install -g sonny", "% ls -la", "> git push origin main", "# make release"] {
+            #expect(ShellSurfaceDetector.verdict(for: line).signals.isEmpty, "\(line)")
+        }
+    }
+
+    /// **The glyphs that are not prompts.** Each of these fired `interactive_prompt` on its own at
+    /// `9cacfc0` and each is a UI convention rather than a shell (PR #57 F1). `➜` stays because it
+    /// is oh-my-zsh's and is not used as a bullet.
+    @Test
+    func onlyTheOhMyZshArrowCountsAsAGlyphPrompt() {
+        for notAPrompt in ["\u{25B6} Show more", "\u{00BB} Settings \u{00BB} Advanced", "\u{276F} ship the agent"] {
+            #expect(ShellSurfaceDetector.verdict(for: notAPrompt).signals.isEmpty, "\(notAPrompt)")
+        }
+        #expect(
+            ShellSurfaceDetector.verdict(for: "\u{279C}  macos-agent git:(main)").signals
+                == [.interactivePrompt, .commandRunInAShell]
+        )
+    }
+
+    /// **An address in prose is not a prompt**, in each of the shapes the old pattern accepted.
+    @Test
+    func anAddressShapedTokenInProseIsNotAPrompt() {
+        let prose = [
+            "Hi team - alice@example.com says the build is 50% faster now.",
+            "ping support@example.com # if it breaks",
+            "bob@acme.com is at 90% context already",
+            "priya@acme.io wrote: we are at 80% of the rollout",
+            "deploy@staging: Permission denied (publickey)."
+        ]
+        for line in prose {
+            #expect(ShellSurfaceDetector.verdict(for: line).contains(.interactivePrompt) == false, "\(line)")
+        }
+        // And the shapes that genuinely are prompts still are.
+        for prompt in [
+            "sauransh@Mac ~ % ",
+            "sauransh@Mac macos-agent % ",
+            "sauransh@Mac:~/dev/macos-agent$ ",
+            "deploy@staging:~$ ",
+            "root@a1b2c3d4:/# ",
+            "[sauransh@build-01 macos-agent]$ "
+        ] {
+            #expect(ShellSurfaceDetector.verdict(for: prompt).signals == [.interactivePrompt], "\(prompt)")
+        }
+    }
+
+    /// **The command vocabulary is only consulted at a prompt**, which is what makes ordinary English
+    /// in it harmless. Fifteen of these sixteen quoted-reply lines fired the old signal.
+    @Test
+    func ordinaryEnglishAfterAQuoteMarkerIsNotACommand() {
+        let firstWords = [
+            "go", "make", "open", "find", "top", "clear", "exit", "history",
+            "man", "kill", "head", "source", "java", "touch", "less", "can"
+        ]
+        for word in firstWords {
+            let line = "> \(word) ahead and ship it"
+            #expect(ShellSurfaceDetector.verdict(for: line).signals.isEmpty, "\(line)")
+        }
+        // The same words after a real prompt are commands, which is why they stay in the vocabulary.
+        #expect(
+            ShellSurfaceDetector.verdict(for: "sauransh@Mac p % make release").signals
+                == [.interactivePrompt, .commandRunInAShell]
+        )
     }
 
     /// A shebang names an interpreter and is not one being invoked. Both halves asserted, so the
@@ -246,20 +555,18 @@ struct ShellSurfaceDetectorTests {
     /// signs, recorded as a testable value rather than as prose — asserted as a minimal pair over
     /// one fixture, so the only difference between refusing and not is a second class of evidence.
     @Test
-    func theBoundaryIsTwoDistinctSignalsFromBothSides() throws {
-        let onePage = try #require(
-            Self.mustNotRefuse.first { $0.name == "a documentation page showing $ npm install" }
-        )
-        let oneSign = ShellSurfaceDetector.verdict(for: onePage.text)
-        #expect(oneSign.signals == [.shellCommandEcho])
+    func theBoundaryIsTwoDistinctSignalsFromBothSides() {
+        // One sign: a shell prompt, nothing typed at it.
+        let oneSign = ShellSurfaceDetector.verdict(for: "sauransh@Mac macos-agent %")
+        #expect(oneSign.signals == [.interactivePrompt])
         #expect(oneSign.showsShell == false)
 
-        // The same page with one line added — a shell's own error message, a different class of
-        // evidence entirely. Nothing else about the page changed.
+        // The same screen with one line added — a shell's own error message, a different class of
+        // evidence entirely. Nothing else changed.
         let twoSigns = ShellSurfaceDetector.verdict(
-            for: onePage.text + "\nzsh: command not found: sonny"
+            for: "sauransh@Mac macos-agent %\nzsh: command not found: sonny"
         )
-        #expect(twoSigns.signals == [.shellCommandEcho, .shellDiagnostic])
+        #expect(twoSigns.signals == [.interactivePrompt, .shellDiagnostic])
         #expect(twoSigns.showsShell)
 
         #expect(ShellSurfaceDetector.signalThreshold == 2)
@@ -281,14 +588,14 @@ struct ShellSurfaceDetectorTests {
         #expect(verdict.signals == [.interactivePrompt])
         #expect(verdict.showsShell == false)
 
-        let manyEchoedCommands = """
+        let manyBareSigilCommands = """
         $ npm install
         $ npm run build
         $ npm test
         $ git push
         """
-        let echoes = ShellSurfaceDetector.verdict(for: manyEchoedCommands)
-        #expect(echoes.signals == [.shellCommandEcho])
+        let echoes = ShellSurfaceDetector.verdict(for: manyBareSigilCommands)
+        #expect(echoes.signals.isEmpty)
         #expect(echoes.showsShell == false)
     }
 
@@ -310,7 +617,7 @@ struct ShellSurfaceDetectorTests {
     func everyDeclaredSignalIsProducedByAtLeastOneInput() {
         let probes: [ShellSurfaceSignal: String] = [
             .interactivePrompt: "sauransh@Mac ~ % ",
-            .shellCommandEcho: "$ npm install",
+            .commandRunInAShell: "In [3]: !ls build",
             .commandOutputListing: "total 48",
             .shellDiagnostic: "zsh: command not found: sonny",
             .sessionBanner: "Last login: Sat Aug 16 09:14:22 on ttys000",
@@ -333,7 +640,7 @@ struct ShellSurfaceDetectorTests {
     func signalNamesAreStableAndCarryNoScreenText() {
         #expect(Set(ShellSurfaceSignal.allCases.map(\.rawValue)) == [
             "interactive_prompt",
-            "shell_command_echo",
+            "command_run_in_a_shell",
             "command_output_listing",
             "shell_diagnostic",
             "session_banner",
@@ -378,16 +685,24 @@ struct ShellSurfaceDetectorTests {
     /// populated — a corpus with an empty negative half would pass by refusing everything.
     @Test
     func theCorpusCoversBothDirections() {
-        #expect(Self.mustRefuse.count >= 7)
-        #expect(Self.mustNotRefuse.count >= 7)
+        #expect(Self.mustRefuse.count >= 12)
+        #expect(Self.mustNotRefuse.count >= 14)
         #expect(Self.mustRefuse.allSatisfy { $0.refuses })
         #expect(Self.mustNotRefuse.allSatisfy { !$0.refuses })
         // Names are the test arguments, so a duplicate would silently drop a fixture.
         #expect(Set(Self.corpus.map(\.name)).count == Self.corpus.count)
+        // Both halves have to keep exercising the cases the review found, by name, so a later
+        // trim cannot quietly remove the coverage that made this corpus able to fail.
+        #expect(Self.mustRefuse.filter { $0.name.contains("(F2)") }.count >= 4)
+        #expect(Self.mustNotRefuse.filter { $0.name.contains("(F1)") }.count >= 6)
     }
 }
 
-// MARK: - The verdict cannot be forged
+private extension ShellSurfaceVerdict {
+    func contains(_ signal: ShellSurfaceSignal) -> Bool { signals.contains(signal) }
+}
+
+// MARK: - The verdict cannot be forged, and cannot carry screen text
 
 @Suite
 struct ShellSurfaceVerdictStructureTests {
@@ -398,11 +713,7 @@ struct ShellSurfaceVerdictStructureTests {
     /// `payloadConstructionIsConfinedToTheRedactionServiceFile` uses for `RedactedPayload`.
     @Test
     func verdictConstructionIsConfinedToTheDetectorsOwnFile() throws {
-        let source = try String(contentsOf: Self.coreFile("ShellSurfaceDetector.swift"), encoding: .utf8)
-        let start = try #require(source.range(of: "public struct ShellSurfaceVerdict"))
-        let end = try #require(source.range(of: "// MARK: - Detector"))
-        let declaration = source[start.lowerBound..<end.lowerBound]
-
+        let declaration = try Self.verdictDeclaration()
         #expect(declaration.contains("fileprivate init("))
         #expect(!declaration.contains("public init"))
         #expect(!declaration.contains("Codable"))
@@ -410,6 +721,71 @@ struct ShellSurfaceVerdictStructureTests {
         // `showsShell` is computed from `signals`, never stored beside it — the two cannot disagree.
         #expect(!declaration.contains("public let showsShell"))
         #expect(declaration.contains("public var showsShell: Bool"))
+    }
+
+    /// **The verdict holds signal names and nothing else, and that is checked rather than assumed**
+    /// (PR #57 F4).
+    ///
+    /// This is the leak shape this repository has shipped twice: a structural guarantee that is only
+    /// as wide as the type carrying it, with a later field quietly widening it. The claim "at most
+    /// six fixed strings ever cross this boundary" was true when written and nothing would have
+    /// failed if someone had added `public let matchedLine: String` to carry a repro into a log.
+    ///
+    /// Comments are stripped before the check, because the declaration's own prose discusses strings
+    /// and a naive substring search over it would be asserting on documentation.
+    @Test
+    func theVerdictHoldsNothingButSignalsAndThatIsCheckedNotAssumed() throws {
+        let code = try Self.verdictDeclaration()
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .map { line -> Substring in
+                let trimmed = line.drop { $0 == " " || $0 == "\t" }
+                return trimmed.hasPrefix("///") || trimmed.hasPrefix("//") ? "" : line
+            }
+            .joined(separator: "\n")
+
+        // Every property the type declares, stored or computed, at any access level — matched on the
+        // whole set rather than on "is there a String" alone, so *any* addition has to come through
+        // this test rather than only the ones a keyword list anticipated.
+        let propertyKeywords = ["let ", "var "]
+        let properties = code
+            .split(separator: "\n")
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { line in
+                propertyKeywords.contains { keyword in
+                    line.hasPrefix(keyword)
+                        || line.hasPrefix("public \(keyword)")
+                        || line.hasPrefix("internal \(keyword)")
+                        || line.hasPrefix("fileprivate \(keyword)")
+                        || line.hasPrefix("private \(keyword)")
+                        || line.hasPrefix("public private(set) \(keyword)")
+                }
+            }
+        #expect(properties == [
+            "public let signals: [ShellSurfaceSignal]",
+            "public var showsShell: Bool {"
+        ])
+
+        // And no text-bearing type appears anywhere in the declaration, in a field or otherwise.
+        for textBearing in ["String", "Substring", "Character", "Data", "[UInt8]", "URL"] {
+            #expect(!code.contains(textBearing), "ShellSurfaceVerdict must not carry \(textBearing)")
+        }
+    }
+
+    /// The behavioural half of the same property: two screens whose *content* differs completely,
+    /// but whose signal classes are identical, produce **equal** verdicts. A field carrying a matched
+    /// line, a snippet, or any other screen-derived text would make these differ.
+    @Test
+    func twoDifferentScreensWithTheSameSignalsProduceEqualVerdicts() {
+        let first = ShellSurfaceDetector.verdict(for: """
+        sauransh@Mac macos-agent % export API_KEY=sk-Abc123Def456Ghi789JklMno012Pqr
+        zsh: permission denied: ./scripts/deploy.sh
+        """)
+        let second = ShellSurfaceDetector.verdict(for: """
+        priya@build-07 releases % cat /etc/shadow
+        zsh: no such file or directory: /etc/shadow
+        """)
+        #expect(first.signals == [.interactivePrompt, .commandRunInAShell, .shellDiagnostic])
+        #expect(first == second)
     }
 
     /// Enumeration half: `ShellSurfaceVerdict(` construction appears in exactly one production file,
@@ -428,6 +804,13 @@ struct ShellSurfaceVerdictStructureTests {
             }
         }
         #expect(constructingFiles == ["ShellSurfaceDetector.swift"])
+    }
+
+    private static func verdictDeclaration() throws -> String {
+        let source = try String(contentsOf: coreFile("ShellSurfaceDetector.swift"), encoding: .utf8)
+        let start = try #require(source.range(of: "public struct ShellSurfaceVerdict"))
+        let end = try #require(source.range(of: "// MARK: - Detector"))
+        return String(source[start.lowerBound..<end.lowerBound])
     }
 
     private static var coreDirectory: URL {

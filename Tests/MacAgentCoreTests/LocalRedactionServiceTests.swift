@@ -633,7 +633,7 @@ struct CaptureShellVerdictTests {
         )
 
         #expect(payload.shellSurface.showsShell)
-        #expect(payload.shellSurface.signals == [.interactivePrompt, .shellDiagnostic, .sessionBanner])
+        #expect(payload.shellSurface.signals == [.interactivePrompt, .commandRunInAShell, .shellDiagnostic, .sessionBanner])
     }
 
     @Test
@@ -672,7 +672,7 @@ struct CaptureShellVerdictTests {
         #expect(first.shellSurface.showsShell == false)
         #expect(second.shellSurface.signals == [.shellDiagnostic])
         #expect(second.shellSurface.showsShell == false)
-        #expect(together.shellSurface.signals == [.interactivePrompt, .shellDiagnostic])
+        #expect(together.shellSurface.signals == [.interactivePrompt, .commandRunInAShell, .shellDiagnostic])
         #expect(together.shellSurface.showsShell)
     }
 
@@ -692,11 +692,25 @@ struct CaptureShellVerdictTests {
 
         #expect(payload.maskedText == nil)
         #expect(payload.shellSurface.showsShell)
-        // Everything the verdict carries, spelled out: signal names from the enum, nothing else.
-        for signal in payload.shellSurface.signals {
-            #expect(ShellSurfaceSignal.allCases.contains(signal))
-            #expect(secretiveShell.contains(signal.rawValue) == false)
-        }
+
+        // **The real assertion: the verdict is a function of the signal classes and of nothing
+        // else.** A second capture whose text shares not one word with the first — different user,
+        // different host, different command, a different secret — produces an *equal* verdict,
+        // because equality on this type is equality of the signal list. A field carrying a matched
+        // line or a snippet, added later to help someone debug, would make these differ and would be
+        // the leak this whole boundary exists to prevent.
+        //
+        // The previous version of this test looped over the signals asserting that the screen text
+        // did not contain their raw values, which was near-vacuous (PR #57 F4): screen text does not
+        // contain "interactive_prompt" whatever the verdict carries.
+        let differentScreen = try await Self.service(reading: """
+        priya@build-07 releases % cat /etc/shadow
+        zsh: permission denied: /etc/shadow
+        """).redactCapture(
+            capture(png: ImageFixtures.solidWhitePNG(width: 400, height: 300), width: 400, height: 300)
+        )
+        #expect(differentScreen.shellSurface == payload.shellSurface)
+        #expect(payload.shellSurface.signals == [.interactivePrompt, .commandRunInAShell, .shellDiagnostic])
     }
 
     /// **A recognizer that throws produces no payload at all** — so there is no verdict to misread
