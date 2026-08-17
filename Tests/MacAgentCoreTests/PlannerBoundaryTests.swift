@@ -39,6 +39,7 @@ struct PlannerBoundaryTests {
         - For opening an app, produce one open_app step with appName.
         - For opening an allowlisted app or website search page, produce one open_app_search_url step with appName and searchQuery. Use only supported search targets; do not invent URL templates.
         - For opening a general website, produce one open_url step with targetURL using http or https.
+        - Opening a URL never needs a browser named: URLs open in the system default browser. Never ask which browser to use. If the user does name one, still produce the URL step rather than a clarify or unsupported step.
         - For creating a local draft, produce one create_local_draft step with draftTitle, draftContent, and optional outputPath. Do not automate Notes, Mail, Calendar, or any app UI.
         - For opening a generated local artifact after a writing step, add open_generated_artifact with outputPath null so the executor can open the previous produced artifact.
         - For saving a text snippet, produce one save_snippet step with searchQuery holding the trigger and draftContent holding the text it expands to. Use only a trigger and text the user supplied; if either is missing, ask a clarification question. This step may also be nested inside save_routine.
@@ -163,6 +164,43 @@ struct PlannerBoundaryTests {
         #expect(!prompt.contains("into edit_workspace, create_workspace, or open_workspace"))
         // The standalone open_workspace rule is untouched and still there for the planner to use.
         #expect(prompt.contains("For opening a saved workspace, produce one open_workspace step with workspaceName."))
+    }
+
+    /// **The browser default, and the general rule it must not have been bought with** (SONNY-152).
+    ///
+    /// The founder asked Sonny to open a web page and it stopped to ask which browser. Nothing was
+    /// hardcoded — no adapter produces a browser clarification — but the prompt was not silent
+    /// either, which is the part worth pinning. Two lines that both reach the assembled prompt name
+    /// an *app* as exactly the thing to ask about, and a browser is an app: the clarify rule's own
+    /// "folder, app name, URL, count, or output destination", and the clarify tool's description
+    /// interpolated through `ToolRegistry.plannerDescription`. So the model was following the
+    /// instruction it had, not improvising into a vacuum.
+    ///
+    /// The golden already pins the new sentence character for character, so this test is not about
+    /// the text. It is about the three obligations being separable, and about the one thing the fix
+    /// must not have done to buy them.
+    ///
+    /// The tempting fix was to strike "app name" from the clarify rule so a browser stops matching
+    /// it. That clause is load-bearing for `open_app` and `switch_running_app`, where a missing app
+    /// name genuinely is a question worth asking, and narrowing it would trade this bug for a
+    /// quieter one. The specific rule overrides the general one instead — the same shape the prompt
+    /// already uses for correction phrases. Direction 4 is what fails if a later edit reaches for
+    /// the general rule again.
+    @Test
+    func theBrowserDefaultIsStatedWithoutWeakeningTheGeneralClarifyRule() {
+        let prompt = OpenAIPlanner.systemPrompt(toolRegistry: .default)
+
+        // Direction 1 — the default is stated, so an unnamed browser is not missing information.
+        #expect(prompt.contains("URLs open in the system default browser"))
+        // Direction 2 — the question this ticket exists to stop.
+        #expect(prompt.contains("Never ask which browser to use"))
+        // Direction 3 — a named browser must not become a clarify or an unsupported step. Naming one
+        // has no routing effect today (there is no browser field on `AgentStep`, and the only
+        // non-nil `preferredBrowser` in `Sources/` is the routine path), so the rule deliberately
+        // promises no routing — only that the page still opens.
+        #expect(prompt.contains("still produce the URL step rather than a clarify or unsupported step"))
+        // Direction 4 — and none of that was bought by weakening the general clarify rule.
+        #expect(prompt.contains("If a folder, app name, URL, count, or output destination is required but missing or ambiguous, return exactly one clarify step"))
     }
 
     /// **The agreement that was true by accident until SONNY-68 pinned it.**
