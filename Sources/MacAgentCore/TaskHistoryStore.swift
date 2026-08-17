@@ -108,12 +108,38 @@ public struct CompletedTaskRecord: Codable, Equatable, Sendable {
 }
 
 public struct TaskHistoryStore: @unchecked Sendable {
-    // Bounded by record count (eviction drops oldest-first via completedAt), not by a fixed
-    // duration — this is still a recency-based cutoff, just parameterized by count rather than
-    // age. Today every TaskHistoryInsights stat (current streak, hasCompletedToday, this-week/
-    // previous-week) only reads a recent window, so eviction never touches data those stats need.
-    // Any future all-time/lifetime stat (total tasks ever, longest streak on record) would need
-    // to revisit this cap before shipping.
+    /// Bounded by record count (eviction drops oldest-first via `completedAt`), not by a fixed
+    /// duration — this is still a recency-based cutoff, just parameterized by count rather than
+    /// age. Today every `TaskHistoryInsights` stat (current streak, `hasCompletedToday`,
+    /// this-week/previous-week) only reads a recent window, so eviction never touches data those
+    /// stats need. Any future all-time/lifetime stat (total tasks ever, longest streak on record)
+    /// would need to revisit this cap before shipping.
+    ///
+    /// **The cap stays, and nothing claims more than it delivers (SONNY-119).** The founder's
+    /// instruction of 2026-08-16 was to raise it, surface it, or state it — the promise and the code
+    /// have to agree — because row D adds a search box, and a search box implies that what it does
+    /// not return is not there. Of the three, stating it is the only one that costs nothing:
+    ///
+    /// - **Raising is not free**, and the price is paid on every finished task rather than once.
+    ///   `record(_:)` decodes and re-encrypts the whole file per call. Measured at `36cef9e` on an
+    ///   M-series Mac, with a history sitting at this cap: a 3.53 MiB file, `record(_:)` **130 ms**
+    ///   median over five runs. There is no other brake on growth, so removing this one makes every
+    ///   task slower, permanently.
+    /// - **Surfacing it is forbidden.** A sentence in the app explaining that older tasks are
+    ///   removed is exactly the how-it-works copy the founder's decision of 2026-08-14 rules out.
+    /// - **Stating it is true and cheap.** 10,000 records is roughly sixteen months at twenty tasks
+    ///   a day. The guarantee is kept by never writing the completeness sentence at all — not in the
+    ///   app, not in a changelog, not in a PR body. The product never promises search finds
+    ///   everything, so there is nothing to walk back.
+    ///
+    /// **Which record size that measurement assumes, because it is about to change.** 130 ms is
+    /// today's eight-field record: 374 bytes encoded, 3.78 MiB at the cap (measured at `36cef9e`).
+    /// Row E's SONNY-147 adds a stored result, a plan summary and the plan's steps, which takes a
+    /// record to roughly 4.1 kB at that ticket's 2,000-character result cap — about **11x**, not the
+    /// "roughly triples" its own note estimated, and 40 MiB at this cap. Re-measured at that size,
+    /// `record(_:)` is **307 ms** median. Worth noting the cost does *not* scale with the bytes:
+    /// eleven times the file for 2.4 times the time, because encryption and I/O throughput dominate
+    /// the per-record JSON work. Both figures argue the same way — keep the cap.
     public static let maxItems = 10_000
 
     public let fileURL: URL
