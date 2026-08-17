@@ -157,6 +157,40 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/sonny-158-unstated-defaults
+Status: complete
+Date: 2026-08-17
+Tickets: SONNY-158 (the sweep SONNY-152's generalisation asked for — four more capability defaults the planner prompt never stated). Spawned **SONNY-160** (Backlog, untriaged).
+Reviewed by: fresh session (per WORKFLOW.md step 7) — pending at PR open.
+
+Spec sections covered: none new. Planner vocabulary inside §8's planning surface; no capability, schema or risk behaviour changed.
+Files changed: `Sources/MacAgentCore/OpenAIPlanner.swift` (one line added and one word added to another, both inside the prompt string — no code), `Tests/MacAgentCoreTests/PlannerBoundaryTests.swift` (the golden updated to match, plus one new test). Nothing else.
+Tests: CLAUDE.md's exact flagged command -> pass, **1225 tests in 92 suites**, exit 0, at `f0a690c`. Branch-point baseline at `1890ec7` was 1224 in 92, measured on this branch before any edit: +1 test, +0 suites. `swift build` clean.
+
+Behavior added:
+- One prompt rule stating that a count, an output destination or a title the user did not state is not missing information, that the field should be omitted so the step's default applies, and that a folder, an app name or a URL is different and stays askable.
+- `create_local_draft`'s rule now calls `draftTitle` optional, which is what the adapter's own `requiredFields` (`["draftContent"]`) has always said.
+
+Behavior preserved (required, no blanket claims):
+- **The general clarify rule is untouched, character for character**, and `theBrowserDefaultIsStatedWithoutWeakeningTheGeneralClarifyRule`'s fourth assertion still pins it.
+- **The asks that must survive.** A workspace with no apps or URLs, a snippet missing its trigger or text, and a song missing its provider or title all still ask — asserted individually in the new test rather than left to the golden.
+- **The three deliberate non-instances stay non-instances.** Vision session's `appName` is an intentional always-ask whose tool description tells the model so verbatim; the four adapters registering `plannerTools: []` (Calculator, ClipboardHistory, RecentArtifacts, SnippetExpansion) remain unreachable by the planner, so their defaults are untouched and unreachable. Nothing in this change names any of them.
+- **The schema is not touched at all** — no new field, no new operation, no change to `stepRequiredKeys` or `plannerVisibleCases`.
+
+Architectural decisions / pitfalls discovered (required):
+- **One general rule rather than five specific ones, and no numbers in the prompt.** The ticket left the shape open between a bullet per default, one general line, and narrowing the clarify rule's noun list. The third was excluded by the founder and by SONNY-152's reasoning. Between the other two: a bullet per default costs five lines on a surface where every line competes for attention, and — the stronger argument — it would copy `3`, `5`, `3`, `~/Desktop` and `"Local Draft"` into prose that is free to drift from the adapters that actually own them. **The behavioural requirement is uniform anyway:** the model does not need to know a count defaults to 3, only that omitting it is complete. So the rule states the property and the adapters keep the values.
+- **The rule had to be written so it could not swallow the genuine asks, and those live in other sentences.** `create_workspace`, `save_snippet` and `play_media` each carry their own explicit ask, and a "never ask" rule is one careless rewrite away from being read over them. Hence the explicit carve-out naming folder, app name and URL, and hence three assertions on those other sentences — a regression there shows up with a test name that says which one went, instead of as one undifferentiated golden diff.
+- **Two of the five nouns in the general clarify rule are now fully overridden, and that is a known residual rather than an oversight.** With this rule in place, "count" and "output destination" in that sentence describe nothing that can still happen — every step taking either already defaults. The sentence keeps them because rewriting it endangers "folder, app name, URL", which are load-bearing, and because the founder's instruction on this ticket was to state the defaults rather than strike the nouns. Recorded so a later reader does not treat the redundancy as a bug, and so that whoever eventually does rewrite that sentence knows both halves of the trade.
+- **The `waitUntil` timeouts in `VisionSessionRunTests` make the suite a function of machine load.** Found incidentally: a mutation run failed with 62 issues across 24 tests, all but two in a suite with **zero** references to the planner prompt (grep for `systemPrompt`, `OpenAIPlanner`, `plannerDescription` returns nothing), while individual tests took 3.7–7.8 s against the harness's fixed 3 s and 4 s `Date()`-based deadlines at `:319-333`. Clean and isolated the same 45 tests pass in 0.81 s. Filed as SONNY-160 rather than fixed here, and worth knowing before someone reads a red vision suite as a real regression — or, worse, learns to discount one.
+
+Known limitations / deferred scope:
+- **None of the four is a reproduced bug.** They are candidates found by the same mechanism that produced the browser question, which was reproduced. Whether a model actually asked about an output destination or a count in the wild is unknown, and the manual-test items are written to find out rather than to confirm.
+- A prompt change is only ever evidenced by a real model. The suite proves the text is present and cannot prove the model obeys it.
+
+Open questions (required): none. The shape was chosen and its reasoning is above and on SONNY-158.
+
+Next branch: unchanged by this. An out-of-row friction fix in the same family as SONNY-152; rows D, E, J and 12 are unaffected.
+
 ### Branch: fix/sonny-156-notarization-entitlements
 Status: complete
 Date: 2026-08-17
