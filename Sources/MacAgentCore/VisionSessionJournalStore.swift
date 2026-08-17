@@ -26,8 +26,12 @@ public struct VisionActionJournalEntry: Codable, Equatable, Sendable {
     /// field being typed into. Screen-derived and therefore untrusted, which is why it is recorded
     /// as *observed* rather than presented as fact.
     public var targetDescription: String
-    /// The point inside the captured image, when the action used one. `nil` for typing, key presses
-    /// and pointer-relative scrolls.
+    /// The point inside the image **that was sent**, when the action used one. `nil` for typing, key
+    /// presses and pointer-relative scrolls.
+    ///
+    /// Sent, not captured: since SONNY-114 the egress ladder may resample a capture that would not
+    /// otherwise fit the request budget, and the model names its point in the grid it was shown. The
+    /// record says what the model actually said.
     public var imageX: Int?
     public var imageY: Int?
     /// The tier this action was assessed at, including any mid-loop escalation — so a record of a

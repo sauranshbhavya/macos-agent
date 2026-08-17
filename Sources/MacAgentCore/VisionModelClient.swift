@@ -53,10 +53,26 @@ public enum VisionModelClientError: Error, Equatable, LocalizedError {
 /// because it is the shape that was actually exercised against the live route; the surrounding
 /// design — redaction, containment, the engine gate — is built fresh, which is what E13 asked for.
 public struct OpenCodeVisionModelClient: VisionModelDeciding {
-    /// The request-size ceiling. Inherited from the experiment, where it was the observed practical
-    /// limit for one request on this route; kept because a capture that exceeds it fails the whole
-    /// iteration with a clear message rather than a truncated upload with an obscure one.
-    public static let maximumImageBytes = 9_000_000
+    /// The request-size ceiling, on the image alone.
+    ///
+    /// **Re-derived by SONNY-114, not inherited.** The old 9,000,000 came from the experiment branch
+    /// as the observed practical limit for one request on this route, and it was a number sized for
+    /// an uncompressed full-resolution PNG: base64 turns an image at that ceiling into a request body
+    /// of about 12 MB, which was ruling out every serverless host with a body limit before anyone had
+    /// asked whether the payload needed to be that big. It did not.
+    ///
+    /// This is now the same budget the egress ladder encodes down to
+    /// (``VisionCaptureEgressPolicy/default``), so the two cannot drift: the encoder aims at exactly
+    /// the number this refuses above. A payload at the ceiling produces a request body of
+    /// `ceil(3_000_000 / 3) * 4` = 4,000,000 bytes of base64 plus the prompt (4,673 characters on a
+    /// six-entry history) and about 120 bytes of JSON envelope — call it 4.01 MB, measured.
+    ///
+    /// The refusal itself is unchanged and still deliberate: a capture that exceeds this fails the
+    /// whole iteration with a clear message rather than becoming a truncated upload with an obscure
+    /// one. What changed is that the ladder now has to exhaust every rung down to half scale before
+    /// it can happen — on the encoder's own worst case (uniform noise at Pro Display XDR point size)
+    /// the ladder lands at 880,346 bytes, so this is a backstop rather than a path users meet.
+    public static let maximumImageBytes = VisionCaptureEgressPolicy.default.maximumImageBytes
 
     public static let defaultEndpoint = URL(string: "https://opencode.ai/zen/go/v1/responses")!
     public static let defaultModel = "gpt-5.6-luna"
@@ -85,11 +101,11 @@ public struct OpenCodeVisionModelClient: VisionModelDeciding {
     }
 
     public func decide(prompt: String, payload: RedactedPayload) async throws -> String {
-        guard let png = payload.redactedImagePNGData else {
+        guard let imageData = payload.redactedImageData, let mediaType = payload.imageMediaType else {
             throw VisionModelClientError.payloadCarriedNoImage
         }
-        guard png.count <= Self.maximumImageBytes else {
-            throw VisionModelClientError.payloadTooLarge(bytes: png.count, limit: Self.maximumImageBytes)
+        guard imageData.count <= Self.maximumImageBytes else {
+            throw VisionModelClientError.payloadTooLarge(bytes: imageData.count, limit: Self.maximumImageBytes)
         }
 
         let body: [String: Any] = [
@@ -101,7 +117,11 @@ public struct OpenCodeVisionModelClient: VisionModelDeciding {
                         ["type": "input_text", "text": prompt],
                         [
                             "type": "input_image",
-                            "image_url": "data:image/png;base64,\(png.base64EncodedString())"
+                            // The media type comes off the payload rather than being a literal: since
+                            // SONNY-114 the encoder picks PNG or JPEG per capture, and a hardcoded
+                            // "image/png" would label roughly half of real captures as a format they
+                            // are not.
+                            "image_url": "data:\(mediaType.rawValue);base64,\(imageData.base64EncodedString())"
                         ]
                     ]
                 ]

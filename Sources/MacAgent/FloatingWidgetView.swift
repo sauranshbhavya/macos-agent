@@ -772,7 +772,7 @@ private struct WidgetCaptureReviewPanel: View {
                 .foregroundStyle(WidgetTheme.textFull)
                 .fixedSize(horizontal: false, vertical: true)
 
-            if let data = preview.redactedPNGData, let image = NSImage(data: data) {
+            if let data = preview.redactedImageData, let image = NSImage(data: data) {
                 Image(nsImage: image)
                     .resizable()
                     .aspectRatio(contentMode: .fit)

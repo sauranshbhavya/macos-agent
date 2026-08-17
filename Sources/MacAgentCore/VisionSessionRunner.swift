@@ -200,6 +200,15 @@ final class VisionSessionRunner {
             // of the type the model client will accept, so there is no branch of this loop that can
             // send `capture.pngData` — it does not type-check.
             let payload = try await environment.redactionService.redactCapture(capture)
+            // **The one size, resolved once.** Everything downstream — what the user is shown, what
+            // the model is told, what bounds a returned coordinate, and what that coordinate is
+            // scaled by — has to agree about how big the picture is, and since SONNY-114 the answer
+            // is the payload's, not the capture's: the egress ladder may have resampled to fit its
+            // byte budget. The fallback is unreachable for an image payload (`redactCapture` sets
+            // both dimensions whenever it sets bytes) and exists so this is not a throw; a payload
+            // with no image is refused a few lines later by the model client anyway.
+            let sentImage = SentImageSize(payload: payload)
+                ?? SentImageSize(pixelWidth: capture.pixelWidth, pixelHeight: capture.pixelHeight)
 
             interaction.visionSessionDidProgress(
                 VisionSessionProgress(
@@ -216,9 +225,9 @@ final class VisionSessionRunner {
                     VisionCapturePreview(
                         appDisplayName: target.displayName,
                         windowTitle: capture.windowTitle,
-                        redactedPNGData: payload.redactedImagePNGData,
-                        pixelWidth: payload.imagePixelWidth ?? capture.pixelWidth,
-                        pixelHeight: payload.imagePixelHeight ?? capture.pixelHeight,
+                        redactedImageData: payload.redactedImageData,
+                        pixelWidth: sentImage.pixelWidth,
+                        pixelHeight: sentImage.pixelHeight,
                         redactionReport: payload.report,
                         iteration: iteration
                     )
@@ -245,8 +254,8 @@ final class VisionSessionRunner {
                 goal: goal,
                 appDisplayName: target.displayName,
                 redactedObserved: redactedObserved,
-                imageWidth: payload.imagePixelWidth ?? capture.pixelWidth,
-                imageHeight: payload.imagePixelHeight ?? capture.pixelHeight
+                imageWidth: sentImage.pixelWidth,
+                imageHeight: sentImage.pixelHeight
             )
             log(.observe, "vision: iteration \(iteration) — sending a redacted capture of \(target.displayName)")
             let reply = try await environment.modelClient.decide(prompt: prompt, payload: payload)
@@ -362,7 +371,7 @@ final class VisionSessionRunner {
                 )
             )
 
-            try await perform(decision, capture: capture, iteration: iteration)
+            try await perform(decision, capture: capture, sentImage: sentImage, iteration: iteration)
             try await settle()
         }
     }
@@ -420,7 +429,12 @@ final class VisionSessionRunner {
 
     // MARK: - Acting
 
-    private func perform(_ decision: VisionDecision, capture: CapturedWindowImage, iteration: Int) async throws {
+    private func perform(
+        _ decision: VisionDecision,
+        capture: CapturedWindowImage,
+        sentImage: SentImageSize,
+        iteration: Int
+    ) async throws {
         switch decision.kind {
         case .click, .scroll:
             guard let x = decision.x, let y = decision.y else {
@@ -439,8 +453,11 @@ final class VisionSessionRunner {
                 return
             }
             let imagePoint = CGPoint(x: CGFloat(x), y: CGFloat(y))
-            guard VisionPointResolver.isInsideImage(imagePoint, capture: capture) else {
-                history.append("iteration \(iteration): \(decision.kind.rawValue) on \u{201C}\(decision.target)\u{201D} was skipped — the point (\(x), \(y)) is outside the \(capture.pixelWidth)x\(capture.pixelHeight) screenshot. Choose a point visibly inside the new screenshot.")
+            guard VisionPointResolver.isInsideImage(imagePoint, sentImageSize: sentImage) else {
+                // The dimensions quoted back are the ones the model was given, not the capture's —
+                // telling it that (900, 40) is outside a screenshot it was told was 1728 wide would
+                // be an instruction it cannot act on.
+                history.append("iteration \(iteration): \(decision.kind.rawValue) on \u{201C}\(decision.target)\u{201D} was skipped — the point (\(x), \(y)) is outside the \(sentImage.pixelWidth)x\(sentImage.pixelHeight) screenshot. Choose a point visibly inside the new screenshot.")
                 // Journalled even though nothing was synthesized. A skipped action is a thing Sonny
                 // decided and did not do, and a record showing only successes would read as a
                 // cleaner run than the one that happened.
@@ -450,6 +467,7 @@ final class VisionSessionRunner {
 
             let outcome = VisionPointResolver.resolve(
                 imagePoint: imagePoint,
+                sentImageSize: sentImage,
                 capture: capture,
                 freshFrame: await environment.synthesizer.currentWindowFrame(windowID: capture.windowID),
                 ownWindowFrames: await environment.synthesizer.ownWindowFrames()

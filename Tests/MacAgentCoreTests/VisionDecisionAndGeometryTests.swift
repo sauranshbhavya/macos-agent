@@ -132,12 +132,22 @@ struct VisionDecisionAndGeometryTests {
         )
     }
 
+    /// The default sent size: the capture's own pixels, which is what the egress encoder produces
+    /// for every capture that fits its byte budget — every real capture measured for SONNY-114.
+    /// The tests that care about the two *differing* build their own.
+    private static func sentSize(
+        _ capture: CapturedWindowImage
+    ) -> SentImageSize {
+        SentImageSize(pixelWidth: capture.pixelWidth, pixelHeight: capture.pixelHeight)
+    }
+
     /// The ordinary case: image point plus the window's live origin.
     @Test
     func anImagePointResolvesThroughTheWindowsLiveOrigin() {
         let capture = Self.capture()
         let outcome = VisionPointResolver.resolve(
             imagePoint: CGPoint(x: 200, y: 300),
+            sentImageSize: Self.sentSize(capture),
             capture: capture,
             freshFrame: capture.windowFrame,
             ownWindowFrames: []
@@ -154,6 +164,7 @@ struct VisionDecisionAndGeometryTests {
         let moved = CGRect(x: 500, y: 400, width: 800, height: 600)
         let outcome = VisionPointResolver.resolve(
             imagePoint: CGPoint(x: 10, y: 20),
+            sentImageSize: Self.sentSize(capture),
             capture: capture,
             freshFrame: moved,
             ownWindowFrames: []
@@ -170,6 +181,7 @@ struct VisionDecisionAndGeometryTests {
         let resized = CGRect(x: 100, y: 50, width: 900, height: 600)
         let outcome = VisionPointResolver.resolve(
             imagePoint: CGPoint(x: 10, y: 20),
+            sentImageSize: Self.sentSize(capture),
             capture: capture,
             freshFrame: resized,
             ownWindowFrames: []
@@ -185,6 +197,7 @@ struct VisionDecisionAndGeometryTests {
         let rounded = CGRect(x: 100, y: 50, width: 800 + VisionPointResolver.resizeTolerance, height: 600)
         if case .posted = VisionPointResolver.resolve(
             imagePoint: .zero,
+            sentImageSize: Self.sentSize(capture),
             capture: capture,
             freshFrame: rounded,
             ownWindowFrames: []
@@ -195,6 +208,7 @@ struct VisionDecisionAndGeometryTests {
         let justOver = CGRect(x: 100, y: 50, width: 800 + VisionPointResolver.resizeTolerance + 0.5, height: 600)
         if case .windowResized = VisionPointResolver.resolve(
             imagePoint: .zero,
+            sentImageSize: Self.sentSize(capture),
             capture: capture,
             freshFrame: justOver,
             ownWindowFrames: []
@@ -208,6 +222,7 @@ struct VisionDecisionAndGeometryTests {
         #expect(
             VisionPointResolver.resolve(
                 imagePoint: .zero,
+                sentImageSize: Self.sentSize(Self.capture()),
                 capture: Self.capture(),
                 freshFrame: nil,
                 ownWindowFrames: []
@@ -222,6 +237,7 @@ struct VisionDecisionAndGeometryTests {
         let capture = Self.capture()
         let outcome = VisionPointResolver.resolve(
             imagePoint: CGPoint(x: 200, y: 300),
+            sentImageSize: Self.sentSize(capture),
             capture: capture,
             freshFrame: capture.windowFrame,
             ownWindowFrames: [CGRect(x: 250, y: 300, width: 200, height: 200)]
@@ -239,6 +255,7 @@ struct VisionDecisionAndGeometryTests {
         )
         let outcome = VisionPointResolver.resolve(
             imagePoint: CGPoint(x: 400, y: 200),
+            sentImageSize: Self.sentSize(capture),
             capture: capture,
             freshFrame: capture.windowFrame,
             ownWindowFrames: []
@@ -253,6 +270,7 @@ struct VisionDecisionAndGeometryTests {
         #expect(
             VisionPointResolver.resolve(
                 imagePoint: CGPoint(x: 1, y: 1),
+                sentImageSize: Self.sentSize(capture),
                 capture: capture,
                 freshFrame: capture.windowFrame,
                 ownWindowFrames: []
@@ -266,11 +284,105 @@ struct VisionDecisionAndGeometryTests {
     @Test
     func pointsOutsideTheCapturedImageAreRejectedBeforeResolution() {
         let capture = Self.capture()
-        #expect(VisionPointResolver.isInsideImage(CGPoint(x: 0, y: 0), capture: capture))
-        #expect(VisionPointResolver.isInsideImage(CGPoint(x: 799, y: 599), capture: capture))
-        #expect(!VisionPointResolver.isInsideImage(CGPoint(x: 800, y: 599), capture: capture))
-        #expect(!VisionPointResolver.isInsideImage(CGPoint(x: 799, y: 600), capture: capture))
-        #expect(!VisionPointResolver.isInsideImage(CGPoint(x: -1, y: 10), capture: capture))
+        #expect(VisionPointResolver.isInsideImage(CGPoint(x: 0, y: 0), sentImageSize: Self.sentSize(capture)))
+        #expect(VisionPointResolver.isInsideImage(CGPoint(x: 799, y: 599), sentImageSize: Self.sentSize(capture)))
+        #expect(!VisionPointResolver.isInsideImage(CGPoint(x: 800, y: 599), sentImageSize: Self.sentSize(capture)))
+        #expect(!VisionPointResolver.isInsideImage(CGPoint(x: 799, y: 600), sentImageSize: Self.sentSize(capture)))
+        #expect(!VisionPointResolver.isInsideImage(CGPoint(x: -1, y: 10), sentImageSize: Self.sentSize(capture)))
+    }
+
+    // MARK: - SONNY-114: the sent image, not the capture
+
+    /// **The scale comes from the image the model saw, and this test is the difference between a
+    /// working click and one off by the resample factor.**
+    ///
+    /// The egress ladder resamples a capture that will not fit the request budget, so the model is
+    /// shown — and names coordinates in — a smaller grid than ScreenCaptureKit produced. Here the
+    /// capture is 800x600 pixels over an 800x600-point window while the sent image is 400x300: the
+    /// model's (200, 150) is the middle of what it saw, which is the middle of the window, which is
+    /// (500, 350) on screen. Scaling by the capture's own pixel count instead would land at
+    /// (300, 200) — inside the window, plausible-looking, and wrong.
+    @Test
+    func theResolverScalesByTheSentImageRatherThanTheCapture() {
+        let capture = Self.capture()
+        let outcome = VisionPointResolver.resolve(
+            imagePoint: CGPoint(x: 200, y: 150),
+            sentImageSize: SentImageSize(pixelWidth: 400, pixelHeight: 300),
+            capture: capture,
+            freshFrame: capture.windowFrame,
+            ownWindowFrames: []
+        )
+        #expect(outcome == .posted(globalPoint: CGPoint(x: 500, y: 350)))
+    }
+
+    /// Bounds are the sent image's too: the model was told those dimensions and answered inside
+    /// them, so checking its answer against the capture's would be checking a claim nobody made —
+    /// and would let a point past the edge of the picture the model actually saw.
+    @Test
+    func boundsCheckingFollowsTheSentImageNotTheCapture() {
+        let capture = Self.capture()
+        let sent = SentImageSize(pixelWidth: 400, pixelHeight: 300)
+        #expect(VisionPointResolver.isInsideImage(CGPoint(x: 399, y: 299), sentImageSize: sent))
+        #expect(!VisionPointResolver.isInsideImage(CGPoint(x: 400, y: 150), sentImageSize: sent))
+        #expect(!VisionPointResolver.isInsideImage(CGPoint(x: 200, y: 300), sentImageSize: sent))
+    }
+
+    /// **What a resample costs a click, bounded exactly.**
+    ///
+    /// The model can only name whole pixels, and a named pixel resolves to that pixel's leading edge
+    /// rather than its centre, so the resolved point lands short of the true target by strictly less
+    /// than one sent pixel — `windowWidth / sentPixelWidth` points. Swept over every rung of the
+    /// shipping ladder and a grid of targets across a 1440-point window: at most one point at full
+    /// resolution and at most two at the 0.5 floor. A macOS control is at least 20 points
+    /// on its short edge and the model is told to aim at the middle of the glyphs, so nothing here
+    /// can move a click off its target.
+    ///
+    /// This bounds the arithmetic only. Whether a *model* aims as well at a smaller picture is not
+    /// something a test can answer and is the founder's attended run.
+    @Test
+    func theResolvedPointStaysWithinOneSentPixelOfTheModelsTargetAtEveryLadderScale() {
+        let windowWidth: CGFloat = 1_440
+        let windowHeight: CGFloat = 900
+        let frame = CGRect(x: 120, y: 64, width: windowWidth, height: windowHeight)
+
+        for rung in VisionCaptureEgressPolicy.default.ladder {
+            let sentWidth = Int((Double(windowWidth) * rung.scale).rounded())
+            let sentHeight = Int((Double(windowHeight) * rung.scale).rounded())
+            let sent = SentImageSize(pixelWidth: sentWidth, pixelHeight: sentHeight)
+            let capture = Self.capture(
+                pixels: CGSize(width: windowWidth, height: windowHeight),
+                frame: frame
+            )
+            let onePixelInPoints = windowWidth / CGFloat(sentWidth)
+
+            // Sweep targets across the window, in points, as the model's true aim. Half-open: a
+            // target at the window's outer edge is not a point inside the window, and the model is
+            // told `0 <= x < width` for exactly that reason.
+            for step in 0..<144 {
+                let targetX = windowWidth * CGFloat(step) / 144
+                let targetY = windowHeight * CGFloat(step) / 144
+                // The best a model can do: name the sent pixel the target falls inside.
+                let namedX = min(sentWidth - 1, Int(targetX / windowWidth * CGFloat(sentWidth)))
+                let namedY = min(sentHeight - 1, Int(targetY / windowHeight * CGFloat(sentHeight)))
+
+                guard case .posted(let resolved) = VisionPointResolver.resolve(
+                    imagePoint: CGPoint(x: namedX, y: namedY),
+                    sentImageSize: sent,
+                    capture: capture,
+                    freshFrame: frame,
+                    ownWindowFrames: []
+                ) else {
+                    Issue.record("a point inside the window must resolve at scale \(rung.scale)")
+                    continue
+                }
+                let errorX = abs((frame.origin.x + targetX) - resolved.x)
+                let errorY = abs((frame.origin.y + targetY) - resolved.y)
+                #expect(errorX <= onePixelInPoints, "x error at scale \(rung.scale), target \(targetX)")
+                #expect(errorY <= windowHeight / CGFloat(sentHeight), "y error at scale \(rung.scale)")
+                // The absolute statement, independent of the rung: never more than two points.
+                #expect(errorX <= 2 && errorY <= 2, "displacement at scale \(rung.scale)")
+            }
+        }
     }
 }
 
