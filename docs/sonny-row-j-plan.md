@@ -249,6 +249,21 @@ it**, because a per-app resolver that nothing calls looks exactly like a working
 - A pure function in `MacAgentCore` taking `(mode, target bundle identifier?, starter list, approved
   apps)` and returning `AppControlStanding`. Pure so it is trivially testable; the stores are inputs,
   not dependencies.
+
+**The resolver's answer depends on the mode, and that is the rule most likely to be lost.** Founder
+correction, 2026-08-16, made while reviewing the ticket set: the switch in §2.5 reads the mode and
+the resolver computes the standing, and it is possible to read both of those and still build a
+resolver that ignores the mode. **Built that way, the starter list would grant standing in Safe too,
+which silently undoes the one thing switching to Safe is for.** The rule, stated so it cannot be
+inferred wrongly:
+
+> **The starter list contributes standing in Normal and Power, and never in Safe. The user's own
+> approvals contribute in all three.**
+
+This is the mechanism behind §2.7's table, and it is what makes founder decision 4 — Normal → Safe
+keeps the user's own list and drops the starter list — a property of the resolver rather than a
+description of intent. **Acceptance criterion, carried on the implementing ticket:** one app resolves
+differently across modes inside a single test, so a mode-blind implementation cannot pass.
 - **Production call site 1:** `AgentViewModel.approvalContext()`
   (`Sources/MacAgent/AgentViewModel.swift:2296-2298`) — the one production construction site. It
   gains a non-defaulted parameter carrying the plan's vision target, so every caller must answer.
