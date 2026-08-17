@@ -137,12 +137,34 @@ public struct VisionSessionRecord: Codable, Equatable, Identifiable, Sendable {
 /// was the only plausible host, and folding a per-action journal into it would have been wrong twice
 /// over: task history is a bounded 10,000-record recency window feeding streak and insight
 /// statistics, and a session's worth of action entries riding inside one of those records would let
-/// one vision session evict a fortnight of history. Retention parity is achieved by matching its cap
-/// and eviction rule, not by sharing its file.
+/// one vision session evict a fortnight of history. Retention is aligned by matching its eviction
+/// *rule* rather than by sharing its file — and deliberately not by matching its number, which
+/// `maxSessions` below explains.
 public struct VisionSessionJournalStore: @unchecked Sendable {
-    /// Matched to `TaskHistoryStore.maxItems`' *spirit* rather than its number: retention parity
-    /// means a journal outlives nothing its task record does not, and sessions are far heavier per
-    /// record than a task row. Oldest-first eviction by `startedAt`, the same rule task history uses.
+    /// **The screen record deliberately outlives its task row by less, and that asymmetry is the
+    /// point (SONNY-119).**
+    ///
+    /// 500 sessions against task history's 10,000 records means the sensitive half — the one holding
+    /// model-authored description of what was on the user's screen — expires far sooner than the row
+    /// it hangs off. That started as a side effect of sessions being heavier per record than a task
+    /// row. The founder's instruction of 2026-08-16 required a stated position on it either way, and
+    /// the position is: **keep it, and say so.** A screen record that ages out on its own, without
+    /// the user doing anything, is a privacy property worth having. Read as a mismatch with task
+    /// history's number it looks like a bug to fix; it is not one, and a later reader tuning either
+    /// cap should know that before closing the gap.
+    ///
+    /// The number stays 500. No evidence supports a different one, and a second, day-based clock
+    /// would add a mechanism nothing is asking for.
+    ///
+    /// **What that costs, and why it is built rather than only written.** A task whose screen record
+    /// aged out and a task whose screen record the user deleted have to look identical, because the
+    /// product cannot tell them apart without explaining itself, and the no-explanatory-copy rule
+    /// forbids the explanation. Both leave `record(withID:)` returning `nil` against a task row that
+    /// still carries its `visionSessionID` — a dangling link is a designed state (row I, SONNY-96) —
+    /// so nothing downstream has anything to differ on.
+    /// `TaskHistoryRetentionTests.aDeletedScreenRecordAndAnEvictedOneLeaveTheSameThingBehind` pins it.
+    ///
+    /// Oldest-first eviction by `startedAt`, the same rule task history uses.
     public static let maxSessions = 500
 
     public let fileURL: URL
