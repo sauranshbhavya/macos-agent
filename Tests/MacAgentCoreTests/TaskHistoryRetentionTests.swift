@@ -157,18 +157,38 @@ struct TaskHistoryRetentionTests {
         case .deletion:
             try journal.deleteAll()
         case .eviction:
-            for index in 0..<VisionSessionJournalStore.maxSessions {
-                try journal.save(
-                    VisionSessionRecord(
-                        id: "later-\(index)",
-                        goal: "g",
-                        appDisplayName: "Discord",
-                        // Every one of them starts after the session under test, so it is the oldest
-                        // and the first to go.
-                        startedAt: Date(timeInterval: TimeInterval(index + 1), since: .retentionFixture)
-                    )
+            // Seeded straight into the file, then one `save(_:)` to trigger eviction. Five hundred
+            // `save(_:)` calls would be five hundred decrypt-modify-re-encrypt cycles, and a second
+            // of stolen CPU makes the timing-sensitive vision-session suites flaky when the whole
+            // suite runs in parallel. Eviction lives in `save(_:)`, so this still goes through it.
+            //
+            // Every seeded session starts after the one under test, so that one is the oldest and
+            // the first to go.
+            let later = (0..<(VisionSessionJournalStore.maxSessions - 1)).map { index in
+                VisionSessionRecord(
+                    id: "later-\(index)",
+                    goal: "g",
+                    appDisplayName: "Discord",
+                    startedAt: Date(timeInterval: TimeInterval(index + 1), since: .retentionFixture)
                 )
             }
+            let encoder = JSONEncoder()
+            encoder.outputFormatting = [.prettyPrinted, .sortedKeys]
+            encoder.dateEncodingStrategy = .iso8601
+            let existing = try journal.loadAll()
+            try encryption.encode(existing + later, encoder: encoder)
+                .write(to: journal.fileURL, options: .atomic)
+            try journal.save(
+                VisionSessionRecord(
+                    id: "newest",
+                    goal: "g",
+                    appDisplayName: "Discord",
+                    startedAt: Date(
+                        timeInterval: TimeInterval(VisionSessionJournalStore.maxSessions),
+                        since: .retentionFixture
+                    )
+                )
+            )
         }
 
         var loadFailure: String?
