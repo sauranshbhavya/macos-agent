@@ -165,7 +165,9 @@ Reviewed by: fresh session (per WORKFLOW.md step 7) — pending at PR open.
 
 Spec sections covered: none new. §8's planning surface and the URL-opening capabilities.
 Files changed: `Sources/MacAgentCore/` — `AgentPlan.swift` (the field, the schema property, both key lists), `CapabilityAdapter.swift` (the resolution helper), `OpenAIPlanner.swift` (one prompt sentence), `OpenSafeURLCapabilityAdapter.swift`, `OpenAppSearchURLCapabilityAdapter.swift`, `WebResearchMarkdownCapabilityAdapter.swift` (one call site each). `Tests/MacAgentCoreTests/` — `AgentActionExecutorTests.swift`, `AgentPlanDecoderTests.swift`, `PlannerBoundaryTests.swift`.
-Tests: CLAUDE.md's exact flagged command -> pass, **1233 tests in 92 suites**, exit 0, at `1dc988c`. Branch-point baseline at `f01fa0a` was 1226 in 92: +7 tests, +0 suites — five on the executor, two on the decoder.
+Tests: CLAUDE.md's exact flagged command -> pass, **1272 tests in 95 suites**, exit 0, at `0c12a5b`. Branch-point baseline at `ad27c56` was **1265 in 95**, measured on this branch rather than carried forward: **+7 tests, +0 suites** — five on the executor, two on the decoder.
+
+> **Re-stamped after the rebase, and the old figures are not merely stale — their SHAs no longer exist.** This branch first measured 1233 in 92 at `1dc988c` over a branch point of 1226 in 92 at `f01fa0a`. `feature/terminal-screen-check` then merged, adding 39 tests and 3 suites, so the branch point moved to 1265 in 95 and both ends were re-measured rather than one being adjusted arithmetically. The delta is unchanged at +7/+0, which is the invariant worth checking: a rebase that altered this branch's own contribution would show up there. `git range-diff f01fa0a..f8f2cff ad27c56..HEAD` reports both commits identical (`1: 1dc988c = 1: 20f8a0a`, `2: f8f2cff = 2: 0c12a5b`), so the work replayed unchanged.
 
 Behavior added:
 - `AgentStep.browserName` carries the browser the user named, and a URL-opening step routes there.
