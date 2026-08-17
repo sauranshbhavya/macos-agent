@@ -157,6 +157,42 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/docx-conversion-defects
+Status: complete
+Date: 2026-08-17
+Tickets: SONNY-79 (destination uniqueness under-folded relative to the filesystem) and SONNY-76 (a chain's second unit reported a document skipped for a PDF the same run had just written). Both filed by SONNY-28. Spawned nothing.
+Reviewed by: fresh session (per WORKFLOW.md step 7) — pending at PR open.
+
+Spec sections covered: none new. Both are defects in the DOCX destination-uniqueness machinery.
+Files changed: `Sources/MacAgentCore/` — `FileInventory.swift` (the fold, the skip rule, the seed), `AgentActionExecutor.swift` (threading and accumulation in both chain loops), `CapabilityAdapter.swift` (one context field), `DocxConversionCapabilityAdapter.swift` (one call), `DocumentConverter.swift` (a bound statement that had gone stale). `Tests/MacAgentCoreTests/AgentActionExecutorTests.swift`.
+Tests: CLAUDE.md's exact flagged command -> pass, **1277 tests in 95 suites**, exit 0, at `67e8522`, twice. Branch-point baseline at `06297f1` was 1272 in 95: **+5 tests, +0 suites** — two for SONNY-79, three for SONNY-76.
+
+Behavior added:
+- An eszett-class or ligature-class destination pair renames rather than aborting the batch partway.
+- A chain's later units see what its earlier units wrote, so a two-folder conversion into one output folder produces both PDFs with a rename note instead of one PDF and a misleading "skipped" line.
+
+Behavior preserved (required, no blanket claims):
+- **The skip rule for a PDF that really did predate the run.** Still skipped, still not converted over — `aPDFThatPredatesTheRunIsStillSkipped` asserts the original bytes survive. This is the half the SONNY-76 fix could most easily have broken.
+- **The ASCII case pair SONNY-28 fixed**, unchanged and still asserted by its own tests.
+- **The "never overwrites" invariant and the no-`assessRisk` decision.** Both shipped converters still refuse an occupied destination; nothing raises a tier.
+- **`assessRisk` needed no threading at all** — this adapter declares no `assessRisk`, so its segments never scan. Checked rather than assumed.
+
+Architectural decisions / pitfalls discovered (required):
+- **The two tickets are one surface and the order between them matters.** SONNY-76's fix makes `DestinationKey.folded` decide sameness *across units* as well as within one. Landing it first would have given the new cross-unit path the same under-fold SONNY-79 exists to remove, so the eszett band would have been wrong in the new code too. SONNY-79 went first for that reason, not for size.
+- **The fold was chosen by measurement, and the measurement is in the code.** Twelve classes compared against what the volume itself answers — write one name into a temp directory, ask `fileExists` for the other. `folding(options: [.caseInsensitive], locale: nil)` agrees on all twelve; `lowercased()` disagreed on three (eszett, `ﬁ`, `ﬀ`). The table lives on `DestinationKey.folded`.
+- **Both tempting strengthenings are wrong, and each has a mutation proving it.** Adding `.diacriticInsensitive` folds `café.pdf` and `cafe.pdf` together where the filesystem does not — the mutation produces a fabricated `cafe-2.pdf` rename and announces it in the summary. Passing `locale: .current` folds `İstanbul`/`istanbul` together under a Turkish locale, so that one would misbehave *only for Turkish users*.
+- **This repo's search fold answers a different question, and borrowing it would have been wrong in two directions at once.** `RecentArtifactStore`'s normalisation is `.folding([.caseInsensitive, .diacriticInsensitive], locale: .current).lowercased()`, and every one of those choices is right for search — a user typing "cafe" to find "café" wants diacritic insensitivity, and search is locale-shaped. It is wrong here for exactly the two reasons above. **This is the second time in three branches that reusing a proven definition would have been the wrong instinct** (SONNY-157 declined `WorkspaceBrowserCatalog` on the same grounds), and the shape is worth naming: the risk is not duplicating a definition, it is borrowing one whose *question* does not match. `aDiacriticPairIsTwoFilesAndNeitherRenames` is where that stops being an argument and becomes a red suite.
+- **A file this run wrote is not "already exists".** SONNY-76's fix is one clause on the skip test, but finding it needed the observation that the skip branch fires *before* the claimed-destinations check ever runs — seeding the claimed set alone would have changed nothing.
+- **Both chain loops accumulate, not only the executing one.** Threading through `executeChain` alone leaves the approval panel naming `report.pdf` while the run writes `report-2.pdf`. `theChainsPreviewNamesTheRenamedDestinationTheRunWillWrite` pins it, and dropping the `previewChain` accumulation fails that test and only that test.
+- **The claimed set is accumulated from previews rather than a new return channel**, which is why the adapter needed no new output and why it covers writes from any capability rather than only the docx one.
+- **Three doc comments stated the old bound and are updated rather than left to contradict the code.** SONNY-79's own filing warned that absolute claims here were corrected twice on PR #41 and must not come back, so the new statements stay qualified: agreement with the volumes measured, not a reproduction of any folding table, and a volume that folds differently is not ruled out.
+
+Known limitations / deferred scope:
+- **The fold is not the filesystem's own table.** A volume whose folding differs from Foundation's `.caseInsensitive` fold would still under-fold, and its failure mode is unchanged and costs no data: both converters refuse an occupied destination rather than overwriting, so such a batch aborts partway rather than losing a file.
+- Only the DOCX path claims destinations across units. Other capabilities write through their own paths and are unaffected; nothing else in the plan had this defect to fix.
+
+Open questions (required): none. SONNY-76 offered two directions and the threading one was taken, since the wording-only option leaves the user a document short; SONNY-79 offered three and the fuller fold was taken, measured rather than assumed, with the filesystem-probe option unnecessary once the fold matched on every class tested.
+
 ### Branch: fix/sonny-146-request-compression
 Status: complete
 Date: 2026-08-17
