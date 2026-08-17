@@ -1466,6 +1466,77 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
+    /// Deletes a task completely — its history row and every record hanging off it.
+    ///
+    /// **Dependents first, the row last, and the order is not interchangeable.** The row is the only
+    /// thing that makes the records hanging off it reachable through the product, so a half-failure
+    /// has to leave the row standing:
+    ///
+    /// - *Dependent gone, row delete failed* → a row whose link resolves to nothing. That is the
+    ///   designed dangling-link state row I already ships and the detail view already handles, and
+    ///   the user can simply try the delete again.
+    /// - *Row gone, dependent delete failed* → a record nobody can reach through the product at all.
+    ///   The founder named exactly this as the real defect when declining the never-coupled design
+    ///   (SONNY-14, 2026-08-16).
+    ///
+    /// **This reaches two records today and has to reach three.** The founder moved row E's plan
+    /// summary and steps into their own store on 2026-08-17 (SONNY-147, superseding the 2026-08-16
+    /// decision to put them on the record). That store shares this row's retention exactly — same
+    /// cap, same eviction, deleted together, suppressed together — so when it lands its delete goes
+    /// **in the dependents block below, above the row**: not after the row, and not in a second
+    /// method a caller could forget to call.
+    func deleteTask(_ record: CompletedTaskRecord) {
+        guard let id = record.id else {
+            // Unreachable in practice — every record `loadAll()` hands out has an id, backfilled if
+            // the file predates them. Reachable only if that backfill's rewrite failed, so the
+            // message points at the retry that fixes it rather than at the missing field.
+            setError("Could not delete this task: its saved copy has no identifier yet. Try again in a moment.")
+            return
+        }
+
+        do {
+            // Dependents first. Row E's detail store joins this block.
+            if let visionSessionID = record.visionSessionID {
+                try visionSessionJournalStore.delete(id: visionSessionID)
+            }
+            // The row, last.
+            try taskHistoryStore.delete(id: id)
+        } catch {
+            // A delete is a write, so this gets its own accurate wording and never
+            // `recordLocalStorageLoadFailure`, whose banner is hardcoded to "could not be decrypted
+            // or decoded" and would be simply wrong here.
+            setError("Could not delete this task: \(error.localizedDescription)")
+            return
+        }
+
+        refreshTaskHistory()
+    }
+
+    /// Deletes only the screen record, leaving the task row and its `visionSessionID` in place.
+    ///
+    /// The dangling link this leaves behind is a designed state rather than an error. It is also
+    /// deliberately indistinguishable from a screen record that simply aged out at the journal's
+    /// cap — pinned by
+    /// `TaskHistoryRetentionTests.aDeletedScreenRecordAndAnEvictedOneLeaveTheSameThingBehind`,
+    /// because the product cannot tell the two apart without explaining itself and the
+    /// no-explanatory-copy rule forbids the explanation.
+    ///
+    /// **No `refreshTaskHistory()` here, deliberately.** That call exists so `taskHistoryRecords`
+    /// agrees with the file, and this delete does not touch task history — the row is byte-identical
+    /// afterwards. Calling it anyway would decrypt and decode the whole history file (130 ms at the
+    /// cap, measured at `36cef9e`) to reload records that did not change.
+    func deleteScreenRecord(for record: CompletedTaskRecord) {
+        guard let visionSessionID = record.visionSessionID else {
+            return
+        }
+
+        do {
+            try visionSessionJournalStore.delete(id: visionSessionID)
+        } catch {
+            setError("Could not delete this task's screen record: \(error.localizedDescription)")
+        }
+    }
+
     func refreshClipboardHistoryNotice() {
         let settings: ClipboardHistorySettings
         do {

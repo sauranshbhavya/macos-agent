@@ -167,6 +167,26 @@ public struct TaskHistoryStore: @unchecked Sendable {
         try write(capped(records))
     }
 
+    /// Removes one record by its `id`, leaving every other record exactly as it was.
+    ///
+    /// Addressed by `id` and nothing else. The `(command, startedAt)` key the UI used to fake an
+    /// identity from cannot do this job: whole-second truncation makes two runs of one command
+    /// started inside the same second collide, so a delete keyed on it can take the wrong twin —
+    /// which is why `CompletedTaskRecord.id` exists at all. `TaskHistoryRetentionTests` and
+    /// `TaskHistoryDeletionTests` both construct that collision rather than assume it away.
+    ///
+    /// **Deleting something already gone is not an error**, and it does not rewrite the file
+    /// either. A delete that re-encrypted a 3.5 MiB history to change nothing would be paying the
+    /// whole cost of a write for no effect.
+    public func delete(id: String) throws {
+        let records = try loadAll()
+        let remaining = records.filter { $0.id != id }
+        guard remaining.count != records.count else {
+            return
+        }
+        try write(remaining)
+    }
+
     public func loadAll() throws -> [CompletedTaskRecord] {
         guard fileManager.fileExists(atPath: fileURL.path) else {
             return []
