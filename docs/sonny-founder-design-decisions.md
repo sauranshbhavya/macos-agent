@@ -242,3 +242,86 @@ Made on SONNY-80's open questions, recorded there as the coordinator's note and 
 - **30-day retention is accepted for development only.** Screenshots go to OpenCode's Zen route, terminating at OpenAI. **Before v1 release the product moves to a paid zero-retention route — a named release-checklist item, not a footnote.** Production routing is deliberately parked until then. This supersedes E10's ratified "no-retention hosts only".
 - **Row I's UI ships on session judgment, with no wireframe gate** — including SONNY-95's controlling state, which had carried an explicit gate from 2026-08-12. **A dedicated two-week whole-product UI/UX pass happens immediately before release**, and every surface row I added is explicitly a candidate for it rather than a finished design.
 - **Unattended is untouched by all of the above.** "Unattended" is the absence of a human, not a mode, so making screen control silent for a *present* user says nothing about an absent one. Screen control never runs unattended, in any mode, with no toggle anywhere — a present human is an authority requirement, not an accuracy hedge.
+
+## The hosted backend — what runs on it, what it keeps, how people sign in (2026-08-16, roadmap row 12)
+
+Founder decisions made during row 12's planning (SONNY-16), recorded here as the durable product
+truth. The full records, with the reasoning offered and declined on each, are SONNY-16's comments of
+the same date. Where these conflict with the spec, the deviation is named as one rather than left to
+be discovered.
+
+- **The agent stays on the Mac; the server holds credentials, accounts and money.** The backend
+  authenticates the user, checks entitlement, meters usage, retains content, and forwards to the
+  model providers. Planning, the risk engine, the consequence rule and the screen-control loop stay
+  local. **The boundary is anything that needs a provider credential** — six of the nine files that
+  make network requests. The three that need none (`HackerNewsService`, `MediaPlaybackService`,
+  `WebResearchService`) stay local by decision, with the tradeoff named: the user's own IP reaches
+  those hosts, where proxying would hide it. That is a privacy question, not a billing one.
+- **This is §16.5, not a deviation from it.** What *is* a conscious deviation is **not building §9's
+  server-side agent loop in v1**. Three grounds, none of which is effort: the safety gate stays local
+  and structural, so a network hiccup never participates in deciding whether an action is
+  destructive; §9.2's state model would force screen-derived observations into server task state as a
+  structural requirement rather than a bounded, disclosed choice; and §16.3's guarantee that free
+  local capabilities survive an unreachable network would become false, since under §9 creating a
+  task at all needs the server.
+- **The backend keeps full request and response content for 30–90 days** — redacted screenshots,
+  command text, model replies and **voice audio** — disclosed on the website's terms and privacy
+  pages. Three named purposes, all chosen deliberately: debugging and support, product analytics, and
+  training or fine-tuning a model. The coordinator recommended metadata-only and set out the case
+  against; the founder decided otherwise with that case in front of him.
+  - **This deviates from §16.5's "Request logging excludes sensitive content by default."** §16.5's
+    other four requirements are met in full. Named as a deviation so a later reader does not have to
+    reconcile the two on their own.
+  - **It is not a reversal of the 2026-08-14 transparency posture.** Those decisions governed what
+    the *product says*; there was no server to govern. The Mac app still says nothing, and disclosure
+    still lives in Safe mode and on the website. **Training consent is captured in the website signup
+    flow, never as an in-app toggle** — a toggle would have to explain itself and would collide head
+    on with the no-explanatory-copy rule.
+  - **What is retained is the redacted content**, since SONNY-89's redaction runs before anything
+    leaves the device and `RedactedPayload` is structurally non-bypassable. That raises the stakes on
+    redaction quality: a miss was a transient exposure to a provider; under retention plus training a
+    miss is durable and can propagate into a trained model.
+  - **Two retention clocks, not one** — raw content at the short end of the range, derived metrics
+    and usage indefinitely, training snapshots on their own separately-consented lifecycle.
+  - **Deletion must reach the training set**, so training reads from documented snapshots with
+    recorded lineage and never from the live store. Delete-by-task must be reachable from the app,
+    and an incognito run is **never stored at all** — enforced server-side rather than on client
+    trust, and structurally excluded from snapshots rather than filtered by a query. Both arrived
+    from row D's planning (SONNY-14) and are requirements, not preferences.
+  - **The corpus will contain third parties' personal data that no user consented on behalf of.** A
+    screenshot can hold someone else's messages or documents; redaction catches secret-shaped
+    strings and cannot catch that. This belongs in the founders' terms and legal work explicitly.
+  - **SONNY-110's reason changed, its work did not.** The zero-retention provider is no longer bought
+    to keep screen content out of a retention window — it is bought so the content is ours and not a
+    third party's, which matters directly because training is one of the three purposes. The
+    requirement widened to **no retention and no training rights over our data.** Nothing may claim
+    this system does not retain screen content. It does. It just does not let the provider do it too.
+- **v1 ships three sign-in methods: email code, Sign in with Google, Sign in with Apple.** Email code
+  is built first — that is build order, not scope. Enterprise SSO is deliberately not in the set and
+  waits on row 19's planning to say whether v1 delivers real team accounts. **Apple is in the set
+  though nothing requires it**: its rule binds App Store distribution, not direct Developer-ID
+  distribution, and including it keeps that door open rather than closing it by accident. Recorded so
+  a later reader does not assume it was mandatory.
+  - **Identity linking is a first-release correctness requirement**, not a later concern — one person
+    signing in by different methods must land on one account, or they end up with two accounts and
+    one subscription. **Hide My Email defeats the obvious rule**: Sign in with Apple can supply a
+    relay address, so email is not a stable identity key.
+  - **A sign-in screen's copy is functional labels, not explanation.**
+    `firstRunApprovalExplainerLines` remains the single founder-approved exception (2026-07-24) and
+    is not a precedent to extend.
+- **Both providers ship in v1** — OpenAI and Anthropic behind the provider-agnostic router, per
+  §16.5's "from day one", with Cerebras kept as a server-side option rather than deleted. Failover is
+  the point: one provider outage currently takes Sonny down for every user at once.
+- **The backend lives in this repo**, in a top-level `server/` directory, with **staging and
+  production plus local**. Staging is seeded synthetic and never holds real user data — under the
+  retention decision, a production-seeded staging database would put real users' screen contents in a
+  second, less-guarded place. **The staging pointer exists in debug builds only**, so SONNY-106's "no
+  environment variable is required for anything" stays true of every build a user runs.
+- **Row boundaries.** Row 12 builds the machinery; row 13 builds screens that do not exist; **row 18
+  owns the paid-only gate itself**; and **SONNY-109's UI/UX pass polishes screens that do exist — so
+  sign-in's design is SONNY-109's, not row 13's.** Without that rule the same screen is designed
+  three times.
+- **A pricing rule this session produced, general beyond the question that produced it.** The
+  email-only option was priced with "we can add Google later." There is no later on this project.
+  **Whenever an option's cost is "we add it in a later phase," re-price it as "we add it in v1 too"
+  before comparing options.** Here that flipped the answer from one sign-in method to three.
