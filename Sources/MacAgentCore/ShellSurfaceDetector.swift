@@ -322,8 +322,15 @@ struct ShellSurfaceDetector {
     /// marker of most config formats; a root prompt arrives as `root@host:/#` through the colon form
     /// anyway. `❯` is a chevron bullet — the measured cost of admitting it is that a bullet list
     /// ending in an empty bullet refuses, which is the F1 class this branch already paid for once.
-    /// The consequence is that a **starship or pure prompt is not recognised**, recorded as a bound
-    /// rather than inherited.
+    ///
+    /// **Excluding `❯` is a founder decision of 2026-08-17, and the cost it accepts is this: a
+    /// developer running starship inside a VS Code panel is not caught by this check.** That is the
+    /// case the whole feature exists for, since the static deny list already refuses terminal
+    /// *applications* and an embedded shell is the entire remaining subject. The reasoning, recorded
+    /// on SONNY-139 so it is not re-litigated: a false stop is worse than a gap, because a stop is
+    /// unappealable and the product is not allowed to explain why it happened, while the gap is
+    /// partly covered by the deny list. Naming the prompt themes (`starship`, `pure`) rather than
+    /// what it costs a person is the shape of record this branch already had to correct once.
     private static func minimalPromptRanges(in text: String) -> [Range<String.Index>] {
         let minimal = /(?m)^[ \t]{0,8}[$%](?=[ \t]|$)/
         let hits = text.matches(of: minimal).map(\.range)
