@@ -2074,15 +2074,19 @@ private func makeProductShellFixture(
     return (viewModel, root, routineStore, workspaceStore, snippetStore, taskHistoryStore, userDefaults, suiteName, browserOpener, appOpener)
 }
 
+/// The 30 seconds is a deadlock backstop, not a timing assertion (SONNY-159/160/161): this target is
+/// `@MainActor` and Swift Testing interleaves its suites on one actor, so the previous 2 s fired when a
+/// neighbouring test was busy rather than when anything was wrong. Full reasoning and the measurements
+/// are on `VisionSessionRunTests.hangBackstop`.
 @MainActor
 private func waitForViewModelToBecomeIdle(
     _ viewModel: AgentViewModel,
-    timeout: TimeInterval = 2
+    timeout: TimeInterval = 30
 ) async throws {
     let deadline = Date(timeIntervalSinceNow: timeout)
     while viewModel.isRunning {
         if Date() > deadline {
-            Issue.record("View model did not become idle before timeout.")
+            Issue.record("View model did not become idle before timeout. Waited 30s, which at this length means genuinely stuck rather than merely busy — treat it as a real failure.")
             return
         }
         try await Task.sleep(for: .milliseconds(10))

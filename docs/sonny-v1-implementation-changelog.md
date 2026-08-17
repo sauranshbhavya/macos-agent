@@ -157,6 +157,44 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/machine-state-tests
+Status: complete
+Date: 2026-08-17
+Tickets: SONNY-159 and SONNY-160 (the same flake, filed twice), SONNY-161's second half (raising the deadlines; its first half is row D's), and SONNY-123's first finding plus the DRY half of its third. Spawned nothing.
+Reviewed by: fresh session (per WORKFLOW.md step 7) — pending at PR open.
+
+Spec sections covered: none. Test infrastructure, serving SONNY-106 section D's "No test depends on machine state" v1 condition.
+Files changed: new: `Tests/MacAgentCoreTests/DeterministicPermissions.swift`; modified: `Tests/MacAgentTests/VisionSessionRunTests.swift`, `ConsequenceRuleDispatchTests.swift`, `InteractionModeTests.swift`, `ProductShellTests.swift`, `WorkspaceDetailSheetTests.swift`, `Tests/MacAgentCoreTests/AgentActionExecutorTests.swift`, `VisionTestContext.swift`. **No file under `Sources/` was touched.**
+Tests: CLAUDE.md's exact flagged command -> pass, **1226 tests in 92 suites**, exit 0, at `681c97e`. Branch-point baseline at `89e317b` was 1225 in 92: +1 test, the permission-seam pin.
+
+**Why this is worth doing, which is not tidiness.** A suite that fails on the machine rather than on the code teaches sessions to discount red. That already happened, more than once, and the cost was not hypothetical: two sessions spent time reasoning about whether a failing suite was caused by their own branch, and **one made changes on that misdiagnosis before reverting them**. A green run that means less than it appears to is bad; a red run that a session has learned to wave through is worse, because it is indistinguishable from the real regression it will eventually be hiding. SONNY-106 section D states the rule for exactly this reason — a suite whose result changes with the machine running it cannot be evidence.
+
+Behavior added:
+- The five hand-rolled wait helpers across `MacAgentTests` now use a 30-second deadlock backstop instead of 2, 3 and 4-second deadlines, and say what a failure at that length means.
+- One shared deterministic screen-permission checker for `MacAgentCoreTests`, defaulted into `makeExecutor`, so the suite stops answering readiness questions from whatever this Mac has granted.
+
+Behavior preserved (required, no blanket claims):
+- **No test's assertions changed, and no polling interval changed.** Raising a backstop cannot make a passing test pass "more": a test that completes still completes at the same moment and asserts exactly what it did before. The only behaviour that changes is what happens when a condition never becomes true.
+- **The backstop still catches a real hang** — proved, not assumed: making a wait condition permanently false fails at 30.020 s with the new message.
+- **The two readiness tests still assert what they asserted.** They pin the voice-hotkey item's copy, which the injected checker does not touch.
+
+Architectural decisions / pitfalls discovered (required):
+- **Reproduced before fixing, because the tickets said it had not been.** Twelve consecutive full-suite runs on `main` at `89e317b`: eleven passes, one failure — 42 issues, 7.656 s against a 5.2–5.5 s norm. That matches SONNY-159's more careful measurement on a quiet machine (17 of 18 at `7b9fec9`; 15 of 16 on `feature/terminal-screen-check` at `315419e`) and SONNY-161's from the other side, where two legitimately heavy task-history tests took the rate from zero in four runs to one in three. After the change: **sixteen consecutive passes, seven of them in the 6.0–7.5 s band that previously correlated with failure** — the contention still happens and no longer fires the deadline. A later confirming run passed at 8.572 s, above the time that previously failed.
+- **The deadline was never a timing assertion, and naming it correctly is most of the fix.** Nothing in these suites asserts the vision loop is fast; every test asserts what it did. A deadline exists so a genuine hang fails instead of wedging the run. Read that way, 2–4 seconds was absurd — close enough to real running time that it measured the hardware. Thirty is roughly four times the worst per-test wall clock observed anywhere across the three investigations, chosen to sit outside the range of any real completion rather than tuned to a machine. Tuning to a measured-nothing threshold is what SONNY-161 rejected, correctly, and this is deliberately not that.
+- **The mechanism is actor starvation, not slow code.** These targets are `@MainActor` and Swift Testing runs suites concurrently, so every `@MainActor` test interleaves on one actor and any test doing sustained synchronous work pushes its neighbours toward their deadlines. The signature is unmistakable once seen: never a wrong answer, always a timeout, on a test that varies between runs, with labels spread across the whole file.
+- **The problem was not confined to the file all three tickets named.** SONNY-159, SONNY-160 and SONNY-161 all describe this as a `VisionSessionRunTests` problem. Sweeping `Tests/MacAgentTests/` for the pattern found **five** hand-rolled deadline helpers, and the other four — in `ConsequenceRuleDispatchTests`, `InteractionModeTests`, `WorkspaceDetailSheetTests` and `ProductShellTests` — were at **2 seconds**, tighter than the ones that were already firing. Fixing only the named file would have left the worst four in place. SONNY-159's own title says `MacAgentTests`, not the one file; the title was right and the bodies were narrower than the problem.
+- **SONNY-160 is a duplicate of SONNY-159, filed 17 minutes later, by this session.** SONNY-159 was created 21:53:30Z from SONNY-139's PR; SONNY-160 at 22:10:17Z. SONNY-159 is also the better ticket — it has a measured rate, a traced mechanism, and two ruled-out contributors recorded. The duplicate happened because the filing session checked the neighbour it already knew about (SONNY-123) and did not check for a ticket filed by another lane minutes earlier. Recorded because the fix is cheap and general: before filing, search the board for the symptom, not only for the ticket you remember.
+- **A mutation caught an overclaim in this branch's own new test.** Its first doc comment said the test would fail if `makeExecutor`'s deterministic default were reverted to a live service. Reverting it and running the test passes — both halves pass their checker explicitly, so the default is never exercised, and no test can distinguish an injected `true` from a machine that genuinely has both grants. The comment now says the protection is *inheritance* rather than detection. The test does catch a service that ignores its injected checker, which was proved by a second mutation.
+
+Known limitations / deferred scope:
+- **Three of SONNY-123's four findings were not taken, because two other lanes are editing those files right now.** Its second finding (two tests depending on the process not being root) is in `LocalStorageSecurityTests.swift`, which `feature/task-history-controls` touches; its fourth (a stale guard-order sentence in `VisionSessionContainment.swift`) is production code `feature/terminal-screen-check` touches; and two of the five permission stubs its third finding wants consolidated live in files that branch touches. Recorded on the ticket with the collision map rather than edited.
+- **SONNY-123's first finding is closed only on the screen side.** `microphoneStatus()` calls `AVCaptureDevice.authorizationStatus(for: .audio)` directly with no seam to inject, so the suite still makes one live authorization read. Closing it is a production change to `PermissionReadinessService`, which this test-only work was not scoped to make and which SONNY-136 will rewrite anyway.
+- **No artificial load was generated to reproduce.** Two other sessions were building and testing on this machine throughout; deliberately loading it would have risked inducing exactly the false-red in *their* terminals that this branch exists to remove. The natural-load measurement was enough — the flake reproduced on the first run of twelve.
+
+Open questions (required): none of this branch's own. Whether SONNY-160 should be closed as a duplicate of SONNY-159 rather than as fixed is the founder's call and is asked on both tickets.
+
+Next branch: unchanged. Rows D, E, J and 12 are unaffected; this removes a source of false signal in front of all of them.
+
 ### Branch: fix/sonny-158-unstated-defaults
 Status: complete
 Date: 2026-08-17

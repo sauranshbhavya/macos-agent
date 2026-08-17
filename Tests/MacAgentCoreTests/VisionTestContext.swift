@@ -32,7 +32,7 @@ enum VisionTestContext {
             spotifyPlaybackProvider: UnavailableSpotifyPlaybackProvider(),
             appleMusicPlaybackProvider: UnavailableAppleMusicPlaybackProvider(),
             finderContextReader: AppleScriptFinderContextReader(),
-            permissionReadinessService: PermissionReadinessService(),
+            permissionReadinessService: .deterministic(),
             routineStore: RoutineStore(fileURL: scratchURL("routines.json")),
             workspaceStore: WorkspaceStore(fileURL: scratchURL("workspaces.json")),
             webPageLoader: .live(),
