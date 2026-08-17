@@ -1618,6 +1618,56 @@ struct AgentActionExecutorTests {
         ))
     }
 
+    // MARK: - SONNY-79: uniqueness folds the way the filesystem does
+
+    /// **The pre-fix production failure, surviving in a narrow band until now.** `DestinationKey`
+    /// compared destinations with `lowercased()`, which leaves `ß` alone while mapping `SS` to `ss`,
+    /// so `Straße.pdf` and `STRASSE.pdf` were two keys here and one file on disk. Neither record was
+    /// flagged as renamed, both claimed distinct destinations, and the batch then aborted at the
+    /// converter with nothing in the summary explaining why — exactly the failure SONNY-28 fixed for
+    /// the ASCII case pair, still reachable for this one.
+    ///
+    /// Driven through the real `FileInventory` against real files, like every other docx test here,
+    /// so what is asserted is the volume's answer and not a fold's opinion of it.
+    @Test
+    func anEszettPairRenamesRatherThanAbortingTheBatch() async throws {
+        let fixture = try collidingDocxFixture(nameA: "Straße", nameB: "STRASSE")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let executor = makeExecutor(root: fixture.root, documentConverter: FakeDocumentConverter())
+
+        let result = try await executor.execute(plan: fixture.plan) { _, _ in }
+
+        #expect(conversionTails(in: result) == [
+            "SubA/Straße.docx -> PDFs/Straße.pdf",
+            "SubB/STRASSE.docx -> PDFs/STRASSE-2.pdf"
+        ])
+        #expect(result.summary.contains("Renamed 1 output"))
+    }
+
+    /// **The control that makes the fold's *shape* testable, not just its strength.** `café` and
+    /// `cafe` are two different files on disk, so neither may rename — a document appearing as
+    /// `cafe-2.pdf` when nothing collided would be a fabricated rename the summary then announces.
+    ///
+    /// This is the assertion that fails if someone reaches for a bigger fold. Adding
+    /// `.diacriticInsensitive` — which this repo's *search* normalisation uses, correctly, so that a
+    /// user typing "cafe" finds "café" — folds these two together and breaks this test. The search
+    /// question and the filesystem question are not the same question, and this is where that stops
+    /// being an argument and becomes a red suite.
+    @Test
+    func aDiacriticPairIsTwoFilesAndNeitherRenames() async throws {
+        let fixture = try collidingDocxFixture(nameA: "café", nameB: "cafe")
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let executor = makeExecutor(root: fixture.root, documentConverter: FakeDocumentConverter())
+
+        let result = try await executor.execute(plan: fixture.plan) { _, _ in }
+
+        #expect(conversionTails(in: result) == [
+            "SubA/café.docx -> PDFs/café.pdf",
+            "SubB/cafe.docx -> PDFs/cafe.pdf"
+        ])
+        #expect(!result.summary.contains("Renamed"))
+    }
+
     /// The renamed destination never lands on a real file either — suffixing onto something that
     /// already exists would trade one silent overwrite for another. With `report-2.pdf` already on
     /// disk the second document becomes `report-3.pdf`, and the pre-existing file is left untouched.
@@ -4465,7 +4515,7 @@ struct AgentActionExecutorTests {
         let plan: AgentPlan
     }
 
-    private func collidingDocxFixture() throws -> CollidingDocxFixture {
+    private func collidingDocxFixture(nameA: String = "report", nameB: String = "report") throws -> CollidingDocxFixture {
         let root = try makeDirectory()
         let documents = root.appendingPathComponent("Documents", isDirectory: true)
         let subA = documents.appendingPathComponent("SubA", isDirectory: true)
@@ -4474,8 +4524,8 @@ struct AgentActionExecutorTests {
         for directory in [subA, subB, outputFolder] {
             try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
         }
-        try write("docx-a", to: subA.appendingPathComponent("report.docx"))
-        try write("docx-b", to: subB.appendingPathComponent("report.docx"))
+        try write("docx-a", to: subA.appendingPathComponent("\(nameA).docx"))
+        try write("docx-b", to: subB.appendingPathComponent("\(nameB).docx"))
 
         return CollidingDocxFixture(
             root: root,

@@ -184,9 +184,14 @@ public struct MockDocumentConverter: DocumentConverting {
     /// the same absolute phrasing that was corrected in two other places and missed here (PR #41
     /// cycle-3, R2). What `docxFiles` rules out is same-scan collisions **as `DestinationKey`
     /// compares them**; what still reaches this guard is (a) a file that appeared between the scan and
-    /// the write, and (b) a pair the filesystem folds together and `DestinationKey` does not —
-    /// `Straße.pdf` against `STRASSE.pdf`, SONNY-79. For (b) this refusal is the whole of the
-    /// protection, and it is why that residual costs a partway-aborted batch and not a lost file.
+    /// the write, and (b) a pair some volume folds together and `DestinationKey` does not.
+    ///
+    /// **(b) is narrower since SONNY-79 and is no longer the eszett class.** `DestinationKey.folded`
+    /// now folds the way the volumes measured do — `Straße.pdf` against `STRASSE.pdf` renames rather
+    /// than aborting — so what remains under (b) is a volume whose folding differs from Foundation's
+    /// `.caseInsensitive` fold, which is not ruled out and is not enumerated. For whatever remains,
+    /// this refusal is still the whole of the protection, and it is still why such a residual costs a
+    /// partway-aborted batch and not a lost file.
     public func convert(_ records: [DocxRecord], log: @escaping (String) -> Void) async throws -> [DocxRecord] {
         guard isAvailable else {
             throw DocumentConversionError.wordUnavailable
