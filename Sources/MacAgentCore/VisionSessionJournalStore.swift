@@ -218,6 +218,27 @@ public struct VisionSessionJournalStore: @unchecked Sendable {
         try write(evicted(records))
     }
 
+    /// Removes one session by id, leaving the rest of the journal untouched.
+    ///
+    /// `VisionSessionRecord.id` is a real unique id rather than a natural key, so this half of a
+    /// per-task delete carries none of the collision risk the task-history half had to solve first.
+    ///
+    /// **The task row that pointed here is deliberately not touched.** It keeps its
+    /// `visionSessionID`, the lookup returns `nil`, and the detail view finds nothing to render —
+    /// the designed dangling-link state from row I (SONNY-96). Clearing the id from the task record
+    /// instead would make one delete a write to two stores, and the second write is the one that
+    /// fails halfway.
+    ///
+    /// Deleting a session that is already gone is not an error and does not rewrite the file.
+    public func delete(id: String) throws {
+        let records = try loadAll()
+        let remaining = records.filter { $0.id != id }
+        guard remaining.count != records.count else {
+            return
+        }
+        try write(remaining)
+    }
+
     public func deleteAll() throws {
         guard fileManager.fileExists(atPath: fileURL.path) else {
             return
