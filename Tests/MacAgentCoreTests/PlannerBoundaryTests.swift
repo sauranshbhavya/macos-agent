@@ -30,6 +30,7 @@ struct PlannerBoundaryTests {
         - Ask a clarification question only when both the prior task and the correction text still leave the replacement field or required action unresolved. Do not ask for clarification merely because the correction phrase is short.
         - Use null for unavailable fields.
         - If a folder, app name, URL, count, or output destination is required but missing or ambiguous, return exactly one clarify step with a short question.
+        - A count, an output destination, or a title the user did not state is not missing information: every step that takes one already has a working default. Omit the field and let the default apply, and never ask which to use. A folder, an app name, or a URL is different and stays askable under the rule above.
         - For largest files, produce scan_select_largest_files then create_zip.
         - For DOCX conversion, produce scan_docx then convert_docx_to_pdf.
         - For Hacker News headline saving, produce open_hacker_news, fetch_hn_headlines, then write_markdown.
@@ -40,7 +41,7 @@ struct PlannerBoundaryTests {
         - For opening an allowlisted app or website search page, produce one open_app_search_url step with appName and searchQuery. Use only supported search targets; do not invent URL templates.
         - For opening a general website, produce one open_url step with targetURL using http or https.
         - Opening a URL never needs a browser named: URLs open in the system default browser. Never ask which browser to use. If the user does name one, still produce the URL step rather than a clarify or unsupported step.
-        - For creating a local draft, produce one create_local_draft step with draftTitle, draftContent, and optional outputPath. Do not automate Notes, Mail, Calendar, or any app UI.
+        - For creating a local draft, produce one create_local_draft step with draftContent, optional draftTitle, and optional outputPath. Do not automate Notes, Mail, Calendar, or any app UI.
         - For opening a generated local artifact after a writing step, add open_generated_artifact with outputPath null so the executor can open the previous produced artifact.
         - For saving a text snippet, produce one save_snippet step with searchQuery holding the trigger and draftContent holding the text it expands to. Use only a trigger and text the user supplied; if either is missing, ask a clarification question. This step may also be nested inside save_routine.
         - For bringing an app that is already running to the front, produce one switch_running_app step with appName holding only the app the user named. A phrase such as "in my research workspace" says where the task belongs, not what to change: never turn a request to switch or focus on an app into edit_workspace or create_workspace. When the thing the user asks to switch or focus on is itself a saved workspace rather than an app, that is an open_workspace request instead. Use open_app when the user asked to open or launch an app that may not be running.
@@ -201,6 +202,52 @@ struct PlannerBoundaryTests {
         #expect(prompt.contains("still produce the URL step rather than a clarify or unsupported step"))
         // Direction 4 — and none of that was bought by weakening the general clarify rule.
         #expect(prompt.contains("If a folder, app name, URL, count, or output destination is required but missing or ambiguous, return exactly one clarify step"))
+    }
+
+    /// **The defaults the prompt never stated, and the asks it must not have swallowed** (SONNY-158).
+    ///
+    /// SONNY-152's browser question was one instance of a mechanical pattern, not a one-off. The
+    /// general clarify rule above names five broad nouns — folder, app name, URL, count, output
+    /// destination — and the clarify tool's own description repeats four of them, so *any*
+    /// capability that silently defaults a field whose noun is on that list is a candidate to be
+    /// asked about instead of defaulted. A browser qualified because a browser is an app. Three more
+    /// families qualified because they are literally `count` and `output destination`: the
+    /// largest-files, Hacker News and web-research counts, the shared output-path fallback behind
+    /// `create_local_draft`/`web_to_markdown`/Hacker News, plus the zip and PDF destinations, and
+    /// `create_local_draft`'s title.
+    ///
+    /// The fix states the defaults rather than striking the nouns, for the reason direction 4 of the
+    /// test above already pins: those nouns are load-bearing for the cases that genuinely must ask.
+    ///
+    /// **Directions 4 to 6 are the point of this test.** A rule saying "never ask" is one careless
+    /// rewrite away from swallowing the asks that have to survive, and those asks live in different
+    /// sentences from the rule that could kill them — so they are asserted here, where a failure
+    /// names what went, rather than left to the golden, where the same regression shows up as one
+    /// undifferentiated diff.
+    @Test
+    func theUnstatedDefaultsAreStatedWithoutSwallowingTheAsksThatMustSurvive() {
+        let prompt = OpenAIPlanner.systemPrompt(toolRegistry: .default)
+
+        // Direction 1 — the three nouns are named as defaulted, not as missing information.
+        #expect(prompt.contains("A count, an output destination, or a title the user did not state is not missing information"))
+        // Direction 2 — and the instruction is to omit and proceed, not to guess a value. The
+        // concrete defaults deliberately stay out of the prompt: they live in the adapters, and a
+        // second copy here would be a number free to drift from the one that actually applies.
+        #expect(prompt.contains("Omit the field and let the default apply, and never ask which to use"))
+        // Direction 3 — the load-bearing nouns are carved back out in the same breath.
+        #expect(prompt.contains("A folder, an app name, or a URL is different and stays askable"))
+
+        // Direction 4 — a workspace with no apps or URLs must still ask.
+        #expect(prompt.contains("Use only explicitly named apps/URLs. If none are provided, ask a clarification question."))
+        // Direction 5 — a snippet missing its trigger or its text must still ask.
+        #expect(prompt.contains("Use only a trigger and text the user supplied; if either is missing, ask a clarification question."))
+        // Direction 6 — a song with no provider or title must still ask.
+        #expect(prompt.contains("If a song or album request is missing the provider or title, ask a clarification question."))
+
+        // Direction 7 — create_local_draft's title is now described the way the adapter actually
+        // treats it. Its requiredFields is ["draftContent"] alone, and the title falls back to
+        // "Local Draft", so listing it as a plain field alongside draftContent overstated it.
+        #expect(prompt.contains("produce one create_local_draft step with draftContent, optional draftTitle, and optional outputPath"))
     }
 
     /// **The agreement that was true by accident until SONNY-68 pinned it.**
