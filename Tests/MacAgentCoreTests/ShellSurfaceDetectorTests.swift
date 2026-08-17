@@ -211,6 +211,55 @@ struct ShellSurfaceDetectorTests {
             cc -O2 -o build/app src/main.c
             [sauransh@build-01 macos-agent]$
             """
+        ),
+
+        // **(N2)** The four shapes PR #57's re-check measured going from refuse to allow when the
+        // prompt signal was narrowed, plus the panel case they generalise to. A shell that prints
+        // nothing but `$ ` or `% ` is extremely common, and the deny list cannot help — this check
+        // exists for shells running inside something else.
+        Fixture(
+            name: "a minimal $ prompt where a command failed (N2)",
+            signals: [.interactivePrompt, .commandRunInAShell, .shellDiagnostic],
+            text: """
+            $ ./scripts/deploy.sh
+            zsh: permission denied: ./scripts/deploy.sh
+            $
+            """
+        ),
+
+        Fixture(
+            name: "a minimal $ prompt with ls -l output (N2)",
+            signals: [.interactivePrompt, .commandRunInAShell, .commandOutputListing],
+            text: """
+            $ ls -l
+            total 48
+            drwxr-xr-x  12 sauransh  staff  384 16 Aug 09:12 .
+            $
+            """
+        ),
+
+        Fixture(
+            name: "a bare % prompt with ls -l output (N2)",
+            signals: [.interactivePrompt, .commandRunInAShell, .commandOutputListing],
+            text: """
+            % ls -l
+            total 48
+            drwxr-xr-x  12 sauransh  staff  384 16 Aug 09:12 .
+            %
+            """
+        ),
+
+        // The generalisation, and the one that matters most: an editor panel whose shell prints a
+        // minimal prompt and where nothing has gone wrong. Before N2 this was zero signals.
+        Fixture(
+            name: "an editor panel with a minimal prompt, nothing failed (N2)",
+            signals: [.interactivePrompt, .commandRunInAShell],
+            text: """
+            PROBLEMS   OUTPUT   TERMINAL   PORTS
+            $ ls
+            README.md  Sources  Tests  docs
+            $
+            """
         )
     ]
 
@@ -366,6 +415,79 @@ struct ShellSurfaceDetectorTests {
         app installed on this Mac — clicking, typing and scrolling in it the way
         you would. Sonny will never control Terminal, iTerm, or any other terminal app.
         Permission Readiness
+        """),
+
+        // **(N1)** The three shapes PR #57's re-check measured refusing on a single line: an address
+        // column abutting a percentage column abutting a status column, which is what a support
+        // desk, a CRM or an analytics table OCRs to.
+        Fixture(name: "a support-desk row with an address and a percentage (N1)", signals: [], text: """
+        priya@acme.io 82% open
+        """),
+
+        Fixture(name: "a support-desk table, three rows (N1)", signals: [], text: """
+        qa@acme.io 91% top performer this quarter
+        sales@acme.io 60% find the renewal date
+        ops@acme.io 75% clear by Friday
+        """),
+
+        // Still read as a prompt *shape* — address, path token, spaced sigil — and that is the honest
+        // residual: the N1 fix stops the refusal by denying the second signal, not by making the
+        // prompt pattern stop misreading this line.
+        Fixture(name: "an invoice line with an address and a currency sigil (N1)", signals: [.interactivePrompt], text: """
+        billing@acme.io Total $ 400 please open the invoice
+        """),
+
+        // **(N2 adversarial)** These four are why the minimal-prompt rule needs *both* halves. Each
+        // refused under a weaker version of it, and each is an ordinary document.
+        // Comment blocks in LaTeX and in config formats start every line with `%`.
+        Fixture(name: "LaTeX source with a bare % separator (N2 adversarial)", signals: [], text: """
+        % Introduction section
+        %
+        % source: the 2025 survey
+        \\section{Intro}
+        We present a method.
+        """),
+
+        Fixture(name: "a config file with % comments (N2 adversarial)", signals: [], text: """
+        % cache settings
+        %
+        % clear on restart
+        max_entries = 500
+        """),
+
+        // Markdown headings are `#`, and a page that also shows one `$` example must stay silent.
+        Fixture(name: "Markdown source in an editor (N2 adversarial)", signals: [], text: """
+        # Getting Started
+
+        Install it:
+
+        $ npm install -g sonny
+
+        # Configuration
+
+        Edit the file.
+        """),
+
+        // Two `$` examples in one document, with no waiting prompt anywhere.
+        Fixture(name: "a quick-start page with two $ examples (N2 adversarial)", signals: [], text: """
+        Quick start
+
+        $ npm install -g sonny
+
+        Now configure it:
+
+        $ sonny init
+
+        That is all.
+        """),
+
+        // The measured cost of leaving `❯` out of the minimal set: a bullet list ending in an empty
+        // bullet would refuse if it were in. Kept as a fixture so the trade stays visible.
+        Fixture(name: "a bullet list ending in an empty chevron (N2 adversarial)", signals: [], text: """
+        Agenda
+        \u{276F} open the retro
+        \u{276F} find owners
+        \u{276F}
         """)
     ]
 
@@ -481,8 +603,15 @@ struct ShellSurfaceDetectorTests {
         for notAPrompt in ["\u{25B6} Show more", "\u{00BB} Settings \u{00BB} Advanced", "\u{276F} ship the agent"] {
             #expect(ShellSurfaceDetector.verdict(for: notAPrompt).signals.isEmpty, "\(notAPrompt)")
         }
+        // The arrow prompt now swallows oh-my-zsh's own decorations, so a prompt with nothing typed
+        // at it is one signal rather than two — which is the honest reading: `git:(main)` is the
+        // prompt telling you the branch, not a command anybody ran.
         #expect(
             ShellSurfaceDetector.verdict(for: "\u{279C}  macos-agent git:(main)").signals
+                == [.interactivePrompt]
+        )
+        #expect(
+            ShellSurfaceDetector.verdict(for: "\u{279C}  macos-agent git:(main) \u{2717} swift test").signals
                 == [.interactivePrompt, .commandRunInAShell]
         )
     }
@@ -710,10 +839,113 @@ struct ShellSurfaceDetectorTests {
 
     /// The corpus is not allowed to shrink to nothing without saying so, and both halves must stay
     /// populated — a corpus with an empty negative half would pass by refusing everything.
+    /// **The minimal-prompt rule needs both halves, and each half is pinned separately** (PR #57 N2).
+    /// Repetition alone refuses a documentation page; a trailing bare sigil alone refuses a comment
+    /// block. Asserted as a progression over one screen so the contribution of each is unmistakable.
+    @Test
+    func aMinimalPromptCountsOnlyWhenItRepeatsAndEndsAtAWaitingPrompt() {
+        // One occurrence: a documentation example.
+        #expect(ShellSurfaceDetector.verdict(for: "$ npm install -g sonny").signals.isEmpty)
+        // Two occurrences, neither waiting: still a page showing two examples.
+        #expect(
+            ShellSurfaceDetector.verdict(for: "$ npm install -g sonny\nthen\n$ sonny init").signals.isEmpty
+        )
+        // Two occurrences ending at a waiting prompt: a scrollback.
+        #expect(
+            ShellSurfaceDetector.verdict(for: "$ npm install -g sonny\nadded 12 packages\n$").signals
+                == [.interactivePrompt, .commandRunInAShell]
+        )
+        // A waiting sigil that is not last does not count — that is a comment block's separator.
+        #expect(
+            ShellSurfaceDetector.verdict(for: "% cache settings\n%\n% clear on restart").signals.isEmpty
+        )
+        #expect(ShellSurfaceDetector.minimumMinimalPromptLines == 2)
+    }
+
+    /// **`#` and `❯` are deliberately outside the minimal set**, and each exclusion has a document
+    /// behind it. A starship or pure prompt is therefore not recognised — the bound this buys.
+    @Test
+    func theMinimalPromptSetExcludesTheMarkdownAndBulletGlyphs() {
+        // `#` is Markdown's heading marker; a root prompt arrives through the colon form instead.
+        #expect(ShellSurfaceDetector.verdict(for: "# Getting Started\nsome prose\n#").signals.isEmpty)
+        #expect(
+            ShellSurfaceDetector.verdict(for: "root@a1b2c3d4:/# ls\ntotal 4\ndrwxr-xr-x  2 root root 4096 Aug 17 09:00 .").signals
+                == [.interactivePrompt, .commandRunInAShell, .commandOutputListing]
+        )
+        // `❯` is a chevron bullet. The cost of excluding it, stated as a test rather than as prose:
+        // a starship prompt is invisible even when a command in it failed.
+        #expect(
+            ShellSurfaceDetector.verdict(for: "\u{276F} ./scripts/deploy.sh\nzsh: permission denied: ./scripts/deploy.sh\n\u{276F}").signals
+                == [.shellDiagnostic]
+        )
+    }
+
+    /// **A prompt sigil glued to a digit is prose, not a prompt** (PR #57 N1) — and a sigil glued to
+    /// a closing bracket still is one, which is the Linux default prompt.
+    @Test
+    func aSigilGluedToADigitIsNotAPromptButOneGluedToABracketIs() {
+        for prose in [
+            "priya@acme.io 82% open",
+            "qa@acme.io 91% top performer this quarter",
+            "alice@example.com says the build is 50% faster now."
+        ] {
+            #expect(ShellSurfaceDetector.verdict(for: prose).signals.isEmpty, "\(prose)")
+        }
+        #expect(
+            ShellSurfaceDetector.verdict(for: "[sauransh@build-01 macos-agent]$ make release").signals
+                == [.interactivePrompt, .commandRunInAShell]
+        )
+    }
+
+    /// **The command must be the first thing typed at the prompt** (PR #57 N1). One command name
+    /// anywhere on the line used to be enough, which is how an invoice row refused on the word
+    /// `open`.
+    @Test
+    func onlyTheFirstTokenAfterAPromptCountsAsACommand() {
+        // A real prompt shape whose remainder starts with a number, not a command. The prompt signal
+        // still fires — this line genuinely has a prompt's shape — but it is now alone, so the
+        // session proceeds. That is the residual, stated as an assertion rather than as prose: the
+        // fix removes the refusal, not the misread.
+        #expect(
+            ShellSurfaceDetector.verdict(for: "billing@acme.io Total $ 400 please open the invoice").signals
+                == [.interactivePrompt]
+        )
+        #expect(
+            ShellSurfaceDetector.verdict(for: "billing@acme.io Total $ 400 please open the invoice").showsShell == false
+        )
+        // The same prompt with the command where a shell would actually put it.
+        #expect(
+            ShellSurfaceDetector.verdict(for: "sauransh@Mac work $ open .").signals
+                == [.interactivePrompt, .commandRunInAShell]
+        )
+        // And a command later on the line does not rescue it.
+        #expect(
+            ShellSurfaceDetector.verdict(for: "sauransh@Mac work $ 400 please open the invoice").signals
+                == [.interactivePrompt]
+        )
+    }
+
+    /// The near-miss shapes the cycle-3 reviewer measured as *already* at zero. They are pinned so
+    /// that a future loosening of the prompt pattern has to walk past them — the reviewer's point
+    /// was that the durable half of N1 is the structure rather than any one table, and these are the
+    /// edges of that structure.
+    @Test
+    func theNearMissShapesAroundAnAddressStayAtZero() {
+        for line in [
+            "| priya@acme.io | 82% | open |",
+            "priya@acme.io, 82% open",
+            "qa@acme.io #412 open",
+            "origin  git@github.com:sauransh/macos-agent.git (fetch)",
+            "ping support@example.com # if it breaks"
+        ] {
+            #expect(ShellSurfaceDetector.verdict(for: line).signals.isEmpty, "\(line)")
+        }
+    }
+
     @Test
     func theCorpusCoversBothDirections() {
-        #expect(Self.mustRefuse.count >= 12)
-        #expect(Self.mustNotRefuse.count >= 14)
+        #expect(Self.mustRefuse.count >= 16)
+        #expect(Self.mustNotRefuse.count >= 22)
         #expect(Self.mustRefuse.allSatisfy { $0.refuses })
         #expect(Self.mustNotRefuse.allSatisfy { !$0.refuses })
         // Names are the test arguments, so a duplicate would silently drop a fixture.
@@ -722,6 +954,10 @@ struct ShellSurfaceDetectorTests {
         // trim cannot quietly remove the coverage that made this corpus able to fail.
         #expect(Self.mustRefuse.filter { $0.name.contains("(F2)") }.count >= 4)
         #expect(Self.mustNotRefuse.filter { $0.name.contains("(F1)") }.count >= 6)
+        // Cycle 3's two findings anchor the same way.
+        #expect(Self.mustRefuse.filter { $0.name.contains("(N2)") }.count >= 4)
+        #expect(Self.mustNotRefuse.filter { $0.name.contains("(N1)") }.count >= 3)
+        #expect(Self.mustNotRefuse.filter { $0.name.contains("(N2 adversarial)") }.count >= 5)
     }
 }
 
