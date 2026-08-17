@@ -269,6 +269,18 @@ struct VisionSessionRunTests {
     Building a Mac agent, and what npm has to do with it
     """
 
+    /// **A VS Code window with its terminal panel open and nothing having gone wrong** — manual-test
+    /// item 2, and the case PR #57's F2 found the session ran straight through. Nothing on this
+    /// screen has failed: no diagnostic, no banner, no `ls -l` output. Its two signs are a real
+    /// prompt and a command typed at it.
+    private static let idleTerminalPanelScreen = """
+    EXPLORER                    deploy.sh
+    PROBLEMS   OUTPUT   TERMINAL   PORTS
+    sauransh@Mac macos-agent % ls
+    README.md  Sources  Tests  docs
+    sauransh@Mac macos-agent %
+    """
+
     // MARK: - Fixture
 
     private struct Fixture {
@@ -1778,6 +1790,31 @@ struct VisionSessionRunTests {
         #expect(record.endSummary == Self.shellRefusalSentence)
         #expect(record.endReasonCode == "screen_shows_shell")
         #expect(record.entries.isEmpty)
+    }
+
+    /// **An editor with its terminal panel open, where nothing has failed, ends the session** — the
+    /// embedded-shell case this ticket exists for, driven through the real runner (PR #57 F2).
+    ///
+    /// The detector-level corpus pins the signals; this pins that the session actually stops. Before
+    /// the fix this screen reached one sign and the session ran on: manual-test item 2 would have
+    /// passed or failed depending on whether the founder's last command happened to error, which is
+    /// not a property anything should depend on.
+    @Test
+    func anEditorWithATerminalPanelEndsTheSessionEvenWhenNothingHasFailed() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"click","x":10,"y":10,"target":"Run","consequence":"ordinary","rationale":"r"}"#],
+            recognizer: ScriptedRecognizer([Self.idleTerminalPanelScreen])
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "run the tests", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.model.prompts.isEmpty)
+        #expect(fixture.synthesizer.clickCount == 0)
+        #expect(fixture.viewModel.finalSummary == Self.shellRefusalSentence)
+        let record = try #require(try fixture.journal.loadAll().first)
+        #expect(record.endReasonCode == "screen_shows_shell")
     }
 
     /// **The same screen without the shell proceeds normally**, which is what stops the test above

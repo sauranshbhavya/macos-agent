@@ -9,6 +9,15 @@ import Foundation
 /// independent signs, not one* (2026-08-16) — mean what it says. Two lines matching the same pattern
 /// are one piece of evidence seen twice; a prompt line beside a shell's own error message are two.
 ///
+/// **Every signal is specific to the thing it claims to detect, and that is a correctness property
+/// rather than a matter of taste** (PR #57 review, F1). The first version of this enum was not: its
+/// prompt signal accepted `▶` and `»` — a disclosure triangle and a breadcrumb separator, neither of
+/// which is a prompt in any shell — and its command signal fired on any line beginning with a
+/// punctuation mark followed by a word like `go`, `make`, `open` or `head`. Between them, a
+/// documentation page reading "Getting Started / ▶ Advanced options / $ brew install sonny" refused,
+/// and fifteen of sixteen quoted-reply lines in an email thread fired the second signal. A signal
+/// that fires on "Getting Started" is not evidence of a shell, and no threshold can repair one.
+///
 /// **Every signal is one-directional.** Nothing here subtracts. `.claude/rules/`'s standing rule for
 /// screen-derived signals is that they may add scrutiny and never remove it, and a check that could
 /// be talked *down* by something rendered would hand the attacker the off switch — the exact reason
@@ -17,19 +26,35 @@ import Foundation
 /// ``shellInterpreterInvocation`` — is a statement about what that text *is* (a file's first line,
 /// not a command being run), not a suppressor that cancels evidence found elsewhere.
 public enum ShellSurfaceSignal: String, CaseIterable, Equatable, Sendable {
-    /// A shell prompt: `user@host:~/dev$`, `user@host dir %`, `bash-5.2$`, an oh-my-zsh arrow, a
-    /// PowerShell `PS C:\…>`. The strongest single sign, and still only one of two needed.
+    /// A shell prompt: `user@host:~/dev$`, `user@host dir %`, `[user@host dir]$`, `bash-5.2$`, an
+    /// oh-my-zsh `➜`, a PowerShell `PS C:\…>`.
+    ///
+    /// **Structure, not a sigil.** The address-shaped part alone is nowhere near enough — "Hi team,
+    /// alice@example.com says the build is 50% faster" carries an address and a `%` and is not a
+    /// prompt. What is required is a prompt's *shape*: an identity, then a path (either after a
+    /// colon or as its own whitespace-delimited token), then a terminating sigil. In prose the sigil
+    /// is glued to a digit (`50%`, `80%`) or is separated from the address by ordinary words, and
+    /// neither parses.
     case interactivePrompt = "interactive_prompt"
 
-    /// A command shown after a bare prompt sigil — `$ npm install`, `% ls`, `!pip install`,
-    /// `%%bash`.
+    /// A command that a shell has actually been asked to run: a recognised command name in the
+    /// remainder of a prompt line, a `./script` execution at one, or a notebook `!command` escape.
     ///
-    /// **Deliberately the weak one.** This is the shape documentation pages, README files and chat
-    /// messages use to show a reader what to type, and it is the exact case the founder named: *a
-    /// single `$` on a documentation page must not stop Sonny driving Chrome*. It is in the set
-    /// because it is real evidence beside a second sign, and the threshold is two because on its own
-    /// it is not.
-    case shellCommandEcho = "shell_command_echo"
+    /// **Position is what makes this specific, and it is the whole fix for the documentation-page
+    /// case.** A bare `$` at the start of a line is how a docs page, a README and a chat message all
+    /// show a reader what to type; it is not a prompt and no longer counts as one. This fires only
+    /// where something is being typed *at* a real prompt, or through a notebook's explicit shell
+    /// escape. So `$ npm install -g sonny` on a documentation page yields **nothing at all**, while
+    /// `sauransh@Mac macos-agent % ls` — an idle terminal panel where the last command succeeded —
+    /// yields this and ``interactivePrompt``, which is two.
+    ///
+    /// **Why this is a second class and not the prompt counted twice.** A prompt is the shell
+    /// rendering its own identity; this is a command having been run. Either occurs without the
+    /// other: a freshly-opened or cleared panel shows a prompt with nothing typed at it, and a
+    /// notebook `!pip install` fires this with no prompt anywhere. That independence is the
+    /// difference between this and the `promptScrollback` signal deleted before the first commit,
+    /// which was the *same* predicate counted a second time.
+    case commandRunInAShell = "command_run_in_a_shell"
 
     /// The shape of a directory listing: a permission string with a link count, or a `total <n>`
     /// header. Output, so it exists only because a command already ran.
@@ -44,9 +69,13 @@ public enum ShellSurfaceSignal: String, CaseIterable, Equatable, Sendable {
     /// bare `logout`, `Connection to … closed`. A shell session beginning or ending.
     case sessionBanner = "session_banner"
 
-    /// An interpreter being invoked by path — `/bin/bash script.sh`, `/usr/bin/env zsh`, `bash -c`.
+    /// An interpreter being named as the thing that will run something — `/bin/bash script.sh`,
+    /// `/usr/bin/env zsh`, `bash -c`, or a notebook's `%%bash` cell magic.
+    ///
     /// A shebang is **not** this, and is excluded: `#!/bin/bash` at the top of a file open in an
-    /// editor is the file saying how it would be run, not a shell running.
+    /// editor is the file saying how it *would* be run, not a shell running. `%%bash` is: it selects
+    /// the interpreter a notebook cell will be handed to, which is the same fact `/bin/bash foo.sh`
+    /// states, and it is a different fact from the `!ls` escape that ``commandRunInAShell`` reads.
     case shellInterpreterInvocation = "shell_interpreter_invocation"
 }
 
@@ -65,9 +94,13 @@ public enum ShellSurfaceSignal: String, CaseIterable, Equatable, Sendable {
 /// answer computed now, about the window in front of Sonny now, and a decodable one could arrive
 /// from a stored plan or a hostile payload carrying an empty signal list.
 ///
-/// It carries the signal *names* and never the text they were found in — a closed vocabulary of six
-/// strings, so a verdict crossing a type boundary carries no screen content with it. That is what
-/// lets the raw recognized text stay inside ``LocalRedactionService``.
+/// **It carries signal names and nothing else, and that is enforced rather than observed.** The
+/// single stored property is a list drawn from a six-case enum with no associated values, so a
+/// verdict crossing a type boundary carries no screen content with it — which is what lets the raw
+/// recognized text stay inside ``LocalRedactionService``. Adding *any* field of a text-bearing type
+/// here would silently reopen that route, so
+/// `theVerdictHoldsNothingButSignalsAndThatIsCheckedNotAssumed` reads this declaration and fails on
+/// one, and `twoDifferentScreensWithTheSameSignalsProduceEqualVerdicts` fails on it behaviourally.
 public struct ShellSurfaceVerdict: Equatable, Sendable {
     /// Which classes of evidence fired, in ``ShellSurfaceSignal/allCases`` order and each at most
     /// once.
@@ -121,20 +154,30 @@ struct ShellSurfaceDetector {
     /// **Two, by founder decision (2026-08-16), recorded as a value rather than as prose** so the
     /// boundary is executable. `theBoundaryIsTwoDistinctSignalsFromBothSides` asserts it from each
     /// side: one sign proceeds, two refuse.
+    ///
+    /// **This is not the tuning surface** (PR #57 review adjudication, 2026-08-17). When the check
+    /// both over-refused ordinary pages and under-refused an idle terminal panel, the two looked
+    /// like opposite pressures on this number and were not: they were one defect, in signals that
+    /// were not specific to what they claimed to detect. Lowering this to one would trade a false
+    /// negative for a worse false positive — it is what keeps a single `$` on a documentation page
+    /// from stopping real work. Raising it would abandon the embedded-shell case this check exists
+    /// for. Tune the signals.
     static let signalThreshold = 2
 
-    /// The commands whose appearance after a bare prompt sigil counts as
-    /// ``ShellSurfaceSignal/shellCommandEcho``.
+    /// The commands whose appearance **at a prompt** counts as
+    /// ``ShellSurfaceSignal/commandRunInAShell``.
     ///
-    /// **A vocabulary rather than "any word", and that is the whole reason quoted email survives.**
-    /// A pattern that accepted `[$%>!]` followed by anything would fire on every quoted reply line
-    /// in a mail thread (`> can you run the deploy script tonight?`) and on the first line of any
-    /// blockquote. Requiring a real command name makes the signal mean "a command line is being
-    /// shown" instead of "a line starts with a punctuation mark".
+    /// **Read only in a position where a shell would execute what follows** — the remainder of a
+    /// prompt line, or after a notebook `!`. That is what makes ordinary English in this list
+    /// harmless: `go`, `make`, `open`, `find`, `head` and `exit` begin ordinary sentences, and an
+    /// earlier version of this detector consulted the list on any line starting with a punctuation
+    /// mark, which is why fifteen of sixteen quoted email replies fired the signal (PR #57 F1). The
+    /// words are kept rather than pruned, because after `%` or `$` on a real prompt line they are
+    /// exactly what they look like, and dropping them would blind the check to `% make release` and
+    /// `% go test ./...`.
     ///
-    /// This is a *weak-signal* vocabulary and is meant to be appended to. Adding an entry can only
-    /// raise this one signal from absent to present; it can never on its own produce a refusal,
-    /// because of ``signalThreshold``.
+    /// It is meant to be appended to. Adding an entry can only raise this one signal from absent to
+    /// present; it can never on its own produce a refusal, because of ``signalThreshold``.
     static let shellCommandNames: Set<String> = [
         "ls", "ll", "cd", "pwd", "cat", "less", "tail", "head", "grep", "rg", "sed", "awk",
         "chmod", "chown", "mkdir", "rm", "mv", "cp", "touch", "ln", "echo", "printf",
@@ -171,9 +214,12 @@ struct ShellSurfaceDetector {
     /// iterations. Signals that are fixed strings do use `String.contains`, which is not a prefilter
     /// — there the literal *is* the whole check, so there is nothing for it to drift from.
     static func verdict(for text: String) -> ShellSurfaceVerdict {
+        // Computed once and shared: two signals read it, and it is the most expensive thing here.
+        let prompts = promptRanges(in: text)
+
         var found: Set<ShellSurfaceSignal> = []
-        if hasInteractivePrompt(text) { found.insert(.interactivePrompt) }
-        if hasShellCommandEcho(text) { found.insert(.shellCommandEcho) }
+        if !prompts.isEmpty { found.insert(.interactivePrompt) }
+        if hasCommandRunInAShell(text, prompts: prompts) { found.insert(.commandRunInAShell) }
         if hasCommandOutputListing(text) { found.insert(.commandOutputListing) }
         if hasShellDiagnostic(text) { found.insert(.shellDiagnostic) }
         if hasSessionBanner(text) { found.insert(.sessionBanner) }
@@ -182,38 +228,71 @@ struct ShellSurfaceDetector {
         return ShellSurfaceVerdict(signals: ShellSurfaceSignal.allCases.filter { found.contains($0) })
     }
 
-    // MARK: - Per-signal detection
+    // MARK: - Prompts
 
-    private static func hasInteractivePrompt(_ text: String) -> Bool {
-        // `user@host` somewhere on the line, then a prompt sigil later on that same line. The sigil
-        // is required, and that requirement is what keeps this off `deploy@staging: Permission
-        // denied` and off a shell script's own `scp "$f" "deploy@$1:$APP_DIR/"` — neither ends a
-        // path segment in `$`, `%` or `#`. `>` is excluded here on purpose: it is redirection far
-        // more often than it is a prompt.
-        let userHost = /(?m)^[^\n]{0,160}?[A-Za-z0-9._-]+@[A-Za-z0-9._-]+[^\n]{0,100}?[$%#](?:\s|$)/
+    /// Every shell prompt in the document, each range ending **at the prompt's terminating sigil** —
+    /// so the text after it on the same line is what was typed at that prompt.
+    ///
+    /// Returned rather than reduced to a `Bool` because ``ShellSurfaceSignal/commandRunInAShell``
+    /// needs the position, not just the presence. Computing it once also keeps the five patterns
+    /// from being evaluated twice.
+    private static func promptRanges(in text: String) -> [Range<String.Index>] {
+        // `user@host:path$` — the colon form. The path is a run of non-space characters, so the
+        // sigil has to sit inside that run: `deploy@staging: Permission denied` does not match,
+        // because a space follows the colon.
+        // `(?m)` is load-bearing on both address forms, and not for an anchor: without it the `$` in
+        // the trailing lookahead means end of *input*, so a prompt sitting on its own line in the
+        // middle of a scrollback — a user who pressed Return at an empty prompt — matched only when
+        // it happened to be the document's last line.
+        let colonForm = /(?m)[A-Za-z0-9._-]+@[A-Za-z0-9._-]+:[^\s]{0,80}[$%#](?=[ \t]|$)/
+        // `user@host ~ %`, `user@host dir %`, `[user@host dir]$` — the spaced form. The path token is
+        // pinned to immediately follow the host, which is what keeps ordinary prose out: in
+        // "alice@example.com says the build is 50% faster" the only token that can occupy the path
+        // slot is `says`, and no sigil follows it. In prose a `%` is glued to a digit; in a prompt it
+        // is a token of its own.
+        let spacedForm = /(?m)[A-Za-z0-9._-]+@[A-Za-z0-9._-]+[ \t]+[~\/A-Za-z0-9._\]-]{1,60}[ \t]*[$%#](?=[ \t]|$)/
         // A shell with no prompt customisation at all: `bash-5.2$`, `sh-3.2#`.
-        let bareShell = /(?m)^[^\n]{0,40}?\b-?(?:bash|zsh|sh|ksh|csh|tcsh|dash|fish)-[0-9][0-9.]*[$#](?:\s|$)/
-        // The glyph prompts: oh-my-zsh's ➜, starship's ❯, and the two other common ones.
-        let arrow = /(?m)^[ \t]{0,8}[\u{279C}\u{276F}\u{00BB}\u{25B6}][ \t]/
-        let powerShell = /(?m)^[ \t]{0,8}PS [A-Za-z]:\\[^\n]{0,120}>(?:\s|$)/
-        return text.firstMatch(of: userHost) != nil
-            || text.firstMatch(of: bareShell) != nil
-            || text.firstMatch(of: arrow) != nil
-            || text.firstMatch(of: powerShell) != nil
+        let bareShell = /(?m)^[ \t]{0,8}-?(?:bash|zsh|sh|ksh|csh|tcsh|dash|fish)-[0-9][0-9.]*[$#](?=[ \t]|$)/
+        // oh-my-zsh's arrow, and **only** that glyph. `▶` is the macOS/Xcode/GitHub/Notion disclosure
+        // triangle and the universal play symbol, `»` is a breadcrumb separator and a European
+        // quotation mark, and `❯` is a common chevron bullet — all three were accepted here once and
+        // each refused ordinary pages on its own (PR #57 F1). Consequence, stated rather than
+        // discovered: a starship prompt, whose default glyph is `❯`, is not recognised as a prompt.
+        let arrowPrompt = /(?m)^[ \t]{0,8}\u{279C}[ \t]/
+        let powerShell = /(?m)^[ \t]{0,8}PS [A-Za-z]:\\[^\n]{0,120}>(?=[ \t]|$)/
+
+        var ranges: [Range<String.Index>] = []
+        for match in text.matches(of: colonForm) { ranges.append(match.range) }
+        for match in text.matches(of: spacedForm) { ranges.append(match.range) }
+        for match in text.matches(of: bareShell) { ranges.append(match.range) }
+        for match in text.matches(of: arrowPrompt) { ranges.append(match.range) }
+        for match in text.matches(of: powerShell) { ranges.append(match.range) }
+        return ranges
     }
 
-    private static func hasShellCommandEcho(_ text: String) -> Bool {
-        // The sigil must start the line (after at most a little indentation, or a notebook's
-        // `In [n]:` gutter). A `$` in the middle of a sentence — "yep, $ npm run release is fine" —
-        // is prose about a command, not a command line, and does not match.
-        let sigilled = /(?m)^[ \t]{0,8}(?:In \[\d+\]:[ \t]*)?[$%>!][ \t]?([A-Za-z][A-Za-z0-9._-]*|\.{1,2}\/[^\s]+)/
-        let echoesACommand = text.matches(of: sigilled).contains { match in
-            let token = String(match.output.1)
-            return token.hasPrefix("./") || token.hasPrefix("../") || shellCommandNames.contains(token)
+    // MARK: - Per-signal detection
+
+    private static func hasCommandRunInAShell(_ text: String, prompts: [Range<String.Index>]) -> Bool {
+        for prompt in prompts {
+            let lineEnd = text[prompt.upperBound...].firstIndex(of: "\n") ?? text.endIndex
+            if commandTokens(in: text[prompt.upperBound..<lineEnd]) {
+                return true
+            }
         }
-        // Notebook cell magic that hands the whole cell to a shell.
-        let cellMagic = /(?m)^[ \t]{0,8}(?:In \[\d+\]:[ \t]*)?%%(?:bash|sh|zsh)\b/
-        return echoesACommand || text.firstMatch(of: cellMagic) != nil
+        // A notebook's `!command` escape, which hands one line to a shell with no prompt rendered
+        // anywhere. This is why the signal is not simply "a prompt with something after it".
+        let notebookEscape = /(?m)^[ \t]{0,8}(?:In \[\d+\]:[ \t]*)?!([A-Za-z][A-Za-z0-9._-]*|\.{1,2}\/[^\s]+)/
+        return text.matches(of: notebookEscape).contains { isCommand(String($0.output.1)) }
+    }
+
+    private static func commandTokens(in remainder: Substring) -> Bool {
+        remainder
+            .split(whereSeparator: { !($0.isLetter || $0.isNumber || $0 == "." || $0 == "/" || $0 == "-" || $0 == "_") })
+            .contains { isCommand(String($0)) }
+    }
+
+    private static func isCommand(_ token: String) -> Bool {
+        token.hasPrefix("./") || token.hasPrefix("../") || shellCommandNames.contains(token)
     }
 
     private static func hasCommandOutputListing(_ text: String) -> Bool {
@@ -262,7 +341,14 @@ struct ShellSurfaceDetector {
         // a shell actually running — the sharpest false positive in the corpus.
         let invoked = text.matches(of: interpreterPath).contains { !isShebang(at: $0.range.lowerBound, in: text) }
         let dashC = /\b(?:bash|zsh|sh|ksh|fish)[ \t]+-[a-z]*c[ \t]/
-        return invoked || text.firstMatch(of: dashC) != nil
+        // `%%bash` selects the interpreter a notebook cell is handed to, which is the same fact
+        // `/bin/bash deploy.sh` states. It sits here rather than beside the `!ls` escape because
+        // choosing an interpreter and running a command are two different facts, and a notebook that
+        // does both should not have them counted as one.
+        let cellMagic = /(?m)^[ \t]{0,8}(?:In \[\d+\]:[ \t]*)?%%(?:bash|sh|zsh)\b/
+        return invoked
+            || text.firstMatch(of: dashC) != nil
+            || text.firstMatch(of: cellMagic) != nil
     }
 
     // MARK: - Helpers
