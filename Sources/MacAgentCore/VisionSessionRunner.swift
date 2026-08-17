@@ -200,6 +200,23 @@ final class VisionSessionRunner {
             // of the type the model client will accept, so there is no branch of this loop that can
             // send `capture.pngData` — it does not type-check.
             let payload = try await environment.redactionService.redactCapture(capture)
+            // **The shell check, here, before anything downstream has looked at this capture**
+            // (SONNY-139). Refusing at the redaction step means a window showing a shell never
+            // reaches the vision provider and never produces an action — not the Safe-mode preview
+            // below, not the prompt, not the send, not `perform`. It also runs on the *first*
+            // capture, which happens before any control approval, so a user is never asked to
+            // approve an app Sonny would refuse anyway.
+            //
+            // Re-asked every iteration rather than once per session, for the reason the deny-list
+            // re-check above is: a screen changes under you, and a once-per-session answer is a
+            // check that cannot notice a shell opening in the window it already cleared.
+            //
+            // The two refusals that reach a shell are ordered and both are kept.
+            // `checkIterationStart` has already re-asked the static deny list at the top of this
+            // iteration; this fires only for what a name list cannot reach.
+            if payload.shellSurface.showsShell {
+                return end(with: .screenShowsShell(payload.shellSurface), iteration: iteration)
+            }
             // **The one size, resolved once.** Everything downstream — what the user is shown, what
             // the model is told, what bounds a returned coordinate, and what that coordinate is
             // scaled by — has to agree about how big the picture is, and since SONNY-114 the answer
