@@ -157,6 +157,42 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/sonny-156-notarization-entitlements
+Status: complete
+Date: 2026-08-17
+Tickets: SONNY-156 (SwiftPM's debug `get-task-allow` entitlement was passed straight through by `package-app.sh`, and the hardened runtime was missing — both notarization blockers). Spawned nothing.
+Reviewed by: fresh session (per WORKFLOW.md step 7) — pending at PR open.
+
+Spec sections covered: none. Build tooling and the human packaging procedure, serving SONNY-106 section E's "Developer ID signed and notarized" condition without satisfying it.
+Files changed: new: `Packaging/MacAgent.entitlements`; modified: `scripts/package-app.sh`, `CLAUDE.md` (the packaging section), `docs/sonny-manual-test-checklist.md` (two troubleshooting entries after §0's rebuild loop). `Sources/` and `Tests/` untouched.
+Tests: `swift build` clean, and CLAUDE.md's exact flagged test command -> pass, **1224 tests in 92 suites**, exit 0, at `1dc9d9e`. Identical to the branch point at `7b9fec9`, as it must be: `git diff --name-only 7b9fec9` contains no path under `Sources/` or `Tests/`. The real verification here is packaging, below.
+
+Behavior added:
+- `package-app.sh release` signs with the hardened runtime and with the committed `Packaging/MacAgent.entitlements`, the second configuration file beside `signing-identity` and the single place release entitlements are named.
+- After signing, the script reads the entitlements back **off the sealed bundle** and refuses to finish if a release build carries `com.apple.security.get-task-allow` or lacks the hardened runtime. Debug prints its own state rather than failing, since it is expected to carry the entitlement.
+
+Behavior preserved (required, no blanket claims):
+- **The debug path is unchanged in behaviour.** Same SwiftPM plist, same absence of hardening, same output plus one informational line. Verified by running it: exit 0, and the designated requirement still prints `identifier "com.sonny.MacAgent" and certificate leaf = H"a600d457…"`, which is the SONNY-153 property that permission grants survive a rebuild.
+- **The xattr-strip retry loop** is untouched; only the arguments inside `sign_app()` became configuration-dependent.
+- **`Packaging/signing-identity` remains the only place the identity is named**, read through `scripts/lib/signing.sh` by both scripts. This change adds a file beside it rather than a second way to configure signing, and touches identity handling not at all. `create-signing-identity.sh` signs only its throwaway warmup file (`:167`), so `package-app.sh` is still the only place the app is signed.
+- **`swift build` and `swift test` are untouched.** Packaging remains an optional extra step.
+
+Architectural decisions / pitfalls discovered (required):
+- **The obvious fix was a no-op, and finding that out changed the ticket.** SwiftPM generates `MacAgent-entitlement.plist` for debug and **not** for release — measured at `7b9fec9`, with `find .build -name "*entitlement*"` returning exactly one hit across the whole tree. So `package-app.sh`'s `if [ -f "$ENTITLEMENTS" ]` branch already took the else path for release and no release build ever carried the entitlement. **The safety was incidental, not designed:** it held because of a toolchain this repo does not control, and nothing checked it. The fix is therefore the check, not the skip — if a future SwiftPM emits that file for release, or if anyone notarizes a debug build, the old code would have passed it through silently.
+- **Hardened runtime cannot be added on its own.** It restricts resource access that is unrestricted without it, and Sonny uses two of the restricted resources: microphone (`AudioCommandRecorder.swift:14-19`) and Apple Events (`FinderContextService.swift`, `DocumentConverter.swift`). Adding `options runtime` without entitlements would have traded a loud notarization rejection for voice input and Finder/Word automation failing silently in the shipped build — the worse failure, and the quieter one.
+- **Whether the Apple Events entitlement is needed is genuinely open, and is recorded as a judgment call rather than a fact.** Sonny sends no Apple Events in-process: grepping `Sources/` for `NSAppleScript`, `NSAppleEventDescriptor` and `AEDeterminePermissionToAutomateTarget` returns nothing, and every event leaves through `/usr/bin/osascript` spawned as a child (`FinderContextService.swift:55`, `DocumentConverter.swift:98`). So the sending process may be osascript — Apple-signed and already entitled — while TCC attributes the automation to the responsible parent, which is why `Info.plist` carries `NSAppleEventsUsageDescription` naming Sonny. Which of those the hardened-runtime check follows cannot be settled without a notarized build. It is included because the costs are asymmetric, and the entitlements file says so in as many words so nobody later reads the key as evidence the question was answered.
+- **An entitlements plist may not contain a literal double hyphen, including inside its own comment.** XML forbids `--` in comments; codesign's parser enforces it and reports `Failed to parse entitlements: AMFIUnserializeXML: syntax error near line 21`, which reads like a problem with the entitlements rather than with the prose above them. The first draft documented the file in place — the same instinct `signing-identity` rewards — and the offending line was the phrase "codesign --options runtime". **`plutil -lint` accepts the file regardless**, so the obvious validator is not the one that catches this.
+- **`set -o pipefail` plus `grep -q` is a false negative on a release gate.** The hardened-runtime check was first written as `codesign -d -v "$APP_DIR" 2>&1 | grep -q 'flags=[^ ]*runtime'`. `grep -q` exits the instant it matches, `codesign` then dies of SIGPIPE, and under `pipefail` the pipeline reports failure **precisely when the match succeeds** — so a correctly hardened bundle was reported as unhardened on the first run. The output is now captured and matched separately. Worth knowing generally: every gate in this script that pipes a producer into a short-circuiting consumer has this shape available to it.
+- **Both guards were proved by mutation rather than by inspection.** Adding `get-task-allow` to the release entitlements makes the script refuse with exit code 1; removing the entitlements file makes it refuse before signing; dropping `options runtime` makes the hardening check refuse. All three reverted afterwards.
+
+Known limitations / deferred scope:
+- **Notarization itself is still not implemented anywhere, and this branch must not be read as satisfying SONNY-106 section E.** That condition needs a Developer ID signed *and notarized* build; this delivers two prerequisites of the notarization half, signed with the local development certificate that Gatekeeper refuses on any other Mac. Section F's Apple Developer enrolment (started 2026-08-17) still gates the rest.
+- **What could not be verified, and why.** No Apple certificate exists on this machine, so: that the notary service accepts a submission, that Gatekeeper accepts the stapled result elsewhere, and — the one that matters most — whether microphone access and Finder/Word automation actually work under hardened runtime in a Developer ID build. A local self-signed certificate is not a stand-in for that last one, because TCC's behaviour with an untrusted certificate is a different case. It is a manual-test item, and the first notarized run is what settles the Apple Events question above.
+
+Open questions (required): one, and it is owned rather than floating. Whether `com.apple.security.automation.apple-events` is required given that all Apple Events leave through a child `osascript` — decided in favour of including it on asymmetric costs, recorded in `Packaging/MacAgent.entitlements` and on SONNY-156, and answerable only by the founder's first notarized build.
+
+Next branch: unchanged by this. The locked roadmap's rows D, E, J and 12 are unaffected; this removes a step that would otherwise have failed the first time notarization is attempted.
+
 ### Branch: fix/sonny-152-default-browser
 Status: complete
 Date: 2026-08-17

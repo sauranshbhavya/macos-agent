@@ -44,6 +44,17 @@ falling back to ad-hoc signing if the identity is missing. **This is not the rel
 SONNY-106 section E still needs a Developer ID signed *and notarized* build, gated on the founder's
 Apple Developer enrolment, and a local certificate satisfies neither.
 
+Release builds sign differently, and only release (SONNY-156). `package-app.sh release` adds the
+hardened runtime and signs with `Packaging/MacAgent.entitlements` — the second configuration file
+beside `signing-identity`, and the single place release entitlements are named. Both are
+notarization requirements. Debug is untouched: it keeps SwiftPM's own generated entitlement plist,
+whose `com.apple.security.get-task-allow` is what lets a debugger attach. The script then verifies
+its own output and refuses to finish if a release bundle carries that entitlement or lacks the
+hardened runtime, so the property is checked rather than assumed — SwiftPM happening not to generate
+the plist for release is not a guarantee this repo controls. Read that entitlements file before
+adding a key to it; it may not contain a literal double hyphen anywhere, comment included, because
+codesign's parser enforces the XML rule that `plutil -lint` does not.
+
 Ad-hoc signing was what this replaced (SONNY-153), and the reason matters for anyone tempted to put
 it back: an ad-hoc signature has no identity, so macOS keys every permission grant to that one
 build's hash. Every rebuild then silently loses Screen Recording, Accessibility, Microphone and
