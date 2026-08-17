@@ -10,6 +10,12 @@ the place they are assembled into one shape, not the only place they exist.
 Founder decisions of 2026-08-16 (Sauransh Bhardwaj) are attributed inline. Everything not attributed
 to him is the planning session's own reasoning and is open to correction.
 
+**The API contract this plan called for is now written:
+[`docs/sonny-backend-api-contract.md`](sonny-backend-api-contract.md) (SONNY-124, 2026-08-17).** It
+is what the twelve implementation tickets are written against — endpoints, auth, the entitlement
+claim, the metering event, the error taxonomy, the versioning rule, sizes, idempotency, timeouts, and
+the incognito and training-consent fields. It is host-agnostic, so nothing in it waits on §4.8.
+
 ---
 
 ## 1. Why this row exists
