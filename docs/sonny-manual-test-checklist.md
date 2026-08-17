@@ -101,6 +101,63 @@ current test data doing it.
 
 ## 0. Setup & the rebuild loop
 
+### 0a. One-time setup on this Mac — do this before anything else, once (added 2026-08-17, SONNY-153)
+
+**Skip this and every permission you grant will be thrown away the next time the app is rebuilt.**
+
+Just run step 1 below. It does nothing it has already done, so running it when you did not need to
+costs a second and nothing else. Do not try to decide in advance whether you need it —
+`security find-identity -p codesigning | grep "Sonny Local Dev"` tells you whether the certificate
+exists, which is only half the setup: the other half is answering the keychain dialog, and a
+certificate that exists with the dialog unanswered looks identical in that listing while still
+blocking every build.
+
+```bash
+# 1. Create the certificate the app is signed with. Run this in a real terminal window: macOS
+#    asks a question partway through and you have to click the answer.
+./scripts/create-signing-identity.sh
+#    >>> When macOS asks whether codesign may use the key, click "Always Allow", not "Allow". <<<
+#    "Allow" answers only once and the dialog comes back on every single build.
+
+# 2. Throw away the permission grants macOS is still holding. They are already dead — each one
+#    points at a build that no longer exists — and they are exactly what makes the app say
+#    "Not granted" while System Settings shows the switch turned on.
+killall MacAgent 2>/dev/null
+tccutil reset All com.sonny.MacAgent
+
+# 3. Build, package and launch.
+./scripts/package-app.sh debug
+open .build/arm64-apple-macosx/debug/MacAgent.app
+
+# 4. Grant Screen Recording and Accessibility again in System Settings, and relaunch the app when
+#    it asks you to. Microphone and Desktop access are asked for by the app when it first needs
+#    them, so there is nothing to pre-grant for those.
+```
+
+**You do this once.** After it, grants stay put across rebuilds and across worktrees, and the
+rebuild loop in §0b is all you need.
+
+`tccutil reset All com.sonny.MacAgent` clears every permission for Sonny and nothing else — the
+bundle identifier on the end scopes it. If you would rather clear them one at a time, these are the
+four macOS was actually holding when this was diagnosed:
+
+```bash
+tccutil reset ScreenCapture com.sonny.MacAgent
+tccutil reset Accessibility com.sonny.MacAgent
+tccutil reset Microphone com.sonny.MacAgent
+tccutil reset SystemPolicyDesktopFolder com.sonny.MacAgent
+```
+
+**What this is not.** The certificate is a local build credential. It lives in this Mac's login
+keychain, is never committed, and is not a distribution identity — it does nothing for anyone else
+installing Sonny, and Gatekeeper still refuses these builds on any other machine. **It does not
+satisfy the v1 release requirement**, which is a Developer ID signed *and notarized* build
+(SONNY-106 section E, gated on the Apple Developer enrolment in section F). Do not tick that
+condition off the back of this. To remove the certificate again:
+`security delete-identity -c "Sonny Local Dev"`.
+
+### 0b. The rebuild loop
+
 ```bash
 # 1. Confirm branch + clean state
 git branch --show-current   # should be feature/ui-ux-wireframe-fidelity
@@ -128,6 +185,35 @@ open .build/arm64-apple-macosx/debug/MacAgent.app
 # crash traces) instead of it going nowhere:
 .build/arm64-apple-macosx/debug/MacAgent.app/Contents/MacOS/MacAgent
 ```
+
+**Troubleshooting: the app says a permission is "Not granted" but System Settings shows it turned
+on.** That means the build's signature changed, not that anything in the app is broken. macOS ties
+each grant to the signature of the build that was running when you gave it; when the signature
+moves, the grant stops applying and the app is told, correctly, that it has no permission. Fix it
+with §0a — most often you have not run `./scripts/create-signing-identity.sh` on this Mac yet, or
+you answered the keychain dialog with "Allow" instead of "Always Allow". To confirm before doing
+anything, this prints one line per refusal, naming the service:
+
+```bash
+/usr/bin/log show --predicate 'process == "tccd"' --info --last 1h \
+  | grep "com.sonny.MacAgent" | grep "Failed to match"
+```
+
+Then clear the dead grants and re-grant:
+
+```bash
+killall MacAgent 2>/dev/null
+tccutil reset All com.sonny.MacAgent
+./scripts/package-app.sh debug
+open .build/arm64-apple-macosx/debug/MacAgent.app
+```
+
+**Troubleshooting: `./scripts/package-app.sh` prints "Code signing as …" and then stops with no
+further output.** It is not stuck — macOS is showing a dialog asking whether codesign may use the
+signing key, and the dialog can be behind another window or on another display. Answer it with
+"Always Allow". If you cannot find it, quit the packaging run, and run
+`./scripts/create-signing-identity.sh` from a terminal, which raises the same dialog deliberately
+and explains it.
 
 **Troubleshooting:** if macOS refuses to open the app or calls it "damaged," re-run
 `./scripts/package-app.sh debug` — the script already retries code-signing up to 5 times to dodge a
