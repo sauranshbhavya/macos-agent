@@ -314,13 +314,26 @@ public enum VisionPointResolver {
     /// in — a smaller grid than the one ScreenCaptureKit produced. `windowFrame.width / sentPixelWidth`
     /// is points-per-*sent*-pixel, which is what turns the model's point back into a screen point.
     ///
-    /// **What the resampling costs a click, exactly.** The model can only name whole pixels, and a
-    /// named pixel maps to that pixel's leading edge rather than its centre, so the resolved point
-    /// lands short of the model's true target by at most one *sent* pixel — a point when nothing was
-    /// resampled, two points at the ladder's 0.5 floor. A macOS control is at
-    /// least 20 points on its short edge and the model is told to aim at the middle of the glyphs, so
-    /// this cannot move a click off its target. Pinned by
-    /// `theResolvedPointStaysWithinOneSentPixelOfTheModelsTargetAtEveryLadderScale`.
+    /// **A named pixel resolves to that pixel's centre, not its leading edge** (SONNY-145). The model
+    /// can only name whole pixels, and sent pixel `i` covers the point range `[i·s, (i+1)·s)` where
+    /// `s` is `scaleX`. Mapping it to `i·s` returned the range's *leading edge*, so every click
+    /// landed systematically up and to the left of where the model was aiming, short by up to one
+    /// whole sent pixel. Sampling the centre — `(i + 0.5)·s` — makes the residual **at most half a
+    /// sent pixel and symmetric**, which is the best any whole-pixel coordinate can do.
+    ///
+    /// **The half-pixel is expressed in sent pixels and scaled by the same `scaleX`**, deliberately.
+    /// It is half of *the model's own pixel*, so it inherits `sentImageSize` as the one answer about
+    /// how big the picture is (SONNY-114's "the one size, resolved once" in `VisionSessionRunner`).
+    /// Writing it as a fixed point offset, or deriving it from the capture's pixel count, would be a
+    /// second opinion about the picture's size — the exact thing that ticket removed.
+    ///
+    /// **What this does and does not establish.** `theResolvedPointStaysWithinHalfASentPixelOfTheModelsTargetAtEveryLadderScale`
+    /// pins the arithmetic across every ladder rung: at most half a point at full resolution, one
+    /// point at the 0.5 floor, and no directional bias. It cannot establish that a click lands on the
+    /// intended control in a real app — nothing in this repository can drive the real UI — so that
+    /// remains an attended check. The prior bias was already well inside the tolerance of the
+    /// controls this loop clicks (a macOS control is at least 20 points on its short edge), which is
+    /// why this is a correctness fix rather than a bug report from the field.
     public static func resolve(
         imagePoint: CGPoint,
         sentImageSize: SentImageSize,
@@ -341,9 +354,10 @@ public enum VisionPointResolver {
 
         let scaleX = capture.windowFrame.width / CGFloat(sentImageSize.pixelWidth)
         let scaleY = capture.windowFrame.height / CGFloat(sentImageSize.pixelHeight)
+        // `+ 0.5` before scaling, so the offset is half a *sent* pixel rather than half a point.
         let globalPoint = CGPoint(
-            x: freshFrame.origin.x + imagePoint.x * scaleX,
-            y: freshFrame.origin.y + imagePoint.y * scaleY
+            x: freshFrame.origin.x + (imagePoint.x + 0.5) * scaleX,
+            y: freshFrame.origin.y + (imagePoint.y + 0.5) * scaleY
         )
 
         if ownWindowFrames.contains(where: { $0.contains(globalPoint) }) {

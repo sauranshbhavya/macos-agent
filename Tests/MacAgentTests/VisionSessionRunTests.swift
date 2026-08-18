@@ -1642,10 +1642,18 @@ struct VisionSessionRunTests {
     /// introduced, and it runs through the real runner rather than the resolver alone.
     ///
     /// The capture is 800x600 pixels over an 800x600-point window; the egress ladder is given a
-    /// budget it cannot meet, so it resamples to its 0.5 floor and the model is shown 400x300. The
-    /// model then names (100, 75) — the middle of what it saw, which is the middle of the window,
-    /// which is (200, 150) on screen. A resolver still scaling by the capture's own pixel count would
-    /// have clicked (100, 75): inside the window, plausible, and half as far in as intended.
+    /// budget it cannot meet, so it resamples to its 0.5 floor and the model is shown 400x300, so one
+    /// sent pixel is two points. The model then names (100, 75), a quarter of the way into what it
+    /// saw; that pixel's centre is (100.5, 75.5) sent pixels, which is **(201, 151)** on screen. A
+    /// resolver still scaling by the capture's own pixel count would have clicked (100.5, 75.5):
+    /// inside the window, plausible, and half as far in as intended — that two-fold gap is what this
+    /// test is for.
+    ///
+    /// The odd half-points are SONNY-145's centre sampling: a named pixel resolves to the middle of
+    /// the region it covers rather than its leading edge. **The offset is half a *sent* pixel**, so
+    /// it scales with the resample and stays inside the one answer about the picture's size this
+    /// test exists to protect. Half a fixed *point* would be a second answer, and it would land here
+    /// at (200.5, 150.5).
     ///
     /// Everything the model was told and everything recorded about its answer belongs to the same
     /// space, so the prompt's declared dimensions and the journal's image coordinates are asserted
@@ -1676,13 +1684,13 @@ struct VisionSessionRunTests {
         #expect(prompt.contains("0 <= x < 400"))
         #expect(!prompt.contains("800x600 pixels"))
 
-        #expect(fixture.synthesizer.events.contains(.clicked(CGPoint(x: 200, y: 150))))
+        #expect(fixture.synthesizer.events.contains(.clicked(CGPoint(x: 201, y: 151))))
 
         let record = try #require(try fixture.journal.loadAll().first)
         let entry = try #require(record.entries.first)
         #expect(entry.imageX == 100)
         #expect(entry.imageY == 75)
-        #expect(entry.observationAfter.contains("(200, 150)"))
+        #expect(entry.observationAfter.contains("(201, 151)"))
     }
 
     /// The bounds the model is held to are the ones it was given. A point inside the capture but
