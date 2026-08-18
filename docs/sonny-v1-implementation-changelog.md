@@ -157,6 +157,43 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/sonny-146-request-compression
+Status: complete
+Date: 2026-08-17
+Tickets: SONNY-146 (vision requests sent uncompressed; deflate recovers a quarter to a third of the body losslessly). Spawned nothing.
+Reviewed by: fresh session (per WORKFLOW.md step 7) — pending at PR open.
+
+Spec sections covered: none new. Transport for §13's screen-control route, ahead of row 12's gateway.
+Files changed: new: `Sources/MacAgentCore/HTTPBodyCompression.swift`; modified: `Sources/MacAgentCore/VisionModelClient.swift`, `Tests/MacAgentCoreTests/VisionModelClientTests.swift`.
+Tests: CLAUDE.md's exact flagged command -> pass, **1277 tests in 95 suites**, exit 0, at `f18e057`, twice. Branch-point baseline at `06297f1` was 1272 in 95: **+5 tests, +0 suites**.
+
+Behavior added:
+- The vision client can send a gzip-encoded request body. **Off for the default endpoint** — see below.
+
+Behavior preserved (required, no blanket claims):
+- **The default endpoint's request is byte-for-byte what it was**: uncompressed, no `Content-Encoding`. Pinned by a test that constructs the client *without naming the flag*, so what it holds is the production default.
+- **`maximumImageBytes` and the 4,200,000-byte contract limit are both unchanged**, and section below says why that is the right answer rather than an omission.
+- **`aRequestAtTheCeilingStaysInsideTheHostBodyBudget` is untouched and still passes.** It measures the body as sent, so it would have broken had compression been switched on by default — which is one more reason the default matters.
+
+Architectural decisions / pitfalls discovered (required):
+- **`NSData.compressed(using: .zlib)` is raw DEFLATE, not gzip and not zlib.** A body produced by it and labelled `Content-Encoding: gzip` fails to inflate — verified against an independent implementation, which rejected it as "Not a gzipped file". SONNY-146's own 29–35% measurement used that call, which is fine for sizing and wrong for the header. `HTTPBodyCompression` adds the real container: fixed 10-byte header, raw DEFLATE, CRC-32 and length little-endian.
+- **The CRC is the part that fails quietly.** A wrong polynomial or table produces a stream that decompresses to the right bytes and is *then* rejected by the receiver's integrity check. Pinned against the published vector `0x414FA339`, and the mutation confirms only that test catches it — the round-trip test passes with a broken CRC.
+- **`gzip` rather than `deflate`, on purpose.** RFC 7230 defines `deflate` as the zlib container while much of the deployed world sends raw DEFLATE under that name, so the label's meaning would depend on whichever server is on the far end. `gzip` has one meaning, and `docs/sonny-backend-api-contract.md` §6.4 already obliges Sonny's own backend to accept it.
+- **This ticket's `Accept-Encoding` instruction is wrong, and following it would have made the response worse.** URLSession already sends `Accept-Encoding: gzip, deflate` on every request with nothing set — measured against a local server. Setting it by hand *replaces* that advertisement with something narrower: the same probe saw `gzip` alone, and `identity`, when each was set. So nothing is set, and the code says why, because an absent header reads like an omission.
+- **Compression is a property of the far end, so it travels with `endpoint` rather than being a free-floating switch.** Off for the default endpoint because whether OpenCode's Zen route inflates a gzip body is **unverified** — confirming it needs a live call with a real key, which this session had none of, and it was this ticket's own first requirement. Turning it on unverified risks every screen-control session for about a quarter of the body. SONNY-131 flips the flag and the endpoint together, in one edit, at the one construction site.
+- **A mutation caught a test that pinned the wrong default.** The first version of the default-endpoint test went through this suite's `client` helper, which passes the flag explicitly — so flipping the *production* default to `true` left it green. It now constructs the client directly. The whole safety argument rests on that default, and the test that guards it was guarding a helper.
+- **Byte-comparing two `JSONSerialization` outputs is unsound.** The body is a `[String: Any]` and key order is not guaranteed, so two serialisations of the same dictionary can differ byte-for-byte at identical length — which the first version of the round-trip test hit. It compares parsed objects now. Flaky rather than wrong, which is worse.
+
+Known limitations / deferred scope:
+- **Nothing is compressed in production yet**, and that is the honest state: the capability ships tested and unused until SONNY-131 gives it a far end that is ours. The alternative was enabling it against an unverified third-party route.
+- **The measured figure is a floor, not a typical case.** `EGRESS-COMPRESSION-RATIO` prints **0.753** on a 1728×1117 seeded-noise capture — uniform noise is the encoder's worst input and forces the lossy branch, so it compresses least. SONNY-146's 0.650–0.709 on five real captures at `e260575` is the more representative band. The test prints on every run rather than freezing a number into prose, following `theShippingPolicyKeepsEvenItsWorstCaseUnderTheCeiling`.
+
+**The ceiling question, answered rather than quietly moved.** Compression does not change what the ceiling should be, in either place it lives. `maximumImageBytes` bounds the *image*, is checked before the body exists, and exists for legibility and a clear refusal rather than for wire size. The contract's 4,200,000-byte server limit is measured on the **decoded** body by deliberate choice, precisely so a client that compresses cannot smuggle a larger payload past it. What compression does change is the figure SONNY-125 measures against Supabase, which publishes no request-body ceiling at all: the wire body at the ceiling becomes roughly three quarters of ~4.01 MB. If that undocumented limit turns out to apply to the encoded bytes, as a proxy seeing wire bytes would, compression buys real headroom — which is the reason for landing this before that measurement rather than after.
+
+Open questions (required): one, owned and named. **Whether the current OpenCode route accepts a gzip request body is unverified**, and it cannot be answered without a live call. It stops mattering when SONNY-131 repoints the client at Sonny's own gateway, which the contract already obliges to accept gzip — so the answer is "moot on the timeline that matters", not "unknown and blocking".
+
+Next branch: unchanged.
+
 ### Branch: fix/sonny-157-named-browser
 Status: complete
 Date: 2026-08-17
