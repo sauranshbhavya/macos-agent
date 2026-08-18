@@ -1494,8 +1494,8 @@ public final class AgentActionExecutor {
             for written in segmentPreviews.flatMap(\.writes) {
                 claimed.recordWrite(written)
             }
-            for source in segmentPreviews.flatMap(\.convertedSources) {
-                claimed.recordConversion(ofSource: source)
+            for converted in segmentPreviews.flatMap(\.convertedSources) {
+                claimed.recordConversion(ofSource: converted.sourcePath, to: converted.destinationPath)
             }
             if let producedPath = segmentPreviews.flatMap(\.writes).last {
                 previousArtifactPath = producedPath
@@ -1526,8 +1526,8 @@ public final class AgentActionExecutor {
             for written in result.previews.flatMap(\.writes) {
                 claimed.recordWrite(written)
             }
-            for source in result.previews.flatMap(\.convertedSources) {
-                claimed.recordConversion(ofSource: source)
+            for converted in result.previews.flatMap(\.convertedSources) {
+                claimed.recordConversion(ofSource: converted.sourcePath, to: converted.destinationPath)
             }
             summaries.append(result.summary)
             suggestions.append(contentsOf: result.suggestions)
