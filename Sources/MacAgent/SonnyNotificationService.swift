@@ -11,6 +11,13 @@ enum SonnyNotificationLog {
 private enum SonnyNotificationCategory {
     static let permission = "SONNY_PERMISSION"
     static let error = "SONNY_ERROR"
+    /// A finished run's result. Its own category rather than reusing `error`, which carries a
+    /// "Retry" action that makes no sense on a run that succeeded (SONNY-56).
+    static let outcome = "SONNY_OUTCOME"
+}
+
+private enum SonnyNotificationUserInfo {
+    static let taskID = "SONNY_TASK_ID"
 }
 
 private enum SonnyNotificationAction {
@@ -31,13 +38,22 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
     private let onAllow: () -> Void
     private let onRetry: () -> Void
     private let onOpen: () -> Void
+    /// The default action for a finished-run notification, which opens that task rather than the
+    /// widget (PR #67 review, F4). Separate from `onOpen` because the two land in different places:
+    /// a failure's message lives in the widget, a result's lives in Command Center.
+    private let onOpenTask: (String?) -> Void
 
     /// Fails when the current process has no real app-bundle identity — e.g. `swift run`'s bare
     /// executable (no `Info.plist`/`CFBundleIdentifier`), as opposed to a packaged `.app`.
     /// `UNUserNotificationCenter.current()` unconditionally crashes in that environment
     /// (`bundleProxyForCurrentProcess is nil`, an uncaught Objective-C exception, not a throwing
     /// Swift error) — this has to be checked *before* ever touching the class, not caught after.
-    init?(onAllow: @escaping () -> Void, onRetry: @escaping () -> Void, onOpen: @escaping () -> Void) {
+    init?(
+        onAllow: @escaping () -> Void,
+        onRetry: @escaping () -> Void,
+        onOpen: @escaping () -> Void,
+        onOpenTask: @escaping (String?) -> Void = { _ in }
+    ) {
         guard Bundle.main.bundleIdentifier != nil else {
             return nil
         }
@@ -45,6 +61,7 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
         self.onAllow = onAllow
         self.onRetry = onRetry
         self.onOpen = onOpen
+        self.onOpenTask = onOpenTask
         super.init()
         center.delegate = self
         registerCategories()
@@ -79,6 +96,14 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
                 actions: [retryAction],
                 intentIdentifiers: [],
                 options: []
+            ),
+            // No actions. SONNY-121 owns acknowledgement and will decide what, if anything, this
+            // one offers — adding a speculative button here would be a second place it has to undo.
+            UNNotificationCategory(
+                identifier: SonnyNotificationCategory.outcome,
+                actions: [],
+                intentIdentifiers: [],
+                options: []
             )
         ])
     }
@@ -96,6 +121,21 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
         content.title = "Sonny"
         content.body = message
         content.categoryIdentifier = SonnyNotificationCategory.error
+        deliver(content)
+    }
+
+    /// A finished run's summary, for a user who was working somewhere else while it ran.
+    func postOutcomeNotification(summary: String, taskID: String?) {
+        let content = UNMutableNotificationContent()
+        content.title = "Sonny"
+        content.body = summary
+        content.categoryIdentifier = SonnyNotificationCategory.outcome
+        // The task travels with the notification rather than being looked up when the click
+        // arrives: by then another run may have finished, and "the most recent task" would open the
+        // wrong one.
+        if let taskID {
+            content.userInfo[SonnyNotificationUserInfo.taskID] = taskID
+        }
         deliver(content)
     }
 
@@ -123,6 +163,8 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
         withCompletionHandler completionHandler: @escaping () -> Void
     ) {
         let actionIdentifier = response.actionIdentifier
+        let category = response.notification.request.content.categoryIdentifier
+        let taskID = response.notification.request.content.userInfo[SonnyNotificationUserInfo.taskID] as? String
         Task { @MainActor [weak self] in
             switch actionIdentifier {
             case SonnyNotificationAction.allow:
@@ -130,7 +172,14 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
             case SonnyNotificationAction.retry:
                 self?.onRetry()
             case UNNotificationDefaultActionIdentifier:
-                self?.onOpen()
+                // Dispatched by category. The seam was already here and simply unused: every
+                // category shared one handler, so the outcome notification inherited behaviour
+                // written for the failure one (PR #67 review, F4).
+                if category == SonnyNotificationCategory.outcome {
+                    self?.onOpenTask(taskID)
+                } else {
+                    self?.onOpen()
+                }
             default:
                 break
             }

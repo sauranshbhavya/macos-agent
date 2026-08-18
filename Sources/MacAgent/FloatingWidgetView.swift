@@ -103,6 +103,7 @@ struct FloatingWidgetView: View {
 
                 HStack(alignment: .center, spacing: 12) {
                     composerPill
+                    dontSaveButton
                     micButton
                 }
             }
@@ -176,7 +177,15 @@ struct FloatingWidgetView: View {
             // was a real bug — the field is genuinely "in use" even with nothing submitted yet.
             return viewModel.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         case .result, .failure:
-            return true
+            // An outcome the user was notified about does not collapse (SONNY-121). They were
+            // working somewhere else when it happened, so the six-second timer measures how long
+            // they have been *away*, not how long they have had to read it. Returning `false` here
+            // also stops the clear: `scheduleAutoDismissIfNeeded` returns before arming the timer.
+            //
+            // Only `.failure` can currently be notified — the marker is set when an error
+            // notification posts — but the two share this branch, and a `.result` that is not
+            // notified reads `true` exactly as before.
+            return !viewModel.outcomeWasNotified
         case .working:
             return viewModel.activeTaskOrigin != .widget
         case .permission, .clarification, .captureReview, .delegationReview, .sessionPaused, .controlling:
@@ -194,7 +203,11 @@ struct FloatingWidgetView: View {
         case .result:
             return true
         case .failure:
-            return !viewModel.errorIsPersistent
+            // Belt and braces with `isCollapsible` above, which already prevents this being reached
+            // for a notified outcome. Stated twice deliberately: the two decisions are read in
+            // different places, and a later change to the collapse rule must not silently start
+            // wiping outcomes nobody has seen. Both read the one marker, so it is one fact.
+            return !viewModel.errorIsPersistent && !viewModel.outcomeWasNotified
         default:
             return false
         }
@@ -352,9 +365,47 @@ struct FloatingWidgetView: View {
         }
     }
 
+    /// The "Don't be saved" state, made unmissable in the composer itself (SONNY-120).
+    ///
+    /// The button alone is not enough. The two mistakes are not symmetrical: leaving the switch on
+    /// costs a history row nobody minds losing, while forgetting it is off records something the
+    /// user wanted private — and that one cannot be undone afterwards. So the on state gets a chip
+    /// in the pill, where the user is already looking as they type.
+    ///
+    /// Same chip shape, dismiss affordance and System B tokens as `workspaceBindingChip`, and the
+    /// same only-before-dispatch rule. No explanatory sentence beside it: the label is the message.
+    @ViewBuilder
+    private var dontSaveChip: some View {
+        if viewModel.taskRecordingPolicy.suppressesTraces {
+            HStack(spacing: 4) {
+                Text(TaskRecordingPresentation.activeChipText)
+                    .font(WidgetType.captionSmall)
+                    .foregroundStyle(WidgetTheme.textFull)
+                    .lineLimit(1)
+
+                if !isTaskInFlight {
+                    Button {
+                        viewModel.taskRecordingPolicy = .record
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(WidgetTheme.textMuted)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(TaskRecordingPresentation.clearAccessibilityLabel)
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(WidgetTheme.neutralButtonFill)
+            .clipShape(Capsule())
+        }
+    }
+
     private var composerPill: some View {
         HStack(spacing: 10) {
             workspaceBindingChip
+            dontSaveChip
 
             Image(systemName: "wand.and.stars.inverse")
                 .font(WidgetType.icon)
@@ -400,6 +451,41 @@ struct FloatingWidgetView: View {
         .padding(.trailing, isTaskInFlight ? 14 : 8)
         .frame(width: 472, height: 40)
         .widgetGlassPill()
+    }
+
+    /// "Don't save this task" (SONNY-120).
+    ///
+    /// **Only before dispatch.** Hidden outright while a task is in flight rather than disabled —
+    /// the same reasoning already written beside the workspace-binding chip's clear affordance, and
+    /// it holds harder here: flipping this mid-run would promise to un-write records already on
+    /// disk, which it cannot do. A disabled-but-visible control invites the user to try.
+    ///
+    /// A third circular button in the composer row, matching `micButton`'s 36×36 and reusing
+    /// `widgetCircularBackground`, so it introduces no new System B token. **The honest cost, stated
+    /// rather than discovered:** this widens the composer row by 48pt, and the widget is a permanent
+    /// on-screen overlay, so that is a real change to its footprint. The alternative — putting it
+    /// inside the pill — squeezes the text field, which is worse. Proposed on session judgment with
+    /// no wireframe to defer to; SONNY-109 settles it.
+    @ViewBuilder
+    private var dontSaveButton: some View {
+        if !isTaskInFlight {
+            let isOn = viewModel.taskRecordingPolicy.suppressesTraces
+            Button {
+                viewModel.taskRecordingPolicy = isOn ? .record : .suppressTraces
+            } label: {
+                Image(systemName: isOn ? "eye.slash.fill" : "eye.slash")
+                    .font(.system(size: 13, weight: .medium))
+                    .foregroundStyle(.white)
+            }
+            .buttonStyle(.plain)
+            .frame(width: 36, height: 36)
+            .widgetCircularBackground(
+                tint: isOn ? WidgetTheme.primaryAction : WidgetTheme.neutralButtonFill
+            )
+            .accessibilityLabel(TaskRecordingPresentation.controlLabel)
+            .accessibilityValue(TaskRecordingPresentation.controlAccessibilityValue(isOn: isOn))
+            .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
+        }
     }
 
     private var micButton: some View {

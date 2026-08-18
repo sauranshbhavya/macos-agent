@@ -91,10 +91,7 @@ public struct RecentArtifactStore: @unchecked Sendable {
     }
 
     public func recent(matching rawQuery: String? = nil, limit: Int = 10, now: Date = Date()) throws -> [RecentArtifact] {
-        let query = rawQuery?
-            .trimmingCharacters(in: .whitespacesAndNewlines)
-            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-            .lowercased()
+        let query = rawQuery.map(SearchText.normalizedQuery)
 
         let artifacts = try loadAll(now: now)
         let filtered: [RecentArtifact]
@@ -151,10 +148,11 @@ public struct RecentArtifactStore: @unchecked Sendable {
         )
     }
 
+    /// Which fields of an artifact are searchable is this store's business; *how* the text is
+    /// normalised is not, and lives in `SearchText` so task-history search folds identically
+    /// (SONNY-118).
     private func normalizedSearchText(for artifact: RecentArtifact) -> String {
-        "\(artifact.title) \(artifact.path)"
-            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-            .lowercased()
+        SearchText.normalized("\(artifact.title) \(artifact.path)")
     }
 
     private func unique(_ values: [String]) -> [String] {

@@ -188,10 +188,196 @@ struct AgentViewModelLocalStorageTests {
         #expect(notice.components(separatedBy: explanation).count - 1 == 1)
         #expect(notice == "Sonny could not load encrypted local data. saved routines: \(explanation)")
     }
+
+    // MARK: - Per-task deletion (SONNY-116)
+
+    @Test
+    func deletingATaskRemovesItsHistoryRowAndItsScreenRecordTogether() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let encryption = testEncryption(byte: 0x42)
+        let fixture = try seedLinkedTask(root: root, encryption: encryption)
+        let viewModel = try makeViewModel(root: root, encryption: encryption)
+        viewModel.refreshTaskHistory()
+        let doomed = try #require(viewModel.taskHistoryRecords.first { $0.command == "reply in Discord" })
+
+        viewModel.deleteTask(doomed)
+
+        #expect(viewModel.errorMessage == nil)
+        // Published state agrees with the file: the row is gone from both.
+        #expect(!viewModel.taskHistoryRecords.contains { $0.id == doomed.id })
+        #expect(try fixture.history.loadAll().map(\.command) == ["unrelated"])
+        // And the screen record went with it.
+        #expect(try fixture.journal.record(withID: "session-1") == nil)
+        // The unrelated task's own session is untouched — the delete is per-task, not a wipe.
+        #expect(try fixture.journal.record(withID: "session-2") != nil)
+    }
+
+    /// **The ordering test the ticket asks for, and the reason it exists.** Dependents are deleted
+    /// before the row because the row is the only thing that makes them reachable through the
+    /// product. Forcing the row's delete to fail proves the order rather than commenting it: the
+    /// screen record is already gone, and the row survives carrying a link that now resolves to
+    /// nothing — the designed dangling state, and a state the user can retry out of.
+    ///
+    /// If a later refactor swaps the two writes, this test fails: the journal would still hold the
+    /// session while the row had gone, which is the orphan the founder named as the real defect.
+    @Test
+    func whenTheRowDeleteFailsTheScreenRecordIsAlreadyGoneAndTheRowSurvives() throws {
+        let root = try makeDirectory()
+        let historyRoot = root.appendingPathComponent("history", isDirectory: true)
+        try FileManager.default.createDirectory(at: historyRoot, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: historyRoot.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let encryption = testEncryption(byte: 0x42)
+        let fixture = try seedLinkedTask(root: root, encryption: encryption, historyRoot: historyRoot)
+        let viewModel = try makeViewModel(root: root, encryption: encryption, taskHistoryRoot: historyRoot)
+        viewModel.refreshTaskHistory()
+        let doomed = try #require(viewModel.taskHistoryRecords.first { $0.command == "reply in Discord" })
+        // Read-only directory: task history still reads, but its rewrite cannot land. The journal
+        // sits elsewhere and stays writable.
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: historyRoot.path)
+
+        viewModel.deleteTask(doomed)
+
+        // The dependent went first and is gone.
+        #expect(try fixture.journal.record(withID: "session-1") == nil)
+        // The row survived, still carrying its now-unresolvable link.
+        let survivingRow = try #require(try fixture.history.loadAll().first { $0.id == doomed.id })
+        #expect(survivingRow.visionSessionID == "session-1")
+        #expect(survivingRow.command == "reply in Discord")
+        // A delete is a write, so the failure gets write wording and never the load-failure banner.
+        let message = try #require(viewModel.errorMessage)
+        #expect(message.hasPrefix("Could not delete this task: "))
+        #expect(!message.contains("decrypted or decoded"))
+        #expect(viewModel.localStorageNotice == nil)
+    }
+
+    @Test
+    func deletingOnlyTheScreenRecordLeavesTheRowAndItsLinkInPlace() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let encryption = testEncryption(byte: 0x42)
+        let fixture = try seedLinkedTask(root: root, encryption: encryption)
+        let viewModel = try makeViewModel(root: root, encryption: encryption)
+        viewModel.refreshTaskHistory()
+        let target = try #require(viewModel.taskHistoryRecords.first { $0.command == "reply in Discord" })
+
+        viewModel.deleteScreenRecord(for: target)
+
+        #expect(viewModel.errorMessage == nil)
+        #expect(try fixture.journal.record(withID: "session-1") == nil)
+        // The row is still there, and it keeps its link — deliberately, so a deleted screen record
+        // and one that aged out look the same.
+        let row = try #require(try fixture.history.loadAll().first { $0.id == target.id })
+        #expect(row.visionSessionID == "session-1")
+        #expect(try fixture.history.loadAll().count == 2)
+    }
+
+    @Test
+    func deletingATaskThatRanNoScreenSessionRemovesJustTheRow() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let encryption = testEncryption(byte: 0x42)
+        let fixture = try seedLinkedTask(root: root, encryption: encryption)
+        let viewModel = try makeViewModel(root: root, encryption: encryption)
+        viewModel.refreshTaskHistory()
+        let plainTask = try #require(viewModel.taskHistoryRecords.first { $0.command == "unrelated" })
+        #expect(plainTask.visionSessionID == nil)
+
+        viewModel.deleteTask(plainTask)
+
+        #expect(viewModel.errorMessage == nil)
+        #expect(try fixture.history.loadAll().map(\.command) == ["reply in Discord"])
+        // Nothing reached the journal, so the other task's session is still there.
+        #expect(try fixture.journal.record(withID: "session-1") != nil)
+    }
+
+    @Test
+    func deletingATaskThatIsAlreadyGoneIsSilent() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let encryption = testEncryption(byte: 0x42)
+        let fixture = try seedLinkedTask(root: root, encryption: encryption)
+        let viewModel = try makeViewModel(root: root, encryption: encryption)
+        viewModel.refreshTaskHistory()
+        let target = try #require(viewModel.taskHistoryRecords.first { $0.command == "unrelated" })
+
+        viewModel.deleteTask(target)
+        viewModel.deleteTask(target)
+
+        #expect(viewModel.errorMessage == nil)
+        #expect(viewModel.localStorageNotice == nil)
+        #expect(try fixture.history.loadAll().map(\.command) == ["reply in Discord"])
+    }
+
+    private struct LinkedTaskFixture {
+        var history: TaskHistoryStore
+        var journal: VisionSessionJournalStore
+    }
+
+    /// Two tasks: one that ran a screen-control session and one that did not, plus a second session
+    /// belonging to nothing under test, so a delete that reached too far is visible.
+    private func seedLinkedTask(
+        root: URL,
+        encryption: LocalStorageEncryption,
+        historyRoot: URL? = nil
+    ) throws -> LinkedTaskFixture {
+        let history = TaskHistoryStore(
+            fileURL: (historyRoot ?? root).appendingPathComponent("task-history.json"),
+            encryption: encryption
+        )
+        let journal = VisionSessionJournalStore(
+            fileURL: root.appendingPathComponent("vision-sessions.json"),
+            encryption: encryption
+        )
+        let base = Date(timeIntervalSince1970: 1_700_000_000)
+        for id in ["session-1", "session-2"] {
+            try journal.save(
+                VisionSessionRecord(
+                    id: id,
+                    goal: "goal \(id)",
+                    appDisplayName: "Discord",
+                    startedAt: base
+                )
+            )
+        }
+        try history.record(
+            CompletedTaskRecord(
+                command: "reply in Discord",
+                startedAt: base,
+                completedAt: base.addingTimeInterval(30),
+                outcomeStatus: .completed,
+                visionSessionID: "session-1"
+            )
+        )
+        try history.record(
+            CompletedTaskRecord(
+                command: "unrelated",
+                startedAt: base.addingTimeInterval(100),
+                completedAt: base.addingTimeInterval(130),
+                outcomeStatus: .completed
+            )
+        )
+        return LinkedTaskFixture(history: history, journal: journal)
+    }
 }
 
 @MainActor
-private func makeViewModel(root: URL, encryption: LocalStorageEncryption) throws -> AgentViewModel {
+/// `taskHistoryRoot` exists for the delete-ordering test, which needs task history in a directory
+/// it can make read-only while the journal stays writable. Everything else defaults to `root`.
+///
+/// The vision journal is injected rather than defaulted for the reason the hermetic-seams comment
+/// below already gives: an un-injected `VisionSessionJournalStore()` resolves to the real
+/// `~/Library/Application Support/Sonny/vision-sessions.json`. No test in this file read it before
+/// SONNY-116, so nothing was wrong yet — which is exactly the shape of the bug that comment
+/// describes, a fixture that is hermetic by accident rather than by construction.
+private func makeViewModel(
+    root: URL,
+    encryption: LocalStorageEncryption,
+    taskHistoryRoot: URL? = nil
+) throws -> AgentViewModel {
     let suiteName = "AgentViewModelLocalStorageTests-\(UUID().uuidString)"
     let userDefaults = try #require(UserDefaults(suiteName: suiteName))
     userDefaults.removePersistentDomain(forName: suiteName)
@@ -222,7 +408,11 @@ private func makeViewModel(root: URL, encryption: LocalStorageEncryption) throws
             encryption: encryption
         ),
         taskHistoryStore: TaskHistoryStore(
-            fileURL: root.appendingPathComponent("task-history.json"),
+            fileURL: (taskHistoryRoot ?? root).appendingPathComponent("task-history.json"),
+            encryption: encryption
+        ),
+        visionSessionJournalStore: VisionSessionJournalStore(
+            fileURL: root.appendingPathComponent("vision-sessions.json"),
             encryption: encryption
         ),
         clipboardHistorySettingsStore: ClipboardHistorySettingsStore(
