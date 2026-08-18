@@ -58,7 +58,8 @@ public struct DocxConversionCapabilityAdapter: CapabilityAdapter {
         let records = try context.inventory.docxFiles(
             in: spec.folder,
             outputFolder: spec.outputFolder,
-            mockDestinations: spec.usesMockDestinations
+            mockDestinations: spec.usesMockDestinations,
+            claimedEarlierInThisRun: context.claimedEarlierInThisRun
         )
         guard !records.isEmpty else {
             throw AgentExecutionError.noMatchingFiles("No .docx files were found in \(spec.folder.path).")
@@ -82,7 +83,10 @@ public struct DocxConversionCapabilityAdapter: CapabilityAdapter {
             title: "Convert \(pending.count) DOCX files",
             details: details,
             writes: pending.map(\.destinationURL.path),
-            conversions: pending.map { "\($0.sourceURL.path) -> \($0.destinationURL.path)" }
+            conversions: pending.map { "\($0.sourceURL.path) -> \($0.destinationURL.path)" },
+            convertedSources: pending.map {
+                ConvertedSource(sourcePath: $0.sourceURL.path, destinationPath: $0.destinationURL.path)
+            }
         )
     }
 
