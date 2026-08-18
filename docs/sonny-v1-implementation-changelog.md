@@ -165,7 +165,9 @@ Reviewed by: fresh session (per WORKFLOW.md step 7), PR #69, cycle 1. Verdict: *
 
 Spec sections covered: none new. A correctness fix inside row I's acting loop.
 Files changed: `Sources/MacAgentCore/ScreenActionSynthesizer.swift` (the mapping and its doc comment). `Tests/MacAgentCoreTests/VisionDecisionAndGeometryTests.swift` (five exact-point expectations, and the ladder sweep). `Tests/MacAgentTests/VisionSessionRunTests.swift` (the end-to-end resampled-click test). This changelog. Four paths.
-Tests: CLAUDE.md's exact flagged command -> pass, **1289 tests in 95 suites**, exit 0, twice, at `17d00ce`. Branch point `2ebc24f` measured on this branch: **1289 in 95** — **+0 tests**, correctly: this branch tightens and re-points existing tests rather than adding any.
+Tests: CLAUDE.md's exact flagged command -> pass, **1290 tests in 95 suites**, exit 0, at `bf8acdb` — the last commit on this branch that touches code; every commit after it changes records only. Branch point `4a91d4a` measured on this branch: **1290 in 95** — **+0 tests, +0 suites**, correctly: this branch tightens and re-points existing tests rather than adding any.
+
+> **Re-stamped after the rebase onto `4a91d4a`.** The branch first recorded **1289 in 95** over a 1289 branch point at `2ebc24f`, at SHAs the rebase replaced; `fix/sonny-102-termius-deny-list` then merged and added one test, moving the branch point to 1290. **Both ends were measured again rather than adjusted arithmetically**, and the delta is still +0 — the figure moved because the branch point moved, not because this branch added anything. `git range-diff 2ebc24f..efb283b 4a91d4a..HEAD` reports the code commit and the fix-round commit **identical**, with the one changed commit differing only by where the changelog entry lands, which is the conflict resolution itself.
 
 Behavior added:
 - A model-named pixel resolves to that pixel's **centre**. Every synthesized click moves down-and-right by half a sent pixel — half a point at full resolution, one point at the ladder's 0.5 floor — and the systematic up-left bias is gone.
@@ -246,7 +248,6 @@ Known limitations / deferred scope:
 Open questions (required): none. The founder settled the one this ticket was blocked on — whether dedicated SSH clients belong on the list — on 2026-08-17, and closed the ticket on 2026-08-18.
 
 Next branch: not a roadmap row. This is an out-of-row entry addition sequenced ahead of the implementation lanes because its decision was already made and its cost is one line plus its records. The locked roadmap is unaffected: rows D, E, J and 12 continue as they stood.
-
 
 ### Branch: fix/docx-conversion-defects
 Status: complete
