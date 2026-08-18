@@ -19,6 +19,14 @@ env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disabl
 ```
 Plain `swift test` will fail to link. The flags above are required, not optional.
 
+Mutation batteries run through `scripts/mutate`, never hand-rolled in a session scratchpad. It
+refuses to start while `git status --porcelain` prints anything: a hand-rolled battery reverts its
+mutants with `git checkout -- <file>`, which restores from HEAD, so run over uncommitted work it
+deletes the work instead of the mutation — five times so far, three of them producing false
+measurements, once in the reassuring direction where a bogus kill claimed coverage that was not
+there. `scripts/mutate --help` has the plan format;
+`scripts/mutate selftest` re-proves the refusal still fires.
+
 `swift run MacAgent` works for everyday iteration, but a bare SwiftPM executable has no real
 app-bundle identity — `UNUserNotificationCenter`, the microphone permission prompt
 (`AVCaptureDevice.requestAccess`), and Apple-Events-gated automation (Finder/Word) all require one
@@ -82,7 +90,7 @@ How claims get made in this repo — in chat, in code comments, in ticket commen
 
 - **Enumerate before you subtract.** Before claiming that something is *not* rendered, *not* reachable, or unchanged, enumerate what it actually does — every call site, every surface it writes to, every field it sets — and only then subtract. A negative is the one kind of claim a single inspected path can never establish, because the evidence against it lives everywhere you didn't look. (Trigger: three subtraction-without-enumeration incidents across SONNY-44 and SONNY-56 — the act log, "both surfaces", "tells them nothing" — each reasoned from one path and each wrong.)
 - **A quantified claim is checked against the whole population, with a sweep that tolerates the markup it is searching.** "Nineteen sites" was one narrow grep's answer; a wider grep said 52 call-site lines across 48 test functions in 11 files; the compiler-verified population at `ca4fbe4` is 74 call-site lines across 57 enclosing functions in 12 files. Each correction came from a wider method than the last, and only the compiler-driven one — a deprecation probe, because grep cannot type-resolve receivers — settled it. Markdown emphasis is the specific trap in this repo's prose: a phrase written `*every* URL` does not match a plain `grep "every URL"`, so a sweep over docs needs a regex tolerating `*`/`_` inside the phrase (or a pass with the markup stripped) before a count is reported as complete. Count first, then write the number — never the reverse.
-- **Every reported measurement carries the SHA it was measured at.** Test counts, mutation-battery results, call-site counts — in ticket comments, changelog entries, PR bodies and code comments alike. A measurement goes stale the moment the tree moves, and a bare count cannot be told apart from a stale one; that is exactly how a mid-branch mutation count survived into a closing comment describing the merged tree (PR #28, F1). `docs/sonny-v1-implementation-changelog.md`'s SONNY-24 entry states this as that branch's practice — it is repo-wide.
+- **Every reported measurement carries the SHA it was measured at.** Test counts, mutation-battery results, call-site counts — in ticket comments, changelog entries, PR bodies and code comments alike. (Batteries run through `scripts/mutate`, which stamps the SHA on its own report for you.) A measurement goes stale the moment the tree moves, and a bare count cannot be told apart from a stale one; that is exactly how a mid-branch mutation count survived into a closing comment describing the merged tree (PR #28, F1). `docs/sonny-v1-implementation-changelog.md`'s SONNY-24 entry states this as that branch's practice — it is repo-wide.
 
 ## Subagent defaults
 
