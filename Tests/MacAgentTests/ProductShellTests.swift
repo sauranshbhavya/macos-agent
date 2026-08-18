@@ -609,7 +609,14 @@ struct ProductShellTests {
             // declaration as deliberately never cleared — `retryLastCommand` reads it after the live
             // binding is gone, and a workspace name the store no longer has resolves to `.unscoped`
             // anyway.
+            // `taskRecordingPolicy` sits here with `command` for the same reason: it is the
+            // user's own pending instruction for the next task, not a task artifact. The wipe
+            // guards on `!isRunning`, so no suppressed run is in flight, and silently switching
+            // "Don't save this task" back off because someone erased their history would discard a
+            // choice they deliberately made. It is reset by `finishRecordingPolicyIfSettled()` on
+            // every terminal state instead.
             "command", "lastCommand", "isRunning", "activeTaskOrigin", "lastAssessedScope",
+            "taskRecordingPolicy",
             "isPreparingVoiceRecording", "isRecordingVoice", "isTranscribingVoice",
             "isPushToTalkHotKeyDown", "voiceRecordingOrigin", "clarificationOrigin",
             "scheduledRunDisplayCommand",
@@ -1367,6 +1374,127 @@ struct ProductShellTests {
         }
     }
 
+    // MARK: - "Don't save this task" (SONNY-120)
+
+    /// **The test that defines done, and the reason it is written this way.**
+    ///
+    /// It enumerates the `.trace` stores from `LocalStore` — SONNY-115's classification — rather
+    /// than from a list written here. That is the whole point: the writing sites live in five
+    /// separate layers, and a boolean remembered at each of them is exactly how this feature would
+    /// quietly stop being true. Enumerating from the classification means a trace store added later
+    /// is covered the day it is classified, whether or not anyone remembered its call site.
+    ///
+    /// Byte-identical, not "no new records" — a rewrite that happened to produce the same records
+    /// would still be a write, and AES-GCM seals with a fresh nonce, so identical bytes prove no
+    /// write occurred at all rather than that the content matched.
+    @Test
+    func aSuppressedRunLeavesEveryTraceStoreByteIdentical() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        // A normal run first, so every trace store this task touches actually exists on disk. A
+        // file that was never created is trivially "unchanged", which would make the assertion below
+        // pass for the wrong reason.
+        viewModel.command = "= 1 + 1"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+        #expect(try fixture.taskHistoryStore.loadAll().count == 1)
+
+        let traceStores = LocalStore.allCases.filter { $0.kind == .trace }
+        #expect(!traceStores.isEmpty, "The classification produced no trace stores to check.")
+        // Mapped into the fixture root by filename — the fixture wires every store to
+        // `root/<the store's own file name>`, so the classification's URLs and the test's agree
+        // without a second hand-written mapping.
+        let before = snapshot(of: traceStores, in: fixture.root)
+        #expect(!before.isEmpty, "No trace-store file existed to compare.")
+
+        viewModel.taskRecordingPolicy = .suppressTraces
+        viewModel.command = "= 2 + 2"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        let after = snapshot(of: traceStores, in: fixture.root)
+        for (name, bytes) in before {
+            #expect(after[name] == bytes, "\(name) changed during a suppressed run")
+        }
+        // Files that did not exist before must not have been created by the suppressed run either.
+        #expect(Set(after.keys) == Set(before.keys))
+        // And the row really is absent, read back from the file rather than from published state.
+        #expect(try fixture.taskHistoryStore.loadAll().map(\.command) == ["= 1 + 1"])
+    }
+
+    /// The negative half, and it matters as much as the positive one: a suppressed run still does
+    /// what the user asked. Someone who says "save this as a routine" with the switch on still wants
+    /// the routine — a saved routine is an *effect*, and this switch never claimed to hide effects.
+    @Test
+    func aSuppressedRunStillWritesTheArtifactTheUserAskedFor() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        viewModel.taskRecordingPolicy = .suppressTraces
+        viewModel.command = "snippet save ;quiet = Nothing to see"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        // The artifact survives — a snippet is a `.artifact` store, never suppressed...
+        #expect(try fixture.snippetStore.loadAll().contains { $0.value.trigger == ";quiet" })
+        // ...and the trace of having made it does not.
+        #expect(try fixture.taskHistoryStore.loadAll().isEmpty)
+    }
+
+    @Test
+    func theSwitchGoesBackOffOnEveryTerminalOutcome() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        // Success.
+        viewModel.taskRecordingPolicy = .suppressTraces
+        viewModel.command = "= 1 + 1"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+        #expect(viewModel.taskRecordingPolicy == .record)
+
+        // Failure — the outcome most likely to skip a cleanup path.
+        viewModel.taskRecordingPolicy = .suppressTraces
+        viewModel.command = "calc apples"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+        #expect(viewModel.taskRecordingPolicy == .record)
+        // Neither run left a row behind.
+        #expect(try fixture.taskHistoryStore.loadAll().isEmpty)
+    }
+
+    /// A run that never started leaves the switch alone. Its counterpart — the switch surviving an
+    /// approval *pause* — is what `finishRecordingPolicyIfSettled()`'s guard exists for.
+    @Test
+    func theSwitchSurvivesUntilATaskActuallyEnds() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        viewModel.taskRecordingPolicy = .suppressTraces
+        // No command, so `start()` refuses and nothing runs.
+        viewModel.command = "   "
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.taskRecordingPolicy == .suppressTraces)
+    }
+
+    private func snapshot(of stores: [LocalStore], in root: URL) -> [String: Data] {
+        var result: [String: Data] = [:]
+        for store in stores {
+            let name = store.fileURL().lastPathComponent
+            if let data = try? Data(contentsOf: root.appendingPathComponent(name)) {
+                result[name] = data
+            }
+        }
+        return result
+    }
+
     @Test
     func completedTaskIsRecordedInPersistentHistory() async throws {
         let fixture = try makeProductShellFixture()
@@ -2053,6 +2181,14 @@ private func makeProductShellFixture(
             encryption: encryption
         ),
         taskHistoryStore: taskHistoryStore,
+        // Injected under the fixture root rather than defaulted, or it resolves to the real
+        // ~/Library/Application Support/Sonny/vision-sessions.json. No test read it before
+        // SONNY-120, so nothing was wrong yet — which is exactly the hermeticity-by-accident the
+        // seam comment above describes.
+        visionSessionJournalStore: VisionSessionJournalStore(
+            fileURL: root.appendingPathComponent("vision-sessions.json"),
+            encryption: encryption
+        ),
         clipboardHistorySettingsStore: clipboardSettingsStore,
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
             reader: ProductShellPasteboardReader(),

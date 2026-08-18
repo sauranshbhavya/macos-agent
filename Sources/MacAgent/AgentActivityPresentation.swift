@@ -220,3 +220,31 @@ enum AgentActivityPresentation {
         return "Ran without asking — worth knowing: " + reasons.joined(separator: " ")
     }
 }
+
+/// "Don't save this task" — the widget control's copy (SONNY-120).
+///
+/// **The label carries the whole meaning, because no sentence may sit beside it.** The founder's
+/// decision of 2026-08-16: the feature is not called Incognito, because incognito borrows a promise
+/// from browsers this cannot keep — files still get created, apps still open, the command still goes
+/// to the provider — and the 2026-08-14 rule forbids the clarifying sentence that would normally fix
+/// an over-promising name. So the name was narrowed until no sentence is needed.
+///
+/// Nothing here explains how it works. There is no tooltip, no help text and no disclosure line, and
+/// `TaskRecordingPresentationTests` refuses copy that reads like one.
+enum TaskRecordingPresentation {
+    /// The control's accessibility label and its only name.
+    static let controlLabel = "Don't save this task"
+
+    /// The chip shown in the composer while it is on. Deliberately in the past-looking tense the
+    /// user cares about — what will be true of this task once it is done.
+    static let activeChipText = "Won't be saved"
+
+    static let clearAccessibilityLabel = "Turn off don't save this task"
+
+    /// The on state has to be unmissable, because the two mistakes are not symmetrical: leaving it
+    /// on costs a history row nobody minds losing, and forgetting it is off records something the
+    /// user wanted private — and that one cannot be undone after the fact.
+    static func controlAccessibilityValue(isOn: Bool) -> String {
+        isOn ? "On" : "Off"
+    }
+}

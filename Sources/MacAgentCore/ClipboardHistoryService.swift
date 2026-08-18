@@ -244,6 +244,21 @@ public final class ClipboardHistoryMonitor {
         _ = try store.loadAll(now: now())
     }
 
+    /// Forgets what the pasteboard looked like, **without recording it**.
+    ///
+    /// Exists because pausing the poll timer is not enough to suppress clipboard history, and the
+    /// difference is a real leak rather than a nicety (SONNY-120). `poll()` records whenever
+    /// `reader.changeCount` differs from the last one it saw, and that counter survives a pause —
+    /// so a run that stops the timer, lets the user copy something, and then restarts it records
+    /// exactly the text the pause existed to withhold, on the very first poll. Measured before this
+    /// method existed: the copied string landed in the store.
+    ///
+    /// Resynchronising on resume closes it. The cost is stated rather than hidden: a copy made
+    /// during the pause is not recorded *later* either — it is gone, which is the point.
+    public func resynchronize() {
+        lastChangeCount = reader.changeCount
+    }
+
     @discardableResult
     public func poll() throws -> ClipboardHistoryItem? {
         // Fail closed. If the consent setting can't be read, recording clipboard contents is the

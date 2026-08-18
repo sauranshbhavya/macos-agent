@@ -65,6 +65,19 @@ final class AgentViewModel: ObservableObject {
     /// reopening Sonny to a filtered task list with no memory of having typed anything would read as
     /// a bug.
     @Published var taskHistoryQuery: String = ""
+
+    /// "Don't save this task" — whether the next run leaves traces (SONNY-120).
+    ///
+    /// **Per task, and reachable only before dispatch.** A Settings switch that stays on was
+    /// declined by the founder on 2026-08-16: it is easy to forget and silently loses weeks of
+    /// history for unrelated tasks. Flipping it mid-run is refused for a harder reason — it would
+    /// promise to un-write records already on disk, which it cannot do. The widget enforces that by
+    /// not offering the control while a task is in flight; `finishRecordingPolicyIfSettled()` is
+    /// what puts it back to `.record` afterwards.
+    ///
+    /// Never applies to scheduled runs. A scheduled run passes through no composer, so there is no
+    /// switch to have been left on — stated here so its absence does not read as a gap.
+    @Published var taskRecordingPolicy: TaskRecordingPolicy = .record
     /// Local-storage health, kept deliberately separate from `errorMessage`: a corrupt store or
     /// a failed save is about Sonny's own data, not about the task the user just ran, and must
     /// never make a successful task read as failed. Rendered as its own notice on both surfaces.
@@ -833,6 +846,20 @@ final class AgentViewModel: ObservableObject {
         // it is not.
         visionSessionProgress = nil
 
+        // Clipboard history pauses for the whole of a suppressed run, and the cost was chosen
+        // knowingly by the founder on 2026-08-16: anything the user copies *by hand* during the task
+        // is not saved either. It cannot be avoided by being cleverer — `ClipboardHistoryMonitor` is
+        // a pasteboard poller watching `changeCount`, so it cannot tell text Sonny copied from text
+        // the user copied.
+        //
+        // A run that ends by crash or quit never reaches the resume in `finishRecordingPolicyIfSettled()`.
+        // That is survivable rather than silent: monitoring is restarted from settings at launch by
+        // `refreshClipboardHistoryNotice()`, so the worst case is clipboard history staying off until
+        // the next launch, never a setting silently rewritten.
+        if taskRecordingPolicy.suppressesTraces {
+            stopClipboardHistoryMonitoring()
+        }
+
         defer {
             publishTaskUsageSummary()
             isRunning = false
@@ -862,6 +889,9 @@ final class AgentViewModel: ObservableObject {
                 activeTaskScope = .unscoped
                 explicitWorkspaceBinding = nil
             }
+            // Guarded internally on the same pause-versus-terminal test, so it is safe to call
+            // unconditionally here and at every other terminal point.
+            finishRecordingPolicyIfSettled()
         }
 
         let taskHistoryStartedAt = Date()
@@ -893,7 +923,7 @@ final class AgentViewModel: ObservableObject {
                     planner: InstantOnlyFallbackPlanner(),
                     executor: executor,
                     logStore: logStore,
-                    recentArtifactStore: recentArtifactStore
+                    recentArtifactStore: recentArtifactStoreForThisRun
                 )
                 prepared = try runner.prepare(plan: prebuiltPlan, source: prebuiltPlanSource)
             } else if let resolution = makeInstantCommandResolver().resolve(command: submittedCommand) {
@@ -901,7 +931,7 @@ final class AgentViewModel: ObservableObject {
                     planner: InstantOnlyFallbackPlanner(),
                     executor: executor,
                     logStore: logStore,
-                    recentArtifactStore: recentArtifactStore
+                    recentArtifactStore: recentArtifactStoreForThisRun
                 )
                 switch resolution {
                 case .plan(let localPlan), .clarify(let localPlan):
@@ -924,7 +954,7 @@ final class AgentViewModel: ObservableObject {
                     planner: selected.planner,
                     executor: executor,
                     logStore: logStore,
-                    recentArtifactStore: recentArtifactStore
+                    recentArtifactStore: recentArtifactStoreForThisRun
                 )
                 prepared = try await runner.prepare(
                     command: submittedCommand,
@@ -1237,9 +1267,15 @@ final class AgentViewModel: ObservableObject {
             // rejected persistent-active-workspace design was rejected for.
             activeTaskScope = .unscoped
             explicitWorkspaceBinding = nil
+            // This function has no `defer`, and this branch returns without ever re-entering
+            // `performStart` — so without this call a task cancelled at its approval prompt would
+            // leave the switch on and clipboard history paused indefinitely.
+            finishRecordingPolicyIfSettled()
             return
         }
 
+        // Everything below is a *running* task being cancelled, which unwinds through
+        // `performStart`'s defer and is settled there.
         currentTask?.cancel()
     }
 
@@ -1464,6 +1500,43 @@ final class AgentViewModel: ObservableObject {
         } catch {
             recordLocalStorageLoadFailure(source, error: error)
         }
+    }
+
+    /// The recent-artifacts store this run may write to, or `nil` when it may not.
+    ///
+    /// Withholding the store rather than checking a flag at the writing site, because `AgentRunner`
+    /// already treats a `nil` store as "record nothing" — the same seam row I gave the vision
+    /// journal. One definition, read by every `AgentRunner` this view model builds, so a new runner
+    /// call site cannot forget the check by omitting it.
+    private var recentArtifactStoreForThisRun: RecentArtifactStore? {
+        taskRecordingPolicy.allowsWriting(to: .recentArtifacts) ? recentArtifactStore : nil
+    }
+
+    /// Puts "Don't save this task" back to off and lets clipboard history resume — but only once the
+    /// run is really over.
+    ///
+    /// **Called from each terminal point rather than from one `defer`, because no single `defer`
+    /// covers them.** `cancelCurrentRun()` has none at all and is the app-wide deny/cancel entry
+    /// point; the two that do exist, in `performStart` and `performApproval`, also fire for *pauses*
+    /// — approval needed, clarification needed — where the run is still going and the switch must
+    /// stay on. The guard below is what tells those apart, using the same
+    /// `approvalRequest == nil && clarificationQuestion == nil` test this file already uses.
+    private func finishRecordingPolicyIfSettled() {
+        guard approvalRequest == nil, clarificationQuestion == nil, !isRunning else {
+            return
+        }
+        guard taskRecordingPolicy != .record else {
+            return
+        }
+        taskRecordingPolicy = .record
+        // Resynchronise *before* monitoring restarts. `poll()` records whenever the pasteboard's
+        // change count differs from the last one it saw, and that counter survived the pause — so
+        // without this the first poll after a suppressed run records exactly what the user copied
+        // during it. Measured: it did.
+        clipboardHistoryMonitor.resynchronize()
+        // Restored from settings rather than unconditionally started, so a user who has clipboard
+        // history switched off does not get it switched on by ending a suppressed task.
+        refreshClipboardHistoryNotice()
     }
 
     func refreshTaskHistory() {
@@ -2104,7 +2177,7 @@ final class AgentViewModel: ObservableObject {
             planner: try makeDelegationPlanner(),
             executor: makeExecutor(),
             logStore: logStore,
-            recentArtifactStore: recentArtifactStore
+            recentArtifactStore: recentArtifactStoreForThisRun
         )
     }
 
@@ -2130,7 +2203,13 @@ final class AgentViewModel: ObservableObject {
         guard let environment = Self.makeVisionEnvironment(
             interaction: self,
             userPauseMonitor: monitor,
-            journalStore: visionSessionJournalStore
+            // The seam row I already built: `VisionSessionEnvironment.journalStore` is Optional, and
+            // a nil one runs the session normally and records nothing. So "Don't save this task"
+            // withholds the store rather than adding a branch inside the loop — which the ticket's
+            // never-touch list forbids, and which would have been a second place to forget.
+            journalStore: taskRecordingPolicy.allowsWriting(to: .visionSessionJournal)
+                ? visionSessionJournalStore
+                : nil
         ) else {
             return nil
         }
@@ -2140,6 +2219,8 @@ final class AgentViewModel: ObservableObject {
 
     func makeExecutor() -> AgentActionExecutor {
         AgentActionExecutor(
+            // A fresh executor per run, so this cannot leak into the next task.
+            recordingPolicy: taskRecordingPolicy,
             whitelist: whitelist,
             zipArchiver: zipArchiver,
             documentConverter: documentConverter,
@@ -2470,6 +2551,7 @@ final class AgentViewModel: ObservableObject {
                 activeTaskScope = .unscoped
                 explicitWorkspaceBinding = nil
             }
+            finishRecordingPolicyIfSettled()
         }
 
         do {
@@ -2596,6 +2678,13 @@ final class AgentViewModel: ObservableObject {
     ) {
         guard [.completed, .failed, .canceled].contains(status),
               let startedAt else {
+            return
+        }
+
+        // Task history is a `.trace` store, so a suppressed run writes no row at all. Note the
+        // consequence for a screen-control run: with no row written there is nothing for a deleted
+        // journal to dangle from, so suppression creates no dangling link.
+        guard taskRecordingPolicy.allowsWriting(to: .taskHistory) else {
             return
         }
 
@@ -2760,6 +2849,10 @@ final class AgentViewModel: ObservableObject {
                 planner: InstantOnlyFallbackPlanner(),
                 executor: executor,
                 logStore: logStore,
+                // The real store, deliberately, not `recentArtifactStoreForThisRun`. Scheduled runs
+                // are never suppressed — the switch is a per-task control on the widget's composer
+                // and a scheduled run passes through no composer. Written out rather than left to
+                // the policy happening to be `.record` here.
                 recentArtifactStore: recentArtifactStore
             )
             self.runner = runner

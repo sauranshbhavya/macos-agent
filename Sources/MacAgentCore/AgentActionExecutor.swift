@@ -59,6 +59,10 @@ public struct PreparedAgentRun: Equatable, Sendable {
 
 @MainActor
 public final class AgentActionExecutor {
+    /// Whether this run leaves traces (SONNY-120). A `let` rather than a settable property because
+    /// `AgentViewModel.makeExecutor()` builds a fresh executor per run — so suppression cannot leak
+    /// from one task into the next, which shared mutable state here would have allowed.
+    private let recordingPolicy: TaskRecordingPolicy
     private let whitelist: PathWhitelist
     private let inventory: FileInventory
     private let zipArchiver: ZipArchiving
@@ -95,6 +99,7 @@ public final class AgentActionExecutor {
     private let visionSession: VisionSessionEnvironment?
 
     public init(
+        recordingPolicy: TaskRecordingPolicy = .record,
         whitelist: PathWhitelist = PathWhitelist(),
         inventory: FileInventory = FileInventory(),
         zipArchiver: ZipArchiving = ProcessZipArchiver(),
@@ -134,6 +139,7 @@ public final class AgentActionExecutor {
         // half-running.
         visionSession: VisionSessionEnvironment? = nil
     ) {
+        self.recordingPolicy = recordingPolicy
         self.whitelist = whitelist
         self.inventory = inventory
         self.zipArchiver = zipArchiver
@@ -1462,7 +1468,8 @@ public final class AgentActionExecutor {
                 }
                 return try await self.execute(plan: plan, preferredBrowser: nestedBrowser, log: log)
             },
-            visionSession: visionSession
+            visionSession: visionSession,
+            recordingPolicy: recordingPolicy
         )
     }
 
