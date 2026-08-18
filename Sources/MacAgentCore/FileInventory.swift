@@ -199,17 +199,22 @@ public struct FileInventory {
                 Self.pdfName(stem: basename, mockDestinations: mockDestinations)
             )
 
-            // **A document this run already converted is not converted again** (PR #65 review, F1).
-            // Checked before the destination rules and keyed on the *source*, because "already
-            // converted" is a fact about the document rather than about where it landed. Two chain
-            // units whose scan scopes overlap — a nested folder pair is enough, since
-            // `regularFiles(in:)` recurses — otherwise re-find the same document, see its preferred
-            // destination already claimed, and rename it: one source converted twice, and a summary
-            // announcing a collision with "another document" that does not exist.
+            // **A document this run already converted into this folder is not converted again**
+            // (PR #65 review, F1; keyed on the pair by the re-check's F5). Checked before the
+            // destination rules. Two chain units whose scan scopes overlap — a nested folder pair is
+            // enough, since `regularFiles(in:)` recurses — otherwise re-find the same document, see
+            // its preferred destination already claimed, and rename it: one source converted twice,
+            // and a summary announcing a collision with "another document" that does not exist.
+            //
+            // **The destination folder is half the key, and leaving it out was its own bug.** Keyed
+            // on the source alone this suppressed a conversion the user had asked for: a later unit
+            // naming a different output folder was told its PDF already existed, at a destination
+            // where none did. `destinationFolder` rather than `preferred` because a renamed output
+            // keeps its folder and loses its filename — see `ConversionClaim`.
             //
             // Reported as a skip, which restores exactly the sentence this case had before SONNY-76
-            // and is the true one: the PDF does exist, and this run made it.
-            if claimedEarlierInThisRun.hasConverted(source.url.path) {
+            // and is the true one: the PDF does exist, in this folder, and this run made it.
+            if claimedEarlierInThisRun.hasConverted(source.url.path, intoFolder: destinationFolder.path) {
                 records.append(
                     DocxRecord(
                         sourceURL: source.url,

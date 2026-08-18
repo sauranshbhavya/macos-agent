@@ -84,7 +84,9 @@ public struct DocxConversionCapabilityAdapter: CapabilityAdapter {
             details: details,
             writes: pending.map(\.destinationURL.path),
             conversions: pending.map { "\($0.sourceURL.path) -> \($0.destinationURL.path)" },
-            convertedSources: pending.map(\.sourceURL.path)
+            convertedSources: pending.map {
+                ConvertedSource(sourcePath: $0.sourceURL.path, destinationPath: $0.destinationURL.path)
+            }
         )
     }
 
