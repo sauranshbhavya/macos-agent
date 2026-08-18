@@ -16,25 +16,79 @@ import Foundation
 ///   version ran `precomposedStringWithCanonicalMapping` here and a comment credited it with handling
 ///   that case; it was a no-op for the comparison it served, and it is gone rather than kept as
 ///   belt-and-braces, because a call that reads like the mechanism and is not is worse than no call.
-/// - **Not caught:** pairs whose full case folding *expands*, where the filesystem folds and this does
-///   not — `Straße.pdf` and `STRASSE.pdf` are one file on disk and two keys here, as are ligature
-///   pairs such as `ﬁ`/`fi`. For that input class the pre-fix behavior survives: both records claim
-///   distinct destinations, neither is flagged as renamed, and the batch aborts partway with nothing
-///   in the summary explaining why. **Nothing is destroyed** — both shipped converters refuse an
-///   occupied destination rather than overwriting it — so the capability's "never overwrites"
-///   invariant and its no-`assessRisk` decision are untouched. Filed as SONNY-79. (PR #41 cycle-3, R1.)
+/// - *Caught since SONNY-79:* pairs whose full case folding **expands** — `Straße.pdf` against
+///   `STRASSE.pdf`, and ligature pairs such as `ﬁ`/`fi`. `lowercased()` left `ß` alone while mapping
+///   `SS` to `ss`, so these were one file on disk and two keys here; the batch then aborted partway
+///   with nothing in the summary explaining why. The fold below closes that, and the table on
+///   `folded` records what was measured against the volume itself.
 ///
-/// **Folded unconditionally rather than probed per volume.** On a case-sensitive volume the only cost
-/// is a rename that was not strictly required, which the summary announces either way; getting it
-/// wrong in the other direction loses the fix entirely on the volume nearly every user has.
-///
-/// Used by `FileInventory.docxFiles` and by `AgentActionExecutor`'s within-plan output-path
-/// disambiguation. The two keep separate *policies* — the docx side must also avoid names that exist
-/// on disk, the executor side must never consult disk or it would suppress the tier-3 "output already
-/// exists" escalation — but they must agree on what "the same destination" means.
+/// The full reasoning, the measurement and the two folds that were tried and rejected live on
+/// `DestinationKey.folded` rather than being repeated here.
 enum DestinationKey {
+    /// Folds a destination path the way the filesystem does.
+    ///
+    /// **`.caseInsensitive` alone, and `locale: nil` — both halves were measured rather than
+    /// reasoned about** (SONNY-79). The previous `lowercased()` under-folded: it leaves `ß` as `ß`
+    /// while mapping `SS` to `ss`, so `Straße.pdf` and `STRASSE.pdf` were two keys here and one file
+    /// on disk. Measured on APFS at `06297f1`, comparing each candidate fold against what the volume
+    /// itself answers by writing one name and asking `fileExists` for the other:
+    ///
+    /// | pair | filesystem | `lowercased()` | `.caseInsensitive` |
+    /// |---|---|---|---|
+    /// | `Straße` / `STRASSE` | same | **differs** | same |
+    /// | `ﬁle` / `file` | same | **differs** | same |
+    /// | `ﬀ` / `ff` | same | **differs** | same |
+    /// | `Report` / `report` | same | same | same |
+    /// | `café` / `CAFÉ` | same | same | same |
+    /// | `café` / `cafe` | differs | differs | differs |
+    /// | NFC `café` / NFD `café` | same | same | same |
+    /// | `İstanbul` / `istanbul` | differs | differs | differs |
+    /// | `ırmak` / `IRMAK` | differs | differs | differs |
+    /// | `ΟΔΟΣ` / `οδός` | differs | differs | differs |
+    /// | `Ｒeport` / `Report` | differs | differs | differs |
+    /// | Kelvin sign `K` / `k` | same | same | same |
+    ///
+    /// Twelve classes, agreement on all twelve.
+    ///
+    /// **Two tempting additions were measured and rejected, and that is the point of recording the
+    /// table.** Adding `.diacriticInsensitive` folds `café.pdf` and `cafe.pdf` together, which the
+    /// filesystem does *not* — it would rename a document that never needed renaming. Passing
+    /// `locale: .current` instead of `nil` folds `İstanbul` and `istanbul` together under a Turkish
+    /// locale, which the filesystem also does not — so this would misbehave only for Turkish users,
+    /// which is exactly the kind of bug that ships. Both appear in this repo's *search* fold
+    /// (`RecentArtifactStore`), correctly: a user typing "cafe" to find "café" wants diacritic
+    /// insensitivity, and search is locale-shaped. **That recipe answers a different question and
+    /// borrowing it here would have been wrong in two directions at once.**
+    ///
+    /// **What is still not claimed, corrected by PR #65's review (F2).** An earlier version of this
+    /// said the residual belonged to "a volume whose folding differs" — which reads as some *other*
+    /// volume. It does not. The review widened the twelve hand-picked classes above to the whole
+    /// reachable population, every scalar in U+0020–U+1FFFF with a case variant, against this same
+    /// APFS volume: **3160 comparisons, and the shipped fold under-folds 9 of them and over-folds
+    /// none.** The nine are U+1C80–U+1C88, Cyrillic Extended-C, which the volume unites with В Д О С
+    /// Т Ъ Ѣ Ꙋ and this fold does not. The fold it replaced under-folded 192 and over-folded none.
+    ///
+    /// So: agreement with the measured volume on 3151 of 3160, the nine exceptions named, zero
+    /// over-folds. The empty over-fold column is the load-bearing half — an over-fold is what would
+    /// fabricate a rename for a document that never collided.
+    ///
+    /// The behavioural consequence for those nine is unchanged and costs no data: both shipped
+    /// converters refuse an occupied destination, so such a pair aborts the batch partway rather than
+    /// losing a file.
+    ///
+    /// **Folded unconditionally rather than probed per volume.** On a case-sensitive volume the only
+    /// cost is a rename that was not strictly required, which the summary announces either way;
+    /// getting it wrong in the other direction loses the fix entirely on the volume nearly every user
+    /// has.
+    ///
+    /// Used by `FileInventory.docxFiles` and by `AgentActionExecutor`'s within-plan output-path
+    /// disambiguation. The two keep separate *policies* — the docx side must also avoid names that
+    /// exist on disk, the executor side must never consult disk or it would suppress the tier-3
+    /// "output already exists" escalation — but they must agree on what "the same destination" means,
+    /// and this is that agreement. Note that folding is a pure string operation: the executor side
+    /// still touches no disk.
     static func folded(_ path: String) -> String {
-        path.lowercased()
+        path.folding(options: [.caseInsensitive], locale: nil)
     }
 }
 
@@ -123,7 +177,12 @@ public struct FileInventory {
     /// interfering with the skip rule: a document whose *preferred* destination already exists is
     /// still skipped, exactly as before, and never renames. Only a collision with another document
     /// of the same run renames, and only ever onto a name nothing occupies.
-    public func docxFiles(in folder: URL, outputFolder: URL? = nil, mockDestinations: Bool = false) throws -> [DocxRecord] {
+    public func docxFiles(
+        in folder: URL,
+        outputFolder: URL? = nil,
+        mockDestinations: Bool = false,
+        claimedEarlierInThisRun: RunClaims = .none
+    ) throws -> [DocxRecord] {
         let sources = try regularFiles(in: folder)
             .filter { record in
                 record.url.pathExtension.lowercased() == "docx" &&
@@ -131,7 +190,7 @@ public struct FileInventory {
             }
             .sorted { $0.url.path < $1.url.path }
 
-        var claimedDestinations: Set<String> = []
+        var claimedDestinations = claimedEarlierInThisRun.destinations
         var records: [DocxRecord] = []
         for source in sources {
             let basename = source.url.deletingPathExtension().lastPathComponent
@@ -140,7 +199,40 @@ public struct FileInventory {
                 Self.pdfName(stem: basename, mockDestinations: mockDestinations)
             )
 
-            if fileManager.fileExists(atPath: preferred.path) {
+            // **A document this run already converted into this folder is not converted again**
+            // (PR #65 review, F1; keyed on the pair by the re-check's F5). Checked before the
+            // destination rules. Two chain units whose scan scopes overlap — a nested folder pair is
+            // enough, since `regularFiles(in:)` recurses — otherwise re-find the same document, see
+            // its preferred destination already claimed, and rename it: one source converted twice,
+            // and a summary announcing a collision with "another document" that does not exist.
+            //
+            // **The destination folder is half the key, and leaving it out was its own bug.** Keyed
+            // on the source alone this suppressed a conversion the user had asked for: a later unit
+            // naming a different output folder was told its PDF already existed, at a destination
+            // where none did. `destinationFolder` rather than `preferred` because a renamed output
+            // keeps its folder and loses its filename — see `ConversionClaim`.
+            //
+            // Reported as a skip, which restores exactly the sentence this case had before SONNY-76
+            // and is the true one: the PDF does exist, in this folder, and this run made it.
+            if claimedEarlierInThisRun.hasConverted(source.url.path, intoFolder: destinationFolder.path) {
+                records.append(
+                    DocxRecord(
+                        sourceURL: source.url,
+                        destinationURL: preferred,
+                        skippedBecausePDFExists: true,
+                        isMockDestination: mockDestinations
+                    )
+                )
+                continue
+            }
+
+            // **A file this run already wrote is not "already exists"** (SONNY-76). The skip rule is
+            // for a PDF that predates the run; a destination an earlier unit of this same chain
+            // claimed has to rename instead, or the user is told their second document was skipped
+            // for a file they never had — and is a PDF short. Reached only for a *different* source,
+            // because the same one was handled above.
+            if fileManager.fileExists(atPath: preferred.path),
+               !claimedDestinations.contains(DestinationKey.folded(preferred.path)) {
                 records.append(
                     DocxRecord(
                         sourceURL: source.url,

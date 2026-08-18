@@ -48,6 +48,22 @@ public final class AgentLogStore: ObservableObject {
     }
 }
 
+/// One document a capability converts, and where its output lands.
+///
+/// The destination is the *file*, not its folder — this type states what the run will do, and
+/// `RunClaims` decides which part of that is the claim's key (see ``ConversionClaim``). Keeping the
+/// narrowing there rather than here means a reader of a preview sees the real destination and only
+/// the claim logic has an opinion about it.
+public struct ConvertedSource: Equatable, Sendable {
+    public var sourcePath: String
+    public var destinationPath: String
+
+    public init(sourcePath: String, destinationPath: String) {
+        self.sourcePath = sourcePath
+        self.destinationPath = destinationPath
+    }
+}
+
 public struct ActionPreview: Identifiable, Equatable, Sendable {
     public var id: UUID
     public var title: String
@@ -55,6 +71,24 @@ public struct ActionPreview: Identifiable, Equatable, Sendable {
     public var writes: [String]
     public var opens: [String]
     public var conversions: [String]
+    /// What this preview's capability will convert, as identities rather than as display text
+    /// (SONNY-76, PR #65 review F1).
+    ///
+    /// Parallel to `conversions`, which carries the same information formatted for a human as
+    /// `"<source> -> <destination>"`. The executor needs these as identities to stop a later chain
+    /// unit re-converting a document an earlier one already did, and deriving that from the display
+    /// string would mean splitting on `" -> "` — a separator that is legal inside a macOS filename
+    /// and that exists to be read, not parsed. A correctness decision taken from a presentation
+    /// format is the shape that already bit this repo once, where a `grep '^designated'` silently
+    /// dropped the very case its warning existed for because the display form differed.
+    ///
+    /// **Source and destination travel together in one value** (PR #65 re-check, F5), rather than as
+    /// this array and `writes` read positionally. The claim the executor builds from it needs both
+    /// halves, and a pair spread across two arrays is a correspondence nothing enforces — the same
+    /// class of implicit contract as parsing the display string, one step quieter.
+    ///
+    /// Empty for every capability that does not convert a source, which is all of them but one.
+    public var convertedSources: [ConvertedSource]
 
     public init(
         id: UUID = UUID(),
@@ -62,7 +96,8 @@ public struct ActionPreview: Identifiable, Equatable, Sendable {
         details: [String] = [],
         writes: [String] = [],
         opens: [String] = [],
-        conversions: [String] = []
+        conversions: [String] = [],
+        convertedSources: [ConvertedSource] = []
     ) {
         self.id = id
         self.title = title
@@ -70,6 +105,7 @@ public struct ActionPreview: Identifiable, Equatable, Sendable {
         self.writes = writes
         self.opens = opens
         self.conversions = conversions
+        self.convertedSources = convertedSources
     }
 
     public var sideEffects: [String] {
