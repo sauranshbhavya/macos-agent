@@ -98,30 +98,35 @@ public enum ScreenControlPolicy {
     /// execution with the user's full rights. An SSH session meets that test on the *far* machine,
     /// and a dedicated SSH client is not an emulator in the sense the rest of this list was built
     /// around. The decision aligns the list with the rule rather than widening the rule. It was not
-    /// hypothetical: Launch Services reports Termius as the founder's machine's default `ssh://`
-    /// handler, ahead of Terminal and iTerm, so it is what opens when anything asks for an SSH
+    /// hypothetical: Launch Services reports Termius as the default `ssh://` handler on the
+    /// founder's Mac, ahead of Terminal and iTerm, so it is what opens when anything asks for an SSH
     /// connection — and it was controllable.
+    ///
+    /// **"The founder's Mac" is the only machine in any of this**, and it is also what older notes
+    /// here called "the development machine". Earlier text spoke of the two as if they were
+    /// separate; they never were (PR #68 review).
     ///
     /// **`com.termius-dmg.mac` is correct as written. Do not "fix" the `-dmg`.** It is a packaging
     /// artefact carried in the real identifier, and it is exactly the character a plausible guess
     /// would have dropped: `com.termius.mac` is what typing this from memory produces. It was read
-    /// from Launch Services on the founder's machine rather than recalled, which is the only reason
-    /// it is right.
+    /// from Launch Services on the founder's Mac rather than recalled, which is the only reason it
+    /// is right.
     ///
-    /// **Evidence, split by how it was obtained — two established by asking a machine, nine not.**
+    /// **Evidence, split by how each identifier was *obtained*.** Provenance only. It is not a
+    /// claim about which of these apps is installed anywhere — that is a separate axis, recorded
+    /// below, and running the two together is what put two false sentences in this comment once
+    /// already (PR #68 review, F1 and F2).
     ///
-    /// - **Verified from a bundle on the development machine (1):** `com.apple.terminal`, read off
-    ///   `/System/Applications/Utilities/Terminal.app/Contents/Info.plist` at `25fb29c`. It is the
-    ///   only entry of the original ten that is installed there.
-    /// - **Established from Launch Services on the founder's machine, 2026-08-17 (1):**
+    /// - **Read from the bundle's own `Info.plist` (1):** `com.apple.terminal`, off
+    ///   `/System/Applications/Utilities/Terminal.app/Contents/Info.plist` at `25fb29c`.
+    /// - **Established from Launch Services' handler registry, 2026-08-17 (1):**
     ///   `com.termius-dmg.mac`. A different provenance from the line above — the answer came from
-    ///   the handler registry (`NSWorkspace.urlsForApplications(toOpen:)`) rather than from reading
-    ///   a bundle's `Info.plist`, and that distinction is load-bearing: Termius is Launch Services'
-    ///   registered default `ssh://` handler while declaring *no* such scheme in its own
-    ///   `CFBundleURLTypes`, so a plist scan — the more obvious method — found Terminal and iTerm
-    ///   and missed the one app the question was about.
-    /// - **From each project's published bundle configuration, not inspected on any machine (9):**
-    ///   iTerm2, Warp, Ghostty, kitty, Alacritty, WezTerm, Hyper, Tabby, Terminus.
+    ///   `NSWorkspace.urlsForApplications(toOpen:)` rather than from reading a bundle, and that
+    ///   distinction is load-bearing: Termius is LS's registered default `ssh://` handler while
+    ///   declaring *no* such scheme in its own `CFBundleURLTypes`, so a plist scan — the more
+    ///   obvious method — found Terminal and iTerm and missed the one app the question was about.
+    /// - **From each project's published bundle configuration, no bundle inspected (9):** iTerm2,
+    ///   Warp, Ghostty, kitty, Alacritty, WezTerm, Hyper, Tabby, Terminus.
     ///
     /// The split is recorded rather than averaged into "these are the terminal identifiers" because
     /// the three claims have different strengths and a reader deciding whether to trust an entry
@@ -130,12 +135,18 @@ public enum ScreenControlPolicy {
     /// pattern-matched, and why a correction is cheap. `theEvidenceSplitMatchesTheList` fails if
     /// this list changes without this record changing with it.
     ///
-    /// **Nine of the eleven cannot be confirmed from the founder's machine, and that was checked
-    /// rather than assumed.** Every existing entry was put to Launch Services there on 2026-08-17;
-    /// only `com.apple.terminal` (which LS holds as `com.apple.Terminal`, capital T) and
-    /// `com.googlecode.iterm2` are installed. The other nine are neither confirmed nor denied — not
-    /// evidence they are wrong, recorded so nobody later reads "checked against Launch Services" as
-    /// covering the whole list.
+    /// **The other axis: three of the eleven can be corroborated against Launch Services on the
+    /// founder's Mac, and eight cannot.** Re-measured on 2026-08-18 by asking LS for each of the
+    /// eleven in turn — a fact about that Mac on that date rather than about any commit. Three
+    /// resolve: `com.apple.terminal` at `/System/Applications/Utilities/Terminal.app` (LS spells it
+    /// `com.apple.Terminal`, capital T), `com.googlecode.iterm2` at `~/Applications/iTerm.app`, and
+    /// `com.termius-dmg.mac` at `/Applications/Termius.app`. The other eight are not installed, so
+    /// LS can neither confirm nor deny them — not evidence they are wrong, recorded so nobody reads
+    /// "checked against Launch Services" as covering the whole list.
+    ///
+    /// **`com.googlecode.iterm2` is in the published-configuration group *and* corroborated here,
+    /// and that is not a contradiction.** Provenance is how an identifier was first obtained;
+    /// corroboration is whether this Mac agrees now. An entry can be one, both or neither.
     ///
     /// ## What this list cannot do — two gaps, both real, said plainly rather than discovered later
     ///
@@ -152,7 +163,7 @@ public enum ScreenControlPolicy {
     ///
     /// **Adding Termius did not cover the SSH-client category**, and that limit is deliberate.
     /// Royal TSX, Shuttle, Core Shell, Prompt, Blink, SecureCRT, ZOC, PuTTY and SSH Config Editor
-    /// are not installed on the founder's machine, so no identifier for any of them can be
+    /// are not installed on the founder's Mac, so no identifier for any of them can be
     /// established from there — and none was invented. **A guessed identifier is worse than an
     /// absent one**: it matches nothing while looking like coverage. This list grows as apps are
     /// encountered, with the app in hand, never by inference.

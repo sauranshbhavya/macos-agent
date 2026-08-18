@@ -127,11 +127,11 @@ public enum VisionContainmentRefusal: Equatable, Sendable {
     ///
     /// **A second refusal on the same rule, never a replacement for the first.**
     /// ``ScreenControlPolicy/terminalBundleIdentifiers`` refuses the terminal apps it names and
-    /// refuses them first — at three doors and again at the top of every iteration, above this one. A static
-    /// bundle comparison cannot be talked out of its answer by anything rendered, while this reads
-    /// exactly the surface an attacker controls, so this is layered after the list and is never a
-    /// reason to shorten it. What it buys is the ground a name list cannot reach: a terminal nobody
-    /// listed, and a shell running *inside* an app that is not a terminal.
+    /// refuses them first — at three doors and again at the top of every iteration, above this one.
+    /// A static bundle comparison cannot be talked out of its answer by anything rendered, while
+    /// this reads exactly the surface an attacker controls, so this is layered after the list and
+    /// is never a reason to shorten it. What it buys is the ground a name list cannot reach: a
+    /// terminal nobody listed, and a shell running *inside* an app that is not a terminal.
     ///
     /// **Ends the session rather than declining the one action**, matching every other case here.
     /// The next capture is one scroll away from the same shell, and the doc comment above already
