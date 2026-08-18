@@ -11,6 +11,9 @@ enum SonnyNotificationLog {
 private enum SonnyNotificationCategory {
     static let permission = "SONNY_PERMISSION"
     static let error = "SONNY_ERROR"
+    /// A finished run's result. Its own category rather than reusing `error`, which carries a
+    /// "Retry" action that makes no sense on a run that succeeded (SONNY-56).
+    static let outcome = "SONNY_OUTCOME"
 }
 
 private enum SonnyNotificationAction {
@@ -79,6 +82,14 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
                 actions: [retryAction],
                 intentIdentifiers: [],
                 options: []
+            ),
+            // No actions. SONNY-121 owns acknowledgement and will decide what, if anything, this
+            // one offers — adding a speculative button here would be a second place it has to undo.
+            UNNotificationCategory(
+                identifier: SonnyNotificationCategory.outcome,
+                actions: [],
+                intentIdentifiers: [],
+                options: []
             )
         ])
     }
@@ -96,6 +107,15 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
         content.title = "Sonny"
         content.body = message
         content.categoryIdentifier = SonnyNotificationCategory.error
+        deliver(content)
+    }
+
+    /// A finished run's summary, for a user who was working somewhere else while it ran.
+    func postOutcomeNotification(summary: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "Sonny"
+        content.body = summary
+        content.categoryIdentifier = SonnyNotificationCategory.outcome
         deliver(content)
     }
 

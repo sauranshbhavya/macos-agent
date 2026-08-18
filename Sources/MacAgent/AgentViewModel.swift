@@ -78,6 +78,26 @@ final class AgentViewModel: ObservableObject {
     /// Never applies to scheduled runs. A scheduled run passes through no composer, so there is no
     /// switch to have been left on — stated here so its absence does not read as a gap.
     @Published var taskRecordingPolicy: TaskRecordingPolicy = .record
+
+    /// A finished run's summary, published for the notification fallback (SONNY-56).
+    ///
+    /// **Written only for a successful run whose origin is Command Center**, and that narrowness is
+    /// the design rather than an oversight:
+    ///
+    /// - *Widget-origin runs* already show their result in the widget's own panel, which is a
+    ///   permanent overlay and therefore on screen even while the user works elsewhere. Notifying
+    ///   would be the duplicate the origin gate exists to prevent.
+    /// - *Scheduled runs* have `scheduledRunNotice`, which already carries their summary and already
+    ///   has its own notification subscription.
+    /// - *Failures* already reach the user through `errorMessage`, which has its own subscription.
+    ///   Publishing them here too would notify twice for one run.
+    ///
+    /// That leaves exactly the case the founder resolved on 2026-08-06: a run started from a Command
+    /// Center row action, which reports its outcome on no surface at all.
+    ///
+    /// Transient — set at the moment a run succeeds and not persisted. SONNY-121 owns making a
+    /// notified outcome survive until the user acknowledges it, and this is the signal it builds on.
+    @Published var completedRunNotice: String?
     /// Local-storage health, kept deliberately separate from `errorMessage`: a corrupt store or
     /// a failed save is about Sonny's own data, not about the task the user just ran, and must
     /// never make a successful task read as failed. Rendered as its own notice on both surfaces.
@@ -1105,6 +1125,7 @@ final class AgentViewModel: ObservableObject {
                     .map(\.reason)
             )
             finalSummary = result.summary
+            publishCompletedRunNoticeIfUnreported(result.summary)
             suggestions = result.suggestions
             recordPriorTaskContext(
                 command: submittedCommand,
@@ -1541,6 +1562,19 @@ final class AgentViewModel: ObservableObject {
         // Restored from settings rather than unconditionally started, so a user who has clipboard
         // history switched off does not get it switched on by ending a suppressed task.
         refreshClipboardHistoryNotice()
+    }
+
+    /// Publishes a finished run's summary for the notification fallback, when nothing else will
+    /// report it. See `completedRunNotice` for why this is the only case.
+    private func publishCompletedRunNoticeIfUnreported(_ summary: String) {
+        guard activeTaskOrigin == .commandCenter else {
+            return
+        }
+        let trimmed = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return
+        }
+        completedRunNotice = trimmed
     }
 
     func refreshTaskHistory() {
@@ -2038,6 +2072,9 @@ final class AgentViewModel: ObservableObject {
         priorTaskContext = nil
         taskUsageSummary = .empty
         taskHistoryRecords = []
+        // A finished run's summary is residue of a run whose record the wipe just erased, so it
+        // goes with it rather than lingering in memory.
+        completedRunNotice = nil
         // Cleared with the records it filters, not left behind. A stale query over an emptied
         // history would put the Tasks page in its "No matching tasks — try a different word" state,
         // when the honest thing to tell someone who just erased everything is that there is nothing
@@ -2573,6 +2610,7 @@ final class AgentViewModel: ObservableObject {
                 logRiskAssessment: true
             )
             finalSummary = result.summary
+            publishCompletedRunNoticeIfUnreported(result.summary)
             suggestions = result.suggestions
             if let pendingCommandForPriorTaskContext {
                 recordPriorTaskContext(

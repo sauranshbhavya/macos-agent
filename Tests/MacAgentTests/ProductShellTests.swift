@@ -549,6 +549,7 @@ struct ProductShellTests {
             "taskUsageSummary",
             "taskHistoryRecords",
             "taskHistoryQuery",
+            "completedRunNotice",
             "clarificationQuestion",
             "clarificationAnswer",
             "clarificationAutoExecute",
@@ -1372,6 +1373,61 @@ struct ProductShellTests {
             try render(window: window, to: URL(fileURLWithPath: snapshotPath))
             window.close()
         }
+    }
+
+    // MARK: - A finished run's outcome (SONNY-56)
+
+    /// The gap SONNY-44 found: a run started from a Command Center row action reports its result on
+    /// no surface at all. It now publishes a summary the notification fallback carries.
+    @Test
+    func aSuccessfulCommandCenterRunPublishesItsSummaryForTheNotificationFallback() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        #expect(viewModel.completedRunNotice == nil)
+
+        viewModel.command = "= 1 + 1"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        let notice = try #require(viewModel.completedRunNotice)
+        #expect(!notice.isEmpty)
+        // It carries the run's own summary, not a generic "done".
+        #expect(notice == viewModel.finalSummary)
+    }
+
+    /// **The narrowness is the design, so it is asserted rather than assumed.** A widget-origin run
+    /// already shows its result in the widget's own panel — a permanent overlay, on screen even
+    /// while the user works elsewhere — so notifying would be the duplicate the origin gate exists
+    /// to prevent.
+    @Test
+    func aWidgetOriginRunPublishesNoOutcomeNoticeBecauseTheWidgetAlreadyShowsIt() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        viewModel.command = "= 1 + 1"
+        viewModel.start(origin: .widget)
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.finalSummary.isEmpty == false)
+        #expect(viewModel.completedRunNotice == nil)
+    }
+
+    /// A failure already reaches the user through `errorMessage`, which has its own notification
+    /// subscription. Publishing here too would notify twice for one run.
+    @Test
+    func aFailedRunPublishesNoOutcomeNoticeSoOneRunNeverNotifiesTwice() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        viewModel.command = "calc apples"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.errorMessage != nil)
+        #expect(viewModel.completedRunNotice == nil)
     }
 
     // MARK: - "Don't save this task" (SONNY-120)
