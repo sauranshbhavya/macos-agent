@@ -19,6 +19,13 @@ env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disabl
 ```
 Plain `swift test` will fail to link. The flags above are required, not optional.
 
+Mutation batteries run through `scripts/mutate`, never hand-rolled in a session scratchpad. It
+refuses to start while `git status --porcelain` prints anything: a hand-rolled battery reverts its
+mutants with `git checkout -- <file>`, which restores from HEAD, so run over uncommitted work it
+deletes the work instead of the mutation — five times so far, twice producing measurements that
+were wrong in the reassuring direction. `scripts/mutate --help` has the plan format;
+`scripts/mutate selftest` re-proves the refusal still fires.
+
 `swift run MacAgent` works for everyday iteration, but a bare SwiftPM executable has no real
 app-bundle identity — `UNUserNotificationCenter`, the microphone permission prompt
 (`AVCaptureDevice.requestAccess`), and Apple-Events-gated automation (Finder/Word) all require one
