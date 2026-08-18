@@ -85,6 +85,20 @@ struct CommandCenterView: View {
         .sheet(isPresented: $isProfilePresented) {
             ProfileDialogView(isPresented: $isProfilePresented)
         }
+        // A task-detail request can arrive while any page is showing, so the navigation to Tasks
+        // happens *here*, above the page switch, and not inside the page that answers it (PR #67
+        // cycle-3, defect A). `TasksFoundationView` only exists while `selection == .tasks`, so
+        // when the request arrived from Insights, Routines or Workspaces its own `onChange` was
+        // mounted on nothing — the window came forward and opened nothing, and because the request
+        // was left set, navigating to Tasks afterwards did not fire it either: `onChange` does not
+        // fire for a value that did not change while the view was mounted.
+        //
+        // This does not clear the request. It selects the destination and lets the page consume it
+        // on appear, which is the one order that works whether or not that page is already up.
+        .onChange(of: viewModel.taskDetailRequest) { _, request in
+            guard request != nil else { return }
+            select(.tasks)
+        }
     }
 
     private var sidebar: some View {
@@ -305,9 +319,16 @@ struct CommandCenterView: View {
             : (fullName.components(separatedBy: .whitespaces).first ?? fullName)
     }
 
+    /// The only writer of `selection`. The sidebar calls it, and so does the task-detail request
+    /// below; routing both through one function is what keeps a programmatic navigation from
+    /// drifting away from what clicking the sidebar does (PR #67 cycle-3, defect A).
+    private func select(_ destination: CommandCenterDestination) {
+        selection = destination
+    }
+
     private func sidebarButton(_ destination: CommandCenterDestination) -> some View {
         Button {
-            selection = destination
+            select(destination)
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: destination.systemImage)
@@ -470,22 +491,17 @@ private struct TasksFoundationView: View {
         .background(SonnyTheme.ink)
         .onAppear {
             viewModel.refreshTaskHistory()
+            // Both entry points are needed and neither is redundant: `onAppear` catches a request
+            // that arrived while this page was not mounted (the notification click from another
+            // page, which selects Tasks and mounts this view *after* the request was set), and
+            // `onChange` below catches one that arrives while it already is.
+            consumeTaskDetailRequest()
         }
         // A finished-run notification opens that task's detail here rather than expanding the
         // widget (PR #67 review, F4 — the founder's decision of 2026-08-17). The request carries a
         // fresh identity per click, so two notifications about the same task each reopen the sheet.
-        //
-        // The record is looked up from `taskHistoryRecords` at open time rather than carried in the
-        // request: the id is what the notification holds, and the row is what the sheet needs, so
-        // resolving late means a task deleted in between opens nothing instead of a stale copy.
-        .onChange(of: viewModel.taskDetailRequest) { _, request in
-            guard let request,
-                  let record = viewModel.taskHistoryRecords.first(where: { $0.id == request.taskID })
-            else {
-                return
-            }
-            selectedLogEntry = logEntry(for: record)
-            viewModel.taskDetailRequest = nil
+        .onChange(of: viewModel.taskDetailRequest) { _, _ in
+            consumeTaskDetailRequest()
         }
         .sheet(item: $selectedLogEntry) { entry in
             TaskLogDetailDialog(
@@ -509,6 +525,23 @@ private struct TasksFoundationView: View {
 
     /// Resolves the screen record once, for the one row the user clicked, before the sheet exists.
     /// See `TaskScreenRecordState` for why this is not done inside the sheet.
+    /// Answers a pending task-detail request, if there is one.
+    ///
+    /// The record is looked up from `taskHistoryRecords` at open time rather than carried in the
+    /// request: the id is what the notification holds, and the row is what the sheet needs, so
+    /// resolving late means a task deleted in between opens nothing instead of a stale copy.
+    ///
+    /// The request is cleared either way. A request naming a row that no longer exists has still
+    /// been answered — leaving it set would strand a value that nothing else clears until the next
+    /// request or a local-data wipe.
+    private func consumeTaskDetailRequest() {
+        guard let request = viewModel.taskDetailRequest else { return }
+        if let record = viewModel.taskHistoryRecords.first(where: { $0.id == request.taskID }) {
+            selectedLogEntry = logEntry(for: record)
+        }
+        viewModel.taskDetailRequest = nil
+    }
+
     private func logEntry(for record: CompletedTaskRecord) -> TaskLogEntry {
         TaskLogEntry(
             record: record,
