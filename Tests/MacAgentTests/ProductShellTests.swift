@@ -1396,6 +1396,24 @@ struct ProductShellTests {
         #expect(notice == viewModel.finalSummary)
     }
 
+    /// A run whose summary is blank posts nothing. An empty notification body is a notification that
+    /// says nothing, and it would still make a sound and take a slot in Notification Center.
+    @Test
+    func aBlankSummaryPublishesNoOutcomeNotice() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        viewModel.publishCompletedRunNoticeIfUnreported("")
+        #expect(viewModel.completedRunNotice == nil)
+        viewModel.publishCompletedRunNoticeIfUnreported("   \n\t ")
+        #expect(viewModel.completedRunNotice == nil)
+
+        viewModel.publishCompletedRunNoticeIfUnreported("  Opened Research.  ")
+        // Trimmed, so the notification body has no stray leading whitespace.
+        #expect(viewModel.completedRunNotice == "Opened Research.")
+    }
+
     /// **The narrowness is the design, so it is asserted rather than assumed.** A widget-origin run
     /// already shows its result in the widget's own panel — a permanent overlay, on screen even
     /// while the user works elsewhere — so notifying would be the duplicate the origin gate exists

@@ -1566,7 +1566,11 @@ final class AgentViewModel: ObservableObject {
 
     /// Publishes a finished run's summary for the notification fallback, when nothing else will
     /// report it. See `completedRunNotice` for why this is the only case.
-    private func publishCompletedRunNoticeIfUnreported(_ summary: String) {
+    /// Internal rather than private so the suite can reach the empty-summary guard. No command the
+    /// test fixtures can run produces an empty summary, so a mutation removing that guard survived
+    /// an end-to-end battery — the guard matters because an empty notification body would be a
+    /// notification that says nothing.
+    func publishCompletedRunNoticeIfUnreported(_ summary: String) {
         guard activeTaskOrigin == .commandCenter else {
             return
         }
