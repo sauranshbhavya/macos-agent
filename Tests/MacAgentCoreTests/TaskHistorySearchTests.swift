@@ -161,7 +161,30 @@ struct TaskHistorySearchTests {
         #expect(listWhileSearching.map(\.command) == ["deploy the site", "old deploy"])
         #expect(listWhileIdle.map(\.command) != listWhileSearching.map(\.command))
 
-        // ...and every statistic is computed from the same records it always was.
+        // ...and every statistic still reads the whole store rather than the slice on screen.
+        //
+        // **Asserted against the slice, not against itself** (PR #67 review, F5). Comparing
+        // `summarize(records:)` to an earlier `summarize(records:)` over the same untouched array
+        // asserted that a pure function is deterministic — it would have passed against an Insights
+        // page routed entirely through the filtered list. What pins the invariant is that the
+        // windowed and searched slices give *different* numbers, and that the number the page's
+        // consumers read is the whole-array one.
+        // The searched slice is the instrument: it drops records the statistics count and adds one
+        // the window excludes, so a page routed through it reports different numbers. That
+        // inequality is what gives the equality below its teeth.
+        let overSearchSlice = TaskHistoryInsights.summarize(records: listWhileSearching, now: now)
+        let breakdownOverSearchSlice = WorkspaceTaskBreakdown.summarize(records: listWhileSearching, now: now)
+        #expect(overSearchSlice != before)
+        #expect(breakdownOverSearchSlice != breakdownBefore)
+
+        // The *idle* slice deliberately gets no such assertion, and the reason is worth recording:
+        // it produces the same numbers as the whole store with this fixture, because every
+        // `TaskHistoryInsights` stat is already recency-scoped — the records the 30-day window drops
+        // are old enough that this-week, streak and completion-rate never counted them. Asserting it
+        // differs would assert something untrue. `TaskHistoryStore`'s own cap comment says the same
+        // thing from the other side: eviction never touches data those stats need.
+
+        // The invariant itself: the statistics read the whole store, unchanged by anything typed.
         #expect(TaskHistoryInsights.summarize(records: records, now: now) == before)
         #expect(WorkspaceTaskBreakdown.summarize(records: records, now: now) == breakdownBefore)
     }

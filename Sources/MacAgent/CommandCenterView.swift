@@ -471,6 +471,22 @@ private struct TasksFoundationView: View {
         .onAppear {
             viewModel.refreshTaskHistory()
         }
+        // A finished-run notification opens that task's detail here rather than expanding the
+        // widget (PR #67 review, F4 — the founder's decision of 2026-08-17). The request carries a
+        // fresh identity per click, so two notifications about the same task each reopen the sheet.
+        //
+        // The record is looked up from `taskHistoryRecords` at open time rather than carried in the
+        // request: the id is what the notification holds, and the row is what the sheet needs, so
+        // resolving late means a task deleted in between opens nothing instead of a stale copy.
+        .onChange(of: viewModel.taskDetailRequest) { _, request in
+            guard let request,
+                  let record = viewModel.taskHistoryRecords.first(where: { $0.id == request.taskID })
+            else {
+                return
+            }
+            selectedLogEntry = logEntry(for: record)
+            viewModel.taskDetailRequest = nil
+        }
         .sheet(item: $selectedLogEntry) { entry in
             TaskLogDetailDialog(
                 record: entry.record,

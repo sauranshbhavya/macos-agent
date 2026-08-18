@@ -97,7 +97,30 @@ final class AgentViewModel: ObservableObject {
     ///
     /// Transient — set at the moment a run succeeds and not persisted. SONNY-121 owns making a
     /// notified outcome survive until the user acknowledges it, and this is the signal it builds on.
-    @Published var completedRunNotice: String?
+    @Published var completedRunNotice: CompletedRunNotice?
+
+    /// A request to open one task's detail dialog, set when the user clicks a finished-run
+    /// notification (PR #67 review, F4). `CommandCenterView`'s Tasks page observes it and presents
+    /// the same sheet a click on a history row opens.
+    ///
+    /// Published state rather than a direct call because the sheet is driven by view-local state the
+    /// app delegate cannot reach, and `.claude/rules/macagent-ui-conventions.md`'s shared-state rule
+    /// puts new cross-surface state on the one view model.
+    @Published var taskDetailRequest: TaskDetailRequest?
+
+    /// Opens a task's detail dialog by id, if that task is still in history.
+    ///
+    /// Returns `false` when the id resolves to nothing — a task deleted between the notification
+    /// arriving and the click, or a suppressed run that never wrote a row. The caller decides what
+    /// to do with that; this does not invent a fallback of its own.
+    @discardableResult
+    func requestTaskDetail(taskID: String) -> Bool {
+        guard taskHistoryRecords.contains(where: { $0.id == taskID }) else {
+            return false
+        }
+        taskDetailRequest = TaskDetailRequest(taskID: taskID)
+        return true
+    }
 
     /// Whether the outcome currently on screen is one the user was **notified** about (SONNY-121).
     ///
@@ -1155,7 +1178,6 @@ final class AgentViewModel: ObservableObject {
                     .map(\.reason)
             )
             finalSummary = result.summary
-            publishCompletedRunNoticeIfUnreported(result.summary)
             suggestions = result.suggestions
             recordPriorTaskContext(
                 command: submittedCommand,
@@ -1165,6 +1187,7 @@ final class AgentViewModel: ObservableObject {
                 startedAt: taskHistoryStartedAt
             )
             refreshSavedItems()
+            publishCompletedRunNoticeIfUnreported(result.summary)
         } catch RiskApprovalError.approvalRequired(let request) {
             // Whatever let this run proceed without a prompt — a routine's trust grant, or the
             // consequence rule mapping it to `.autoRun` — stopped covering it in the window
@@ -1562,6 +1585,24 @@ final class AgentViewModel: ObservableObject {
     /// already treats a `nil` store as "record nothing" — the same seam row I gave the vision
     /// journal. One definition, read by every `AgentRunner` this view model builds, so a new runner
     /// call site cannot forget the check by omitting it.
+    /// The vision journal this run may write to, or `nil` when it may not.
+    ///
+    /// Internal and separated from its one call site for the same reason
+    /// `recentArtifactStoreForThisRun` is (PR #67 review, F1): the decision was previously inline in
+    /// `makeLiveVisionEnvironment()`, which **no test in this repository can execute** — under test
+    /// `makeVisionEnvironment` returns `nil` without an API key, and the vision tests inject
+    /// `visionSessionEnvironment` directly, bypassing the function. So a mutation handing over the
+    /// store regardless of policy survived the whole suite. Asserting the decision *is* asserting
+    /// the suppression, because row I built a `nil` journal store as "run the session, record
+    /// nothing".
+    ///
+    /// It is the fifth `.trace` store and the one `LocalStoreClassification` calls the most
+    /// sensitive of the nine; it had no seam test, no mutation and no entry under Known limits,
+    /// while the other four were each closed or recorded.
+    var visionSessionJournalStoreForThisRun: VisionSessionJournalStore? {
+        taskRecordingPolicy.allowsWriting(to: .visionSessionJournal) ? visionSessionJournalStore : nil
+    }
+
     /// Internal rather than private so the suite can assert the decision directly. Running a real
     /// task through the fixture cannot reach it: the fixture's deterministic planner has no command
     /// that generates an artifact, so a suppressed run leaves this store untouched either way and
@@ -1611,7 +1652,16 @@ final class AgentViewModel: ObservableObject {
         guard !trimmed.isEmpty else {
             return
         }
-        completedRunNotice = trimmed
+        // The row this run just wrote, so a click can open *that* task's detail (PR #67 review,
+        // F4). Read from `taskHistoryRecords` rather than kept in a second piece of state:
+        // `recordTaskHistoryIfTerminal` has already run and refreshed it, sorted newest first, so
+        // the head is this run's row and its id is the one persisted on disk. That is also why the
+        // publish moved *below* the record call at both success sites — before it, no row exists.
+        //
+        // `nil` when a suppressed run wrote no row: there is nothing to open, and the notification
+        // still tells the user the task finished. An accepted limit, recorded rather than answered
+        // with a second behaviour.
+        completedRunNotice = CompletedRunNotice(summary: trimmed, taskID: taskHistoryRecords.first?.id)
     }
 
     func refreshTaskHistory() {
@@ -2112,6 +2162,8 @@ final class AgentViewModel: ObservableObject {
         // A finished run's summary is residue of a run whose record the wipe just erased, so it
         // goes with it rather than lingering in memory.
         completedRunNotice = nil
+        // A pending request to open a task's detail would point at a row the wipe has just erased.
+        taskDetailRequest = nil
         // And the marker that describes an outcome goes with the outcome. `deleteLocalData` writes
         // its own message into `finalSummary` immediately after this returns, and a stale `true`
         // here would make *that* message un-collapsible for a notification nobody sent.
@@ -2289,9 +2341,7 @@ final class AgentViewModel: ObservableObject {
             // a nil one runs the session normally and records nothing. So "Don't save this task"
             // withholds the store rather than adding a branch inside the loop — which the ticket's
             // never-touch list forbids, and which would have been a second place to forget.
-            journalStore: taskRecordingPolicy.allowsWriting(to: .visionSessionJournal)
-                ? visionSessionJournalStore
-                : nil
+            journalStore: visionSessionJournalStoreForThisRun
         ) else {
             return nil
         }
@@ -2299,10 +2349,12 @@ final class AgentViewModel: ObservableObject {
         return environment
     }
 
-    func makeExecutor() -> AgentActionExecutor {
+    /// - Parameter recordingPolicy: defaulted to this run's policy. The scheduled path passes
+    ///   `.record` explicitly — see `performScheduledRun`.
+    func makeExecutor(recordingPolicy: TaskRecordingPolicy? = nil) -> AgentActionExecutor {
         AgentActionExecutor(
             // A fresh executor per run, so this cannot leak into the next task.
-            recordingPolicy: taskRecordingPolicy,
+            recordingPolicy: recordingPolicy ?? taskRecordingPolicy,
             whitelist: whitelist,
             zipArchiver: zipArchiver,
             documentConverter: documentConverter,
@@ -2651,7 +2703,6 @@ final class AgentViewModel: ObservableObject {
                 logRiskAssessment: true
             )
             finalSummary = result.summary
-            publishCompletedRunNoticeIfUnreported(result.summary)
             suggestions = result.suggestions
             if let pendingCommandForPriorTaskContext {
                 recordPriorTaskContext(
@@ -2662,6 +2713,7 @@ final class AgentViewModel: ObservableObject {
                     startedAt: pendingTaskHistoryStartedAt
                 )
             }
+            publishCompletedRunNoticeIfUnreported(result.summary)
             pendingCommandForPriorTaskContext = nil
             pendingTaskHistoryStartedAt = nil
             refreshSavedItems()
@@ -2927,7 +2979,16 @@ final class AgentViewModel: ObservableObject {
         resolveOccurrence(for: name, at: occurrence)
 
         do {
-            let executor = makeExecutor()
+            // `.record` explicitly, never this run's policy (PR #67 review, F2). A scheduled routine is
+            // never suppressed — it passes through no composer, so there is no switch to have been
+            // left on. Inheriting `taskRecordingPolicy` was wrong in one reachable window: a
+            // foreground run paused at a *clarification* leaves `isRunning` false and the policy
+            // still `.suppressTraces`, and `checkScheduledRoutines` only guards on `isRunning` and
+            // `isAwaitingApproval` — so a routine firing then lost its Shortcut run history while
+            // still writing its task-history row, which is a different writer. Stated here the same
+            // way `recentArtifactStore` already is, rather than left to the policy happening to be
+            // right.
+            let executor = makeExecutor(recordingPolicy: .record)
             let runner = AgentRunner(
                 planner: InstantOnlyFallbackPlanner(),
                 executor: executor,

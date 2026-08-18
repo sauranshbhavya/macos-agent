@@ -63,6 +63,13 @@ public final class AgentActionExecutor {
     /// `AgentViewModel.makeExecutor()` builds a fresh executor per run — so suppression cannot leak
     /// from one task into the next, which shared mutable state here would have allowed.
     private let recordingPolicy: TaskRecordingPolicy
+
+    /// Read-only, for the suite: which policy this executor was built with. The policy itself stays
+    /// private — nothing may change it after construction, which is what makes a fresh executor per
+    /// run safe (PR #67 review, F2).
+    public var suppressesTracesForTests: Bool {
+        recordingPolicy.suppressesTraces
+    }
     private let whitelist: PathWhitelist
     private let inventory: FileInventory
     private let zipArchiver: ZipArchiving
