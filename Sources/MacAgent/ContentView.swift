@@ -30,7 +30,7 @@ extension View {
             }
             Button("Cancel", role: .cancel) {}
         } message: {
-            Text("This deletes saved routines, workspaces, clipboard history, snippets, recent artifacts, Shortcut run history, task history, and clipboard settings. Generated files and API keys are not deleted.")
+            Text("This deletes saved routines, workspaces, clipboard history, snippets, recent artifacts, Shortcut run history, task history, records of what Sonny did on screen, and clipboard settings. Generated files and API keys are not deleted.")
         }
     }
 }
