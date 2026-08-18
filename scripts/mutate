@@ -10,11 +10,20 @@
 #
 # It has happened five times: SONNY-40, SONNY-64 and SONNY-83, each written up in this
 # repository's changelog; SONNY-161, in its own closing comment; and PR #67's cycle-3 fix round.
-# Twice it did something worse than cost a redo — it produced measurements that were wrong in the
-# reassuring direction. Five mutants "survived" against code that had just been deleted
-# (SONNY-161); three were "killed" by the absence of the fix they were written to test
-# (SONNY-64). Both were caught by luck rather than by design, and a battery whose whole value is
-# that its result can be trusted is worth less than nothing when it lies comfortably.
+# Three of those did something worse than cost a redo — they produced false measurements — and
+# they did not all mislead in the same direction, which is the part worth getting right:
+#
+#   * SONNY-64's three bogus "kills" are the dangerous kind. A false kill says the suite covers
+#     something it does not, so the battery hands back a reassurance nobody earned and the reader
+#     stops looking. Once, so far.
+#   * SONNY-161's five and SONNY-83's one were false *survivors*, against code that had just been
+#     deleted. A survivor is an alarm — this script exits 2 for one — so those made coverage look
+#     worse than it was and got chased. Costly, but they announce themselves.
+#
+# Both kinds were caught by luck rather than by design, and a battery whose whole value is that its
+# result can be trusted is worth less than nothing when it lies comfortably. (PR #70 review, F9:
+# this comment previously said "twice ... in the reassuring direction" and counted a false survivor
+# as one of the two.)
 #
 # Every occurrence was answered with documentation, and the last happened in a session that had
 # already written up an earlier one. So the answer here is mechanical rather than written: this
@@ -58,6 +67,25 @@ WORKDIR=""
 ACTIVE_FILE=""
 ACTIVE_BACKUP=""
 
+# Set only by finish(), which is the one way this script is allowed to end. Everything else —
+# `set -u` on an unbound variable, `set -e` on a failed command, a syntax error on a path never
+# taken — reaches the EXIT trap with this still empty, and assert_intended_exit turns that into a
+# non-zero exit.
+#
+# It exists because on bash 3.2, the shell this actually runs under, **the presence of an EXIT trap
+# makes a `set -u` death exit 0**. Measured three ways: the same death with no trap exits 1; with a
+# trap it exits 0; and the usual remedy, a trap doing `rc=$?; trap - EXIT; exit $rc`, still exits 0,
+# because $? is already 0 by the time the trap runs. There is nothing to preserve — the status has
+# to be manufactured, so a legitimate exit has to announce itself. (PR #70 review, F6. The earlier
+# fix for this symptom changed the battery() call site instead, which governs a real but different
+# hazard — see the note there — and left this one live.)
+MUTATE_EXIT_INTENDED=""
+
+finish() {
+  MUTATE_EXIT_INTENDED="yes"
+  exit "$1"
+}
+
 cleanup() {
   if [[ -n "$ACTIVE_FILE" && -f "$ACTIVE_BACKUP" ]]; then
     cp "$ACTIVE_BACKUP" "$ACTIVE_FILE" 2>/dev/null || true
@@ -69,12 +97,24 @@ cleanup() {
     WORKDIR=""
   fi
 }
-trap cleanup EXIT
-trap 'cleanup; exit 130' INT TERM
+
+# Runs last in every EXIT trap, after the cleanup it must not pre-empt.
+assert_intended_exit() {
+  if [[ -z "$MUTATE_EXIT_INTENDED" ]]; then
+    printf '%s: exiting 1 — the harness ended at a point that is not one of its exits.\n' \
+      "$SCRIPT_NAME" >&2
+    printf '%s: any output above this line is not a battery result. See the error above it.\n' \
+      "$SCRIPT_NAME" >&2
+    exit 1
+  fi
+}
+
+trap 'cleanup; assert_intended_exit' EXIT
+trap 'finish 130' INT TERM
 
 die() {
   printf '%s: %s\n' "$SCRIPT_NAME" "$*" >&2
-  exit 1
+  finish 1
 }
 
 require_command() {
@@ -143,9 +183,13 @@ USAGE
 # The guard. Everything else in this file is convenience.
 # ---------------------------------------------------------------------------------------------
 
+# `-c status.showUntrackedFiles=normal`, not a bare `git status`: that config is honoured by
+# --porcelain, so `git config status.showUntrackedFiles no` deletes the untracked half of this
+# guard without anyone editing the script — an effective override in a script whose stated property
+# is that it has none. (PR #70 review, F1.)
 require_clean_tree() {
   local dirty
-  dirty="$(git status --porcelain)"
+  dirty="$(git -c status.showUntrackedFiles=normal status --porcelain)"
   if [[ -z "$dirty" ]]; then
     return 0
   fi
@@ -158,17 +202,19 @@ A battery's result is only meaningful if it can be attributed to a commit, and i
 only safe if what it reverts to is what is committed. Uncommitted work makes both untrue: the run
 measures a tree no SHA names, and any recovery by \`git checkout\` — which is how every battery in
 this repository used to revert — deletes the work instead of the mutation. That has happened five
-times, and twice it produced results that were wrong in the reassuring direction.
+times, and three of those produced false measurements: once a bogus kill, which is the dangerous
+direction because it claims coverage that is not there, and twice bogus survivors against code
+that had just been deleted.
 
 Commit or stash the paths above, then re-run. There is no override flag.
 EOF
-  exit 1
+  finish 1
 }
 
 require_clean_tree_after() {
   local context="$1"
   local dirty
-  dirty="$(git status --porcelain)"
+  dirty="$(git -c status.showUntrackedFiles=normal status --porcelain)"
   if [[ -z "$dirty" ]]; then
     return 0
   fi
@@ -181,7 +227,7 @@ The battery stops here rather than carrying an unexplained change into the next 
 would make every result after this one describe a tree nobody chose. Restore the paths above by
 hand and work out what wrote them before re-running.
 EOF
-  exit 1
+  finish 1
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -399,6 +445,16 @@ battery() {
       mismatches=$((mismatches + 1))
       continue
     fi
+    # Tracked, or the run means nothing. `>>> file ../outside.txt` used to pass pre-flight and be
+    # mutated and restored happily, with "Summary at <sha>" printed over a file the SHA does not
+    # describe — and `git status` can never see it, so an interrupted run would leave that mutant
+    # somewhere the guard will never flag. A gitignored path inside the tree has the same two
+    # problems. One check closes both. (PR #70 review, F2.)
+    if ! git ls-files --error-unmatch -- "${M_FILE[$idx]}" >/dev/null 2>&1; then
+      printf '    %-6s %s  NOT TRACKED BY GIT — REFUSED\n' "${M_ID[$idx]}" "${M_FILE[$idx]}"
+      mismatches=$((mismatches + 1))
+      continue
+    fi
     count="$(occurrences "${M_FILE[$idx]}" "$WORKDIR/m$idx.from")"
     if [[ "$count" == "1" ]]; then
       printf '    %-6s %s  1 match\n' "${M_ID[$idx]}" "${M_FILE[$idx]}"
@@ -409,16 +465,27 @@ battery() {
   done
   if [[ $mismatches -gt 0 ]]; then
     printf '\n'
-    die "$mismatches mutant(s) do not match exactly once. Nothing was run and nothing was changed.
-       A mutant that does not apply runs an unmutated suite and reports a clean pass, so this
-       aborts instead. Copy the \`from\` block out of the file again — indentation included."
+    die "$mismatches mutant(s) were refused. Nothing was run and nothing was changed.
+       A mutant that does not apply runs an unmutated suite and reports a clean pass, so a bad
+       match aborts instead — copy the \`from\` block out of the file again, indentation included.
+       A file git does not track cannot be attributed to the SHA this run would print, so it is
+       refused too; \`>>> file\` paths are repository-root-relative and must be tracked."
   fi
   printf '\n'
+
+  # Fault-injection seam, set only by `selftest`: reference a variable that is genuinely unbound
+  # so `set -u` kills the script here, mid-report. Under bash 3.2 that used to exit 0 (PR #70
+  # review, F6); the sentinel is what makes it exit 1, and this is how that is watched firing
+  # rather than argued for.
+  if [[ -n "${MUTATE_INJECT_INTERNAL_ERROR:-}" ]]; then
+    printf '    (selftest: injecting an unbound-variable death here)\n'
+    printf '%s\n' "$MUTATE_A_VARIABLE_THAT_IS_DELIBERATELY_NEVER_SET"
+  fi
 
   if [[ -n "$check_only" ]]; then
     printf '==> --check: every selected mutant matches. No tests were run, nothing was changed.\n'
     printf '    This is not a battery result. Re-run without --check to measure anything.\n'
-    exit 0
+    finish 0
   fi
 
   # Logs go under .build/, which this repository gitignores — writing them anywhere tracked
@@ -529,11 +596,11 @@ battery() {
     done
     printf '\n'
     printf '    Exiting 2 because of them. Every measurement above was taken at %s.\n' "$sha"
-    exit 2
+    finish 2
   fi
   printf '\n'
   printf '    Every mutant was killed. Measured at %s.\n' "$sha"
-  exit 0
+  finish 0
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -595,8 +662,8 @@ selftest() {
   require_command python3
 
   SELFTEST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/mutate-selftest.XXXXXX")"
-  trap 'cleanup; selftest_cleanup' EXIT
-  trap 'cleanup; selftest_cleanup; exit 130' INT TERM
+  trap 'cleanup; selftest_cleanup; assert_intended_exit' EXIT
+  trap 'finish 130' INT TERM
 
   local root="$SELFTEST_ROOT"
   local sentinel="$root/the-suite-ran.marker"
@@ -692,12 +759,25 @@ printf \"X  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n\""
   printf '==> %s selftest\n' "$SCRIPT_NAME"
   printf '    throwaway repository: %s\n\n' "$root/repo"
 
+  # Every check below runs with the sentinel stand-in, and asserts BOTH the wording only
+  # require_clean_tree emits ("refusing to run") and that no suite ran. Without those two, this
+  # group passes against a guard that has been deleted outright: require_clean_tree_after also
+  # exits 1 and also prints the dirty path, just after both suites have already run against the
+  # dirty tree. Measured — with require_clean_tree's git call replaced by an empty string, 2 of
+  # this group's 4 checks and the whole untracked group still passed. (PR #70 review, F7.)
   printf '==> The guard: a dirty tree is refused, and the uncommitted work survives\n'
   printf 'let uncommittedWorkInProgress = true\n' >>sample.swift
-  st_run "$always_pass" "$root/kill.plan"
+  rm -f "$sentinel"
+  st_run "$records_that_it_ran" "$root/kill.plan"
   st_eq "a dirty tree exits 1" "$ST_EXIT" "1"
+  st_contains "the refusal comes from the pre-run guard" "$ST_OUT" "refusing to run"
   st_contains "the refusal says the tree is not clean" "$ST_OUT" "working tree is not clean"
   st_contains "the refusal prints the dirty path" "$ST_OUT" "sample.swift"
+  if [[ -e "$sentinel" ]]; then
+    st_fail "a suite ran against the dirty tree — the refusal came too late to be this guard"
+  else
+    st_pass "no suite ran"
+  fi
   if grep -q "uncommittedWorkInProgress" sample.swift; then
     st_pass "the uncommitted work is still on disk afterwards"
   else
@@ -707,16 +787,32 @@ printf \"X  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n\""
 
   printf '\n==> The guard covers an untracked file too\n'
   printf 'scratch\n' >"$root/repo/scratch.txt"
-  st_run "$always_pass" "$root/kill.plan"
+  rm -f "$sentinel"
+  st_run "$records_that_it_ran" "$root/kill.plan"
   st_eq "an untracked file exits 1" "$ST_EXIT" "1"
+  st_contains "the refusal comes from the pre-run guard" "$ST_OUT" "refusing to run"
   st_contains "the refusal names the untracked file" "$ST_OUT" "scratch.txt"
+  if [[ -e "$sentinel" ]]; then st_fail "a suite ran anyway"; else st_pass "no suite ran"; fi
+
+  printf '\n==> status.showUntrackedFiles=no does not silently remove half the guard\n'
+  # git status --porcelain honours that config, so setting it used to delete the untracked half
+  # of the guard with no edit to this script at all. (PR #70 review, F1.)
+  git config status.showUntrackedFiles no
+  rm -f "$sentinel"
+  st_run "$records_that_it_ran" "$root/kill.plan"
+  st_eq "an untracked file still exits 1 with the config set" "$ST_EXIT" "1"
+  st_contains "and still comes from the pre-run guard" "$ST_OUT" "refusing to run"
+  st_contains "and still names the file" "$ST_OUT" "scratch.txt"
+  if [[ -e "$sentinel" ]]; then st_fail "a suite ran anyway"; else st_pass "no suite ran"; fi
+  git config --unset status.showUntrackedFiles
   rm -f "$root/repo/scratch.txt"
 
   printf '\n==> The guard covers --check as well — no command tolerates a dirty tree\n'
   printf 'let alsoUncommitted = true\n' >>sample.swift
   st_run "$always_pass" "$root/kill.plan" --check
   st_eq "--check on a dirty tree exits 1" "$ST_EXIT" "1"
-  st_contains "--check refuses for the same reason" "$ST_OUT" "working tree is not clean"
+  st_contains "--check refuses for the same reason" "$ST_OUT" "refusing to run"
+  st_contains "--check names the dirty tree" "$ST_OUT" "working tree is not clean"
   git checkout -- sample.swift
 
   printf '\n==> A mutant whose text does not match is refused before any test runs\n'
@@ -785,6 +881,51 @@ printf \"X  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n\""
   fi
   st_eq "the tree is clean after an interrupt" "$(git status --porcelain)" ""
 
+  printf '\n==> A mutant file git does not track is refused, wherever it points\n'
+  # `>>> file ../outside.txt` used to pass pre-flight and be mutated, with "Summary at <sha>"
+  # printed over a file that SHA does not describe. A gitignored path had the same hole.
+  # (PR #70 review, F2.)
+  printf 'outside the repository\n' >"$root/outside.txt"
+  printf 'ignored inside the repository\n' >"$root/repo/ignored.txt"
+  printf 'ignored.txt\n' >>"$root/repo/.gitignore"
+  git add .gitignore
+  git commit -q -m "ignore ignored.txt"
+  for target in "../outside.txt" "ignored.txt"; do
+    cat >"$root/untracked.plan" <<PLAN
+>>> mutant M1 a mutant aimed at a file git does not track
+>>> file $target
+>>> from
+outside the repository
+>>> to
+mutated
+>>> end
+PLAN
+    rm -f "$sentinel"
+    st_run "$records_that_it_ran" "$root/untracked.plan"
+    st_eq "a mutant aimed at $target exits 1" "$ST_EXIT" "1"
+    st_contains "$target is reported as untracked" "$ST_OUT" "NOT TRACKED BY GIT"
+    if [[ -e "$sentinel" ]]; then
+      st_fail "a suite ran against $target"
+    else
+      st_pass "no suite ran for $target"
+    fi
+  done
+  if grep -q "outside the repository" "$root/outside.txt"; then
+    st_pass "the file outside the repository was never touched"
+  else
+    st_fail "a file outside the repository was mutated"
+  fi
+
+  printf '\n==> An internal error exits non-zero rather than reporting success\n'
+  # The bug this pins: on bash 3.2 the presence of an EXIT trap makes a `set -u` death exit 0, so
+  # the harness printed a normal-looking report, died, and returned success. (PR #70 review, F6.)
+  ST_EXIT=0
+  ST_OUT="$(MUTATE_TEST_CMD="$always_pass" MUTATE_INJECT_INTERNAL_ERROR=1 "$SELF" "$root/kill.plan" 2>&1)" || ST_EXIT=$?
+  st_eq "a set -u death inside the harness exits 1" "$ST_EXIT" "1"
+  st_contains "bash reports the unbound variable" "$ST_OUT" "unbound variable"
+  st_contains "and the harness disowns the output above it" "$ST_OUT" "not one of its exits"
+  st_eq "the tree is clean after an internal error" "$(git status --porcelain)" ""
+
   printf '\n==> The file is restored byte for byte and the tree is left clean\n'
   if cmp -s sample.swift "$root/sample.pristine"; then
     st_pass "sample.swift is byte-identical to the committed version"
@@ -796,10 +937,10 @@ printf \"X  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n\""
   printf '\n'
   if [[ $SELFTEST_FAILURES -eq 0 ]]; then
     printf '==> selftest: all checks passed.\n'
-    return 0
+    finish 0
   fi
   printf '==> selftest: %d check(s) FAILED.\n' "$SELFTEST_FAILURES" >&2
-  return 1
+  finish 1
 }
 
 # ---------------------------------------------------------------------------------------------
@@ -810,16 +951,15 @@ main() {
   case "${1:-}" in
     -h|--help|help)
       usage
-      return 0
+      finish 0
       ;;
     selftest)
       [[ $# -eq 1 ]] || die "selftest takes no arguments"
       selftest
-      return 0
       ;;
     "")
       usage >&2
-      return 1
+      finish 1
       ;;
   esac
 
@@ -852,8 +992,15 @@ main() {
 
   WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/mutate.XXXXXX")"
   # Called plainly, never as `battery ... || rc=$?`: bash suspends errexit inside a command whose
-  # status is being tested, and a harness that dies of its own bug while reporting success is the
-  # exact failure mode this script exists to prevent. battery() exits directly with 0, 1 or 2.
+  # status is being tested, so with that call shape a failing command *inside* battery — a `cp`
+  # that cannot write, say — stops failing the run. Execution continues past it and the battery
+  # reports a full summary built on a step that did not happen. Measured: with `|| rc=$?` restored
+  # and a failing cp injected, the run completes and exits 2; called plainly it dies at exit 1 with
+  # no summary.
+  #
+  # What this does NOT govern is a `set -u` death exiting 0 — that is the EXIT trap, and the
+  # sentinel at the top of this file is what fixes it. This comment previously claimed otherwise
+  # and the claim was wrong in a way the selftest could not see (PR #70 review, F6).
   battery "$plan" "$only" "$check_only"
 }
 
