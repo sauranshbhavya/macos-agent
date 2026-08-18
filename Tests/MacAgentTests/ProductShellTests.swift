@@ -1570,13 +1570,27 @@ struct ProductShellTests {
     /// The notice names the row *this* run wrote, not whichever row the sort happens to leave at
     /// the head (PR #67 cycle-3, defect B).
     ///
-    /// The seeded rows all carry the same `completedAt` as the run under test, which is the real
-    /// condition rather than a contrived one: `completedAt` persists at whole-second resolution, so
-    /// every task finishing within one second of another ties exactly. `sorted(by:)` is not stable,
-    /// so among tied rows the head is arbitrary — and the row this run wrote is the one appended
-    /// last, which is the position a non-stable sort is least likely to leave at the front. Several
-    /// tied rows rather than two, because with only two elements an unstable sort can still get the
-    /// answer right by luck, and a test that passes by luck under the mutation is not a test.
+    /// **The tie is built by construction, not by timing.** The first version of this test sampled
+    /// `Date()` once at the top and seeded every row from it, then let the run stamp its own row
+    /// with a second `Date()` about twenty milliseconds later — so the two agreed only when no
+    /// second boundary fell between them, and roughly one run in fifty failed on the tie assertion
+    /// rather than on the thing under test. Seeding a *band* of consecutive seconds removes the
+    /// clock from the outcome: wherever within the band the run's own row lands, four seeded rows
+    /// already share its persisted second.
+    ///
+    /// Two separate properties are set up here, and the test asserts both rather than assuming
+    /// either:
+    ///
+    /// 1. **The tie really happened** — at least four other rows share this run's persisted
+    ///    `completedAt`. That is the real-world condition, since `completedAt` persists at
+    ///    whole-second resolution and any two tasks finishing within one second of each other
+    ///    compare exactly equal.
+    /// 2. **A strictly newer row exists**, from the far band. This is what makes the mutation's
+    ///    failure deterministic instead of probabilistic: with a genuinely newer row present,
+    ///    "the newest row" is provably not this run's, so the old `taskHistoryRecords.first?.id`
+    ///    derivation picks the wrong id every time rather than most of the time. Without it the
+    ///    test would rest on an unstable sort happening to mis-order a tie group, which is likely
+    ///    but not certain — and a test that passes by luck under the mutation is not a test.
     @Test
     @MainActor
     func aFinishedRunsNoticeNamesItsOwnRowEvenWhenEveryTimestampTies() async throws {
@@ -1584,17 +1598,27 @@ struct ProductShellTests {
         defer { try? FileManager.default.removeItem(at: fixture.root) }
         let viewModel = fixture.viewModel
 
-        let tiedSecond = Date()
-        for index in 0..<8 {
-            try fixture.taskHistoryStore.record(
-                CompletedTaskRecord(
-                    command: "seeded \(index)",
-                    startedAt: tiedSecond,
-                    completedAt: tiedSecond,
-                    outcomeStatus: .completed
+        // Whole seconds, because that is the resolution the store persists and therefore the
+        // resolution at which rows can tie at all.
+        let base = Date(timeIntervalSince1970: (Date().timeIntervalSince1970).rounded(.down))
+        func seed(_ label: String, at offset: TimeInterval) throws {
+            for index in 0..<4 {
+                try fixture.taskHistoryStore.record(
+                    CompletedTaskRecord(
+                        command: "seeded \(label) \(index)",
+                        startedAt: base,
+                        completedAt: base.addingTimeInterval(offset),
+                        outcomeStatus: .completed
+                    )
                 )
-            )
+            }
         }
+        // The band the run's own completion must land in — four consecutive seconds, against a run
+        // that takes milliseconds. Whichever it lands on, it ties with four seeded rows.
+        for offset in 0..<4 { try seed("band", at: TimeInterval(offset)) }
+        // Far enough ahead that no plausible fixture run reaches it, so these are newer than this
+        // run's row with certainty rather than with probability.
+        try seed("newer", at: 30)
 
         viewModel.command = "= 1 + 1"
         viewModel.start()
@@ -1602,11 +1626,12 @@ struct ProductShellTests {
 
         let rows = try fixture.taskHistoryStore.loadAll()
         let ownRow = try #require(rows.first { $0.command == "= 1 + 1" })
-        // The condition the defect needs is real in this fixture, not assumed: every row genuinely
-        // shares one persisted second. If this ever stops holding the test still passes, but it
-        // stops proving anything, so it is asserted rather than trusted.
-        #expect(Set(rows.map(\.completedAt)).count == 1)
-        #expect(rows.count == 9)
+        let tiedWithOwnRow = rows.filter { $0.completedAt == ownRow.completedAt && $0.id != ownRow.id }
+        // (1) and (2). Both are setup conditions rather than the behaviour under test, and both are
+        // asserted: if a change ever stops them holding, this test fails loudly here instead of
+        // continuing to pass while proving nothing.
+        #expect(tiedWithOwnRow.count >= 4)
+        #expect(rows.contains { $0.completedAt > ownRow.completedAt })
 
         let notice = try #require(viewModel.completedRunNotice)
         #expect(notice.taskID == ownRow.id)
