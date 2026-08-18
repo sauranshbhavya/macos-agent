@@ -142,6 +142,9 @@ struct VisionDecisionAndGeometryTests {
     }
 
     /// The ordinary case: image point plus the window's live origin.
+    ///
+    /// The half-point tails are the pixel *centre* (SONNY-145): scale is 1 here, so pixel (200, 300)
+    /// covers the point square `[200, 201) x [300, 301)` and its centre is (200.5, 300.5).
     @Test
     func anImagePointResolvesThroughTheWindowsLiveOrigin() {
         let capture = Self.capture()
@@ -152,7 +155,7 @@ struct VisionDecisionAndGeometryTests {
             freshFrame: capture.windowFrame,
             ownWindowFrames: []
         )
-        #expect(outcome == .posted(globalPoint: CGPoint(x: 300, y: 350)))
+        #expect(outcome == .posted(globalPoint: CGPoint(x: 300.5, y: 350.5)))
     }
 
     /// **A window that merely moved keeps the model's point valid**, so the click goes through — at
@@ -169,7 +172,7 @@ struct VisionDecisionAndGeometryTests {
             freshFrame: moved,
             ownWindowFrames: []
         )
-        #expect(outcome == .posted(globalPoint: CGPoint(x: 510, y: 420)))
+        #expect(outcome == .posted(globalPoint: CGPoint(x: 510.5, y: 420.5)))
     }
 
     /// **A window that resized has reflowed its content under the model**, so the point no longer
@@ -242,7 +245,7 @@ struct VisionDecisionAndGeometryTests {
             freshFrame: capture.windowFrame,
             ownWindowFrames: [CGRect(x: 250, y: 300, width: 200, height: 200)]
         )
-        #expect(outcome == .suppressedOwnWindow(globalPoint: CGPoint(x: 300, y: 350)))
+        #expect(outcome == .suppressedOwnWindow(globalPoint: CGPoint(x: 300.5, y: 350.5)))
     }
 
     /// Retina and other scale factors: the mapping is derived per capture, so a 2x image maps
@@ -260,7 +263,7 @@ struct VisionDecisionAndGeometryTests {
             freshFrame: capture.windowFrame,
             ownWindowFrames: []
         )
-        #expect(outcome == .posted(globalPoint: CGPoint(x: 200, y: 100)))
+        #expect(outcome == .posted(globalPoint: CGPoint(x: 200.25, y: 100.25)))
     }
 
     /// A degenerate capture cannot produce a divide-by-zero point somewhere arbitrary on screen.
@@ -298,10 +301,15 @@ struct VisionDecisionAndGeometryTests {
     ///
     /// The egress ladder resamples a capture that will not fit the request budget, so the model is
     /// shown — and names coordinates in — a smaller grid than ScreenCaptureKit produced. Here the
-    /// capture is 800x600 pixels over an 800x600-point window while the sent image is 400x300: the
-    /// model's (200, 150) is the middle of what it saw, which is the middle of the window, which is
-    /// (500, 350) on screen. Scaling by the capture's own pixel count instead would land at
-    /// (300, 200) — inside the window, plausible-looking, and wrong.
+    /// capture is 800x600 pixels over an 800x600-point window while the sent image is 400x300, so one
+    /// sent pixel is two points. The model's (200, 150) names the pixel spanning `[200, 201)` of that
+    /// smaller grid, whose centre is (200.5, 150.5) sent pixels — (401, 301) points into the window,
+    /// so (501, 351) on screen.
+    ///
+    /// **Scaling by the capture's own pixel count instead would land at (300.5, 200.5)** — inside the
+    /// window, plausible-looking, and wrong by two hundred points. That gap, not the half-pixel, is
+    /// what this test is for; the half-pixel is SONNY-145's centre sampling and is why neither number
+    /// is round.
     @Test
     func theResolverScalesByTheSentImageRatherThanTheCapture() {
         let capture = Self.capture()
@@ -312,7 +320,7 @@ struct VisionDecisionAndGeometryTests {
             freshFrame: capture.windowFrame,
             ownWindowFrames: []
         )
-        #expect(outcome == .posted(globalPoint: CGPoint(x: 500, y: 350)))
+        #expect(outcome == .posted(globalPoint: CGPoint(x: 501, y: 351)))
     }
 
     /// Bounds are the sent image's too: the model was told those dimensions and answered inside
@@ -327,23 +335,49 @@ struct VisionDecisionAndGeometryTests {
         #expect(!VisionPointResolver.isInsideImage(CGPoint(x: 200, y: 300), sentImageSize: sent))
     }
 
-    /// **What a resample costs a click, bounded exactly.**
+    /// **What a resample costs a click, bounded exactly — and in both directions** (SONNY-145).
     ///
-    /// The model can only name whole pixels, and a named pixel resolves to that pixel's leading edge
-    /// rather than its centre, so the resolved point lands short of the true target by strictly less
-    /// than one sent pixel — `windowWidth / sentPixelWidth` points. Swept over every rung of the
-    /// shipping ladder and a grid of targets across a 1440-point window: at most one point at full
-    /// resolution and at most two at the 0.5 floor. A macOS control is at least 20 points
-    /// on its short edge and the model is told to aim at the middle of the glyphs, so nothing here
-    /// can move a click off its target.
+    /// The model can only name whole pixels, and a named pixel now resolves to that pixel's *centre*
+    /// rather than its leading edge, so the resolved point is within **half** a sent pixel of the
+    /// model's true target: at most half a point at full resolution, one point at the ladder's 0.5
+    /// floor. Before SONNY-145 it was a whole sent pixel and always in the same direction — up and to
+    /// the left.
     ///
-    /// This bounds the arithmetic only. Whether a *model* aims as well at a smaller picture is not
-    /// something a test can answer and is the founder's attended run.
+    /// **The step count is 997 because the old 144 sampled sub-pixel positions degenerately.** With
+    /// 144 targets over a 1440x900 window, counting distinct fractional positions within a sent
+    /// pixel: at scale 0.8 **every** x target landed exactly on a pixel boundary (1 distinct
+    /// position), at scale 0.64 every y target did, and the remaining rung/axis pairs offered only
+    /// 2 to 8 distinct positions out of 144 targets. A pixel boundary is the one input where
+    /// leading-edge and centre sampling produce the same answer, so those combinations contributed
+    /// no signal at all. 997 is prime and divides none of the rungs' sent dimensions: it yields 997
+    /// distinct positions on **both** axes at **every** rung.
+    ///
+    /// **Stated precisely, because the tempting stronger claim is false:** the old sweep was not
+    /// blind. Measured — the assertions below, run against the pre-SONNY-145 mapping with the step
+    /// count back at 144, still fail. What 144 bought was a test whose whole discriminating power
+    /// sat in a few rung/axis pairs by arithmetic accident, one ladder change away from resting on
+    /// nothing. 997 makes every rung carry its own weight.
+    ///
+    /// **The signed check is what pins the *direction*.** Leading-edge sampling can only ever
+    /// undershoot, so asserting that the sweep sees an overshoot too is the assertion that fails if
+    /// the `+ 0.5` is removed — a bound alone would still admit a mapping biased to one side.
+    ///
+    /// **This bounds the arithmetic only.** Whether a click lands on the control the user sees is not
+    /// something any test in this repository can answer — nothing here drives the real UI — and it is
+    /// the founder's attended run. Whether a *model* aims as well at a smaller picture is the same
+    /// kind of question and the same answer.
     @Test
-    func theResolvedPointStaysWithinOneSentPixelOfTheModelsTargetAtEveryLadderScale() {
+    func theResolvedPointStaysWithinHalfASentPixelOfTheModelsTargetAtEveryLadderScale() {
         let windowWidth: CGFloat = 1_440
         let windowHeight: CGFloat = 900
         let frame = CGRect(x: 120, y: 64, width: windowWidth, height: windowHeight)
+        let steps = 997
+        // Absorbs binary rounding in the scale division only — three orders of magnitude below the
+        // half-point figure being asserted, so it cannot hide a real regression.
+        let epsilon: CGFloat = 0.000_001
+
+        var sawUndershoot = false
+        var sawOvershoot = false
 
         for rung in VisionCaptureEgressPolicy.default.ladder {
             let sentWidth = Int((Double(windowWidth) * rung.scale).rounded())
@@ -353,14 +387,15 @@ struct VisionDecisionAndGeometryTests {
                 pixels: CGSize(width: windowWidth, height: windowHeight),
                 frame: frame
             )
-            let onePixelInPoints = windowWidth / CGFloat(sentWidth)
+            let halfPixelX = windowWidth / CGFloat(sentWidth) / 2
+            let halfPixelY = windowHeight / CGFloat(sentHeight) / 2
 
             // Sweep targets across the window, in points, as the model's true aim. Half-open: a
             // target at the window's outer edge is not a point inside the window, and the model is
             // told `0 <= x < width` for exactly that reason.
-            for step in 0..<144 {
-                let targetX = windowWidth * CGFloat(step) / 144
-                let targetY = windowHeight * CGFloat(step) / 144
+            for step in 0..<steps {
+                let targetX = windowWidth * CGFloat(step) / CGFloat(steps)
+                let targetY = windowHeight * CGFloat(step) / CGFloat(steps)
                 // The best a model can do: name the sent pixel the target falls inside.
                 let namedX = min(sentWidth - 1, Int(targetX / windowWidth * CGFloat(sentWidth)))
                 let namedY = min(sentHeight - 1, Int(targetY / windowHeight * CGFloat(sentHeight)))
@@ -375,14 +410,25 @@ struct VisionDecisionAndGeometryTests {
                     Issue.record("a point inside the window must resolve at scale \(rung.scale)")
                     continue
                 }
-                let errorX = abs((frame.origin.x + targetX) - resolved.x)
-                let errorY = abs((frame.origin.y + targetY) - resolved.y)
-                #expect(errorX <= onePixelInPoints, "x error at scale \(rung.scale), target \(targetX)")
-                #expect(errorY <= windowHeight / CGFloat(sentHeight), "y error at scale \(rung.scale)")
-                // The absolute statement, independent of the rung: never more than two points.
-                #expect(errorX <= 2 && errorY <= 2, "displacement at scale \(rung.scale)")
+
+                // Positive: the click landed short of the target, the old mapping's only direction.
+                let signedX = (frame.origin.x + targetX) - resolved.x
+                let signedY = (frame.origin.y + targetY) - resolved.y
+                if signedX > epsilon { sawUndershoot = true }
+                if signedX < -epsilon { sawOvershoot = true }
+
+                #expect(abs(signedX) <= halfPixelX + epsilon, "x error at scale \(rung.scale), target \(targetX)")
+                #expect(abs(signedY) <= halfPixelY + epsilon, "y error at scale \(rung.scale)")
+                // The absolute statement, independent of the rung: never more than one point.
+                #expect(abs(signedX) <= 1 + epsilon && abs(signedY) <= 1 + epsilon, "displacement at scale \(rung.scale)")
             }
         }
+
+        #expect(sawUndershoot, "some targets must sit past their pixel's centre")
+        #expect(
+            sawOvershoot,
+            "centre sampling must err in both directions — leading-edge sampling can only undershoot"
+        )
     }
 }
 
