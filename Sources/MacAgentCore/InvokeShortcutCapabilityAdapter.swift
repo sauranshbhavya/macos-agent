@@ -123,6 +123,19 @@ public struct InvokeShortcutCapabilityAdapter: CapabilityAdapter {
         log: @escaping (AgentPhase, String) -> Void,
         write: () throws -> Void
     ) {
+        // "Don't save this task" (SONNY-120) is asked here rather than at the three call sites
+        // above, because one guard that wraps all three cannot be half-remembered. Shortcut run
+        // history is a `.trace` store, so a suppressed run withholds it.
+        //
+        // The cost, stated because it is a real one and not obvious: this history feeds
+        // `hasCleanObservedSuccess`, which decides whether a *future* run of the same Shortcut is
+        // tier 1 or tier 2. A suppressed run therefore earns no trust it could have earned, so the
+        // next run may ask where it otherwise would not. That is the right direction for a switch
+        // whose whole promise is leaving no record — suppression may cost the user an extra
+        // confirmation later; it must never buy them a quieter approval.
+        guard context.recordingPolicy.allowsWriting(to: .shortcutRunHistory) else {
+            return
+        }
         do {
             try write()
         } catch {
