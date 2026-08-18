@@ -157,6 +157,36 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: docs/sonny-168-force-push-clause
+Status: complete
+Date: 2026-08-18
+Tickets: SONNY-168 (CLAUDE.md's history rule contradicts WORKFLOW.md's force-push authorization). One clause. Not a new rule — a pointer to one that already exists.
+Reviewed by: fresh session (per WORKFLOW.md step 7) — pending at PR open.
+
+Spec sections covered: none. A process-record fix.
+Files changed: `CLAUDE.md` (one bullet in Conventions), and this changelog. **`WORKFLOW.md` is deliberately untouched** — it was already correct, and this ticket exists because the auto-loaded file contradicted it in emphasis, not because the rule was wrong.
+Tests: **not run, under WORKFLOW.md's one rerun exemption** — "a diff provably confined to docs/comments may skip the rerun — anything touching `Sources/` or `Tests/` never skips." Proven rather than asserted: `git diff --name-only` reports `CLAUDE.md` and this changelog, and zero paths under `Sources/` or `Tests/`. No test reads either file; the handful of `CLAUDE.md` mentions in the tree are doc comments citing its rules, not code depending on its text.
+
+Behavior added: none. Documentation only.
+
+Behavior preserved (required, no blanket claims):
+- **The authorization itself is unchanged**, because CLAUDE.md never granted it — `WORKFLOW.md`'s merge-one-branch-at-a-time rule did, and still does, as the sole source.
+- **The merge gate is untouched.** "Merging is the user's, always" leads the clause exactly as before.
+- **The prohibition is untouched in substance and stated first**: `main` and any branch that is not the session's own ticket branch, before the exception is named.
+
+Architectural decisions / pitfalls discovered (required):
+- **The defect was reading order, not rule content.** `CLAUDE.md` is auto-loaded into every session; `WORKFLOW.md` is opened on purpose. So the absolute-sounding sentence was the one every session saw by default, and the exception lived in a file it might not have read yet. A session following the letter of the auto-loaded file would refuse to finish an instructed rebase — worse than the outcome the rule guards against.
+- **Two independent readers made the same mistake from the same text**, which is what earns a clause rather than a note: PR #69's implementing session flagged its own authorized force-push as a possible rule break, and the coordinator then proposed adding a carve-out that already existed. Both had read only the auto-loaded sentence.
+- **The clause says "already authorized rather than granted here", deliberately.** The risk in fixing this is that `CLAUDE.md` starts reading like a second source of authorization that could drift from `WORKFLOW.md`. Naming it a pointer, and naming the rule it points at, keeps one source.
+- **The agreement was checked clause by clause rather than by impression.** Every constraint in `WORKFLOW.md`'s rule has a counterpart in the new text: own ticket branch only; arising from the rebase; always `--force-with-lease`; never bare `--force`; never another branch; never `main`. Nothing in the new text has no counterpart there, which is the direction that would mean widening.
+
+Known limitations / deferred scope:
+- **`CLAUDE.md`'s Conventions bullet is now longer**, and length is the tax on it being the file everyone reads by default. Accepted: the alternative is the shorter sentence that was wrong twice.
+
+Open questions (required): none.
+
+Next branch: not a roadmap row. A one-clause records fix. Rows D, E, J and 12 are unaffected.
+
 ### Branch: fix/sonny-145-click-point-centre
 Status: complete
 Date: 2026-08-18
