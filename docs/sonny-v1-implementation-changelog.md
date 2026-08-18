@@ -157,6 +157,43 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/sonny-102-termius-deny-list
+Status: complete
+Date: 2026-08-18
+Tickets: SONNY-102 (the terminal ban is a name-based deny list — an unlisted terminal is controllable). The ticket is **not closed by this branch**: it implements the founder's decision of 2026-08-17 to add one entry, and the gap the ticket exists for is inherent to enumeration and does not close by adding entries.
+Reviewed by: fresh session (per WORKFLOW.md step 7) — pending at PR open.
+
+Spec sections covered: §7.4 (the terminal trust boundary), no new ground — this aligns the *list* with the rule §7.4 already states.
+Files changed: `Sources/MacAgentCore/` — `ScreenControlEligibility.swift` (the entry, the evidence record, the category note), `ShellSurfaceDetector.swift` and `VisionSessionContainment.swift` (one doc sentence each). `Tests/MacAgentCoreTests/` — `ScreenControlEligibilityTests.swift` (the three-group split and the literal pin), `ShellSurfaceDetectorTests.swift`. `Tests/MacAgentTests/VisionSessionRunTests.swift`. `docs/sonny-founder-design-decisions.md` (a dated addendum), and this changelog. Eight paths, which is what `git diff --name-only 2ebc24f...HEAD` reports.
+Tests: CLAUDE.md's exact flagged command -> pass, **1290 tests in 95 suites**, exit 0, at `76bcf91` — the last commit on this branch that touches code. Branch point `2ebc24f` measured on this branch: **1289 in 95**, so **+1 test, +0 suites**, which is the one new literal pin.
+
+Behavior added:
+- Termius is refused. Sonny will not control `com.termius-dmg.mac` through either door, and the refusal is the same non-negotiable terminal sentence every other entry produces.
+
+Behavior preserved (required, no blanket claims):
+- **The other ten entries, unchanged**, and every list-driven test still drives off the list itself rather than a hand-copy — so the new entry is exercised by `everyListedTerminalIsRefusedThroughTheResolvedAppDoor`, `bothDoorsAgreeOnEveryListedTerminal` and the uppercase spelling assertions without any of them being edited.
+- **`normalize` is untouched**, and it is what makes this entry survive the same way `com.apple.terminal` does: Launch Services reports `com.apple.Terminal` with a capital T while the list stores lowercase, and the comparison holds only because `normalize` trims and lowercases with Swift's locale-independent `String.lowercased()` rather than `NSString.lowercased(with:)`, whose Turkish `I` folds to `ı`. Load-bearing, and resting on one small function nobody is likely to think about again.
+- **The screen check and its ordering.** `ShellSurfaceDetector` is untouched as behaviour; the deny list still refuses first, at three doors and again per iteration, above it.
+- **Nothing was built for the embedded-shell case.** The founder put it out of scope on 2026-08-17. This branch declines to extend that layer rather than removing one.
+
+Architectural decisions / pitfalls discovered (required):
+- **The entry is on the rule, not on the word "terminal".** §7.4's test is *arbitrary shell execution with the user's full rights*, which an SSH session meets on the far machine. The list had been built around terminal emulators — a narrower idea than the rule it implements. So this **aligns the list with the rule rather than widening the rule**, and that framing is what makes the next app's decision answerable instead of a fresh argument.
+- **`com.termius-dmg.mac` is the whole lesson.** A plausible identifier typed from memory is `com.termius.mac`; the real one carries a `-dmg` packaging artefact nobody would infer. A wrong identifier **fails open** — it matches nothing while sitting in the list looking like coverage — so a guess is worse than an absence. `termiusIsOnTheListUnderTheIdentifierLaunchServicesActuallyHolds` pins the string character for character *and* asserts `com.termius.mac` stays eligible, so a well-meant tidy-up fails a test rather than silently un-banning an SSH client.
+- **One method was not enough, and the disagreement is the useful part.** Launch Services' handler registry (`NSWorkspace.urlsForApplications(toOpen:)`) found Termius; scanning every app bundle's `CFBundleURLTypes` found only Terminal and iTerm. Termius is LS's registered default `ssh://` handler while declaring no such scheme in its own bundle — so the more obvious method would have missed the single app the question was about. **Anyone repeating this sweep asks the handler registry.**
+- **The evidence record needed a third group, not a bigger second one.** "Established from Launch Services' handler registry on the founder's machine" is a different claim from "read off a bundle's `Info.plist`", and collapsing them into "verified on a machine" would erase the method finding above. `theEvidenceSplitMatchesTheList` now holds three mutually disjoint groups whose union must equal the list.
+- **Count claims were made count-free rather than re-pinned, where no test held them.** Four sentences said "ten" in passing — two source doc comments, one test doc comment, one roadmap cell. None was pinned by anything, all four had already gone stale relative to nobody noticing, and re-pinning them to "eleven" only reschedules the rot. The count now has **one home**: `terminalBundleIdentifiers`' own doc comment, which a test fails on. This is the same shape as the finding filed on the docx branch about a folding rule with two homes.
+- **Dated records were left verbatim, deliberately.** Two changelog entries (row I's, and the terminal-screen-check branch's) say "ten" as a statement of what was true when that branch shipped, and the founder-decisions doc's 2026-08-16 screen-check section does the same. Editing them would falsify history, so the current truth is carried by a **dated addendum** on the standing ratification instead — the convention that doc already uses for supersessions.
+
+Known limitations / deferred scope:
+- **The SSH-client category is not covered, and that is a stated limit rather than an oversight.** Royal TSX, Shuttle, Core Shell, Prompt, Blink, SecureCRT, ZOC, PuTTY and SSH Config Editor are not installed on the founder's machine, so no identifier for any of them can be established from there — and none was invented. The list grows app by app, with the app in hand.
+- **Nine of the eleven entries cannot be confirmed from the founder's machine**, checked rather than assumed: every existing entry was put to Launch Services there and only Terminal and iTerm2 are installed. Not evidence the other nine are wrong; recorded so nobody reads "checked against Launch Services" as covering the list.
+- **The embedded-shell gap is unchanged and out of scope by decision** (founder, 2026-08-17): a shell inside VS Code, a JetBrains console or a notebook cell is controllable. The shipped `ShellSurfaceDetector` still runs as defense in depth; this is an accepted limit on that layer, not a deferred fix, and the primary refusal is intact.
+- **SONNY-102 stays open.** A name-based deny list is never complete. This narrows the gap by one app and does not close it.
+
+Open questions (required): none. The founder settled the one this ticket was blocked on — whether dedicated SSH clients belong on the list — on 2026-08-17.
+
+Next branch: not a roadmap row. This is an out-of-row entry addition sequenced ahead of the implementation lanes because its decision was already made and its cost is one line plus its records. The locked roadmap is unaffected: rows D, E, J and 12 continue as they stood.
+
 ### Branch: fix/docx-conversion-defects
 Status: complete
 Date: 2026-08-17
