@@ -20,7 +20,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // `show()` alone could never have done that — it has no reference to the view's `isCompact`
         // state at all. (SONNY-121; the open question SONNY-25 recorded and left for whoever
         // revisited outcome retention.)
-        onOpen: { [weak self] in self?.requestWidgetPresentation() }
+        onOpen: { [weak self] in self?.requestWidgetPresentation() },
+        // A finished run's notification opens that task's detail dialog in Command Center, not the
+        // widget — the founder's decision of 2026-08-17 (PR #67 review, F4). The widget renders
+        // nothing for a Command-Center-origin result, so the old shared handler expanded it onto an
+        // empty composer.
+        onOpenTask: { [weak self] taskID in
+            guard let self else { return }
+            windowCoordinator.showCommandCenter()
+            // No id, or a task that is no longer in history: Command Center still comes forward,
+            // which is the honest fallback — there is no dialog to open.
+            guard let taskID else { return }
+            _ = viewModel.requestTaskDetail(taskID: taskID)
+        }
     )
     private var pushToTalkHotKey: PushToTalkHotKey?
     private var cancellables: Set<AnyCancellable> = []
@@ -183,11 +195,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // otherwise notify twice for one run.
         viewModel.$completedRunNotice
             .compactMap { $0 }
-            .sink { [weak self] summary in
+            .sink { [weak self] notice in
                 guard let self, !isUserWorkingInSonny else {
                     return
                 }
-                notificationService.postOutcomeNotification(summary: summary)
+                notificationService.postOutcomeNotification(summary: notice.summary, taskID: notice.taskID)
             }
             .store(in: &cancellables)
 

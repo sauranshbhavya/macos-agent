@@ -550,6 +550,7 @@ struct ProductShellTests {
             "taskHistoryRecords",
             "taskHistoryQuery",
             "completedRunNotice",
+            "taskDetailRequest",
             "outcomeWasNotified",
             "clarificationQuestion",
             "clarificationAnswer",
@@ -1506,9 +1507,14 @@ struct ProductShellTests {
         try await waitForViewModelToBecomeIdle(viewModel)
 
         let notice = try #require(viewModel.completedRunNotice)
-        #expect(!notice.isEmpty)
+        #expect(!notice.summary.isEmpty)
         // It carries the run's own summary, not a generic "done".
-        #expect(notice == viewModel.finalSummary)
+        #expect(notice.summary == viewModel.finalSummary)
+        // And the task it is about, so a click can open that task's detail (PR #67 review, F4).
+        // Resolved against the row actually on disk, not merely non-nil.
+        let taskID = try #require(notice.taskID)
+        #expect(try fixture.taskHistoryStore.loadAll().contains { $0.id == taskID })
+        #expect(viewModel.taskHistoryRecords.first?.id == taskID)
     }
 
     /// A run whose summary is blank posts nothing. An empty notification body is a notification that
@@ -1526,7 +1532,59 @@ struct ProductShellTests {
 
         viewModel.publishCompletedRunNoticeIfUnreported("  Opened Research.  ")
         // Trimmed, so the notification body has no stray leading whitespace.
-        #expect(viewModel.completedRunNotice == "Opened Research.")
+        #expect(viewModel.completedRunNotice?.summary == "Opened Research.")
+    }
+
+    /// **F4.** Clicking a finished-run notification opens that task's detail rather than expanding
+    /// the widget onto an empty composer. The view-model half of that — resolving the id the
+    /// notification carries to a real row and raising the request — is what the suite can reach.
+    @Test
+    func aFinishedRunNotificationOpensThatTasksDetailAndNotAnyOther() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        viewModel.command = "= 1 + 1"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+        viewModel.command = "= 2 + 2"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        let rows = try fixture.taskHistoryStore.loadAll()
+        #expect(rows.count == 2)
+        let firstTask = try #require(rows.first { $0.command == "= 1 + 1" }?.id)
+
+        // The older task, not the most recent one — "the newest row" would open the wrong task when
+        // another run finishes between the notification arriving and the click.
+        #expect(viewModel.requestTaskDetail(taskID: firstTask))
+        #expect(viewModel.taskDetailRequest?.taskID == firstTask)
+
+        // Two requests for the same task are two distinct requests, so a second notification
+        // reopens the sheet rather than being dropped as an unchanged value.
+        let first = try #require(viewModel.taskDetailRequest)
+        #expect(viewModel.requestTaskDetail(taskID: firstTask))
+        #expect(viewModel.taskDetailRequest != first)
+    }
+
+    /// A task deleted between the notification arriving and the click resolves to nothing, and the
+    /// opener says so rather than inventing a fallback.
+    @Test
+    func aNotificationForADeletedTaskOpensNothing() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        viewModel.command = "= 1 + 1"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+        let record = try #require(viewModel.taskHistoryRecords.first)
+        let taskID = try #require(record.id)
+
+        viewModel.deleteTask(record)
+
+        #expect(!viewModel.requestTaskDetail(taskID: taskID))
+        #expect(viewModel.taskDetailRequest == nil)
     }
 
     /// **The narrowness is the design, so it is asserted rather than assumed.** A widget-origin run
@@ -1671,6 +1729,54 @@ struct ProductShellTests {
         try await waitForViewModelToBecomeIdle(viewModel)
 
         #expect(viewModel.taskRecordingPolicy == .suppressTraces)
+    }
+
+    /// **F1's seam test.** The vision journal is the fifth `.trace` store and was the one nothing
+    /// pinned: its withholding decision lived inline in `makeLiveVisionEnvironment()`, which no test
+    /// here can execute — `makeVisionEnvironment` returns `nil` without an API key, and the vision
+    /// tests inject `visionSessionEnvironment` directly and bypass it. So a mutation handing the
+    /// store over regardless of policy survived the whole suite.
+    ///
+    /// Asserting the decision is asserting the suppression: row I built `journalStore == nil` as
+    /// "run the session, record nothing", so withholding the store *is* the mechanism. This test's
+    /// whole purpose is to fail when suppression breaks.
+    @Test
+    func aSuppressedRunIsHandedNoVisionSessionJournal() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        #expect(viewModel.visionSessionJournalStoreForThisRun != nil)
+        viewModel.taskRecordingPolicy = .suppressTraces
+        #expect(viewModel.visionSessionJournalStoreForThisRun == nil)
+        viewModel.taskRecordingPolicy = .record
+        #expect(viewModel.visionSessionJournalStoreForThisRun != nil)
+        // The store handed back when recording is the real one, not some other instance — a
+        // withholding that returned a fresh empty store would satisfy nil-vs-non-nil and record
+        // nowhere the app can read.
+        #expect(viewModel.visionSessionJournalStoreForThisRun?.fileURL == viewModel.visionSessionJournalStore.fileURL)
+    }
+
+    /// **F2.** A scheduled routine is never suppressed, including in the one window where a
+    /// foreground run has left the policy set: paused at a clarification, `isRunning` is false and
+    /// `checkScheduledRoutines` does not guard on it, so a routine can fire while
+    /// `taskRecordingPolicy` is still `.suppressTraces`.
+    @Test
+    func aScheduledRunIsNeverSuppressedEvenWhileAForegroundRunIsPausedAtAClarification() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        // The window: policy set, run not "running", not awaiting approval.
+        viewModel.taskRecordingPolicy = .suppressTraces
+        viewModel.clarificationQuestion = "Which workspace did you mean?"
+        #expect(!viewModel.isRunning)
+        #expect(!viewModel.isAwaitingApproval)
+
+        // The foreground executor still suppresses — that run really is still going.
+        #expect(viewModel.makeExecutor().suppressesTracesForTests)
+        // The scheduled executor does not, whatever the policy says.
+        #expect(!viewModel.makeExecutor(recordingPolicy: .record).suppressesTracesForTests)
     }
 
     /// The recent-artifacts half, asserted at the decision rather than end-to-end.

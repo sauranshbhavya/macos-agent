@@ -40,9 +40,28 @@ struct TaskRecordingPolicyTests {
     func suppressesTracesAgreesWithTheCaseItReports() {
         #expect(TaskRecordingPolicy.suppressTraces.suppressesTraces)
         #expect(!TaskRecordingPolicy.record.suppressesTraces)
-        // The default a store, an executor or a context takes when nobody says otherwise.
-        #expect(CapabilityExecutionContext.self is Any.Type)
         #expect(TaskRecordingPolicy.allCases.count == 2)
+    }
+
+    /// **The default is load-bearing and was asserted by nothing** (PR #67 review, F6, replacing
+    /// `#expect(CapabilityExecutionContext.self is Any.Type)` — trivially true and pinning nothing).
+    ///
+    /// `.record` is what makes every pre-existing construction site and every existing test keep its
+    /// old behaviour when the policy was threaded through. If either default flipped, suppression
+    /// would become the norm silently: traces would stop being written for runs nobody opted out of,
+    /// in the safe direction and therefore quietly.
+    @Test
+    @MainActor
+    func aContextAndAnExecutorBuiltWithoutAPolicyBothRecord() {
+        // The context's own default, read off a context built the way every non-suppressing caller
+        // builds one.
+        let context = VisionTestContext.make(installed: [])
+        #expect(context.recordingPolicy == .record)
+        #expect(!context.recordingPolicy.suppressesTraces)
+
+        // The executor's default parameter, taken rather than passed.
+        #expect(!AgentActionExecutor().suppressesTracesForTests)
+        #expect(AgentActionExecutor(recordingPolicy: .suppressTraces).suppressesTracesForTests)
     }
 
     /// **The leak pausing alone does not close, pinned as a regression.**
