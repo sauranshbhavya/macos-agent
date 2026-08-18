@@ -278,7 +278,7 @@ later," per the user) — it ships as an honest "Not designed yet" placeholder, 
 as Settings. Design this for real once there's real direction on what a Sonny profile even is
 (no accounts/auth system exists yet either, so this is likely gated on branch 13 anyway).
 
-## Not built: Tasks page search
+## Built 2026-08-17 (was: Not built: Tasks page search)
 
 Per direct user feedback (2026-07-18, Tasks/Home page review): the toolbar row's filter icon was
 removed outright (no filter feature planned), but the search icon (`TasksToolbarRow` in
@@ -288,6 +288,16 @@ matching against `TaskHistoryStore` records, no UI for results. The user referre
 "branch #9" work; the roadmap has been renumbered multiple times already (see
 `docs/sonny-v1-implementation-changelog.md`), so confirm the actual target branch at implementation
 time rather than trusting that number.
+
+**Resolved on roadmap row D (SONNY-118), 2026-08-17.** The icon is a real search field now, matching
+the command text and the workspace name through `TaskHistorySearch` in `MacAgentCore`. Three details
+worth carrying rather than re-deriving: there is deliberately **no index** — a linear scan over an
+array capped at 10,000 records is the right size of solution; search deliberately **does not read
+screen records**, because that text is a model's description of the user's screen and reading it
+would cost a decrypt of up to 500 journal sessions per keystroke; and the Tasks list window dropped
+from 90 days to 30 **in the same change**, because a search that reaches past the window is what
+makes the shorter window safe. Kept here rather than deleted, per this file's own convention of
+logging what happened to a named gap. The paragraph above is the original entry, unedited.
 
 ## Skipped by explicit decision (not a gap — logged for completeness)
 

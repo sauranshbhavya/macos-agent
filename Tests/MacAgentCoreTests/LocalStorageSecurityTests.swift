@@ -362,6 +362,55 @@ struct LocalStorageSecurityTests {
             "vision-sessions.json"
         ])
     }
+
+    /// The mechanism that stops "Don't save this task" from quietly becoming untrue. The founder's
+    /// decision of 2026-08-16 is that its reach is a rule, not a list — so a store that reaches the
+    /// wipe without a `LocalStore` case has to fail here rather than default to "recorded".
+    ///
+    /// Row 12's work already implies a tenth store. When it lands, this test is meant to fail: the
+    /// new file has no case, so it matches nothing. Classifying it is the fix; deleting the
+    /// assertion is not.
+    @Test
+    func everyLocalStoreFileIsClassifiedExactlyOnce() {
+        let wipedURLs = LocalDataDeletionService.defaultStoreFileURLs()
+
+        for url in wipedURLs {
+            let matches = LocalStore.allCases.filter { $0.fileURL() == url }
+            #expect(matches.count == 1, "\(url.lastPathComponent) has \(matches.count) classifications, expected 1")
+        }
+
+        // And the other direction: no case describes a file the wipe never reaches.
+        let classifiedURLs = LocalStore.allCases.map { $0.fileURL() }
+        #expect(Set(classifiedURLs) == Set(wipedURLs))
+        #expect(Set(classifiedURLs).count == LocalStore.allCases.count)
+        #expect(LocalStore.allCases.count == 9)
+    }
+
+    /// Pins *which* kind each store is, not merely that it has one. Exhaustiveness alone would let
+    /// task history be silently reclassified `.artifact` and stop being suppressed, which is the
+    /// same failure by a different route.
+    @Test
+    func theTraceArtifactSplitMatchesTheFounderDecision() {
+        func stores(_ kind: LocalStoreKind) -> Set<LocalStore> {
+            Set(LocalStore.allCases.filter { $0.kind == kind })
+        }
+
+        // Suppressed by "Don't save this task": incidental records of what happened.
+        #expect(stores(.trace) == [
+            .clipboardHistory,
+            .recentArtifacts,
+            .shortcutRunHistory,
+            .taskHistory,
+            .visionSessionJournal
+        ])
+        // Never suppressed: the thing the user actually asked for.
+        #expect(stores(.artifact) == [.routines, .workspaces, .snippets])
+        // The ninth store, which the founder's own enumeration did not reach: no task writes it.
+        #expect(stores(.notWrittenByTasks) == [.clipboardHistorySettings])
+
+        // Every kind is used, so none is a case nothing ever means.
+        #expect(LocalStoreKind.allCases.allSatisfy { !stores($0).isEmpty })
+    }
 }
 
 private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncryption) throws -> [URL] {

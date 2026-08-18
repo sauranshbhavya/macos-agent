@@ -548,6 +548,10 @@ struct ProductShellTests {
             "priorTaskContext",
             "taskUsageSummary",
             "taskHistoryRecords",
+            "taskHistoryQuery",
+            "completedRunNotice",
+            "taskDetailRequest",
+            "outcomeWasNotified",
             "clarificationQuestion",
             "clarificationAnswer",
             "clarificationAutoExecute",
@@ -608,7 +612,14 @@ struct ProductShellTests {
             // declaration as deliberately never cleared — `retryLastCommand` reads it after the live
             // binding is gone, and a workspace name the store no longer has resolves to `.unscoped`
             // anyway.
+            // `taskRecordingPolicy` sits here with `command` for the same reason: it is the
+            // user's own pending instruction for the next task, not a task artifact. The wipe
+            // guards on `!isRunning`, so no suppressed run is in flight, and silently switching
+            // "Don't save this task" back off because someone erased their history would discard a
+            // choice they deliberately made. It is reset by `finishRecordingPolicyIfSettled()` on
+            // every terminal state instead.
             "command", "lastCommand", "isRunning", "activeTaskOrigin", "lastAssessedScope",
+            "taskRecordingPolicy",
             "isPreparingVoiceRecording", "isRecordingVoice", "isTranscribingVoice",
             "isPushToTalkHotKeyDown", "voiceRecordingOrigin", "clarificationOrigin",
             "scheduledRunDisplayCommand",
@@ -1366,6 +1377,509 @@ struct ProductShellTests {
         }
     }
 
+    // MARK: - Notified outcomes persist until acknowledged (SONNY-121)
+
+    @Test
+    func anErrorAloneDoesNotMarkAnOutcomeNotified() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        viewModel.setError("Could not reach the planner.")
+
+        // Setting an error is not the same as notifying about one. The gate that decides lives in
+        // AppDelegate, and a user watching the widget is never notified at all.
+        #expect(!viewModel.outcomeWasNotified)
+    }
+
+    /// **The acceptance criterion at the boundary the suite can reach.** A notified outcome and an
+    /// identical unnotified one differ in exactly one readable fact, and that fact is what
+    /// `FloatingWidgetView`'s collapse and clear decisions read.
+    @Test
+    func aNotifiedOutcomeAndAnIdenticalUnnotifiedOneDifferOnlyInTheMarker() throws {
+        let notifiedFixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: notifiedFixture.root) }
+        let unnotifiedFixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: unnotifiedFixture.root) }
+
+        notifiedFixture.viewModel.setError("Could not reach the planner.")
+        notifiedFixture.viewModel.markOutcomeAsNotified()
+        unnotifiedFixture.viewModel.setError("Could not reach the planner.")
+
+        #expect(notifiedFixture.viewModel.outcomeWasNotified)
+        #expect(!unnotifiedFixture.viewModel.outcomeWasNotified)
+        // Same message and same persistence flag — the marker is the only difference, so it is the
+        // only thing the widget's two decisions can be turning on.
+        #expect(notifiedFixture.viewModel.errorMessage == unnotifiedFixture.viewModel.errorMessage)
+        #expect(notifiedFixture.viewModel.errorIsPersistent == unnotifiedFixture.viewModel.errorIsPersistent)
+    }
+
+    /// The marker describes the outcome, so it cannot outlive it — a stale `true` would make the
+    /// *next* outcome un-collapsible for a notification nobody ever sent about it.
+    @Test
+    func clearingAStaleOutcomeClearsItsNotifiedMarkerToo() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        viewModel.setError("Could not reach the planner.")
+        viewModel.markOutcomeAsNotified()
+
+        viewModel.clearStaleTaskOutcome()
+
+        #expect(!viewModel.outcomeWasNotified)
+        #expect(viewModel.errorMessage == nil)
+    }
+
+    @Test
+    func submittingAnotherCommandAcknowledgesANotifiedOutcome() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        viewModel.setError("Could not reach the planner.")
+        viewModel.markOutcomeAsNotified()
+        #expect(viewModel.outcomeWasNotified)
+
+        viewModel.command = "= 1 + 1"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(!viewModel.outcomeWasNotified)
+    }
+
+    /// Retry is the other acknowledgement and reaches the same clearing point through `dispatch`.
+    /// Asserted separately, because "retry clears it" and "a new command clears it" are two
+    /// criteria and one line satisfying both is worth pinning as such.
+    @Test
+    func retryingAcknowledgesANotifiedOutcome() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        // A real failed run first, so `lastCommand` is populated and retry actually dispatches.
+        viewModel.command = "calc apples"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+        #expect(viewModel.errorMessage != nil)
+        #expect(viewModel.hasRetryableCommand)
+
+        viewModel.markOutcomeAsNotified()
+        #expect(viewModel.outcomeWasNotified)
+
+        viewModel.retryLastCommand()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(!viewModel.outcomeWasNotified)
+    }
+
+    /// **The distinction the whole ticket rests on: visible is not read.** Bringing the widget
+    /// forward is exactly what clicking a notification now does, and it must not count as
+    /// acknowledgement — otherwise the outcome would be wiped by the act of going to look at it.
+    @Test
+    func bringingTheWidgetForwardDoesNotAcknowledgeAnything() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        viewModel.setError("Could not reach the planner.")
+        viewModel.markOutcomeAsNotified()
+        let before = viewModel.widgetPresentationRequest
+
+        // Exactly what the notification's default action does now.
+        viewModel.widgetPresentationRequest += 1
+
+        #expect(viewModel.widgetPresentationRequest == before + 1)
+        #expect(viewModel.outcomeWasNotified)
+        #expect(viewModel.errorMessage == "Could not reach the planner.")
+    }
+
+    // MARK: - A finished run's outcome (SONNY-56)
+
+    /// The gap SONNY-44 found: a run started from a Command Center row action reports its result on
+    /// no surface at all. It now publishes a summary the notification fallback carries.
+    @Test
+    func aSuccessfulCommandCenterRunPublishesItsSummaryForTheNotificationFallback() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        #expect(viewModel.completedRunNotice == nil)
+
+        viewModel.command = "= 1 + 1"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        let notice = try #require(viewModel.completedRunNotice)
+        #expect(!notice.summary.isEmpty)
+        // It carries the run's own summary, not a generic "done".
+        #expect(notice.summary == viewModel.finalSummary)
+        // And the task it is about, so a click can open that task's detail (PR #67 review, F4).
+        // Resolved against the row actually on disk, not merely non-nil.
+        let taskID = try #require(notice.taskID)
+        #expect(try fixture.taskHistoryStore.loadAll().contains { $0.id == taskID })
+        #expect(viewModel.taskHistoryRecords.first?.id == taskID)
+    }
+
+    /// A run whose summary is blank posts nothing. An empty notification body is a notification that
+    /// says nothing, and it would still make a sound and take a slot in Notification Center.
+    @Test
+    func aBlankSummaryPublishesNoOutcomeNotice() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        viewModel.publishCompletedRunNoticeIfUnreported("", taskID: nil)
+        #expect(viewModel.completedRunNotice == nil)
+        viewModel.publishCompletedRunNoticeIfUnreported("   \n\t ", taskID: nil)
+        #expect(viewModel.completedRunNotice == nil)
+
+        viewModel.publishCompletedRunNoticeIfUnreported("  Opened Research.  ", taskID: nil)
+        // Trimmed, so the notification body has no stray leading whitespace.
+        #expect(viewModel.completedRunNotice?.summary == "Opened Research.")
+    }
+
+    /// **F4.** Clicking a finished-run notification opens that task's detail rather than expanding
+    /// the widget onto an empty composer. The view-model half of that — resolving the id the
+    /// notification carries to a real row and raising the request — is what the suite can reach.
+    @Test
+    func aFinishedRunNotificationOpensThatTasksDetailAndNotAnyOther() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        viewModel.command = "= 1 + 1"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+        viewModel.command = "= 2 + 2"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        let rows = try fixture.taskHistoryStore.loadAll()
+        #expect(rows.count == 2)
+        let firstTask = try #require(rows.first { $0.command == "= 1 + 1" }?.id)
+
+        // The older task, not the most recent one — "the newest row" would open the wrong task when
+        // another run finishes between the notification arriving and the click.
+        #expect(viewModel.requestTaskDetail(taskID: firstTask))
+        #expect(viewModel.taskDetailRequest?.taskID == firstTask)
+
+        // Two requests for the same task are two distinct requests, so a second notification
+        // reopens the sheet rather than being dropped as an unchanged value.
+        let first = try #require(viewModel.taskDetailRequest)
+        #expect(viewModel.requestTaskDetail(taskID: firstTask))
+        #expect(viewModel.taskDetailRequest != first)
+    }
+
+    /// The notice names the row *this* run wrote, not whichever row the sort happens to leave at
+    /// the head (PR #67 cycle-3, defect B).
+    ///
+    /// **The tie is built by construction, not by timing.** The first version of this test sampled
+    /// `Date()` once at the top and seeded every row from it, then let the run stamp its own row
+    /// with a second `Date()` about twenty milliseconds later — so the two agreed only when no
+    /// second boundary fell between them, and roughly one run in fifty failed on the tie assertion
+    /// rather than on the thing under test. Seeding a *band* of consecutive seconds removes the
+    /// clock from the outcome: wherever within the band the run's own row lands, four seeded rows
+    /// already share its persisted second.
+    ///
+    /// Two separate properties are set up here, and the test asserts both rather than assuming
+    /// either:
+    ///
+    /// 1. **The tie really happened** — at least four other rows share this run's persisted
+    ///    `completedAt`. That is the real-world condition, since `completedAt` persists at
+    ///    whole-second resolution and any two tasks finishing within one second of each other
+    ///    compare exactly equal.
+    /// 2. **A strictly newer row exists**, from the far band. This is what makes the mutation's
+    ///    failure deterministic instead of probabilistic: with a genuinely newer row present,
+    ///    "the newest row" is provably not this run's, so the old `taskHistoryRecords.first?.id`
+    ///    derivation picks the wrong id every time rather than most of the time. Without it the
+    ///    test would rest on an unstable sort happening to mis-order a tie group, which is likely
+    ///    but not certain — and a test that passes by luck under the mutation is not a test.
+    @Test
+    @MainActor
+    func aFinishedRunsNoticeNamesItsOwnRowEvenWhenEveryTimestampTies() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        // Whole seconds, because that is the resolution the store persists and therefore the
+        // resolution at which rows can tie at all.
+        let base = Date(timeIntervalSince1970: (Date().timeIntervalSince1970).rounded(.down))
+        func seed(_ label: String, at offset: TimeInterval) throws {
+            for index in 0..<4 {
+                try fixture.taskHistoryStore.record(
+                    CompletedTaskRecord(
+                        command: "seeded \(label) \(index)",
+                        startedAt: base,
+                        completedAt: base.addingTimeInterval(offset),
+                        outcomeStatus: .completed
+                    )
+                )
+            }
+        }
+        // The band the run's own completion must land in — four consecutive seconds, against a run
+        // that takes milliseconds. Whichever it lands on, it ties with four seeded rows.
+        for offset in 0..<4 { try seed("band", at: TimeInterval(offset)) }
+        // Far enough ahead that no plausible fixture run reaches it, so these are newer than this
+        // run's row with certainty rather than with probability.
+        try seed("newer", at: 30)
+
+        viewModel.command = "= 1 + 1"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        let rows = try fixture.taskHistoryStore.loadAll()
+        let ownRow = try #require(rows.first { $0.command == "= 1 + 1" })
+        let tiedWithOwnRow = rows.filter { $0.completedAt == ownRow.completedAt && $0.id != ownRow.id }
+        // (1) and (2). Both are setup conditions rather than the behaviour under test, and both are
+        // asserted: if a change ever stops them holding, this test fails loudly here instead of
+        // continuing to pass while proving nothing.
+        #expect(tiedWithOwnRow.count >= 4)
+        #expect(rows.contains { $0.completedAt > ownRow.completedAt })
+
+        let notice = try #require(viewModel.completedRunNotice)
+        #expect(notice.taskID == ownRow.id)
+    }
+
+    /// A task deleted between the notification arriving and the click resolves to nothing, and the
+    /// opener says so rather than inventing a fallback.
+    @Test
+    func aNotificationForADeletedTaskOpensNothing() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        viewModel.command = "= 1 + 1"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+        let record = try #require(viewModel.taskHistoryRecords.first)
+        let taskID = try #require(record.id)
+
+        viewModel.deleteTask(record)
+
+        #expect(!viewModel.requestTaskDetail(taskID: taskID))
+        #expect(viewModel.taskDetailRequest == nil)
+    }
+
+    /// **The narrowness is the design, so it is asserted rather than assumed.** A widget-origin run
+    /// already shows its result in the widget's own panel — a permanent overlay, on screen even
+    /// while the user works elsewhere — so notifying would be the duplicate the origin gate exists
+    /// to prevent.
+    @Test
+    func aWidgetOriginRunPublishesNoOutcomeNoticeBecauseTheWidgetAlreadyShowsIt() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        viewModel.command = "= 1 + 1"
+        viewModel.start(origin: .widget)
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.finalSummary.isEmpty == false)
+        #expect(viewModel.completedRunNotice == nil)
+    }
+
+    /// A failure already reaches the user through `errorMessage`, which has its own notification
+    /// subscription. Publishing here too would notify twice for one run.
+    @Test
+    func aFailedRunPublishesNoOutcomeNoticeSoOneRunNeverNotifiesTwice() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        viewModel.command = "calc apples"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.errorMessage != nil)
+        #expect(viewModel.completedRunNotice == nil)
+    }
+
+    // MARK: - "Don't save this task" (SONNY-120)
+
+    /// **The test that defines done, and the reason it is written this way.**
+    ///
+    /// It enumerates the `.trace` stores from `LocalStore` — SONNY-115's classification — rather
+    /// than from a list written here. That is the whole point: the writing sites live in five
+    /// separate layers, and a boolean remembered at each of them is exactly how this feature would
+    /// quietly stop being true. Enumerating from the classification means a trace store added later
+    /// is covered the day it is classified, whether or not anyone remembered its call site.
+    ///
+    /// Byte-identical, not "no new records" — a rewrite that happened to produce the same records
+    /// would still be a write, and AES-GCM seals with a fresh nonce, so identical bytes prove no
+    /// write occurred at all rather than that the content matched.
+    @Test
+    func aSuppressedRunLeavesEveryTraceStoreByteIdentical() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        // A normal run first, so every trace store this task touches actually exists on disk. A
+        // file that was never created is trivially "unchanged", which would make the assertion below
+        // pass for the wrong reason.
+        viewModel.command = "= 1 + 1"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+        #expect(try fixture.taskHistoryStore.loadAll().count == 1)
+
+        let traceStores = LocalStore.allCases.filter { $0.kind == .trace }
+        #expect(!traceStores.isEmpty, "The classification produced no trace stores to check.")
+        // Mapped into the fixture root by filename — the fixture wires every store to
+        // `root/<the store's own file name>`, so the classification's URLs and the test's agree
+        // without a second hand-written mapping.
+        let before = snapshot(of: traceStores, in: fixture.root)
+        #expect(!before.isEmpty, "No trace-store file existed to compare.")
+
+        viewModel.taskRecordingPolicy = .suppressTraces
+        viewModel.command = "= 2 + 2"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        let after = snapshot(of: traceStores, in: fixture.root)
+        for (name, bytes) in before {
+            #expect(after[name] == bytes, "\(name) changed during a suppressed run")
+        }
+        // Files that did not exist before must not have been created by the suppressed run either.
+        #expect(Set(after.keys) == Set(before.keys))
+        // And the row really is absent, read back from the file rather than from published state.
+        #expect(try fixture.taskHistoryStore.loadAll().map(\.command) == ["= 1 + 1"])
+    }
+
+    /// The negative half, and it matters as much as the positive one: a suppressed run still does
+    /// what the user asked. Someone who says "save this as a routine" with the switch on still wants
+    /// the routine — a saved routine is an *effect*, and this switch never claimed to hide effects.
+    @Test
+    func aSuppressedRunStillWritesTheArtifactTheUserAskedFor() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        viewModel.taskRecordingPolicy = .suppressTraces
+        viewModel.command = "snippet save ;quiet = Nothing to see"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        // The artifact survives — a snippet is a `.artifact` store, never suppressed...
+        #expect(try fixture.snippetStore.loadAll().contains { $0.value.trigger == ";quiet" })
+        // ...and the trace of having made it does not.
+        #expect(try fixture.taskHistoryStore.loadAll().isEmpty)
+    }
+
+    @Test
+    func theSwitchGoesBackOffOnEveryTerminalOutcome() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        // Success.
+        viewModel.taskRecordingPolicy = .suppressTraces
+        viewModel.command = "= 1 + 1"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+        #expect(viewModel.taskRecordingPolicy == .record)
+
+        // Failure — the outcome most likely to skip a cleanup path.
+        viewModel.taskRecordingPolicy = .suppressTraces
+        viewModel.command = "calc apples"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+        #expect(viewModel.taskRecordingPolicy == .record)
+        // Neither run left a row behind.
+        #expect(try fixture.taskHistoryStore.loadAll().isEmpty)
+    }
+
+    /// A run that never started leaves the switch alone. Its counterpart — the switch surviving an
+    /// approval *pause* — is what `finishRecordingPolicyIfSettled()`'s guard exists for.
+    @Test
+    func theSwitchSurvivesUntilATaskActuallyEnds() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        viewModel.taskRecordingPolicy = .suppressTraces
+        // No command, so `start()` refuses and nothing runs.
+        viewModel.command = "   "
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.taskRecordingPolicy == .suppressTraces)
+    }
+
+    /// **F1's seam test.** The vision journal is the fifth `.trace` store and was the one nothing
+    /// pinned: its withholding decision lived inline in `makeLiveVisionEnvironment()`, which no test
+    /// here can execute — `makeVisionEnvironment` returns `nil` without an API key, and the vision
+    /// tests inject `visionSessionEnvironment` directly and bypass it. So a mutation handing the
+    /// store over regardless of policy survived the whole suite.
+    ///
+    /// Asserting the decision is asserting the suppression: row I built `journalStore == nil` as
+    /// "run the session, record nothing", so withholding the store *is* the mechanism. This test's
+    /// whole purpose is to fail when suppression breaks.
+    @Test
+    func aSuppressedRunIsHandedNoVisionSessionJournal() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        #expect(viewModel.visionSessionJournalStoreForThisRun != nil)
+        viewModel.taskRecordingPolicy = .suppressTraces
+        #expect(viewModel.visionSessionJournalStoreForThisRun == nil)
+        viewModel.taskRecordingPolicy = .record
+        #expect(viewModel.visionSessionJournalStoreForThisRun != nil)
+        // The store handed back when recording is the real one, not some other instance — a
+        // withholding that returned a fresh empty store would satisfy nil-vs-non-nil and record
+        // nowhere the app can read.
+        #expect(viewModel.visionSessionJournalStoreForThisRun?.fileURL == viewModel.visionSessionJournalStore.fileURL)
+    }
+
+    /// **F2.** A scheduled routine is never suppressed, including in the one window where a
+    /// foreground run has left the policy set: paused at a clarification, `isRunning` is false and
+    /// `checkScheduledRoutines` does not guard on it, so a routine can fire while
+    /// `taskRecordingPolicy` is still `.suppressTraces`.
+    @Test
+    func aScheduledRunIsNeverSuppressedEvenWhileAForegroundRunIsPausedAtAClarification() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        // The window: policy set, run not "running", not awaiting approval.
+        viewModel.taskRecordingPolicy = .suppressTraces
+        viewModel.clarificationQuestion = "Which workspace did you mean?"
+        #expect(!viewModel.isRunning)
+        #expect(!viewModel.isAwaitingApproval)
+
+        // The foreground executor still suppresses — that run really is still going.
+        #expect(viewModel.makeExecutor().suppressesTracesForTests)
+        // The scheduled executor does not, whatever the policy says.
+        #expect(!viewModel.makeExecutor(recordingPolicy: .record).suppressesTracesForTests)
+    }
+
+    /// The recent-artifacts half, asserted at the decision rather than end-to-end.
+    ///
+    /// The fixture's deterministic planner has no command that generates an artifact, so a
+    /// suppressed run leaves that store untouched whether or not the withholding works — the
+    /// acceptance test above passes for the wrong reason on this one store, which a mutation
+    /// battery found by surviving. This is what actually pins it: `AgentRunner` already treats a
+    /// `nil` store as "record nothing", so withholding the store *is* the suppression.
+    @Test
+    func aSuppressedRunIsHandedNoRecentArtifactStore() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        #expect(viewModel.recentArtifactStoreForThisRun != nil)
+        viewModel.taskRecordingPolicy = .suppressTraces
+        #expect(viewModel.recentArtifactStoreForThisRun == nil)
+        viewModel.taskRecordingPolicy = .record
+        #expect(viewModel.recentArtifactStoreForThisRun != nil)
+    }
+
+    private func snapshot(of stores: [LocalStore], in root: URL) -> [String: Data] {
+        var result: [String: Data] = [:]
+        for store in stores {
+            let name = store.fileURL().lastPathComponent
+            if let data = try? Data(contentsOf: root.appendingPathComponent(name)) {
+                result[name] = data
+            }
+        }
+        return result
+    }
+
     @Test
     func completedTaskIsRecordedInPersistentHistory() async throws {
         let fixture = try makeProductShellFixture()
@@ -2052,6 +2566,14 @@ private func makeProductShellFixture(
             encryption: encryption
         ),
         taskHistoryStore: taskHistoryStore,
+        // Injected under the fixture root rather than defaulted, or it resolves to the real
+        // ~/Library/Application Support/Sonny/vision-sessions.json. No test read it before
+        // SONNY-120, so nothing was wrong yet — which is exactly the hermeticity-by-accident the
+        // seam comment above describes.
+        visionSessionJournalStore: VisionSessionJournalStore(
+            fileURL: root.appendingPathComponent("vision-sessions.json"),
+            encryption: encryption
+        ),
         clipboardHistorySettingsStore: clipboardSettingsStore,
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
             reader: ProductShellPasteboardReader(),

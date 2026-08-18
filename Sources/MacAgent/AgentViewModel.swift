@@ -54,6 +54,99 @@ final class AgentViewModel: ObservableObject {
     @Published var priorTaskContext: PriorTaskContext?
     @Published var taskUsageSummary: TaskUsageSummary = .empty
     @Published var taskHistoryRecords: [CompletedTaskRecord] = []
+    /// The Tasks page's search query.
+    ///
+    /// On the view model rather than local to the view, per `.claude/rules/macagent-ui-conventions.md`'s
+    /// shared-state rule: both surfaces observe this one instance, and new page state lives here even
+    /// when it feels surface-local. It also outlives a page switch, so a query survives a trip to
+    /// Insights and back rather than silently clearing.
+    ///
+    /// Deliberately not persisted. A search is a thing the user is doing now, not a preference —
+    /// reopening Sonny to a filtered task list with no memory of having typed anything would read as
+    /// a bug.
+    @Published var taskHistoryQuery: String = ""
+
+    /// "Don't save this task" — whether the next run leaves traces (SONNY-120).
+    ///
+    /// **Per task, and reachable only before dispatch.** A Settings switch that stays on was
+    /// declined by the founder on 2026-08-16: it is easy to forget and silently loses weeks of
+    /// history for unrelated tasks. Flipping it mid-run is refused for a harder reason — it would
+    /// promise to un-write records already on disk, which it cannot do. The widget enforces that by
+    /// not offering the control while a task is in flight; `finishRecordingPolicyIfSettled()` is
+    /// what puts it back to `.record` afterwards.
+    ///
+    /// Never applies to scheduled runs. A scheduled run passes through no composer, so there is no
+    /// switch to have been left on — stated here so its absence does not read as a gap.
+    @Published var taskRecordingPolicy: TaskRecordingPolicy = .record
+
+    /// A finished run's summary, published for the notification fallback (SONNY-56).
+    ///
+    /// **Written only for a successful run whose origin is Command Center**, and that narrowness is
+    /// the design rather than an oversight:
+    ///
+    /// - *Widget-origin runs* already show their result in the widget's own panel, which is a
+    ///   permanent overlay and therefore on screen even while the user works elsewhere. Notifying
+    ///   would be the duplicate the origin gate exists to prevent.
+    /// - *Scheduled runs* have `scheduledRunNotice`, which already carries their summary and already
+    ///   has its own notification subscription.
+    /// - *Failures* already reach the user through `errorMessage`, which has its own subscription.
+    ///   Publishing them here too would notify twice for one run.
+    ///
+    /// That leaves exactly the case the founder resolved on 2026-08-06: a run started from a Command
+    /// Center row action, which reports its outcome on no surface at all.
+    ///
+    /// Transient — set at the moment a run succeeds and not persisted. SONNY-121 owns making a
+    /// notified outcome survive until the user acknowledges it, and this is the signal it builds on.
+    @Published var completedRunNotice: CompletedRunNotice?
+
+    /// A request to open one task's detail dialog, set when the user clicks a finished-run
+    /// notification (PR #67 review, F4). `CommandCenterView`'s Tasks page observes it and presents
+    /// the same sheet a click on a history row opens.
+    ///
+    /// Published state rather than a direct call because the sheet is driven by view-local state the
+    /// app delegate cannot reach, and `.claude/rules/macagent-ui-conventions.md`'s shared-state rule
+    /// puts new cross-surface state on the one view model.
+    @Published var taskDetailRequest: TaskDetailRequest?
+
+    /// Opens a task's detail dialog by id, if that task is still in history.
+    ///
+    /// Returns `false` when the id resolves to nothing — a task deleted between the notification
+    /// arriving and the click, or a suppressed run that never wrote a row. The caller decides what
+    /// to do with that; this does not invent a fallback of its own.
+    @discardableResult
+    func requestTaskDetail(taskID: String) -> Bool {
+        guard taskHistoryRecords.contains(where: { $0.id == taskID }) else {
+            return false
+        }
+        taskDetailRequest = TaskDetailRequest(taskID: taskID)
+        return true
+    }
+
+    /// Whether the outcome currently on screen is one the user was **notified** about (SONNY-121).
+    ///
+    /// The founder's decision of 2026-08-04: a notified outcome persists until acknowledged. The
+    /// widget is a permanent overlay, so an outcome nobody acknowledged used to auto-collapse after
+    /// six seconds and then be wiped by `clearStaleTaskOutcome()` — which is fine for an outcome the
+    /// user watched happen, and wrong for one they were pulled away from. Clicking the notification
+    /// after that landed on a compact capsule with nothing in it.
+    ///
+    /// **Why this is a flag and not a rule the view model can derive.** Being notified is a fact
+    /// about the *user's attention* — Sonny was not the app they were working in — and only
+    /// `AppDelegate` knows that, because the answer lives in `NSApp.isActive` and the widget panel's
+    /// key state (see `SonnyAttention`). So the delegate that posts the notification is what records
+    /// that it happened.
+    ///
+    /// **Acknowledged means the user acted**, not that the widget came forward: it clears when they
+    /// retry or submit another command, and deliberately *not* when the panel is merely fronted.
+    /// Being on screen is not the same as being read, which is this ticket's whole premise.
+    @Published private(set) var outcomeWasNotified: Bool = false
+
+    /// Records that the outcome now on screen reached the user as a notification. Called by
+    /// `AppDelegate` immediately after it posts one, because the gate that decided to post is its
+    /// to evaluate.
+    func markOutcomeAsNotified() {
+        outcomeWasNotified = true
+    }
     /// Local-storage health, kept deliberately separate from `errorMessage`: a corrupt store or
     /// a failed save is about Sonny's own data, not about the task the user just ran, and must
     /// never make a successful task read as failed. Rendered as its own notice on both surfaces.
@@ -792,6 +885,10 @@ final class AgentViewModel: ObservableObject {
         prebuiltPlanSource: PreparedPlanSource = .directUserAction
     ) async {
         activeTaskOrigin = origin
+        // Submitting anything is an acknowledgement of whatever was on screen — this one line covers
+        // both "the user retried" and "the user typed something else", because `retryLastCommand`
+        // reaches here through `dispatch` like every other submission.
+        outcomeWasNotified = false
         errorMessage = nil
         finalSummary = ""
         plan = nil
@@ -822,6 +919,20 @@ final class AgentViewModel: ObservableObject {
         // it is not.
         visionSessionProgress = nil
 
+        // Clipboard history pauses for the whole of a suppressed run, and the cost was chosen
+        // knowingly by the founder on 2026-08-16: anything the user copies *by hand* during the task
+        // is not saved either. It cannot be avoided by being cleverer — `ClipboardHistoryMonitor` is
+        // a pasteboard poller watching `changeCount`, so it cannot tell text Sonny copied from text
+        // the user copied.
+        //
+        // A run that ends by crash or quit never reaches the resume in `finishRecordingPolicyIfSettled()`.
+        // That is survivable rather than silent: monitoring is restarted from settings at launch by
+        // `refreshClipboardHistoryNotice()`, so the worst case is clipboard history staying off until
+        // the next launch, never a setting silently rewritten.
+        if taskRecordingPolicy.suppressesTraces {
+            stopClipboardHistoryMonitoring()
+        }
+
         defer {
             publishTaskUsageSummary()
             isRunning = false
@@ -851,6 +962,9 @@ final class AgentViewModel: ObservableObject {
                 activeTaskScope = .unscoped
                 explicitWorkspaceBinding = nil
             }
+            // Guarded internally on the same pause-versus-terminal test, so it is safe to call
+            // unconditionally here and at every other terminal point.
+            finishRecordingPolicyIfSettled()
         }
 
         let taskHistoryStartedAt = Date()
@@ -882,7 +996,7 @@ final class AgentViewModel: ObservableObject {
                     planner: InstantOnlyFallbackPlanner(),
                     executor: executor,
                     logStore: logStore,
-                    recentArtifactStore: recentArtifactStore
+                    recentArtifactStore: recentArtifactStoreForThisRun
                 )
                 prepared = try runner.prepare(plan: prebuiltPlan, source: prebuiltPlanSource)
             } else if let resolution = makeInstantCommandResolver().resolve(command: submittedCommand) {
@@ -890,7 +1004,7 @@ final class AgentViewModel: ObservableObject {
                     planner: InstantOnlyFallbackPlanner(),
                     executor: executor,
                     logStore: logStore,
-                    recentArtifactStore: recentArtifactStore
+                    recentArtifactStore: recentArtifactStoreForThisRun
                 )
                 switch resolution {
                 case .plan(let localPlan), .clarify(let localPlan):
@@ -913,7 +1027,7 @@ final class AgentViewModel: ObservableObject {
                     planner: selected.planner,
                     executor: executor,
                     logStore: logStore,
-                    recentArtifactStore: recentArtifactStore
+                    recentArtifactStore: recentArtifactStoreForThisRun
                 )
                 prepared = try await runner.prepare(
                     command: submittedCommand,
@@ -1065,7 +1179,7 @@ final class AgentViewModel: ObservableObject {
             )
             finalSummary = result.summary
             suggestions = result.suggestions
-            recordPriorTaskContext(
+            let recordedTaskID = recordPriorTaskContext(
                 command: submittedCommand,
                 preparedRun: prepared,
                 status: .completed,
@@ -1073,6 +1187,7 @@ final class AgentViewModel: ObservableObject {
                 startedAt: taskHistoryStartedAt
             )
             refreshSavedItems()
+            publishCompletedRunNoticeIfUnreported(result.summary, taskID: recordedTaskID)
         } catch RiskApprovalError.approvalRequired(let request) {
             // Whatever let this run proceed without a prompt — a routine's trust grant, or the
             // consequence rule mapping it to `.autoRun` — stopped covering it in the window
@@ -1226,9 +1341,15 @@ final class AgentViewModel: ObservableObject {
             // rejected persistent-active-workspace design was rejected for.
             activeTaskScope = .unscoped
             explicitWorkspaceBinding = nil
+            // This function has no `defer`, and this branch returns without ever re-entering
+            // `performStart` — so without this call a task cancelled at its approval prompt would
+            // leave the switch on and clipboard history paused indefinitely.
+            finishRecordingPolicyIfSettled()
             return
         }
 
+        // Everything below is a *running* task being cancelled, which unwinds through
+        // `performStart`'s defer and is settled there.
         currentTask?.cancel()
     }
 
@@ -1267,6 +1388,9 @@ final class AgentViewModel: ObservableObject {
     /// for `.failure` when `errorIsPersistent` is false, so a real configuration problem never gets
     /// silently cleared out from under the user.
     func clearStaleTaskOutcome() {
+        // The marker describes the outcome, so it cannot outlive it — a stale `true` would make the
+        // *next* outcome un-collapsible for a notification that was never sent about it.
+        outcomeWasNotified = false
         errorMessage = nil
         finalSummary = ""
         suggestions = []
@@ -1455,6 +1579,99 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
+    /// The vision journal this run may write to, or `nil` when it may not.
+    ///
+    /// Internal and separated from its one call site for the same reason
+    /// `recentArtifactStoreForThisRun` is (PR #67 review, F1): the decision was previously inline in
+    /// `makeLiveVisionEnvironment()`, which **no test in this repository can execute** — under test
+    /// `makeVisionEnvironment` returns `nil` without an API key, and the vision tests inject
+    /// `visionSessionEnvironment` directly, bypassing the function. So a mutation handing over the
+    /// store regardless of policy survived the whole suite. Asserting the decision *is* asserting
+    /// the suppression, because row I built a `nil` journal store as "run the session, record
+    /// nothing".
+    ///
+    /// It is the fifth `.trace` store and the one `LocalStoreClassification` calls the most
+    /// sensitive of the nine; it had no seam test, no mutation and no entry under Known limits,
+    /// while the other four were each closed or recorded.
+    var visionSessionJournalStoreForThisRun: VisionSessionJournalStore? {
+        taskRecordingPolicy.allowsWriting(to: .visionSessionJournal) ? visionSessionJournalStore : nil
+    }
+
+    /// The recent-artifacts store this run may write to, or `nil` when it may not.
+    ///
+    /// Withholding the store rather than checking a flag at the writing site, because `AgentRunner`
+    /// already treats a `nil` store as "record nothing" — the same seam row I gave the vision
+    /// journal. One definition, read by every `AgentRunner` this view model builds, so a new runner
+    /// call site cannot forget the check by omitting it.
+    ///
+    /// Internal rather than private so the suite can assert the decision directly. Running a real
+    /// task through the fixture cannot reach it: the fixture's deterministic planner has no command
+    /// that generates an artifact, so a suppressed run leaves this store untouched either way and
+    /// the acceptance test passes for the wrong reason. A mutation battery caught exactly that.
+    var recentArtifactStoreForThisRun: RecentArtifactStore? {
+        taskRecordingPolicy.allowsWriting(to: .recentArtifacts) ? recentArtifactStore : nil
+    }
+
+    /// Puts "Don't save this task" back to off and lets clipboard history resume — but only once the
+    /// run is really over.
+    ///
+    /// **Called from each terminal point rather than from one `defer`, because no single `defer`
+    /// covers them.** `cancelCurrentRun()` has none at all and is the app-wide deny/cancel entry
+    /// point; the two that do exist, in `performStart` and `performApproval`, also fire for *pauses*
+    /// — approval needed, clarification needed — where the run is still going and the switch must
+    /// stay on. The guard below is what tells those apart, using the same
+    /// `approvalRequest == nil && clarificationQuestion == nil` test this file already uses.
+    private func finishRecordingPolicyIfSettled() {
+        guard approvalRequest == nil, clarificationQuestion == nil, !isRunning else {
+            return
+        }
+        guard taskRecordingPolicy != .record else {
+            return
+        }
+        taskRecordingPolicy = .record
+        // Resynchronise *before* monitoring restarts. `poll()` records whenever the pasteboard's
+        // change count differs from the last one it saw, and that counter survived the pause — so
+        // without this the first poll after a suppressed run records exactly what the user copied
+        // during it. Measured: it did.
+        clipboardHistoryMonitor.resynchronize()
+        // Restored from settings rather than unconditionally started, so a user who has clipboard
+        // history switched off does not get it switched on by ending a suppressed task.
+        refreshClipboardHistoryNotice()
+    }
+
+    /// Publishes a finished run's summary for the notification fallback, when nothing else will
+    /// report it. See `completedRunNotice` for why this is the only case.
+    /// Internal rather than private so the suite can reach the empty-summary guard. No command the
+    /// test fixtures can run produces an empty summary, so a mutation removing that guard survived
+    /// an end-to-end battery — the guard matters because an empty notification body would be a
+    /// notification that says nothing.
+    func publishCompletedRunNoticeIfUnreported(_ summary: String, taskID: String?) {
+        guard activeTaskOrigin == .commandCenter else {
+            return
+        }
+        let trimmed = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return
+        }
+        // `taskID` is the id `recordTaskHistoryIfTerminal` returned, handed down from the call
+        // site, so a click opens *that* task's detail (PR #67 review, F4).
+        //
+        // It is passed in rather than re-derived here, and that is the fix for a real defect rather
+        // than a preference (PR #67 cycle-3, defect B). This line used to read
+        // `taskHistoryRecords.first?.id` — "the newest row must be the one we just wrote". It is
+        // not: `completedAt` persists at whole-second resolution, so two runs finishing in the same
+        // second compare equal, and `refreshTaskHistory`'s `sorted(by:)` is not stable, so the head
+        // can be the earlier row. The notification would then name the wrong task. Whole-second
+        // truncation is the same hazard `CompletedTaskRecord.id` exists to defeat (SONNY-115), and
+        // it re-entered through the phrase "the most recent row"; the id the write returned cannot
+        // tie with anything.
+        //
+        // `nil` when a suppressed run wrote no row: there is nothing to open, and the notification
+        // still tells the user the task finished. An accepted limit, recorded rather than answered
+        // with a second behaviour.
+        completedRunNotice = CompletedRunNotice(summary: trimmed, taskID: taskID)
+    }
+
     func refreshTaskHistory() {
         do {
             taskHistoryRecords = try taskHistoryStore.loadAll()
@@ -1463,6 +1680,77 @@ final class AgentViewModel: ObservableObject {
         } catch {
             taskHistoryRecords = []
             recordLocalStorageLoadFailure(.taskHistory, error: error)
+        }
+    }
+
+    /// Deletes a task completely — its history row and every record hanging off it.
+    ///
+    /// **Dependents first, the row last, and the order is not interchangeable.** The row is the only
+    /// thing that makes the records hanging off it reachable through the product, so a half-failure
+    /// has to leave the row standing:
+    ///
+    /// - *Dependent gone, row delete failed* → a row whose link resolves to nothing. That is the
+    ///   designed dangling-link state row I already ships and the detail view already handles, and
+    ///   the user can simply try the delete again.
+    /// - *Row gone, dependent delete failed* → a record nobody can reach through the product at all.
+    ///   The founder named exactly this as the real defect when declining the never-coupled design
+    ///   (SONNY-14, 2026-08-16).
+    ///
+    /// **This reaches two records today and has to reach three.** The founder moved row E's plan
+    /// summary and steps into their own store on 2026-08-17 (SONNY-147, superseding the 2026-08-16
+    /// decision to put them on the record). That store shares this row's retention exactly — same
+    /// cap, same eviction, deleted together, suppressed together — so when it lands its delete goes
+    /// **in the dependents block below, above the row**: not after the row, and not in a second
+    /// method a caller could forget to call.
+    func deleteTask(_ record: CompletedTaskRecord) {
+        guard let id = record.id else {
+            // Unreachable in practice — every record `loadAll()` hands out has an id, backfilled if
+            // the file predates them. Reachable only if that backfill's rewrite failed, so the
+            // message points at the retry that fixes it rather than at the missing field.
+            setError("Could not delete this task: its saved copy has no identifier yet. Try again in a moment.")
+            return
+        }
+
+        do {
+            // Dependents first. Row E's detail store joins this block.
+            if let visionSessionID = record.visionSessionID {
+                try visionSessionJournalStore.delete(id: visionSessionID)
+            }
+            // The row, last.
+            try taskHistoryStore.delete(id: id)
+        } catch {
+            // A delete is a write, so this gets its own accurate wording and never
+            // `recordLocalStorageLoadFailure`, whose banner is hardcoded to "could not be decrypted
+            // or decoded" and would be simply wrong here.
+            setError("Could not delete this task: \(error.localizedDescription)")
+            return
+        }
+
+        refreshTaskHistory()
+    }
+
+    /// Deletes only the screen record, leaving the task row and its `visionSessionID` in place.
+    ///
+    /// The dangling link this leaves behind is a designed state rather than an error. It is also
+    /// deliberately indistinguishable from a screen record that simply aged out at the journal's
+    /// cap — pinned by
+    /// `TaskHistoryRetentionTests.aDeletedScreenRecordAndAnEvictedOneLeaveTheSameThingBehind`,
+    /// because the product cannot tell the two apart without explaining itself and the
+    /// no-explanatory-copy rule forbids the explanation.
+    ///
+    /// **No `refreshTaskHistory()` here, deliberately.** That call exists so `taskHistoryRecords`
+    /// agrees with the file, and this delete does not touch task history — the row is byte-identical
+    /// afterwards. Calling it anyway would decrypt and decode the whole history file (130 ms at the
+    /// cap, measured at `36cef9e`) to reload records that did not change.
+    func deleteScreenRecord(for record: CompletedTaskRecord) {
+        guard let visionSessionID = record.visionSessionID else {
+            return
+        }
+
+        do {
+            try visionSessionJournalStore.delete(id: visionSessionID)
+        } catch {
+            setError("Could not delete this task's screen record: \(error.localizedDescription)")
         }
     }
 
@@ -1879,6 +2167,20 @@ final class AgentViewModel: ObservableObject {
         priorTaskContext = nil
         taskUsageSummary = .empty
         taskHistoryRecords = []
+        // A finished run's summary is residue of a run whose record the wipe just erased, so it
+        // goes with it rather than lingering in memory.
+        completedRunNotice = nil
+        // A pending request to open a task's detail would point at a row the wipe has just erased.
+        taskDetailRequest = nil
+        // And the marker that describes an outcome goes with the outcome. `deleteLocalData` writes
+        // its own message into `finalSummary` immediately after this returns, and a stale `true`
+        // here would make *that* message un-collapsible for a notification nobody sent.
+        outcomeWasNotified = false
+        // Cleared with the records it filters, not left behind. A stale query over an emptied
+        // history would put the Tasks page in its "No matching tasks — try a different word" state,
+        // when the honest thing to tell someone who just erased everything is that there is nothing
+        // there at all.
+        taskHistoryQuery = ""
         clarificationQuestion = nil
         clarificationAnswer = ""
         clarificationAutoExecute = false
@@ -2017,7 +2319,7 @@ final class AgentViewModel: ObservableObject {
             planner: try makeDelegationPlanner(),
             executor: makeExecutor(),
             logStore: logStore,
-            recentArtifactStore: recentArtifactStore
+            recentArtifactStore: recentArtifactStoreForThisRun
         )
     }
 
@@ -2043,7 +2345,11 @@ final class AgentViewModel: ObservableObject {
         guard let environment = Self.makeVisionEnvironment(
             interaction: self,
             userPauseMonitor: monitor,
-            journalStore: visionSessionJournalStore
+            // The seam row I already built: `VisionSessionEnvironment.journalStore` is Optional, and
+            // a nil one runs the session normally and records nothing. So "Don't save this task"
+            // withholds the store rather than adding a branch inside the loop — which the ticket's
+            // never-touch list forbids, and which would have been a second place to forget.
+            journalStore: visionSessionJournalStoreForThisRun
         ) else {
             return nil
         }
@@ -2051,8 +2357,12 @@ final class AgentViewModel: ObservableObject {
         return environment
     }
 
-    func makeExecutor() -> AgentActionExecutor {
+    /// - Parameter recordingPolicy: defaulted to this run's policy. The scheduled path passes
+    ///   `.record` explicitly — see `performScheduledRun`.
+    func makeExecutor(recordingPolicy: TaskRecordingPolicy? = nil) -> AgentActionExecutor {
         AgentActionExecutor(
+            // A fresh executor per run, so this cannot leak into the next task.
+            recordingPolicy: recordingPolicy ?? taskRecordingPolicy,
             whitelist: whitelist,
             zipArchiver: zipArchiver,
             documentConverter: documentConverter,
@@ -2383,6 +2693,7 @@ final class AgentViewModel: ObservableObject {
                 activeTaskScope = .unscoped
                 explicitWorkspaceBinding = nil
             }
+            finishRecordingPolicyIfSettled()
         }
 
         do {
@@ -2401,8 +2712,9 @@ final class AgentViewModel: ObservableObject {
             )
             finalSummary = result.summary
             suggestions = result.suggestions
+            var recordedTaskID: String?
             if let pendingCommandForPriorTaskContext {
-                recordPriorTaskContext(
+                recordedTaskID = recordPriorTaskContext(
                     command: pendingCommandForPriorTaskContext,
                     preparedRun: preparedRun,
                     status: .completed,
@@ -2410,6 +2722,7 @@ final class AgentViewModel: ObservableObject {
                     startedAt: pendingTaskHistoryStartedAt
                 )
             }
+            publishCompletedRunNoticeIfUnreported(result.summary, taskID: recordedTaskID)
             pendingCommandForPriorTaskContext = nil
             pendingTaskHistoryStartedAt = nil
             refreshSavedItems()
@@ -2459,13 +2772,15 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
+    /// Returns the task-history row id this call wrote, or `nil` when it wrote none.
+    @discardableResult
     private func recordPriorTaskContext(
         command: String,
         preparedRun: PreparedAgentRun,
         status: PriorTaskOutcomeStatus,
         summary: String,
         startedAt: Date? = nil
-    ) {
+    ) -> String? {
         priorTaskContextStore.record(
             command: command,
             plan: preparedRun.plan,
@@ -2478,15 +2793,17 @@ final class AgentViewModel: ObservableObject {
             routineStore: routineStore,
             workspaceStore: workspaceStore
         )
-        recordTaskHistoryIfTerminal(command: command, status: status, startedAt: startedAt, workspaceName: workspaceName)
+        return recordTaskHistoryIfTerminal(command: command, status: status, startedAt: startedAt, workspaceName: workspaceName)
     }
 
+    /// Returns the task-history row id this call wrote, or `nil` when it wrote none.
+    @discardableResult
     private func recordPriorTaskContext(
         command: String,
         status: PriorTaskOutcomeStatus,
         summary: String,
         startedAt: Date? = nil
-    ) {
+    ) -> String? {
         priorTaskContextStore.record(
             command: command,
             outcome: PriorTaskOutcome(status: status, summary: summary)
@@ -2498,43 +2815,58 @@ final class AgentViewModel: ObservableObject {
             routineStore: routineStore,
             workspaceStore: workspaceStore
         )
-        recordTaskHistoryIfTerminal(command: command, status: status, startedAt: startedAt, workspaceName: workspaceName)
+        return recordTaskHistoryIfTerminal(command: command, status: status, startedAt: startedAt, workspaceName: workspaceName)
     }
 
+    /// Returns the id of the row it wrote, or `nil` when it wrote none — suppressed, non-terminal,
+    /// or the write failed. The caller needs that id to name this run's task in a notification, and
+    /// it must come from here: re-deriving it afterwards as "the newest row" is not sound, because
+    /// `completedAt` persists at whole-second resolution and two runs finishing in the same second
+    /// tie under a non-stable sort (PR #67 cycle-3, defect B).
+    @discardableResult
     private func recordTaskHistoryIfTerminal(
         command: String,
         status: PriorTaskOutcomeStatus,
         startedAt: Date?,
         workspaceName: String?
-    ) {
+    ) -> String? {
         guard [.completed, .failed, .canceled].contains(status),
               let startedAt else {
-            return
+            return nil
         }
 
+        // Task history is a `.trace` store, so a suppressed run writes no row at all. Note the
+        // consequence for a screen-control run: with no row written there is nothing for a deleted
+        // journal to dangle from, so suppression creates no dangling link.
+        guard taskRecordingPolicy.allowsWriting(to: .taskHistory) else {
+            return nil
+        }
+
+        let record = CompletedTaskRecord(
+            command: command,
+            startedAt: startedAt,
+            completedAt: Date(),
+            outcomeStatus: status,
+            workspaceName: workspaceName,
+            // Derived from origin rather than threaded through every call site — origin
+            // already records who started this run, and a second parameter saying the same
+            // thing is a second thing to forget to pass.
+            trigger: activeTaskOrigin == .scheduled ? .scheduled : .manual,
+            // The link, written on every terminal exit including the failures — a link
+            // present only on clean finishes would be missing from exactly the runs someone
+            // most wants to read afterwards. `nil` for every task that ran no session, which
+            // is every task the product had before row I.
+            visionSessionID: activeVisionSessionID
+        )
+
         do {
-            try taskHistoryStore.record(
-                CompletedTaskRecord(
-                    command: command,
-                    startedAt: startedAt,
-                    completedAt: Date(),
-                    outcomeStatus: status,
-                    workspaceName: workspaceName,
-                    // Derived from origin rather than threaded through every call site — origin
-                    // already records who started this run, and a second parameter saying the same
-                    // thing is a second thing to forget to pass.
-                    trigger: activeTaskOrigin == .scheduled ? .scheduled : .manual,
-                    // The link, written on every terminal exit including the failures — a link
-                    // present only on clean finishes would be missing from exactly the runs someone
-                    // most wants to read afterwards. `nil` for every task that ran no session, which
-                    // is every task the product had before row I.
-                    visionSessionID: activeVisionSessionID
-                )
-            )
+            try taskHistoryStore.record(record)
             refreshTaskHistory()
+            return record.id
         } catch {
             setError("Could not save task history: \(error.localizedDescription)")
             logStore.append(.observe, "Could not record task history: \(error.localizedDescription)")
+            return nil
         }
     }
 
@@ -2668,11 +3000,24 @@ final class AgentViewModel: ObservableObject {
         resolveOccurrence(for: name, at: occurrence)
 
         do {
-            let executor = makeExecutor()
+            // `.record` explicitly, never this run's policy (PR #67 review, F2). A scheduled routine is
+            // never suppressed — it passes through no composer, so there is no switch to have been
+            // left on. Inheriting `taskRecordingPolicy` was wrong in one reachable window: a
+            // foreground run paused at a *clarification* leaves `isRunning` false and the policy
+            // still `.suppressTraces`, and `checkScheduledRoutines` only guards on `isRunning` and
+            // `isAwaitingApproval` — so a routine firing then lost its Shortcut run history while
+            // still writing its task-history row, which is a different writer. Stated here the same
+            // way `recentArtifactStore` already is, rather than left to the policy happening to be
+            // right.
+            let executor = makeExecutor(recordingPolicy: .record)
             let runner = AgentRunner(
                 planner: InstantOnlyFallbackPlanner(),
                 executor: executor,
                 logStore: logStore,
+                // The real store, deliberately, not `recentArtifactStoreForThisRun`. Scheduled runs
+                // are never suppressed — the switch is a per-task control on the widget's composer
+                // and a scheduled run passes through no composer. Written out rather than left to
+                // the policy happening to be `.record` here.
                 recentArtifactStore: recentArtifactStore
             )
             self.runner = runner

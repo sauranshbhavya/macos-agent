@@ -85,6 +85,20 @@ struct CommandCenterView: View {
         .sheet(isPresented: $isProfilePresented) {
             ProfileDialogView(isPresented: $isProfilePresented)
         }
+        // A task-detail request can arrive while any page is showing, so the navigation to Tasks
+        // happens *here*, above the page switch, and not inside the page that answers it (PR #67
+        // cycle-3, defect A). `TasksFoundationView` only exists while `selection == .tasks`, so
+        // when the request arrived from Insights, Routines or Workspaces its own `onChange` was
+        // mounted on nothing — the window came forward and opened nothing, and because the request
+        // was left set, navigating to Tasks afterwards did not fire it either: `onChange` does not
+        // fire for a value that did not change while the view was mounted.
+        //
+        // This does not clear the request. It selects the destination and lets the page consume it
+        // on appear, which is the one order that works whether or not that page is already up.
+        .onChange(of: viewModel.taskDetailRequest) { _, request in
+            guard request != nil else { return }
+            select(.tasks)
+        }
     }
 
     private var sidebar: some View {
@@ -305,9 +319,16 @@ struct CommandCenterView: View {
             : (fullName.components(separatedBy: .whitespaces).first ?? fullName)
     }
 
+    /// The only writer of `selection`. The sidebar calls it, and so does the task-detail request
+    /// below; routing both through one function is what keeps a programmatic navigation from
+    /// drifting away from what clicking the sidebar does (PR #67 cycle-3, defect A).
+    private func select(_ destination: CommandCenterDestination) {
+        selection = destination
+    }
+
     private func sidebarButton(_ destination: CommandCenterDestination) -> some View {
         Button {
-            selection = destination
+            select(destination)
         } label: {
             HStack(spacing: 10) {
                 Image(systemName: destination.systemImage)
@@ -415,7 +436,7 @@ private struct TasksFoundationView: View {
                     // persistent-active-workspace affordance (see the task-to-workspace
                     // association decision in the changelog), so only the trailing
                     // filter/search icons are built here.
-                    TasksToolbarRow()
+                    TasksToolbarRow(viewModel: viewModel)
 
                     // Outside the In Progress group on purpose: that group only exists while a
                     // task is active, so nesting the storage notice inside it would hide a
@@ -442,7 +463,9 @@ private struct TasksFoundationView: View {
                         records: displayedRecords,
                         collapseState: collapseState,
                         onToggleSection: toggleSection,
-                        onSelect: { selectedLogEntry = TaskLogEntry(record: $0) }
+                        onSelect: { selectedLogEntry = logEntry(for: $0) },
+                        onDelete: { viewModel.deleteTask($0) },
+                        emptyState: TaskSearchPresentation.emptyState(query: viewModel.taskHistoryQuery)
                     )
                     .padding(.bottom, 24)
                 }
@@ -468,10 +491,65 @@ private struct TasksFoundationView: View {
         .background(SonnyTheme.ink)
         .onAppear {
             viewModel.refreshTaskHistory()
+            // Both entry points are needed and neither is redundant: `onAppear` catches a request
+            // that arrived while this page was not mounted (the notification click from another
+            // page, which selects Tasks and mounts this view *after* the request was set), and
+            // `onChange` below catches one that arrives while it already is.
+            consumeTaskDetailRequest()
+        }
+        // A finished-run notification opens that task's detail here rather than expanding the
+        // widget (PR #67 review, F4 — the founder's decision of 2026-08-17). The request carries a
+        // fresh identity per click, so two notifications about the same task each reopen the sheet.
+        .onChange(of: viewModel.taskDetailRequest) { _, _ in
+            consumeTaskDetailRequest()
         }
         .sheet(item: $selectedLogEntry) { entry in
-            TaskLogDetailDialog(record: entry.record, journalStore: viewModel.visionSessionJournalStore)
+            TaskLogDetailDialog(
+                record: entry.record,
+                screenRecord: entry.screenRecord,
+                onDeleteTask: {
+                    viewModel.deleteTask(entry.record)
+                    selectedLogEntry = nil
+                },
+                onDeleteScreenRecord: {
+                    viewModel.deleteScreenRecord(for: entry.record)
+                    // Re-resolve rather than dismiss: the task itself is still here, and the whole
+                    // point of this action is that its receipt survives. Rebuilding the entry moves
+                    // the sheet to the state a task with no screen record has always had, which is
+                    // also the state a task that never ran one has — the equality this ticket owes.
+                    selectedLogEntry = logEntry(for: entry.record)
+                }
+            )
         }
+    }
+
+    /// Resolves the screen record once, for the one row the user clicked, before the sheet exists.
+    /// See `TaskScreenRecordState` for why this is not done inside the sheet.
+    /// Answers a pending task-detail request, if there is one.
+    ///
+    /// The record is looked up from `taskHistoryRecords` at open time rather than carried in the
+    /// request: the id is what the notification holds, and the row is what the sheet needs, so
+    /// resolving late means a task deleted in between opens nothing instead of a stale copy.
+    ///
+    /// The request is cleared either way. A request naming a row that no longer exists has still
+    /// been answered — leaving it set would strand a value that nothing else clears until the next
+    /// request or a local-data wipe.
+    private func consumeTaskDetailRequest() {
+        guard let request = viewModel.taskDetailRequest else { return }
+        if let record = viewModel.taskHistoryRecords.first(where: { $0.id == request.taskID }) {
+            selectedLogEntry = logEntry(for: record)
+        }
+        viewModel.taskDetailRequest = nil
+    }
+
+    private func logEntry(for record: CompletedTaskRecord) -> TaskLogEntry {
+        TaskLogEntry(
+            record: record,
+            screenRecord: TaskDeletePresentation.resolveScreenRecord(
+                for: record,
+                journalStore: viewModel.visionSessionJournalStore
+            )
+        )
     }
 
     /// Wireframe shows a time-of-day greeting ("Good Afternoon, User") in this exact slot
@@ -487,11 +565,25 @@ private struct TasksFoundationView: View {
         )
     }
 
-    /// Display-only windowing (inspired by Wispr Flow's ~90-day home-page history) — this page's
-    /// own list only shows the last 90 days. Nothing is deleted: `viewModel.taskHistoryRecords`
-    /// itself is untouched, so Insights and everything else still sees the complete history.
+    /// Display-only windowing — this page's own list shows the last 30 days when the search field is
+    /// empty, and everything the store holds when it is not. Both halves live in
+    /// `TaskHistorySearch.visibleRecords`, so the rule that search reaches past the window is pinned
+    /// by the suite rather than by this view.
+    ///
+    /// Nothing here deletes anything, and `viewModel.taskHistoryRecords` is untouched, so Insights,
+    /// the workspace breakdown and the per-workspace counts read the whole store either way —
+    /// narrowing the window and typing a query both move exactly this list and nothing else.
+    ///
+    /// This comment used to end "so Insights and everything else still sees the complete history".
+    /// That was false and predates row D: `TaskHistoryStore` evicts oldest-first at its cap, so the
+    /// whole *store* is not the whole history. The true statement is the one above — every other
+    /// consumer sees the store rather than this slice. (SONNY-118.)
     private var displayedRecords: [CompletedTaskRecord] {
-        TaskHistoryDisplayWindow.withinWindow(viewModel.taskHistoryRecords, now: Date())
+        TaskHistorySearch.visibleRecords(
+            viewModel.taskHistoryRecords,
+            query: viewModel.taskHistoryQuery,
+            now: Date()
+        )
     }
 
     /// The write is unconditional and immediate rather than debounced or deferred to `onDisappear`:
@@ -508,15 +600,48 @@ private struct TasksFoundationView: View {
 }
 
 private struct TasksToolbarRow: View {
+    @ObservedObject var viewModel: AgentViewModel
+    @FocusState private var isFocused: Bool
+
     var body: some View {
         HStack(spacing: 8) {
             Spacer()
-            // Filter icon deliberately dropped (2026-07-18 review) — no filter feature exists or
-            // is planned yet. Search stays as a real, named backlog item: see
-            // docs/sonny-ui-backend-gaps.md for the task-search feature this button needs wired up.
-            Image(systemName: "magnifyingglass")
-                .font(SonnyType.icon(12, weight: .medium))
-                .foregroundStyle(SonnyTheme.muted)
+            // The magnifying glass was decorative until SONNY-118 — no tap target, no state, no
+            // matching behind it. The filter icon beside it stays deliberately dropped (2026-07-18
+            // review): no filter feature exists or is planned.
+            HStack(spacing: 6) {
+                Image(systemName: "magnifyingglass")
+                    .font(SonnyType.icon(12, weight: .medium))
+                    .foregroundStyle(SonnyTheme.muted)
+
+                TextField(TaskSearchPresentation.fieldPrompt, text: $viewModel.taskHistoryQuery)
+                    .textFieldStyle(.plain)
+                    .font(SonnyType.micro)
+                    .foregroundStyle(SonnyTheme.text)
+                    .focused($isFocused)
+                    .frame(width: 150)
+                    .accessibilityLabel(TaskSearchPresentation.fieldPrompt)
+
+                if !viewModel.taskHistoryQuery.isEmpty {
+                    Button {
+                        viewModel.taskHistoryQuery = ""
+                        isFocused = true
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(SonnyType.icon(11, weight: .medium))
+                            .foregroundStyle(SonnyTheme.muted)
+                    }
+                    .buttonStyle(.plain)
+                    .sonnyPointerCursor()
+                    .accessibilityLabel("Clear search")
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .overlay(
+                RoundedRectangle(cornerRadius: SonnyRadius.container)
+                    .stroke(isFocused ? SonnyTheme.accent : SonnyTheme.border, lineWidth: 1)
+            )
         }
         .padding(.leading, 30)
         .padding(.trailing, 24)
@@ -1378,6 +1503,10 @@ private struct TaskHistoryGroupedPanel: View {
     let collapseState: TaskSectionCollapseState
     let onToggleSection: (String) -> Void
     let onSelect: (CompletedTaskRecord) -> Void
+    let onDelete: (CompletedTaskRecord) -> Void
+    /// Passed in rather than derived here, because "no results" and "nothing has ever run" are the
+    /// same empty array and only the caller knows which one it is holding.
+    let emptyState: TaskSearchPresentation.EmptyState
 
     private var sections: [TaskSectionPresentation] {
         TaskSectionPresentation.sections(
@@ -1389,10 +1518,10 @@ private struct TaskHistoryGroupedPanel: View {
     var body: some View {
         if records.isEmpty {
             VStack(alignment: .leading, spacing: 6) {
-                Text("No completed tasks yet")
+                Text(emptyState.title)
                     .font(SonnyType.bodyEmphasis)
                     .foregroundStyle(SonnyTheme.text)
-                Text("Run or cancel a Sonny task and it will appear here.")
+                Text(emptyState.detail)
                     .font(SonnyType.micro)
                     .foregroundStyle(SonnyTheme.muted)
                     .fixedSize(horizontal: false, vertical: true)
@@ -1420,8 +1549,16 @@ private struct TaskHistoryGroupedPanel: View {
                         )
 
                         VStack(spacing: 0) {
-                            ForEach(section.visibleRecords, id: \.startedAt) { record in
-                                TaskHistoryRow(record: record, onSelect: { onSelect(record) })
+                            // Keyed on the record's own id, not `\.startedAt`. Whole-second
+                            // timestamps mean two runs of one command inside the same second share
+                            // a `startedAt`, and SwiftUI collapses rows that share an id — so the
+                            // list silently showed one row where there were two.
+                            ForEach(section.visibleRecords, id: \.taskRowIdentity) { record in
+                                TaskHistoryRow(
+                                    record: record,
+                                    onSelect: { onSelect(record) },
+                                    onDelete: { onDelete(record) }
+                                )
                             }
                         }
                     }
@@ -1485,6 +1622,8 @@ private func taskStatusText(for record: CompletedTaskRecord) -> String {
 private struct TaskHistoryRow: View {
     let record: CompletedTaskRecord
     let onSelect: () -> Void
+    let onDelete: () -> Void
+    @State private var showDeleteConfirmation = false
 
     var body: some View {
         HStack(spacing: 10) {
@@ -1546,16 +1685,52 @@ private struct TaskHistoryRow: View {
         )
         .accessibilityAddTraits(.isButton)
         .accessibilityHint("Opens task details")
+        // A context menu rather than a trailing button, and this is a judgment call with no
+        // wireframe to defer to. The Tasks list is dense flat rows whose whole visual language is
+        // "nothing but the task"; a permanent trash icon on every row would be the single loudest
+        // element on the page, and a hover-revealed one is an affordance nothing else here uses. The
+        // detail sheet carries the discoverable, labelled version of the same action, so this is the
+        // shortcut rather than the only route. Proposed, not settled — SONNY-109 owns the pass.
+        .contextMenu {
+            Button(TaskDeletePresentation.taskActionLabel, role: .destructive) {
+                showDeleteConfirmation = true
+            }
+        }
+        .confirmationDialog(
+            TaskDeletePresentation.taskConfirmationTitle(for: record),
+            isPresented: $showDeleteConfirmation,
+            titleVisibility: .visible
+        ) {
+            Button(TaskDeletePresentation.taskConfirmButtonLabel, role: .destructive, action: onDelete)
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            // Keyed on the link alone — a row that decrypted the journal to write a confirmation
+            // message would be the file read the detail sheet's own comment exists to avoid.
+            if let message = TaskDeletePresentation.taskConfirmationMessage(for: record) {
+                Text(message)
+            }
+        }
     }
 }
 
 /// Identifiable wrapper so `CompletedTaskRecord` (a plain `MacAgentCore` model with no UI-layer
 /// concerns baked in) can drive `.sheet(item:)` without adding an `Identifiable` conformance to
-/// the persisted model itself. `startedAt` plus `command` is unique enough for this — real
-/// collisions would need two records with the exact same command starting in the same instant.
+/// the persisted model itself.
+///
+/// **The identity is the record's own id now, not a compound key.** This used to be
+/// `"\(startedAt.timeIntervalSince1970)-\(command)"`, and the comment here used to say that was
+/// "unique enough — real collisions would need two records with the exact same command starting in
+/// the same instant." That was wrong about the unit: the store persists whole-second timestamps, so
+/// the collision needs the same *second*, not the same instant, and
+/// `TaskHistoryDeletionTests.deletingOneOfTwoTwinsThatCollideOnTheOldKeyLeavesTheOther` constructs
+/// it. With a delete attached to this sheet, opening the wrong twin stopped being cosmetic.
+///
+/// `screenRecord` is resolved before presentation rather than looked up inside the sheet — see
+/// `TaskScreenRecordState` for why that is what makes "gone" and "never ran one" render alike.
 private struct TaskLogEntry: Identifiable {
     let record: CompletedTaskRecord
-    var id: String { "\(record.startedAt.timeIntervalSince1970)-\(record.command)" }
+    let screenRecord: TaskScreenRecordState
+    var id: String { record.taskRowIdentity }
 }
 
 /// A static "receipt" of one completed run — command, outcome, timestamps, workspace — not a live
@@ -1566,13 +1741,15 @@ private struct TaskLogEntry: Identifiable {
 /// richer "what did it actually produce" narrative is wanted here later.
 private struct TaskLogDetailDialog: View {
     let record: CompletedTaskRecord
-    /// Read lazily, on appear, and only for a row that says it has a session. A detail dialog that
-    /// decrypted the whole journal for every row would make opening an ordinary task's receipt cost
-    /// a file read it has no use for.
-    let journalStore: VisionSessionJournalStore
+    /// Resolved once, before this sheet was presented, for the one row the user clicked — so the
+    /// lazy-read property the old `.task` block existed for is kept, without the state settling a
+    /// frame after the sheet opens. See `TaskScreenRecordState`.
+    let screenRecord: TaskScreenRecordState
+    let onDeleteTask: () -> Void
+    let onDeleteScreenRecord: () -> Void
     @Environment(\.dismiss) private var dismiss
-    @State private var session: VisionSessionRecord?
-    @State private var journalLoadFailure: String?
+    @State private var showTaskDeleteConfirmation = false
+    @State private var showScreenRecordDeleteConfirmation = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -1628,8 +1805,10 @@ private struct TaskLogDetailDialog: View {
             visionSessionSection
 
             Spacer(minLength: 20)
+
+            deleteTaskFooter
         }
-        .frame(width: 420, height: record.visionSessionID == nil ? 320 : 560, alignment: .top)
+        .frame(width: 420, height: TaskDeletePresentation.sheetHeight(for: screenRecord), alignment: .top)
         .background(SonnyTheme.ink)
         .overlay(
             RoundedRectangle(cornerRadius: SonnyRadius.container)
@@ -1640,23 +1819,62 @@ private struct TaskLogDetailDialog: View {
 
     /// The action journal for this task, when it ran a screen-control session (row I, SONNY-96).
     ///
-    /// **Read-only, and only what actually happened.** Rows D and E own hiding, deleting and
-    /// rehydration; this ticket only makes the records exist and renders them. A row that ran no
-    /// session shows nothing here at all — not an empty state, which would imply a session with no
-    /// actions rather than no session.
+    /// **Read-only, and only what actually happened.** Row I made the records exist and render;
+    /// row D adds the delete beside them.
+    ///
+    /// **A task with nothing to show here renders nothing at all — no header, no empty state.** Row
+    /// I's version of this comment already argued that for one case: an empty state would imply a
+    /// session that did nothing rather than no session. Row D widens it, and the reason is
+    /// different and stronger. There are now three ways to arrive with nothing to show — the task
+    /// never ran a session, its session was deleted, or its session aged out at the journal's cap —
+    /// and **they must be one rendering, not three.** The product cannot honestly tell the last two
+    /// apart, the no-explanatory-copy rule forbids a sentence explaining the difference, and a
+    /// tombstone would tell the user something they already know. `TaskScreenRecordState.none` is
+    /// where all three land, so there is no branch here that could drift apart.
+    ///
+    /// A load failure is deliberately *not* one of them: an unreadable journal is a real problem
+    /// the user is entitled to see, and it keeps the load-failure wording it has always had.
     @ViewBuilder
     private var visionSessionSection: some View {
-        if record.visionSessionID != nil {
+        if TaskDeletePresentation.showsScreenRecordSection(screenRecord) {
             SettingsDivider()
                 .padding(.horizontal, 28)
                 .padding(.top, 8)
 
             VStack(alignment: .leading, spacing: 10) {
-                Text("What Sonny did on screen")
-                    .font(SonnyType.settingsSectionLabel)
-                    .foregroundStyle(SonnyTheme.text)
+                HStack(alignment: .firstTextBaseline) {
+                    Text(TaskDeletePresentation.screenRecordSectionTitle)
+                        .font(SonnyType.settingsSectionLabel)
+                        .foregroundStyle(SonnyTheme.text)
 
-                if let journalLoadFailure {
+                    Spacer(minLength: 12)
+
+                    if TaskDeletePresentation.showsScreenRecordDeleteAction(screenRecord) {
+                        Button(TaskDeletePresentation.screenRecordActionLabel) {
+                            showScreenRecordDeleteConfirmation = true
+                        }
+                        .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
+                        .sonnyPointerCursor()
+                        .accessibilityLabel(TaskDeletePresentation.screenRecordActionLabel)
+                        .help(TaskDeletePresentation.screenRecordActionLabel)
+                        .confirmationDialog(
+                            TaskDeletePresentation.screenRecordConfirmationTitle,
+                            isPresented: $showScreenRecordDeleteConfirmation,
+                            titleVisibility: .visible
+                        ) {
+                            Button(
+                                TaskDeletePresentation.screenRecordConfirmButtonLabel,
+                                role: .destructive,
+                                action: onDeleteScreenRecord
+                            )
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text(TaskDeletePresentation.screenRecordConfirmationMessage)
+                        }
+                    }
+                }
+
+                if case .unreadable(let journalLoadFailure) = screenRecord {
                     // A load failure is a real, visible problem and gets the load-failure wording,
                     // never silently-empty state — the repo's own rule, and the difference matters
                     // more here than most places: an empty journal and an unreadable one are very
@@ -1665,7 +1883,7 @@ private struct TaskLogDetailDialog: View {
                         .font(SonnyType.micro)
                         .foregroundStyle(SonnyTheme.warning)
                         .fixedSize(horizontal: false, vertical: true)
-                } else if let session {
+                } else if case .present(let session) = screenRecord {
                     Text("\(session.appDisplayName) — \(session.entries.count) action\(session.entries.count == 1 ? "" : "s")")
                         .font(SonnyType.micro)
                         .foregroundStyle(SonnyTheme.muted)
@@ -1683,16 +1901,43 @@ private struct TaskLogDetailDialog: View {
             }
             .padding(.horizontal, 28)
             .padding(.top, 14)
-            .task {
-                guard let id = record.visionSessionID else { return }
-                do {
-                    session = try journalStore.record(withID: id)
-                } catch {
-                    journalLoadFailure =
-                        "This session's record could not be decrypted or decoded: \(error.localizedDescription)"
+        }
+    }
+
+    /// "Delete task" sits in the sheet's footer rather than beside the screen-record action, so the
+    /// two are never mistaken for a pair of similar buttons: one acts on the whole receipt and lives
+    /// at its foot, the other acts on the section it sits inside.
+    private var deleteTaskFooter: some View {
+        HStack {
+            Spacer()
+            Button(TaskDeletePresentation.taskActionLabel) {
+                showTaskDeleteConfirmation = true
+            }
+            .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
+            .sonnyPointerCursor()
+            .accessibilityLabel(TaskDeletePresentation.taskActionLabel)
+            .help(TaskDeletePresentation.taskActionLabel)
+            .confirmationDialog(
+                TaskDeletePresentation.taskConfirmationTitle(for: record),
+                isPresented: $showTaskDeleteConfirmation,
+                titleVisibility: .visible
+            ) {
+                Button(
+                    TaskDeletePresentation.taskConfirmButtonLabel,
+                    role: .destructive,
+                    action: onDeleteTask
+                )
+                Button("Cancel", role: .cancel) {}
+            } message: {
+                // The sheet has already resolved the state, so unlike the row it can name the
+                // screen record only when there really is one.
+                if let message = TaskDeletePresentation.taskConfirmationMessage(for: screenRecord) {
+                    Text(message)
                 }
             }
         }
+        .padding(.horizontal, 28)
+        .padding(.bottom, 20)
     }
 
     private func visionEntryRow(_ entry: VisionActionJournalEntry) -> some View {
@@ -3879,7 +4124,7 @@ private struct SettingsDataPage: View {
                         // next to the label made the row read as too bold/heavy (2026-07-18).
                         SettingsControlLabel(
                             title: "Delete Sonny local data",
-                            detail: "Saved routines, workspaces, clipboard history, snippets, recent artifacts, Shortcut run history, task history, and clipboard settings."
+                            detail: "Saved routines, workspaces, clipboard history, snippets, recent artifacts, Shortcut run history, task history, records of what Sonny did on screen, and clipboard settings."
                         )
                     } trailing: {
                         Button {

@@ -253,6 +253,13 @@ public struct CapabilityExecutionContext {
     /// `VisionSessionError.visionUnavailable`, which is loud. A site that forgot a `taskScope` got a
     /// silently unchecked routine, which is why that one is non-defaulted and this one is not.
     public var visionSession: VisionSessionEnvironment?
+    /// Whether this run leaves traces — "Don't save this task" (SONNY-120).
+    ///
+    /// Defaulted to `.record`, so every existing construction site and every test keeps its current
+    /// behaviour, and an adapter that never asks behaves exactly as before. Adapters that write a
+    /// `.trace` store ask before writing; the classification-enumerating test is what catches one
+    /// that forgets.
+    public var recordingPolicy: TaskRecordingPolicy = .record
 
     public init(
         whitelist: PathWhitelist,
@@ -298,8 +305,10 @@ public struct CapabilityExecutionContext {
         assessNestedPlan: @escaping AssessNestedPlan,
         previewNestedPlan: @escaping PreviewNestedPlan,
         executeNestedPlan: @escaping ExecuteNestedPlan,
-        visionSession: VisionSessionEnvironment? = nil
+        visionSession: VisionSessionEnvironment? = nil,
+        recordingPolicy: TaskRecordingPolicy = .record
     ) {
+        self.recordingPolicy = recordingPolicy
         self.whitelist = whitelist
         self.inventory = inventory
         self.zipArchiver = zipArchiver

@@ -133,6 +133,20 @@ public enum LocalStorageMigrationLog {
             """
         )
     }
+
+    /// The other deferred rewrite a store can owe: giving records written before an id field
+    /// existed one. Same failure semantics as the migration above and a separate sentence on
+    /// purpose — reusing that one would name the wrong upgrade, and this repository has already
+    /// paid once for a message describing something other than what happened.
+    static func recordDeferredIDBackfill(store: String, error: Error) {
+        logger.warning(
+            """
+            Deferred record-id backfill for \(store, privacy: .public): \
+            \(error.localizedDescription, privacy: .public). The existing file is intact and \
+            the backfill retries on the next load.
+            """
+        )
+    }
 }
 
 public struct LocalStorageEncryption: @unchecked Sendable {
