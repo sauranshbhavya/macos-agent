@@ -473,15 +473,6 @@ battery() {
   fi
   printf '\n'
 
-  # Fault-injection seam, set only by `selftest`: reference a variable that is genuinely unbound
-  # so `set -u` kills the script here, mid-report. Under bash 3.2 that used to exit 0 (PR #70
-  # review, F6); the sentinel is what makes it exit 1, and this is how that is watched firing
-  # rather than argued for.
-  if [[ -n "${MUTATE_INJECT_INTERNAL_ERROR:-}" ]]; then
-    printf '    (selftest: injecting an unbound-variable death here)\n'
-    printf '%s\n' "$MUTATE_A_VARIABLE_THAT_IS_DELIBERATELY_NEVER_SET"
-  fi
-
   if [[ -n "$check_only" ]]; then
     printf '==> --check: every selected mutant matches. No tests were run, nothing was changed.\n'
     printf '    This is not a battery result. Re-run without --check to measure anything.\n'
@@ -535,6 +526,18 @@ battery() {
       cp "$backup" "${M_FILE[$idx]}"
       ACTIVE_FILE=""
       die "failed to apply ${M_ID[$idx]} — ${M_FILE[$idx]} was restored from its backup"
+    fi
+
+    # Fault-injection seam, set only by `selftest`: reference a genuinely unbound variable so
+    # `set -u` kills the script HERE — with the mutant in the file and ACTIVE_FILE set. That
+    # placement is the whole point of it. It used to sit before the baseline, where a death leaves
+    # cleanup with nothing to restore, so the selftest passed just as happily with
+    # `assert_intended_exit` running *ahead* of `cleanup` — the one ordering that abandons the
+    # mutant in the tree. Injected here, the ordering is observable and the selftest fails when it
+    # is wrong. Do not move it earlier. (PR #70 cycle-3 re-check, G1.)
+    if [[ -n "${MUTATE_INJECT_INTERNAL_ERROR:-}" ]]; then
+      printf '    (selftest: injecting an unbound-variable death with the mutant applied)\n'
+      printf '%s\n' "$MUTATE_A_VARIABLE_THAT_IS_DELIBERATELY_NEVER_SET"
     fi
 
     log="$logdir/${M_ID[$idx]}.log"
@@ -916,14 +919,25 @@ PLAN
     st_fail "a file outside the repository was mutated"
   fi
 
-  printf '\n==> An internal error exits non-zero rather than reporting success\n'
-  # The bug this pins: on bash 3.2 the presence of an EXIT trap makes a `set -u` death exit 0, so
-  # the harness printed a normal-looking report, died, and returned success. (PR #70 review, F6.)
+  printf '\n==> An internal error exits non-zero, and restores the mutant on the way out\n'
+  # Two bugs are pinned here. On bash 3.2 the presence of an EXIT trap makes a `set -u` death exit
+  # 0, so the harness printed a normal-looking report, died, and returned success (PR #70 review,
+  # F6). And the EXIT trap must run `cleanup` BEFORE `assert_intended_exit`, or the exit ends the
+  # trap with the mutant still in the tree — which nothing held until the seam was moved to fire
+  # with a mutant applied (cycle-3 re-check, G1). The last three checks are the ordering-sensitive
+  # ones: reverse the trap and they fail.
   ST_EXIT=0
   ST_OUT="$(MUTATE_TEST_CMD="$always_pass" MUTATE_INJECT_INTERNAL_ERROR=1 "$SELF" "$root/kill.plan" 2>&1)" || ST_EXIT=$?
   st_eq "a set -u death inside the harness exits 1" "$ST_EXIT" "1"
   st_contains "bash reports the unbound variable" "$ST_OUT" "unbound variable"
   st_contains "and the harness disowns the output above it" "$ST_OUT" "not one of its exits"
+  st_contains "the death landed with a mutant applied" "$ST_OUT" "death with the mutant applied"
+  st_contains "cleanup ran before the exit, and said so" "$ST_OUT" "interrupted mid-mutant"
+  if grep -q "hour < 13" sample.swift; then
+    st_fail "the mutant was left in the tree — cleanup did not run before assert_intended_exit"
+  else
+    st_pass "the mutant is gone from the working tree"
+  fi
   st_eq "the tree is clean after an internal error" "$(git status --porcelain)" ""
 
   printf '\n==> The file is restored byte for byte and the tree is left clean\n'
