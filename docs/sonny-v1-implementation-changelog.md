@@ -157,6 +157,40 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/sonny-145-click-point-centre
+Status: complete
+Date: 2026-08-18
+Tickets: SONNY-145 (vision click points map to a pixel's leading edge rather than its centre — a systematic up-left bias of up to one sent pixel). Filed by the SONNY-114 session; the ticket offered "do nothing" as a reasonable outcome and the founder assigned the fix instead.
+Reviewed by: fresh session (per WORKFLOW.md step 7) — pending at PR open.
+
+Spec sections covered: none new. A correctness fix inside row I's acting loop.
+Files changed: `Sources/MacAgentCore/ScreenActionSynthesizer.swift` (the mapping and its doc comment). `Tests/MacAgentCoreTests/VisionDecisionAndGeometryTests.swift` (five exact-point expectations, and the ladder sweep). `Tests/MacAgentTests/VisionSessionRunTests.swift` (the end-to-end resampled-click test). This changelog. Four paths.
+Tests: CLAUDE.md's exact flagged command -> pass, **1289 tests in 95 suites**, exit 0, twice, at `17d00ce`. Branch point `2ebc24f` measured on this branch: **1289 in 95** — **+0 tests**, correctly: this branch tightens and re-points existing tests rather than adding any.
+
+Behavior added:
+- A model-named pixel resolves to that pixel's **centre**. Every synthesized click moves down-and-right by half a sent pixel — half a point at full resolution, one point at the ladder's 0.5 floor — and the systematic up-left bias is gone.
+
+Behavior preserved (required, no blanket claims):
+- **The sent size is still the one answer about how big the picture is** (SONNY-114). The half-pixel is added *before* scaling, so it is half of the model's own pixel and inherits `sentImageSize` rather than introducing a second opinion. `aResampledCaptureResolvesItsClickThroughTheSizeTheModelWasShown` still runs end to end through the real runner, and the mutation below shows what would break if this were written as a fixed point offset.
+- **The fresh-frame policy.** A window that moved still resolves at its new origin; a window that resized is still refused for a recapture; a vanished window still ends the action. Untouched.
+- **Own-window suppression.** A click landing inside Sonny's own window is still refused — asserted at the new coordinate, since the fixture's suppression rectangle contains both.
+- **Bounds checking.** `isInsideImage` is untouched and still `0 <= x < sentPixelWidth`. A centre-sampled point cannot leave the window either: the largest resolves to half a sent pixel inside the trailing edge rather than exactly on it.
+
+Architectural decisions / pitfalls discovered (required):
+- **The half is expressed in sent pixels, not points, and that is the whole SONNY-114 interaction.** `(i + 0.5) * scale` is half of the model's pixel; `i * scale + 0.5` is half of a point and would mean the correction stopped tracking the resample. A mutation writing it the second way fails three tests including the end-to-end one, so the constraint is enforced rather than merely intended.
+- **The ladder sweep was sampling sub-pixel positions degenerately, and the bound alone would not have found it.** With 144 targets over a 1440x900 window: at scale 0.8 **every** x target landed exactly on a sent-pixel boundary, at scale 0.64 every y target did, and the remaining rung/axis pairs offered 2 to 8 distinct fractional positions out of 144 targets. A pixel boundary is precisely where leading-edge and centre sampling agree. The step count is now **997** — prime, dividing none of the rungs' sent dimensions — which yields 997 distinct positions on both axes at every rung.
+- **The tempting stronger claim about that is false, and was measured rather than assumed.** "The old sweep could not have caught the bias" was written into a doc comment and then removed: running the new assertions against the pre-fix mapping *with the step count back at 144* still fails. What 144 bought was a test whose discriminating power sat in a few rung/axis pairs by arithmetic accident, one ladder change away from resting on nothing — which is worth fixing, and is a smaller claim than the one first written.
+- **A bound cannot pin a direction, so the sweep asserts both signs occur.** Leading-edge sampling can only ever undershoot. Asserting that the sweep sees an overshoot too is the assertion that fails if the `+ 0.5` is removed; a tightened bound on its own would still admit a mapping biased to one side.
+
+Known limitations / deferred scope:
+- **The suite establishes the arithmetic and nothing beyond it.** Whether a click lands on the control the user actually sees is not something anything in this repository can drive — no agent can operate the real macOS app — so no test here is evidence of real-world aiming accuracy, and none claims to be.
+- **This change is not manually verifiable as an improvement either, and that is stated rather than papered over.** The correction is 0.5 to 1 point on controls that are at least 20 points on their short edge. Nobody watching an attended run can tell 200 from 201. The manual item below is therefore a **regression check** — that the acting loop still clicks what it means to — and it cannot confirm the fix works, because the defect it fixes was never observable at that resolution either. The case for the change is that the error was real, directional, and free to remove, not that anyone had seen it.
+- **The model's own aim is untouched by this.** Whether a model aims as well at a resampled picture is SONNY-114's attended question and stays open.
+
+Open questions (required): none. The ticket offered "do nothing" as a legitimate outcome; the fix was assigned instead, and this entry is the record of that rather than of a silent choice.
+
+Next branch: not a roadmap row. An out-of-row correctness fix in row I's acting loop, sequenced ahead of the implementation lanes because it is small and its decision was already made. Rows D, E, J and 12 are unaffected.
+
 ### Branch: fix/sonny-102-termius-deny-list
 Status: complete
 Date: 2026-08-18
@@ -202,6 +236,7 @@ Known limitations / deferred scope:
 Open questions (required): none. The founder settled the one this ticket was blocked on — whether dedicated SSH clients belong on the list — on 2026-08-17, and closed the ticket on 2026-08-18.
 
 Next branch: not a roadmap row. This is an out-of-row entry addition sequenced ahead of the implementation lanes because its decision was already made and its cost is one line plus its records. The locked roadmap is unaffected: rows D, E, J and 12 continue as they stood.
+
 
 ### Branch: fix/docx-conversion-defects
 Status: complete
