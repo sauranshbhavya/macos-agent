@@ -343,14 +343,33 @@ struct VisionDecisionAndGeometryTests {
     /// floor. Before SONNY-145 it was a whole sent pixel and always in the same direction — up and to
     /// the left.
     ///
-    /// **The step count is 997 because the old 144 sampled sub-pixel positions degenerately.** With
-    /// 144 targets over a 1440x900 window, counting distinct fractional positions within a sent
-    /// pixel: at scale 0.8 **every** x target landed exactly on a pixel boundary (1 distinct
-    /// position), at scale 0.64 every y target did, and the remaining rung/axis pairs offered only
-    /// 2 to 8 distinct positions out of 144 targets. A pixel boundary is the one input where
-    /// leading-edge and centre sampling produce the same answer, so those combinations contributed
-    /// no signal at all. 997 is prime and divides none of the rungs' sent dimensions: it yields 997
-    /// distinct positions on **both** axes at **every** rung.
+    /// **The step count is 997 because the old 144 sampled sub-pixel positions degenerately.** The
+    /// distinct fractional positions a step count reaches within a sent pixel is exactly
+    /// `steps / gcd(sentDimension, steps)`. Over a 1440x900 window at 144 steps:
+    ///
+    /// | scale | sent | x | y |
+    /// |---|---|---|---|
+    /// | 1.0 | 1440x900 | 1 | 4 |
+    /// | 0.8 | 1152x720 | 1 | 1 |
+    /// | 0.64 | 922x576 | **72** | 1 |
+    /// | 0.5 | 720x450 | 1 | 8 |
+    ///
+    /// **Five of the eight cells reach exactly one position** — always fraction 0, a pixel boundary,
+    /// which is the one input where leading-edge and centre sampling give the same answer. Only
+    /// three sample more than that, and **x at 0.64 is far and away the largest at 72**: half the
+    /// sweep's targets at distinct positions. That single cell is where the old sweep's ability to
+    /// see this defect actually sat, which is the fact this paragraph exists to state — an earlier
+    /// draft said "2 to 8 distinct positions" and missed exactly the cell that mattered (PR #69
+    /// review, G1).
+    ///
+    /// **The table is exact rational arithmetic, deliberately.** Recomputing it in the `Double`
+    /// arithmetic the test itself uses returns larger and unstable counts — 8, 129, 14 and so on —
+    /// because a fraction that is mathematically 0 shows up as a scatter of values around 1e-14.
+    /// That is rounding dust, not sub-pixel positions, and any count taken from it depends on how
+    /// much dust the counter happens to tolerate.
+    ///
+    /// 997 is prime and coprime with every sent dimension here (1440, 900, 1152, 720, 922, 576,
+    /// 450), so every `gcd` is 1 and every cell becomes 997.
     ///
     /// **Stated precisely, because the tempting stronger claim is false:** the old sweep was not
     /// blind. Measured — the assertions below, run against the pre-SONNY-145 mapping with the step
@@ -358,9 +377,18 @@ struct VisionDecisionAndGeometryTests {
     /// sat in a few rung/axis pairs by arithmetic accident, one ladder change away from resting on
     /// nothing. 997 makes every rung carry its own weight.
     ///
-    /// **The signed check is what pins the *direction*.** Leading-edge sampling can only ever
-    /// undershoot, so asserting that the sweep sees an overshoot too is the assertion that fails if
-    /// the `+ 0.5` is removed — a bound alone would still admit a mapping biased to one side.
+    /// **The direction assertions are belt-and-braces, not load-bearing, and the earlier note here
+    /// claimed otherwise** (PR #69 review, G3). For a constant offset `c` in sent pixels the signed
+    /// residual spans `[-c, 1-c)` pixels, so requiring `|residual| <= 0.5` pixels forces `c = 0.5`
+    /// exactly. **The half-pixel bound alone therefore already pins the offset**, direction
+    /// included. "A bound alone cannot pin a direction" was true of the *one*-sent-pixel bound this
+    /// branch replaced, and is not true of the bound that replaced it.
+    ///
+    /// They are kept because they are cheap, they document the intent directly, and they still have
+    /// something to say about a mapping that is not a constant offset — one that is asymmetric
+    /// between the axes, or varies with position. They are tracked **per axis** for that reason: fed
+    /// from `signedX` alone, the claim was true of x and silent about y, and ORing y into the same
+    /// two flags does not help, because x on its own still sets both. Measured both ways.
     ///
     /// **This bounds the arithmetic only.** Whether a click lands on the control the user sees is not
     /// something any test in this repository can answer — nothing here drives the real UI — and it is
@@ -376,8 +404,13 @@ struct VisionDecisionAndGeometryTests {
         // half-point figure being asserted, so it cannot hide a real regression.
         let epsilon: CGFloat = 0.000_001
 
-        var sawUndershoot = false
-        var sawOvershoot = false
+        // Per axis, not shared. Two flags fed from `signedX` alone made the direction claim true of
+        // x and silent about y; ORing y into the same two flags does not fix it either, since x on
+        // its own still sets both (measured — the assertion fires zero times either way).
+        var sawUndershootX = false
+        var sawOvershootX = false
+        var sawUndershootY = false
+        var sawOvershootY = false
 
         for rung in VisionCaptureEgressPolicy.default.ladder {
             let sentWidth = Int((Double(windowWidth) * rung.scale).rounded())
@@ -414,8 +447,10 @@ struct VisionDecisionAndGeometryTests {
                 // Positive: the click landed short of the target, the old mapping's only direction.
                 let signedX = (frame.origin.x + targetX) - resolved.x
                 let signedY = (frame.origin.y + targetY) - resolved.y
-                if signedX > epsilon { sawUndershoot = true }
-                if signedX < -epsilon { sawOvershoot = true }
+                if signedX > epsilon { sawUndershootX = true }
+                if signedX < -epsilon { sawOvershootX = true }
+                if signedY > epsilon { sawUndershootY = true }
+                if signedY < -epsilon { sawOvershootY = true }
 
                 #expect(abs(signedX) <= halfPixelX + epsilon, "x error at scale \(rung.scale), target \(targetX)")
                 #expect(abs(signedY) <= halfPixelY + epsilon, "y error at scale \(rung.scale)")
@@ -424,10 +459,13 @@ struct VisionDecisionAndGeometryTests {
             }
         }
 
-        #expect(sawUndershoot, "some targets must sit past their pixel's centre")
         #expect(
-            sawOvershoot,
-            "centre sampling must err in both directions — leading-edge sampling can only undershoot"
+            sawUndershootX && sawUndershootY,
+            "some targets must sit past their pixel's centre, on both axes"
+        )
+        #expect(
+            sawOvershootX && sawOvershootY,
+            "must err in both directions on both axes — leading-edge only undershoots"
         )
     }
 }
