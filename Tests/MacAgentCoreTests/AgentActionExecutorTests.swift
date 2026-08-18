@@ -1661,8 +1661,36 @@ struct AgentActionExecutorTests {
 
         let result = try await executor.execute(plan: fixture.plan) { _, _ in }
 
+        // Asserted on what the run *did*, not only on a sentence the first unit alone satisfies
+        // (PR #65 review, Minor). Both units skip and nothing converts, so a fix that let the second
+        // unit convert would still have produced "Skipped 1" and passed the old assertion.
         #expect(result.summary.contains("Skipped 1"))
         #expect(try String(contentsOf: fixture.outputFolder.appendingPathComponent("report.pdf"), encoding: .utf8) == "pre-existing")
+        let pdfs = try FileManager.default.contentsOfDirectory(atPath: fixture.outputFolder.path)
+            .filter { $0.hasSuffix(".pdf") }
+            .sorted()
+        #expect(pdfs == ["report.pdf"], "a predating PDF is never renamed around")
+        #expect(conversionTails(in: result).isEmpty, "nothing was converted")
+    }
+
+    /// **The `locale: nil` half of the fold, pinned where it can be** (PR #65 review, F3).
+    ///
+    /// The closing comment claimed both rejected strengthenings had a mutation proving them wrong.
+    /// Only the `.diacriticInsensitive` half did: changing `locale: nil` to `locale: .current` leaves
+    /// the whole suite green, because `.current` is not Turkish on this machine and no test can make
+    /// it so. That claim is corrected in the record; this is what can honestly be held.
+    ///
+    /// The first assertion establishes the trap is real rather than theoretical. The second is a
+    /// genuine regression test **on a Turkish-locale machine**, where `.current` would unite these
+    /// two names and the shipped fold must not — and is documentation everywhere else. Recorded as a
+    /// partial pin rather than presented as a full one.
+    @Test
+    func theFoldDoesNotUniteTheNamesATurkishLocaleWould() {
+        let turkish = Locale(identifier: "tr_TR")
+        let foldedTurkish = { (name: String) in name.folding(options: [.caseInsensitive], locale: turkish) }
+
+        #expect(foldedTurkish("İstanbul.pdf") == foldedTurkish("istanbul.pdf"), "the trap this avoids is real")
+        #expect(DestinationKey.folded("İstanbul.pdf") != DestinationKey.folded("istanbul.pdf"))
     }
 
     /// **The preview and the run agree about what the second unit will write.** Threading the claimed
@@ -1679,6 +1707,65 @@ struct AgentActionExecutorTests {
 
         #expect(writes.contains { $0.hasSuffix("PDFs/report.pdf") })
         #expect(writes.contains { $0.hasSuffix("PDFs/report-2.pdf") })
+    }
+
+    /// **PROBE A from PR #65's review: two units whose scan scopes overlap, one source document.**
+    /// `regularFiles(in:)` recurses, so scanning `Documents` and then `Documents/Sub` finds the same
+    /// document twice. Before this fix the second unit saw its preferred destination already claimed
+    /// and renamed: one document converted twice, a duplicate PDF the user never asked for, and a
+    /// summary announcing a collision with "another document" that does not exist.
+    ///
+    /// **Both scans are in one command, deliberately.** A second *run* starts with an empty claimed
+    /// set and takes the ordinary skip path, which is exactly why this ticket's manual item 2 does not
+    /// reach this and why the regression has to be a chain.
+    @Test
+    func aUnitRescanningGroundAnEarlierUnitCoveredDoesNotConvertTheSameDocumentTwice() async throws {
+        let fixture = try overlappingScopeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let executor = makeExecutor(root: fixture.root, documentConverter: FakeDocumentConverter())
+
+        let result = try await executor.execute(plan: fixture.plan) { _, _ in }
+
+        let pdfs = try FileManager.default.contentsOfDirectory(atPath: fixture.sub.path)
+            .filter { $0.hasSuffix(".pdf") }
+            .sorted()
+        #expect(pdfs == ["report.pdf"], "one source document, one PDF")
+        #expect(!result.summary.contains("Renamed"), "nothing collided, so nothing may claim a rename")
+    }
+
+    /// **PROBE B: the same folder scanned twice.** The degenerate case of the same defect, and the
+    /// one a user reaches by asking for the same conversion twice in one sentence.
+    @Test
+    func aUnitRescanningTheSameFolderDoesNotConvertTheSameDocumentTwice() async throws {
+        let fixture = try repeatedScopeFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let executor = makeExecutor(root: fixture.root, documentConverter: FakeDocumentConverter())
+
+        let result = try await executor.execute(plan: fixture.plan) { _, _ in }
+
+        let pdfs = try FileManager.default.contentsOfDirectory(atPath: fixture.documents.path)
+            .filter { $0.hasSuffix(".pdf") }
+            .sorted()
+        #expect(pdfs == ["report.pdf"])
+        #expect(!result.summary.contains("Renamed"))
+    }
+
+    /// And the distinction the fix rests on: a *different* document with the same basename still
+    /// renames. Suppressing re-conversion must not suppress the collision handling SONNY-76 added —
+    /// these two cases differ only in whether the later unit's source is the same file.
+    @Test
+    func adifferentDocumentWithTheSameNameStillRenamesAcrossUnits() async throws {
+        let fixture = try twoFolderChainFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let executor = makeExecutor(root: fixture.root, documentConverter: FakeDocumentConverter())
+
+        let result = try await executor.execute(plan: fixture.plan) { _, _ in }
+
+        #expect(conversionTails(in: result) == [
+            "ClientA/report.docx -> PDFs/report.pdf",
+            "ClientB/report.docx -> PDFs/report-2.pdf"
+        ])
+        #expect(result.summary.contains("Renamed 1 output"))
     }
 
     // MARK: - SONNY-79: uniqueness folds the way the filesystem does
@@ -4570,6 +4657,13 @@ struct AgentActionExecutorTests {
     /// SONNY-28's fixture: `SubA/report.docx` and `SubB/report.docx` scanned together into one flat
     /// output folder — "convert the Word docs in ~/Documents to PDF and put them in ~/Desktop/PDFs".
     /// Both documents' basenames produce `report.pdf` in the same directory.
+    private struct OverlappingScopeFixture {
+        let root: URL
+        let documents: URL
+        let sub: URL
+        let plan: AgentPlan
+    }
+
     private struct CollidingDocxFixture {
         let root: URL
         let subA: URL
@@ -4581,6 +4675,52 @@ struct AgentActionExecutorTests {
     /// Two folders, one output folder, one document of the same name in each — expressed as a chain
     /// of two `[scan_docx, convert]` units, which is what a two-folder conversion becomes after
     /// SONNY-34 and what makes this different from `collidingDocxFixture`'s single scan.
+    /// Nested scopes: `[scan(Documents), convert] + [scan(Documents/Sub), convert]`, one document.
+    private func overlappingScopeFixture() throws -> OverlappingScopeFixture {
+        let root = try makeDirectory()
+        let documents = root.appendingPathComponent("Documents", isDirectory: true)
+        let sub = documents.appendingPathComponent("Sub", isDirectory: true)
+        try FileManager.default.createDirectory(at: sub, withIntermediateDirectories: true)
+        try write("docx", to: sub.appendingPathComponent("report.docx"))
+        return OverlappingScopeFixture(
+            root: root,
+            documents: documents,
+            sub: sub,
+            plan: AgentPlan(
+                summary: "Convert the Word documents to PDF.",
+                requiresConfirmation: true,
+                steps: docxPair("outer", documents) + docxPair("inner", sub)
+            )
+        )
+    }
+
+    /// The degenerate case: `[scan(Documents), convert] + [scan(Documents), convert]`.
+    private func repeatedScopeFixture() throws -> OverlappingScopeFixture {
+        let root = try makeDirectory()
+        let documents = root.appendingPathComponent("Documents", isDirectory: true)
+        try FileManager.default.createDirectory(at: documents, withIntermediateDirectories: true)
+        try write("docx", to: documents.appendingPathComponent("report.docx"))
+        return OverlappingScopeFixture(
+            root: root,
+            documents: documents,
+            sub: documents,
+            plan: AgentPlan(
+                summary: "Convert the Word documents to PDF.",
+                requiresConfirmation: true,
+                steps: docxPair("first", documents) + docxPair("second", documents)
+            )
+        )
+    }
+
+    /// One `[scan_docx, convert]` unit over `folder`, with no explicit output folder so each PDF
+    /// lands beside its source — which is what makes both units name the same destination.
+    private func docxPair(_ id: String, _ folder: URL) -> [AgentStep] {
+        [
+            AgentStep(id: "scan-\(id)", operation: .scanDocx, description: "Scan DOCX.", inputPath: folder.path),
+            AgentStep(id: "convert-\(id)", operation: .convertDocxToPDF, description: "Convert DOCX.", inputPath: folder.path)
+        ]
+    }
+
     private func twoFolderChainFixture() throws -> CollidingDocxFixture {
         let root = try makeDirectory()
         let clientA = root.appendingPathComponent("ClientA", isDirectory: true)

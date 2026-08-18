@@ -207,7 +207,7 @@ public struct CapabilityExecutionContext {
     /// Accumulated from what each unit's previews say they write, so it needs no second return
     /// channel and covers writes from any capability rather than only the docx one — a PDF this run
     /// produced is this run's whether a conversion or something else made it.
-    public var destinationsClaimedEarlierInThisRun: Set<String>
+    public var claimedEarlierInThisRun: RunClaims
 
     /// The browser a URL-opening step should use: the one the user named on that step if it resolves
     /// to something installed, otherwise whatever was already in force (SONNY-157).
@@ -287,7 +287,7 @@ public struct CapabilityExecutionContext {
         now: @escaping () -> Date = Date.init,
         hotKeyReady: @escaping () -> Bool = { true },
         preferredBrowser: MacApp? = nil,
-        destinationsClaimedEarlierInThisRun: Set<String> = [],
+        claimedEarlierInThisRun: RunClaims = .none,
         // Non-defaulted, on the same reasoning as `assessRisk(plan:scope:)` and both `AgentRunner`
         // entry points, and for a failure that is one layer quieter than either: a second
         // construction site omitting this would leave `taskScope` at `.unscoped`, which turns
@@ -332,7 +332,7 @@ public struct CapabilityExecutionContext {
         self.now = now
         self.hotKeyReady = hotKeyReady
         self.preferredBrowser = preferredBrowser
-        self.destinationsClaimedEarlierInThisRun = destinationsClaimedEarlierInThisRun
+        self.claimedEarlierInThisRun = claimedEarlierInThisRun
         self.taskScope = taskScope
         self.assessNestedPlan = assessNestedPlan
         self.previewNestedPlan = previewNestedPlan
