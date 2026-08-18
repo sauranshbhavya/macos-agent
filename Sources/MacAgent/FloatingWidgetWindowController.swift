@@ -92,6 +92,14 @@ final class FloatingWidgetWindowController: NSObject {
         panel?.isVisible ?? false
     }
 
+    /// Whether the widget panel currently has key focus — i.e. the user is typing into it.
+    ///
+    /// Needed because `.nonactivatingPanel` means the app is *not* active while someone types here,
+    /// so activation alone cannot tell "working in Sonny" from "working elsewhere" (SONNY-56).
+    var isPanelKey: Bool {
+        panel?.isKeyWindow ?? false
+    }
+
     func show() {
         let panel = panel ?? makePanel()
         self.panel = panel

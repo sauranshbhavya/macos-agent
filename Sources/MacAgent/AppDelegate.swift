@@ -84,8 +84,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// Only post a system notification when neither surface already showing the same state inline
     /// (the floating widget's permission row / failure row) is in front of the user — otherwise
     /// it's a redundant second prompt for something already on screen.
-    private var isAnySonnySurfaceVisible: Bool {
-        widgetController.isVisible || windowCoordinator.commandCenterWindow?.isKeyWindow == true
+    /// The one definition of "do not interrupt", read by every notification subscription below.
+    ///
+    /// **Replaces the old `isAnySonnySurfaceVisible`, which had been permanently `true` since the
+    /// widget became a permanent overlay — so every notification path was dead.** That test asked
+    /// whether a Sonny surface was *on screen*; the widget always is, by the founder's decision of
+    /// 2026-07-20, whose own record predicted this ("notifications ship as real, working code that's
+    /// simply unused for now"). The founder's rule of 2026-08-17 replaces it: notify when Sonny is
+    /// not the app the user is working in.
+    ///
+    /// Both halves are load-bearing. Activation alone would interrupt someone in the middle of
+    /// typing into the widget, because `.nonactivatingPanel` means that typing deliberately does not
+    /// activate the app. See `SonnyAttention`, where the rule lives and is tested.
+    private var isUserWorkingInSonny: Bool {
+        SonnyAttention.isUserWorkingInSonny(
+            isApplicationActive: NSApp.isActive || windowCoordinator.commandCenterWindow?.isKeyWindow == true,
+            isWidgetPanelKey: widgetController.isPanelKey
+        )
     }
 
     /// Command Center has no composer of its own anymore — quick actions like "New routine"/
@@ -116,7 +131,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewModel.$approvalRequest
             .compactMap { $0 }
             .sink { [weak self] request in
-                guard let self, !isAnySonnySurfaceVisible else {
+                guard let self, !isUserWorkingInSonny else {
                     return
                 }
                 notificationService.postPermissionNotification(resource: request.approvalCopy.involvedResource)
@@ -126,7 +141,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewModel.$errorMessage
             .compactMap { $0 }
             .sink { [weak self] message in
-                guard let self, !isAnySonnySurfaceVisible else {
+                guard let self, !isUserWorkingInSonny else {
                     return
                 }
                 notificationService.postErrorNotification(message: message)
@@ -139,10 +154,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewModel.$localStorageNotice
             .compactMap { $0 }
             .sink { [weak self] message in
-                guard let self, !isAnySonnySurfaceVisible else {
+                guard let self, !isUserWorkingInSonny else {
                     return
                 }
                 notificationService.postErrorNotification(message: message)
+            }
+            .store(in: &cancellables)
+
+        // A finished run's own outcome — the gap SONNY-44 found and the founder resolved on
+        // 2026-08-06. A run started from a Command Center row action reports its result on no
+        // surface at all: the widget's result panel is origin-gated to `.widget`, and Command Center
+        // renders progress and failures but has no result panel for the widget's to duplicate.
+        //
+        // Only successes arrive here — `completedRunNotice` is written on the success path alone,
+        // because a failure already reaches the user through `errorMessage` above and would
+        // otherwise notify twice for one run.
+        viewModel.$completedRunNotice
+            .compactMap { $0 }
+            .sink { [weak self] summary in
+                guard let self, !isUserWorkingInSonny else {
+                    return
+                }
+                notificationService.postOutcomeNotification(summary: summary)
             }
             .store(in: &cancellables)
 
@@ -152,7 +185,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         viewModel.$scheduledRunNotice
             .compactMap { $0 }
             .sink { [weak self] message in
-                guard let self, !isAnySonnySurfaceVisible else {
+                guard let self, !isUserWorkingInSonny else {
                     return
                 }
                 notificationService.postErrorNotification(message: message)
