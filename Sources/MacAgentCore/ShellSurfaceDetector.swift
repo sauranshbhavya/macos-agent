@@ -143,8 +143,8 @@ public struct ShellSurfaceVerdict: Equatable, Sendable {
 
 /// Pattern-based detection of a shell rendered on screen, over text a recognizer already produced.
 ///
-/// **What this is for.** `ScreenControlPolicy.terminalBundleIdentifiers` refuses ten named terminal
-/// apps and refuses them first, at three doors and again every iteration. It cannot reach a terminal
+/// **What this is for.** `ScreenControlPolicy.terminalBundleIdentifiers` refuses the terminal apps
+/// it names and refuses them first, at three doors and again every iteration. It cannot reach a terminal
 /// nobody listed, and it cannot reach a shell running *inside* an app that is not a terminal — VS
 /// Code's integrated terminal, a JetBrains run console, a notebook cell — because nothing in a
 /// bundle identifier distinguishes "has a shell inside it". That second gap does not narrow with
