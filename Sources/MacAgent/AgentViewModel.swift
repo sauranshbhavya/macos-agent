@@ -98,6 +98,32 @@ final class AgentViewModel: ObservableObject {
     /// Transient — set at the moment a run succeeds and not persisted. SONNY-121 owns making a
     /// notified outcome survive until the user acknowledges it, and this is the signal it builds on.
     @Published var completedRunNotice: String?
+
+    /// Whether the outcome currently on screen is one the user was **notified** about (SONNY-121).
+    ///
+    /// The founder's decision of 2026-08-04: a notified outcome persists until acknowledged. The
+    /// widget is a permanent overlay, so an outcome nobody acknowledged used to auto-collapse after
+    /// six seconds and then be wiped by `clearStaleTaskOutcome()` — which is fine for an outcome the
+    /// user watched happen, and wrong for one they were pulled away from. Clicking the notification
+    /// after that landed on a compact capsule with nothing in it.
+    ///
+    /// **Why this is a flag and not a rule the view model can derive.** Being notified is a fact
+    /// about the *user's attention* — Sonny was not the app they were working in — and only
+    /// `AppDelegate` knows that, because the answer lives in `NSApp.isActive` and the widget panel's
+    /// key state (see `SonnyAttention`). So the delegate that posts the notification is what records
+    /// that it happened.
+    ///
+    /// **Acknowledged means the user acted**, not that the widget came forward: it clears when they
+    /// retry or submit another command, and deliberately *not* when the panel is merely fronted.
+    /// Being on screen is not the same as being read, which is this ticket's whole premise.
+    @Published private(set) var outcomeWasNotified: Bool = false
+
+    /// Records that the outcome now on screen reached the user as a notification. Called by
+    /// `AppDelegate` immediately after it posts one, because the gate that decided to post is its
+    /// to evaluate.
+    func markOutcomeAsNotified() {
+        outcomeWasNotified = true
+    }
     /// Local-storage health, kept deliberately separate from `errorMessage`: a corrupt store or
     /// a failed save is about Sonny's own data, not about the task the user just ran, and must
     /// never make a successful task read as failed. Rendered as its own notice on both surfaces.
@@ -836,6 +862,10 @@ final class AgentViewModel: ObservableObject {
         prebuiltPlanSource: PreparedPlanSource = .directUserAction
     ) async {
         activeTaskOrigin = origin
+        // Submitting anything is an acknowledgement of whatever was on screen — this one line covers
+        // both "the user retried" and "the user typed something else", because `retryLastCommand`
+        // reaches here through `dispatch` like every other submission.
+        outcomeWasNotified = false
         errorMessage = nil
         finalSummary = ""
         plan = nil
@@ -1335,6 +1365,9 @@ final class AgentViewModel: ObservableObject {
     /// for `.failure` when `errorIsPersistent` is false, so a real configuration problem never gets
     /// silently cleared out from under the user.
     func clearStaleTaskOutcome() {
+        // The marker describes the outcome, so it cannot outlive it — a stale `true` would make the
+        // *next* outcome un-collapsible for a notification that was never sent about it.
+        outcomeWasNotified = false
         errorMessage = nil
         finalSummary = ""
         suggestions = []
@@ -2079,6 +2112,10 @@ final class AgentViewModel: ObservableObject {
         // A finished run's summary is residue of a run whose record the wipe just erased, so it
         // goes with it rather than lingering in memory.
         completedRunNotice = nil
+        // And the marker that describes an outcome goes with the outcome. `deleteLocalData` writes
+        // its own message into `finalSummary` immediately after this returns, and a stale `true`
+        // here would make *that* message un-collapsible for a notification nobody sent.
+        outcomeWasNotified = false
         // Cleared with the records it filters, not left behind. A stale query over an emptied
         // history would put the Tasks page in its "No matching tasks — try a different word" state,
         // when the honest thing to tell someone who just erased everything is that there is nothing

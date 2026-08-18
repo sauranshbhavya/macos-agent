@@ -177,7 +177,15 @@ struct FloatingWidgetView: View {
             // was a real bug — the field is genuinely "in use" even with nothing submitted yet.
             return viewModel.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         case .result, .failure:
-            return true
+            // An outcome the user was notified about does not collapse (SONNY-121). They were
+            // working somewhere else when it happened, so the six-second timer measures how long
+            // they have been *away*, not how long they have had to read it. Returning `false` here
+            // also stops the clear: `scheduleAutoDismissIfNeeded` returns before arming the timer.
+            //
+            // Only `.failure` can currently be notified — the marker is set when an error
+            // notification posts — but the two share this branch, and a `.result` that is not
+            // notified reads `true` exactly as before.
+            return !viewModel.outcomeWasNotified
         case .working:
             return viewModel.activeTaskOrigin != .widget
         case .permission, .clarification, .captureReview, .delegationReview, .sessionPaused, .controlling:
@@ -195,7 +203,11 @@ struct FloatingWidgetView: View {
         case .result:
             return true
         case .failure:
-            return !viewModel.errorIsPersistent
+            // Belt and braces with `isCollapsible` above, which already prevents this being reached
+            // for a notified outcome. Stated twice deliberately: the two decisions are read in
+            // different places, and a later change to the collapse rule must not silently start
+            // wiping outcomes nobody has seen. Both read the one marker, so it is one fact.
+            return !viewModel.errorIsPersistent && !viewModel.outcomeWasNotified
         default:
             return false
         }

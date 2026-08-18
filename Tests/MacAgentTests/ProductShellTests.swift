@@ -550,6 +550,7 @@ struct ProductShellTests {
             "taskHistoryRecords",
             "taskHistoryQuery",
             "completedRunNotice",
+            "outcomeWasNotified",
             "clarificationQuestion",
             "clarificationAnswer",
             "clarificationAutoExecute",
@@ -1373,6 +1374,120 @@ struct ProductShellTests {
             try render(window: window, to: URL(fileURLWithPath: snapshotPath))
             window.close()
         }
+    }
+
+    // MARK: - Notified outcomes persist until acknowledged (SONNY-121)
+
+    @Test
+    func anErrorAloneDoesNotMarkAnOutcomeNotified() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        viewModel.setError("Could not reach the planner.")
+
+        // Setting an error is not the same as notifying about one. The gate that decides lives in
+        // AppDelegate, and a user watching the widget is never notified at all.
+        #expect(!viewModel.outcomeWasNotified)
+    }
+
+    /// **The acceptance criterion at the boundary the suite can reach.** A notified outcome and an
+    /// identical unnotified one differ in exactly one readable fact, and that fact is what
+    /// `FloatingWidgetView`'s collapse and clear decisions read.
+    @Test
+    func aNotifiedOutcomeAndAnIdenticalUnnotifiedOneDifferOnlyInTheMarker() throws {
+        let notifiedFixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: notifiedFixture.root) }
+        let unnotifiedFixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: unnotifiedFixture.root) }
+
+        notifiedFixture.viewModel.setError("Could not reach the planner.")
+        notifiedFixture.viewModel.markOutcomeAsNotified()
+        unnotifiedFixture.viewModel.setError("Could not reach the planner.")
+
+        #expect(notifiedFixture.viewModel.outcomeWasNotified)
+        #expect(!unnotifiedFixture.viewModel.outcomeWasNotified)
+        // Same message and same persistence flag — the marker is the only difference, so it is the
+        // only thing the widget's two decisions can be turning on.
+        #expect(notifiedFixture.viewModel.errorMessage == unnotifiedFixture.viewModel.errorMessage)
+        #expect(notifiedFixture.viewModel.errorIsPersistent == unnotifiedFixture.viewModel.errorIsPersistent)
+    }
+
+    /// The marker describes the outcome, so it cannot outlive it — a stale `true` would make the
+    /// *next* outcome un-collapsible for a notification nobody ever sent about it.
+    @Test
+    func clearingAStaleOutcomeClearsItsNotifiedMarkerToo() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        viewModel.setError("Could not reach the planner.")
+        viewModel.markOutcomeAsNotified()
+
+        viewModel.clearStaleTaskOutcome()
+
+        #expect(!viewModel.outcomeWasNotified)
+        #expect(viewModel.errorMessage == nil)
+    }
+
+    @Test
+    func submittingAnotherCommandAcknowledgesANotifiedOutcome() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        viewModel.setError("Could not reach the planner.")
+        viewModel.markOutcomeAsNotified()
+        #expect(viewModel.outcomeWasNotified)
+
+        viewModel.command = "= 1 + 1"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(!viewModel.outcomeWasNotified)
+    }
+
+    /// Retry is the other acknowledgement and reaches the same clearing point through `dispatch`.
+    /// Asserted separately, because "retry clears it" and "a new command clears it" are two
+    /// criteria and one line satisfying both is worth pinning as such.
+    @Test
+    func retryingAcknowledgesANotifiedOutcome() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        // A real failed run first, so `lastCommand` is populated and retry actually dispatches.
+        viewModel.command = "calc apples"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+        #expect(viewModel.errorMessage != nil)
+        #expect(viewModel.hasRetryableCommand)
+
+        viewModel.markOutcomeAsNotified()
+        #expect(viewModel.outcomeWasNotified)
+
+        viewModel.retryLastCommand()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(!viewModel.outcomeWasNotified)
+    }
+
+    /// **The distinction the whole ticket rests on: visible is not read.** Bringing the widget
+    /// forward is exactly what clicking a notification now does, and it must not count as
+    /// acknowledgement — otherwise the outcome would be wiped by the act of going to look at it.
+    @Test
+    func bringingTheWidgetForwardDoesNotAcknowledgeAnything() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        viewModel.setError("Could not reach the planner.")
+        viewModel.markOutcomeAsNotified()
+        let before = viewModel.widgetPresentationRequest
+
+        // Exactly what the notification's default action does now.
+        viewModel.widgetPresentationRequest += 1
+
+        #expect(viewModel.widgetPresentationRequest == before + 1)
+        #expect(viewModel.outcomeWasNotified)
+        #expect(viewModel.errorMessage == "Could not reach the planner.")
     }
 
     // MARK: - A finished run's outcome (SONNY-56)

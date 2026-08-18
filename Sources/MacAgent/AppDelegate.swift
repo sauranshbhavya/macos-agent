@@ -12,7 +12,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private lazy var notificationService = SonnyNotificationService(
         onAllow: { [weak self] in self?.viewModel.start() },
         onRetry: { [weak self] in self?.viewModel.retryLastCommand() },
-        onOpen: { [weak self] in self?.widgetController.show() }
+        // Routed through the presentation counter rather than calling `show()` directly, so every
+        // hand-driven summon converges on the one mechanism SONNY-8 built. That also buys the
+        // expansion this ticket needs for free: `FloatingWidgetView` already observes
+        // `widgetPresentationRequest` and calls `expandFromCompact()` when it is compact, so
+        // clicking a notification now lands on the outcome rather than on an empty capsule.
+        // `show()` alone could never have done that — it has no reference to the view's `isCompact`
+        // state at all. (SONNY-121; the open question SONNY-25 recorded and left for whoever
+        // revisited outcome retention.)
+        onOpen: { [weak self] in self?.requestWidgetPresentation() }
     )
     private var pushToTalkHotKey: PushToTalkHotKey?
     private var cancellables: Set<AnyCancellable> = []
@@ -145,6 +153,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     return
                 }
                 notificationService.postErrorNotification(message: message)
+                // The user was pulled away, so this outcome must still be here when they come back
+                // (SONNY-121). The gate above is the only thing that knows they were elsewhere, so
+                // recording it here is not a convenience — the view model cannot work it out.
+                viewModel.markOutcomeAsNotified()
             }
             .store(in: &cancellables)
 
