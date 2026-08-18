@@ -126,8 +126,8 @@ public enum VisionContainmentRefusal: Equatable, Sendable {
     /// The captured window is showing a shell (SONNY-139).
     ///
     /// **A second refusal on the same rule, never a replacement for the first.**
-    /// ``ScreenControlPolicy/terminalBundleIdentifiers`` refuses ten named terminal apps and refuses
-    /// them first — at three doors and again at the top of every iteration, above this one. A static
+    /// ``ScreenControlPolicy/terminalBundleIdentifiers`` refuses the terminal apps it names and
+    /// refuses them first — at three doors and again at the top of every iteration, above this one. A static
     /// bundle comparison cannot be talked out of its answer by anything rendered, while this reads
     /// exactly the surface an attacker controls, so this is layered after the list and is never a
     /// reason to shorten it. What it buys is the ground a name list cannot reach: a terminal nobody

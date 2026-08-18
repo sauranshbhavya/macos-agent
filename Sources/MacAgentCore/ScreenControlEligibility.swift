@@ -86,26 +86,56 @@ public struct ScreenControlVerdict: Equatable, Sendable {
 public enum ScreenControlPolicy {
     /// Terminal emulators, by bundle identifier, lowercased.
     ///
-    /// `com.apple.Terminal` and `com.googlecode.iterm2` are the two the founder named. The rest are
-    /// the other terminal emulators in common use on macOS, included because the ratified rule is
-    /// categorical — "terminals are never controllable" — and a list of two does not implement that
-    /// on a Mac with Warp or Ghostty installed. The founder's own wording ("extensible") is what
-    /// this list is; adding an entry is a one-line change with no other moving part.
+    /// `com.apple.Terminal` and `com.googlecode.iterm2` are the two the founder named. Most of the
+    /// rest are the other terminal emulators in common use on macOS, included because the ratified
+    /// rule is categorical — "terminals are never controllable" — and a list of two does not
+    /// implement that on a Mac with Warp or Ghostty installed. The founder's own wording
+    /// ("extensible") is what this list is; adding an entry is a one-line change with no other
+    /// moving part.
     ///
-    /// **Evidence, split by how it was obtained — one verified, nine not.**
+    /// **Termius is here on the rule rather than on the word "terminal"** (founder decision
+    /// 2026-08-17, SONNY-102). The rule's ground is spec §7.4: a terminal is arbitrary shell
+    /// execution with the user's full rights. An SSH session meets that test on the *far* machine,
+    /// and a dedicated SSH client is not an emulator in the sense the rest of this list was built
+    /// around. The decision aligns the list with the rule rather than widening the rule. It was not
+    /// hypothetical: Launch Services reports Termius as the founder's machine's default `ssh://`
+    /// handler, ahead of Terminal and iTerm, so it is what opens when anything asks for an SSH
+    /// connection — and it was controllable.
     ///
-    /// - **Verified from a bundle on this machine (1):** `com.apple.terminal`, read off
-    ///   `/System/Applications/Utilities/Terminal.app/Contents/Info.plist` on the development
-    ///   machine at `25fb29c`. It is the only entry here that is installed there.
+    /// **`com.termius-dmg.mac` is correct as written. Do not "fix" the `-dmg`.** It is a packaging
+    /// artefact carried in the real identifier, and it is exactly the character a plausible guess
+    /// would have dropped: `com.termius.mac` is what typing this from memory produces. It was read
+    /// from Launch Services on the founder's machine rather than recalled, which is the only reason
+    /// it is right.
+    ///
+    /// **Evidence, split by how it was obtained — two established by asking a machine, nine not.**
+    ///
+    /// - **Verified from a bundle on the development machine (1):** `com.apple.terminal`, read off
+    ///   `/System/Applications/Utilities/Terminal.app/Contents/Info.plist` at `25fb29c`. It is the
+    ///   only entry of the original ten that is installed there.
+    /// - **Established from Launch Services on the founder's machine, 2026-08-17 (1):**
+    ///   `com.termius-dmg.mac`. A different provenance from the line above — the answer came from
+    ///   the handler registry (`NSWorkspace.urlsForApplications(toOpen:)`) rather than from reading
+    ///   a bundle's `Info.plist`, and that distinction is load-bearing: Termius is Launch Services'
+    ///   registered default `ssh://` handler while declaring *no* such scheme in its own
+    ///   `CFBundleURLTypes`, so a plist scan — the more obvious method — found Terminal and iTerm
+    ///   and missed the one app the question was about.
     /// - **From each project's published bundle configuration, not inspected on any machine (9):**
     ///   iTerm2, Warp, Ghostty, kitty, Alacritty, WezTerm, Hyper, Tabby, Terminus.
     ///
     /// The split is recorded rather than averaged into "these are the terminal identifiers" because
-    /// the two claims have different strengths and a reader deciding whether to trust an entry
+    /// the three claims have different strengths and a reader deciding whether to trust an entry
     /// deserves to know which kind it is. A wrong identifier fails *open* — it protects nothing
     /// rather than banning something wrongly — which is why the entries are listed rather than
     /// pattern-matched, and why a correction is cheap. `theEvidenceSplitMatchesTheList` fails if
     /// this list changes without this record changing with it.
+    ///
+    /// **Nine of the eleven cannot be confirmed from the founder's machine, and that was checked
+    /// rather than assumed.** Every existing entry was put to Launch Services there on 2026-08-17;
+    /// only `com.apple.terminal` (which LS holds as `com.apple.Terminal`, capital T) and
+    /// `com.googlecode.iterm2` are installed. The other nine are neither confirmed nor denied — not
+    /// evidence they are wrong, recorded so nobody later reads "checked against Launch Services" as
+    /// covering the whole list.
     ///
     /// ## What this list cannot do — two gaps, both real, said plainly rather than discovered later
     ///
@@ -119,6 +149,13 @@ public enum ScreenControlPolicy {
     /// categorical claim. **Filed as its own ticket (SONNY-102) rather than left implied** — the
     /// alternatives to enumeration (a heuristic on bundle metadata, an allow-list inversion, an
     /// AX-tree signal) are real design work with real costs, and they are not row I's.
+    ///
+    /// **Adding Termius did not cover the SSH-client category**, and that limit is deliberate.
+    /// Royal TSX, Shuttle, Core Shell, Prompt, Blink, SecureCRT, ZOC, PuTTY and SSH Config Editor
+    /// are not installed on the founder's machine, so no identifier for any of them can be
+    /// established from there — and none was invented. **A guessed identifier is worse than an
+    /// absent one**: it matches nothing while looking like coverage. This list grows as apps are
+    /// encountered, with the app in hand, never by inference.
     ///
     /// **2. A shell inside an app that is not a terminal is controllable.** VS Code's integrated
     /// terminal, a JetBrains run console, a notebook cell. Nothing in an app's bundle identity
@@ -139,7 +176,8 @@ public enum ScreenControlPolicy {
         "com.github.wez.wezterm",      // WezTerm
         "co.zeit.hyper",               // Hyper
         "org.tabby",                   // Tabby
-        "org.eugeny.terminus"          // Terminus (Tabby's former identity)
+        "org.eugeny.terminus",         // Terminus (Tabby's former identity)
+        "com.termius-dmg.mac"          // Termius (SSH client) — the -dmg is real, see above
     ]
 
     /// The verdict for an app the resolver has already identified.

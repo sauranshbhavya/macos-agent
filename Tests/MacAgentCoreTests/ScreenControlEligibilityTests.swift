@@ -79,16 +79,24 @@ struct ScreenControlEligibilityTests {
 
     /// **The evidence split, pinned so the record cannot drift from the list.**
     ///
-    /// The founder ratified the ten-entry list on the condition that the record says which single
-    /// identifier was verified from a bundle on this machine and which nine came from published
-    /// project configuration. That is a claim about the list's *contents*, so it rots the moment
-    /// someone appends an eleventh entry and leaves the doc comment alone — which is exactly the
-    /// failure mode a comment cannot defend against and a test can. Adding or removing an entry
-    /// fails here until the evidence record is updated with it.
+    /// The founder ratified the list on the condition that the record says how each identifier was
+    /// established. That is a claim about the list's *contents*, so it rots the moment someone
+    /// appends an entry and leaves the doc comment alone — which is exactly the failure mode a
+    /// comment cannot defend against and a test can. Adding or removing an entry fails here until
+    /// the evidence record is updated with it.
+    ///
+    /// **Three groups, not two, since 2026-08-17.** Termius was established from Launch Services on
+    /// the founder's machine — a different provenance from reading a bundle's `Info.plist`, and the
+    /// distinction is load-bearing rather than pedantic: Termius is LS's registered default `ssh://`
+    /// handler while declaring no such scheme in its own `CFBundleURLTypes`, so the plist route
+    /// would have missed it entirely. Collapsing the two into "verified on a machine" would erase
+    /// the one fact a session repeating this sweep needs.
     @Test
     func theEvidenceSplitMatchesTheList() {
         // Verified on the development machine at `25fb29c`, from the bundle's own Info.plist.
-        let verifiedOnThisMachine: Set<String> = ["com.apple.terminal"]
+        let verifiedFromABundle: Set<String> = ["com.apple.terminal"]
+        // Established from Launch Services' handler registry on the founder's machine, 2026-08-17.
+        let establishedFromLaunchServices: Set<String> = ["com.termius-dmg.mac"]
         // Taken from each project's published bundle configuration; no bundle was inspected.
         let fromPublishedConfiguration: Set<String> = [
             "com.googlecode.iterm2",
@@ -102,13 +110,49 @@ struct ScreenControlEligibilityTests {
             "org.eugeny.terminus"
         ]
 
-        #expect(verifiedOnThisMachine.count == 1)
+        #expect(verifiedFromABundle.count == 1)
+        #expect(establishedFromLaunchServices.count == 1)
         #expect(fromPublishedConfiguration.count == 9)
-        #expect(verifiedOnThisMachine.isDisjoint(with: fromPublishedConfiguration))
+
+        let groups = [verifiedFromABundle, establishedFromLaunchServices, fromPublishedConfiguration]
+        for (index, group) in groups.enumerated() {
+            for other in groups[(index + 1)...] {
+                #expect(group.isDisjoint(with: other), "an identifier is recorded under two provenances")
+            }
+        }
         #expect(
-            verifiedOnThisMachine.union(fromPublishedConfiguration) == ScreenControlPolicy.terminalBundleIdentifiers,
+            groups.reduce(into: Set<String>()) { $0.formUnion($1) } == ScreenControlPolicy.terminalBundleIdentifiers,
             "the deny list and the evidence record in its doc comment have diverged"
         )
+    }
+
+    /// **Termius, pinned literally, `-dmg` and all** (founder decision 2026-08-17, SONNY-102).
+    ///
+    /// Separate from the list-driven tests for the same reason `theTwoFounderNamedTerminalsAreOnTheList`
+    /// is: those prove the mechanism is consistent with whatever the list says and would pass on an
+    /// empty list. This proves the list says the specific string that was established.
+    ///
+    /// **The literal is the whole point.** `com.termius-dmg.mac` carries a packaging artefact that
+    /// reads like a typo, and `com.termius.mac` is exactly what a well-meaning correction — or a
+    /// guess from memory — produces. A wrong identifier here fails *open*: it matches nothing while
+    /// sitting in the list looking like coverage. So the string is asserted character for character,
+    /// and a "tidy-up" fails this test rather than silently un-banning an SSH client.
+    @Test
+    func termiusIsOnTheListUnderTheIdentifierLaunchServicesActuallyHolds() {
+        #expect(ScreenControlPolicy.terminalBundleIdentifiers.contains("com.termius-dmg.mac"))
+        #expect(
+            !ScreenControlPolicy.terminalBundleIdentifiers.contains("com.termius.mac"),
+            "com.termius.mac is what a guess produces and it matches no installed app"
+        )
+
+        #expect(ScreenControlPolicy.verdict(for: Self.app("Termius", "com.termius-dmg.mac")).refusal == .terminal)
+        // The identifier as Launch Services spells it, through the second door, since a carried
+        // string is what that door sees.
+        #expect(
+            ScreenControlPolicy.verdict(bundleIdentifier: "com.termius-dmg.mac", displayName: "Termius").refusal == .terminal
+        )
+        // And the guess stays controllable, which is the failure this entry exists to avoid being.
+        #expect(ScreenControlPolicy.verdict(for: Self.app("Termius", "com.termius.mac")).refusal == nil)
     }
 
     /// **A name-based deny list is never complete, and the record says so.**
