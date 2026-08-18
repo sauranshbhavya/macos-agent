@@ -164,8 +164,8 @@ Tickets: SONNY-79 (destination uniqueness under-folded relative to the filesyste
 Reviewed by: fresh session (per WORKFLOW.md step 7) — pending at PR open.
 
 Spec sections covered: none new. Both are defects in the DOCX destination-uniqueness machinery.
-Files changed: `Sources/MacAgentCore/` — `FileInventory.swift` (the fold, the skip rule, the seed), `AgentActionExecutor.swift` (threading and accumulation in both chain loops), `CapabilityAdapter.swift` (one context field), `DocxConversionCapabilityAdapter.swift` (one call), `DocumentConverter.swift` (a bound statement that had gone stale). `Tests/MacAgentCoreTests/AgentActionExecutorTests.swift`.
-Tests: CLAUDE.md's exact flagged command -> pass, **1289 tests in 95 suites**, exit 0, twice, at `18c38ab`. Branch-point baseline at `6af4044` was **1277 in 95**, measured on this branch: **+12 tests, +0 suites** — two for SONNY-79, three for SONNY-76, four from the PR #65 fix round below, and three from the re-check's F5 fix. (The fix round's own **1286 in 95** was measured at `34ebd59`, which is the SHA the re-check reran.)
+Files changed: new: `Sources/MacAgentCore/RunClaims.swift` (what earlier chain units have done, and `ConversionClaim`). Modified, `Sources/MacAgentCore/` — `FileInventory.swift` (the fold, the skip rule, the seed, and the pair-keyed same-source skip), `AgentActionExecutor.swift` (threading and accumulation in both chain loops), `AgentEvent.swift` (`ActionPreview.convertedSources`, and the `ConvertedSource` it carries), `CapabilityAdapter.swift` (one context field), `DocxConversionCapabilityAdapter.swift` (one call), `DocumentConverter.swift` (a bound statement that had gone stale). `Tests/MacAgentCoreTests/AgentActionExecutorTests.swift`. Nine paths counting this changelog, which is what `git diff --name-only 6af4044...HEAD` reports. (PR #65 re-check, F7: the line was written before the fix round added `RunClaims.swift` and touched `AgentEvent.swift`, and named neither.)
+Tests: CLAUDE.md's exact flagged command -> pass, **1289 tests in 95 suites**, exit 0, twice, at `18c38ab` — **the last commit on this branch that touches code**. Every commit after it changes records only, so the figure cannot go stale behind them; the SHA names the tree that was measured rather than whatever happens to be head. Branch-point baseline at `6af4044` was **1277 in 95**, measured on this branch: **+12 tests, +0 suites** — two for SONNY-79, three for SONNY-76, four from the PR #65 fix round below, and three from the re-check's F5 fix. (The fix round's own **1286 in 95** was measured at `34ebd59`, which is the SHA the re-check reran.)
 
 > **Re-stamped after the fix round and a rebase.** The branch first recorded 1277 in 95 over a 1272 branch point at `06297f1`, at SHAs the rebase replaced; `fix/sonny-146-request-compression` then merged, moving the branch point to 1277. Both ends were measured again rather than adjusted arithmetically. `git range-diff 06297f1..7ce7e34 6af4044..HEAD` reported both code commits identical, so the rebase changed nothing this branch does.
 
@@ -214,6 +214,8 @@ Known limitations / deferred scope:
 - **F6, F7 and F8 remain open by decision, not oversight.** The re-check's two record gaps (this entry's dropped `Next branch:` line, and a `Files changed` line that predates `RunClaims.swift` and `AgentEvent.swift`) and its low finding about the dead `RunClaims.hasWritten` are all outside the F5 grant, which is explicitly scoped to this fix alone. They are recorded on SONNY-76 for the founder to route.
 
 Open questions (required): none. SONNY-76 offered two directions and the threading one was taken, since the wording-only option leaves the user a document short; SONNY-79 offered three and the fuller fold was taken, measured rather than assumed, with the filesystem-probe option unnecessary once the fold matched on every class tested.
+
+Next branch: unchanged.
 
 ### Branch: fix/sonny-146-request-compression
 Status: complete
