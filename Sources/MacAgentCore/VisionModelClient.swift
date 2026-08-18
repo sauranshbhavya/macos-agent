@@ -100,13 +100,35 @@ public struct OpenCodeVisionModelClient: VisionModelDeciding {
 
     public var transcriptDescription: String { "opencode/\(model)" }
 
+    /// Whether the request body is gzip-encoded on the wire (SONNY-146).
+    ///
+    /// **A property of the far end, not a preference**, which is why it travels with `endpoint`
+    /// rather than being a standalone switch. A body sent under `Content-Encoding: gzip` to a route
+    /// that does not accept it fails the whole request, so this may only be turned on for an endpoint
+    /// known to inflate it.
+    ///
+    /// **Off for the default endpoint, and that is not caution for its own sake.** Whether OpenCode's
+    /// Zen route accepts a gzip-encoded request body is unverified: confirming it needs a live call
+    /// with a real key, which this ticket had no way to make, and it is exactly what SONNY-146's
+    /// first requirement asked for. Turning it on unverified would risk every screen-control session
+    /// for a saving measured at 30%.
+    ///
+    /// **SONNY-131 is the consumer that turns it on.** That ticket repoints this client at Sonny's
+    /// own gateway, and `docs/sonny-backend-api-contract.md` §6.4 already obliges that server to
+    /// accept `Content-Encoding: gzip` and to apply its size limits to the *decoded* body. So the
+    /// change there is this flag and the endpoint together, in one edit, at the one construction
+    /// site.
+    public let compressesRequestBody: Bool
+
     public init(
         environment: [String: String] = ProcessInfo.processInfo.environment,
         endpoint: URL = OpenCodeVisionModelClient.defaultEndpoint,
+        compressesRequestBody: Bool = false,
         session: URLSession = .shared
     ) throws {
         self.model = environment["SONNY_VISION_MODEL"] ?? Self.defaultModel
         self.endpoint = endpoint
+        self.compressesRequestBody = compressesRequestBody
         self.session = session
         guard let key = environment[Self.apiKeyEnvironmentVariable],
               !key.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
@@ -147,7 +169,19 @@ public struct OpenCodeVisionModelClient: VisionModelDeciding {
         request.httpMethod = "POST"
         request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
         request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = try JSONSerialization.data(withJSONObject: body)
+        // `Accept-Encoding` is deliberately not set. URLSession already advertises `gzip, deflate` on
+        // every request and handles the response transparently — measured against a local server,
+        // which saw exactly that header when nothing here set one. Setting it by hand only *narrows*
+        // the advertisement (the same probe saw `gzip` alone, and `identity`, when each was set), so
+        // the instruction to "set Accept-Encoding while there" would have made the response half
+        // worse rather than better. Recorded because it reads like an omission.
+        let json = try JSONSerialization.data(withJSONObject: body)
+        if compressesRequestBody {
+            request.setValue("gzip", forHTTPHeaderField: "Content-Encoding")
+            request.httpBody = try HTTPBodyCompression.gzipped(json)
+        } else {
+            request.httpBody = json
+        }
 
         let (data, response) = try await session.data(for: request)
         guard let http = response as? HTTPURLResponse else {
