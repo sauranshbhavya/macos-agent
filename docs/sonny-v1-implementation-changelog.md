@@ -157,6 +157,40 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: chore/sonny-75-mutation-harness
+Status: complete
+Date: 2026-08-18
+Tickets: SONNY-75 (commit a shared mutation harness carrying a dirty-tree abort to `scripts/`). Filed as a discovery ticket by SONNY-64's session, triaged under SONNY-111, assigned after a coordinator update raised the occurrence count. Spawned nothing.
+Reviewed by: fresh session (per WORKFLOW.md step 7) — pending at PR open.
+
+Spec sections covered: none. This is developer tooling. Nothing in `Sources/`, `Tests/`, `Package.swift` or the packaging inputs references `scripts/`, so no shipped-product path changes and no user can reach any of it.
+Files changed: new: `scripts/mutate`. Modified: `CLAUDE.md` (the Commands section names the harness), `docs/sonny-v1-implementation-changelog.md`. Three paths, which is what `git diff --name-only 2ebc24f..HEAD` reports.
+Tests: CLAUDE.md's exact flagged command -> pass, **1289 tests in 95 suites**, exit 0, at `5b4a502` — **the last commit on this branch that touches code**; the commits after it change records only. Unchanged from the `2ebc24f` branch point, and necessarily so: this branch adds no Swift. Two further measurements, both at `5b4a502`: `scripts/mutate selftest` -> pass, **35 checks across 11 groups**, exit 0; and a dogfood battery of four mutants against `Sources/MacAgent/CommandCenterView.swift` -> **3 killed, 1 survived**, exit 2, logs at `.build/mutate/5b4a502-20260818T020819/`.
+
+Behavior added:
+- `scripts/mutate <plan>` runs a mutation battery and **refuses to start while `git status --porcelain` prints anything**, on every command, with no override flag. That refusal is the ticket; everything else is convenience.
+- It reverts each mutant from a byte-exact copy taken before the mutation rather than from HEAD, including from its `EXIT`/`INT`/`TERM` trap, so an interrupted run leaves no mutant in the tree and no revert can reach past the file it mutated.
+- It refuses a mutant whose `from` text does not match exactly once — zero matches or two — before any test runs; aborts on a red baseline; reports a survivor loudly and exits 2 for it; distinguishes a compiler kill from a test kill; names the killing tests; and stamps the SHA on the report.
+
+Behavior preserved (required, no blanket claims): nothing existing was touched, and that is a checkable claim rather than a blanket one. `scripts/mutate` is standalone — it does not source `scripts/lib/signing.sh`, and `scripts/plane`, `scripts/package-app.sh` and `scripts/create-signing-identity.sh` are byte-identical to their `2ebc24f` versions. `.claude/hooks/verify-tests-before-stop.sh` still fires on Swift changes and is unaffected: this branch changes no Swift. The full suite was rerun anyway and is unchanged at 1289 in 95.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+- **The count was four in the ticket and it is five.** SONNY-75's description records two occurrences, its 2026-08-16 triage comment adds SONNY-83 as the third, and its 2026-08-17 coordinator update adds SONNY-161 and PR #67's cycle-3 fix round while numbering them three and four — silently dropping SONNY-83. Sweeping the changelog for the incident itself (`grep -n uncommitted` filtered to battery/mutation/checkout lines) finds three distinct branch entries, `feature/workspace-restriction-scope`:2370, `feature/prebuilt-plan-dispatch`:2753 and `feature/app-catalog-dissolution`:2946; SONNY-161's is in its own closing comment, verified by reading it; PR #67's is recorded only in the coordinator's comment, quoting the session. Five, and the script says five.
+- **Two near neighbours are deliberately not counted**, so the number stays checkable: `:1511` is a scratch-experiment `git checkout` near-miss on `AsyncProcessRunner.swift`, not a battery, and `:3124` is the `perl -0pi` mutation that corrupted UTF-8 punctuation — a case where the committed tree *saved* the branch, which is an argument for the guard rather than an instance of the hazard.
+- **The harness must not dirty the tree it just insisted on.** Logs go under `.build/mutate/<sha>-<timestamp>/`, and the fact that `.build/` is gitignored is checked with `git check-ignore` rather than assumed; a repository that does not ignore it gets its logs in a temp directory instead. The selftest's throwaway repo has no `.gitignore`, so the fallback path runs on every selftest. This was not foresight: the first selftest run failed on `?? .build/`, and every check after it failed too, because the harness's own logs tripped its own guard.
+- **A plan file kept inside the working tree is an untracked file, and the harness will refuse its own plan.** Keep plans outside the tree. `--help` says so.
+- **The mutation text is matched and patched as raw bytes by python3, never by a regex.** `:3124` is the reason: a `perl -0pi` one-liner re-encoded UTF-8 punctuation across a file's doc comments and left a syntax error, mutating far more than it meant to.
+- **A survivor is reported as a finding even when it is a deliberate neutrality check**, because the harness cannot know intent and the alternative is a plan-file field nobody needs. The dogfood battery's N1 — `!fullName.isEmpty` rewritten as `fullName.isEmpty == false` — survived exactly as designed, and it is a survivor in the report. Classifying it is the reader's job, as it was in the `feature/prebuilt-plan-dispatch` entry's own N1.
+- **A compiler kill is recorded distinctly from a test kill.** The dogfood battery's D3 typed `period` as `Int`; nothing ran, so the run says "KILLED by the compiler — no test evidence." Folding that into a kill count inflates a battery's apparent strength, which is the same species of comfortable wrong answer the dirty-tree guard exists to stop.
+- **Two harness bugs the selftest caught that reading did not.** `TEST_CMD` was referenced and never defined, and the resulting `set -u` death **exited 0** — a harness dying of its own bug while reporting success. `battery()` now `exit`s directly instead of returning through a `|| rc=$?` at the call site, because bash suspends errexit inside a command whose status is being tested. And the interrupt check first passed vacuously: the stand-in suite signalled during the *baseline*, before anything was mutated, so "the mutant is gone" was trivially true; it now signals only once the mutant is in the file.
+- **`git status --porcelain` was the right predicate, not a narrower one.** It covers staged, unstaged and untracked-but-not-ignored paths, all three of which mean the tree is not the commit the report will name. The selftest exercises the tracked and untracked cases separately.
+
+Known limitations / deferred scope: the harness does not run mutants in parallel, does not support per-mutant test filters (use `MUTATE_TEST_CMD` with `--filter` for a whole run), and has no way to mark a mutant as expected-to-survive. All three were considered and left out under the ticket's explicit "do not over-build" instruction — a harness nobody adopts is worth less than a guard everybody hits. `WORKFLOW.md` still does not mention mutation testing; naming the harness in step 5's rigor bar is a candidate second discoverability surface and was left to the user rather than edited into the process doc unilaterally.
+
+Open questions (required, write "none" if true): none.
+
+Next branch: per the roadmap — this is out-of-band tooling and does not consume a roadmap row.
+
 ### Branch: docs/sonny-168-force-push-clause
 Status: complete
 Date: 2026-08-18
