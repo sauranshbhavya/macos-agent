@@ -19,7 +19,7 @@ import Testing
 ///
 /// What is asserted, said plainly because it is easy to over-claim: **not** that every shell on
 /// every screen is caught. A shell that is not rendered is not seen, and this check reads exactly
-/// the surface an attacker controls, which is why the static ten-name deny list stays the primary
+/// the surface an attacker controls, which is why the static name-based deny list stays the primary
 /// refusal and why SONNY-102 stays open. What is asserted is that this corpus lands on the right
 /// side of a threshold that is a named constant, from both directions, **with the exact signal set
 /// pinned on both halves** — a must-refuse fixture that started refusing for a different reason, or
