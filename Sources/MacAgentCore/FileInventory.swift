@@ -60,11 +60,21 @@ enum DestinationKey {
     /// insensitivity, and search is locale-shaped. **That recipe answers a different question and
     /// borrowing it here would have been wrong in two directions at once.**
     ///
-    /// **What is still not claimed.** This is agreement with the volumes measured, not a reproduction
-    /// of any filesystem's folding table. A volume whose folding differs from Foundation's
-    /// `.caseInsensitive` fold is not ruled out, and the failure mode there is unchanged from before:
-    /// the batch aborts at the converter rather than overwriting, because both shipped converters
-    /// refuse an occupied destination. Nothing is destroyed either way.
+    /// **What is still not claimed, corrected by PR #65's review (F2).** An earlier version of this
+    /// said the residual belonged to "a volume whose folding differs" — which reads as some *other*
+    /// volume. It does not. The review widened the twelve hand-picked classes above to the whole
+    /// reachable population, every scalar in U+0020–U+1FFFF with a case variant, against this same
+    /// APFS volume: **3160 comparisons, and the shipped fold under-folds 9 of them and over-folds
+    /// none.** The nine are U+1C80–U+1C88, Cyrillic Extended-C, which the volume unites with В Д О С
+    /// Т Ъ Ѣ Ꙋ and this fold does not. The fold it replaced under-folded 192 and over-folded none.
+    ///
+    /// So: agreement with the measured volume on 3151 of 3160, the nine exceptions named, zero
+    /// over-folds. The empty over-fold column is the load-bearing half — an over-fold is what would
+    /// fabricate a rename for a document that never collided.
+    ///
+    /// The behavioural consequence for those nine is unchanged and costs no data: both shipped
+    /// converters refuse an occupied destination, so such a pair aborts the batch partway rather than
+    /// losing a file.
     ///
     /// **Folded unconditionally rather than probed per volume.** On a case-sensitive volume the only
     /// cost is a rename that was not strictly required, which the summary announces either way;
@@ -171,7 +181,7 @@ public struct FileInventory {
         in folder: URL,
         outputFolder: URL? = nil,
         mockDestinations: Bool = false,
-        destinationsClaimedEarlierInThisRun: Set<String> = []
+        claimedEarlierInThisRun: RunClaims = .none
     ) throws -> [DocxRecord] {
         let sources = try regularFiles(in: folder)
             .filter { record in
@@ -180,7 +190,7 @@ public struct FileInventory {
             }
             .sorted { $0.url.path < $1.url.path }
 
-        var claimedDestinations = destinationsClaimedEarlierInThisRun
+        var claimedDestinations = claimedEarlierInThisRun.destinations
         var records: [DocxRecord] = []
         for source in sources {
             let basename = source.url.deletingPathExtension().lastPathComponent
@@ -189,10 +199,33 @@ public struct FileInventory {
                 Self.pdfName(stem: basename, mockDestinations: mockDestinations)
             )
 
+            // **A document this run already converted is not converted again** (PR #65 review, F1).
+            // Checked before the destination rules and keyed on the *source*, because "already
+            // converted" is a fact about the document rather than about where it landed. Two chain
+            // units whose scan scopes overlap — a nested folder pair is enough, since
+            // `regularFiles(in:)` recurses — otherwise re-find the same document, see its preferred
+            // destination already claimed, and rename it: one source converted twice, and a summary
+            // announcing a collision with "another document" that does not exist.
+            //
+            // Reported as a skip, which restores exactly the sentence this case had before SONNY-76
+            // and is the true one: the PDF does exist, and this run made it.
+            if claimedEarlierInThisRun.hasConverted(source.url.path) {
+                records.append(
+                    DocxRecord(
+                        sourceURL: source.url,
+                        destinationURL: preferred,
+                        skippedBecausePDFExists: true,
+                        isMockDestination: mockDestinations
+                    )
+                )
+                continue
+            }
+
             // **A file this run already wrote is not "already exists"** (SONNY-76). The skip rule is
             // for a PDF that predates the run; a destination an earlier unit of this same chain
             // claimed has to rename instead, or the user is told their second document was skipped
-            // for a file they never had — and is a PDF short.
+            // for a file they never had — and is a PDF short. Reached only for a *different* source,
+            // because the same one was handled above.
             if fileManager.fileExists(atPath: preferred.path),
                !claimedDestinations.contains(DestinationKey.folded(preferred.path)) {
                 records.append(
