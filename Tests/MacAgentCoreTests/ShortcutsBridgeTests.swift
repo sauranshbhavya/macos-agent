@@ -194,6 +194,42 @@ struct ShortcutsBridgeTests {
         #expect(catalog.readCount == 2)
     }
 
+    /// "Don't save this task" reaches Shortcut run history (SONNY-120), and this goes through the
+    /// real executor rather than a hand-built context so the whole threading is exercised —
+    /// executor to `CapabilityExecutionContext` to the adapter's one `recordHistory` helper.
+    ///
+    /// Written because the end-to-end acceptance test cannot reach this: the product-shell fixture's
+    /// deterministic planner has no command that invokes a Shortcut, so a suppressed run there
+    /// leaves this store untouched whether or not the guard exists. A mutation battery caught the
+    /// gap by surviving.
+    @Test
+    func aSuppressedRunWritesNoShortcutRunHistory() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let historyURL = root.appendingPathComponent("shortcuts-run-history.json")
+        let history = ShortcutRunHistoryStore(fileURL: historyURL)
+        let catalog = FakeShortcutCatalog(names: ["Focus"])
+        let invoker = FakeShortcutInvoker(results: [ProcessResult(terminationStatus: 0, output: "ok")])
+
+        // Recording first, so the suppressed case below is a real difference and not an empty store.
+        let recording = makeExecutor(catalog: catalog, invoker: invoker, history: history)
+        _ = try await recording.execute(plan: shortcutPlan(name: "Focus")) { _, _ in }
+        #expect(try history.hasCleanObservedSuccess(for: "Focus"))
+        let afterRecording = try Data(contentsOf: historyURL)
+
+        let suppressed = makeExecutor(
+            catalog: catalog,
+            invoker: FakeShortcutInvoker(results: [ProcessResult(terminationStatus: 0, output: "ok")]),
+            history: history,
+            recordingPolicy: .suppressTraces
+        )
+        _ = try await suppressed.execute(plan: shortcutPlan(name: "Focus")) { _, _ in }
+
+        // Byte-identical: AES-GCM reseals with a fresh nonce, so identical bytes prove no write
+        // happened rather than that the content matched.
+        #expect(try Data(contentsOf: historyURL) == afterRecording)
+    }
+
     private func makeDirectory() throws -> URL {
         let url = FileManager.default.temporaryDirectory
             .appendingPathComponent("ShortcutsBridgeTests-\(UUID().uuidString)", isDirectory: true)
@@ -208,9 +244,11 @@ struct ShortcutsBridgeTests {
     private func makeExecutor(
         catalog: any ShortcutCatalogProviding,
         invoker: any ShortcutInvoking = FakeShortcutInvoker(results: []),
-        history: ShortcutRunHistoryStore = ShortcutRunHistoryStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("unused-shortcuts-history-\(UUID().uuidString).json"))
+        history: ShortcutRunHistoryStore = ShortcutRunHistoryStore(fileURL: FileManager.default.temporaryDirectory.appendingPathComponent("unused-shortcuts-history-\(UUID().uuidString).json")),
+        recordingPolicy: TaskRecordingPolicy = .record
     ) -> AgentActionExecutor {
         AgentActionExecutor(
+            recordingPolicy: recordingPolicy,
             shortcutCatalog: catalog,
             shortcutInvoker: invoker,
             shortcutRunHistoryStore: history
