@@ -86,7 +86,7 @@ struct ScreenControlEligibilityTests {
     /// the evidence record is updated with it.
     ///
     /// **Three groups, not two, since 2026-08-17.** Termius was established from Launch Services on
-    /// the founder's machine — a different provenance from reading a bundle's `Info.plist`, and the
+    /// the founder's Mac — a different provenance from reading a bundle's `Info.plist`, and the
     /// distinction is load-bearing rather than pedantic: Termius is LS's registered default `ssh://`
     /// handler while declaring no such scheme in its own `CFBundleURLTypes`, so the plist route
     /// would have missed it entirely. Collapsing the two into "verified on a machine" would erase
@@ -95,7 +95,7 @@ struct ScreenControlEligibilityTests {
     func theEvidenceSplitMatchesTheList() {
         // Verified on the development machine at `25fb29c`, from the bundle's own Info.plist.
         let verifiedFromABundle: Set<String> = ["com.apple.terminal"]
-        // Established from Launch Services' handler registry on the founder's machine, 2026-08-17.
+        // Established from Launch Services' handler registry on the founder's Mac, 2026-08-17.
         let establishedFromLaunchServices: Set<String> = ["com.termius-dmg.mac"]
         // Taken from each project's published bundle configuration; no bundle was inspected.
         let fromPublishedConfiguration: Set<String> = [
