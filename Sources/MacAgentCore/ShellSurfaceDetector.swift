@@ -143,13 +143,14 @@ public struct ShellSurfaceVerdict: Equatable, Sendable {
 
 /// Pattern-based detection of a shell rendered on screen, over text a recognizer already produced.
 ///
-/// **What this is for.** `ScreenControlPolicy.terminalBundleIdentifiers` refuses ten named terminal
-/// apps and refuses them first, at three doors and again every iteration. It cannot reach a terminal
-/// nobody listed, and it cannot reach a shell running *inside* an app that is not a terminal — VS
-/// Code's integrated terminal, a JetBrains run console, a notebook cell — because nothing in a
-/// bundle identifier distinguishes "has a shell inside it". That second gap does not narrow with
-/// more list entries at all. This reads what is actually rendered, so it reaches both (SONNY-102's
-/// approach, chosen by the founder 2026-08-16; designed in `docs/sonny-row-j-plan.md` §4).
+/// **What this is for.** `ScreenControlPolicy.terminalBundleIdentifiers` refuses the terminal apps
+/// it names and refuses them first, at three doors and again every iteration. It cannot reach a
+/// terminal nobody listed, and it cannot reach a shell running *inside* an app that is not a
+/// terminal — VS Code's integrated terminal, a JetBrains run console, a notebook cell — because
+/// nothing in a bundle identifier distinguishes "has a shell inside it". That second gap does not
+/// narrow with more list entries at all. This reads what is actually rendered, so it reaches both
+/// (SONNY-102's approach, chosen by the founder 2026-08-16; designed in
+/// `docs/sonny-row-j-plan.md` §4).
 ///
 /// **It is never the primary refusal, and the ordering is not a design choice.** A static bundle
 /// comparison cannot be talked out of its answer by anything rendered; this reads exactly the

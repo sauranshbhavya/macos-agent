@@ -1747,7 +1747,7 @@ struct VisionSessionRunTests {
     /// before anything is clicked.
     ///
     /// All three modes, because Power is the reason this check exists: it asks about no app, so the
-    /// ten-name deny list is otherwise the only thing standing there, and a terminal nobody listed
+    /// name-based deny list is otherwise the only thing standing there, and a terminal nobody listed
     /// reaches the loop unchallenged. Safe is here for the opposite reason — its capture-review
     /// prompt sits *below* the shell check, so a shell must not even get as far as asking the user
     /// whether to send a picture of it.
