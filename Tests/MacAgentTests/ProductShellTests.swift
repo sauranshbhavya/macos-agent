@@ -1484,6 +1484,26 @@ struct ProductShellTests {
         #expect(viewModel.taskRecordingPolicy == .suppressTraces)
     }
 
+    /// The recent-artifacts half, asserted at the decision rather than end-to-end.
+    ///
+    /// The fixture's deterministic planner has no command that generates an artifact, so a
+    /// suppressed run leaves that store untouched whether or not the withholding works — the
+    /// acceptance test above passes for the wrong reason on this one store, which a mutation
+    /// battery found by surviving. This is what actually pins it: `AgentRunner` already treats a
+    /// `nil` store as "record nothing", so withholding the store *is* the suppression.
+    @Test
+    func aSuppressedRunIsHandedNoRecentArtifactStore() throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        #expect(viewModel.recentArtifactStoreForThisRun != nil)
+        viewModel.taskRecordingPolicy = .suppressTraces
+        #expect(viewModel.recentArtifactStoreForThisRun == nil)
+        viewModel.taskRecordingPolicy = .record
+        #expect(viewModel.recentArtifactStoreForThisRun != nil)
+    }
+
     private func snapshot(of stores: [LocalStore], in root: URL) -> [String: Data] {
         var result: [String: Data] = [:]
         for store in stores {

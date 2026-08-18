@@ -1508,7 +1508,11 @@ final class AgentViewModel: ObservableObject {
     /// already treats a `nil` store as "record nothing" — the same seam row I gave the vision
     /// journal. One definition, read by every `AgentRunner` this view model builds, so a new runner
     /// call site cannot forget the check by omitting it.
-    private var recentArtifactStoreForThisRun: RecentArtifactStore? {
+    /// Internal rather than private so the suite can assert the decision directly. Running a real
+    /// task through the fixture cannot reach it: the fixture's deterministic planner has no command
+    /// that generates an artifact, so a suppressed run leaves this store untouched either way and
+    /// the acceptance test passes for the wrong reason. A mutation battery caught exactly that.
+    var recentArtifactStoreForThisRun: RecentArtifactStore? {
         taskRecordingPolicy.allowsWriting(to: .recentArtifacts) ? recentArtifactStore : nil
     }
 
