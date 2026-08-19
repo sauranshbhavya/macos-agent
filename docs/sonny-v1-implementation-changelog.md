@@ -157,6 +157,59 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/widget-mic-and-dont-save
+Status: complete
+Date: 2026-08-19
+Tickets: SONNY-173 (the widget's mic button did nothing at all with no `OPENAI_API_KEY` set, while the hotkey explained itself — the guard was unreachable, not missing), SONNY-174 (the "Don't save this task" button's off state was a white glyph on a near-white fill, unreadable). Both found by the founder at the packaged app on 2026-08-19, both in `FloatingWidgetView.swift`, so both ran on one branch in one session, SONNY-173 first.
+Reviewed by: pending — fresh session per WORKFLOW.md step 7.
+
+Spec sections covered: none new. §3.1 of `docs/sonny-design-system-reference.md` (System B's neutral/untinted button variant) is applied rather than extended; no token was added, changed or removed.
+Files changed:
+- `Sources/MacAgent/AgentViewModel.swift` — `canUseVoice` split into `voiceConfigurationBlocker` (actionable) and `isVoiceTransientlyBusy` (transient) and recomposed from both; new `isVoiceControlDisabled` (the mic's whole `.disabled` predicate); new `missingAPIKeyVoiceMessage` constant; new `voiceConfigurationBlockerOverride` test seam; the two duplicated guard bodies collapsed into one `reportVoiceRefusal()`; `toggleVoiceRecording`'s doc comment corrected.
+- `Sources/MacAgent/FloatingWidgetView.swift` — the mic's `.disabled` now takes `isVoiceControlDisabled`; `dontSaveButton`'s background takes `tint: nil` when off. Both carry the measured reasoning in place.
+- `Tests/MacAgentTests/WidgetVoiceEntryTests.swift` (new, 8 tests), `Tests/MacAgentTests/WidgetCircularButtonFillTests.swift` (new, 2 tests), `Tests/MacAgentTests/ProductShellTests.swift` (the new stored property classified against the local-data wipe — the existing forcing test caught it, as designed).
+
+Tests: CLAUDE.md's flagged command. Baseline **1386 in 107 suites, exit 0 at `7b1c20a`**; **1394 in 108 at `9801acd`** (SONNY-173); **1396 in 109 at `cb2abef`** (SONNY-174). Nothing removed, nothing rewritten — the one edit to an existing test adds a member to an enumeration list. **Mutation batteries via `scripts/mutate`: 12/12 killed at `9801acd`, 3/3 killed at `cb2abef`.** Both include a mutant that restores the shipped bug verbatim (M1 and M11 for the mic — model side and view side separately; N1 for the fill), and each dies by name. Build warnings: the set at `cb2abef` is byte-identical to the six pre-existing sites at `7b1c20a`, diffed as sets after a full recompile rather than compared as totals.
+
+Behavior added:
+- With voice unconfigured, pressing the widget's mic button now says "OPENAI_API_KEY is not set. Export it before launching Sonny, then relaunch the app." — the same message, from the same constant, the hotkey has always given.
+- The "Don't save this task" button's off state is legible: a dark translucent fill under a white glyph instead of a near-white fill under one.
+
+Behavior preserved (required, no blanket claims):
+- **The push-to-talk hotkey path is behaviourally identical.** Its guard still fires on the same condition and still reports the same string; only the string's address moved. Pinned by comparing both surfaces' `errorMessage` and `errorIsPersistent` in one test.
+- **Every transient refusal still disables the mic and still says nothing** — a run in flight, an approval waiting, a clarification open, the recorder starting up, a transcription in flight. Each is pinned individually, in both directions (disabled, and silent).
+- **The stop half still works.** A transient state arriving mid-recording leaves the button pressable, so an approval landing mid-sentence cannot trap the user in a live microphone.
+- **`canUseVoice`'s truth table is unchanged.** It is now composed from the two halves rather than written as one conjunction; the terms and their meanings are the same, and the clarification term keeps the doc comment that explains why it exists.
+- **The "Don't save this task" on state is untouched** — same `primaryAction` tint, same path through `WidgetTintedButtonBackground`, same shadow. Only the off arm of the ternary changed.
+- **The composer row's layout, the control's position, its accessibility label/value/traits, and the hide-while-in-flight rule are all untouched.** The change is one argument.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**A disabled control is a silent one, so a `.disabled` predicate may only hold reasons that clear on their own.** That is the whole of SONNY-173 stated as a rule. `canUseVoice` folded one *configuration* failure the user could act on together with five *transient* states, and a disabled SwiftUI button never invokes its action — so the guard inside `startVoiceRecording`, which already held the right message, could not be reached from the mic at all. Nothing was missing. The fix names the two halves separately and lets only the transient half reach `.disabled`. **Written to outlive its trigger:** SONNY-136 deletes every provider environment variable and takes `hasAPIKey` with it, which changes what `voiceConfigurationBlocker` reports and nothing else. The tests state their configuration failure through an injected override with a *different* message than the API-key one, precisely so they keep meaning the same thing afterwards.
+
+**The whole predicate moved onto the view model, because a view cannot be asked what it rendered.** An expression written inline in SwiftUI is enforced by a reader noticing, which is how the configuration term got in. As a named property it has one address, one doc comment, and a test that fails when it moves — and the mutation that reverts the *view* line alone (M11) dies against the two source-scan guards, which is the half a view-model test could never cover.
+
+**A `.commandCenter` default with no caller is not evidence of a caller.** The ticket asked for the enumeration rather than an inference from the default, and grep cannot resolve a receiver, so it was taken with a deprecation probe over the compiled package: `toggleVoiceRecording` has **exactly one** call site, `FloatingWidgetView.micButton`, passing `.widget` explicitly; `canUseVoice` had **exactly three** read sites, the two guards and the one `.disabled`. The doc comment claiming a Command Center composer had been stale since that composer was deleted on 2026-07-21. The default is kept, and now says why: the origin reaches `dispatchTranscribedCommand`, where `fromComposer: origin == .widget` decides whether a dispatch may consume a pending workspace-card binding, so a future caller that forgets inherits the answer that consumes nothing.
+
+**The neutral fill was never too transparent — it was too light, and the token was never at fault.** SONNY-174's own diagnosis reads "a white glyph on a 17%-opacity grey fill over translucent glass", which names the right token and the wrong rendering. `WidgetTintedButtonBackground` has two branches, and a non-nil `tint` takes the one that lays `Color.white.opacity(0.94)` down first and composites the tint over it in `.plusDarker`. That recipe is what turns a solid accent into a solid button; run `rgba(153,153,153,.17)` through it and the result is **#EDEDED at alpha 0.95**, seating as **#E2E2E2** over the panel — a white glyph at **1.26–1.30:1**, which is invisible and reads exactly as the founder put it, "too light for anyone to figure it out."
+
+**So the fix is `tint: nil`, which is not a value at all.** `neutralButtonFill` is the *untinted* variant's own fill by §3.1's definition, and the `else` branch draws it directly over the glass — the path the permission panel's Deny button has always taken. Off now seats at **#2B2B2B–#626262** across a dark-to-bright backdrop sweep, white glyph at **6.10–14.17:1**; its 0.5pt `#A6A6A6` rim sits at **1.79–3.07:1** against its own fill, which is what draws the silhouette once the fill stops doing it. On is unchanged at solid `#0091FF`, white glyph 3.23:1, and the two states now differ by fill, by shadow weight (§3.1's lighter neutral shadow) and by glyph fill rather than by one washed-out step. **Only the fill lever was used**; the other available lever, a non-white glyph when off, is deliberately unused because a white glyph on the corrected fill is already far past any threshold and darkening it would hand back the contrast the fill just won.
+
+**Those numbers are arithmetic, not eyesight, and the distinction is the point.** They are Porter-Duff source-over with `kCGBlendModePlusDarker` as CoreGraphics defines it (`B(Cb,Cs) = max(0, Cb+Cs−1)`), WCAG relative luminance from linearised sRGB. The panel's own colour is the system's `NSVisualEffectView` output and is not computable here, so it is **swept across a plausible range rather than asserted** — every figure above is a range for that reason. **No automated test can judge legibility on a translucent panel, and none was written pretending to.** The two tests added pin that `neutralButtonFill` is never passed as a tint by any button, and that this control tints only when on. That is a regression guard and a statement that the two states are treated differently; it is not proof that either reads correctly. The founder's eye is the verification, and the tests' own doc comments say so.
+
+**A test that presses a control must fail closed, not carry on.** The transient-state tests press push-to-talk to prove silence, and a press that gets past the guard reaches `AVCaptureDevice.requestAccess`, which a `swift test` process has no bundle identity to survive. Under mutation that is not hypothetical — several of these mutants make voice *available* in exactly the state the test then presses in. So every press in `WidgetVoiceEntryTests` sits behind `try #require(canUseVoice == false)` rather than `#expect`: a broken gate ends the test on the spot. Without it the battery's own mutants would have driven the machine's microphone.
+
+**The wipe's forcing test earned its keep again.** Adding one stored property to `AgentViewModel` failed `everyAgentViewModelStoredPropertyIsClassifiedAgainstTheLocalDataWipe` immediately, exactly as designed — the fourth time that enumeration would otherwise have been missed. The seam is classified `outsideTheWipe` beside `visionSessionEnvironment`, for the same reason: it is injected infrastructure, not user data.
+
+Known limitations / deferred scope:
+- **`voiceConfigurationBlockerOverride` is production surface that exists for tests.** Accepted deliberately: the repo's own comment on `voiceCannotConsumeAnArmWhileAClarificationIsPending` had already recorded the alternative — "that half is readable, not testable, and its proof is the declaration" — and a ticket whose acceptance criteria demand a mutation-proved test of the no-key press cannot be met by a declaration. It is `nil` in the shipping app, nothing under `Sources/` assigns it, and it follows `visionSessionEnvironment`'s established seam precedent.
+- **SONNY-109, the whole-product UI/UX pass, may revisit the "Don't save this task" control wholesale.** This is a legibility fix inside the existing design language and does not pre-empt that; the code comment at the control still records that the control was proposed on session judgment with no wireframe to defer to.
+- **Neither fix is verified visually by this session.** No agent can see the live app; both tickets' manual-test items are the real check and are carried into the PR.
+
+Open questions (required, write "none" if true): none.
+
+Next branch: not a roadmap row — two founder-found defects from the 2026-08-19 manual pass. Rows D, E, J and 12 are unaffected, and SONNY-136 remains the ticket that will change what `voiceConfigurationBlocker` reports.
+
 ### Branch: fix/sonny-123-machine-state-tests
 Status: complete
 Date: 2026-08-19
