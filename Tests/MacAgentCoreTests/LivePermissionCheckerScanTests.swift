@@ -2,38 +2,48 @@ import Foundation
 import Testing
 @testable import MacAgentCore
 
-/// **No test may construct a live permission checker** (SONNY-123).
+/// **No test may reach a live permission checker** (SONNY-123).
 ///
 /// The reason this exists rather than a convention: the seams are *defaulted*, so a fixture that
 /// reaches for the live service is a call that compiles, passes, and reads exactly like every other
 /// fixture. SONNY-103 was one instance found by accident. SONNY-106 section D states the rule; this
-/// test is the thing that enforces it, and it is the only mechanism here that can, because the
-/// deterministic default is a state a real Mac can also be in — a runtime assertion cannot tell an
-/// injected grant from a granted machine, so the property has to be pinned in the source.
+/// file is the thing that enforces it, and source text is the only place it can be enforced, because
+/// the deterministic default is a state a real Mac can also be in — a runtime assertion cannot tell
+/// an injected grant from a granted machine.
 ///
-/// **Measured, not assumed.** Reverting `makeExecutor`'s readiness default to
-/// `PermissionReadinessService()` and reverting `VisionTestContext`'s the same way are two mutants
-/// that survive the entire suite without this test, and die with it.
+/// **Measured, not assumed.** Every pin here was written against a mutant that survived without it:
+/// two fixture defaults reverted to a live service (PR #72 cycle 0), an executor fixture that never
+/// named the seam at all (F1), a partial injection naming only the screen checker (F3), a neutered
+/// matching loop (F6), and an argument spelled `.init()` (C1).
 ///
 /// Scanning both target directories from one file is deliberate: the property is about the whole
 /// suite, and a per-target copy is a copy that can be deleted from one target and still look
 /// enforced.
 ///
-/// **What this cannot do, stated so it is not mistaken for a boundary.** It is textual, and three
-/// forms evade it:
+/// ## What this cannot do, stated so it is not mistaken for a boundary
+///
+/// It is textual, and four forms evade it:
 ///
 /// 1. **Omission** — a constructor that leaves a defaulted seam out entirely puts no forbidden token
-///    on any line. This is not hypothetical and is the form that actually shipped:
-///    `AgentRunnerTests.makeExecutor` built an `AgentActionExecutor` without
-///    `permissionReadinessService` and drove a readiness plan through it, and this scan could not
-///    see it (PR #72 F1). Omission is not closable here without requiring the parameter at all 37
-///    executor constructions in the suite, most of which never touch a readiness path. What closes
-///    it instead is the probe recorded on the ticket: patching the live checkers to print a marker
-///    and running the whole suite single-threaded, which enumerates every live read rather than
-///    guessing at their shape.
-/// 2. **Indirection** — a typealias, a stored metatype, or a construction split across lines.
-/// 3. **A new defaulted seam** that nobody adds to `forbidden`. `theForbiddenTokensStillNameTheLiveImplementations`
-///    catches a *rename* of the two that exist; it cannot catch a third being introduced.
+///    on any line. Not hypothetical, and the form that actually shipped: `AgentRunnerTests.makeExecutor`
+///    built an `AgentActionExecutor` without `permissionReadinessService` and drove a readiness plan
+///    through it (PR #72 F1). Closed for the three fixtures that can drive readiness, by
+///    `everyExecutorFixtureThatCanDriveReadinessInjectsTheSeam`, and nowhere else — requiring the
+///    parameter at all 37 executor constructions in the suite would be churn, since most never touch
+///    a readiness path.
+/// 2. **Spelling, which is what this keys on rather than route.** `everyExecutorFixtureThatCanDriveReadinessInjectsTheSeam`
+///    matches files that write `.showPermissionReadiness`; a fixture that resolves the same operation
+///    as `AgentOperation(rawValue: "show_permission_readiness")` is not in the matched set and never
+///    was. The cycle-2 review built exactly that file, ran a readiness plan through an executor with
+///    no seam, and watched every pin here pass. Its count pin does catch an *existing* matched file
+///    that stops spelling the symbol (measured: rewriting `AgentRunnerTests`' step that way drops the
+///    count to two and fails). It cannot catch a *new* file that never spelled it. This is a
+///    permanent property of a textual scan, not a defect to harden away: any spelling-based rule has
+///    a spelling that evades it, and the enumerating method is the marker probe recorded on the
+///    ticket, not a longer regex.
+/// 3. **Indirection** — a typealias, a stored metatype, or a construction split across lines.
+/// 4. **A new defaulted seam** that nobody adds to `forbidden`. `theForbiddenTokensStillNameTheLiveImplementations`
+///    catches a *rename* of the ones that exist; it cannot catch a third being introduced.
 ///
 /// It raises the cost of the accident it is aimed at and does not pretend to be a barrier against
 /// intent.
@@ -41,13 +51,11 @@ import Testing
 struct LivePermissionCheckerScanTests {
     /// Constructions that hand a test whatever this Mac has granted.
     ///
-    /// `PermissionReadinessService(` is listed **with no closing parenthesis**, which is a change
-    /// from the first version and the point of PR #72's F3. Matching the argument-free
-    /// `PermissionReadinessService()` let *partial* injection through — a call naming
-    /// `screenPermissionChecker` and leaving `microphonePermissionChecker` at its live default is a
-    /// live authorization read that matched no token. Both checkers are defaulted, so any direct
-    /// construction can be partial; the only safe rule is that tests do not call this initializer at
-    /// all. `deterministic(...)` is the one way in, and its own file is the one exemption.
+    /// `PermissionReadinessService(` is listed **with no closing parenthesis** (PR #72 F3): matching
+    /// the argument-free `PermissionReadinessService()` let *partial* injection through, since a call
+    /// naming `screenPermissionChecker` and leaving `microphonePermissionChecker` at its live default
+    /// is a live authorization read. Both checkers are defaulted, so any direct construction can be
+    /// partial; the only safe rule is that tests do not call this initializer at all.
     static let forbidden = [
         "SystemScreenCapturePermissionChecker(",
         "SystemMicrophonePermissionChecker(",
@@ -56,21 +64,16 @@ struct LivePermissionCheckerScanTests {
 
     /// The single file allowed to construct a readiness service directly, target-qualified because
     /// both targets carry a file of this name and only this one is exempt.
-    private static let constructionSite = (target: "MacAgentCoreTests", fileName: "DeterministicPermissions.swift")
+    private static let constructionSite = "MacAgentCoreTests/DeterministicPermissions.swift"
+
+    private static let thisFile = "MacAgentCoreTests/LivePermissionCheckerScanTests.swift"
 
     /// The matching rule, as a pure function so a fixture can hold it.
-    ///
-    /// Comments name these types constantly — this file included, and every doc comment explaining
-    /// why the seam exists. A scan that counted prose would be unusable. It skips comment-*prefixed*
-    /// lines and deliberately not every line *containing* `//`: the narrower `grep -v "//"` this
-    /// repo was bitten by during row C drops a real construction that carries a trailing note.
     static func offenders(inSource source: String, label: String) -> [String] {
         var found: [String] = []
-        for (index, line) in source.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
-            let trimmed = line.trimmingCharacters(in: .whitespaces)
-            guard !trimmed.hasPrefix("//") else { continue }
-            for token in forbidden where line.contains(token) {
-                found.append("\(label):\(index + 1) — \(token)")
+        for line in TestSourceTree.codeLines(of: source) {
+            for token in forbidden where line.text.contains(token) {
+                found.append("\(label):\(line.number) — \(token)")
             }
         }
         return found
@@ -101,32 +104,23 @@ struct LivePermissionCheckerScanTests {
 
     @Test
     func noTestSourceConstructsALivePermissionChecker() throws {
-        let testsDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-        let thisFileName = URL(fileURLWithPath: #filePath).lastPathComponent
         var scannedFileCount = 0
         var offenders: [String] = []
 
-        for target in ["MacAgentCoreTests", "MacAgentTests"] {
-            let directory = testsDirectory.appendingPathComponent(target)
-            let files = try FileManager.default
-                .contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-                .filter { $0.pathExtension == "swift" }
-            let names = Set(files.map(\.lastPathComponent))
+        for target in TestSourceTree.targets {
+            let files = try TestSourceTree.swiftFiles(in: target)
+            let names = Set(files.map { URL(fileURLWithPath: $0.relativePath).lastPathComponent })
             // Guards against a silently empty scan, which is a source scan's classic failure. Named
-            // files rather than a count near the real one: the previous `> 20` floor sat three files
-            // above this target's actual 23 and would have tripped on an ordinary consolidation
-            // (PR #72 F3).
+            // files rather than a count near the real one: a `> 20` floor once sat three files above
+            // this target's actual 23 and would have tripped on an ordinary consolidation (PR #72 F3).
             #expect(names.contains("DeterministicPermissions.swift"), "\(target) is not the directory this expects")
             #expect(names.contains("UnprivilegedProcess.swift"), "\(target) is not the directory this expects")
 
-            for file in files where file.lastPathComponent != thisFileName {
-                let isExemptConstructionSite = target == Self.constructionSite.target
-                    && file.lastPathComponent == Self.constructionSite.fileName
-                guard !isExemptConstructionSite else { continue }
+            for file in files where file.relativePath != Self.thisFile && file.relativePath != Self.constructionSite {
                 scannedFileCount += 1
                 offenders += Self.offenders(
-                    inSource: try String(contentsOf: file, encoding: .utf8),
-                    label: "\(target)/\(file.lastPathComponent)"
+                    inSource: try TestSourceTree.read(file),
+                    label: file.relativePath
                 )
             }
         }
@@ -148,9 +142,7 @@ struct LivePermissionCheckerScanTests {
     @Test
     func theExemptFileConstructsExactlyOneReadinessServiceAndOnlyInsideTheHelper() throws {
         let source = try String(
-            contentsOf: URL(fileURLWithPath: #filePath)
-                .deletingLastPathComponent()
-                .appendingPathComponent(Self.constructionSite.fileName),
+            contentsOf: TestSourceTree.root.appendingPathComponent(Self.constructionSite),
             encoding: .utf8
         )
         let constructions = Self.offenders(inSource: source, label: "exempt")
@@ -163,36 +155,69 @@ struct LivePermissionCheckerScanTests {
         #expect(source.contains("microphonePermissionChecker: DeterministicMicrophonePermission("))
     }
 
+    /// **Every value handed to `permissionReadinessService:` is the deterministic helper** (PR #72 C1).
+    ///
+    /// The token scan sees constructions that spell the type. `.init()` is a construction that does
+    /// not: `permissionReadinessService: .init()` is `PermissionReadinessService.init()` with both
+    /// checkers left at their live defaults, and it walked past every other pin here — measured, a
+    /// survivor at the exact fixture whose live reads were F1. Checking the parameter's *value*
+    /// rather than the presence of its name closes that, and closes every other spelling of a
+    /// non-deterministic argument at the same time.
+    ///
+    /// Two forms are allowed: `.deterministic(` in any arity, and forwarding a parameter of the same
+    /// name through a fixture's own signature.
+    @Test
+    func everyReadinessServiceArgumentIsTheDeterministicHelper() throws {
+        var checked = 0
+        var offenders: [String] = []
+
+        for target in TestSourceTree.targets {
+            for file in try TestSourceTree.swiftFiles(in: target) where file.relativePath != Self.thisFile {
+                for line in TestSourceTree.codeLines(of: try TestSourceTree.read(file)) {
+                    guard line.text.contains("permissionReadinessService:") else { continue }
+                    checked += 1
+                    let forwards = line.text.contains("permissionReadinessService: permissionReadinessService")
+                    guard !forwards, !line.text.contains(".deterministic(") else { continue }
+                    offenders.append("\(file.relativePath):\(line.number) — \(line.text.trimmingCharacters(in: .whitespaces))")
+                }
+            }
+        }
+
+        // A rule that matched nothing would pass forever.
+        #expect(checked >= 7, "expected the known readiness arguments, matched \(checked) lines")
+        #expect(
+            offenders.isEmpty,
+            """
+            A readiness service is being passed to a fixture by some spelling other than \
+            .deterministic(...). `.init()` and a bare construction both leave the two checkers at \
+            their live defaults, which is a live TCC and AVFoundation read (SONNY-106 section D). \
+            Offenders: \(offenders.joined(separator: " | "))
+            """
+        )
+    }
+
     /// **The omission form, closed where it is affordable to close it.** A construction that leaves a
     /// defaulted seam out names nothing forbidden, so the token scan is blind to it — that is how F1
-    /// shipped. Requiring the parameter at all 37 executor constructions in the suite would be
-    /// disproportionate, since most never touch a readiness path. This is the narrow version that
-    /// catches the real shape: a file that both builds an `AgentActionExecutor` and names
-    /// `.showPermissionReadiness` is one plan away from a live read, and there are exactly three of
-    /// them. Reverting F1's one-line fix fails here; nothing else in the suite notices it.
+    /// shipped. This is the narrow version that catches the real shape: a file that both builds an
+    /// `AgentActionExecutor` and names `.showPermissionReadiness` is one plan away from a live read,
+    /// and there are exactly three of them. Reverting F1's one-line fix fails here.
+    ///
+    /// It requires the injected *form*, not the identifier's presence: `permissionReadinessService: .init()`
+    /// contains the name and is a live service (PR #72 C1).
     @Test
     func everyExecutorFixtureThatCanDriveReadinessInjectsTheSeam() throws {
-        let testsDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-        let thisFileName = URL(fileURLWithPath: #filePath).lastPathComponent
         var checked: [String] = []
         var missing: [String] = []
 
-        for target in ["MacAgentCoreTests", "MacAgentTests"] {
-            let files = try FileManager.default
-                .contentsOfDirectory(
-                    at: testsDirectory.appendingPathComponent(target),
-                    includingPropertiesForKeys: nil
-                )
-                .filter { $0.pathExtension == "swift" && $0.lastPathComponent != thisFileName }
-            for file in files {
-                let code = try String(contentsOf: file, encoding: .utf8)
-                    .split(separator: "\n", omittingEmptySubsequences: false)
-                    .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+        for target in TestSourceTree.targets {
+            for file in try TestSourceTree.swiftFiles(in: target) where file.relativePath != Self.thisFile {
+                let code = TestSourceTree.codeLines(of: try TestSourceTree.read(file))
+                    .map(\.text)
                     .joined(separator: "\n")
                 guard code.contains("AgentActionExecutor("), code.contains("showPermissionReadiness") else { continue }
-                checked.append("\(target)/\(file.lastPathComponent)")
-                if !code.contains("permissionReadinessService") {
-                    missing.append("\(target)/\(file.lastPathComponent)")
+                checked.append(file.relativePath)
+                if !code.contains("permissionReadinessService: .deterministic(") {
+                    missing.append(file.relativePath)
                 }
             }
         }
@@ -203,9 +228,9 @@ struct LivePermissionCheckerScanTests {
             missing.isEmpty,
             """
             \(missing.joined(separator: ", ")) builds an AgentActionExecutor and names \
-            .showPermissionReadiness, but injects no readiness service — so a plan run through that \
-            fixture reaches the production default and makes live TCC and AVFoundation reads. Pass \
-            permissionReadinessService: .deterministic().
+            .showPermissionReadiness, but injects no deterministic readiness service — so a plan run \
+            through that fixture reaches the production default and makes live TCC and AVFoundation \
+            reads. Pass permissionReadinessService: .deterministic().
             """
         )
     }
@@ -213,15 +238,9 @@ struct LivePermissionCheckerScanTests {
     /// Pins the scan's own premise: the tokens it looks for are the ones that actually name the live
     /// implementations, so a rename in `Sources/` that left this list behind fails here rather than
     /// turning the scan into a no-op that still reports green.
-    ///
-    /// This replaced two `#expect(SystemScreenCapturePermissionChecker() is any ScreenCapturePermissionChecking)`
-    /// assertions, which were true by declaration and were the branch's only new compiler warnings —
-    /// `warning: 'is' test is always true`, twice (PR #72 F6).
     @Test
     func theForbiddenTokensStillNameTheLiveImplementations() throws {
-        let coreDirectory = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()
-            .deletingLastPathComponent()
+        let coreDirectory = TestSourceTree.root
             .deletingLastPathComponent()
             .appendingPathComponent("Sources/MacAgentCore")
         let readiness = try String(

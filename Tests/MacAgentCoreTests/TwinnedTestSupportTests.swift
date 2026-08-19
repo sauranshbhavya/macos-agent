@@ -2,12 +2,12 @@ import Foundation
 import Testing
 
 /// **The twinned test-support files cannot drift apart, and the unprivileged gate cannot be
-/// inverted** (SONNY-123, PR #72 F4 and F5).
+/// inverted or moved** (SONNY-123, PR #72 F4, F5, C2 and C3).
 ///
 /// Two helpers exist once per test target — `DeterministicPermissions.swift`'s
-/// `DeterministicScreenPermissions` and `UnprivilegedProcess.swift`'s trait — because one source
-/// file belongs to exactly one target here. Both headers ask the reader to "keep the two in step",
-/// and until this file existed that was a request with no mechanism behind it: deleting the
+/// `DeterministicScreenPermissions` and `UnprivilegedProcess.swift`'s trait — because a source file
+/// belongs to exactly one target here. Both headers ask the reader to "keep the two in step", and
+/// until this file existed that was a request with no mechanism behind it: deleting the
 /// grants-on-request flip from the **core** copy survived the whole suite, because nothing in that
 /// target reads it. The app copy is held by `ScreenAccessOnboardingTests`; the core copy was held by
 /// nothing at all.
@@ -15,35 +15,33 @@ import Testing
 /// The gate had the same shape. Inverting `geteuid() != 0` to `== 0` survived: three tests silently
 /// stopped running, the suite still reported green, and the total dropped from 1377 to 1374 with
 /// nobody told. There is no CI in this repository, so that gate has never fired anywhere and its
-/// correctness was neither exercised nor checked.
+/// correctness is neither exercised nor checked.
 ///
 /// **Comparison is on code, not prose.** Comment lines are stripped before comparing, because the
 /// two copies deliberately differ in their doc comments — each names its own twin, and the app copy
-/// carries one extra sentence about the Screen Recording asymmetry. Brace matching is naive: it
-/// counts `{` and `}` without tracking string literals, which is safe for these two files and would
-/// need revisiting if either grew one containing an unbalanced brace.
+/// carries the F2 correction in full. Reformatting and reindentation are normalized away; member
+/// *order* is not, because the surviving lines are joined in order and compared as strings. Brace
+/// matching is naive: it counts `{` and `}` without tracking string literals, which is safe for these
+/// two files and would need revisiting if either grew one containing an unbalanced brace.
 @Suite
 struct TwinnedTestSupportTests {
-    private static let targets = ["MacAgentCoreTests", "MacAgentTests"]
-
-    private static var testsDirectory: URL {
-        URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
-    }
+    /// This file carries both scans' search strings as literals, so it matches itself unless
+    /// excluded — the same self-reference the permission scan exempts by path.
+    private static let thisFile = "MacAgentCoreTests/TwinnedTestSupportTests.swift"
 
     private static func twin(_ fileName: String, in target: String) throws -> String {
         try String(
-            contentsOf: testsDirectory.appendingPathComponent(target).appendingPathComponent(fileName),
+            contentsOf: TestSourceTree.root.appendingPathComponent(target).appendingPathComponent(fileName),
             encoding: .utf8
         )
     }
 
-    /// Drops comment-only lines and blank lines, and collapses runs of whitespace, so that
-    /// reindentation and prose differences do not read as drift while a changed statement does.
+    /// Drops comment-only and blank lines and collapses runs of whitespace, so that reindentation and
+    /// prose differences do not read as drift while a changed statement does.
     private static func code(_ source: String) -> String {
-        source
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .map { $0.trimmingCharacters(in: .whitespaces) }
-            .filter { !$0.isEmpty && !$0.hasPrefix("//") }
+        TestSourceTree.codeLines(of: source)
+            .map { $0.text.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
             .map { $0.split(separator: " ").joined(separator: " ") }
             .joined(separator: "\n")
     }
@@ -74,7 +72,7 @@ struct TwinnedTestSupportTests {
 
     @Test
     func theTwinnedPermissionStubsAreTheSameCode() throws {
-        let bodies = try Self.targets.map { target in
+        let bodies = try TestSourceTree.targets.map { target in
             Self.code(
                 try Self.declarationBody(
                     try Self.twin("DeterministicPermissions.swift", in: target),
@@ -97,9 +95,35 @@ struct TwinnedTestSupportTests {
         #expect(bodies[0].count > 400)
     }
 
+    /// **The class body is not the whole type** (PR #72 C3). Comparing bodies leaves an extension on
+    /// one copy invisible — measured: adding `extension DeterministicScreenPermissions { ... }` to the
+    /// app twin alone left both bodies byte-identical and the suite green, while the twins had
+    /// genuinely diverged. Extending it anywhere is therefore refused outright: put the member in the
+    /// class body, in both copies, where the drift pin can see it.
+    @Test
+    func neitherTwinIsExtendedOutsideItsClassBody() throws {
+        var extensions: [String] = []
+        for target in TestSourceTree.targets {
+            for file in try TestSourceTree.swiftFiles(in: target) where file.relativePath != Self.thisFile {
+                for line in TestSourceTree.codeLines(of: try TestSourceTree.read(file))
+                where line.text.contains("extension DeterministicScreenPermissions") {
+                    extensions.append("\(file.relativePath):\(line.number)")
+                }
+            }
+        }
+        #expect(
+            extensions.isEmpty,
+            """
+            DeterministicScreenPermissions is extended at \(extensions.joined(separator: ", ")). An \
+            extension on one twin is drift the body comparison cannot see. Add the member to the class \
+            body in both copies instead.
+            """
+        )
+    }
+
     @Test
     func theTwinnedUnprivilegedTraitsAreTheSameCode() throws {
-        let files = try Self.targets.map { try Self.code(Self.twin("UnprivilegedProcess.swift", in: $0)) }
+        let files = try TestSourceTree.targets.map { try Self.code(Self.twin("UnprivilegedProcess.swift", in: $0)) }
         #expect(files[0] == files[1], "The two UnprivilegedProcess.swift copies have drifted.")
         #expect(files[0].contains("static var requiresUnprivilegedProcess: Self {"))
     }
@@ -108,7 +132,7 @@ struct TwinnedTestSupportTests {
     /// the run that was skipped. Inverting it is a mutant this kills; nothing else does.
     @Test
     func theUnprivilegedGatePredicateIsNotInverted() throws {
-        for target in Self.targets {
+        for target in TestSourceTree.targets {
             let source = try Self.twin("UnprivilegedProcess.swift", in: target)
             #expect(source.contains("if: geteuid() != 0,"), "\(target)'s gate is not the expected predicate")
             #expect(
@@ -118,43 +142,64 @@ struct TwinnedTestSupportTests {
         }
     }
 
-    /// **Every forced-filesystem-failure test is gated, and no other test is.** A relational pin
-    /// rather than a bare constant: it fails when a new `0o500` test arrives ungated *and* when a
-    /// gate is deleted from an existing one. It holds because each gated test locks exactly one
-    /// directory — a test that ever needs two chmods makes this a deliberate update, in the same
-    /// spirit as the wipe's nine-store pin.
+    /// **Every test that locks a directory carries the gate, and no other test does — matched per
+    /// test rather than in aggregate** (PR #72 C2).
+    ///
+    /// The first version counted two populations across the tree and compared totals, which never
+    /// asked whether a given `chmod` and a given tag belonged to the same test. Measured: moving
+    /// `@Test(.requiresUnprivilegedProcess)` off the directory-locking test and onto its neighbour
+    /// left both totals at four and the suite green, with one forced-failure test silently ungated
+    /// and an unrelated one needlessly gated. That is a plausible merge accident — an attribute
+    /// landing on the wrong function is what an inserted test does — not only an adversarial one.
+    ///
+    /// So each file is segmented at its `@Test` lines and the two facts are required to agree inside
+    /// every segment. Both directions matter: a lock without a gate fails on a root runner for a
+    /// reason that is not a defect, and a gate without a lock silently stops running a test that had
+    /// no need of it.
     @Test
-    func theGateCoversExactlyTheTestsThatForceAFilesystemFailure() throws {
-        var lockedDirectoryCount = 0
-        var gatedTestCount = 0
-        // This file holds both search strings as literals, so it counts itself if included — the
-        // same self-reference the permission scan excludes by name.
-        let thisFileName = URL(fileURLWithPath: #filePath).lastPathComponent
+    func everyDirectoryLockingTestCarriesTheGateAndNoOtherTestDoes() throws {
+        var lockedAndGated = 0
+        var mismatches: [String] = []
 
-        for target in Self.targets {
-            let directory = Self.testsDirectory.appendingPathComponent(target)
-            let files = try FileManager.default
-                .contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
-                .filter { $0.pathExtension == "swift" && $0.lastPathComponent != thisFileName }
-            for file in files {
-                let source = try String(contentsOf: file, encoding: .utf8)
-                for line in source.split(separator: "\n", omittingEmptySubsequences: false) {
-                    let trimmed = line.trimmingCharacters(in: .whitespaces)
-                    guard !trimmed.hasPrefix("//") else { continue }
-                    if trimmed.contains("posixPermissions: 0o500") { lockedDirectoryCount += 1 }
-                    if trimmed.contains("@Test(.requiresUnprivilegedProcess)") { gatedTestCount += 1 }
+        for target in TestSourceTree.targets {
+            for file in try TestSourceTree.swiftFiles(in: target)
+            where file.relativePath != Self.thisFile {
+                var header: (number: Int, text: String)?
+                var locksDirectory = false
+
+                func closeSegment() {
+                    guard let header else { return }
+                    let gated = header.text.contains(".requiresUnprivilegedProcess")
+                    if gated && locksDirectory {
+                        lockedAndGated += 1
+                    } else if gated != locksDirectory {
+                        mismatches.append(
+                            "\(file.relativePath):\(header.number) — locks=\(locksDirectory) gated=\(gated)"
+                        )
+                    }
                 }
+
+                for line in TestSourceTree.codeLines(of: try TestSourceTree.read(file)) {
+                    if line.text.trimmingCharacters(in: .whitespaces).hasPrefix("@Test") {
+                        closeSegment()
+                        header = line
+                        locksDirectory = false
+                    } else if line.text.contains("posixPermissions: 0o500") {
+                        locksDirectory = true
+                    }
+                }
+                closeSegment()
             }
         }
 
-        #expect(lockedDirectoryCount == 4)
+        #expect(lockedAndGated == 4, "expected four gated directory-locking tests, found \(lockedAndGated)")
         #expect(
-            gatedTestCount == lockedDirectoryCount,
+            mismatches.isEmpty,
             """
-            \(lockedDirectoryCount) tests force a filesystem failure by locking a directory to 0o500, \
-            but \(gatedTestCount) carry .requiresUnprivilegedProcess. Root bypasses directory \
-            permission bits, so an ungated one fails on a root-running runner for a reason that is \
-            not a defect (SONNY-106 section D).
+            A test locks a directory to 0o500 without .requiresUnprivilegedProcess, or carries the \
+            trait without locking one. Root bypasses directory permission bits, so an ungated lock \
+            fails on a root-running runner for a reason that is not a defect, and a stray gate skips \
+            a test that never needed gating (SONNY-106 section D). \(mismatches.joined(separator: " | "))
             """
         )
     }
