@@ -499,7 +499,15 @@ struct FloatingWidgetView: View {
         .buttonStyle(.plain)
         .frame(width: 36, height: 36)
         .widgetCircularBackground(tint: WidgetTheme.secondaryCircular)
-        .disabled(!viewModel.canUseVoice && !viewModel.isRecordingVoice)
+        // **Transient reasons only** — the rule and its whole predicate live on
+        // `AgentViewModel.isVoiceControlDisabled`. A disabled SwiftUI button never runs its action,
+        // so every term folded in here is a press the user makes and never hears back about. The
+        // missing-API-key term used to be one: pressing the mic with no key did nothing at all,
+        // while holding the hotkey — gated by no SwiftUI state — said why (SONNY-173). A
+        // configuration failure the user can go and fix belongs to the guard inside
+        // `startVoiceRecording`, which explains it; a control may only be disabled for something
+        // that clears on its own.
+        .disabled(viewModel.isVoiceControlDisabled)
         // Diagnosed via a debug print: hover worked exactly once, right after a fresh launch, and
         // never again — including after the panel had since lost key status (e.g. the user clicked
         // into another app). SwiftUI's `.onHover` is backed by an `NSTrackingArea` that defaults to
