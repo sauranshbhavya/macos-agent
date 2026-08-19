@@ -18,20 +18,91 @@ import Testing
 /// Scanning both target directories from one file is deliberate: the property is about the whole
 /// suite, and a per-target copy is a copy that can be deleted from one target and still look
 /// enforced.
+///
+/// **What this cannot do, stated so it is not mistaken for a boundary.** It is textual, and three
+/// forms evade it:
+///
+/// 1. **Omission** — a constructor that leaves a defaulted seam out entirely puts no forbidden token
+///    on any line. This is not hypothetical and is the form that actually shipped:
+///    `AgentRunnerTests.makeExecutor` built an `AgentActionExecutor` without
+///    `permissionReadinessService` and drove a readiness plan through it, and this scan could not
+///    see it (PR #72 F1). Omission is not closable here without requiring the parameter at all 37
+///    executor constructions in the suite, most of which never touch a readiness path. What closes
+///    it instead is the probe recorded on the ticket: patching the live checkers to print a marker
+///    and running the whole suite single-threaded, which enumerates every live read rather than
+///    guessing at their shape.
+/// 2. **Indirection** — a typealias, a stored metatype, or a construction split across lines.
+/// 3. **A new defaulted seam** that nobody adds to `forbidden`. `theForbiddenTokensStillNameTheLiveImplementations`
+///    catches a *rename* of the two that exist; it cannot catch a third being introduced.
+///
+/// It raises the cost of the accident it is aimed at and does not pretend to be a barrier against
+/// intent.
 @Suite
 struct LivePermissionCheckerScanTests {
-    /// Constructions that hand a test whatever this Mac has granted. `PermissionReadinessService()`
-    /// is listed with its empty parentheses on purpose — the same initializer *with* arguments is
-    /// how `deterministic(...)` builds the safe one.
-    private static let forbidden = [
+    /// Constructions that hand a test whatever this Mac has granted.
+    ///
+    /// `PermissionReadinessService(` is listed **with no closing parenthesis**, which is a change
+    /// from the first version and the point of PR #72's F3. Matching the argument-free
+    /// `PermissionReadinessService()` let *partial* injection through — a call naming
+    /// `screenPermissionChecker` and leaving `microphonePermissionChecker` at its live default is a
+    /// live authorization read that matched no token. Both checkers are defaulted, so any direct
+    /// construction can be partial; the only safe rule is that tests do not call this initializer at
+    /// all. `deterministic(...)` is the one way in, and its own file is the one exemption.
+    static let forbidden = [
         "SystemScreenCapturePermissionChecker(",
         "SystemMicrophonePermissionChecker(",
-        "PermissionReadinessService()"
+        "PermissionReadinessService("
     ]
+
+    /// The single file allowed to construct a readiness service directly, target-qualified because
+    /// both targets carry a file of this name and only this one is exempt.
+    private static let constructionSite = (target: "MacAgentCoreTests", fileName: "DeterministicPermissions.swift")
+
+    /// The matching rule, as a pure function so a fixture can hold it.
+    ///
+    /// Comments name these types constantly — this file included, and every doc comment explaining
+    /// why the seam exists. A scan that counted prose would be unusable. It skips comment-*prefixed*
+    /// lines and deliberately not every line *containing* `//`: the narrower `grep -v "//"` this
+    /// repo was bitten by during row C drops a real construction that carries a trailing note.
+    static func offenders(inSource source: String, label: String) -> [String] {
+        var found: [String] = []
+        for (index, line) in source.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
+            let trimmed = line.trimmingCharacters(in: .whitespaces)
+            guard !trimmed.hasPrefix("//") else { continue }
+            for token in forbidden where line.contains(token) {
+                found.append("\(label):\(index + 1) — \(token)")
+            }
+        }
+        return found
+    }
+
+    /// Pins the matching rule itself against a fixture, so that neutering the scan's loop is a
+    /// failure rather than a silent green. Without this, a mutant that made the scan inspect no
+    /// lines at all survived the whole suite (PR #72 F6).
+    ///
+    /// Line 3 is the F3 case: partial injection, which the first version of this list let through.
+    @Test
+    func theScanMatchesConstructionsAndIgnoresProse() {
+        let fixture = """
+        // PermissionReadinessService() in a line comment is prose, not a construction.
+        /// So is SystemMicrophonePermissionChecker() in a doc comment.
+        let partiallyInjected = PermissionReadinessService(screenPermissionChecker: DeterministicScreenPermissions())
+        let live = PermissionReadinessService()
+        let checker = SystemScreenCapturePermissionChecker()  // a trailing comment must not hide this
+        let safe = PermissionReadinessService.deterministic(microphoneStatus: .denied)
+        """
+
+        #expect(Self.offenders(inSource: fixture, label: "F") == [
+            "F:3 — PermissionReadinessService(",
+            "F:4 — PermissionReadinessService(",
+            "F:5 — SystemScreenCapturePermissionChecker("
+        ])
+    }
 
     @Test
     func noTestSourceConstructsALivePermissionChecker() throws {
         let testsDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let thisFileName = URL(fileURLWithPath: #filePath).lastPathComponent
         var scannedFileCount = 0
         var offenders: [String] = []
 
@@ -40,29 +111,27 @@ struct LivePermissionCheckerScanTests {
             let files = try FileManager.default
                 .contentsOfDirectory(at: directory, includingPropertiesForKeys: nil)
                 .filter { $0.pathExtension == "swift" }
-            // Guards against a silently empty scan: a wrong path would otherwise pass by finding
-            // nothing, which is the failure mode a source-scan test is most likely to have.
-            #expect(files.count > 20, "\(target) should hold far more than 20 test files")
+            let names = Set(files.map(\.lastPathComponent))
+            // Guards against a silently empty scan, which is a source scan's classic failure. Named
+            // files rather than a count near the real one: the previous `> 20` floor sat three files
+            // above this target's actual 23 and would have tripped on an ordinary consolidation
+            // (PR #72 F3).
+            #expect(names.contains("DeterministicPermissions.swift"), "\(target) is not the directory this expects")
+            #expect(names.contains("UnprivilegedProcess.swift"), "\(target) is not the directory this expects")
 
-            for file in files where file.lastPathComponent != URL(fileURLWithPath: #filePath).lastPathComponent {
+            for file in files where file.lastPathComponent != thisFileName {
+                let isExemptConstructionSite = target == Self.constructionSite.target
+                    && file.lastPathComponent == Self.constructionSite.fileName
+                guard !isExemptConstructionSite else { continue }
                 scannedFileCount += 1
-                let source = try String(contentsOf: file, encoding: .utf8)
-                for (index, line) in source.split(separator: "\n", omittingEmptySubsequences: false).enumerated() {
-                    // Comments name these types constantly — this file included, and every doc
-                    // comment explaining why the seam exists. A scan that counted prose would be
-                    // unusable, and the narrower `grep -v "//"` this repo was bitten by once drops
-                    // any line *containing* a comment, which would hide a real construction that
-                    // carries a trailing note.
-                    let trimmed = line.trimmingCharacters(in: .whitespaces)
-                    guard !trimmed.hasPrefix("//") else { continue }
-                    for token in Self.forbidden where line.contains(token) {
-                        offenders.append("\(target)/\(file.lastPathComponent):\(index + 1) — \(token)")
-                    }
-                }
+                offenders += Self.offenders(
+                    inSource: try String(contentsOf: file, encoding: .utf8),
+                    label: "\(target)/\(file.lastPathComponent)"
+                )
             }
         }
 
-        #expect(scannedFileCount > 50)
+        #expect(scannedFileCount > 40)
         #expect(
             offenders.isEmpty,
             """
@@ -74,20 +143,35 @@ struct LivePermissionCheckerScanTests {
         )
     }
 
-    /// **What the scan cannot do, stated so it is not mistaken for a boundary.** It is textual. A
-    /// typealias, a stored metatype, or a construction split across two lines all evade it, and
-    /// nothing here stops production code from defaulting to the live checkers — which is exactly
-    /// what production should do. It raises the cost of the accident it is aimed at (a fixture
-    /// written without the seam in mind) and does not pretend to be a barrier against intent.
+    /// The exemption is a hole by construction, so it is bounded rather than trusted: the one file
+    /// allowed to call the initializer may do so exactly once, inside `deterministic`.
+    @Test
+    func theExemptFileConstructsExactlyOneReadinessServiceAndOnlyInsideTheHelper() throws {
+        let source = try String(
+            contentsOf: URL(fileURLWithPath: #filePath)
+                .deletingLastPathComponent()
+                .appendingPathComponent(Self.constructionSite.fileName),
+            encoding: .utf8
+        )
+        let constructions = Self.offenders(inSource: source, label: "exempt")
+        #expect(constructions.count == 1, "the exempt file constructs \(constructions.count) readiness services: \(constructions)")
+        let helperStart = try #require(source.range(of: "static func deterministic("))
+        let construction = try #require(source.range(of: "PermissionReadinessService("))
+        #expect(construction.lowerBound > helperStart.lowerBound)
+        // Both checkers named, so the exempt construction cannot itself be partial.
+        #expect(source.contains("screenPermissionChecker: DeterministicScreenPermissions("))
+        #expect(source.contains("microphonePermissionChecker: DeterministicMicrophonePermission("))
+    }
+
+    /// Pins the scan's own premise: the tokens it looks for are the ones that actually name the live
+    /// implementations, so a rename in `Sources/` that left this list behind fails here rather than
+    /// turning the scan into a no-op that still reports green.
     ///
-    /// This second test pins the scan's own premise: the tokens it looks for are the ones that
-    /// actually name the live implementations, so a rename in `Sources/` that left this list behind
-    /// fails here rather than turning the scan into a no-op that still reports green.
+    /// This replaced two `#expect(SystemScreenCapturePermissionChecker() is any ScreenCapturePermissionChecking)`
+    /// assertions, which were true by declaration and were the branch's only new compiler warnings —
+    /// `warning: 'is' test is always true`, twice (PR #72 F6).
     @Test
     func theForbiddenTokensStillNameTheLiveImplementations() throws {
-        #expect(SystemScreenCapturePermissionChecker() is any ScreenCapturePermissionChecking)
-        #expect(SystemMicrophonePermissionChecker() is any MicrophonePermissionChecking)
-
         let coreDirectory = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
             .deletingLastPathComponent()
@@ -106,5 +190,14 @@ struct LivePermissionCheckerScanTests {
         // Both are still the defaults, which is the whole reason a fixture can reach one by omission.
         #expect(readiness.contains("= SystemScreenCapturePermissionChecker()"))
         #expect(readiness.contains("= SystemMicrophonePermissionChecker()"))
+        // And every token in the list still names something real, so the list cannot rot into one
+        // that matches nothing.
+        for token in Self.forbidden {
+            let name = String(token.dropLast())
+            #expect(
+                readiness.contains(name) || capture.contains(name),
+                "\(name) is in the forbidden list but names nothing in Sources/MacAgentCore"
+            )
+        }
     }
 }
