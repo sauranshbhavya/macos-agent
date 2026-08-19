@@ -163,6 +163,53 @@ struct LivePermissionCheckerScanTests {
         #expect(source.contains("microphonePermissionChecker: DeterministicMicrophonePermission("))
     }
 
+    /// **The omission form, closed where it is affordable to close it.** A construction that leaves a
+    /// defaulted seam out names nothing forbidden, so the token scan is blind to it — that is how F1
+    /// shipped. Requiring the parameter at all 37 executor constructions in the suite would be
+    /// disproportionate, since most never touch a readiness path. This is the narrow version that
+    /// catches the real shape: a file that both builds an `AgentActionExecutor` and names
+    /// `.showPermissionReadiness` is one plan away from a live read, and there are exactly three of
+    /// them. Reverting F1's one-line fix fails here; nothing else in the suite notices it.
+    @Test
+    func everyExecutorFixtureThatCanDriveReadinessInjectsTheSeam() throws {
+        let testsDirectory = URL(fileURLWithPath: #filePath).deletingLastPathComponent().deletingLastPathComponent()
+        let thisFileName = URL(fileURLWithPath: #filePath).lastPathComponent
+        var checked: [String] = []
+        var missing: [String] = []
+
+        for target in ["MacAgentCoreTests", "MacAgentTests"] {
+            let files = try FileManager.default
+                .contentsOfDirectory(
+                    at: testsDirectory.appendingPathComponent(target),
+                    includingPropertiesForKeys: nil
+                )
+                .filter { $0.pathExtension == "swift" && $0.lastPathComponent != thisFileName }
+            for file in files {
+                let code = try String(contentsOf: file, encoding: .utf8)
+                    .split(separator: "\n", omittingEmptySubsequences: false)
+                    .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+                    .joined(separator: "\n")
+                guard code.contains("AgentActionExecutor("), code.contains("showPermissionReadiness") else { continue }
+                checked.append("\(target)/\(file.lastPathComponent)")
+                if !code.contains("permissionReadinessService") {
+                    missing.append("\(target)/\(file.lastPathComponent)")
+                }
+            }
+        }
+
+        // A rule that matched nothing would pass forever; these three are the population today.
+        #expect(checked.count == 3, "expected three readiness-capable executor fixtures, found \(checked)")
+        #expect(
+            missing.isEmpty,
+            """
+            \(missing.joined(separator: ", ")) builds an AgentActionExecutor and names \
+            .showPermissionReadiness, but injects no readiness service — so a plan run through that \
+            fixture reaches the production default and makes live TCC and AVFoundation reads. Pass \
+            permissionReadinessService: .deterministic().
+            """
+        )
+    }
+
     /// Pins the scan's own premise: the tokens it looks for are the ones that actually name the live
     /// implementations, so a rename in `Sources/` that left this list behind fails here rather than
     /// turning the scan into a no-op that still reports green.

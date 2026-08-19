@@ -103,6 +103,9 @@ struct SolitaryWriteMarkdownTests {
             whitelist: PathWhitelist(roots: [root]),
             browserOpener: browserOpener,
             hackerNewsFetcher: fetcher,
+            // This file names `.showPermissionReadiness` in its classification list, so a test here
+            // is one plan away from driving readiness through a live service (SONNY-123 PR #72 F1).
+            permissionReadinessService: .deterministic(),
             routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
             workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json")),
             clipboardHistoryStore: ClipboardHistoryStore(fileURL: root.appendingPathComponent("clipboard.json")),
