@@ -289,9 +289,11 @@ public struct VisionSessionContainment: Sendable {
     /// Accessibility grant, then attention, then target eligibility, then frontmost. A user who
     /// pressed stop should not have to wait on a frontmost query to find out that they stopped it.
     ///
-    /// The two middle checks earn their places for their own reasons, each recorded where it sits
-    /// rather than restated here. This sentence used to list four of the six and read as the whole
-    /// order (SONNY-123 finding 4); it is a summary of every guard below, and stays one.
+    /// The two middle checks earn their places for their own reasons, recorded once each rather than
+    /// restated here: the revocation guard's is inline at the guard, and the iteration cap's is on
+    /// `VisionSessionLimits.maximumIterations`, not at its call site. This sentence used to list four
+    /// of the six and read as the whole order (SONNY-123 finding 4); it is a summary of every guard
+    /// below, and stays one.
     public func checkIterationStart(
         iteration: Int,
         isCancelled: Bool,
