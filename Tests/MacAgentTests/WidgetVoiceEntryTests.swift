@@ -215,8 +215,19 @@ struct WidgetVoiceEntryTests {
     }
 
     /// The class guard, half two. `.disabled` is not the only way to make a press impossible — a
-    /// view that branches on the composite readiness can hide the control outright and reproduce
-    /// the same silence. So the composite stays where it is computed and no view reads it at all.
+    /// view that branches on voice readiness can hide the control outright and reproduce the same
+    /// silence. So the readiness internals stay where they are computed and no view reads them.
+    ///
+    /// **Two terms, not one, and the second was a hole this guard used to leave open.** Scanning
+    /// only for `canUseVoice` let `if viewModel.voiceConfigurationBlocker == nil { micButton }`
+    /// through — a view that hides the mic exactly when the user has something to fix, which is
+    /// SONNY-173's silence rebuilt out of the actionable half alone, and it touches neither
+    /// `.disabled(` nor the composite. It is also the obvious wrong fix someone reaches for.
+    /// Filed as residual (a) by PR #73's cycle-1 review and left recorded through cycle 2; closed
+    /// here, and the mutant expressing that view is in the branch's battery precisely because it
+    /// *survived* this guard before the second term was added.
+    ///
+    /// Views take `isVoiceControlDisabled`, which is the transient half and nothing else.
     @Test
     func theCompositeVoiceReadinessIsReadInOneFileOnly() throws {
         var readingFiles: Set<String> = []
@@ -225,7 +236,7 @@ struct WidgetVoiceEntryTests {
 
         for file in files {
             let source = try String(contentsOf: file, encoding: .utf8)
-            if source.contains("canUseVoice") {
+            if source.contains("canUseVoice") || source.contains("voiceConfigurationBlocker") {
                 readingFiles.insert(file.lastPathComponent)
             }
         }
@@ -233,9 +244,10 @@ struct WidgetVoiceEntryTests {
         #expect(
             readingFiles == ["AgentViewModel.swift"],
             """
-            `canUseVoice` is the composite — actionable and transient folded together — and a view \
-            that reads it can refuse a press for a reason it never shows. Views take \
-            `isVoiceControlDisabled`; the composite stays internal. Found in: \
+            A view may read neither `canUseVoice` — the composite, actionable and transient folded \
+            together — nor `voiceConfigurationBlocker`, the actionable half on its own. Branching \
+            on either lets a view refuse or hide a press for a reason it never shows. Views take \
+            `isVoiceControlDisabled`; both of these stay internal. Found in: \
             \(readingFiles.sorted())
             """
         )
