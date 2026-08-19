@@ -192,22 +192,6 @@ struct VisionSessionRunTests {
         @MainActor func press() { onStop() }
     }
 
-    /// Grants that a test can take away mid-session.
-    private final class RevocablePermissions: ScreenCapturePermissionChecking, @unchecked Sendable {
-        var accessibilityTrusted = true
-        func hasScreenRecordingPermission() -> Bool { true }
-        func requestScreenRecordingPermission() -> Bool { true }
-        func isAccessibilityTrusted() -> Bool { accessibilityTrusted }
-        func requestAccessibilityTrust() -> Bool { accessibilityTrusted }
-    }
-
-    private struct GrantedPermissions: ScreenCapturePermissionChecking {
-        func hasScreenRecordingPermission() -> Bool { true }
-        func requestScreenRecordingPermission() -> Bool { true }
-        func isAccessibilityTrusted() -> Bool { true }
-        func requestAccessibilityTrust() -> Bool { true }
-    }
-
     /// Finds no text, which is what a window with no secrets in it looks like.
     private struct EmptyRecognizer: ImageTextRecognizing {
         func recognizeText(inPNGData: Data, pixelWidth: Int, pixelHeight: Int) async throws -> [RecognizedTextObservation] {
@@ -361,7 +345,7 @@ struct VisionSessionRunTests {
         let journal = VisionSessionJournalStore(fileURL: root.appendingPathComponent("vision-sessions.json"))
         viewModel.visionSessionEnvironment = VisionSessionEnvironment(
             captureService: ScreenCaptureService(
-                permissionChecker: permissions ?? GrantedPermissions(),
+                permissionChecker: permissions ?? DeterministicScreenPermissions(),
                 backend: FakeCaptureBackend(bundleIdentifier: bundleIdentifier)
             ),
             redactionService: LocalRedactionService(
@@ -372,7 +356,7 @@ struct VisionSessionRunTests {
             modelClient: model,
             limits: limits,
             attentionMonitor: attention ?? AlwaysAttendedMonitor(),
-            permissionChecker: permissions ?? GrantedPermissions(),
+            permissionChecker: permissions ?? DeterministicScreenPermissions(),
             journalStore: journal,
             interaction: viewModel
         )
@@ -1129,7 +1113,9 @@ struct VisionSessionRunTests {
     /// the Permission Center.
     @Test
     func revokingAccessibilityMidSessionStopsItAndRoutesToThePermissionCenter() async throws {
-        let permissions = RevocablePermissions()
+        // Grants this test takes away mid-session: the shared stub's flags are `var`s for exactly
+        // this, and `accessibilityTrusted` starts true by default.
+        let permissions = DeterministicScreenPermissions()
         let fixture = try makeFixture(
             replies: Array(repeating: #"{"action":"click","x":10,"y":10,"target":"A","consequence":"ordinary","rationale":"r"}"#, count: 4),
             permissions: permissions

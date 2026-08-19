@@ -1,6 +1,31 @@
 import AVFoundation
 import Foundation
 
+// MARK: - Permission seam
+
+/// Live TCC state for the microphone (SONNY-123).
+///
+/// **Separate from `ScreenCapturePermissionChecking` rather than folded into it.** That protocol
+/// vends preflight booleans because macOS exposes no "not determined vs. denied" distinction for
+/// Screen Recording or Accessibility. The microphone does expose one, and the readiness row has
+/// three distinct states because of it, so the seam vends `AVAuthorizationStatus` itself rather
+/// than re-encoding four cases into a boolean that would lose the two the UI depends on.
+///
+/// The platform type is deliberate too: a domain enum here would be a one-to-one re-spelling of
+/// `AVAuthorizationStatus` whose only effect is that `@unknown default` stops meaning what it
+/// means.
+public protocol MicrophonePermissionChecking: Sendable {
+    func microphoneAuthorizationStatus() -> AVAuthorizationStatus
+}
+
+public struct SystemMicrophonePermissionChecker: MicrophonePermissionChecking {
+    public init() {}
+
+    public func microphoneAuthorizationStatus() -> AVAuthorizationStatus {
+        AVCaptureDevice.authorizationStatus(for: .audio)
+    }
+}
+
 public enum PermissionReadinessState: String, Codable, Equatable, Sendable {
     case ready
     case needsAction
@@ -34,11 +59,14 @@ public struct PermissionReadinessItem: Identifiable, Codable, Equatable, Sendabl
 
 public struct PermissionReadinessService: Sendable {
     private let screenPermissionChecker: any ScreenCapturePermissionChecking
+    private let microphonePermissionChecker: any MicrophonePermissionChecking
 
     public init(
-        screenPermissionChecker: any ScreenCapturePermissionChecking = SystemScreenCapturePermissionChecker()
+        screenPermissionChecker: any ScreenCapturePermissionChecking = SystemScreenCapturePermissionChecker(),
+        microphonePermissionChecker: any MicrophonePermissionChecking = SystemMicrophonePermissionChecker()
     ) {
         self.screenPermissionChecker = screenPermissionChecker
+        self.microphonePermissionChecker = microphonePermissionChecker
     }
 
     public func currentStatus(hasAPIKey: Bool, hotKeyReady: Bool) -> [PermissionReadinessItem] {
@@ -104,7 +132,7 @@ public struct PermissionReadinessService: Sendable {
     }
 
     private func microphoneStatus() -> PermissionReadinessItem {
-        switch AVCaptureDevice.authorizationStatus(for: .audio) {
+        switch microphonePermissionChecker.microphoneAuthorizationStatus() {
         case .authorized:
             return PermissionReadinessItem(
                 id: "microphone",
