@@ -357,10 +357,22 @@ final class AgentViewModel: ObservableObject {
     /// readable anywhere outside the in-flight composer — the rejected persistent-active-workspace
     /// design is exactly what this must not become.
     @Published var pendingWorkspaceBinding: String?
-    /// Which surface's mic button started the in-progress recording — `toggleVoiceRecording()` is
+    /// Which surface's mic button started the in-progress recording, set explicitly by the caller
+    /// rather than inferred. Read back when voice transcription auto-submits, so that submission is
+    /// attributed correctly.
+    ///
+    /// **There is one mic button, the widget's.** This used to say `toggleVoiceRecording()` "is
     /// called identically from both Command Center's composer and the floating widget's own mic
-    /// button, so this is set explicitly by the caller rather than inferred. Read back when voice
-    /// transcription auto-submits, so that submission is attributed correctly.
+    /// button"; that composer was deleted on 2026-07-21 and the sentence outlived it. Corrected by
+    /// PR #73's review (F3), which caught it precisely because SONNY-173 had corrected the *same*
+    /// claim at the method's own doc comment 1200 lines below and left this copy standing — a
+    /// compiler probe enumerates call sites, and no probe reads prose. A repo-wide sweep at that
+    /// point found no third copy: every other mention of that composer already says it is gone.
+    ///
+    /// The `.commandCenter` initial value is never observed — `startVoiceRecording` assigns this
+    /// before the single read in `stopVoiceRecordingAndTranscribe`'s completion — and is kept only
+    /// to match `toggleVoiceRecording(origin:)`'s own default, which is documented there as the
+    /// direction that consumes no pending workspace-card binding.
     private var voiceRecordingOrigin: TaskOrigin = .commandCenter
     /// The last command text actually submitted for real execution — tracked on the shared view
     /// model (not as widget-local UI state) so both the widget's own retry button and a system

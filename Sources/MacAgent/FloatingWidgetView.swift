@@ -467,23 +467,59 @@ struct FloatingWidgetView: View {
     /// inside the pill — squeezes the text field, which is worse. Proposed on session judgment with
     /// no wireframe to defer to; SONNY-109 settles it.
     ///
-    /// **Off is the untinted variant, not a neutral tint (SONNY-174).** The two arms of the ternary
-    /// below read as two colours; they are two different code paths. A non-nil `tint` goes through
-    /// `WidgetTintedButtonBackground`'s `Color.white.opacity(0.94)` underlay with the tint applied
-    /// `.plusDarker` over it — which is what turns a solid accent into a solid button, and what
-    /// turned `neutralButtonFill`'s `rgba(153,153,153,.17)` into a near-opaque **#E2E2E2**: a white
-    /// glyph on it sits at **1.26–1.30:1**, which is invisible, and reads exactly as the founder
-    /// described it, "too light for anyone to figure it out". The fill was never too transparent —
-    /// it was too *light*, and the token was not at fault. `neutralButtonFill` is the **untinted**
-    /// variant's own fill (design-system reference §3.1, "Neutral/untinted button variant:
-    /// `rgba(153,153,153,.17)`"), so `tint: nil` introduces no new token and no new value: it is
-    /// that token used where it was designed to be used, the same path the permission panel's Deny
-    /// button has always taken. Off then renders **#2B2B2B–#626262** across the panel's backdrop
-    /// range with a white glyph at **6.1–14.2:1**, its 0.5pt `#A6A6A6` rim at 1.8–3.1:1 against its
-    /// own fill to draw the silhouette. On is untouched, and the two states now differ in fill,
-    /// shadow weight (§3.1's lighter neutral shadow) and glyph, not in one washed-out step.
-    /// Composited arithmetic, not judgement by eye — an eye is still the only thing that can say it
-    /// reads right, which is what the founder's manual pass is for.
+    /// **This button has no backdrop of its own, and that is the fact everything else here follows
+    /// from (SONNY-174).** The composer row is `HStack { composerPill; dontSaveButton; micButton }`
+    /// and only `composerPill` carries `.widgetGlassPill()`; the enclosing stack has no background
+    /// and `FloatingWidgetWindowController` makes the panel fully transparent. So these two
+    /// circular buttons composite onto **whatever window the user happens to have behind the
+    /// widget** — never onto the widget's dark glass. Every other untinted-variant button in the
+    /// app lives inside a `Widget*Panel`, which does sit on glass. **A fill whose opacity is less
+    /// than 1 therefore buys its contrast from the user's desktop**, and out here there is no
+    /// desktop to buy it from.
+    ///
+    /// That is what makes both of the first two treatments wrong, for the same reason twice over:
+    /// - **Shipped originally:** `neutralButtonFill` passed as a *tint*. A non-nil tint takes
+    ///   `WidgetTintedButtonBackground`'s other branch — a `Color.white.opacity(0.94)` underlay
+    ///   with the tint composited `.plusDarker` over it — so `rgba(153,153,153,.17)` came out as
+    ///   **#EDEDED at 95% alpha**, a near-opaque pale disc carrying a white glyph at
+    ///   **1.16–1.31:1**. The founder's report, "too light for anyone to figure it out."
+    /// - **The first attempt at fixing it,** `tint: nil`, took the fill from 95% opaque down to
+    ///   **17%** — the opposite of presence. It read as darker only because the thing showing
+    ///   through happened to be dark. Over a white window the two branches are not merely close,
+    ///   they are **identical**: with a white destination `plusDarker` reduces to the source, so
+    ///   both collapse to `0.932000` and a **1.16:1** glyph. On a white window that change was a
+    ///   no-op on screen. (PR #73 review, F1.)
+    ///
+    /// **So the fill is opaque, which is the ticket's own first lever — give the fill real
+    /// presence — done where it actually had to be done.** An opaque tint resolves through that
+    /// branch to exactly itself at alpha 1 (`αs = 1` ⇒ the composite is the source), which is why
+    /// `micButton` beside it and this button's own on state are already backdrop-proof. `panelBase`
+    /// is the widget's own material colour and the **only opaque, non-accent token System B has**;
+    /// every other opaque token means something (Allow, error, retry, or the mic sitting 12pt
+    /// away). No new token, and none is warranted: the one candidate worth adding, §3.1's neutral
+    /// fill pre-composited over `panelBase` (#303030), measures *worse* on every axis — glyph
+    /// 13.20:1 against this one's 17.40:1, rim 2.94:1 against 3.41:1, and less separation from the
+    /// on state.
+    ///
+    /// **Measured over the backdrop swept 0.0 to 1.0, the screen and not a panel**, all three
+    /// constant because the fill is opaque: white glyph **17.40:1**, hairline rim **3.41:1**
+    /// against its own fill, and **5.38:1** between off and the untouched on state — the widest
+    /// separation any candidate gave. The glyph beats the mic's own 2.23:1 by a wide margin. The
+    /// fill matches *some* backdrop at every opacity (worst case 1.01:1 here, 1.00:1 for both the
+    /// mic and the on state), which is why the rim, the top highlight and the shadow draw the
+    /// silhouette rather than the fill — and all three are backdrop-independent too.
+    ///
+    /// **The shadow rides along with the branch, and that is right here rather than merely
+    /// tolerable.** A non-nil tint carries the heavier `black 0.45 / r12 / y6`; §3.1 pairs its
+    /// lighter `0.04 / r8 / y4` with the neutral variant, which is a button *on a panel* that
+    /// already provides separation. This one has nothing under it, so the heavier shadow is what
+    /// separates it from a bright desktop — and it now matches the mic beside it and its own on
+    /// state, so the row carries one shadow instead of two.
+    ///
+    /// On and off are now solid `#0091FF` against solid `#1A1A1A`, plus `eye.slash.fill` against
+    /// `eye.slash`. **Every figure above is composited arithmetic, not eyesight** — Porter-Duff
+    /// source-over with `kCGBlendModePlusDarker`, WCAG luminance from linearised sRGB. Whether
+    /// either state actually reads right is the founder's manual pass, and nothing here replaces it.
     @ViewBuilder
     private var dontSaveButton: some View {
         if !isTaskInFlight {
@@ -497,7 +533,7 @@ struct FloatingWidgetView: View {
             }
             .buttonStyle(.plain)
             .frame(width: 36, height: 36)
-            .widgetCircularBackground(tint: isOn ? WidgetTheme.primaryAction : nil)
+            .widgetCircularBackground(tint: isOn ? WidgetTheme.primaryAction : WidgetTheme.panelBase)
             .accessibilityLabel(TaskRecordingPresentation.controlLabel)
             .accessibilityValue(TaskRecordingPresentation.controlAccessibilityValue(isOn: isOn))
             .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
