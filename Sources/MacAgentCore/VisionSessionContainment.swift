@@ -285,9 +285,13 @@ public struct VisionSessionContainment: Sendable {
     /// The checks that run before an iteration does anything at all — before a capture, before a
     /// byte leaves, before a pixel moves.
     ///
-    /// Ordered cheapest-and-most-certain first. Cancellation before attention before eligibility
-    /// before frontmost: a user who pressed stop should not have to wait on a frontmost query to
-    /// find out that they stopped it.
+    /// Ordered cheapest-and-most-certain first: cancellation, then the iteration cap, then the
+    /// Accessibility grant, then attention, then target eligibility, then frontmost. A user who
+    /// pressed stop should not have to wait on a frontmost query to find out that they stopped it.
+    ///
+    /// The two middle checks earn their places for their own reasons, each recorded where it sits
+    /// rather than restated here. This sentence used to list four of the six and read as the whole
+    /// order (SONNY-123 finding 4); it is a summary of every guard below, and stays one.
     public func checkIterationStart(
         iteration: Int,
         isCancelled: Bool,
