@@ -193,7 +193,7 @@ struct LocalStorageSecurityTests {
     /// succeeded and the write is atomic, so the original file is intact and the data is usable.
     /// Letting that write error escape `loadAll()` made callers blank the data and show the
     /// "could not be decrypted or decoded" banner for data that decoded perfectly.
-    @Test
+    @Test(.requiresUnprivilegedProcess)
     func failedLegacyMigrationRewriteStillReturnsTheDecodedData() throws {
         let root = try makeDirectory()
         defer {
@@ -302,7 +302,7 @@ struct LocalStorageSecurityTests {
         #expect(secondResult == LocalDataDeletionResult(deletedFileCount: 0, missingFileCount: 8))
     }
 
-    @Test
+    @Test(.requiresUnprivilegedProcess)
     func localDataDeletionAttemptsEveryFileEvenWhenOneFails() throws {
         let root = try makeDirectory()
         defer {

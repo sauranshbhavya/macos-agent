@@ -3,34 +3,6 @@ import Foundation
 import Testing
 @testable import MacAgentCore
 
-private final class FakeScreenCapturePermissionChecker: ScreenCapturePermissionChecking, @unchecked Sendable {
-    var screenRecordingGranted: Bool
-    var accessibilityTrusted: Bool
-    private(set) var screenRecordingRequestCount = 0
-    private(set) var accessibilityRequestCount = 0
-
-    init(screenRecordingGranted: Bool, accessibilityTrusted: Bool) {
-        self.screenRecordingGranted = screenRecordingGranted
-        self.accessibilityTrusted = accessibilityTrusted
-    }
-
-    func hasScreenRecordingPermission() -> Bool { screenRecordingGranted }
-
-    @discardableResult
-    func requestScreenRecordingPermission() -> Bool {
-        screenRecordingRequestCount += 1
-        return screenRecordingGranted
-    }
-
-    func isAccessibilityTrusted() -> Bool { accessibilityTrusted }
-
-    @discardableResult
-    func requestAccessibilityTrust() -> Bool {
-        accessibilityRequestCount += 1
-        return accessibilityTrusted
-    }
-}
-
 private final class FakeScreenCaptureBackend: ScreenCaptureBackend, @unchecked Sendable {
     var windows: [ScreenCaptureWindowInfo]
     var frontToBackIDs: [UInt32]
@@ -94,7 +66,7 @@ struct ScreenCaptureServiceTests {
             imageByWindowID: [10: image(7, width: 800, height: 600)]
         )
         let service = ScreenCaptureService(
-            permissionChecker: FakeScreenCapturePermissionChecker(screenRecordingGranted: true, accessibilityTrusted: false),
+            permissionChecker: DeterministicScreenPermissions(accessibilityTrusted: false, screenRecordingGranted: true),
             backend: backend
         )
 
@@ -115,7 +87,7 @@ struct ScreenCaptureServiceTests {
             imageByWindowID: [10: image(1)]
         )
         let service = ScreenCaptureService(
-            permissionChecker: FakeScreenCapturePermissionChecker(screenRecordingGranted: false, accessibilityTrusted: true),
+            permissionChecker: DeterministicScreenPermissions(accessibilityTrusted: true, screenRecordingGranted: false),
             backend: backend
         )
 
@@ -133,7 +105,7 @@ struct ScreenCaptureServiceTests {
             frontToBackIDs: [10]
         )
         let service = ScreenCaptureService(
-            permissionChecker: FakeScreenCapturePermissionChecker(screenRecordingGranted: true, accessibilityTrusted: true),
+            permissionChecker: DeterministicScreenPermissions(accessibilityTrusted: true, screenRecordingGranted: true),
             backend: backend
         )
 
@@ -156,7 +128,7 @@ struct ScreenCaptureServiceTests {
             imageByWindowID: [10: image(1), 11: image(2, width: 420, height: 260)]
         )
         let service = ScreenCaptureService(
-            permissionChecker: FakeScreenCapturePermissionChecker(screenRecordingGranted: true, accessibilityTrusted: true),
+            permissionChecker: DeterministicScreenPermissions(accessibilityTrusted: true, screenRecordingGranted: true),
             backend: backend
         )
 
@@ -179,7 +151,7 @@ struct ScreenCaptureServiceTests {
             imageByWindowID: [10: image(1), 20: image(9)]
         )
         let service = ScreenCaptureService(
-            permissionChecker: FakeScreenCapturePermissionChecker(screenRecordingGranted: true, accessibilityTrusted: true),
+            permissionChecker: DeterministicScreenPermissions(accessibilityTrusted: true, screenRecordingGranted: true),
             backend: backend
         )
 
@@ -201,7 +173,7 @@ struct ScreenCaptureServiceTests {
             imageByWindowID: [10: image(1), 12: image(9)]
         )
         let service = ScreenCaptureService(
-            permissionChecker: FakeScreenCapturePermissionChecker(screenRecordingGranted: true, accessibilityTrusted: true),
+            permissionChecker: DeterministicScreenPermissions(accessibilityTrusted: true, screenRecordingGranted: true),
             backend: backend
         )
 
@@ -216,7 +188,7 @@ struct ScreenCaptureServiceTests {
         let tooltip = window(id: 12, bundleID: "com.example.notes", width: 60, height: 24)
         let backend = FakeScreenCaptureBackend(windows: [tooltip], frontToBackIDs: [12])
         let service = ScreenCaptureService(
-            permissionChecker: FakeScreenCapturePermissionChecker(screenRecordingGranted: true, accessibilityTrusted: true),
+            permissionChecker: DeterministicScreenPermissions(accessibilityTrusted: true, screenRecordingGranted: true),
             backend: backend
         )
 
@@ -235,7 +207,7 @@ struct ScreenCaptureServiceTests {
             imageByWindowID: [10: image(1), 11: image(2)]
         )
         let service = ScreenCaptureService(
-            permissionChecker: FakeScreenCapturePermissionChecker(screenRecordingGranted: true, accessibilityTrusted: true),
+            permissionChecker: DeterministicScreenPermissions(accessibilityTrusted: true, screenRecordingGranted: true),
             backend: backend
         )
 
@@ -257,7 +229,7 @@ struct ScreenCaptureServiceTests {
             imageByWindowID: [10: image(1), 11: image(2)]
         )
         let service = ScreenCaptureService(
-            permissionChecker: FakeScreenCapturePermissionChecker(screenRecordingGranted: true, accessibilityTrusted: true),
+            permissionChecker: DeterministicScreenPermissions(accessibilityTrusted: true, screenRecordingGranted: true),
             backend: backend
         )
 
@@ -270,7 +242,7 @@ struct ScreenCaptureServiceTests {
     @Test
     func preflightHelpersThrowTheInstructiveErrorsWhenUngranted() throws {
         let service = ScreenCaptureService(
-            permissionChecker: FakeScreenCapturePermissionChecker(screenRecordingGranted: false, accessibilityTrusted: false),
+            permissionChecker: DeterministicScreenPermissions(accessibilityTrusted: false, screenRecordingGranted: false),
             backend: FakeScreenCaptureBackend(windows: [], frontToBackIDs: [])
         )
 
@@ -285,7 +257,7 @@ struct ScreenCaptureServiceTests {
     @Test
     func preflightHelpersPassWhenGranted() throws {
         let service = ScreenCaptureService(
-            permissionChecker: FakeScreenCapturePermissionChecker(screenRecordingGranted: true, accessibilityTrusted: true),
+            permissionChecker: DeterministicScreenPermissions(accessibilityTrusted: true, screenRecordingGranted: true),
             backend: FakeScreenCaptureBackend(windows: [], frontToBackIDs: [])
         )
 
@@ -311,11 +283,11 @@ struct ScreenCaptureServiceTests {
 
 struct PermissionReadinessScreenRowsTests {
     private func rows(screenRecording: Bool, accessibility: Bool) -> [PermissionReadinessItem] {
-        let service = PermissionReadinessService(
-            screenPermissionChecker: FakeScreenCapturePermissionChecker(
-                screenRecordingGranted: screenRecording,
-                accessibilityTrusted: accessibility
-            )
+        // `.deterministic` rather than a bare init: it also states the microphone status, which
+        // `currentStatus` reads and this file has no opinion about (SONNY-123).
+        let service = PermissionReadinessService.deterministic(
+            accessibilityTrusted: accessibility,
+            screenRecordingGranted: screenRecording
         )
         return service.currentStatus(hasAPIKey: true, hotKeyReady: true)
     }

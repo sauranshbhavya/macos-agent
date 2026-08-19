@@ -3139,11 +3139,13 @@ struct AgentActionExecutorTests {
     /// A future test that wants a specific grant state says so at its call site, the way this one
     /// does.
     ///
-    /// **What this does not close, stated so it is not mistaken for done.** `microphoneStatus()`
-    /// calls `AVCaptureDevice.authorizationStatus(for: .audio)` directly, with no seam to inject, so
-    /// the suite still makes that one live authorization read. Closing it needs a production change
-    /// to `PermissionReadinessService`, which SONNY-123 records and which this test-only work was
-    /// not scoped to make.
+    /// **The microphone half is closed now, and elsewhere.** It used to be the open half of this:
+    /// `microphoneStatus()` called `AVCaptureDevice.authorizationStatus(for: .audio)` directly, with
+    /// no seam to inject. SONNY-123 added `MicrophonePermissionChecking`, so `.deterministic()`
+    /// states that status too and this executor makes no live authorization read of any kind.
+    /// `PermissionReadinessMicrophoneTests` is that seam's own pin — and, unlike this test, it
+    /// genuinely detects the seam being ignored, because four authorization cases cannot all be
+    /// answered by one live status.
     @Test
     func permissionReadinessAnswersFromTheInjectedCheckerRatherThanThisMac() throws {
         let root = try makeDirectory()

@@ -3,43 +3,6 @@ import Testing
 import MacAgentCore
 @testable import MacAgent
 
-private final class FakePermissionChecker: ScreenCapturePermissionChecking, @unchecked Sendable {
-    var screenRecordingGranted: Bool
-    var accessibilityTrusted: Bool
-    /// When true, a request call flips the corresponding grant — Accessibility behaves this way
-    /// live (the grant takes effect immediately); Screen Recording never does (relaunch-gated).
-    var grantsOnRequest: Bool
-    private(set) var screenRecordingRequestCount = 0
-    private(set) var accessibilityRequestCount = 0
-
-    init(screenRecordingGranted: Bool, accessibilityTrusted: Bool, grantsOnRequest: Bool = false) {
-        self.screenRecordingGranted = screenRecordingGranted
-        self.accessibilityTrusted = accessibilityTrusted
-        self.grantsOnRequest = grantsOnRequest
-    }
-
-    func hasScreenRecordingPermission() -> Bool { screenRecordingGranted }
-
-    @discardableResult
-    func requestScreenRecordingPermission() -> Bool {
-        screenRecordingRequestCount += 1
-        // Deliberately never flips `screenRecordingGranted`, matching the live behavior the
-        // whole relaunch-guidance step exists for.
-        return screenRecordingGranted
-    }
-
-    func isAccessibilityTrusted() -> Bool { accessibilityTrusted }
-
-    @discardableResult
-    func requestAccessibilityTrust() -> Bool {
-        accessibilityRequestCount += 1
-        if grantsOnRequest {
-            accessibilityTrusted = true
-        }
-        return accessibilityTrusted
-    }
-}
-
 private final class FakeRelauncher: AppRelaunching {
     private(set) var relaunchCount = 0
 
@@ -53,7 +16,7 @@ struct ScreenAccessOnboardingTests {
     @Test
     func initialStateReadsTheLiveGrants() {
         let model = ScreenAccessOnboardingModel(
-            permissionChecker: FakePermissionChecker(screenRecordingGranted: true, accessibilityTrusted: false),
+            permissionChecker: DeterministicScreenPermissions(accessibilityTrusted: false, screenRecordingGranted: true),
             relauncher: FakeRelauncher(),
             settingsOpener: { _ in }
         )
@@ -66,7 +29,7 @@ struct ScreenAccessOnboardingTests {
 
     @Test
     func requestingScreenRecordingRegistersAndRevealsRelaunchGuidance() {
-        let checker = FakePermissionChecker(screenRecordingGranted: false, accessibilityTrusted: false)
+        let checker = DeterministicScreenPermissions(accessibilityTrusted: false, screenRecordingGranted: false)
         let model = ScreenAccessOnboardingModel(
             permissionChecker: checker,
             relauncher: FakeRelauncher(),
@@ -84,7 +47,7 @@ struct ScreenAccessOnboardingTests {
 
     @Test
     func requestingScreenRecordingWhenAlreadyGrantedDoesNothing() {
-        let checker = FakePermissionChecker(screenRecordingGranted: true, accessibilityTrusted: false)
+        let checker = DeterministicScreenPermissions(accessibilityTrusted: false, screenRecordingGranted: true)
         let model = ScreenAccessOnboardingModel(
             permissionChecker: checker,
             relauncher: FakeRelauncher(),
@@ -102,7 +65,7 @@ struct ScreenAccessOnboardingTests {
     func guidanceClearsWhenAFreshProcessSeesTheGrant() {
         // Simulates the post-relaunch confirm step: the checker now answers true and a refresh
         // (the modal re-preflights on appear) lands on the confirmed state.
-        let checker = FakePermissionChecker(screenRecordingGranted: false, accessibilityTrusted: true)
+        let checker = DeterministicScreenPermissions(accessibilityTrusted: true, screenRecordingGranted: false)
         let model = ScreenAccessOnboardingModel(
             permissionChecker: checker,
             relauncher: FakeRelauncher(),
@@ -123,10 +86,10 @@ struct ScreenAccessOnboardingTests {
     func accessibilityGrantLandsImmediatelyWithoutARelaunchStep() {
         // The asymmetry the model owns: Accessibility takes effect in-process, so a granted
         // request is visible on the very next read with no guidance step anywhere.
-        let checker = FakePermissionChecker(
-            screenRecordingGranted: true,
+        let checker = DeterministicScreenPermissions(
             accessibilityTrusted: false,
-            grantsOnRequest: true
+            screenRecordingGranted: true,
+            accessibilityGrantsOnRequest: true
         )
         let model = ScreenAccessOnboardingModel(
             permissionChecker: checker,
@@ -144,7 +107,7 @@ struct ScreenAccessOnboardingTests {
 
     @Test
     func requestingAccessibilityWhenAlreadyTrustedDoesNothing() {
-        let checker = FakePermissionChecker(screenRecordingGranted: false, accessibilityTrusted: true)
+        let checker = DeterministicScreenPermissions(accessibilityTrusted: true, screenRecordingGranted: false)
         let model = ScreenAccessOnboardingModel(
             permissionChecker: checker,
             relauncher: FakeRelauncher(),
@@ -160,7 +123,7 @@ struct ScreenAccessOnboardingTests {
     func relaunchNowDrivesTheRelauncherSeam() {
         let relauncher = FakeRelauncher()
         let model = ScreenAccessOnboardingModel(
-            permissionChecker: FakePermissionChecker(screenRecordingGranted: false, accessibilityTrusted: false),
+            permissionChecker: DeterministicScreenPermissions(accessibilityTrusted: false, screenRecordingGranted: false),
             relauncher: relauncher,
             settingsOpener: { _ in }
         )
@@ -174,7 +137,7 @@ struct ScreenAccessOnboardingTests {
     func settingsShortcutsOpenTheRightPrivacyPanes() {
         var opened: [URL] = []
         let model = ScreenAccessOnboardingModel(
-            permissionChecker: FakePermissionChecker(screenRecordingGranted: false, accessibilityTrusted: false),
+            permissionChecker: DeterministicScreenPermissions(accessibilityTrusted: false, screenRecordingGranted: false),
             relauncher: FakeRelauncher(),
             settingsOpener: { opened.append($0) }
         )
