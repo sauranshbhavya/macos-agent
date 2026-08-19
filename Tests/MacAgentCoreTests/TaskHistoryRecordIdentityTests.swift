@@ -223,7 +223,7 @@ struct TaskHistoryRecordIdentityTests {
 
     /// The `migratingLegacyPlaintext` contract, applied to the backfill: a rewrite that cannot land
     /// is not a load failure. Mirrors `failedLegacyMigrationRewriteStillReturnsTheDecodedData`.
-    @Test
+    @Test(.requiresUnprivilegedProcess)
     func aFailedIdBackfillRewriteStillReturnsTheDecodedRecords() throws {
         let root = try makeDirectory()
         defer {

@@ -1191,6 +1191,13 @@ struct AgentRunnerTests {
             fileOpener: fileOpener,
             mediaOpener: mediaOpener,
             finderContextReader: finderContextReader,
+            // Not optional decoration: `tierZeroCommandAutoRunsWithoutApprovalDecision` drives a
+            // `.showPermissionReadiness` plan through this executor, which reaches
+            // `PermissionReadinessCapabilityAdapter` and calls `currentStatus`. Without this the
+            // production default builds a live service and the run makes real `AXIsProcessTrusted()`
+            // and `AVCaptureDevice.authorizationStatus` reads — the last live reads in the suite
+            // (SONNY-123 PR #72 F1).
+            permissionReadinessService: .deterministic(),
             routineStore: routineStore ?? RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
             workspaceStore: workspaceStore ?? WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json")),
             capabilityRegistry: capabilityRegistry

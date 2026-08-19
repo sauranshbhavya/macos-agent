@@ -142,7 +142,7 @@ struct UnattendedVisionNeverTests {
         VisionSessionContainment(
             target: ScreenControlPolicy.verdict(for: safari),
             attentionMonitor: FixedMonitor(attention, presentable: presentable),
-            permissionChecker: FixedAccessibilityGrant(trusted: true)
+            permissionChecker: DeterministicScreenPermissions()
         )
     }
 
