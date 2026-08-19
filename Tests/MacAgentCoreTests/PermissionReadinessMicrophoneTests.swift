@@ -36,12 +36,19 @@ struct PermissionReadinessMicrophoneTests {
     /// Proved rather than argued: reverting `microphoneStatus()` to the direct `AVCaptureDevice`
     /// call is a mutant this test kills.
     ///
-    /// **What it still cannot do.** It does not catch `deterministic(microphoneStatus:)`'s own
-    /// default being reverted to `SystemMicrophonePermissionChecker()`. Every caller that cares
-    /// about the microphone states its status here, so that default is never the thing under test —
-    /// the same inheritance-not-detection limit the screen-side pin records, and the same mutant
-    /// survives. What the default buys is that a test which never mentions the microphone still
-    /// makes no live authorization read.
+    /// **What it still cannot do, and a correction worth keeping.** The first draft of this
+    /// paragraph claimed that `deterministic(microphoneStatus:)` substituting a live checker would
+    /// survive, by the same inheritance-not-detection argument the screen-side pin records. The
+    /// mutation disproved it: that mutant makes all four expectations here answer from one live
+    /// status, and it dies. Ignoring an argument and defaulting an argument are different mutations,
+    /// and only running both told them apart.
+    ///
+    /// What genuinely is not detectable from inside a test is a *fixture's* readiness default being
+    /// reverted to a live service — `makeExecutor`'s and `VisionTestContext`'s, mutated to
+    /// `PermissionReadinessService()`, both left the whole suite green. No assertion can catch that,
+    /// because the deterministic default is a state a real Mac can also be in. That gap is closed in
+    /// the source instead, by `LivePermissionCheckerScanTests`, and those two mutants die against
+    /// it.
     @Test
     func theMicrophoneRowAnswersFromTheInjectedStatusRatherThanThisMac() throws {
         let authorized = try microphoneRow(.authorized)
