@@ -637,7 +637,13 @@ struct ProductShellTests {
             "visionDelegationRequest", "visionDelegationContinuation",
             "visionSessionPause", "visionResumeContinuation",
             "visionUserPauseMonitor", "visionEmergencyStopHotKey", "visionEmergencyStopHotKeyFactory",
-            "visionSessionJournalStore", "activeVisionSessionID"
+            "visionSessionJournalStore", "activeVisionSessionID",
+
+            // 6. A test seam, not state — `nil` in the shipping app, and nothing in `Sources/`
+            // assigns it. Same category as `visionSessionEnvironment` in group 5: it lets a test
+            // describe the world rather than inherit it, and it holds no user data for a wipe to
+            // find. (SONNY-173.)
+            "voiceConfigurationBlockerOverride"
         ]
 
         let fixture = try makeProductShellFixture()
