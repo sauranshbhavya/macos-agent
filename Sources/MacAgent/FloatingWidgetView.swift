@@ -466,6 +466,24 @@ struct FloatingWidgetView: View {
     /// on-screen overlay, so that is a real change to its footprint. The alternative — putting it
     /// inside the pill — squeezes the text field, which is worse. Proposed on session judgment with
     /// no wireframe to defer to; SONNY-109 settles it.
+    ///
+    /// **Off is the untinted variant, not a neutral tint (SONNY-174).** The two arms of the ternary
+    /// below read as two colours; they are two different code paths. A non-nil `tint` goes through
+    /// `WidgetTintedButtonBackground`'s `Color.white.opacity(0.94)` underlay with the tint applied
+    /// `.plusDarker` over it — which is what turns a solid accent into a solid button, and what
+    /// turned `neutralButtonFill`'s `rgba(153,153,153,.17)` into a near-opaque **#E2E2E2**: a white
+    /// glyph on it sits at **1.26–1.30:1**, which is invisible, and reads exactly as the founder
+    /// described it, "too light for anyone to figure it out". The fill was never too transparent —
+    /// it was too *light*, and the token was not at fault. `neutralButtonFill` is the **untinted**
+    /// variant's own fill (design-system reference §3.1, "Neutral/untinted button variant:
+    /// `rgba(153,153,153,.17)`"), so `tint: nil` introduces no new token and no new value: it is
+    /// that token used where it was designed to be used, the same path the permission panel's Deny
+    /// button has always taken. Off then renders **#2B2B2B–#626262** across the panel's backdrop
+    /// range with a white glyph at **6.1–14.2:1**, its 0.5pt `#A6A6A6` rim at 1.8–3.1:1 against its
+    /// own fill to draw the silhouette. On is untouched, and the two states now differ in fill,
+    /// shadow weight (§3.1's lighter neutral shadow) and glyph, not in one washed-out step.
+    /// Composited arithmetic, not judgement by eye — an eye is still the only thing that can say it
+    /// reads right, which is what the founder's manual pass is for.
     @ViewBuilder
     private var dontSaveButton: some View {
         if !isTaskInFlight {
@@ -479,9 +497,7 @@ struct FloatingWidgetView: View {
             }
             .buttonStyle(.plain)
             .frame(width: 36, height: 36)
-            .widgetCircularBackground(
-                tint: isOn ? WidgetTheme.primaryAction : WidgetTheme.neutralButtonFill
-            )
+            .widgetCircularBackground(tint: isOn ? WidgetTheme.primaryAction : nil)
             .accessibilityLabel(TaskRecordingPresentation.controlLabel)
             .accessibilityValue(TaskRecordingPresentation.controlAccessibilityValue(isOn: isOn))
             .accessibilityAddTraits(isOn ? [.isButton, .isSelected] : .isButton)
