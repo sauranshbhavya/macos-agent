@@ -3,34 +3,6 @@ import Foundation
 import Testing
 @testable import MacAgentCore
 
-/// **The Accessibility grant as a stated value rather than a reading of this Mac** (SONNY-103).
-///
-/// `VisionSessionContainment` defaults its checker to `SystemScreenCapturePermissionChecker`, which
-/// answers `AXIsProcessTrusted()` — a fact about whichever process happens to be running the suite.
-/// macOS grants Accessibility per responsible process, so one unchanged tree passed from the
-/// founder's terminal and failed 22 issues from an agent session's, every one of them
-/// `.permissionRevoked` returned before the boundary the test was written to pin. (Measured at main
-/// `9a84e3b`: 1203 tests / 90 suites / 22 issues from a process where `AXIsProcessTrusted()`
-/// answered false, against 1203 / 90 / exit 0 from one where it answered true.) A suite whose result
-/// depends on machine state is not evidence — and this one failed in the flattering direction as
-/// well, because a defect that made the containment refuse everything would have looked exactly like
-/// a missing grant.
-///
-/// One flag, because the containment asks exactly one question. The screen-recording members answer
-/// alike to satisfy the protocol rather than inventing a second axis nothing here reads.
-///
-/// File-scoped rather than nested because both suites that drive `checkIterationStart` need it —
-/// this file's and `UnattendedVisionNeverTests`' — and two copies of the same stub is how one of
-/// them ends up still reading the machine.
-struct FixedAccessibilityGrant: ScreenCapturePermissionChecking {
-    let trusted: Bool
-
-    func hasScreenRecordingPermission() -> Bool { trusted }
-    @discardableResult func requestScreenRecordingPermission() -> Bool { trusted }
-    func isAccessibilityTrusted() -> Bool { trusted }
-    @discardableResult func requestAccessibilityTrust() -> Bool { trusted }
-}
-
 /// SONNY-92: the containment layer, one check at a time.
 ///
 /// Each per-iteration boundary gets its own test that fails for its own reason. A single
@@ -57,6 +29,22 @@ struct VisionSessionContainmentTests {
     /// to a default seam by forgetting to pass one. Every input the containment reads — the target,
     /// the cap, attention, and the Accessibility grant — is stated here as a value, and not one of
     /// them is read from the machine running the suite.
+    ///
+    /// **What that seam cost when it was open, kept because it is the reason this helper exists.**
+    /// `VisionSessionContainment` defaults its checker to `SystemScreenCapturePermissionChecker`,
+    /// which answers `AXIsProcessTrusted()` — a fact about whichever process happens to be running
+    /// the suite. macOS grants Accessibility per responsible process, so one unchanged tree passed
+    /// from the founder's terminal and failed 22 issues from an agent session's, every one of them
+    /// `.permissionRevoked` returned before the boundary the test was written to pin. (Measured at
+    /// main `9a84e3b`: 1203 tests / 90 suites / 22 issues from a process where `AXIsProcessTrusted()`
+    /// answered false, against 1203 / 90 / exit 0 from one where it answered true.) A suite whose
+    /// result depends on machine state is not evidence — and this one failed in the flattering
+    /// direction as well, because a defect that made the containment refuse everything would have
+    /// looked exactly like a missing grant.
+    ///
+    /// The screen-recording grant is left at the stub's default rather than tracking
+    /// `accessibilityTrusted`: `checkIterationStart` asks `isAccessibilityTrusted()` and nothing
+    /// else, so a second axis here would suggest a question the containment never asks.
     private static func containment(
         target: InstalledApp = safari,
         limits: VisionSessionLimits = .default,
@@ -67,7 +55,7 @@ struct VisionSessionContainmentTests {
             target: ScreenControlPolicy.verdict(for: target),
             limits: limits,
             attentionMonitor: FixedAttentionMonitor(attention),
-            permissionChecker: FixedAccessibilityGrant(trusted: accessibilityTrusted)
+            permissionChecker: DeterministicScreenPermissions(accessibilityTrusted: accessibilityTrusted)
         )
     }
 
