@@ -221,7 +221,7 @@ struct AgentViewModelLocalStorageTests {
     ///
     /// If a later refactor swaps the two writes, this test fails: the journal would still hold the
     /// session while the row had gone, which is the orphan the founder named as the real defect.
-    @Test
+    @Test(.requiresUnprivilegedProcess)
     func whenTheRowDeleteFailsTheScreenRecordIsAlreadyGoneAndTheRowSurvives() throws {
         let root = try makeDirectory()
         let historyRoot = root.appendingPathComponent("history", isDirectory: true)
