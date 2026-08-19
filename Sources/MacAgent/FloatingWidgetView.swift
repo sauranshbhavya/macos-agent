@@ -493,13 +493,20 @@ struct FloatingWidgetView: View {
     /// **So the fill is opaque, which is the ticket's own first lever — give the fill real
     /// presence — done where it actually had to be done.** An opaque tint resolves through that
     /// branch to exactly itself at alpha 1 (`αs = 1` ⇒ the composite is the source), which is why
-    /// `micButton` beside it and this button's own on state are already backdrop-proof. `panelBase`
-    /// is the widget's own material colour and the **only opaque, non-accent token System B has**;
-    /// every other opaque token means something (Allow, error, retry, or the mic sitting 12pt
-    /// away). No new token, and none is warranted: the one candidate worth adding, §3.1's neutral
-    /// fill pre-composited over `panelBase` (#303030), measures *worse* on every axis — glyph
-    /// 13.20:1 against this one's 17.40:1, rim 2.94:1 against 3.41:1, and less separation from the
-    /// on state.
+    /// `micButton` beside it and this button's own on state are already backdrop-proof.
+    ///
+    /// **Which token, enumerated over the whole set rather than picked.** System B has ten colour
+    /// tokens. Two are translucent (`neutralButtonFill`, `textMuted`) and the finding above
+    /// disqualifies both. Of the eight opaque ones, five are accents that already mean something —
+    /// `primaryAction` is this button's *own* on state, `secondaryCircular` is the mic 12pt away,
+    /// and `allowAction`/`errorGlyph`/`taskFailureRetry` carry Allow, error and retry. The last two
+    /// are opaque and are not accents, but another layer of *this same button* already uses them:
+    /// `hairline` draws its rim and `textFull` its glyph, so either one as the fill erases the very
+    /// thing it would have to contrast against (each measures 1.00:1 against its own layer).
+    /// `panelBase` is the one that remains, and it is also the best of them on the numbers. No new
+    /// token is warranted either: the one candidate worth adding, §3.1's neutral fill
+    /// pre-composited over `panelBase` (#303030), measures *worse* on every axis — glyph 13.20:1
+    /// against this one's 17.40:1, rim 2.94:1 against 3.41:1, and less separation from the on state.
     ///
     /// **Measured over the backdrop swept 0.0 to 1.0, the screen and not a panel**, all three
     /// constant because the fill is opaque: white glyph **17.40:1**, hairline rim **3.41:1**
