@@ -17,10 +17,12 @@ import Foundation
 /// two test targets, five of them private to a single file, and a seventh was the path of least
 /// resistance for the next test that needed one — which is exactly what makes a test reach for the
 /// live default instead. A stub that is easy to find is the thing that removes the incentive.
-/// `Tests/MacAgentTests/DeterministicPermissions.swift` is this file's twin: SwiftPM gives a source
-/// file to exactly one target, so one shared stub *per target* is the most consolidation available
-/// without adding a test-support target to `Package.swift`, which is a build-graph change this
-/// ticket was not scoped to make. Keep the two in step.
+/// `Tests/MacAgentTests/DeterministicPermissions.swift` is this file's twin: both test targets
+/// declare an explicit `path:`, so a source file belongs to exactly one of them and one shared stub
+/// *per target* is the most consolidation available without a `Package.swift` edit — a build-graph
+/// change this ticket was not scoped to make. That edit is cheaper than this comment first claimed;
+/// the twin's header carries the correction (PR #72 F2). Keep the two in step —
+/// `TwinnedTestSupportTests` enforces it.
 ///
 /// **Grants everything by default, deliberately.** The tests that reach this seam assert on other
 /// items entirely (the voice-hotkey copy, titles and counts), so a granted machine is the state they
