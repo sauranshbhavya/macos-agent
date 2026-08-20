@@ -157,6 +157,57 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/hover-teardown-and-app-icons
+Status: complete
+Date: 2026-08-20
+Tickets: **SONNY-178** — audit every hover-tracked view for the teardown hole SONNY-179 fixed in one of them, and bring §3a of the manual checklist current. **SONNY-65** — the workspace detail sheet's app rows show the app's icon beside the name. One session, from `main` at `5df806d` (the PR #80 merge). Assigned as a sequence at launch; one branch carries both, per step 2's "sequential tickets may share a branch".
+Reviewed by: pending — fresh session per WORKFLOW.md step 7.
+
+Spec sections covered: none newly. SONNY-65 is the founder's ask of 2026-08-07 against the sheet built in branch B; SONNY-178 changes no product behaviour at all.
+Files changed:
+- `Sources/MacAgent/CommandCenterView.swift` — SONNY-65 only: `WorkspaceScopeEntryPresentation.appIcon`, the section builder resolving it for `.app` alone, `WorkspaceDetailPresentation.init` taking an icon resolver, `@MainActor` on both, and the row rendering an icon beside the name.
+- `Tests/MacAgentTests/HoverTeardownAuditTests.swift` — new, 3 tests.
+- `Tests/MacAgentTests/WorkspaceDetailSheetTests.swift` — 5 tests added, one of them a view-shape scan.
+- `Tests/MacAgentTests/MacAgentSourceScan.swift` — a recursive source-file enumerator.
+- `docs/sonny-manual-test-checklist.md` — §3a brought current (3 ticked, 2 rows added); 5 rows added to Workspaces.
+- `docs/sonny-v1-implementation-changelog.md` — this entry.
+
+Tests: CLAUDE.md's flagged command. Base **1438 in 112 suites at `5df806d`**, carried from the `fix/attention-reaches-user` entry directly below. Head **1446 in 113 suites, exit 0 at `49b646d`**, clean tree — 8 added, none removed or weakened, and `HoverTeardownAuditTests` is the 113th suite. **Compiler warnings: `scripts/warnings` reports 0, exit 0, at `49b646d` (clean), 110s cold.** **Mutation via `scripts/mutate`: 10 mutants across two plans, all killed** — 5 for SONNY-178 at `4226998`, 5 for SONNY-65 at `49b646d`. **One of the ten is weaker than the others and is stated rather than folded in:** SONNY-178's S5 was killed by the *compiler* (changing a flag's storage kind breaks the memberwise init), so it shows the mutation cannot ship, not that a test catches it. S4 — SONNY-179's deleted boolean put back on the long-lived view — is what actually pins that test.
+
+Behavior added:
+- **The workspace detail sheet's app rows show the app's real icon beside the name.** Apps only; URL and file-location rows are unchanged.
+- **An app this Mac cannot resolve renders name-only**, never the card's dashed-square placeholder.
+- Nothing else. SONNY-178 is an audit: it changed no `Sources/` file.
+
+Behavior preserved (required, no blanket claims):
+- **The sheet's entry strings are still verbatim and still selectable.** The icon is additional; a scan pins that the name is rendered unconditionally, outside the icon's own `if let`.
+- **`WorkspaceScopeEntryPresentation`'s equality is still independent of what is installed.** Asserted directly: two presentations of one workspace, one resolving every icon and one resolving none, compare equal.
+- **SONNY-41's inert note still renders on every inert entry**, unchanged, beside the new field.
+- **The workspace card is untouched** — same resolver, so one app cannot show two different icons across the two surfaces, and the card keeps its own placeholder tile, which this sheet deliberately does not reuse.
+- **Every hover site behaves exactly as before.** No `Sources/` file was touched for SONNY-178.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**The hover-teardown hole needs two conditions, and naming both is what closed the audit.** The hole is not "a hover boolean" — it is *hover state that outlives the tracked view*, plus a path that removes that view while the pointer is inside it. SONNY-179's mic satisfied both because its flag lived on `FloatingWidgetView`, which survives the collapse that removes only the mic subtree. Five of the six sites keep their flag in `@State` on the tracked view itself, so the storage dies with the view and a stale `true` has nowhere to live — condition 1 fails and condition 2 cannot matter. **That is why the audit came back clean, and it is not a claim that the other five are carefully written; they are safe by construction.** A future session adding a hover site should check the first condition, not look for booleans.
+
+**The cursor-leak hypothesis was refuted, and the refutation is more useful than a fix would have been.** `SonnyPointerCursorModifier` is the only hover site whose state is process-global, so it is the only one a view's destruction cannot clean up — the right thing to have suspected. It discharges its push on four paths (hover-exit, both `onChange`s, `onDisappear`), and `git log -S` puts all four in `8c48c83`, the commit that introduced it. It was never open. Also worth keeping straight: its `didPushCursor` is **not** the forbidden "copy of the state to repair" — it records an *obligation*, because push/pop is a stack and a caller must know whether it owes a pop. SONNY-179 deleted a second copy of a fact AppKit already owned, which is a different thing.
+
+**A presentation test cannot see a view declining to render a field it was handed.** SONNY-65's four presentation tests all passed against a mutant that blanked the entry name whenever an icon resolved — the presentation was still correct, and the icon-instead-of-name outcome is precisely what the ticket forbids. This is PR #80's F2 recurring in a new place: *a test anchored on the data does not reach what the view does with it*. The fix is the same technique, a `MacAgentSource` scan, and it needs two assertions rather than one — the name must be rendered **and** must not be rendered inside the icon's conditional, since checking only the first survives a rewrite that keeps the `Text` and wraps it.
+
+**Where the icon lives is decided by equality, not by tidiness.** The entry carries a `WorkspaceAppIconPresentation?` rather than a bare `NSImage?` because that type excludes icon content from its `==` on purpose. A bare image would have folded "is this app installed on this machine" into the entry's synthesized equality — making two presentations of one workspace compare unequal across machines, and every diffing test machine-dependent. A mutant re-adding `lhs.icon === rhs.icon` is killed.
+
+**An app entry is inert only when its name is empty.** SONNY-82 removed catalog membership as a cause, so `WorkspaceScope`'s only app-inertness reason is "The app name is empty." That makes SONNY-65's third constraint — inert rendering stays primary over icon decoration — mostly *structural*: an empty name resolves no icon, so an inert app row is name-only anyway, and the two can only coexist in a fixture. Recorded because the obvious test for that constraint stages a combination the app cannot reach, and would have looked like coverage.
+
+Known limitations / deferred scope:
+- **What the hover tests cover, and what nothing here can.** They cover the population's size and per-file location, the cursor's one push and four discharges with the teardown one checked by name, and that every other flag is still `@State`. They do **not** cover that `.onDisappear` fires on any given real teardown, or that AppKit delivers or withholds exits as described — no test process can drive SwiftUI teardown or move a real pointer. That is what §3a is for.
+- **SONNY-65's appearance is unverified by anything but a human.** Icon size (16pt), the `.top` alignment and the 1pt optical nudge beside 13pt text are judgement calls made without being able to look; five manual rows cover them, including the narrow-window check, since an icon is new width inside a `SettingsAdaptiveControlRow`.
+- **Two directory enumerators now exist in one test target** — `MacAgentSource.appSourceFiles()` (added here, recursive) and `WidgetVoiceEntryTests.appSourceFiles()` (SONNY-173's, one level deep). Consolidating means editing a file outside either ticket's scope for no behavioural gain, so it was not done. Asked on SONNY-178's closing comment rather than filed as a ticket or dropped, per step 5's "when genuinely unsure which side of the line something sits on, ask in the ticket's comments".
+- Nothing else deferred. No discovery tickets spawned.
+
+Open questions (required, write "none" if true): none.
+
+Next branch: unchanged by this branch — it touches no roadmap row.
+
 ### Branch: docs/row-12-host-decision
 Status: complete
 Date: 2026-08-20
