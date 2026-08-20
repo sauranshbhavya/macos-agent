@@ -328,7 +328,6 @@ struct VisionDecisionAndGeometryTests {
     /// and would let a point past the edge of the picture the model actually saw.
     @Test
     func boundsCheckingFollowsTheSentImageNotTheCapture() {
-        let capture = Self.capture()
         let sent = SentImageSize(pixelWidth: 400, pixelHeight: 300)
         #expect(VisionPointResolver.isInsideImage(CGPoint(x: 399, y: 299), sentImageSize: sent))
         #expect(!VisionPointResolver.isInsideImage(CGPoint(x: 400, y: 150), sentImageSize: sent))

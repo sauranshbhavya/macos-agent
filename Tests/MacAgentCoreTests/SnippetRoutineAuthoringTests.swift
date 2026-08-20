@@ -58,7 +58,7 @@ struct SnippetRoutineAuthoringTests {
         let preparedSave = try runner.prepare(plan: savePlan, source: .planner)
         _ = try await runner.execute(preparedSave, approvalDecision: .approved(.tier2), scope: .unscoped, context: ApprovalContext(safeMode: false))
 
-        let saved = try #require(try routineStore.routine(named: "Onboarding"))
+        let saved = try routineStore.routine(named: "Onboarding")
         #expect(saved.steps.map(\.operation) == [.saveSnippet])
         #expect(saved.steps[0].searchQuery == ";welcome")
         #expect(saved.steps[0].draftContent == "Welcome aboard!")

@@ -94,7 +94,7 @@ struct ScheduledRoutineRunTests {
         #expect(notice.contains("while you are here"))
         // SONNY-31's notify-and-pause semantics, not a silent skip that repeats forever: the
         // schedule is off, so the user hears this once rather than every occurrence.
-        let saved = try #require(try fixture.routineStore.routine(named: "Morning"))
+        let saved = try fixture.routineStore.routine(named: "Morning")
         #expect(saved.schedule?.isEnabled == false)
         // And nothing ran: no approval was raised for nobody to answer, and no session started.
         #expect(fixture.viewModel.approvalRequest == nil)
