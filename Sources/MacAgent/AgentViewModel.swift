@@ -713,14 +713,22 @@ final class AgentViewModel: ObservableObject {
     static let missingAPIKeyVoiceMessage =
         "No API key is set up. Add one, then relaunch Sonny."
 
-    /// What the mic's hover hint says when voice actually works. Wording unchanged from the literal
-    /// that used to sit in `FloatingWidgetView`; it moved here so that *choosing* between this and
-    /// the configuration message happens in one place — see `micHoverHintPresentation`.
-    static let micHoverShortcutReminder = "Speak your command — or hold Ctrl-Opt-Space anywhere"
+    /// What the mic's hover hint says when voice actually works. It lives here, rather than as a
+    /// literal in `FloatingWidgetView`, so that *choosing* between this and the configuration
+    /// message happens in one place — see `micHoverHintPresentation`.
+    ///
+    /// **The founder's own wording, given verbatim on SONNY-179, 2026-08-19.** It replaces "Speak
+    /// your command — or hold Ctrl-Opt-Space anywhere". The em dash goes, and no comma takes its
+    /// place: two clauses this short do not need one. Copy is his, so this string is not a sentence
+    /// to improve on session judgment.
+    static let micHoverShortcutReminder = "Click to speak or hold Ctrl-Opt-Space."
 
     /// How long the shortcut reminder stays, and nothing else. The configuration message has no
     /// delay at all rather than a longer one, which is why this is not a general "hint duration".
-    static let micHoverReminderDismissDelay: Duration = .seconds(4)
+    ///
+    /// Three seconds since SONNY-179, down from the four SONNY-177 shipped — the founder's pass at
+    /// the packaged app, and his call to make.
+    static let micHoverReminderDismissDelay: Duration = .seconds(3)
 
     /// The mic's hover hint, resolved: the sentence to render and whether it clears itself.
     ///
