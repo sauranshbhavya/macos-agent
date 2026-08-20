@@ -189,6 +189,103 @@ struct AgentViewModelLocalStorageTests {
         #expect(notice == "Sonny could not load encrypted local data. saved routines: \(explanation)")
     }
 
+    // MARK: - SONNY-78: a corrupt workspace store is not an unbound task
+
+    /// **The defect.** `resolveTaskScope` read the bound workspace with `try? workspaceStore.workspace(named:)`,
+    /// which throws for absence *and* rethrows a decrypt or decode failure — so an unreadable
+    /// `workspaces.json` was handled identically to a workspace the user had deleted, and the task
+    /// silently ran unscoped. `.unscoped` is not a smaller boundary: `assessRisk` computes scope
+    /// findings only when a workspace scope is present, so every out-of-scope advisory for that run
+    /// disappears, and with it the sentence the ran-without-asking trace would have carried.
+    ///
+    /// The binding comes through `start(workspaceBinding:)` — the workspace-card dispatch path — so
+    /// the name is known without a store read, which is exactly the case where the scope can fail
+    /// while the user has already been told the task belongs somewhere.
+    @Test
+    func aCorruptWorkspaceStoreReportsItselfInsteadOfSilentlyUnbindingTheTask() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try WorkspaceStore(
+            fileURL: root.appendingPathComponent("workspaces.json"),
+            encryption: testEncryption(byte: 0x42)
+        ).save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://example.com"]))
+        let viewModel = try makeViewModel(root: root, encryption: testEncryption(byte: 0x99))
+
+        viewModel.command = "= 1 + 1"
+        viewModel.start(workspaceBinding: "Research")
+        while viewModel.isRunning {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        // The storage problem is named on its own channel rather than swallowed.
+        let notice = try #require(viewModel.localStorageNotice)
+        #expect(notice.contains("saved workspaces"))
+        // And the task itself still ran — a corrupt store is not this task failing, and refusing the
+        // dispatch to report a storage problem would invert escalate-never-block for no safety gain.
+        #expect(viewModel.finalSummary.contains("2"))
+        #expect(viewModel.errorMessage == nil)
+        // The scope genuinely did not bind, which is what makes the notice the only thing standing
+        // between the user and a silent unbinding. `lastAssessedScope` is the post-terminal record;
+        // `activeTaskScope` is reset when a run ends, so it cannot answer this after the fact.
+        #expect(viewModel.lastAssessedScope == .unscoped)
+    }
+
+    /// The other side of the distinction, and the behaviour that had to survive the fix: a workspace
+    /// that is simply *gone* still binds to nothing, silently. That fallback is legitimate — a
+    /// workspace deleted between dispatch and assessment is not a storage fault — and reporting it
+    /// as one would put a decryption banner in front of a user whose store is perfectly healthy.
+    @Test
+    func aWorkspaceThatNoLongerExistsStillUnbindsWithoutReportingAStoreFailure() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let encryption = testEncryption(byte: 0x42)
+        // A healthy, readable store — it just does not contain the bound name.
+        try WorkspaceStore(
+            fileURL: root.appendingPathComponent("workspaces.json"),
+            encryption: encryption
+        ).save(StoredWorkspace(name: "Writing", apps: ["Notes"], urls: []))
+        let viewModel = try makeViewModel(root: root, encryption: encryption)
+
+        viewModel.command = "= 1 + 1"
+        viewModel.start(workspaceBinding: "Research")
+        while viewModel.isRunning {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(viewModel.localStorageNotice == nil)
+        #expect(viewModel.finalSummary.contains("2"))
+        #expect(viewModel.lastAssessedScope == .unscoped)
+    }
+
+    /// And a healthy store that *does* contain the workspace binds it, so the fix did not turn every
+    /// scope resolution into a failure path. Asserted through `lastAssessedScope`, the post-terminal
+    /// record of what the assessment actually used — `activeTaskScope` and therefore
+    /// `boundWorkspaceName` are reset when a run ends, so neither can answer this afterwards.
+    @Test
+    func aReadableWorkspaceStoreStillBindsTheScope() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let encryption = testEncryption(byte: 0x42)
+        try WorkspaceStore(
+            fileURL: root.appendingPathComponent("workspaces.json"),
+            encryption: encryption
+        ).save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://example.com"]))
+        let viewModel = try makeViewModel(root: root, encryption: encryption)
+
+        viewModel.command = "= 1 + 1"
+        viewModel.start(workspaceBinding: "Research")
+        while viewModel.isRunning {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(viewModel.localStorageNotice == nil)
+        guard case .scoped(let scope) = viewModel.lastAssessedScope else {
+            Issue.record("A readable store holding the bound workspace must produce a scoped assessment.")
+            return
+        }
+        #expect(scope.workspaceName == "Research")
+    }
+
     // MARK: - Per-task deletion (SONNY-116)
 
     @Test

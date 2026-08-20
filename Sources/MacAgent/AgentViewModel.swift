@@ -2824,6 +2824,25 @@ final class AgentViewModel: ObservableObject {
     /// deleted between dispatch and assessment binds to nothing rather than to an empty boundary,
     /// because an empty `WorkspaceScope` would report `.unconstrained` for every kind and read as a
     /// workspace that restricts nothing rather than as no workspace at all.
+    ///
+    /// **A store that will not load is a different thing from a workspace that is not there, and this
+    /// used to answer both the same way** (SONNY-78). The read was `try? workspaceStore.workspace(named:)`,
+    /// which throws `.missingWorkspace` for absence and rethrows a file-read, AES-GCM authentication
+    /// or JSON-decode failure — so an unreadable `workspaces.json` silently unbound the task, and
+    /// `.unscoped` is not a smaller boundary but no boundary: `assessRisk` computes scope findings
+    /// only when a workspace scope is present, so every out-of-scope advisory for that run vanished
+    /// along with the sentence the ran-without-asking trace would have carried. `findWorkspace(named:)`
+    /// (SONNY-30's primitive, added for exactly this distinction) answers `nil` only when the load
+    /// succeeded and nothing matched.
+    ///
+    /// **A load failure says so and the run continues, rather than being refused.** It goes to this
+    /// file's own load-failure channel, which publishes to `localStorageNotice` and never to
+    /// `errorMessage` — a corrupt store is not this task failing. Refusing the dispatch was the
+    /// alternative and is declined: since the consequence rule, a workspace scope gates no prompt at
+    /// all (its escalation is `.advisory`), so a lost boundary costs legibility rather than
+    /// permission, and blocking a task the user asked for in order to report a storage problem
+    /// inverts escalate-never-block for no safety gain. What the user gets instead is the same
+    /// banner every other unreadable store raises, naming this one.
     private func resolveTaskScope(command: String, plan: AgentPlan?) -> TaskWorkspaceScope {
         let resolvedName = explicitWorkspaceBinding ?? WorkspaceTaskTagging.resolvedWorkspaceName(
             command: command,
@@ -2831,8 +2850,20 @@ final class AgentViewModel: ObservableObject {
             routineStore: routineStore,
             workspaceStore: workspaceStore
         )
-        guard let resolvedName,
-              let record = try? workspaceStore.workspace(named: resolvedName) else {
+        guard let resolvedName else {
+            return .unscoped
+        }
+
+        let found: StoredWorkspace?
+        do {
+            found = try workspaceStore.findWorkspace(named: resolvedName)
+            clearLocalStorageLoadFailure(.savedWorkspaces)
+        } catch {
+            recordLocalStorageLoadFailure(.savedWorkspaces, error: error)
+            return .unscoped
+        }
+
+        guard let record = found else {
             return .unscoped
         }
         // The injected whitelist, not `WorkspaceScope`'s default: the scope's idea of a valid file
