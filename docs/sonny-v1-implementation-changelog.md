@@ -216,7 +216,7 @@ Architectural decisions / pitfalls discovered (required, write "none" if true):
 
 Known limitations / deferred scope:
 - **The default suite command is checked as text and never executed by the selftest.** Nothing in this process runs a real Swift build inside a selftest, so the evidence that the default works is the real battery at `71f07cb`, not the selftest.
-- **`.build/mutate-scratch` is a second full build directory** — about 300 MB here — and it persists between runs, which is what makes every battery after the first incremental. The first battery in a checkout pays one cold build, about a minute and a half in this repository.
+- **`.build/mutate-scratch` is a second full build directory** — 830 MB here once warm, measured after the battery at `71f07cb`, against 1.6 GB for the whole of `.build/` — and it persists between runs, which is what makes every battery after the first incremental. The first battery in a checkout pays one cold build, about a minute and a half in this repository.
 - **The lock cannot see a battery in another worktree, deliberately**, and a pid reused by anything whose command line says "mutate" reads as a live battery.
 - **SONNY-180 is filed, not fixed**: CLAUDE.md still says Command Center has no approval UI of its own.
 - **The sweep's own residue, stated rather than rounded off.** A backticked branch name is a false-positive class for it (`feature/ui-ux-wireframe-fidelity` is one, and its tokens only pass by coincidence). `qlmanage`, `output_dir` and `tspan` resolve to nothing in the repository and are correct as written — a macOS binary at `/usr/bin/qlmanage`, a placeholder in that same example command, and an SVG element name.
