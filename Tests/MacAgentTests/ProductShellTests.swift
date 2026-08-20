@@ -637,7 +637,13 @@ struct ProductShellTests {
             "visionDelegationRequest", "visionDelegationContinuation",
             "visionSessionPause", "visionResumeContinuation",
             "visionUserPauseMonitor", "visionEmergencyStopHotKey", "visionEmergencyStopHotKeyFactory",
-            "visionSessionJournalStore", "activeVisionSessionID"
+            "visionSessionJournalStore", "activeVisionSessionID",
+
+            // 6. A test seam, not state — `nil` in the shipping app, and nothing in `Sources/`
+            // assigns it. Same category as `visionSessionEnvironment` in group 5: it lets a test
+            // describe the world rather than inherit it, and it holds no user data for a wipe to
+            // find. (SONNY-173.)
+            "voiceConfigurationBlockerOverride"
         ]
 
         let fixture = try makeProductShellFixture()
@@ -1222,8 +1228,14 @@ struct ProductShellTests {
     /// Driven at the level the tests actually reach — the same `start(autoExecute:origin:
     /// fromComposer:)` the transcription completion issues. Stated per the D4 standard: the
     /// `canUseVoice` half of the gate is **not** exercised here, because the fixture has no API key
-    /// so `canUseVoice` is already false for an unrelated reason; that half is readable, not
-    /// testable, and its proof is the declaration.
+    /// so `canUseVoice` is already false for an unrelated reason.
+    ///
+    /// This used to end "that half is readable, not testable, and its proof is the declaration."
+    /// It is testable as of SONNY-173: `AgentViewModel.voiceConfigurationBlockerOverride` lets a
+    /// test state the configuration answer instead of inheriting the launching process's
+    /// environment, and `WidgetVoiceEntryTests` exercises that half directly. This test is
+    /// unchanged and still does not exercise it — what changed is that the gap is now a choice
+    /// about this test's scope rather than a limit of the code. (PR #73 review, F4.)
     @Test
     func voiceCannotConsumeAnArmWhileAClarificationIsPending() async throws {
         let fixture = try makeProductShellFixture()

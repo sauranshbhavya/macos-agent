@@ -357,10 +357,22 @@ final class AgentViewModel: ObservableObject {
     /// readable anywhere outside the in-flight composer — the rejected persistent-active-workspace
     /// design is exactly what this must not become.
     @Published var pendingWorkspaceBinding: String?
-    /// Which surface's mic button started the in-progress recording — `toggleVoiceRecording()` is
+    /// Which surface's mic button started the in-progress recording, set explicitly by the caller
+    /// rather than inferred. Read back when voice transcription auto-submits, so that submission is
+    /// attributed correctly.
+    ///
+    /// **There is one mic button, the widget's.** This used to say `toggleVoiceRecording()` "is
     /// called identically from both Command Center's composer and the floating widget's own mic
-    /// button, so this is set explicitly by the caller rather than inferred. Read back when voice
-    /// transcription auto-submits, so that submission is attributed correctly.
+    /// button"; that composer was deleted on 2026-07-21 and the sentence outlived it. Corrected by
+    /// PR #73's review (F3), which caught it precisely because SONNY-173 had corrected the *same*
+    /// claim at the method's own doc comment 1200 lines below and left this copy standing — a
+    /// compiler probe enumerates call sites, and no probe reads prose. A repo-wide sweep at that
+    /// point found no third copy: every other mention of that composer already says it is gone.
+    ///
+    /// The `.commandCenter` initial value is never observed — `startVoiceRecording` assigns this
+    /// before the single read in `stopVoiceRecordingAndTranscribe`'s completion — and is kept only
+    /// to match `toggleVoiceRecording(origin:)`'s own default, which is documented there as the
+    /// direction that consumes no pending workspace-card binding.
     private var voiceRecordingOrigin: TaskOrigin = .commandCenter
     /// The last command text actually submitted for real execution — tracked on the shared view
     /// model (not as widget-local UI state) so both the widget's own retry button and a system
@@ -681,20 +693,85 @@ final class AgentViewModel: ObservableObject {
         isAwaitingApproval || (isRunning && currentTask != nil)
     }
 
+    /// The message shown when voice is asked for and the app is not configured to do it.
+    ///
+    /// One copy, because two surfaces must say the same thing: the widget's mic button and the
+    /// push-to-talk hotkey. They said the same thing by coincidence — two identical literals — until
+    /// one of them stopped saying anything at all (SONNY-173).
+    static let missingAPIKeyVoiceMessage =
+        "OPENAI_API_KEY is not set. Export it before launching Sonny, then relaunch the app."
+
+    /// Lets a test state what the *configuration* half of voice readiness should answer, instead of
+    /// inheriting whatever the process that launched the test suite happened to export.
+    ///
+    /// The live answer reads `ProcessInfo.processInfo.environment` through `hasAPIKey`, which a test
+    /// cannot set for itself: `setenv` is process-global and the suite runs its tests in parallel.
+    /// The same reason `visionSessionEnvironment` is a seam — a test must be able to describe the
+    /// world rather than hope for it. Before this existed the repo's own comment on
+    /// `voiceCannotConsumeAnArmWhileAClarificationIsPending` recorded the consequence plainly: "that
+    /// half is readable, not testable, and its proof is the declaration." It is testable now.
+    ///
+    /// `nil` in the shipping app, and nothing in `Sources/` assigns it. Deliberately not
+    /// `@Published`: a test sets it once before reading, and production never changes it, so there
+    /// is no view to invalidate.
+    var voiceConfigurationBlockerOverride: (() -> String?)?
+
+    /// **The actionable half of voice readiness** — something the user can go and fix, and the
+    /// message that says so. `nil` when configuration is fine.
+    ///
+    /// Actionable failures are the ones a control may never swallow. That is the whole of
+    /// SONNY-173: the mic button was `.disabled` on the *composite* `canUseVoice`, a disabled
+    /// SwiftUI button never runs its action, and so the guard that already had the right message
+    /// was unreachable from the one surface most people press. The hotkey, gated by no SwiftUI
+    /// state at all, reached its copy of the guard and explained itself. Same failure, two answers.
+    ///
+    /// **This split outlives its current contents.** SONNY-136 deletes every provider environment
+    /// variable, and `hasAPIKey` goes with it — what that changes is the body of this property, not
+    /// the rule it exists to state: an actionable refusal explains itself, a transient one stays
+    /// quiet, and only the transient half is ever allowed into a `.disabled` predicate.
+    var voiceConfigurationBlocker: String? {
+        if let voiceConfigurationBlockerOverride {
+            return voiceConfigurationBlockerOverride()
+        }
+        return hasAPIKey ? nil : Self.missingAPIKeyVoiceMessage
+    }
+
+    /// **The transient half of voice readiness** — the app is busy, and refusing in silence is the
+    /// correct answer. Nothing here is something the user could go and fix; each clears on its own.
+    ///
+    /// `clarificationQuestion == nil` restores parity with the typed route, which `isTaskInFlight`
+    /// has always blocked during a clarification pause. Voice lacking the same term was asymmetry by
+    /// omission, and it was reachable: a clarification pause holds `activeTaskScope` (the same task
+    /// is resuming), so the chip shows the *paused* task's workspace while a card arm sits invisible
+    /// behind it — and both voice entry points dispatch with `origin: .widget`, so the transcription
+    /// completion consumed that arm. The task then ran scoped to a workspace the chip never named,
+    /// and the paused task's unanswered clarification was silently discarded by `performStart`'s
+    /// per-task reset.
+    ///
+    /// Voice answering a clarification is a real feature and this does not foreclose it; it is a
+    /// separate ticket, and the gate has to exist first.
+    var isVoiceTransientlyBusy: Bool {
+        clarificationQuestion != nil || isAwaitingApproval || isRunning
+            || isPreparingVoiceRecording || isTranscribingVoice
+    }
+
     var canUseVoice: Bool {
-        // `clarificationQuestion == nil` restores parity with the typed route, which
-        // `isTaskInFlight` has always blocked during a clarification pause. Voice lacking the same
-        // term was asymmetry by omission, and it was reachable: a clarification pause holds
-        // `activeTaskScope` (the same task is resuming), so the chip shows the *paused* task's
-        // workspace while a card arm sits invisible behind it — and both voice entry points
-        // dispatch with `origin: .widget`, so the transcription completion consumed that arm. The
-        // task then ran scoped to a workspace the chip never named, and the paused task's
-        // unanswered clarification was silently discarded by `performStart`'s per-task reset.
-        //
-        // Voice answering a clarification is a real feature and this does not foreclose it; it is a
-        // separate ticket, and the gate has to exist first.
-        hasAPIKey && clarificationQuestion == nil && !isAwaitingApproval && !isRunning
-            && !isPreparingVoiceRecording && !isTranscribingVoice
+        voiceConfigurationBlocker == nil && !isVoiceTransientlyBusy
+    }
+
+    /// The mic control's whole `.disabled` predicate, **the transient half only** — and it lives
+    /// here, not in the view, so it is something a test can hold.
+    ///
+    /// A view cannot be asked what it renders, so a `.disabled` expression written inline in
+    /// `FloatingWidgetView` is enforced by nothing but a reader noticing. That is how the
+    /// configuration term got into it. Stated as a property, the rule "only transient reasons
+    /// disable a control" has one address, one doc comment, and a test that fails when it moves.
+    ///
+    /// `!isRecordingVoice` is the stop half, carried over unchanged: once a recording is running the
+    /// button is Stop, and it stays pressable even if something transient arrives mid-recording —
+    /// an approval landing while the user is mid-sentence must not trap them in a live microphone.
+    var isVoiceControlDisabled: Bool {
+        isVoiceTransientlyBusy && !isRecordingVoice
     }
 
     var isAwaitingApproval: Bool {
@@ -1481,9 +1558,20 @@ final class AgentViewModel: ObservableObject {
         start(autoExecute: shouldAutoExecute, origin: shouldUseOrigin, workspaceBinding: shouldUseBinding)
     }
 
-    /// - Parameter origin: Which surface's mic button this is — `toggleVoiceRecording()` is called
-    ///   identically from Command Center's composer and the floating widget's own mic button, so
-    ///   the caller states which one explicitly rather than it being inferred.
+    /// - Parameter origin: Which surface's mic button this is.
+    ///
+    /// **One call site today**, `FloatingWidgetView.micButton`, which passes `.widget` explicitly.
+    /// The Command Center composer this method was written to also serve was deleted in
+    /// `feature/ui-ux-wireframe-fidelity` (2026-07-21), and the doc comment kept describing it until
+    /// SONNY-173 checked — a deprecation probe over the compiled package, since grep cannot resolve
+    /// a receiver. The count is the compiler's, not a search's.
+    ///
+    /// The `.commandCenter` default therefore has no caller and is kept on purpose, as the *safe*
+    /// direction for a call site added later: the origin reaches `dispatchTranscribedCommand`, where
+    /// `fromComposer: origin == .widget` decides whether the dispatch may consume a pending
+    /// workspace-card binding. A new caller that forgets to say which surface it is gets the answer
+    /// that consumes nothing — the same reasoning `dispatch(fromComposer:)` states for its own
+    /// default. A caller that really is the widget composer says so, exactly as this one does.
     func toggleVoiceRecording(origin: TaskOrigin = .commandCenter) {
         if isRecordingVoice {
             stopVoiceRecordingAndTranscribe()
@@ -1497,9 +1585,7 @@ final class AgentViewModel: ObservableObject {
             return
         }
         guard canUseVoice else {
-            if !hasAPIKey {
-                setError("OPENAI_API_KEY is not set. Export it before launching Sonny, then relaunch the app.", persistent: true)
-            }
+            reportVoiceRefusal()
             return
         }
 
@@ -1508,6 +1594,19 @@ final class AgentViewModel: ObservableObject {
         // `AppDelegate.handlePushToTalkPress()`), so a hotkey-triggered recording is always a
         // widget interaction regardless of which surface happened to be focused.
         startVoiceRecording(trigger: .hotKey, origin: .widget)
+    }
+
+    /// Says an *actionable* refusal out loud and says nothing about a transient one — the single
+    /// copy both voice entry points call, so the mic button and the hotkey cannot answer the same
+    /// question differently again.
+    ///
+    /// Called after the `canUseVoice` guard has already failed, so it is only ever reached on a
+    /// refusal; it stays silent when the refusal was transient.
+    private func reportVoiceRefusal() {
+        guard let blocker = voiceConfigurationBlocker else {
+            return
+        }
+        setError(blocker, persistent: true)
     }
 
     func endPushToTalkVoice() {
@@ -2396,9 +2495,7 @@ final class AgentViewModel: ObservableObject {
 
     private func startVoiceRecording(trigger: VoiceRecordingTrigger, origin: TaskOrigin) {
         guard canUseVoice else {
-            if !hasAPIKey {
-                setError("OPENAI_API_KEY is not set. Export it before launching Sonny, then relaunch the app.", persistent: true)
-            }
+            reportVoiceRefusal()
             return
         }
 
