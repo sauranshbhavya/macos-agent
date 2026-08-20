@@ -304,26 +304,44 @@ compare directly — don't rely on memory of what it's supposed to look like.
 - [x] Sparkle icon, "Let Sonny take it from here…" placeholder, "Start" pill (disabled until text
       entered), separate circular mic button
 - [x] Typing enables Start; clearing text disables it again
-- [ ] Hover (don't click) the mic button → hint row appears: "Click to speak or hold
+- [x] Hover (don't click) the mic button → hint row appears: "Click to speak or hold
       Ctrl-Opt-Space." Confirm it's a real inline row (pushes layout, doesn't clip) not a
       floating tooltip, and that it goes on its own after about three seconds with the pointer left
       where it is. **(Fixed 2026-07-21 — tracker #2, and confirmed working 2026-07-23 —
       tracker #21: hover now also survives clicking into another app and back, not just the first
       hover right after launch. Wording, the three seconds and the *first* hover are SONNY-179,
-      2026-08-19 — re-check, this line's tick is not carried over.)**
-- [ ] SONNY-179 specifically. **The precondition is the whole mechanism — without it this item
+      2026-08-19 — re-checked and confirmed by the founder 2026-08-20, ticked by SONNY-178.)**
+- [x] SONNY-179 specifically — **confirmed by the founder 2026-08-20** ("collapse with the pointer
+      on the mic, expand, hover once, hint appears"), ticked by SONNY-178. **The precondition is the whole mechanism — without it this item
       passes on the broken build too and proves nothing.** Hover the mic and *leave the pointer
       resting on it* while the widget collapses to the small capsule (~6s after the last thing you
       did). Then click the capsule open and hover the mic **once**. The hint must appear on that
       first hover. It is the pointer being on the mic *at the moment of the collapse* that stranded
       the old boolean; with the pointer anywhere else, the next hover was a real transition and the
       hint appeared even before this branch.
-- [ ] SONNY-179, the risk the fix takes on. Hover the mic and keep the pointer **moving slightly
+- [x] SONNY-179, the risk the fix takes on — **confirmed by the founder 2026-08-20**, ticked by
+      SONNY-178. **What this one established, recorded because nothing in a test process could
+      answer it:** AppKit does **not** manufacture a duplicate `mouseEntered` when a tracking area
+      re-registers under a pointer that is already inside it. That was the open risk of responding
+      to every arrival — the hint row appearing and disappearing resizes the window under the
+      pointer, and had each resize counted as a fresh arrival the hint would have re-shown forever.
+      It does not. Hover the mic and keep the pointer **moving slightly
       inside the button** for about ten seconds. The hint must go once at ~3s and must **not** come
       back. Every mouse-entered now re-shows the hint and re-arms the three seconds — that is the
       fix, and it also means the old design's accidental absorbing of a repeat is gone, so this is
       the check that AppKit is not manufacturing extra arrivals when the row appearing and
       disappearing resizes the window under a moving pointer.
+- [ ] **The re-arm** (SONNY-178). Hover the mic, let the hint go on its own at ~3s, then move the
+      pointer **off** the mic and back **on**. The hint must appear again, with a fresh three-second
+      countdown — not stay away because it has "already been shown". This is the property that makes
+      a second hover and a first the same event, which is the whole of SONNY-179's design; the
+      collapse item above only proves one specific stranded case.
+- [ ] **The no-API-key variant** (SONNY-178). With no API key configured, hover the mic. A different
+      message appears — the configuration one, naming what to do — and it must **not** time out: it
+      stays for as long as the pointer rests there. The two variants differ in kind, not in wording
+      (`MicHoverHintPresentation.autoDismissDelay` is `nil` for this one), so a shared countdown
+      would be wrong rather than merely inconsistent. Check the wording matches what pressing the
+      mic says, since the same condition drives both.
 - [x] Leave idle, untouched, >6 seconds → auto-collapses to a small icon-only capsule. Click it →
       expands back, refocused for typing. **Then re-test the actual original complaint: type
       something, stop typing, wait >6s without submitting — confirm it does NOT collapse while there's
