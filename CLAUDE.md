@@ -27,7 +27,8 @@ claim about nothing, and it reads identically to a true one: sessions reported i
 repeatedly across 2026-08-17's reviews while `main` in fact carried five, one of them introduced
 that same day by a PR whose own implementer, reviewer and coordinator rerun all missed it because
 none of them could have seen it (SONNY-169). The script empties a build directory of its own —
-never the shared `.build/`, so it costs you no incremental rebuild afterwards — and recompiles
+`.build/warnings-scratch`, which is inside `.build/` but is not the `.build/debug/` that `swift
+build` and `swift test` share, so it costs you no incremental rebuild afterwards — and recompiles
 every file, so its count is the whole population of the tree rather than of whatever was edited
 last. About 95s. Exit 0 for none, 2 for some, 1 when no trustworthy measurement was made; a failed
 build is reported as a failed build and never as zero. It measures the working tree, uncommitted
