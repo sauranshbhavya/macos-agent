@@ -350,7 +350,22 @@ struct ClarificationExitTests {
             from: "private func clarificationContent(_ question: String) -> some View {",
             to: "private func failureContent(_ message: String) -> some View {"
         )
-        #expect(commandCenterRegion.contains("cancelCurrentRun()"))
+        // **Paired counts, not `contains` (PR #80 review cycle 2, N1).** A presence check on the
+        // cancel token alone is satisfied by a mutant that rewires the button and leaves the old
+        // call in a *trailing* line comment — `viewModel.submitClarification() // was
+        // viewModel.cancelCurrentRun()`. Trailing comments are deliberately not stripped (see
+        // `MacAgentSource`, and the row-C reason it stays that way), so the token is still there and
+        // a single-sided count stays at 1. The reviewer's M13 did exactly that and passed the whole
+        // suite.
+        //
+        // Counting *both* sides closes it, because a rewiring is a transfer rather than a deletion:
+        // this region holds one cancel — the Cancel button — and two submits, the field's `.onSubmit`
+        // and the Send button. Move the cancel to submit and the second number becomes 3 whatever
+        // the comment says, because a comment cannot subtract a token it can only add. The widget
+        // half below has counted since F2; this is the same technique applied to the half that was
+        // still checking presence.
+        #expect(MacAgentSource.count(of: "cancelCurrentRun()", inText: commandCenterRegion) == 1)
+        #expect(MacAgentSource.count(of: "submitClarification()", inText: commandCenterRegion) == 2)
 
         // **The widget's own button, and the region above does not reach it (PR #80 review, F2).**
         //
