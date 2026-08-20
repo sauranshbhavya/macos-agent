@@ -157,6 +157,59 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/compiler-warnings-baseline
+Status: complete
+Date: 2026-08-20
+Tickets: SONNY-169 ("zero compiler warnings" had been written as evidence on many branches and was never true; the ticket measured five on `main` when it was filed and named a sixth arriving with row D). One session, from `main` at `59d66a9`. Two halves, and the ticket is explicit that the second is the point: fix the warnings, then build the thing that makes the claim checkable, because six one-line fixes prevent nothing.
+Reviewed by: pending — fresh session per WORKFLOW.md step 7.
+
+Spec sections covered: none. No product behaviour changes; the only `Tests/` edits are the six warning sites, and `Sources/` is untouched.
+Files changed:
+- `scripts/warnings` — new. Empties a build directory of its own before every run and rebuilds every file, then classifies the log and reports the deduplicated population with the SHA stamped on it. Run lock in `.git/warnings.lock` with an `unlock` subcommand, a `--help` carrying "What this does and does not prevent", and a `selftest` of 27 checks.
+- `Tests/MacAgentCoreTests/PriorTaskContextTests.swift`, `SnippetRoutineAuthoringTests.swift`, `VisionDecisionAndGeometryTests.swift`, `VisionSessionAdapterTests.swift`, `Tests/MacAgentTests/ScheduledRoutineRunTests.swift`, `TaskDeletePresentationTests.swift` — the six warning sites, one line or two each.
+- `CLAUDE.md` — the script named beside the flagged test command, which is where a session meets it without knowing to look.
+- `WORKFLOW.md` — step 5's evidence list and step 7's reviewer duties, at the founder's call (2026-08-20) rather than by this session's judgment, since a process change is outside what the ticket named.
+- `docs/sonny-v1-implementation-changelog.md` — this entry.
+
+Tests: CLAUDE.md's flagged command. Base **1410 in 111 suites, exit 0 at `59d66a9`** (carried from the previous entry's `ed9fd1e`, the merge's parent); head **1410 in 111, exit 0** with the six fixes applied — unchanged, and expected to be: no test is added or removed, six bodies change. **Compiler warnings: six at `59d66a9`, zero at `9b8e73f`**, both from a cold build via the command now in `scripts/warnings` (91s at the head, 96s at the base). **`scripts/warnings selftest`: 27 checks, 0 failures, exit 0**, and the harness now reports that total itself rather than leaving it to be counted off the output. Release, `Sources/` only, cold at `9b8e73f`: `Build complete!`, zero warnings — measured so that the debug-only boundary documented in `--help` is a stated limit rather than a hiding place.
+
+Behavior added:
+- **`scripts/warnings`** — the whole warning population of the working tree, from a build in which every file was compiled, in about 95 seconds. Exit 0 for none, 2 for some, 1 when no trustworthy measurement was made.
+- **A failed build is reported as a failed build**, never as zero warnings, and prints no count at all.
+- **A `warning:` line the parser cannot classify suppresses the count** and is printed, rather than being dropped.
+- **A second run in the same checkout is refused**, naming the holder; `scripts/warnings unlock` clears a lock a killed run left behind and refuses while its owner is alive.
+
+Behavior preserved (required, no blanket claims):
+- **No file under `Sources/` is in this diff.** The six fixes are test-local; `routine(named:)`, `visionSplitDisclosure(for:)`, `CompletedTaskRecord.id` and `VisionPointResolver.isInsideImage` are all untouched.
+- **No test was added or removed**, and no assertion was weakened. The suite is 1410 in 111 at both ends.
+- **Every assertion the six tests made, they still make** — `disclosure?.contains(x) == true` became `disclosure.contains(x)` and `== false` became `!disclosure.contains(x)`, which is the same predicate against a value that can no longer be nil.
+- **The shared `.build/` is untouched by the new script**, which never writes there, so running it costs no incremental rebuild afterwards and cannot corrupt a build running beside it — the isolation argument SONNY-176 made for `scripts/mutate`, reused rather than reinvented.
+- **`scripts/mutate` is not modified.** The two harnesses share a shape and a `.git/`-scoped lock convention, not code.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**The hazard was reproduced on purpose, and the reproduction is the argument.** At `59d66a9`, with five warnings still live in the tree, one test file was edited and rebuilt: the incremental build recompiled exactly that one file and printed `Build complete!` with **zero** warnings in its output. Five, reported as none, by a build that did nothing wrong. That is why the answer is not a rule telling sessions to check — that rule already existed implicitly and produced five — and why the wipe has no flag to disable it. `scripts/warnings selftest` performs the same demonstration on a throwaway package before showing the harness catch it, so the property is watched firing rather than asserted.
+
+**Counting `warning:` lines gives four different answers on one log, and only one of them is the population.** The same cold build at `59d66a9` yields 68 lines containing `warning:`, 34 diagnostic headers, and 6 distinct warnings; the compiler repeats each diagnostic across compilation jobs and renders each one again inside a gutter that also says `warning:`. The report prints both the deduplicated count and the raw header count so the gap is visible instead of being a number a reader has to trust. This is `CLAUDE.md`'s quantified-claim rule landing on a build log: count first, with a method that tolerates what it is searching.
+
+**Four of the six were misdiagnosed in the ticket, and the correct diagnosis changes the fix.** The ticket read all four `#require` warnings as redundant calls on non-optional expressions. Only two are: `routine(named:)` returns a non-optional `StoredRoutine` and throws when the routine is absent, so `#require` around it adds nothing. The other two — plus the one the ticket called `try? #require` — sit on expressions that genuinely *are* optional: `String.range(of:options:)`, `visionSplitDisclosure(for:) -> String?`, and `CompletedTaskRecord.id`, which is declared `String?` and documented at length as to why. **It is `try?`, not the argument, that selects the redundant overload**, because `try?` flattens its result so both `#require` overloads produce the same type and the deprecated one stops being excluded by type mismatch. Verified by controlled comparison inside a single file rather than reasoned about: `VisionSessionAdapterTests.swift:618` calls `try #require` on the same optional-returning function from a `throws` test and emits nothing, while line 584's `try?` on the same call emits the warning. The fix is therefore `try` plus `throws` on the test — which is what the authors were avoiding by reaching for `try?` — and not the deletion the ticket's reading would have produced. **Re-deriving the list, which the ticket asked for, was not enough; re-deriving the diagnosis was the part that mattered.**
+
+**Two of the six sites were hiding a vacuous pass, and the warning was pointing at it.** `PriorTaskContextTests`'s `let closing = try? #require(...)` fed an `if let closing, let injected = ...` that guarded the *only* assertion in the test, so either range coming back nil made the test pass having checked nothing. Both are now required. The pattern is worth naming because it is what `try? #require` tends to produce: `try?` converts a would-be failure into a nil that some later `if let` then quietly swallows, and the compiler's complaint about the redundant overload is the visible end of an invisible problem.
+
+**Release cannot be covered, and the reason is structural rather than a missing flag.** The test targets use `@testable import`, which requires `-enable-testing`; release does not pass it, so `swift build -c release --build-tests` fails outright with `error: module 'MacAgent' was not compiled for testing`. No single build can cover the test targets and release at once, so the harness is debug — the configuration every session builds and tests in — and says so in `--help` instead of implying coverage it does not have. Release over `Sources/` alone was measured once here and is clean, which makes that a documented boundary rather than an unexamined one.
+
+**The dirty-tree rule is the opposite of `scripts/mutate`'s, deliberately.** A battery rewrites files, so it must run against something a SHA names or its revert step destroys work. This only reads, and checking work that is not committed yet is the entire point — a session that can only measure committed trees learns it introduced a warning after it has already written the closing comment. So the tree is measured as it stands and *described* instead: the report carries the SHA and the uncommitted-file count, so a number still cannot be quoted without the tree it came from.
+
+Known limitations / deferred scope:
+- **Nothing runs it for you.** There is no CI in this repository and no hook was added; the founder chose the WORKFLOW.md route (step 5 and step 7) over a `pre-push` hook, which would have cost ~95s on every push, fired on doc-only branches, and been bypassable with `--no-verify`. Stated here because "it is a check, not a gate" is the honest residual, and `--help` says it too.
+- Dependency warnings are unreportable by construction — SwiftPM suppresses them for non-root packages, so the compiler never emits them. Warnings from outside this repository's sources are printed under "elsewhere" and not counted.
+- One machine, one toolchain (Apple Swift 6.3.3, arm64-apple-macosx26.0). A warning needing a different SDK is not visible here.
+- Nothing deferred, and no tickets filed by this branch.
+
+Open questions (required, write "none" if true): none.
+
+Next branch: unchanged by this branch — it touches no roadmap row.
+
 ### Branch: chore/records-sweep
 Status: complete
 Date: 2026-08-20

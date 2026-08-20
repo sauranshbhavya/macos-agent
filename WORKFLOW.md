@@ -173,6 +173,13 @@ changelog's per-branch decisions, `.claude/rules/`). The v1 rigor bar is unchang
 - Build: `swift build`. Tests: the exact flagged command in `CLAUDE.md` — plain
   `swift test` fails at compile with "no such module 'Testing'", and neither half of the
   flag set is optional. CLAUDE.md's Commands section says which flag fixes which failure.
+- Warnings: `scripts/warnings`, and never a count read off `swift build` or `swift test`.
+  Those build incrementally against the shared `.build/`, an unchanged file is not
+  recompiled, and a file that is not recompiled emits no warnings — so their output is
+  silent about everything the ticket did not touch, and "zero compiler warnings" taken
+  from it is a claim about nothing that reads exactly like a true one. It was written as
+  evidence repeatedly on 2026-08-17 while `main` carried five. The closing comment carries
+  the script's count and the SHA it stamped, the same way it carries the test count.
 - **Evidence, not assertion.** A ticket is done when its acceptance criteria are
   demonstrated by test output and exit codes, not when the work "looks done."
   `CLAUDE.md`'s claims-and-evidence conventions bind every claim made under this workflow —
@@ -268,10 +275,12 @@ than validating:
 - Maps every acceptance criterion on every ticket to the specific test(s) exercising it,
   and checks those tests assert concrete values and state — not merely no-throw, not-nil,
   or happy-path-only. Test quality is explicitly the reviewer's job, not a courtesy.
-- Reruns the full suite itself and hand-traces non-trivial logic (date math, state
-  machines) rather than trusting green tests. One exception: a diff provably confined to
-  docs/comments may skip the rerun — anything touching `Sources/` or `Tests/` never
-  skips, and no session invents its own threshold beyond that line.
+- Reruns the full suite itself, and `scripts/warnings` with it, and hand-traces
+  non-trivial logic (date math, state machines) rather than trusting green tests. One
+  exception covers both reruns: a diff provably confined to docs/comments may skip them —
+  anything touching `Sources/` or `Tests/` never skips, and no session invents its own
+  threshold beyond that line. A reviewer that reruns only the suite cannot see a warning
+  the implementer introduced, which is how one merged on 2026-08-17.
 - Posts findings to the affected tickets (or the PR) carrying the same evidentiary bar as
   implementers: the literal command run and the tail of its output (exit code, test
   counts). Its "all green" is a spot-checkable record, not an assertion to trust.
