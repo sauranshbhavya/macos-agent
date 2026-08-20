@@ -230,11 +230,20 @@ struct VisionModelClientTests {
         #expect(HTTPBodyCompression.crc32(Data("The quick brown fox jumps over the lazy dog".utf8)) == 0x414F_A339)
     }
 
-    /// **The default endpoint sends an uncompressed body and no `Content-Encoding`.** Whether
-    /// OpenCode's Zen route inflates a gzip body is unverified — it needs a live call with a real
-    /// key — so turning compression on for it would risk every screen-control session against an
-    /// unknown. SONNY-131 turns it on in the same edit that repoints this client at Sonny's own
+    /// **The default endpoint sends an uncompressed body and no `Content-Encoding`.** OpenCode's
+    /// Zen route does **not** inflate a gzip body: it answers HTTP 500, where the same body sent
+    /// uncompressed answers 200. Measured 2026-08-17 at `34ebd59`, where `VisionModelClient.swift`
+    /// and `HTTPBodyCompression.swift` were byte-identical to `main` at `6af4044`; full evidence is
+    /// in SONNY-146's comment of that date. So `false` is the measured-correct value for this
+    /// endpoint rather than caution against an unknown, and what this test pins is a value the route
+    /// requires. SONNY-131 turns it on in the same edit that repoints this client at Sonny's own
     /// gateway, which the API contract already obliges to accept gzip.
+    ///
+    /// (SONNY-164 corrected this paragraph on 2026-08-20; it read "unverified" until then. The claim
+    /// lived in **three** places and that ticket named two — the `compressesRequestBody` doc comment
+    /// and SONNY-146's closing comment — so this one survived the first pass and was caught by
+    /// PR #77's review. A stale claim has a population; fixing the instances a ticket lists is not
+    /// the same as fixing the claim.)
     @Test
     func theDefaultEndpointSendsAnUncompressedBodyWithNoContentEncoding() async throws {
         Self.respondAndCapture()

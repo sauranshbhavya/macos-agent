@@ -17,7 +17,7 @@ https://drive.google.com/file/d/12lJnnqiBrbGnua2pGyE2GsYaVBcil0qe/view?usp=shari
 ## What Sonny Can Do
 
 **Agent loop and safety**
-- Plans typed or spoken commands through OpenAI, validates the plan against a strict schema and a registered capability contract, then executes only registered local capabilities — never model-generated code, shell, or AppleScript.
+- Plans typed or spoken commands through a hosted model (OpenAI by default, behind `PlannerProviderRegistry`), validates the plan against a strict schema and a registered capability contract, then executes only registered local capabilities — never model-generated code, shell, or AppleScript.
 - Every capability declares a default risk tier (0 informational/auto-run, 1 low-impact/auto-run, 2 local modification/lightweight confirmation, 3 external-or-destructive/explicit approval, 4 refused) and can escalate dynamically at validation time — e.g. a zip whose output path already exists, or a routine save that would replace an existing one, escalates to explicit approval before it runs.
 - Tier 2+ actions pause for approval in the floating widget — the app's only command surface — and on the Command Center page you are looking at, which has its own attention panel for permission, clarification and failure, plus a compact running indicator while a task is in flight.
 
