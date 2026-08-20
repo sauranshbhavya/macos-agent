@@ -126,6 +126,41 @@ public final class OpenAIPlanner: Planning {
         ]
     }
 
+    /// The routine-exclusion sentence's operation list, derived from
+    /// `StoredRoutine.forbiddenStepOperations` rather than written out beside it (SONNY-74).
+    ///
+    /// The sentence named five operations while the store refused nine, and nothing on either side
+    /// said so. A user asking for "a routine that opens my research workspace" got a plan the
+    /// planner had no reason to avoid, then `AutomationStoreError.unsafeRoutineStep` — an
+    /// internal-sounding refusal naming an operation they never typed — where a working routine or
+    /// an explanation belonged. The nested schema is no help: `AgentPlanSchema.stepSchema` gives
+    /// nested steps the same `plannerVisibleCases` enum as top-level ones, so every planner-visible
+    /// operation is structurally emittable inside `routineSteps` and this prose is the only thing
+    /// steering the model away from the ones the store will refuse.
+    ///
+    /// **Derived, because the gap was not static.** The set grew twice after the sentence was
+    /// written, and the second addition was `.visionSession` — the third of three independent
+    /// layers of "unattended vision: never", listed there so the scheduled path can never see a
+    /// vision step through the routine door. Nothing broke, because the validator still refuses;
+    /// what changed is that the belt-and-braces layer became the one doing the catching while the
+    /// model was being invited toward a shape the product refuses on safety grounds. Deriving is
+    /// the only shape that survives the set changing a third time.
+    ///
+    /// Declaration order via `allCases`, because a `Set` has none and a sentence that reordered
+    /// itself between processes would make the golden untestable and defeat prompt caching.
+    ///
+    /// One sentence covers both providers: `CerebrasPlanner` builds on `systemPrompt` and appends
+    /// only a schema suffix, so a fix here cannot land on one planner and not the other.
+    nonisolated private static var forbiddenRoutineStepPhrase: String {
+        let names = AgentOperation.allCases
+            .filter { StoredRoutine.forbiddenStepOperations.contains($0) }
+            .map(\.rawValue)
+        guard let last = names.last, names.count > 1 else {
+            return names.first ?? ""
+        }
+        return names.dropLast().joined(separator: ", ") + (names.count == 2 ? " or " : ", or ") + last
+    }
+
     nonisolated public static func systemPrompt(toolRegistry: ToolRegistry = .default) -> String {
         """
     You plan a tiny macOS agent. Return only a JSON object that matches the provided schema.
@@ -166,7 +201,7 @@ public final class OpenAIPlanner: Planning {
     - For Finder context phrases such as "selected folder", "selected files", "this Finder selection", or "the folder selected in Finder", set contextSource to finder_selection and leave inputPath null.
     - For "reveal the result/zip/markdown/PDFs in Finder" after a writing step, add reveal_in_finder with outputPath null so the executor can reveal the previous produced artifact.
     - For permission/readiness requests, produce one show_permission_readiness step.
-    - For teaching a routine, produce one save_routine step with routineName and routineSteps containing only registered non-routine steps. Do not put save_routine, run_routine, switch_running_app, clarify, or unsupported inside routineSteps.
+    - For teaching a routine, produce one save_routine step with routineName and routineSteps containing only registered non-routine steps. Do not put \(forbiddenRoutineStepPhrase) inside routineSteps.
     - For running a saved routine, produce one run_routine step with routineName.
     - For creating a workspace, produce one create_workspace step with workspaceName, workspaceApps, and workspaceURLs. Use only explicitly named apps/URLs. If none are provided, ask a clarification question.
     - For changing a workspace the user already saved, produce one edit_workspace step with workspaceName and only the fields the user asked to change: workspaceApps, workspaceURLs, workspaceFileLocations to add, and workspaceAppsToRemove, workspaceURLsToRemove, workspaceFileLocationsToRemove to remove. Never use create_workspace to change an existing workspace, and never put an item in both an add and a remove field.

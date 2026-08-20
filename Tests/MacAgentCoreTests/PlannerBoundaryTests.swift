@@ -50,7 +50,7 @@ struct PlannerBoundaryTests {
         - For Finder context phrases such as "selected folder", "selected files", "this Finder selection", or "the folder selected in Finder", set contextSource to finder_selection and leave inputPath null.
         - For "reveal the result/zip/markdown/PDFs in Finder" after a writing step, add reveal_in_finder with outputPath null so the executor can reveal the previous produced artifact.
         - For permission/readiness requests, produce one show_permission_readiness step.
-        - For teaching a routine, produce one save_routine step with routineName and routineSteps containing only registered non-routine steps. Do not put save_routine, run_routine, switch_running_app, clarify, or unsupported inside routineSteps.
+        - For teaching a routine, produce one save_routine step with routineName and routineSteps containing only registered non-routine steps. Do not put save_routine, run_routine, create_workspace, edit_workspace, open_workspace, switch_running_app, vision_session, clarify, or unsupported inside routineSteps.
         - For running a saved routine, produce one run_routine step with routineName.
         - For creating a workspace, produce one create_workspace step with workspaceName, workspaceApps, and workspaceURLs. Use only explicitly named apps/URLs. If none are provided, ask a clarification question.
         - For changing a workspace the user already saved, produce one edit_workspace step with workspaceName and only the fields the user asked to change: workspaceApps, workspaceURLs, workspaceFileLocations to add, and workspaceAppsToRemove, workspaceURLsToRemove, workspaceFileLocationsToRemove to remove. Never use create_workspace to change an existing workspace, and never put an item in both an add and a remove field.
@@ -254,6 +254,48 @@ struct PlannerBoundaryTests {
         // treats it. Its requiredFields is ["draftContent"] alone, and the title falls back to
         // "Local Draft", so listing it as a plain field alongside draftContent overstated it.
         #expect(prompt.contains("produce one create_local_draft step with draftContent, optional draftTitle, and optional outputPath"))
+    }
+
+    /// **The prompt and the store agreeing about routines, held by the compiler-visible set rather
+    /// than by whoever edits the sentence next** (SONNY-74).
+    ///
+    /// The sentence named five operations while `StoredRoutine.forbiddenStepOperations` refused
+    /// nine. The two omissions that mattered were the three workspace operations — so "teach me a
+    /// routine that opens my research workspace" produced a plan the planner had no reason to avoid
+    /// and then a store refusal naming an operation the user never typed — and `.visionSession`,
+    /// which is one of three deliberate layers of "unattended vision: never" and the one the model
+    /// was being steered straight into.
+    ///
+    /// The golden pins the assembled sentence character for character, so this is not about the
+    /// text. It is about the correspondence: the golden fails on any edit, this fails only on the
+    /// edits that make the prompt lie about what the store accepts, and it fails the same way if a
+    /// tenth operation joins the set with nobody touching this file.
+    @Test
+    func theRoutineExclusionSentenceNamesExactlyWhatTheStoreRefuses() throws {
+        let prompt = OpenAIPlanner.systemPrompt(toolRegistry: .default)
+        let sentence = try #require(
+            prompt.split(separator: "\n").first { $0.hasPrefix("- For teaching a routine") }
+        )
+        // Only the exclusion clause: the rest of the line legitimately names `save_routine` as the
+        // operation to produce, and reading the whole line would count that as an exclusion.
+        let clause = try #require(sentence.components(separatedBy: "Do not put ").last)
+
+        for operation in StoredRoutine.forbiddenStepOperations {
+            #expect(
+                clause.contains(operation.rawValue),
+                "the store refuses \(operation.rawValue) inside a routine and the planner is not told"
+            )
+        }
+
+        // And the converse, which is the direction that would quietly cost the user a capability:
+        // an operation named here that the store actually permits is a routine step the planner
+        // would refuse to write for no reason anyone could find.
+        for operation in Set(AgentOperation.allCases).subtracting(StoredRoutine.forbiddenStepOperations) {
+            #expect(
+                !clause.contains(operation.rawValue),
+                "the planner is told not to nest \(operation.rawValue), which the store permits"
+            )
+        }
     }
 
     /// **The agreement that was true by accident until SONNY-68 pinned it.**
