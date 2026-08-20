@@ -1243,6 +1243,139 @@ struct AgentRunnerTests {
         ])
     }
 
+    /// **SONNY-73 over the real two-phase dispatch, which is where its fix could break SONNY-59.**
+    ///
+    /// `AgentRunner.prepare` resolves the plan and hands the *resolved* plan to `approvalRequest`,
+    /// which resolves it again — so `FinderSelectionResolver.pinningSelectedDirectoryInput` runs
+    /// twice over one run, and on the second pass every matching step already carries the
+    /// `inputPath` the first pass pinned from the live selection. A clearing rule keyed on "this
+    /// resolution was satisfied from an explicit path" answers *true* on that second pass and
+    /// deletes the Finder report from a run that genuinely did read the selection. Every existing
+    /// test stays green while it happens, because they all call `assessRisk` once, on a raw plan.
+    ///
+    /// So the rule is keyed on the steps the pin *back-fills*, which is the one signal that
+    /// distinguishes the two: in the genuine case the declaring step arrives with no path and is
+    /// back-filled on the first pass and nothing is back-filled on the second, while in the pooled
+    /// case the declaring step is the one being back-filled. This test is the guard on that.
+    @Test
+    func aSelectionDrivenZipStillReportsFinderThroughPrepareThenApproval() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("Client", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write("contents", to: folder.appendingPathComponent("a.txt"))
+
+        let reader = FakeFinderContextReader(selection: [folder])
+        // The planner is never consulted: `prepare(plan:source:)` is the pre-built entry point.
+        let runner = AgentRunner(
+            planner: StaticPlanner(plan: selectionDrivenZipPlan()),
+            executor: makeExecutor(root: root, finderContextReader: reader)
+        )
+        let scope = TaskWorkspaceScope.scoped(
+            WorkspaceScope(
+                workspace: StoredWorkspace(
+                    name: "Client Alpha",
+                    apps: ["Safari"],
+                    urls: [],
+                    fileLocations: [folder.path]
+                ),
+                whitelist: PathWhitelist(roots: [root])
+            )
+        )
+
+        let prepared = try runner.prepare(plan: selectionDrivenZipPlan(), source: .planner)
+        let request = try runner.approvalRequest(
+            for: prepared,
+            scope: scope,
+            context: approvalContext(for: prepared)
+        )
+
+        #expect(request.assessment.escalations.map(\.reason) == ["Finder is not part of the Client Alpha workspace."])
+        #expect(request.assessment.scopeVerdict == .outOfScope)
+    }
+
+    /// The same two-phase path for the shape SONNY-73 is actually about: a scan carrying an explicit
+    /// folder beside a zip carrying only `contextSource`. Finder is never contacted, and the report
+    /// has to stay absent across both resolutions rather than only the first.
+    @Test
+    func aPooledExplicitPathReportsNoFinderThroughPrepareThenApproval() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("Client", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write("contents", to: folder.appendingPathComponent("a.txt"))
+        let decoy = root.appendingPathComponent("Decoy", isDirectory: true)
+        try FileManager.default.createDirectory(at: decoy, withIntermediateDirectories: true)
+
+        let runner = AgentRunner(
+            planner: StaticPlanner(plan: selectionDrivenZipPlan()),
+            executor: makeExecutor(root: root, finderContextReader: FakeFinderContextReader(selection: [decoy]))
+        )
+        let scope = TaskWorkspaceScope.scoped(
+            WorkspaceScope(
+                workspace: StoredWorkspace(
+                    name: "Client Alpha",
+                    apps: ["Safari"],
+                    urls: [],
+                    fileLocations: [folder.path]
+                ),
+                whitelist: PathWhitelist(roots: [root])
+            )
+        )
+        let plan = AgentPlan(
+            summary: "Zip the largest files in that folder.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "scan",
+                    operation: .scanSelectLargestFiles,
+                    description: "Scan the folder.",
+                    inputPath: folder.path,
+                    count: 1
+                ),
+                AgentStep(
+                    id: "zip",
+                    operation: .createZip,
+                    description: "Zip the selected folder.",
+                    contextSource: .finderSelection
+                )
+            ]
+        )
+
+        let prepared = try runner.prepare(plan: plan, source: .planner)
+        let request = try runner.approvalRequest(
+            for: prepared,
+            scope: scope,
+            context: approvalContext(for: prepared)
+        )
+
+        #expect(request.assessment.escalations.map(\.reason) == [])
+        #expect(request.assessment.scopeVerdict == .inScope)
+    }
+
+    /// A scan/zip pair carrying no `inputPath` at all — the folder is whatever is selected in Finder.
+    private func selectionDrivenZipPlan() -> AgentPlan {
+        AgentPlan(
+            summary: "Zip the largest files in the selected folder.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "scan",
+                    operation: .scanSelectLargestFiles,
+                    description: "Scan the selected folder.",
+                    count: 1,
+                    contextSource: .finderSelection
+                ),
+                AgentStep(
+                    id: "zip",
+                    operation: .createZip,
+                    description: "Zip the selected folder.",
+                    contextSource: .finderSelection
+                )
+            ]
+        )
+    }
+
     private func makeExecutor(
         root: URL,
         zipArchiver: ZipArchiving = RecordingZipArchiver(),
