@@ -327,8 +327,8 @@ struct ClarificationExitTests {
     /// version of this test was not, and a mutation battery walked straight through it.
     @Test
     func bothClarificationSurfacesRouteTheirExitThroughOneEntryPointAndOneLabel() throws {
-        let widget = try ClarificationExitFixture.readSource("FloatingWidgetView.swift")
-        let commandCenter = try ClarificationExitFixture.readSource("CommandCenterView.swift")
+        let widget = try MacAgentSource.read("FloatingWidgetView.swift")
+        let commandCenter = try MacAgentSource.read("CommandCenterView.swift")
 
         // One label, referenced by name on both surfaces. The widget's control is icon-only, so
         // there it is the VoiceOver name and the tooltip; Command Center shows it.
@@ -338,14 +338,14 @@ struct ClarificationExitTests {
 
         // One entry point, inside each surface's own clarification region — not merely somewhere in
         // a 4,000-line file, which both already satisfy via unrelated approval controls.
-        let widgetRegion = try ClarificationExitFixture.region(
+        let widgetRegion = try MacAgentSource.region(
             of: widget,
             from: "case .clarification(let question):",
             to: "case .permission(let request):"
         )
         #expect(widgetRegion.contains("cancelCurrentRun()"))
 
-        let commandCenterRegion = try ClarificationExitFixture.region(
+        let commandCenterRegion = try MacAgentSource.region(
             of: commandCenter,
             from: "private func clarificationContent(_ question: String) -> some View {",
             to: "private func failureContent(_ message: String) -> some View {"
@@ -448,44 +448,6 @@ private struct ClarificationExitFixture {
         }
     }
 
-    /// A file under `Sources/MacAgent/`, resolved from this test file's own location so the scan
-    /// works from any checkout — **with comment-prefixed lines removed.**
-    ///
-    /// The removal is not tidiness, it is the whole soundness of every scan below. Measured on this
-    /// branch: a mutation battery rewired Command Center's Cancel to `submitClarification()` and the
-    /// scan **survived**, because the comment three lines above it says the button "calls the same
-    /// `cancelCurrentRun()` the widget's own control does". The test was reading the sentence
-    /// describing the code instead of the code, and a scan that a prose edit can satisfy holds
-    /// nothing at all.
-    ///
-    /// Comment-*prefixed*, not every line containing `//` — the narrower `grep -v "//"` this
-    /// repository was bitten by during row C drops real constructions carrying a trailing note. Same
-    /// rule `TestSourceTree.codeLines` states in the other target.
-    static func readSource(_ name: String) throws -> String {
-        let repository = URL(fileURLWithPath: #filePath)
-            .deletingLastPathComponent()   // MacAgentTests
-            .deletingLastPathComponent()   // Tests
-            .deletingLastPathComponent()   // repository root
-        let url = repository
-            .appendingPathComponent("Sources/MacAgent")
-            .appendingPathComponent(name)
-        let source = try String(contentsOf: url, encoding: .utf8)
-        return source
-            .split(separator: "\n", omittingEmptySubsequences: false)
-            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
-            .joined(separator: "\n")
-    }
-
-    /// The text between two anchors, failing with the missing anchor named rather than silently
-    /// scanning an empty string.
-    static func region(of source: String, from start: String, to end: String) throws -> String {
-        let startRange = try #require(source.range(of: start), "Anchor not found: \(start)")
-        let endRange = try #require(
-            source.range(of: end, range: startRange.upperBound..<source.endIndex),
-            "Anchor not found after \(start): \(end)"
-        )
-        return String(source[startRange.upperBound..<endRange.lowerBound])
-    }
 }
 
 /// Counts what the view model asked, so "monitoring was restarted" is a measurement rather than an

@@ -14,6 +14,22 @@ private enum SonnyNotificationCategory {
     /// A finished run's result. Its own category rather than reusing `error`, which carries a
     /// "Retry" action that makes no sense on a run that succeeded (SONNY-56).
     static let outcome = "SONNY_OUTCOME"
+    /// What the scheduler did while nobody was watching — ran, failed, was skipped, or had its
+    /// schedule paused (SONNY-113).
+    ///
+    /// **Its own category for the same reason `outcome` has one, and the cost of not having it was
+    /// larger here.** These posted through `error` until now, so every scheduled notice arrived with
+    /// a Retry button — wrong twice. A run that succeeded ("X ran on schedule.") is not something to
+    /// retry, and the button's action is `retryLastCommand()`, which re-dispatches the *user's own
+    /// last submitted command*: `performScheduledRun` deliberately never writes `lastCommand`, so
+    /// Retry on "your 9am routine failed" ran whatever the user last typed, a task with no
+    /// relationship to the routine. `ScheduledRoutineRunTests.aScheduledRunDoesNotBecomeTheRetryTarget`
+    /// demonstrates that property directly — it was written to protect the widget's Retry button and
+    /// is equally the proof that this notification must not offer one.
+    ///
+    /// Latent rather than live until now: every notification was suppressed by the old
+    /// `isAnySonnySurfaceVisible` gate, and SONNY-56 opening the gate is what made it reachable.
+    static let scheduled = "SONNY_SCHEDULED"
 }
 
 private enum SonnyNotificationUserInfo {
@@ -42,6 +58,12 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
     /// widget (PR #67 review, F4). Separate from `onOpen` because the two land in different places:
     /// a failure's message lives in the widget, a result's lives in Command Center.
     private let onOpenTask: (String?) -> Void
+    /// The default action for a scheduled-run notification (SONNY-113). A third destination for the
+    /// same reason there is a second: the notice's own controls live in Command Center — the
+    /// Routines page is where a paused schedule is switched back on, and the notice strip carrying
+    /// the reason renders there — so fronting the widget would answer the click with less than the
+    /// user came for.
+    private let onOpenScheduledRun: () -> Void
 
     /// Fails when the current process has no real app-bundle identity — e.g. `swift run`'s bare
     /// executable (no `Info.plist`/`CFBundleIdentifier`), as opposed to a packaged `.app`.
@@ -52,7 +74,8 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
         onAllow: @escaping () -> Void,
         onRetry: @escaping () -> Void,
         onOpen: @escaping () -> Void,
-        onOpenTask: @escaping (String?) -> Void = { _ in }
+        onOpenTask: @escaping (String?) -> Void = { _ in },
+        onOpenScheduledRun: @escaping () -> Void = {}
     ) {
         guard Bundle.main.bundleIdentifier != nil else {
             return nil
@@ -62,6 +85,7 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
         self.onRetry = onRetry
         self.onOpen = onOpen
         self.onOpenTask = onOpenTask
+        self.onOpenScheduledRun = onOpenScheduledRun
         super.init()
         center.delegate = self
         registerCategories()
@@ -104,6 +128,18 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
                 actions: [],
                 intentIdentifiers: [],
                 options: []
+            ),
+            // No actions either, and this empty array is load-bearing rather than a default
+            // (SONNY-113). The only action Sonny has that could plausibly go here is Retry, and
+            // Retry cannot mean "run the routine again" — it is wired to `retryLastCommand()`, which
+            // re-dispatches the user's own last submitted command. There is no per-routine retry
+            // entry point to offer instead, and inventing one is not this ticket's. The click opens
+            // Command Center, where the routine's real controls are.
+            UNNotificationCategory(
+                identifier: SonnyNotificationCategory.scheduled,
+                actions: [],
+                intentIdentifiers: [],
+                options: []
             )
         ])
     }
@@ -136,6 +172,21 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
         if let taskID {
             content.userInfo[SonnyNotificationUserInfo.taskID] = taskID
         }
+        deliver(content)
+    }
+
+    /// What the scheduler did while the user was elsewhere (SONNY-113).
+    ///
+    /// Carries every scheduled outcome, successes included — the notice's own channel already does,
+    /// deliberately, because "an action taken with nobody watching should be visible after the
+    /// fact" is the whole reason unattended execution needs a surface. That is exactly why it must
+    /// not post through `postErrorNotification`: a routine that ran fine would arrive in the
+    /// notification category Sonny reserves for failures, wearing a Retry button.
+    func postScheduledRunNotification(message: String) {
+        let content = UNMutableNotificationContent()
+        content.title = "Sonny"
+        content.body = message
+        content.categoryIdentifier = SonnyNotificationCategory.scheduled
         deliver(content)
     }
 
@@ -175,9 +226,12 @@ final class SonnyNotificationService: NSObject, UNUserNotificationCenterDelegate
                 // Dispatched by category. The seam was already here and simply unused: every
                 // category shared one handler, so the outcome notification inherited behaviour
                 // written for the failure one (PR #67 review, F4).
-                if category == SonnyNotificationCategory.outcome {
+                switch category {
+                case SonnyNotificationCategory.outcome:
                     self?.onOpenTask(taskID)
-                } else {
+                case SonnyNotificationCategory.scheduled:
+                    self?.onOpenScheduledRun()
+                default:
                     self?.onOpen()
                 }
             default:

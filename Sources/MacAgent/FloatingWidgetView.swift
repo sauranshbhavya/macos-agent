@@ -86,6 +86,34 @@ struct FloatingWidgetView: View {
                     micHoverHintRow(hint)
                 }
 
+                // What the scheduler did while nobody was watching (SONNY-113). Until now this
+                // notice rendered on exactly four Command Center pages and nowhere else, and the
+                // notification that was supposed to cover "nobody is looking at Command Center" is
+                // suppressed whenever the user *is* working in Sonny — so a routine that fired while
+                // they sat on a routine-detail or workspace-detail sheet, or typed into this widget
+                // with Command Center closed, reached them on no surface at all. Founder decision,
+                // 2026-08-20.
+                //
+                // First in the stack, mirroring the precedence Command Center's own notice row
+                // already states: it reports something that already happened without the user
+                // present, which outranks an ambient storage problem that will still be true after
+                // they dismiss this.
+                //
+                // The accent tint rather than the error red, because this channel carries successes
+                // too — `clock.arrow.circlepath` is the same glyph Command Center shows for the same
+                // notice, so one event does not look like two different kinds of thing depending on
+                // which surface the user reads it on.
+                if let notice = viewModel.scheduledRunNotice {
+                    WidgetNoticeStrip(
+                        message: notice,
+                        icon: "clock.arrow.circlepath",
+                        tint: WidgetTheme.primaryAction,
+                        dismissAccessibilityLabel: "Dismiss scheduled run notice"
+                    ) {
+                        viewModel.scheduledRunNotice = nil
+                    }
+                }
+
                 if let notice = viewModel.localStorageNotice {
                     WidgetNoticeStrip(
                         message: notice,
@@ -136,6 +164,13 @@ struct FloatingWidgetView: View {
             }
         }
         .onChange(of: isVoiceActive) { _, _ in
+            scheduleAutoDismissIfNeeded()
+        }
+        // An arriving scheduled notice re-runs the collapse decision, which now refuses (see
+        // `isCollapsible`) and so pushes `isCompact` back to false. Without this the guard would
+        // only be consulted the next time something else changed, and a routine firing at an
+        // already-compact widget would sit behind the capsule until then.
+        .onChange(of: viewModel.scheduledRunNotice) { _, _ in
             scheduleAutoDismissIfNeeded()
         }
         .onChange(of: viewModel.widgetPresentationRequest) { _, _ in
@@ -196,6 +231,25 @@ struct FloatingWidgetView: View {
     /// hidden by collapsing, since `showsPanel` already wouldn't render anything for it either.
     private var isCollapsible: Bool {
         guard !isVoiceActive else {
+            return false
+        }
+        // **A scheduled notice holds the widget open until the user dismisses it (SONNY-113).**
+        //
+        // Without this the strip above is close to useless for the case it was added for. Every
+        // notice strip renders inside the `else` branch of `if isCompact`, and the widget's steady
+        // state when nobody is using Sonny is compact — which is exactly the state a routine fires
+        // in. The notice would have arrived on a surface the user cannot see and been reported as
+        // covered.
+        //
+        // Holding it open indefinitely is the intended shape, not an oversight: this is the same
+        // rule `.permission` and `.clarification` follow, and the same one a notified outcome
+        // follows below. Something that needs a human does not shrink itself away, and this notice
+        // has an explicit Dismiss control, so nothing is stuck — the user ends it by reading it.
+        //
+        // Deliberately only this channel. `localStorageNotice` and `plannerFallbackNotice` have the
+        // same hole and are not this ticket's; SONNY-187 records them rather than widening the
+        // guard past what was decided.
+        guard viewModel.scheduledRunNotice == nil else {
             return false
         }
         switch state {
@@ -1435,6 +1489,12 @@ private struct WidgetFilePreviewChip: View {
 private struct WidgetNoticeStrip: View {
     let message: String
     let icon: String
+    /// The glyph's colour. Defaulted to the error red the two original callers ship, so adding this
+    /// parameter changed neither of them — and parameterised at all because the third caller
+    /// (SONNY-113's scheduled-run notice) carries successes as well as failures, and reporting "your
+    /// 9am routine ran" in Sonny's failure colour is the same mistake as posting it in the failure
+    /// notification category, one surface further in.
+    var tint: Color = WidgetTheme.errorGlyph
     let dismissAccessibilityLabel: String
     let onDismiss: () -> Void
 
@@ -1442,7 +1502,7 @@ private struct WidgetNoticeStrip: View {
         HStack(alignment: .top, spacing: 8) {
             Image(systemName: icon)
                 .font(WidgetType.icon)
-                .foregroundStyle(WidgetTheme.errorGlyph)
+                .foregroundStyle(tint)
             Text(message)
                 .font(WidgetType.caption)
                 .foregroundStyle(WidgetTheme.textMuted)
