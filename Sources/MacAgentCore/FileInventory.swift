@@ -81,12 +81,13 @@ enum DestinationKey {
     /// getting it wrong in the other direction loses the fix entirely on the volume nearly every user
     /// has.
     ///
-    /// Used by `FileInventory.docxFiles` and by `AgentActionExecutor`'s within-plan output-path
-    /// disambiguation. The two keep separate *policies* — the docx side must also avoid names that
-    /// exist on disk, the executor side must never consult disk or it would suppress the tier-3
-    /// "output already exists" escalation — but they must agree on what "the same destination" means,
-    /// and this is that agreement. Note that folding is a pure string operation: the executor side
-    /// still touches no disk.
+    /// Used by `RunClaims` — which folds every destination key it stores, at both of its two doors,
+    /// so `docxFiles` asks it rather than folding by hand (SONNY-165) — and by
+    /// `AgentActionExecutor`'s within-plan output-path disambiguation. The two keep separate
+    /// *policies*: the docx side must also avoid names that exist on disk, the executor side must
+    /// never consult disk or it would suppress the tier-3 "output already exists" escalation. But
+    /// they must agree on what "the same destination" means, and this is that agreement. Note that
+    /// folding is a pure string operation: the executor side still touches no disk.
     static func folded(_ path: String) -> String {
         path.folding(options: [.caseInsensitive], locale: nil)
     }
@@ -166,8 +167,13 @@ public struct FileInventory {
     /// user has, which a raw string comparison missed (PR #41 review F1).
     ///
     /// The guarantee is per *scan*, and that qualifier is load-bearing: two `[scan_docx, convert]`
-    /// units in one chain scan separately, so the second re-scans after the first has written and its
-    /// record is skipped rather than renamed. That is SONNY-76, filed, not fixed here.
+    /// units in one chain scan separately, so the second re-scans after the first has written. What
+    /// keeps its record from being skipped rather than renamed is `claimedEarlierInThisRun` — the
+    /// cross-unit half, **fixed by SONNY-76 in this very function** and pinned by
+    /// `aSecondUnitRenamesAroundThePDFTheFirstUnitJustWrote`. (This sentence said "That is SONNY-76,
+    /// filed, not fixed here" until PR #81's review; it had outlived the fix by two branches while a
+    /// test in the suite asserted the opposite.) A routine run as a unit of the same chain inherits
+    /// that set too, since SONNY-163.
     /// `skippedBecausePDFExists` cannot save them: it is evaluated once, here, before anything is
     /// written, so against a fresh output folder both records answer `false` and both convert. The
     /// second one then destroyed the first under `MockDocumentConverter` (an `.atomic` write, which
@@ -223,7 +229,7 @@ public struct FileInventory {
             //
             // Reported as a skip, which restores exactly the sentence this case had before SONNY-76
             // and is the true one: the PDF does exist, in this folder, and this run made it.
-            if claimedEarlierInThisRun.hasConverted(source.url.path, intoFolder: destinationFolder.path) {
+            if claimed.hasConverted(source.url.path, intoFolder: destinationFolder.path) {
                 records.append(
                     DocxRecord(
                         sourceURL: source.url,
