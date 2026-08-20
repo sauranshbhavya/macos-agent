@@ -186,7 +186,10 @@ public struct CapabilityExecutionContext {
     public var hotKeyReady: () -> Bool
     /// The browser this execution should prefer for every URL it opens *on the injected
     /// browser-opener seam*, or `nil` for the system default. `.playMedia` is on a different seam
-    /// and does not consult this (SONNY-51).
+    /// and does not consult this — **decided, not pending** (SONNY-51, founder 2026-08-20): a media
+    /// step's fallback link is playback, which the OS routes, and forcing an https provider link
+    /// through a named browser could override the handler that would otherwise open the Spotify or
+    /// Music app. The reasoning and the cost are in `docs/sonny-founder-design-decisions.md`.
     ///
     /// Set only for the nested execution of a routine that names a browser-capable app among its
     /// own steps (SONNY-24), mirroring what a workspace already does with its apps list. It is

@@ -106,9 +106,18 @@ public struct RunRoutineCapabilityAdapter: CapabilityAdapter {
     /// That seam qualifier is load-bearing, not hedging (PR #28, F4). `.openURL`, `.openAppSearchURL`
     /// and the Hacker News open all go through `CapabilityExecutionContext.browserOpener` and so
     /// bind. `.playMedia` does not: it opens through `context.mediaOpener`, which reaches
-    /// `NSWorkspace.shared.open` directly (`MediaPlaybackService.swift:1015`), so a media step
-    /// carrying an explicit `open.spotify.com`-style URL still lands in the system default browser.
+    /// `NSWorkspace.shared.open` directly, so a media step carrying an explicit
+    /// `open.spotify.com`-style URL still lands in the system default browser.
     /// "Every URL the routine opens" was the original claim here and it was too broad.
+    ///
+    /// **That is a decision as of 2026-08-20, not an outstanding gap** (SONNY-51). Binding it would
+    /// mean giving `MediaOpening` a browser preference, and forcing an https provider link through a
+    /// named browser could override the handler that would otherwise open the Spotify or Music app —
+    /// turning an app-open into a web-player open, which is worse than the inconsistency it fixes and
+    /// cannot be measured from this repository because it depends on what each user has installed.
+    /// The full reasoning, the measured reach (the media opener's fallback ends in an app-scheme URI
+    /// in every case but an explicit https provider link), and the cost are recorded in
+    /// `docs/sonny-founder-design-decisions.md`.
     ///
     /// Byte-for-byte the workspace rule (`WorkspaceBrowserCatalog.firstBrowser(in:)`, reused rather
     /// than reimplemented so there is one definition of "browser-capable"), deliberately so: a
