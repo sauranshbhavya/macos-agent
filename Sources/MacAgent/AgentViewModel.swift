@@ -695,11 +695,54 @@ final class AgentViewModel: ObservableObject {
 
     /// The message shown when voice is asked for and the app is not configured to do it.
     ///
-    /// One copy, because two surfaces must say the same thing: the widget's mic button and the
-    /// push-to-talk hotkey. They said the same thing by coincidence — two identical literals — until
-    /// one of them stopped saying anything at all (SONNY-173).
+    /// One copy, because three surfaces must say the same thing: the widget's mic button, the
+    /// push-to-talk hotkey, and — since SONNY-177 — the mic's hover hint, which reaches it through
+    /// `micHoverHintPresentation` rather than holding a second string of its own. The first two said
+    /// the same thing by coincidence — two identical literals — until one of them stopped saying
+    /// anything at all (SONNY-173).
+    ///
+    /// **Provider-neutral by founder decision, 2026-08-19 (SONNY-177), wording approved the same
+    /// day.** No provider name and no environment-variable name: other providers are coming, and
+    /// SONNY-136 deletes every provider environment variable, so anything more specific written here
+    /// is copy already scheduled for deletion. Naming the variable was the more actionable sentence
+    /// today and that cost was accepted deliberately — the audience is two founders who already know
+    /// what it means, and the specificity survives in one place, the Settings › Security & Access
+    /// readiness row, which is SONNY-136's to rewrite. What the trade may not cost is the
+    /// instruction: this still names the action class — add a key, relaunch — so a reader is left
+    /// with something to do rather than a statement of fact.
     static let missingAPIKeyVoiceMessage =
-        "OPENAI_API_KEY is not set. Export it before launching Sonny, then relaunch the app."
+        "No API key is set up. Add one, then relaunch Sonny."
+
+    /// What the mic's hover hint says when voice actually works. Wording unchanged from the literal
+    /// that used to sit in `FloatingWidgetView`; it moved here so that *choosing* between this and
+    /// the configuration message happens in one place — see `micHoverHintPresentation`.
+    static let micHoverShortcutReminder = "Speak your command — or hold Ctrl-Opt-Space anywhere"
+
+    /// How long the shortcut reminder stays, and nothing else. The configuration message has no
+    /// delay at all rather than a longer one, which is why this is not a general "hint duration".
+    static let micHoverReminderDismissDelay: Duration = .seconds(4)
+
+    /// The mic's hover hint, resolved: the sentence to render and whether it clears itself.
+    ///
+    /// **Resolved here for the same reason `isVoiceControlDisabled` is.** A view may read neither
+    /// half of voice readiness, so it cannot pick between these two messages for itself; it receives
+    /// the answer already made. The guard is `theCompositeVoiceReadinessIsReadInOneFileOnly`.
+    ///
+    /// **The unconfigured variant renders the very text the mic press shows, rather than a second
+    /// string of its own.** One condition on one control must not speak with two voices, and taking
+    /// the words from the same place the press takes them makes that structural instead of a
+    /// convention someone has to keep remembering — a rewrite cannot leave the hover and the press
+    /// disagreeing, because there is only one sentence. It also means SONNY-136 changes one constant
+    /// and all three surfaces follow.
+    var micHoverHintPresentation: MicHoverHintPresentation {
+        if let blocker = voiceConfigurationBlocker {
+            return MicHoverHintPresentation(message: blocker, autoDismissDelay: nil)
+        }
+        return MicHoverHintPresentation(
+            message: Self.micHoverShortcutReminder,
+            autoDismissDelay: Self.micHoverReminderDismissDelay
+        )
+    }
 
     /// Lets a test state what the *configuration* half of voice readiness should answer, instead of
     /// inheriting whatever the process that launched the test suite happened to export.

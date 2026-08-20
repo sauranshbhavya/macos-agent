@@ -52,10 +52,24 @@ struct FloatingWidgetView: View {
     /// multiple compacts to actually go away."
     @State private var isCompact = false
     @State private var autoDismissTask: Task<Void, Never>?
-    /// Drives a hover hint shown as a real layout row (see `micHoverHint`) rather than a
-    /// `.help()` tooltip — `.help()` already proved unreliable in this exact app once before
-    /// (the Insights weekly chart), and was confirmed unreliable here too, not just assumed.
+    /// **Where the pointer is, and nothing else.** Drives a hover hint shown as a real layout row
+    /// (see `micHoverHintRow`) rather than a `.help()` tooltip — `.help()` already proved unreliable
+    /// in this exact app once before (the Insights weekly chart), and was confirmed unreliable here
+    /// too, not just assumed.
+    ///
+    /// It used to be the hint's visibility as well, and SONNY-177 is where the two came apart: the
+    /// reminder now clears itself after four seconds with the pointer still sitting on the mic, so
+    /// "the pointer is here" and "the hint is showing" are different facts. This one stays the
+    /// pointer's, which is what makes re-entry detectable — a second hover is a `false` → `true`
+    /// transition here, and the hint gets fresh seconds off it.
     @State private var isMicHovered = false
+    /// Whether the hint is on screen, and its countdown. Deliberately not `@State` — see
+    /// `MicHoverHintModel`, which exists so the countdown is something a test can drive.
+    ///
+    /// *How long* it counts for is not here and not `autoCollapseDelay`'s neighbour below: it
+    /// arrives with the hint, from `AgentViewModel.micHoverHintPresentation`, because one of the two
+    /// hints this row can show does not count down at all.
+    @StateObject private var micHint = MicHoverHintModel()
 
     private static let autoCollapseDelay: Duration = .seconds(6)
 
@@ -73,8 +87,8 @@ struct FloatingWidgetView: View {
             } else {
                 if showsPanel {
                     styledPanel
-                } else if isMicHovered {
-                    micHoverHint
+                } else if let hint = micHint.visibleHint {
+                    micHoverHintRow(hint)
                 }
 
                 if let notice = viewModel.localStorageNotice {
@@ -137,6 +151,30 @@ struct FloatingWidgetView: View {
                 scheduleAutoDismissIfNeeded()
             }
         }
+        // SONNY-177. Entering only shows the hint when the slot is *already* free, which is not the
+        // same as letting the render condition decide. A hint shown while the panel is up would sit
+        // there unrendered and appear the instant the panel closed — a stale flicker attached to
+        // nothing the user just did, and for the configuration variant it would wait there
+        // indefinitely, since that one has no countdown to expire.
+        .onChange(of: isMicHovered) { _, isHovering in
+            if isHovering, isMicHintSlotFree {
+                micHint.show(viewModel.micHoverHintPresentation)
+            } else {
+                micHint.dismiss()
+            }
+        }
+        // The panel (or a collapse) taking the slot mid-countdown dismisses the hint and cancels
+        // with it, so nothing is left counting toward a row that is no longer there. The slot coming
+        // back free deliberately does not re-show it: the user is looking at whatever just finished,
+        // not at a reminder they have already been given. It returns on the next real hover.
+        .onChange(of: isMicHintSlotFree) { _, isFree in
+            if !isFree {
+                micHint.dismiss()
+            }
+        }
+        .onDisappear {
+            micHint.dismiss()
+        }
         // Forces SwiftUI to report its real ideal (non-expanding) size rather than growing to fill
         // whatever frame AppKit hands it — FloatingWidgetWindowController reads that size via
         // NSHostingController.view.fittingSize to keep the panel bottom-pinned and tightly sized.
@@ -151,6 +189,13 @@ struct FloatingWidgetView: View {
     /// predicate and the two must never drift apart.
     private var showsPanel: Bool {
         viewModel.hasVisibleWidgetPanel
+    }
+
+    /// Whether the hover hint's slot is free. The panel and the compact capsule both occupy the same
+    /// slot and both outrank it, so this is the one predicate the hint is gated on — the panel's own
+    /// states are enumerated on `AgentViewModel.hasVisibleWidgetPanel`.
+    private var isMicHintSlotFree: Bool {
+        !isCompact && !showsPanel
     }
 
     /// Voice recording/transcription isn't part of `WidgetState` (it's orthogonal to a task being
@@ -586,8 +631,15 @@ struct FloatingWidgetView: View {
     /// 472×40 frame, not just a text-sized bubble — an unconstrained width/height and a different
     /// corner shape than the pill directly beneath it read as a stray, misaligned fragment rather
     /// than a hint that visibly belongs to the row it's describing.
-    private var micHoverHint: some View {
-        Text("Speak your command — or hold Ctrl-Opt-Space anywhere")
+    ///
+    /// **The frame is unchanged by SONNY-177, and that was measured rather than assumed.** Both
+    /// sentences this row can now carry were laid out at the row's real font (SF Pro Medium 10, via
+    /// `WidgetType.captionSmall`) against the 444pt the 472pt frame leaves after its 14pt padding:
+    /// the shortcut reminder is 285.4pt and the configuration message 254.1pt, so each stays a
+    /// single line with room to spare and nothing about the window controller's fitted-size
+    /// positioning has to be revisited.
+    private func micHoverHintRow(_ hint: MicHoverHintPresentation) -> some View {
+        Text(hint.message)
             .font(WidgetType.captionSmall)
             .foregroundStyle(WidgetTheme.textFull)
             .padding(.horizontal, 14)
