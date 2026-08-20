@@ -628,6 +628,29 @@ it feels confusing in practice, not just whether it's "technically correct."
       workspace breakdown keeps the old rows under the stale name (point-in-time text, by design),
       nothing crashes or re-attributes
 
+- [ ] **(new 2026-08-20, SONNY-65)** Open a workspace's detail sheet. Its **Apps** rows now show the
+      app's real icon beside the name. Cross-check against the card behind the sheet: the same app
+      must show the same icon on both, since both now resolve through `WorkspaceAppIconResolver`.
+      The name is still the full verbatim string — an icon is *additional* to it, never instead of
+      it, because the whole point of this sheet is checking an entry against the one a consent
+      prompt named.
+- [ ] **(new 2026-08-20, SONNY-65)** Add an app to a workspace that is **not installed on this Mac**
+      (any plausible name will do). Its row must show the **name only** — no icon, and specifically
+      **not** the dashed-square placeholder the card's stack uses for the same case. A placeholder
+      here would imply the entry is broken; it is stored, valid, and simply unresolvable on this
+      machine.
+- [ ] **(new 2026-08-20, SONNY-65)** In the same sheet, confirm the **URLs** and **File locations**
+      rows show no icon at all. All three dimensions share one row view, so this is the check that
+      the icon is dimension-scoped rather than leaking into rows that have nothing to resolve.
+- [ ] **(new 2026-08-20, SONNY-65)** Narrow the Command Center window (not fullscreen) with a
+      detail sheet open. The app rows must still read properly — icon and name on one line, remove
+      button reachable, nothing character-wrapped. The row is a `SettingsAdaptiveControlRow`, and
+      an icon is new width inside it.
+- [ ] **(new 2026-08-20, SONNY-65)** If any entry shows a muted "Not in effect — …" note, confirm
+      that note still reads as the **dominant** signal on the row rather than the icon beside the
+      name. SONNY-41's inert rendering stays primary over any icon decoration; the two are
+      independent fields, so this is a visual judgement no test can make.
+
 ### Settings — `10-MainAppSettings.svg`/`.png`, opened via the bottom-left account row
 - [x] Account row shows your real macOS full name only, no email/plan badge
 - [x] **Preferences:** Display full names toggle actually changes name rendering somewhere real; Use
