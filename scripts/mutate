@@ -80,9 +80,9 @@ readonly SELF
 readonly SCRIPT_NAME="scripts/mutate"
 
 # The exact flagged test command from CLAUDE.md, plus two flags that are only isolation. Plain
-# `swift test` does not link here, and the flagged command's own CLANG_MODULE_CACHE_PATH and
-# default build directory both sit in .build/, which every other build in this checkout also
-# writes. Single quotes are deliberate — $MUTATE_SCRATCH is expanded by the subshell that runs
+# `swift test` never gets as far as running here — CLAUDE.md's Commands section has which flag
+# fixes which failure — and the flagged command's own CLANG_MODULE_CACHE_PATH and default build
+# directory both sit in .build/, which every other build in this checkout also writes. Single quotes are deliberate — $MUTATE_SCRATCH is expanded by the subshell that runs
 # the command, not now.
 #
 # Isolation does not change what is measured, which was checked rather than assumed: at c3b8166

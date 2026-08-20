@@ -19,7 +19,7 @@ https://drive.google.com/file/d/12lJnnqiBrbGnua2pGyE2GsYaVBcil0qe/view?usp=shari
 **Agent loop and safety**
 - Plans typed or spoken commands through OpenAI, validates the plan against a strict schema and a registered capability contract, then executes only registered local capabilities — never model-generated code, shell, or AppleScript.
 - Every capability declares a default risk tier (0 informational/auto-run, 1 low-impact/auto-run, 2 local modification/lightweight confirmation, 3 external-or-destructive/explicit approval, 4 refused) and can escalate dynamically at validation time — e.g. a zip whose output path already exists, or a routine save that would replace an existing one, escalates to explicit approval before it runs.
-- Tier 2+ actions pause for approval in the floating widget, which is the app's only command surface; Command Center pages show a compact running indicator instead of their own approval UI.
+- Tier 2+ actions pause for approval in the floating widget — the app's only command surface — and on the Command Center page you are looking at, which has its own attention panel for permission, clarification and failure, plus a compact running indicator while a task is in flight.
 
 **File and document workflows**
 - Find the largest files in a whitelisted folder and zip them.
@@ -134,7 +134,7 @@ Mock mode writes clearly marked `.mock.pdf` placeholders, not real PDFs.
 swift test
 ```
 
-On this local Command Line Tools install, plain `swift test` will fail to link — use the full invocation below (this is the only valid way to run tests in this repo):
+On this local Command Line Tools install, plain `swift test` fails at compile with `error: no such module 'Testing'` — use the full invocation below (this is the only valid way to run tests in this repo). Both halves earn their place: `-Xswiftc -F` is what finds the module, and the two `-rpath` pairs are what let the built test bundle load at run time.
 
 ```bash
 env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disable-sandbox \
