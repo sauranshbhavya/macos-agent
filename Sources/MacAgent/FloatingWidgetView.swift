@@ -63,8 +63,10 @@ struct FloatingWidgetView: View {
     /// pointer's, which is what makes re-entry detectable — a second hover is a `false` → `true`
     /// transition here, and the hint gets fresh seconds off it.
     @State private var isMicHovered = false
-    /// Whether the hint is on screen, and its countdown. Deliberately not `@State` — see
-    /// `MicHoverHintModel`, which exists so the countdown is something a test can drive.
+    /// Whether a hint should be showing, and its countdown. Deliberately not `@State` — see
+    /// `MicHoverHintModel`, which exists so the countdown is something a test can drive, and which
+    /// records why "should be showing" is not quite "on screen": this view still has to hand it the
+    /// slot, below.
     ///
     /// *How long* it counts for is not here and not `autoCollapseDelay`'s neighbour below: it
     /// arrives with the hint, from `AgentViewModel.micHoverHintPresentation`, because one of the two
