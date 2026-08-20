@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import MacAgent
@@ -1096,6 +1097,138 @@ struct WorkspaceDetailSheetTests {
         // load banner would render a *successful* task as a failure in the widget.
         #expect(viewModel.localStorageNotice == nil)
     }
+
+    // MARK: - App icons on the sheet's rows (SONNY-65)
+
+    /// **The founder's ask of 2026-08-07: icon beside the name, apps only.**
+    ///
+    /// Asserted on the presentation rather than the view, per this suite's own standard — the icon
+    /// is resolved in `WorkspaceDetailPresentation` precisely so that it *can* be. What the view
+    /// does with a resolved icon is a manual item, as it is for every other field here.
+    @Test
+    func onlyAppRowsCarryAnIconAndUrlsAndFoldersCarryNone() {
+        let presentation = WorkspaceDetailPresentation(
+            workspace: StoredWorkspace(
+                name: "Client Alpha",
+                apps: ["Safari", "Notes"],
+                urls: ["https://example.com"],
+                fileLocations: ["~/Documents/Alpha"]
+            ),
+            taskHistoryRecords: [],
+            iconResolver: StubWorkspaceAppIconResolver(resolving: ["Safari"])
+        )
+
+        // Apps: every row carries an icon presentation, and it is for that row's own app.
+        #expect(presentation.apps.entries.map(\.appIcon?.appName) == ["Safari", "Notes"])
+        // The other two dimensions carry none at all — the row view is shared across all three, so
+        // this is what keeps a folder from being asked for an app icon.
+        #expect(presentation.urls.entries.allSatisfy { $0.appIcon == nil })
+        #expect(presentation.fileLocations.entries.allSatisfy { $0.appIcon == nil })
+    }
+
+    /// **The fallback constraint, which is the one place this ticket departs from the card.**
+    ///
+    /// An app the catalog cannot resolve renders **name-only**. The card's tile does the opposite —
+    /// `app.dashed` on a bordered chip — and reusing it wholesale would have violated this ticket's
+    /// own constraint, which is why the resolver is reused and the fallback is not.
+    ///
+    /// Two different `nil`s reach the same rendering, and both are asserted: `appIcon` itself being
+    /// `nil` (not an app), and `appIcon?.icon` being `nil` (an app that resolves to nothing). The
+    /// view branches on the second, so a row for an uninstalled app is name-only exactly like a URL.
+    @Test
+    func anUnresolvableAppFallsBackToNameOnlyRatherThanAPlaceholder() {
+        let presentation = WorkspaceDetailPresentation(
+            workspace: StoredWorkspace(
+                name: "Client Alpha",
+                apps: ["Safari", "NotInstalledApp"],
+                urls: [],
+                fileLocations: []
+            ),
+            taskHistoryRecords: [],
+            iconResolver: StubWorkspaceAppIconResolver(resolving: ["Safari"])
+        )
+
+        let entries = presentation.apps.entries
+        #expect(entries[0].appIcon?.icon != nil)
+        #expect(entries[1].appIcon?.icon == nil)
+        // And the name is untouched either way — the verbatim string is the sheet's recorded
+        // rationale (a user checks an entry against the one a consent prompt named), so an icon is
+        // additional to it and never a replacement.
+        #expect(entries.map(\.value) == ["Safari", "NotInstalledApp"])
+    }
+
+    /// **Equality stays independent of what is installed**, which is why the entry carries a
+    /// `WorkspaceAppIconPresentation?` rather than a bare `NSImage?`.
+    ///
+    /// That type excludes icon content from its `==` on purpose. A bare image on the entry would
+    /// have put it back into this type's synthesized equality, making two presentations of the same
+    /// workspace compare unequal on a machine where one app happens to be installed — a difference
+    /// no user could see and every diffing test would trip over.
+    @Test
+    func twoPresentationsOfOneWorkspaceCompareEqualWhateverResolved() {
+        let workspace = StoredWorkspace(
+            name: "Client Alpha",
+            apps: ["Safari", "NotInstalledApp"],
+            urls: [],
+            fileLocations: []
+        )
+        let everything = WorkspaceDetailPresentation(
+            workspace: workspace,
+            taskHistoryRecords: [],
+            iconResolver: StubWorkspaceAppIconResolver(resolving: ["Safari", "NotInstalledApp"])
+        )
+        let nothing = WorkspaceDetailPresentation(
+            workspace: workspace,
+            taskHistoryRecords: [],
+            iconResolver: StubWorkspaceAppIconResolver(resolving: [])
+        )
+
+        // One resolved both icons and the other resolved neither.
+        #expect(everything.apps.entries.allSatisfy { $0.appIcon?.icon != nil })
+        #expect(nothing.apps.entries.allSatisfy { $0.appIcon?.icon == nil })
+        // And they are still the same presentation.
+        #expect(everything == nothing)
+    }
+
+    /// **SONNY-41's inert rendering survives the icon field** — this ticket's third constraint, as
+    /// far as a presentation-level test can carry it.
+    ///
+    /// `inertNote` and `appIcon` are independent fields, so nothing here can displace anything; the
+    /// point of asserting it is that the icon was added *to* the row rather than in place of part
+    /// of it. The visual half — that a 16pt square beside the name does not out-shout a muted note
+    /// on the line beneath it — is a manual item, like every other rendering claim in this suite.
+    ///
+    /// **Worth knowing, because it makes the constraint mostly structural:** an app entry is inert
+    /// only when its name is empty (`WorkspaceScope`, "The app name is empty." — the catalog stopped
+    /// making apps inert in SONNY-82). An empty name resolves no icon in production, so an inert app
+    /// row is name-only anyway. The two can only coexist in a fixture, which is why this test
+    /// asserts the fields' independence rather than staging a combination the app cannot reach.
+    @Test
+    func anInertAppRowKeepsItsInertNoteAndTheIconFieldDoesNotDisplaceIt() {
+        let presentation = WorkspaceDetailPresentation(
+            workspace: StoredWorkspace(
+                name: "Client Alpha",
+                apps: ["Safari", "   "],
+                urls: [],
+                fileLocations: []
+            ),
+            taskHistoryRecords: [],
+            iconResolver: StubWorkspaceAppIconResolver(resolving: ["Safari"])
+        )
+
+        let entries = presentation.apps.entries
+        #expect(entries.count == 2)
+        // The live one: icon resolved, no note.
+        #expect(entries[0].appIcon?.icon != nil)
+        #expect(entries[0].inertNote == nil)
+        // The inert one: the note is intact, and it still carries an icon *field* — so the row is
+        // rendering both facts rather than the icon having taken the note's place. It resolves no
+        // image, which is the production shape too.
+        #expect(entries[1].inertNote == "Not in effect — The app name is empty.")
+        #expect(entries[1].appIcon != nil)
+        #expect(entries[1].appIcon?.icon == nil)
+    }
+
 }
 
 /// Arms a pending approval the consequence rule still produces: a typed snippet save whose
@@ -1494,5 +1627,22 @@ struct ClarificationGateTests {
         func tearDown() {
             try? FileManager.default.removeItem(at: root)
         }
+    }
+}
+
+/// Resolves an icon for a named set of apps and nothing else, so a test can drive both branches of
+/// the fallback without depending on what is installed on the machine running it.
+///
+/// A distinct, non-`nil` `NSImage` per app: the assertions below are about *whether* an icon
+/// resolved, and a shared instance would let a mix-up between two rows pass.
+@MainActor
+private struct StubWorkspaceAppIconResolver: WorkspaceAppIconResolving {
+    let resolving: Set<String>
+
+    func icon(forAppName appName: String) -> NSImage? {
+        guard resolving.contains(appName) else {
+            return nil
+        }
+        return NSImage(size: NSSize(width: 16, height: 16))
     }
 }
