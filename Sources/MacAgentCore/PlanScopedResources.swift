@@ -345,10 +345,11 @@ public enum PlanScopedResources {
     /// classifier that also required an empty one would fire on no real plan while still passing
     /// unit tests built from unresolved steps.
     ///
-    /// **What that used to cost, and why the resolver rather than this file paid it (SONNY-73).**
-    /// A step reaching classification with both `contextSource` and a non-empty `inputPath` named
+    /// **What that costs, and why the resolver rather than this file paid part of it (SONNY-73).**
+    /// A step reaching classification with both `contextSource` and a non-empty `inputPath` names
     /// Finder even when `selectedDirectoryPath` returned the supplied path at `:20-25` and never
-    /// talked to Finder. The reachable form was **cross-step as well as per-step**:
+    /// talked to Finder — present tense, because one form of it is still here; see the third
+    /// paragraph below. The form SONNY-73 closed was **cross-step**:
     /// `pinningSelectedDirectoryInput` pools the plan's matching steps, taking `primary` from the
     /// first non-empty `inputPath` among them and `contextSource` from the first non-nil among them
     /// — independently. So a scan carrying an explicit path with no `contextSource`, beside a zip
@@ -362,11 +363,30 @@ public enum PlanScopedResources {
     /// ran-without-asking trace, the one channel the consequence rule relies on to make its
     /// silences legible.
     ///
-    /// It is fixed in `FinderSelectionResolver`, the only place that can know whether Finder was
-    /// contacted: when the resolution is satisfied from a pooled explicit path, the pin now clears
-    /// `contextSource` on every matching step, so this classifier keeps reporting exactly what the
-    /// field says and the field has stopped lying. Nothing here changed, and nothing here needs to
-    /// — which is why this stayed a separate ticket rather than a looser key on this switch.
+    /// The pooled form is fixed in `FinderSelectionResolver`, the only place that can know whether
+    /// Finder was contacted: when the resolution is satisfied from an explicit path, the pin clears
+    /// `contextSource` on **the steps it back-fills**, so this classifier keeps reporting exactly
+    /// what the field says and the field has stopped lying about them. Nothing here changed, and
+    /// nothing here needed to — which is why that stayed a separate ticket rather than a looser key
+    /// on this switch.
+    ///
+    /// **Back-filled, not every matching step, and the difference is not caution.**
+    /// `pinningSelectedDirectoryInput` runs twice over one run — `AgentRunner.prepare` resolves the
+    /// plan and `approvalRequest` re-resolves the plan it returned — so on the second pass a genuine
+    /// selection-driven plan carries a pinned `inputPath` on every matching step and "satisfied from
+    /// an explicit path" is true of a run that had just contacted Finder. Clearing every matching
+    /// step therefore deletes the report this function exists to produce; restricted to the steps
+    /// each pass back-fills, the second pass back-fills nothing and clears nothing, and the rule is
+    /// idempotent. SONNY-73 shipped the wrong version first and the whole suite stayed green.
+    ///
+    /// **So one form of the over-report survives here, and it is the per-step one.** A step carrying
+    /// `contextSource` together with its own non-empty `inputPath` is back-filled by nothing, keeps
+    /// its marker, and is still reported as driving Finder — including the mixed plan
+    /// `WorkspaceScopeTests.aMixedSelectionDrivenPlanNamesFinderOnceOnTheStepThatDeclaresIt` builds,
+    /// whose resolved form really does still produce a Finder finding. After the first pass such a
+    /// step is indistinguishable from a genuine declaring step the pin filled in, so no rule reading
+    /// these fields can separate them; it needs a resolve-phase provenance pin with this switch keyed
+    /// on that instead. Tracked as SONNY-185, deliberately not done here.
     ///
     /// Reported per step rather than per plan because that is all a step-scoped classifier can see.
     /// The selection is read once for the whole plan, so in a mixed plan the step that declares
