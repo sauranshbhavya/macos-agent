@@ -1190,6 +1190,45 @@ struct WorkspaceDetailSheetTests {
         #expect(everything == nothing)
     }
 
+    /// **The row renders the icon *beside* the name, not instead of it** — the ticket's central
+    /// constraint, and the one the four tests above could not reach.
+    ///
+    /// Found by a mutant, not by reading: blanking the name whenever an icon resolved
+    /// (`Text(entry.appIcon?.icon == nil ? entry.value : "")`) **passed the whole suite**. Every
+    /// assertion above is about the presentation, and the presentation was still correct — the view
+    /// was simply declining to render a field it had. That is the same shape as PR #80's F2, where a
+    /// scan anchored on a call site missed what the callee did with what it was handed.
+    ///
+    /// So this reads the view, through `MacAgentSource`. This suite's header says view-level claims
+    /// are a recorded limitation with a manual item rather than a fake test, and that still holds
+    /// for anything about *appearance* — spacing, alignment, whether 16pt reads right beside 13pt
+    /// text. It does not have to hold for *whether a field is rendered at all*, which is textual and
+    /// therefore checkable, and which is the half a user would actually lose.
+    ///
+    /// Two assertions, because one is not enough: the name must be rendered, **and** it must not be
+    /// rendered inside the icon's own `if let`. The first alone survives a rewrite that keeps
+    /// `Text(entry.value)` and wraps it in the icon's conditional — which is the same bug wearing
+    /// different syntax.
+    @Test
+    func theSheetRowRendersTheNameUnconditionallyBesideAnyIcon() throws {
+        let row = try MacAgentSource.region(
+            of: MacAgentSource.read("CommandCenterView.swift"),
+            from: "private func entryRow(_ entry: WorkspaceScopeEntryPresentation) -> some View {",
+            to: "private struct WorkspaceScopeAddTarget: Identifiable {"
+        )
+        #expect(MacAgentSource.count(of: "Text(entry.value)", inText: row) == 1)
+
+        let iconBranch = try MacAgentSource.region(
+            of: row,
+            from: "if let nsImage = entry.appIcon?.icon {",
+            to: "Text(entry.value)"
+        )
+        #expect(!iconBranch.contains("entry.value"))
+        // And the icon really is gated on a resolved image rather than on the entry being an app,
+        // which is what routes an unresolvable app to the same name-only rendering a URL gets.
+        #expect(row.contains("if let nsImage = entry.appIcon?.icon {"))
+    }
+
     /// **SONNY-41's inert rendering survives the icon field** — this ticket's third constraint, as
     /// far as a presentation-level test can carry it.
     ///
