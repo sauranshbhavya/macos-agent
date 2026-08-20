@@ -157,6 +157,58 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/mic-hint-first-hover
+Status: complete
+Date: 2026-08-19
+Tickets: SONNY-179 (with a key set, the mic's hover hint did not show on the first hover of a session; it showed on the second and on every one after. Plus the founder's two calls from the same pass: the reminder drops from four seconds to three, and its wording becomes "Click to speak or hold Ctrl-Opt-Space." with the em dash gone). Founder request from his manual pass of SONNY-177 at the packaged app, 2026-08-19 — the fourth from that pass, after SONNY-173, SONNY-174 and SONNY-177 itself.
+Reviewed by: pending — fresh session per WORKFLOW.md step 7.
+
+Spec sections covered: none new. §3.1/§3.2 of `docs/sonny-design-system-reference.md` are applied rather than extended — the hint keeps its `widgetGlassPill()` shape, its `WidgetType.captionSmall` type and its 472×40 frame; no token was added, changed or removed.
+Files changed:
+- `Sources/MacAgent/FloatingWidgetView.swift` — `@State isMicHovered` deleted; `AlwaysActiveHoverTracker` now takes `onEnter`/`onExit` closures instead of a `Binding<Bool>`, and `TrackingNSView`'s two overrides call them; the `onChange(of: isMicHovered)` hook is replaced by `micHintPointerEnteredMic()`, called from the arrival itself. The tracker and its nested view are now internal so a test can build one. `onChange(of: isMicHintSlotFree)` and `onDisappear` are unchanged.
+- `Sources/MacAgent/MicHoverHint.swift` — new `MicHoverHintModel.pointerArrived(slotIsFree:hint:)`, the arrival's one entry point, which owns the slot rule that used to sit in the view as an `if`. `show`/`dismiss` are otherwise unchanged.
+- `Sources/MacAgent/AgentViewModel.swift` — `micHoverShortcutReminder` rewritten to the founder's sentence; `micHoverReminderDismissDelay` four seconds → three.
+- `Tests/MacAgentTests/WidgetMicHoverHintTests.swift` (+1 test, +1 new suite of 3) — `anArrivalWithTheSlotTakenShowsNothingAndClearsWhatWasUp`, plus `MicHoverArrivalTests`, which builds the real `TrackingNSView` and sends it real `NSEvent` enter/exit crossings.
+- `Tests/MacAgentTests/WidgetVoiceEntryTests.swift` — the copy pin takes the new sentence and adds an em-dash-absence assertion over both messages; the delay assertion takes three seconds.
+- `docs/sonny-manual-test-checklist.md` — §3a's hover item re-opened with the new wording and the three seconds, plus a new item for the first hover after a collapse.
+
+Tests: CLAUDE.md's flagged command. Baseline **1406 in 110 suites, exit 0 at `556c5d4`** (measured in a detached worktree at that SHA, not inferred from the previous entry); **1410 in 111 at `d315c2c`**, exit 0 — +4 and +1 suite, reconciled against the diff. Nothing removed, nothing renamed. **Mutation battery via `scripts/mutate`: 10/10 killed, 0 survived at `d315c2c`**. The battery's first run at `63e99ad` was 7/8 with one survivor (the slot check removed), which is why the second commit exists; see below. M4 is the shipped bug restored verbatim — SONNY-177's edge semantics rebuilt inside the tracking view — and it dies. Build warnings: `swift build` is **zero** warnings after touching all three changed sources, and the full test build reports zero.
+
+Behavior fixed:
+- **The first hover of a session shows the hint.** So does every hover after it, and so does an arrival on a mic that was taken away and given back under a pointer that never moved.
+
+Behavior changed at the founder's request:
+- The reminder clears itself after **three** seconds rather than four.
+- It reads **"Click to speak or hold Ctrl-Opt-Space."** — his wording verbatim. The em dash is gone and no comma takes its place.
+
+Behavior preserved (required, no blanket claims):
+- **The key-not-set variant is untouched**, which the ticket asked for explicitly: `micHoverHintPresentation`'s blocker branch is byte-identical, its message is the same constant, and it still arms no countdown. Two mutants say so rather than the diff alone (M7, M10).
+- **The panel's precedence over the hint is unchanged.** `isMicHintSlotFree` has the same definition and the same two readers; what moved is where the rule about it is written, not what it decides.
+- **The six-second auto-collapse is untouched.** It is the thing that *causes* the bug's setup — it takes the mic away under a stationary pointer — but nothing about it changed, and the fix works by not keeping a fact that its teardown can falsify.
+- **Departure still ends the hint and cancels its countdown**, pinned directly now (`aDepartureClearsTheHintAndLeavesNothingCounting`) rather than only through the model.
+- **The tracking area itself is unchanged** — same `rect: .zero`, same `[.mouseEnteredAndExited, .activeAlways, .inVisibleRect]`, same `updateTrackingAreas` re-registration, same one call site in the app. The `.activeAlways` reasoning from tracker #2/#21 stands untouched; this is a different failure with a different cause.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**A stored copy of where the pointer is can only be corrected by a boundary crossing, and this one's boundary comes and goes.** SONNY-177 kept `isMicHovered` as "the pointer's truth" and drove the hint off it *changing*. Both events that write such a boolean — `mouseEntered` and `mouseExited` — require the pointer to cross the tracking area's edge **while that area exists**, and this area is created and destroyed with the mic button. The widget's own six-second auto-collapse removes the mic under a stationary pointer: no crossing, nothing writes `false`, and the boolean sits at `true` with the pointer nowhere near the mic. Expanding again and hovering wrote `true` over `true` — not a change — so the hook never ran and that hover showed nothing; leaving finally wrote `false`, the two agreed again, and every later hover worked. **Exactly one hover lost, and always the first**, which is the shape of the founder's report and the reason no time-based or layout-based explanation fits: anything periodic would recur.
+
+**So the fix deletes the copy rather than repairing it.** Repairing it means finding every way the area can appear or disappear under a stationary pointer — the collapse, the panel being ordered out, the view being torn down — and writing the boolean by hand at each, which is a list that has to stay complete forever. An arrival is an event; there is no second answer to "is the pointer here" left to disagree with the pointer. **The general rule, worth carrying past this file: derive from an event when the thing you want is an event, and keep state only for facts that outlive the events that set them.** The hint's own visibility is such a fact, which is why `MicHoverHintModel` is unchanged.
+
+**Two `show`s in a row became reachable, and the suite already said what happens.** `showingAgainReplacesTheCountdownRatherThanAddingASecond` was written under SONNY-177 as a contract for a caller that did not exist, its comment arguing that the edge design made it unreachable. It is reachable now — two arrivals with no departure delivered is exactly the sequence the old boolean swallowed — and the behaviour it pinned is the correct one. A test written for a caller that does not exist yet paid for itself one ticket later; the comment is corrected rather than the test.
+
+**A rule written as an `if` in a view is a mutant nothing kills.** The first battery run found the slot check unheld: `if isMicHintSlotFree { show } else { dismiss }` could be replaced by an unconditional `show` and the whole suite still passed. It was inherited from SONNY-177's `onChange` hook rather than introduced here, but it sat in code this ticket had just rewritten, so it was closed rather than recorded — `MicHoverHintModel.pointerArrived(slotIsFree:hint:)` now owns the rule and three mutants die on it. What is left in the view is which boolean it hands over, which is genuinely view wiring. **The hint is passed as a closure, not a resolved value**, so "an arrival with the slot taken does not even ask what it would have shown" is observable; a caller that resolved it anyway would make that unfalsifiable.
+
+**An `NSView` is testable in a way a SwiftUI view is not, and that is worth reaching for.** `MicHoverArrivalTests` builds the real `TrackingNSView`, constructs real `NSEvent.enterExitEvent` crossings, and sends them to the real overrides — no seam added for the test's benefit. That covers strictly more than the model tests do: it is the only place that says an arrival repeating itself is still an arrival. What stays out of reach is `makeNSView`/`updateNSView` handing the closures over and what `FloatingWidgetView` puts in them; the manual items are the verification for those, as ever.
+
+**The new sentence was re-measured, not assumed to fit because it is shorter.** At the row's real font (SF Pro Medium 10) against the 444pt the 472pt frame leaves after its 14pt padding: **189.6pt**, against the old sentence's 285.4pt and the configuration message's unchanged 254.1pt. The method was validated by reproducing SONNY-177's two figures exactly before trusting it on the new one. The frame is untouched and the window controller's fitted-size positioning needed no revisiting.
+
+Known limitations / deferred scope:
+- **No session verified any of this visually.** The mechanism is pinned by tests and a battery; that the first hover now works *in the packaged app* is the founder's manual item, and it is the only thing that settles it. The three-second feel and the new sentence are likewise his.
+- **Residual A on SONNY-177 is still open** and now reads three seconds: nothing pins that `MicHoverHintModel` counts for the duration it was handed, so a mutant hardcoding the shipping delay inside the sleep survives. Harmless while `micHoverReminderDismissDelay` is the only non-`nil` delay any caller passes; real the moment a second one exists.
+- Nothing deferred, no new tickets filed: everything SONNY-179 asked for landed on this branch.
+
+Open questions (required, write "none" if true): none. The wording is the founder's own, given verbatim on the ticket 2026-08-19; the three seconds is his call from the same pass.
+
 ### Branch: fix/widget-mic-hover-hint
 Status: complete
 Date: 2026-08-19
