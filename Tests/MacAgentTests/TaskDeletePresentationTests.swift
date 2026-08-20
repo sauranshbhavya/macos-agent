@@ -78,14 +78,14 @@ struct TaskDeletePresentationTests {
     }
 
     @Test
-    func rowIdentityIsTheRecordIdAndFallsBackOnlyWhenThereIsNone() {
+    func rowIdentityIsTheRecordIdAndFallsBackOnlyWhenThereIsNone() throws {
         var record = CompletedTaskRecord(
             command: "open Safari",
             startedAt: Date(timeIntervalSince1970: 1_700_000_000),
             completedAt: Date(timeIntervalSince1970: 1_700_000_010),
             outcomeStatus: .completed
         )
-        let realID = try? #require(record.id)
+        let realID = try #require(record.id)
         #expect(record.taskRowIdentity == realID)
 
         // Reachable only if SONNY-115's backfill could not write. The fallback is the old key, and

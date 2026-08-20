@@ -567,7 +567,7 @@ struct MixedVisionPlanTests {
 
     /// A plan that is *only* a vision step says so plainly rather than counting zero other steps.
     @Test
-    func aVisionOnlyPlanGetsItsOwnSentenceRatherThanACountOfZero() {
+    func aVisionOnlyPlanGetsItsOwnSentenceRatherThanACountOfZero() throws {
         let plan = AgentPlan(
             summary: "Set the theme to dark in Safari.",
             requiresConfirmation: false,
@@ -581,9 +581,9 @@ struct MixedVisionPlanTests {
                 )
             ]
         )
-        let disclosure = try? #require(AgentActionExecutor.visionSplitDisclosure(for: plan))
-        #expect(disclosure?.contains("by controlling Safari directly") == true)
-        #expect(disclosure?.contains("steps with its own tools") == false)
+        let disclosure = try #require(AgentActionExecutor.visionSplitDisclosure(for: plan))
+        #expect(disclosure.contains("by controlling Safari directly"))
+        #expect(!disclosure.contains("steps with its own tools"))
     }
 
     /// **Every plan without a vision step is untouched**, which is every plan the product had before
