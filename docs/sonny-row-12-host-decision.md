@@ -518,8 +518,23 @@ Two environments plus local, per the founder's 2026-08-16 decision.
 | Supabase **Pro**, two projects | **$35** | Supabase's own worked example: "$25 (plan) + $10 (project 1) + $10 (project 2) − $10 (credits) = $35/month". 8 GB disk per project, 250 GB egress, 2M invocations, 100,000 MAUs, documented 400 s wall clock. |
 | Cloudflare Workers, if the gateway ever moves | **$0** or **$5** | Free: 100K requests/day, 10 ms CPU. Paid: $5/month minimum. |
 
-**The realistic floor for a shipping product is $35/month.** The pause-after-a-week behaviour rules
-Free out for a staging environment that is used intermittently, which is what staging is.
+**$35/month was the realistic floor for the architecture this document measured, and that
+architecture is superseded** (§12.2). It prices Supabase carrying *everything* — auth, Postgres and
+the gateway. After the 2026-08-21 decision Supabase carries **auth and Postgres only**, and the
+gateway's hosting is a separate cost on deploymind, then Oracle, then AWS. **So $35 is neither the
+floor nor a clean component of one**, and nobody has yet priced what the auth-plus-Postgres
+footprint alone actually needs. That is the live version of the founder's deferred Free-versus-Pro
+question.
+
+One input survives the decision intact, because it is a property of Supabase *projects* rather than
+of Edge Functions: **a Free project pauses after a week of inactivity**, and a staging environment is
+precisely the thing that goes a week untouched. That is what ruled Free out before, and it still
+does — so whatever the auth-plus-Postgres footprint costs, the shape of the answer is unlikely to be
+"stay on Free".
+
+(The reviewer flagged this same stale-costing error in `docs/sonny-row-12-plan.md` §4.8 and in the
+changelog entry, and not here; it is the same error in a third document, corrected in the same
+round rather than left to contradict the two that were named — PR #82 cycle 2, R2/R3.)
 
 ### 10.2 What meters
 
@@ -601,9 +616,16 @@ is a measured number rather than a documentation quote.
 Recorded on SONNY-125 by the coordinator; that comment is the source, this is the durable copy.
 
 **The gateway runs on a VM, not on serverless functions.** Hosting is staged across the product's
-life: **deploymind** (the cofounder Bhavya's deployment project) for development, **Oracle Cloud**
-for beta testing, **AWS** for the v1 release. **Supabase keeps auth and Postgres — only the gateway
-moves.**
+life: development **first tries deploymind** (the cofounder Bhavya's deployment project),
+**Oracle Cloud** for beta testing, **AWS** for the v1 release. **Supabase keeps auth and Postgres —
+only the gateway moves.**
+
+**"First tries" is the founder's own hedge and is preserved deliberately.** The VM decision is
+settled; deploymind as the development host is not, and an earlier draft of this line stated it
+flatly (PR #82 cycle 2, R5). Oracle and AWS are named without that qualifier because the source
+names them without one. The distinction matters to SONNY-126, which should treat the development
+host as the least fixed of the three — which costs it nothing, because the host-portability
+constraint below already assumes none of them is load-bearing.
 
 **What stops binding.** Every Edge-Function ceiling measured in this document — the 150-second wall
 clock, the streaming truncation, the platform body limits, and Edge egress metering. The gateway now
