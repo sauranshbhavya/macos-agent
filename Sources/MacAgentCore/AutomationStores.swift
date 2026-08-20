@@ -122,6 +122,46 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
         .unsupported
     ]
 
+    /// Every step with the executor's resolve-phase app pins cleared, recursively (SONNY-67).
+    ///
+    /// **A read-door rule, and the counterpart to `validateStepSafety`'s write-door one.**
+    /// `resolvedAppName` and `resolvedBundleIdentifier` are written by the executor when it resolves
+    /// a plan, and by nothing else: they are absent from `AgentPlanDecoder.stepKeys` and from the
+    /// planner schema, so a model cannot emit one, and the two adapters that *do* write them
+    /// (`RunningAppSwitchCapabilityAdapter`, `VisionSessionCapabilityAdapter`) write onto a
+    /// top-level plan's steps for operations `forbiddenStepOperations` refuses inside a routine.
+    /// Enumerated rather than assumed: those are the only two writers in `Sources/`.
+    ///
+    /// So **no legitimately saved routine can carry a pin**, and stripping is behaviour-preserving
+    /// for every store Sonny itself wrote. What it closes is the one door that admits one: a
+    /// `routines.json` written by something that is not Sonny. `RoutineStore.loadAll` validates
+    /// nothing and `LocalStorageEncryption.decode` accepts unauthenticated plaintext when the header
+    /// is absent, so a hand-written file reaches the executor intact — and once there, the pin-once
+    /// guard in `RunningAppSwitchCapabilityAdapter` honours an already-set pin at every gate,
+    /// correctly and by design, which is exactly why a pin that arrives pre-set is never questioned.
+    /// The sharpest traced consequence: a step whose `resolvedAppName` matches a workspace entry and
+    /// whose `resolvedBundleIdentifier` names a different app earns `.inScope`, renders the trusted
+    /// display name on the approval line, and activates the foreign app by exact bundle-id lookup.
+    ///
+    /// **Strip rather than reject**, following the SONNY-52 store-door precedent: rejecting would
+    /// turn a tampered file into a store that will not load at all, which costs a user their real
+    /// routines to punish bytes they may not have written. Stripping returns the routine to the only
+    /// state Sonny could have saved it in, and the executor then resolves the pins itself.
+    ///
+    /// Recursive because a tampered file can nest `routineSteps` that `validateStepSafety` would
+    /// have refused at the write door.
+    static func strippingResolverPins(_ steps: [AgentStep]) -> [AgentStep] {
+        steps.map { step in
+            var stripped = step
+            stripped.resolvedAppName = nil
+            stripped.resolvedBundleIdentifier = nil
+            if let nested = step.routineSteps {
+                stripped.routineSteps = strippingResolverPins(nested)
+            }
+            return stripped
+        }
+    }
+
     /// The step-safety rule, in the one place both write doors call it.
     ///
     /// Rejects on the first offending step rather than collecting every problem: the caller shows
@@ -440,7 +480,20 @@ public struct RoutineStore: @unchecked Sendable {
         }
         let data = try Data(contentsOf: fileURL)
         let decoded = try encryption.decode([String: StoredRoutine].self, from: data)
-        return decoded.migratingLegacyPlaintext(store: "routines", write: write)
+        // Pins are cleared here, at the store's read door, before anything downstream can honour one
+        // (SONNY-67). See `StoredRoutine.strippingResolverPins` for why this loses nothing a
+        // legitimate store had and what it closes.
+        //
+        // Before the migration rather than after, so the rewrite a legacy-plaintext file triggers
+        // persists the stripped form rather than re-writing the pins it just read.
+        let stripped = decoded.map { routines in
+            routines.mapValues { routine -> StoredRoutine in
+                var clean = routine
+                clean.steps = StoredRoutine.strippingResolverPins(routine.steps)
+                return clean
+            }
+        }
+        return stripped.migratingLegacyPlaintext(store: "routines", write: write)
     }
 
     private func write(_ routines: [String: StoredRoutine]) throws {

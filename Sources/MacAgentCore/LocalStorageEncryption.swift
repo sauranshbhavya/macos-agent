@@ -95,6 +95,22 @@ public enum LocalStorageDecoded<Value> {
         }
     }
 
+    /// The decoded value transformed, keeping which door it came through.
+    ///
+    /// Exists so a store can clean what it just decoded *before* `migratingLegacyPlaintext` decides
+    /// whether to re-write it — `RoutineStore.loadAll` strips resolver pins there (SONNY-67), and
+    /// stripping after the migration would re-encrypt the very bytes it is removing. One caller
+    /// today; it is here rather than as a `switch` at that call site because a call site that
+    /// rebuilds this enum's cases by hand is a second place that has to know there are exactly two.
+    public func map<Mapped>(_ transform: (Value) -> Mapped) -> LocalStorageDecoded<Mapped> {
+        switch self {
+        case .encrypted(let value):
+            return .encrypted(transform(value))
+        case .legacy(let value):
+            return .legacy(transform(value))
+        }
+    }
+
     /// Opportunistically re-writes a legacy plaintext file as encrypted, returning the decoded
     /// value either way.
     ///
