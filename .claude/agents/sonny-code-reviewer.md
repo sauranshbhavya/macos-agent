@@ -14,6 +14,8 @@ Standing rule for this project: never trust a summary of what changed. Read ever
 env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disable-sandbox -Xswiftc -F -Xswiftc /Library/Developer/CommandLineTools/Library/Developer/Frameworks -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/Frameworks -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/usr/lib
 ```
 
+Run `scripts/warnings` as well, and report its count with the SHA it stamps. A warning is emitted when a file is *compiled*, and the command above builds incrementally against the shared `.build/`, so an unchanged file is not recompiled and its warnings are simply absent from that output — a reviewer rerunning only the suite cannot see a warning the implementer introduced. That is not hypothetical: one merged on 2026-08-17 past an implementer, a fresh-session review and a coordinator's own rerun, because none of the three could have seen it, and "zero compiler warnings" read off suite output is a claim about nothing that reads exactly like a true one (SONNY-169).
+
 For any date/time, streak, week-boundary, or state-machine logic: hand-trace it against the actual test fixtures rather than trusting green tests alone. A test suite can pass while still encoding the wrong specification.
 
 Specifically check for these bug classes, all of which have occurred once already on this project and are easy to reintroduce:
