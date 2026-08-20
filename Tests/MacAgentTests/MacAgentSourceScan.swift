@@ -12,20 +12,36 @@ import Testing
 /// The wiring those two facts put out of reach is real behaviour, and leaving it unheld because the
 /// obvious tool does not fit is how a rewired control ships green.
 ///
-/// **Comment-prefixed lines are removed, and that is the whole soundness of the thing.** Measured on
-/// `fix/attention-reaches-user`: a mutation battery rewired Command Center's Cancel button to
-/// `submitClarification()` and the scan **survived**, because the comment three lines above it
-/// mentioned `cancelCurrentRun()`. The test was reading the sentence describing the code instead of
-/// the code. A scan a prose edit can satisfy holds nothing at all.
+/// **Comments are removed, and that is the whole soundness of the thing.** Measured twice on
+/// `fix/attention-reaches-user`, both times by a mutant that walked straight through a scan:
 ///
-/// Comment-*prefixed*, not every line containing a double slash — the narrower `grep -v "//"` this
-/// repository was bitten by during row C drops real constructions carrying a trailing note. Same
-/// rule `TestSourceTree.codeLines` states for the test tree in the other target; this is the source
-/// tree's counterpart, and it is not twinned because only this target scans `Sources/`.
+/// 1. A mutant rewired Command Center's Cancel button to `submitClarification()` and the scan
+///    **survived**, because the `//` comment three lines above it mentioned `cancelCurrentRun()`.
+///    The test was reading the sentence describing the code instead of the code.
+/// 2. With line comments stripped, the PR #80 reviewer's own battery hid the same rewiring behind a
+///    `/* was viewModel.cancelCurrentRun() */` block comment and it **survived again** — while this
+///    doc comment claimed stripping was "the whole soundness of the thing". A scan any comment
+///    syntax can satisfy holds nothing at all, and a scan that says otherwise is worse than none.
+///
+/// Both forms are stripped now. Line comments are matched comment-*prefixed*, not by every line
+/// containing a double slash — the narrower `grep -v "//"` this repository was bitten by during row
+/// C drops real constructions carrying a trailing note. Block comments are matched with a depth
+/// counter, because Swift nests them.
+///
+/// **What is still not stripped, stated rather than glossed: string literals.** A Swift string
+/// containing `"cancelCurrentRun()"` would satisfy any scan below, and nothing here can tell one
+/// from a call without parsing the language. That residual is narrow — a source file would have to
+/// carry the searched symbol inside a literal — but it is real, and the honest limit of a textual
+/// scan is that it is textual. Anything needing more than that needs a different tool, not a
+/// stronger claim about this one.
+///
+/// Same line-comment rule `TestSourceTree.codeLines` states for the test tree in the other target;
+/// this is the source tree's counterpart, and it is not twinned because only this target scans
+/// `Sources/`.
 @MainActor
 enum MacAgentSource {
     /// A file under `Sources/MacAgent/`, resolved from this file's own location so the scan works
-    /// from any checkout, with comment-prefixed lines dropped.
+    /// from any checkout, with both comment syntaxes dropped.
     static func read(_ name: String) throws -> String {
         let repository = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()   // MacAgentTests
@@ -35,10 +51,44 @@ enum MacAgentSource {
             .appendingPathComponent("Sources/MacAgent")
             .appendingPathComponent(name)
         let source = try String(contentsOf: url, encoding: .utf8)
-        return source
+        return strippingBlockComments(source)
             .split(separator: "\n", omittingEmptySubsequences: false)
             .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
             .joined(separator: "\n")
+    }
+
+    /// Removes `/* … */` spans, counting depth because Swift nests block comments — `/* /* */ */`
+    /// closes once, and a scanner that stopped at the first `*/` would hand back the tail of a
+    /// comment as if it were code.
+    ///
+    /// Newlines inside a stripped span are kept, so the line structure the caller's line-comment
+    /// filter and `region(of:from:to:)` both read is the file's own. Dropping them would let a
+    /// block comment silently splice two unrelated code lines into one.
+    ///
+    /// Runs before the line filter, so a `//` line inside a block comment is gone either way.
+    static func strippingBlockComments(_ source: String) -> String {
+        var result = ""
+        result.reserveCapacity(source.count)
+        var depth = 0
+        var index = source.startIndex
+        while index < source.endIndex {
+            if source[index...].hasPrefix("/*") {
+                depth += 1
+                index = source.index(index, offsetBy: 2)
+                continue
+            }
+            if depth > 0, source[index...].hasPrefix("*/") {
+                depth -= 1
+                index = source.index(index, offsetBy: 2)
+                continue
+            }
+            let character = source[index]
+            if depth == 0 || character == "\n" {
+                result.append(character)
+            }
+            index = source.index(after: index)
+        }
+        return result
     }
 
     /// The text between two anchors, failing with the missing anchor named rather than silently
@@ -56,16 +106,24 @@ enum MacAgentSource {
         return String(source[startRange.upperBound..<endRange.lowerBound])
     }
 
-    /// How many times `needle` occurs in `name`, over code lines only. For pinning the size of a
-    /// population a suite claims to have enumerated.
+    /// How many times `needle` occurs in `name`, comments already stripped. For pinning the size of
+    /// a population a suite claims to have enumerated.
     static func occurrences(of needle: String, in name: String) throws -> Int {
-        let source = try read(name)
+        count(of: needle, inText: try read(name))
+    }
+
+    /// The same count over a region already extracted by `region(of:from:to:)`.
+    ///
+    /// Counting rather than `contains` is what pins a *rewiring* in both directions: a button whose
+    /// action is swapped for its neighbour's leaves the neighbour's token present and the swapped
+    /// one absent, so only a per-token count sees both halves of the swap.
+    static func count(of needle: String, inText text: String) -> Int {
         guard !needle.isEmpty else {
             return 0
         }
         var count = 0
-        var searchStart = source.startIndex
-        while let found = source.range(of: needle, range: searchStart..<source.endIndex) {
+        var searchStart = text.startIndex
+        while let found = text.range(of: needle, range: searchStart..<text.endIndex) {
             count += 1
             searchStart = found.upperBound
         }

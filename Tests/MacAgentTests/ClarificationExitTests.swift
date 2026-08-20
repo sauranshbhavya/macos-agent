@@ -351,6 +351,108 @@ struct ClarificationExitTests {
             to: "private func failureContent(_ message: String) -> some View {"
         )
         #expect(commandCenterRegion.contains("cancelCurrentRun()"))
+
+        // **The widget's own button, and the region above does not reach it (PR #80 review, F2).**
+        //
+        // `case .clarification` is the *call site* — it proves the panel is handed a closure that
+        // cancels. What the panel does with that closure is a file away, and the reviewer's battery
+        // proved the gap by rewiring `WidgetClarificationPanel`'s button from `onCancel` to
+        // `onSubmit`: all 1425 tests passed, because the call site was untouched and the panel was
+        // unscanned. Command Center had no equivalent hole only because its button's action is
+        // written inline at the site the region already covered.
+        //
+        // Counted per token rather than checked for presence, because a swap is symmetrical: after
+        // it, `Button(action: onSubmit)` appears twice and `Button(action: onCancel)` not at all, and
+        // only a count sees both halves. One each is the whole of what this panel should have.
+        let widgetPanel = try MacAgentSource.region(
+            of: widget,
+            from: "private struct WidgetClarificationPanel: View {",
+            to: "private struct WidgetResultPanel: View {"
+        )
+        #expect(MacAgentSource.count(of: "Button(action: onCancel)", inText: widgetPanel) == 1)
+        #expect(MacAgentSource.count(of: "Button(action: onSubmit)", inText: widgetPanel) == 1)
+        // And it declares both, so neither can be quietly dropped to make the counts agree.
+        #expect(widgetPanel.contains("let onSubmit: () -> Void"))
+        #expect(widgetPanel.contains("let onCancel: () -> Void"))
+    }
+
+    /// **The founder's own words, pinned as literals once (PR #80 review, F4).**
+    ///
+    /// Every other assertion in this suite compares against
+    /// `ClarificationPresentation.canceledSummary`, which is right — that constant existing is what
+    /// stops the two surfaces drifting apart — but it means a mutant that *rewrites the constant*
+    /// changes what the product says and passes the whole suite. The reviewer's battery demonstrated
+    /// exactly that. The copy is the founder's, given verbatim on 2026-08-20, so it is pinned here
+    /// the same way the approval path's is: as the literal, against a run that really produced it.
+    ///
+    /// Driven rather than declared. Asserting `cancelLabel == "Cancel"` alone would pin the constant
+    /// to itself; asserting that a real abandoned run *says* it is what ties the copy to the
+    /// behaviour.
+    @Test
+    func theCancelCopyIsTheFoundersOwnWordsOnBothSurfaces() async throws {
+        let fixture = try ClarificationExitFixture()
+        defer { fixture.tearDown() }
+        let viewModel = fixture.viewModel
+
+        viewModel.command = "="
+        viewModel.start(origin: .widget, fromComposer: true)
+        try await fixture.waitUntilIdle()
+        viewModel.cancelCurrentRun()
+
+        #expect(viewModel.finalSummary == "Canceled. No action was taken.")
+        #expect(ClarificationPresentation.canceledSummary == "Canceled. No action was taken.")
+        // Command Center shows this on its button; the widget uses it as the VoiceOver name and the
+        // tooltip for its icon-only one.
+        #expect(ClarificationPresentation.cancelLabel == "Cancel")
+        // The neighbouring exit's wording, asserted beside it because the whole reason this string
+        // was chosen over "Never mind" and "Stop" is that Sonny's two exits from a paused run should
+        // read as one voice. A change to either alone breaks that, silently, and here.
+        #expect(viewModel.finalSummary.hasSuffix("No action was taken."))
+    }
+
+    /// **The recording-policy reset depends on nothing else running, and the scheduler guard is what
+    /// makes that true (PR #80 review, F1).**
+    ///
+    /// `finishRecordingPolicyIfSettled()` refuses while `isRunning`. Until this round
+    /// `checkScheduledRoutines` guarded only on `isRunning` and `isAwaitingApproval` — both false
+    /// during a clarification pause — so a routine could start on top of the paused task, and a user
+    /// cancelling their clarification inside that window got no reset at all: "Don't save this task"
+    /// stayed on and clipboard history stayed paused until relaunch, which is the exact failure
+    /// SONNY-166 exists to end.
+    ///
+    /// Both halves are asserted, because the positive one alone cannot show the dependency: with a
+    /// run in flight the reset really is refused, and that is why the guard is load-bearing rather
+    /// than tidy. `aPendingClarificationStopsTheSchedulerFromStartingAnything` pins the guard itself.
+    @Test
+    func cancellingAClarificationWithNothingElseRunningCompletesTheRecordingPolicyReset() async throws {
+        let settled = try ClarificationExitFixture()
+        defer { settled.tearDown() }
+        settled.viewModel.taskRecordingPolicy = .suppressTraces
+        settled.viewModel.command = "="
+        settled.viewModel.start(origin: .widget, fromComposer: true)
+        try await settled.waitUntilIdle()
+
+        // The precondition the guard now protects, asserted rather than assumed.
+        #expect(!settled.viewModel.isRunning)
+        settled.viewModel.cancelCurrentRun()
+        #expect(settled.viewModel.taskRecordingPolicy == .record)
+
+        // The negative half: the same cancellation, with something running.
+        let occupied = try ClarificationExitFixture()
+        defer { occupied.tearDown() }
+        occupied.viewModel.taskRecordingPolicy = .suppressTraces
+        occupied.viewModel.command = "="
+        occupied.viewModel.start(origin: .widget, fromComposer: true)
+        try await occupied.waitUntilIdle()
+
+        // What a scheduled routine firing during the pause used to do to this state.
+        occupied.viewModel.isRunning = true
+        occupied.viewModel.cancelCurrentRun()
+
+        // The question is gone — the exit ran — but the reset was refused, so the switch is still on
+        // and clipboard history is still paused. Nothing in the app would have put either back.
+        #expect(occupied.viewModel.clarificationQuestion == nil)
+        #expect(occupied.viewModel.taskRecordingPolicy == .suppressTraces)
     }
 }
 

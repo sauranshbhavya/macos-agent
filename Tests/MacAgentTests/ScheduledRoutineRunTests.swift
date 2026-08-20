@@ -1455,8 +1455,24 @@ struct ScheduledRoutineRunTests {
     func theWidgetRendersTheScheduledNoticeAndStaysExpandedWhileItIsSet() throws {
         let widget = try MacAgentSource.read("FloatingWidgetView.swift")
 
-        #expect(widget.contains("viewModel.scheduledRunNotice"))
-        #expect(widget.contains("Dismiss scheduled run notice"))
+        // The strip itself, not merely a mention of the property somewhere in a 1,600-line file.
+        let strip = try MacAgentSource.region(
+            of: widget,
+            from: "if let notice = viewModel.scheduledRunNotice {",
+            to: "if let notice = viewModel.localStorageNotice {"
+        )
+        #expect(strip.contains("WidgetNoticeStrip("))
+        #expect(strip.contains("Dismiss scheduled run notice"))
+        // **The tint, pinned (PR #80 review, F4).** `WidgetNoticeStrip.tint` defaults to the error
+        // red its two older callers ship, so a mutant deleting this one argument silently reports a
+        // routine that ran fine in Sonny's failure colour — the same mistake as posting it in the
+        // failure notification category, one surface further in, and the whole reason the parameter
+        // exists. The default being the *wrong* value for this caller is what makes an omission
+        // invisible without this line.
+        #expect(strip.contains("tint: WidgetTheme.primaryAction"))
+        // Same glyph Command Center shows for the same notice, so one event does not read as two
+        // different kinds of thing depending on which surface the user happens to be looking at.
+        #expect(strip.contains("clock.arrow.circlepath"))
 
         let collapseRule = try MacAgentSource.region(
             of: widget,
@@ -1468,6 +1484,64 @@ struct ScheduledRoutineRunTests {
         // And an arriving notice re-runs that decision rather than waiting for something else to
         // change, so a routine firing at an already-compact widget expands it there and then.
         #expect(widget.contains(".onChange(of: viewModel.scheduledRunNotice)"))
+    }
+
+    /// **A scheduled routine does not fire while a clarification is waiting (PR #80 review, F1,
+    /// founder decision 2026-08-20).**
+    ///
+    /// `checkScheduledRoutines` guarded only on `isRunning` and `isAwaitingApproval`, and a
+    /// clarification pause makes both false — `performStart`'s defer has already set `isRunning`
+    /// false and a clarification never writes `approvalRequest`. So a routine could start on top of
+    /// a user's half-finished task.
+    ///
+    /// The cost was specific rather than aesthetic: `finishRecordingPolicyIfSettled()` refuses while
+    /// `isRunning`, so a user cancelling their clarification inside that window got no reset — "Don't
+    /// save this task" stayed on and clipboard history stayed paused until relaunch. See
+    /// `ClarificationExitTests.cancellingAClarificationWithNothingElseRunningCompletesTheRecordingPolicyReset`,
+    /// which asserts both halves of that dependency.
+    ///
+    /// **The second half of this test is the part that matters**: the occurrence is only *delayed*.
+    /// Nothing here resolves it, so the very next tick runs it once the question is gone. A guard
+    /// that dropped the run instead would have traded one silent failure for another.
+    @Test
+    func aPendingClarificationStopsTheSchedulerFromStartingAnything() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.saveRoutine(unattendedTrusted: true)
+
+        // A real clarification through the real dispatch path — a bare "=" is a command the
+        // deterministic fixture genuinely cannot act on.
+        fixture.viewModel.command = "="
+        fixture.viewModel.start(origin: .widget, fromComposer: true)
+        try await fixture.waitForIdle()
+        let question = try #require(fixture.viewModel.clarificationQuestion)
+        // The window: the two older terms are both false, which is why they could not close it.
+        #expect(fixture.viewModel.isRunning == false)
+        #expect(fixture.viewModel.isAwaitingApproval == false)
+
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
+        try await fixture.waitForIdle()
+
+        // Nothing started, nothing was reported, and the user's question is untouched.
+        #expect(fixture.viewModel.scheduledRunNotice == nil)
+        #expect(fixture.viewModel.clarificationQuestion == question)
+        #expect(try fixture.routineStore.routine(named: "Morning").effectiveRecentRunDates.isEmpty)
+        // The occurrence is still outstanding — the baseline is exactly where enabling the schedule
+        // left it, never advanced to the occurrence, so this is a deferral rather than a skip.
+        // `resolveOccurrence` is what would have consumed it, and it runs on every outcome
+        // including the skips, so an unmoved baseline is the one thing that distinguishes "not
+        // started" from "handled and reported".
+        #expect(try fixture.routineStore.routine(named: "Morning").schedule?.lastRunAt == fixture.enabledAt)
+
+        // Delay, not loss: with the question answered away, the same tick runs it.
+        fixture.viewModel.cancelCurrentRun()
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
+        try await fixture.waitForIdle()
+
+        #expect(try #require(fixture.viewModel.scheduledRunNotice).contains("ran on schedule"))
+        #expect(try fixture.routineStore.routine(named: "Morning").effectiveRecentRunDates.isEmpty == false)
+        // And the baseline moved this time, so the two halves are distinguishable by the same field.
+        #expect(try fixture.routineStore.routine(named: "Morning").schedule?.lastRunAt == fixture.nineAM)
     }
 
     private func makeFixture() throws -> Fixture {
