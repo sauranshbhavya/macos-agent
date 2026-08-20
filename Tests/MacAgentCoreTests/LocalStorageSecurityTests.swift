@@ -293,13 +293,18 @@ struct LocalStorageSecurityTests {
 
         let result = try service.deleteAllLocalData()
 
-        #expect(result == LocalDataDeletionResult(deletedFileCount: 8, missingFileCount: 0))
+        // Nine, not eight (SONNY-154): the vision session journal is the ninth store and was the one
+        // this test did not create, so the only place the wipe's behaviour is actually exercised
+        // covered every store except the most sensitive one. Asserted against the same count the
+        // fixture returns, so adding a tenth store fails here rather than passing quietly.
+        #expect(fileURLs.count == 9)
+        #expect(result == LocalDataDeletionResult(deletedFileCount: 9, missingFileCount: 0))
         for fileURL in fileURLs {
             #expect(!FileManager.default.fileExists(atPath: fileURL.path))
         }
 
         let secondResult = try service.deleteAllLocalData()
-        #expect(secondResult == LocalDataDeletionResult(deletedFileCount: 0, missingFileCount: 8))
+        #expect(secondResult == LocalDataDeletionResult(deletedFileCount: 0, missingFileCount: 9))
     }
 
     @Test(.requiresUnprivilegedProcess)
@@ -434,6 +439,15 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
         fileURL: root.appendingPathComponent("task-history.json"),
         encryption: encryption
     )
+    // The ninth store, and the one the wipe most has to reach: the journal holds `observationAfter`,
+    // the model's description of what was on the user's screen. It was missing from this helper
+    // (SONNY-154) — it arrived with row I and nobody extended the fixture — so the only test that
+    // actually runs `deleteAllLocalData()` over real files exercised eight of nine, and the journal's
+    // place in the wipe was pinned by the URL list alone.
+    let visionSessionJournalStore = VisionSessionJournalStore(
+        fileURL: root.appendingPathComponent("vision-sessions.json"),
+        encryption: encryption
+    )
 
     try routineStore.save(
         StoredRoutine(
@@ -458,6 +472,14 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
             outcomeStatus: .completed
         )
     )
+    try visionSessionJournalStore.save(
+        VisionSessionRecord(
+            id: "delete-session",
+            goal: "delete vision session",
+            appDisplayName: "Safari",
+            startedAt: .fixture
+        )
+    )
 
     return [
         routineStore.fileURL,
@@ -467,7 +489,8 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
         snippetStore.fileURL,
         recentArtifactStore.fileURL,
         shortcutRunHistoryStore.fileURL,
-        taskHistoryStore.fileURL
+        taskHistoryStore.fileURL,
+        visionSessionJournalStore.fileURL
     ]
 }
 
