@@ -2027,8 +2027,7 @@ struct AgentActionExecutorTests {
         let record = DocxRecord(
             sourceURL: root.appendingPathComponent("report.docx"),
             destinationURL: destination,
-            skippedBecausePDFExists: false,
-            isMockDestination: true
+            skippedBecausePDFExists: false
         )
 
         await #expect(throws: DocumentConversionError.mockWriteFailed(
@@ -2050,8 +2049,7 @@ struct AgentActionExecutorTests {
         let record = DocxRecord(
             sourceURL: root.appendingPathComponent("report.docx"),
             destinationURL: destination,
-            skippedBecausePDFExists: false,
-            isMockDestination: true
+            skippedBecausePDFExists: false
         )
 
         let converted = try await converter.convert([record]) { _ in }
