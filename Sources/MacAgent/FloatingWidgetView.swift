@@ -680,7 +680,11 @@ private extension FloatingWidgetView {
                 stepStatuses: viewModel.stepStatuses,
                 question: question,
                 answer: $viewModel.clarificationAnswer,
-                onSubmit: { viewModel.submitClarification() }
+                onSubmit: { viewModel.submitClarification() },
+                // The same app-wide entry point the permission panel's Deny above uses, not a
+                // clarification-specific method (SONNY-166). `CommandCenterAttentionPanel`'s own
+                // Cancel calls it too, so the two surfaces cannot end a paused task differently.
+                onCancel: { viewModel.cancelCurrentRun() }
             )
         case .permission(let request):
             WidgetPermissionPanel(
@@ -1232,12 +1236,23 @@ private struct WidgetControllingPanel: View {
 
 // MARK: - Clarification (no wireframe — best-effort, flagged for review)
 
+/// **The Cancel control is a founder-approved exception to the wireframe rule, not a fidelity gap
+/// (SONNY-166, approved 2026-08-20).** This panel has no wireframe to match — §3.3 covers six states
+/// and clarification is the seventh, reachable in the real view model and drawn nowhere — so there
+/// was no existing element to build rather than invent. The exception was proposed with its exact
+/// shape and copy and answered before any of it was written, per the repo's standing rule that a
+/// deliberate departure is a stated, reasoned one.
+///
+/// The shape is borrowed rather than designed: a 23x23 circular `xmark` on the neutral fill is
+/// `WidgetPermissionPanel`'s Deny button, reused verbatim. No new component and no new token, so the
+/// one thing this adds to System B is a button that already exists two panels away.
 private struct WidgetClarificationPanel: View {
     let plan: AgentPlan?
     let stepStatuses: [String: AgentStepStatus]
     let question: String
     @Binding var answer: String
     let onSubmit: () -> Void
+    let onCancel: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1252,6 +1267,26 @@ private struct WidgetClarificationPanel: View {
                         .font(WidgetType.caption)
                         .foregroundStyle(WidgetTheme.textFull)
                         .fixedSize(horizontal: false, vertical: true)
+
+                    Spacer(minLength: 8)
+
+                    // On the question's row rather than beside the send arrow below, deliberately:
+                    // inside the answer capsule it would read as "clear what I typed", and this
+                    // ends the task. It sits where the thing it declines is.
+                    //
+                    // Icon-only, so `ClarificationPresentation.cancelLabel` is its VoiceOver name
+                    // and its tooltip instead of visible text — the same string Command Center
+                    // shows on its own button.
+                    Button(action: onCancel) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(WidgetTheme.textFull)
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: 23, height: 23)
+                    .widgetCircularBackground()
+                    .accessibilityLabel(ClarificationPresentation.cancelLabel)
+                    .help(ClarificationPresentation.cancelLabel)
                 }
 
                 HStack(spacing: 8) {

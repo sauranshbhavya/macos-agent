@@ -956,6 +956,19 @@ private struct CommandCenterAttentionPanel: View {
             .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
             .onSubmit { viewModel.submitClarification() }
 
+            // The widget's Cancel, mirrored (SONNY-166). Declining-then-answering order matches the
+            // permission row's Deny-then-Allow directly above, and it calls the same
+            // `cancelCurrentRun()` the widget's own control does — the two surfaces render one
+            // task's state, so an exit that behaved differently depending on which one the user
+            // happened to be looking at is exactly what this panel's mirroring rule forbids.
+            //
+            // Never `.disabled`: the whole point is that this is the way out when the user has
+            // nothing to type. Send is still gated on a non-empty answer, as before.
+            Button(ClarificationPresentation.cancelLabel) {
+                viewModel.cancelCurrentRun()
+            }
+            .buttonStyle(CommandCenterRowActionStyle())
+
             Button("Send") {
                 viewModel.submitClarification()
             }
