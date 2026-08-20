@@ -170,6 +170,15 @@ screenshot at the top of every pass (`:196-198`) — including for `wait`, `dele
 
 ### 3.1 What this rules out, and what it does not
 
+> **Superseded in part, 2026-08-20 (SONNY-125).** The verdict column below judges each host against
+> a **12,005,000**-byte body, which SONNY-114 replaced: the ceiling is now 4,200,000 (contract §6.1).
+> Two of its rows have since been *measured* rather than looked up — Supabase Edge Functions took
+> 67,200,000 bytes unrefused, and Cloudflare Workers 33,600,000 — and one exclusion no longer holds:
+> **Vercel's documented 4.5 MB is above the settled 4,200,000, so "fails" is out of date**, though
+> nobody has measured it. See `docs/sonny-row-12-host-decision.md` §2, §4.1, §5 and §6. The table is
+> kept as written because it records what was true against the payload of the day.
+
+
 | host | documented request-body ceiling | verdict against a 12,005,000-byte body |
 |---|---|---|
 | Cloudflare Workers | 100 MB (Free/Pro account plans) | fits |
@@ -186,6 +195,12 @@ typical 1.8 MB body fits easily — and fail for a customer on a large monitor. 
 is the reason the ticket demanded a measurement instead of a docs figure.
 
 ### 3.2 The honest limit of this measurement
+
+> **Closed 2026-08-20 by SONNY-125.** "The host half is not measured, and cannot be until an account
+> exists" was true when written and is no longer: the account exists, and both the body ceiling and
+> the execution-time ceiling were observed against live endpoints. The paragraph below is kept as the
+> statement of what was outstanding; `docs/sonny-row-12-host-decision.md` is what closed it.
+
 
 The payload half is measured. **The host half is not, and cannot be until an account exists.** No
 figure above for any host was observed; every one is quoted from that host's documentation. Proving
@@ -465,24 +480,51 @@ accident:** §16.3's entitlement cache **fails closed only for paid or gated fea
 capabilities keep working when the network is unreachable. Getting that backwards breaks the offline
 behaviour instant utilities depend on (§2.6).
 
-### 4.8 Host — deliberately not decided yet
+### 4.8 Host — decided and measured (SONNY-125, 2026-08-20)
 
-The host choice is **held**, on the founder's instruction, and is downstream of SONNY-114 (§3.3).
-Everything else in this plan is host-agnostic: the API contract, the auth model, the metering shape,
-the entitlement design and the client seam swap do not depend on where this runs.
+**Supabase, for the whole backend** — auth, database, and the gateway that proxies planner, vision,
+transcription and search, on Edge Functions. Decided by the founder 2026-08-17; **proven against a
+live endpoint 2026-08-20**, which is a separate thing and was the point of SONNY-125.
 
-Two things to carry into that decision when it is made:
+The full measurements, the method, the control arm and what was rejected are in
+`docs/sonny-row-12-host-decision.md`. The four figures that decided it:
 
-- **State the Supabase objection accurately.** Its 2-second CPU limit is not a 2-second wall-clock
-  limit, and a proxy is I/O-bound — it waits on the provider rather than computing. The real
-  objection is the **unpublished request-body ceiling**, and that is precisely the objection SONNY-114
-  may dissolve.
-- **Per-user spend caps need an atomic answer.** A hybrid shape — accounts in one place, the AI path
-  in another — means the gateway reads and writes the account store on every call: latency, plus a
-  race window on concurrent requests from the same user. A leaked token billing the founder is an
-  accepted cost already recorded on SONNY-16, which makes an atomic spend cap a requirement of the
-  design rather than later hardening. Whichever host wins, the decision says how the cap is enforced
-  and what happens on a race.
+| what had to be true | needed | measured |
+|---|---|---|
+| a 4,200,000-byte body lands (contract §6.1) | 4,200,000 | `200`, no refusal up to **67,200,000** |
+| a request may sit on a slow upstream (contract §12) | 105 s | `200` at **105.19 s**; cut off at **150 s** |
+| `Content-Encoding: gzip` survives (contract §6.4) | must arrive | arrives still compressed; inflates in 26 ms |
+| the per-user spend cap is atomic under a race | must exist | one `UPDATE`; demonstrated against Postgres 17 |
+
+The two things this section previously said to carry into the decision, both now answered:
+
+- **The Supabase objection, stated accurately.** The unpublished request-body ceiling was the real
+  objection, and it is answered — 16× the contract's limit, unrefused. The CPU-limit objection was
+  the wrong one, but the standing rebuttal to it ("a proxy is I/O-bound") is **no longer completely
+  true**: §6.4 obliges the gateway to inflate a gzip body and apply limits to the decoded result,
+  which is CPU on a multi-megabyte body. Measured at 26 ms against a 2 s budget — not a problem, but
+  no longer a category to wave away, and the first thing to re-measure if the payload ceiling rises.
+- **Per-user spend caps, atomically.** A single `UPDATE` carrying the cap test in its own `WHERE`.
+  Under READ COMMITTED an `UPDATE` re-evaluates that `WHERE` against the row version a concurrent
+  transaction just committed, so the second of two racers is skipped and refused rather than reading
+  a stale total. Demonstrated with a control: the naive read-then-write overshoots to 200 against a
+  cap of 100. SONNY-135 owns the values; the shape and its evidence are in the decision document.
+
+**Three consequences the rest of the row inherits**, none of which changes any other decision here:
+
+1. **The gateway must not stream.** A streamed response that outruns the 150 s limit reaches the
+   client as HTTP 200 with a truncated body — a silent corruption where the non-streaming path gives
+   a clean `546`. Contract §4 defines no streaming route and the client streams nowhere, so this
+   confirms the existing design rather than changing it.
+2. **`546 WORKER_RESOURCE_LIMIT` needs a home in the error taxonomy** (contract §7), which promises
+   the client a typed error rather than a raw platform status. SONNY-131 and SONNY-136.
+3. **One cost question is open, and it is not answerable from documentation:** whether an Edge
+   Function's outbound `fetch` to a model provider meters as egress. Supabase's own definition names
+   only data sent "to a connected client." The two readings differ by orders of magnitude in what a
+   Pro plan buys.
+
+**Monthly floor: $35** — Supabase Pro with two projects, per Supabase's own worked example. Free is
+$0 and measured fine, but pauses a project after a week of inactivity, which is what staging is.
 
 ---
 
