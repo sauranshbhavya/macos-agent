@@ -322,6 +322,9 @@ struct ClarificationExitTests {
     /// Anchored on real code lines rather than line numbers. If either anchor is renamed this fails
     /// loudly with the anchor in the message, which is the intended behaviour: the rename is the
     /// moment to re-check that the mirror still holds.
+    ///
+    /// **Comments are stripped before any of this is searched** — see `readSource`. The first
+    /// version of this test was not, and a mutation battery walked straight through it.
     @Test
     func bothClarificationSurfacesRouteTheirExitThroughOneEntryPointAndOneLabel() throws {
         let widget = try ClarificationExitFixture.readSource("FloatingWidgetView.swift")
@@ -446,7 +449,18 @@ private struct ClarificationExitFixture {
     }
 
     /// A file under `Sources/MacAgent/`, resolved from this test file's own location so the scan
-    /// works from any checkout.
+    /// works from any checkout — **with comment-prefixed lines removed.**
+    ///
+    /// The removal is not tidiness, it is the whole soundness of every scan below. Measured on this
+    /// branch: a mutation battery rewired Command Center's Cancel to `submitClarification()` and the
+    /// scan **survived**, because the comment three lines above it says the button "calls the same
+    /// `cancelCurrentRun()` the widget's own control does". The test was reading the sentence
+    /// describing the code instead of the code, and a scan that a prose edit can satisfy holds
+    /// nothing at all.
+    ///
+    /// Comment-*prefixed*, not every line containing `//` — the narrower `grep -v "//"` this
+    /// repository was bitten by during row C drops real constructions carrying a trailing note. Same
+    /// rule `TestSourceTree.codeLines` states in the other target.
     static func readSource(_ name: String) throws -> String {
         let repository = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()   // MacAgentTests
@@ -455,7 +469,11 @@ private struct ClarificationExitFixture {
         let url = repository
             .appendingPathComponent("Sources/MacAgent")
             .appendingPathComponent(name)
-        return try String(contentsOf: url, encoding: .utf8)
+        let source = try String(contentsOf: url, encoding: .utf8)
+        return source
+            .split(separator: "\n", omittingEmptySubsequences: false)
+            .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+            .joined(separator: "\n")
     }
 
     /// The text between two anchors, failing with the missing anchor named rather than silently
