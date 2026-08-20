@@ -1,0 +1,39 @@
+=== 2026-08-20T22:44:09Z UTC  postgres 17.11 (Debian 17.11-1.pgdg13+2)
+
+--- TEST 1: two racing reserves, cap fits ONE. Expect exactly one to win.
+A=100
+  B=REFUSED   (B blocked 1.6s waiting on A's row lock, then re-evaluated)
+  spent reserved cap -> 0 100 100
+  (the control for this test is control.sh, not this script)
+
+--- TEST 2: 50 concurrent reserves, cap fits exactly 10. Expect 10 wins, 40 refusals.
+  wins:     10
+  refusals: 40
+  spent reserved cap -> 0 1000 1000
+
+--- TEST 3: requests the platform kills mid-flight leak their holds until swept.
+    THREE orphans for one user and one for a second, deliberately. A sweep that
+    subtracts straight from the expired rows reclaims only ONE hold per user-period,
+    because UPDATE ... FROM applies a single source row per target row -- and it marks
+    the rest settled, so the remainder is lost for good. A single-orphan test cannot
+    tell that sweep from a correct one; this one can (PR #82 cycle 1, F2).
+  after 3 holds for user A, 1 for user B
+    A -> 0 900 1000     B -> 0 400 1000
+  a 1000 for A now      -> REFUSED
+  sweep() reclaimed     -> 4 hold(s)   [must be 4 -- holds, not rows]
+    A -> 0 0 1000     B -> 0 0 1000   [both must be 0 reserved]
+  a 1000 for A now      -> 1000
+  a 1000 for B now      -> 1000
+
+--- TEST 4: settle is idempotent. A retried settle must charge once.
+  after first settle  -> 400 0 1000
+  after second settle -> 400 0 1000   (unchanged = idempotent)
+
+--- TEST 5: settle caps the charge at the reservation. This is a RESIDUAL, not a feature.
+    LEAST(actual, reserved) means a call that cost more than was held is charged the
+    hold and the excess is absorbed silently -- real provider spend that never reaches
+    the cap. Shown so SONNY-135 decides it rather than inherits it (PR #82 cycle 1, F9).
+  reserved 100, call actually cost 900 -> 100 0 1000
+  800 credits of real spend went uncharged.
+
+=== finished 2026-08-20T22:44:15Z UTC

@@ -1,0 +1,21 @@
+=== SONNY-125 PR #82 cycle 1, F7: evidence for the Cloudflare error-1042 claim.
+=== The claim was made in cycle 0 from an interactive observation that was never logged.
+=== Reproduced here deliberately, on 2026-08-20, with a throwaway Worker whose
+=== UPSTREAM_URL points at another Worker on the SAME workers.dev zone.
+===
+=== deploy:  wrangler deploy -c wrangler-1042.toml     (name = sonny-1042-probe,
+===          UPSTREAM_URL = https://sonny-slow-upstream.sbhardwaj1418.workers.dev/slow)
+=== command: curl -sS -m 30 -w '%{http_code} %{time_total}' \
+===            'https://sonny-1042-probe.sbhardwaj1418.workers.dev/up?ms=1000'
+=== started 2026-08-20T22:50:46Z UTC
+run 1: 200 0.167733  body: {"route":"up","requested_ms":1000,"actual_ms":1,"upstream_status":404,"upstream_body":"error code: 1042
+"}
+run 2: 200 0.080345  body: {"route":"up","requested_ms":1000,"actual_ms":2,"upstream_status":404,"upstream_body":"error code: 1042
+"}
+run 3: 200 0.220959  body: {"route":"up","requested_ms":1000,"actual_ms":1,"upstream_status":404,"upstream_body":"error code: 1042
+"}
+=== control: the SAME Worker code, reaching a CROSS-zone upstream (the Supabase
+=== function), which is the wiring every measurement in the decision document used.
+control 1: 200 1.304872  body: {"route":"up","requested_ms":1000,"actual_ms":1098,"upstream_status":200,"upstream_body":"{\"route\":\"slow\",\"requested_ms\":1000,\"actual_ms\":1002}"}
+control 2: 200 1.223182  body: {"route":"up","requested_ms":1000,"actual_ms":1086,"upstream_status":200,"upstream_body":"{\"route\":\"slow\",\"requested_ms\":1000,\"actual_ms\":1001}"}
+=== finished 2026-08-20T22:50:49Z UTC

@@ -1,0 +1,139 @@
+# SUPERSEDED, and kept rather than deleted so the incident is on the record.
+#
+# Two probe.sh runs shared this label concurrently and appended to this file through `tee -a`,
+# so its runs interleave: the MODE=times run has no `=== finished` line, a MODE=ceiling run was
+# written inside it, and a second ceiling ladder at "cap 33554432" carries no header naming the
+# command that produced it. SONNY-125 cited nothing from this file once that was found.
+#
+# The clean re-run is results/local-control.txt -- four strictly sequential runs, verified by
+# their own start/finish timestamps. probe.sh now takes a per-label lock so this cannot recur;
+# `results/.<label>.lock`.
+#
+# Both host logs (supabase.txt, cloudflare.txt) were checked the same way and are clean: every
+# run in each is strictly sequential with no overlap.
+
+
+=== local-deno  http://127.0.0.1:8787  MODE=sizes
+=== started 2026-08-20T20:52:30Z UTC   curl 8.7.1
+--- POST http://127.0.0.1:8787/echo   decoded=664000  wire=664000  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @664000.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'http://127.0.0.1:8787/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 0.003432 664000 0.000476 0.003342
+    body: {"route":"echo","received_bytes":664000,"decoded_bytes":664000,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"664000","inflate_error":null,"actual_ms":2}
+size 664000 raw -> 200 0.003432
+--- POST http://127.0.0.1:8787/echo   decoded=664000  wire=499537  mode=gzip
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' -H 'content-encoding: gzip' \
+         --data-binary @664000.json.gz -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'http://127.0.0.1:8787/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 0.009447 499537 0.000519 0.009301
+    body: {"route":"echo","received_bytes":499537,"decoded_bytes":664000,"still_gzipped":true,"header_content_encoding":"gzip","header_content_length":"499537","inflate_error":null,"actual_ms":8}
+size 664000 gzip -> 200 0.009447
+--- POST http://127.0.0.1:8787/echo   decoded=3512879  wire=3512879  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @3512879.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'http://127.0.0.1:8787/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 0.011230 3512879 0.000554 0.001415
+    body: {"route":"echo","received_bytes":3512879,"decoded_bytes":3512879,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"3512879","inflate_error":null,"actual_ms":10}
+size 3512879 raw -> 200 0.011230
+--- POST http://127.0.0.1:8787/echo   decoded=3512879  wire=2657497  mode=gzip
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' -H 'content-encoding: gzip' \
+         --data-binary @3512879.json.gz -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'http://127.0.0.1:8787/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 0.022852 2657497 0.000559 0.001008
+    body: {"route":"echo","received_bytes":2657497,"decoded_bytes":3512879,"still_gzipped":true,"header_content_encoding":"gzip","header_content_length":"2657497","inflate_error":null,"actual_ms":22}
+size 3512879 gzip -> 200 0.022852
+--- POST http://127.0.0.1:8787/echo   decoded=4004793  wire=4004793  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @4004793.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'http://127.0.0.1:8787/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 0.012550 4004793 0.000518 0.001012
+    body: {"route":"echo","received_bytes":4004793,"decoded_bytes":4004793,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"4004793","inflate_error":null,"actual_ms":11}
+size 4004793 raw -> 200 0.012550
+--- POST http://127.0.0.1:8787/echo   decoded=4004793  wire=3030065  mode=gzip
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' -H 'content-encoding: gzip' \
+         --data-binary @4004793.json.gz -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'http://127.0.0.1:8787/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 0.029764 3030065 0.000512 0.001034
+    body: {"route":"echo","received_bytes":3030065,"decoded_bytes":4004793,"still_gzipped":true,"header_content_encoding":"gzip","header_content_length":"3030065","inflate_error":null,"actual_ms":26}
+size 4004793 gzip -> 200 0.029764
+--- POST http://127.0.0.1:8787/echo   decoded=4200000  wire=4200000  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @4200000.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'http://127.0.0.1:8787/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 0.015625 4200000 0.000471 0.000929
+    body: {"route":"echo","received_bytes":4200000,"decoded_bytes":4200000,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"4200000","inflate_error":null,"actual_ms":14}
+size 4200000 raw -> 200 0.015625
+--- POST http://127.0.0.1:8787/echo   decoded=4200000  wire=3177921  mode=gzip
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' -H 'content-encoding: gzip' \
+         --data-binary @4200000.json.gz -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'http://127.0.0.1:8787/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 0.027978 3177921 0.000487 0.000959
+    body: {"route":"echo","received_bytes":3177921,"decoded_bytes":4200000,"still_gzipped":true,"header_content_encoding":"gzip","header_content_length":"3177921","inflate_error":null,"actual_ms":26}
+size 4200000 gzip -> 200 0.027978
+=== finished 2026-08-20T20:52:31Z UTC
+
+=== local-deno  http://127.0.0.1:8787  MODE=times
+=== started 2026-08-20T20:52:54Z UTC   curl 8.7.1
+--- GET http://127.0.0.1:8787/slow?ms=1000
+    curl -sS --max-time 420 -w '%{http_code} %{time_total}' 'http://127.0.0.1:8787/slow?ms=1000'
+    200 1.008856
+    body: {"route":"slow","requested_ms":1000,"actual_ms":1004}
+slow 1000ms -> 200 1.008856
+--- GET http://127.0.0.1:8787/slow?ms=105000
+    curl -sS --max-time 420 -w '%{http_code} %{time_total}' 'http://127.0.0.1:8787/slow?ms=105000'
+
+=== local-deno  http://127.0.0.1:8787  MODE=ceiling
+=== started 2026-08-20T20:53:51Z UTC   curl 8.7.1
+ceiling: laddering from 4200000, cap 9000000
+--- POST http://127.0.0.1:8787/echo   decoded=4200000  wire=4200000  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @4200000.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'http://127.0.0.1:8787/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 0.020692 4200000 0.000358 0.006218
+    body: {"route":"echo","received_bytes":4200000,"decoded_bytes":4200000,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"4200000","inflate_error":null,"actual_ms":12}
+ceiling probe 4200000 -> 200
+--- POST http://127.0.0.1:8787/echo   decoded=8400000  wire=8400000  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @8400000.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'http://127.0.0.1:8787/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 0.020795 8400000 0.003388 0.006970
+    body: {"route":"echo","received_bytes":8400000,"decoded_bytes":8400000,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"8400000","inflate_error":null,"actual_ms":13}
+ceiling probe 8400000 -> 200
+ceiling: 8400000 passed and the ladder stopped at cap 9000000 without a refusal
+=== finished 2026-08-20T20:53:52Z UTC
+    200 105.004276
+    body: {"route":"slow","requested_ms":105000,"actual_ms":105002}
+slow 105000ms -> 200 105.004276
+ceiling: laddering from 4200000, cap 33554432
+--- POST http://127.0.0.1:8787/echo   decoded=4200000  wire=4200000  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @4200000.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'http://127.0.0.1:8787/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 0.015264 4200000 0.000683 0.003175
+    body: {"route":"echo","received_bytes":4200000,"decoded_bytes":4200000,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"4200000","inflate_error":null,"actual_ms":14}
+ceiling probe 4200000 -> 200
+--- POST http://127.0.0.1:8787/echo   decoded=8400000  wire=8400000  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @8400000.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'http://127.0.0.1:8787/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 0.023203 8400000 0.000499 0.004050
+    body: {"route":"echo","received_bytes":8400000,"decoded_bytes":8400000,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"8400000","inflate_error":null,"actual_ms":22}
+ceiling probe 8400000 -> 200
+--- POST http://127.0.0.1:8787/echo   decoded=16800000  wire=16800000  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @16800000.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'http://127.0.0.1:8787/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 0.037251 16800000 0.000857 0.002096
+    body: {"route":"echo","received_bytes":16800000,"decoded_bytes":16800000,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"16800000","inflate_error":null,"actual_ms":36}
+ceiling probe 16800000 -> 200
+ceiling: 16800000 passed and the ladder stopped at cap 33554432 without a refusal
+
+=== local-deno  http://127.0.0.1:8787  MODE=up
+=== started 2026-08-20T20:54:42Z UTC   curl 8.7.1
+--- GET http://127.0.0.1:8787/up?ms=105000
+    curl -sS --max-time 420 -w '%{http_code} %{time_total}' 'http://127.0.0.1:8787/up?ms=105000'
+    200 105.012919
+    body: {"route":"up","requested_ms":105000,"actual_ms":105009,"upstream_status":200,"upstream_body":"{\"route\":\"slow\",\"requested_ms\":105000,\"actual_ms\":105004}"}
+up 105000ms -> 200 105.012919
+=== finished 2026-08-20T20:56:27Z UTC

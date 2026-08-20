@@ -1,0 +1,6 @@
+# The deliberately slow upstream, deployed as its own Worker on its own hostname so the
+# probe's fetch is a real cross-host subrequest rather than a self-loop the platform may
+# short-circuit or refuse.
+name = "sonny-slow-upstream"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
