@@ -198,6 +198,15 @@ struct AgentViewModelLocalStorageTests {
     /// findings only when a workspace scope is present, so every out-of-scope advisory for that run
     /// disappears, and with it the sentence the ran-without-asking trace would have carried.
     ///
+    /// **The plan is a bare `clarify` step, and that is what makes this test measure the fix.** A
+    /// completed run ends in `refreshSavedItems()`, which reads the workspace store itself and
+    /// records the *same* `.savedWorkspaces` source — so a test that runs a task to completion sees
+    /// the notice whether or not `resolveTaskScope` reported anything, and passes with the fix
+    /// removed. A mutation battery caught exactly that: the first version of this test survived a
+    /// mutant deleting the `recordLocalStorageLoadFailure` call it was written to pin. A
+    /// clarification returns from `performStart` *before* that refresh, and `resolveTaskScope` runs
+    /// before the clarification is read, so the notice here has exactly one possible author.
+    ///
     /// The binding comes through `start(workspaceBinding:)` — the workspace-card dispatch path — so
     /// the name is known without a store read, which is exactly the case where the scope can fail
     /// while the user has already been told the task belongs somewhere.
@@ -211,19 +220,22 @@ struct AgentViewModelLocalStorageTests {
         ).save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://example.com"]))
         let viewModel = try makeViewModel(root: root, encryption: testEncryption(byte: 0x99))
 
-        viewModel.command = "= 1 + 1"
-        viewModel.start(workspaceBinding: "Research")
+        // `canSubmit` requires a non-empty command even for a prebuilt plan; the text is never read
+        // by this path beyond history's label for it.
+        viewModel.command = "zip the selected folder"
+        viewModel.start(workspaceBinding: "Research", prebuiltPlan: clarifyingPlan())
         while viewModel.isRunning {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
 
-        // The storage problem is named on its own channel rather than swallowed.
+        // The storage problem is named on its own channel rather than swallowed, and this is the
+        // only path that could have named it.
         let notice = try #require(viewModel.localStorageNotice)
         #expect(notice.contains("saved workspaces"))
-        // And the task itself still ran — a corrupt store is not this task failing, and refusing the
-        // dispatch to report a storage problem would invert escalate-never-block for no safety gain.
-        #expect(viewModel.finalSummary.contains("2"))
+        // Nothing was refused: a corrupt store is not this task failing, and blocking the dispatch to
+        // report a storage problem would invert escalate-never-block for no safety gain.
         #expect(viewModel.errorMessage == nil)
+        #expect(viewModel.clarificationQuestion != nil)
         // The scope genuinely did not bind, which is what makes the notice the only thing standing
         // between the user and a silent unbinding. `lastAssessedScope` is the post-terminal record;
         // `activeTaskScope` is reset when a run ends, so it cannot answer this after the fact.
@@ -234,6 +246,10 @@ struct AgentViewModelLocalStorageTests {
     /// that is simply *gone* still binds to nothing, silently. That fallback is legitimate — a
     /// workspace deleted between dispatch and assessment is not a storage fault — and reporting it
     /// as one would put a decryption banner in front of a user whose store is perfectly healthy.
+    ///
+    /// Same clarification shape as above, and for the same reason in reverse: a completed run's
+    /// `refreshSavedItems()` would *clear* the source against this healthy store, so a run-to-
+    /// completion test asserts nil no matter what `resolveTaskScope` did.
     @Test
     func aWorkspaceThatNoLongerExistsStillUnbindsWithoutReportingAStoreFailure() async throws {
         let root = try makeDirectory()
@@ -246,14 +262,16 @@ struct AgentViewModelLocalStorageTests {
         ).save(StoredWorkspace(name: "Writing", apps: ["Notes"], urls: []))
         let viewModel = try makeViewModel(root: root, encryption: encryption)
 
-        viewModel.command = "= 1 + 1"
-        viewModel.start(workspaceBinding: "Research")
+        // `canSubmit` requires a non-empty command even for a prebuilt plan; the text is never read
+        // by this path beyond history's label for it.
+        viewModel.command = "zip the selected folder"
+        viewModel.start(workspaceBinding: "Research", prebuiltPlan: clarifyingPlan())
         while viewModel.isRunning {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
 
         #expect(viewModel.localStorageNotice == nil)
-        #expect(viewModel.finalSummary.contains("2"))
+        #expect(viewModel.clarificationQuestion != nil)
         #expect(viewModel.lastAssessedScope == .unscoped)
     }
 
@@ -278,6 +296,8 @@ struct AgentViewModelLocalStorageTests {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
 
+        // A completed run is fine here: this asserts that the scope *bound*, which no other path can
+        // produce — unlike the notice, which `refreshSavedItems()` also writes.
         #expect(viewModel.localStorageNotice == nil)
         guard case .scoped(let scope) = viewModel.lastAssessedScope else {
             Issue.record("A readable store holding the bound workspace must produce a scoped assessment.")
@@ -459,6 +479,24 @@ struct AgentViewModelLocalStorageTests {
         )
         return LinkedTaskFixture(history: history, journal: journal)
     }
+}
+
+/// A plan that prepares straight into a clarification, so `performStart` returns before
+/// `refreshSavedItems()` runs. That early return is what isolates `resolveTaskScope`'s own
+/// load-failure reporting from the identical reporting the post-run refresh does (SONNY-78).
+private func clarifyingPlan() -> AgentPlan {
+    AgentPlan(
+        summary: "Ask first.",
+        requiresConfirmation: false,
+        steps: [
+            AgentStep(
+                id: "clarify",
+                operation: .clarify,
+                description: "Ask which folder.",
+                question: "Which folder should Sonny use?"
+            )
+        ]
+    )
 }
 
 @MainActor
