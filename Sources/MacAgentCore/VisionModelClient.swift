@@ -107,11 +107,16 @@ public struct OpenCodeVisionModelClient: VisionModelDeciding {
     /// that does not accept it fails the whole request, so this may only be turned on for an endpoint
     /// known to inflate it.
     ///
-    /// **Off for the default endpoint, and that is not caution for its own sake.** Whether OpenCode's
-    /// Zen route accepts a gzip-encoded request body is unverified: confirming it needs a live call
-    /// with a real key, which this ticket had no way to make, and it is exactly what SONNY-146's
-    /// first requirement asked for. Turning it on unverified would risk every screen-control session
-    /// for a saving measured at 30%.
+    /// **Off for the default endpoint, and that is a measurement rather than caution.** OpenCode's
+    /// Zen route refuses a gzip-encoded request body: it answers HTTP 500, where the same body sent
+    /// uncompressed answers 200. Measured 2026-08-17 at `34ebd59`, where this file was byte-identical
+    /// to `main` at `6af4044`, through the real `decide` path rather than a replica of it — nine gzip
+    /// requests all 500, interleaved with seven uncompressed controls all 200; a 68-byte text-only
+    /// request carrying no image at all also 500; `curl` sending the identical bytes also 500; and
+    /// the body this code produces passes `gunzip -t` and round-trips through an independent
+    /// implementation, so the framing is not the cause. Full evidence is in SONNY-146's comment of
+    /// that date. So `false` here is the only value that works against this endpoint — the question
+    /// SONNY-146 left open is answered, not still open.
     ///
     /// **SONNY-131 is the consumer that turns it on.** That ticket repoints this client at Sonny's
     /// own gateway, and `docs/sonny-backend-api-contract.md` §6.4 already obliges that server to
