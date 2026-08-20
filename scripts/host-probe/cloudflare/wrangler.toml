@@ -1,0 +1,6 @@
+name = "sonny-host-probe"
+main = "src/index.js"
+compatibility_date = "2026-08-01"
+
+[vars]
+UPSTREAM_URL = "https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/slow"

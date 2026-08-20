@@ -1,0 +1,166 @@
+
+=== supabase  https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe  MODE=sizes
+=== started 2026-08-20T21:20:27Z UTC   curl 8.7.1
+--- POST https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo   decoded=664000  wire=664000  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @664000.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 0.764695 664000 0.022856 0.764498
+    body: {"route":"echo","received_bytes":664000,"decoded_bytes":664000,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"664000","inflate_error":null,"actual_ms":1}
+size 664000 raw -> 200 0.764695
+--- POST https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo   decoded=664000  wire=499537  mode=gzip
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' -H 'content-encoding: gzip' \
+         --data-binary @664000.json.gz -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 0.924321 499537 0.022268 0.923984
+    body: {"route":"echo","received_bytes":499537,"decoded_bytes":664000,"still_gzipped":true,"header_content_encoding":"gzip","header_content_length":"499537","inflate_error":null,"actual_ms":7}
+size 664000 gzip -> 200 0.924321
+--- POST https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo   decoded=3512879  wire=3512879  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @3512879.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 4.924145 3512879 0.039832 4.923846
+    body: {"route":"echo","received_bytes":3512879,"decoded_bytes":3512879,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"3512879","inflate_error":null,"actual_ms":4}
+size 3512879 raw -> 200 4.924145
+--- POST https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo   decoded=3512879  wire=2657497  mode=gzip
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' -H 'content-encoding: gzip' \
+         --data-binary @3512879.json.gz -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 4.768750 2657497 0.145287 4.768466
+    body: {"route":"echo","received_bytes":2657497,"decoded_bytes":3512879,"still_gzipped":true,"header_content_encoding":"gzip","header_content_length":"2657497","inflate_error":null,"actual_ms":319}
+size 3512879 gzip -> 200 4.768750
+--- POST https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo   decoded=4004793  wire=4004793  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @4004793.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 5.247961 4004793 0.025758 5.247675
+    body: {"route":"echo","received_bytes":4004793,"decoded_bytes":4004793,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"4004793","inflate_error":null,"actual_ms":8}
+size 4004793 raw -> 200 5.247961
+--- POST https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo   decoded=4004793  wire=3030065  mode=gzip
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' -H 'content-encoding: gzip' \
+         --data-binary @4004793.json.gz -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 5.636074 3030065 0.130725 5.635784
+    body: {"route":"echo","received_bytes":3030065,"decoded_bytes":4004793,"still_gzipped":true,"header_content_encoding":"gzip","header_content_length":"3030065","inflate_error":null,"actual_ms":25}
+size 4004793 gzip -> 200 5.636074
+--- POST https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo   decoded=4200000  wire=4200000  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @4200000.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 4.381263 4200000 0.026060 4.380852
+    body: {"route":"echo","received_bytes":4200000,"decoded_bytes":4200000,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"4200000","inflate_error":null,"actual_ms":10}
+size 4200000 raw -> 200 4.381263
+--- POST https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo   decoded=4200000  wire=3177921  mode=gzip
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' -H 'content-encoding: gzip' \
+         --data-binary @4200000.json.gz -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 4.432929 3177921 0.037842 4.432665
+    body: {"route":"echo","received_bytes":3177921,"decoded_bytes":4200000,"still_gzipped":true,"header_content_encoding":"gzip","header_content_length":"3177921","inflate_error":null,"actual_ms":26}
+size 4200000 gzip -> 200 4.432929
+=== finished 2026-08-20T21:20:59Z UTC
+
+=== supabase  https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe  MODE=times
+=== started 2026-08-20T21:22:11Z UTC   curl 8.7.1
+--- GET https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/slow?ms=1000
+    curl -sS --max-time 420 -w '%{http_code} %{time_total}' 'https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/slow?ms=1000'
+    200 1.190346
+    body: {"route":"slow","requested_ms":1000,"actual_ms":1002}
+slow 1000ms -> 200 1.190346
+--- GET https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/slow?ms=105000
+    curl -sS --max-time 420 -w '%{http_code} %{time_total}' 'https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/slow?ms=105000'
+    200 105.193332
+    body: {"route":"slow","requested_ms":105000,"actual_ms":105002}
+slow 105000ms -> 200 105.193332
+--- GET https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/slow?ms=150000
+    curl -sS --max-time 420 -w '%{http_code} %{time_total}' 'https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/slow?ms=150000'
+    546 150.156599
+    body: {"code":"WORKER_RESOURCE_LIMIT","message":"Function failed due to not having enough compute resources (please check logs)"}
+slow 150000ms -> 546 150.156599
+--- GET https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/slow?ms=200000
+    curl -sS --max-time 420 -w '%{http_code} %{time_total}' 'https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/slow?ms=200000'
+    546 150.647845
+    body: {"code":"WORKER_RESOURCE_LIMIT","message":"Function failed due to not having enough compute resources (please check logs)"}
+slow 200000ms -> 546 150.647845
+--- GET https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/slow?ms=400000
+    curl -sS --max-time 420 -w '%{http_code} %{time_total}' 'https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/slow?ms=400000'
+    546 150.267974
+    body: {"code":"WORKER_RESOURCE_LIMIT","message":"Function failed due to not having enough compute resources (please check logs)"}
+slow 400000ms -> 546 150.267974
+=== finished 2026-08-20T21:31:29Z UTC
+
+=== supabase  https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe  MODE=up
+=== started 2026-08-20T21:31:29Z UTC   curl 8.7.1
+--- GET https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/up?ms=105000
+    curl -sS --max-time 420 -w '%{http_code} %{time_total}' 'https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/up?ms=105000'
+    200 105.721295
+    body: {"route":"up","requested_ms":105000,"actual_ms":105055,"upstream_status":200,"upstream_body":"{\"route\":\"slow\",\"requested_ms\":105000,\"actual_ms\":105000}"}
+up 105000ms -> 200 105.721295
+--- GET https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/up?ms=200000
+    curl -sS --max-time 420 -w '%{http_code} %{time_total}' 'https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/up?ms=200000'
+    546 150.364896
+    body: {"code":"WORKER_RESOURCE_LIMIT","message":"Function failed due to not having enough compute resources (please check logs)"}
+up 200000ms -> 546 150.364896
+=== finished 2026-08-20T21:35:45Z UTC
+
+=== supabase  https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe  MODE=drip
+=== started 2026-08-20T21:35:45Z UTC   curl 8.7.1
+--- GET https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/drip?ms=200000
+    curl -sS --max-time 420 -w '%{http_code} %{time_total}' 'https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/drip?ms=200000'
+    200 150.525267
+    body: {"route":"drip","keepalive":".....................................................................................................................................................
+drip 200000ms -> 200 150.525267
+=== finished 2026-08-20T21:38:16Z UTC
+
+=== supabase  https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe  MODE=ceiling
+=== started 2026-08-20T21:42:19Z UTC   curl 8.7.1
+ceiling: laddering from 4200000, cap 67108864
+--- POST https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo   decoded=4200000  wire=4200000  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @4200000.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 4.085415 4200000 0.053075 4.085082
+    body: {"route":"echo","received_bytes":4200000,"decoded_bytes":4200000,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"4200000","inflate_error":null,"actual_ms":22}
+ceiling probe 4200000 -> 200
+--- POST https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo   decoded=8400000  wire=8400000  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @8400000.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 8.024167 8400000 0.025380 8.023994
+    body: {"route":"echo","received_bytes":8400000,"decoded_bytes":8400000,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"8400000","inflate_error":null,"actual_ms":25}
+ceiling probe 8400000 -> 200
+--- POST https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo   decoded=16800000  wire=16800000  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @16800000.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 21.648920 16800000 0.290431 21.647321
+    body: {"route":"echo","received_bytes":16800000,"decoded_bytes":16800000,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"16800000","inflate_error":null,"actual_ms":91}
+ceiling probe 16800000 -> 200
+--- POST https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo   decoded=33600000  wire=33600000  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @33600000.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 33.260997 33600000 0.034110 33.260670
+    body: {"route":"echo","received_bytes":33600000,"decoded_bytes":33600000,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"33600000","inflate_error":null,"actual_ms":274}
+ceiling probe 33600000 -> 200
+ceiling: 33600000 passed and the ladder stopped at cap 67108864 without a refusal
+=== finished 2026-08-20T21:43:27Z UTC
+
+=== supabase  https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe  MODE=ceiling
+=== started 2026-08-20T21:43:47Z UTC   curl 8.7.1
+ceiling: laddering from 33600000, cap 134217728
+--- POST https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo   decoded=33600000  wire=33600000  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @33600000.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 36.953850 33600000 0.149444 36.953512
+    body: {"route":"echo","received_bytes":33600000,"decoded_bytes":33600000,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"33600000","inflate_error":null,"actual_ms":220}
+ceiling probe 33600000 -> 200
+--- POST https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo   decoded=67200000  wire=67200000  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @67200000.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 65.721327 67200000 0.040575 65.721022
+    body: {"route":"echo","received_bytes":67200000,"decoded_bytes":67200000,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"67200000","inflate_error":null,"actual_ms":759}
+ceiling probe 67200000 -> 200
+ceiling: 67200000 passed and the ladder stopped at cap 134217728 without a refusal
+=== finished 2026-08-20T21:45:35Z UTC

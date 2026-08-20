@@ -1,0 +1,18 @@
+=== 2026-08-20T21:21:22Z UTC  postgres 17.11 (Debian 17.11-1.pgdg13+2)
+
+--- naive read-then-write, two racers, cap 100. WITHOUT the CHECK constraint
+  racer A: read=0 
+  racer B: read=0 
+  final spent/reserved/cap -> 0 200 100
+
+--- naive read-then-write, two racers, cap 100. WITH the CHECK constraint
+  racer A: read=0 ERROR:  new row for relation "naive" violates check constraint "never_over_cap" DETAIL:  Failing row contains (11111111-1111-1111-1111-111111111111, 2026-08-01, 100, 0, 200). 
+  racer B: read=0 
+  final spent/reserved/cap -> 0 100 100
+
+--- and the single-statement reserve, same race, for comparison
+  racer A: 100
+  racer B: REFUSED
+  final spent/reserved/cap -> 0 100 100
+
+=== finished 2026-08-20T21:21:24Z UTC

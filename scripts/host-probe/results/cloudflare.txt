@@ -1,0 +1,127 @@
+
+=== cloudflare  https://sonny-host-probe.sbhardwaj1418.workers.dev  MODE=times
+=== started 2026-08-20T21:22:14Z UTC   curl 8.7.1
+--- GET https://sonny-host-probe.sbhardwaj1418.workers.dev/slow?ms=1000
+    curl -sS --max-time 420 -w '%{http_code} %{time_total}' 'https://sonny-host-probe.sbhardwaj1418.workers.dev/slow?ms=1000'
+    200 1.490147
+    body: {"route":"slow","requested_ms":1000,"actual_ms":1000}
+slow 1000ms -> 200 1.490147
+--- GET https://sonny-host-probe.sbhardwaj1418.workers.dev/slow?ms=105000
+    curl -sS --max-time 420 -w '%{http_code} %{time_total}' 'https://sonny-host-probe.sbhardwaj1418.workers.dev/slow?ms=105000'
+    200 105.079983
+    body: {"route":"slow","requested_ms":105000,"actual_ms":105000}
+slow 105000ms -> 200 105.079983
+--- GET https://sonny-host-probe.sbhardwaj1418.workers.dev/slow?ms=200000
+    curl -sS --max-time 420 -w '%{http_code} %{time_total}' 'https://sonny-host-probe.sbhardwaj1418.workers.dev/slow?ms=200000'
+    200 200.177327
+    body: {"route":"slow","requested_ms":200000,"actual_ms":200000}
+slow 200000ms -> 200 200.177327
+--- GET https://sonny-host-probe.sbhardwaj1418.workers.dev/slow?ms=400000
+    curl -sS --max-time 420 -w '%{http_code} %{time_total}' 'https://sonny-host-probe.sbhardwaj1418.workers.dev/slow?ms=400000'
+    200 400.114323
+    body: {"route":"slow","requested_ms":400000,"actual_ms":400000}
+slow 400000ms -> 200 400.114323
+=== finished 2026-08-20T21:34:01Z UTC
+
+=== cloudflare  https://sonny-host-probe.sbhardwaj1418.workers.dev  MODE=up
+=== started 2026-08-20T21:34:01Z UTC   curl 8.7.1
+--- GET https://sonny-host-probe.sbhardwaj1418.workers.dev/up?ms=105000
+    curl -sS --max-time 420 -w '%{http_code} %{time_total}' 'https://sonny-host-probe.sbhardwaj1418.workers.dev/up?ms=105000'
+    200 105.302361
+    body: {"route":"up","requested_ms":105000,"actual_ms":105082,"upstream_status":200,"upstream_body":"{\"route\":\"slow\",\"requested_ms\":105000,\"actual_ms\":105001}"}
+up 105000ms -> 200 105.302361
+=== finished 2026-08-20T21:35:46Z UTC
+
+=== cloudflare  https://sonny-host-probe.sbhardwaj1418.workers.dev  MODE=sizes
+=== started 2026-08-20T21:41:29Z UTC   curl 8.7.1
+--- POST https://sonny-host-probe.sbhardwaj1418.workers.dev/echo   decoded=664000  wire=664000  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @664000.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'https://sonny-host-probe.sbhardwaj1418.workers.dev/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 0.882038 664000 0.152239 0.881871
+    body: {"route":"echo","received_bytes":664000,"decoded_bytes":664000,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"664000","inflate_error":null,"actual_ms":7}
+size 664000 raw -> 200 0.882038
+--- POST https://sonny-host-probe.sbhardwaj1418.workers.dev/echo   decoded=664000  wire=499537  mode=gzip
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' -H 'content-encoding: gzip' \
+         --data-binary @664000.json.gz -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'https://sonny-host-probe.sbhardwaj1418.workers.dev/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 0.508228 499537 0.021303 0.507934
+    body: {"route":"echo","received_bytes":499537,"decoded_bytes":664000,"still_gzipped":true,"header_content_encoding":"gzip","header_content_length":"499537","inflate_error":null,"actual_ms":4}
+size 664000 gzip -> 200 0.508228
+--- POST https://sonny-host-probe.sbhardwaj1418.workers.dev/echo   decoded=3512879  wire=3512879  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @3512879.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'https://sonny-host-probe.sbhardwaj1418.workers.dev/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 3.310337 3512879 0.037351 3.309707
+    body: {"route":"echo","received_bytes":3512879,"decoded_bytes":3512879,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"3512879","inflate_error":null,"actual_ms":54}
+size 3512879 raw -> 200 3.310337
+--- POST https://sonny-host-probe.sbhardwaj1418.workers.dev/echo   decoded=3512879  wire=2657497  mode=gzip
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' -H 'content-encoding: gzip' \
+         --data-binary @3512879.json.gz -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'https://sonny-host-probe.sbhardwaj1418.workers.dev/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 2.538318 2657497 0.025742 2.537533
+    body: {"route":"echo","received_bytes":2657497,"decoded_bytes":3512879,"still_gzipped":true,"header_content_encoding":"gzip","header_content_length":"2657497","inflate_error":null,"actual_ms":19}
+size 3512879 gzip -> 200 2.538318
+--- POST https://sonny-host-probe.sbhardwaj1418.workers.dev/echo   decoded=4004793  wire=4004793  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @4004793.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'https://sonny-host-probe.sbhardwaj1418.workers.dev/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 3.973394 4004793 0.036659 3.973070
+    body: {"route":"echo","received_bytes":4004793,"decoded_bytes":4004793,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"4004793","inflate_error":null,"actual_ms":54}
+size 4004793 raw -> 200 3.973394
+--- POST https://sonny-host-probe.sbhardwaj1418.workers.dev/echo   decoded=4004793  wire=3030065  mode=gzip
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' -H 'content-encoding: gzip' \
+         --data-binary @4004793.json.gz -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'https://sonny-host-probe.sbhardwaj1418.workers.dev/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 5.287122 3030065 0.170620 5.286866
+    body: {"route":"echo","received_bytes":3030065,"decoded_bytes":4004793,"still_gzipped":true,"header_content_encoding":"gzip","header_content_length":"3030065","inflate_error":null,"actual_ms":19}
+size 4004793 gzip -> 200 5.287122
+--- POST https://sonny-host-probe.sbhardwaj1418.workers.dev/echo   decoded=4200000  wire=4200000  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @4200000.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'https://sonny-host-probe.sbhardwaj1418.workers.dev/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 3.989718 4200000 0.038094 3.989411
+    body: {"route":"echo","received_bytes":4200000,"decoded_bytes":4200000,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"4200000","inflate_error":null,"actual_ms":51}
+size 4200000 raw -> 200 3.989718
+--- POST https://sonny-host-probe.sbhardwaj1418.workers.dev/echo   decoded=4200000  wire=3177921  mode=gzip
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' -H 'content-encoding: gzip' \
+         --data-binary @4200000.json.gz -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'https://sonny-host-probe.sbhardwaj1418.workers.dev/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 3.594863 3177921 0.022542 3.594246
+    body: {"route":"echo","received_bytes":3177921,"decoded_bytes":4200000,"still_gzipped":true,"header_content_encoding":"gzip","header_content_length":"3177921","inflate_error":null,"actual_ms":28}
+size 4200000 gzip -> 200 3.594863
+=== finished 2026-08-20T21:41:53Z UTC
+
+=== cloudflare  https://sonny-host-probe.sbhardwaj1418.workers.dev  MODE=ceiling
+=== started 2026-08-20T21:45:35Z UTC   curl 8.7.1
+ceiling: laddering from 4200000, cap 67108864
+--- POST https://sonny-host-probe.sbhardwaj1418.workers.dev/echo   decoded=4200000  wire=4200000  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @4200000.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'https://sonny-host-probe.sbhardwaj1418.workers.dev/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 3.981105 4200000 0.073461 3.980904
+    body: {"route":"echo","received_bytes":4200000,"decoded_bytes":4200000,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"4200000","inflate_error":null,"actual_ms":28}
+ceiling probe 4200000 -> 200
+--- POST https://sonny-host-probe.sbhardwaj1418.workers.dev/echo   decoded=8400000  wire=8400000  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @8400000.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'https://sonny-host-probe.sbhardwaj1418.workers.dev/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 7.622189 8400000 0.020253 7.621877
+    body: {"route":"echo","received_bytes":8400000,"decoded_bytes":8400000,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"8400000","inflate_error":null,"actual_ms":97}
+ceiling probe 8400000 -> 200
+--- POST https://sonny-host-probe.sbhardwaj1418.workers.dev/echo   decoded=16800000  wire=16800000  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @16800000.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'https://sonny-host-probe.sbhardwaj1418.workers.dev/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 15.321240 16800000 0.035998 15.320950
+    body: {"route":"echo","received_bytes":16800000,"decoded_bytes":16800000,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"16800000","inflate_error":null,"actual_ms":415}
+ceiling probe 16800000 -> 200
+--- POST https://sonny-host-probe.sbhardwaj1418.workers.dev/echo   decoded=33600000  wire=33600000  mode=raw
+    curl -sS --max-time 420 -X POST -H 'content-type: application/json' \
+         --data-binary @33600000.json -w '%{http_code} %{time_total} %{size_upload} %{time_connect} %{time_starttransfer}' 'https://sonny-host-probe.sbhardwaj1418.workers.dev/echo'
+    http_code time_total size_upload time_connect time_starttransfer
+    200 35.662477 33600000 0.020822 35.662296
+    body: {"route":"echo","received_bytes":33600000,"decoded_bytes":33600000,"still_gzipped":false,"header_content_encoding":null,"header_content_length":"33600000","inflate_error":null,"actual_ms":413}
+ceiling probe 33600000 -> 200
+ceiling: 33600000 passed and the ladder stopped at cap 67108864 without a refusal
+=== finished 2026-08-20T21:46:38Z UTC
