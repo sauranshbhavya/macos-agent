@@ -304,11 +304,26 @@ compare directly — don't rely on memory of what it's supposed to look like.
 - [x] Sparkle icon, "Let Sonny take it from here…" placeholder, "Start" pill (disabled until text
       entered), separate circular mic button
 - [x] Typing enables Start; clearing text disables it again
-- [x] Hover (don't click) the mic button → hint row appears: "Speak your command — or hold
-      Ctrl-Opt-Space anywhere." Confirm it's a real inline row (pushes layout, doesn't clip) not a
-      floating tooltip. **(Fixed 2026-07-21 — tracker #2, and confirmed working 2026-07-23 —
+- [ ] Hover (don't click) the mic button → hint row appears: "Click to speak or hold
+      Ctrl-Opt-Space." Confirm it's a real inline row (pushes layout, doesn't clip) not a
+      floating tooltip, and that it goes on its own after about three seconds with the pointer left
+      where it is. **(Fixed 2026-07-21 — tracker #2, and confirmed working 2026-07-23 —
       tracker #21: hover now also survives clicking into another app and back, not just the first
-      hover right after launch.)**
+      hover right after launch. Wording, the three seconds and the *first* hover are SONNY-179,
+      2026-08-19 — re-check, this line's tick is not carried over.)**
+- [ ] SONNY-179 specifically. **The precondition is the whole mechanism — without it this item
+      passes on the broken build too and proves nothing.** Hover the mic and *leave the pointer
+      resting on it* while the widget collapses to the small capsule (~6s after the last thing you
+      did). Then click the capsule open and hover the mic **once**. The hint must appear on that
+      first hover. It is the pointer being on the mic *at the moment of the collapse* that stranded
+      the old boolean; with the pointer anywhere else, the next hover was a real transition and the
+      hint appeared even before this branch.
+- [ ] SONNY-179, the risk the fix takes on. Hover the mic and keep the pointer **moving slightly
+      inside the button** for about ten seconds. The hint must go once at ~3s and must **not** come
+      back. Every mouse-entered now re-shows the hint and re-arms the three seconds — that is the
+      fix, and it also means the old design's accidental absorbing of a repeat is gone, so this is
+      the check that AppKit is not manufacturing extra arrivals when the row appearing and
+      disappearing resizes the window under a moving pointer.
 - [x] Leave idle, untouched, >6 seconds → auto-collapses to a small icon-only capsule. Click it →
       expands back, refocused for typing. **Then re-test the actual original complaint: type
       something, stop typing, wait >6s without submitting — confirm it does NOT collapse while there's
