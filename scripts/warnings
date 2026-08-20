@@ -535,6 +535,7 @@ EOF
 # ---------------------------------------------------------------------------------------------
 
 ST_FAILURES=0
+ST_CHECKS=0
 ST_ROOT=""
 
 selftest_cleanup() {
@@ -543,9 +544,10 @@ selftest_cleanup() {
   fi
 }
 
-st_pass() { printf '    PASS  %s\n' "$1"; }
+st_pass() { ST_CHECKS=$((ST_CHECKS + 1)); printf '    PASS  %s\n' "$1"; }
 
 st_fail() {
+  ST_CHECKS=$((ST_CHECKS + 1))
   printf '    FAIL  %s\n' "$1"
   printf '          %s\n' "$2"
   ST_FAILURES=$((ST_FAILURES + 1))
@@ -734,10 +736,10 @@ EOF
 
   printf '\n'
   if [[ "$ST_FAILURES" -eq 0 ]]; then
-    printf '%s selftest: every guard fired.\n' "$SCRIPT_NAME"
+    printf '%s selftest: %s checks, 0 failures — every guard fired.\n' "$SCRIPT_NAME" "$ST_CHECKS"
     finish 0
   fi
-  printf '%s selftest: %s assertion(s) failed.\n' "$SCRIPT_NAME" "$ST_FAILURES" >&2
+  printf '%s selftest: %s checks, %s failure(s).\n' "$SCRIPT_NAME" "$ST_CHECKS" "$ST_FAILURES" >&2
   finish 1
 }
 
