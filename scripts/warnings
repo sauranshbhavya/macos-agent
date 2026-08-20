@@ -24,9 +24,12 @@
 #     skipped. That is the whole point of the script and there is no flag to turn it off. What
 #     survives the wipe is only what was fetched from the network — checkouts/, repositories/,
 #     artifacts/ — so a run needs no network and still recompiles every line of source.
-#   * That directory is this script's own, never the shared .build/, for the same reason
-#     scripts/mutate builds somewhere private (SONNY-176): a run whose artifacts another build is
-#     also writing reports a result its own output cannot be told apart from a clean one.
+#   * That directory is this script's own — .build/warnings-scratch, inside .build/ but never the
+#     .build/debug/ that swift build and swift test share — for the same reason scripts/mutate
+#     builds somewhere private (SONNY-176): a run whose artifacts another build is also writing
+#     reports a result its own output cannot be told apart from a clean one. Nothing an ordinary
+#     build depends on is read or written here, so the next one is as incremental as it would
+#     have been.
 #   * A run lock, so two of these cannot share one scratch directory. The wipe is what makes this
 #     necessary rather than merely tidy — a second run emptying the directory underneath the first
 #     can leave it reporting a partial compile, and a partial compile's missing warnings look
@@ -137,9 +140,11 @@ compiler warning that came from this repository's own sources.
 
 It empties its build directory first, every run, with no flag to stop it. That is the point: an
 incremental build does not recompile an unchanged file, so it cannot report that file's warnings,
-and "zero warnings" read off one is a claim about nothing. The directory it empties is its own,
-never the shared .build/, so running this never costs you an incremental rebuild afterwards and
-never disturbs a build running beside it.
+and "zero warnings" read off one is a claim about nothing. The directory it empties is its own —
+.build/warnings-scratch, which lives inside .build/ but is not the .build/debug/ that swift build
+and swift test share — so running this costs you no incremental rebuild afterwards and disturbs no
+build running beside it. On a failed build it also writes .build/warnings-failed-build.log; those
+two paths are everything it puts in your tree, and both are gitignored.
 
 It reports the SHA it measured at and how many files were uncommitted, so a count can be quoted
 with the tree it came from. It does not refuse a dirty tree — checking work you have not committed
@@ -461,11 +466,21 @@ none at all. The compiler's own output follows; fix that first, then re-run.
 
 EOF
     grep -E '(^|[^A-Za-z])error: ' "$log" | head -20 >&2 || true
-    printf '\n  full build log kept at: %s\n' "$WORKDIR/build.log" >&2
-    # The log lives in WORKDIR, which cleanup() removes on the way out; copy it somewhere the
-    # reader can actually open before that happens.
-    if mkdir -p "$ROOT/.build" 2>/dev/null && cp "$log" "$ROOT/.build/warnings-failed-build.log" 2>/dev/null; then
-      printf '  copied to: .build/warnings-failed-build.log\n' >&2
+    # The log lives in WORKDIR, which cleanup() deletes on the way out, so it is copied somewhere
+    # durable BEFORE any path is named. Printing WORKDIR's path first — which this did until PR
+    # #78's review — hands the reader a file that is already gone by the time they open it, and
+    # names it as the surviving copy when the copy is the thing that might have failed.
+    local kept=""
+    if mkdir -p "$ROOT/.build" 2>/dev/null \
+      && cp "$log" "$ROOT/.build/warnings-failed-build.log" 2>/dev/null; then
+      kept="$ROOT/.build/warnings-failed-build.log"
+    fi
+    if [[ -n "$kept" ]]; then
+      printf '\n  full build log: %s\n' "${kept#$ROOT/}" >&2
+    else
+      printf '\n  The full build log could not be saved — %s is not writable — so it goes with this\n' \
+        "$ROOT/.build" >&2
+      printf '  run. The errors above are the only surviving record; re-run to reproduce it.\n' >&2
     fi
     finish 1
   fi
@@ -684,6 +699,16 @@ selftest() {
   st_eq "exits 1, not 0" "$status" "1"
   st_contains "says the build failed" "$out" "the build failed"
   st_absent "prints no count" "$out" "0 warnings."
+  # PR #78 F3: the only path this prints must be one that still exists once the run has exited.
+  # The build log is written inside a temp directory the EXIT trap deletes, so naming that path
+  # hands the reader a dead file.
+  st_contains "names the durable copy of the build log" "$out" ".build/warnings-failed-build.log"
+  st_absent "and never the temp path it deletes on exit" "$out" "/build.log"
+  if [[ -f "$repo/.build/warnings-failed-build.log" ]]; then
+    st_pass "and that copy is really on disk afterwards"
+  else
+    st_fail "and that copy is really on disk afterwards" "no file at $repo/.build/warnings-failed-build.log"
+  fi
   git -C "$repo" checkout -q -- Sources/Widget/Warned.swift
 
   printf '\n  an uncommitted change is measured, and said to have been\n'
