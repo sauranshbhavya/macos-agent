@@ -73,10 +73,39 @@ public enum FinderSelectionResolver {
             return plan
         }
 
+        // **Whether Finder was contacted at all, recorded where it is knowable** (SONNY-73).
+        //
+        // `selectedDirectoryPath` returns `primary ?? secondary` before it so much as looks at
+        // `contextSource`, and `inputPaths` is already filtered to non-empty entries — so a
+        // non-empty `inputPaths` is exactly the case where it took that early return and the
+        // Apple-Events reader was never called. Pooling is what makes this reachable without any
+        // step misbehaving: the primary path and the context source are taken from the matching
+        // steps independently, so a scan carrying an explicit folder and a zip carrying
+        // `contextSource` satisfy the plan from the scan's path while the zip still declares itself
+        // selection-driven, and `PlanScopedResources` reports Finder off that declaration. The
+        // report was an over-report, never a silent blessing — but it named an app the run never
+        // touched, on the ran-without-asking trace that exists to make the consequence rule's
+        // silences legible.
+        //
+        // Cleared on every matching step rather than only the back-filled ones, because the honest
+        // statement is about the *resolution*, not about which steps it wrote to: one step carrying
+        // both an explicit path and `contextSource` is satisfied by the same early return, contacts
+        // Finder just as little, and is back-filled by nothing.
+        //
+        // The classifier stays keyed on `contextSource` alone and stays pure — it is still true
+        // there that a populated `inputPath` is evidence the selection *was* read, because this is
+        // the only place that can tell the two apart and it now says so in the field itself.
+        let satisfiedWithoutContactingFinder = !inputPaths.isEmpty
+
         var pinnedPlan = plan
-        for index in matchingIndices where pinnedPlan.steps[index].inputPath?
-            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
-            pinnedPlan.steps[index].inputPath = resolved
+        for index in matchingIndices {
+            if pinnedPlan.steps[index].inputPath?
+                .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false {
+                pinnedPlan.steps[index].inputPath = resolved
+            }
+            if satisfiedWithoutContactingFinder {
+                pinnedPlan.steps[index].contextSource = nil
+            }
         }
         return pinnedPlan
     }

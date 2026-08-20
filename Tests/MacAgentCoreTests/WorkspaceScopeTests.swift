@@ -443,13 +443,20 @@ struct WorkspaceScopeTests {
         #expect(PlanScopedResources.resources(in: openArtifact) == [.fileLocation("~/Documents/report.pdf")])
     }
 
-    /// Attribution, at plan level. `pinningSelectedDirectoryInput` reads the selection once for the
-    /// whole plan, taking `contextSource` from the first matching step that carries one and pinning
-    /// the result onto every matching step — so a plan where only the scan declares itself
-    /// selection-driven still has both steps working from the selection. The step-scoped classifier
-    /// names Finder on the declaring step, once, and the plan-level verdict is the same either way.
-    /// Asserted so the "once, on the step that declares it" half is a decision on the record rather
-    /// than an accident of which step happened to be first.
+    /// Attribution: the step-scoped classifier names Finder once, on the step that declares itself
+    /// selection-driven, and the plan-level verdict is the same either way. Asserted so the "once,
+    /// on the step that declares it" half is a decision on the record rather than an accident of
+    /// which step happened to be first.
+    ///
+    /// **A classifier contract, not a claim about what reaches it (SONNY-73).** This plan is built
+    /// by hand with both steps already carrying an explicit `inputPath`, which is precisely the
+    /// shape `FinderSelectionResolver.pinningSelectedDirectoryInput` now resolves without contacting
+    /// Finder at all — and, since SONNY-73, clears `contextSource` while doing so. So the
+    /// *resolved* form of this exact plan produces no Finder finding on the real dispatch path.
+    /// The rule this test pins is still the classifier's, and still what fires for a genuine
+    /// selection-driven plan, where nothing supplies a path and the resolver really does read the
+    /// selection: `aSelectionDrivenZipEscalatesOnFinderEvenThoughTheResolvePhaseAlreadyPinnedTheFolder`
+    /// is that end-to-end case.
     @Test
     func aMixedSelectionDrivenPlanNamesFinderOnceOnTheStepThatDeclaresIt() {
         let scope = makeScope(apps: ["Safari"], urls: [])
