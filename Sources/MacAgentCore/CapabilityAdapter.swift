@@ -210,7 +210,15 @@ public struct CapabilityExecutionContext {
     /// Accumulated from what each unit's previews say they write, so it needs no second return
     /// channel and covers writes from any capability rather than only the docx one — a PDF this run
     /// produced is this run's whether a conversion or something else made it.
-    public var claimedEarlierInThisRun: RunClaims
+    ///
+    /// **`let`, not `var`, since SONNY-163 made the nested-plan closures inherit it.** Those closures
+    /// capture the value this context was built with, and a `var` here would let an adapter mutate
+    /// its own copy of the context and reasonably expect the nested call to see the change — which it
+    /// would not, silently. A mutation battery found exactly that: a mutant seeding a claim on this
+    /// property before calling `executeNestedPlan` changed nothing, because the property and the
+    /// captured value are two homes for one fact. `let` deletes the second home, so the divergence is
+    /// a compile error rather than a behaviour nothing can observe.
+    public let claimedEarlierInThisRun: RunClaims
 
     /// The browser a URL-opening step should use: the one the user named on that step if it resolves
     /// to something installed, otherwise whatever was already in force (SONNY-157).
