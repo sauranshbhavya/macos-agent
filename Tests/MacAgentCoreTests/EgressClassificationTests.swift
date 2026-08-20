@@ -200,4 +200,39 @@ struct SolitaryWriteMarkdownTests {
         let prepared = try executor.prepare(plan: plan)
         #expect(prepared.previews.first?.title == "Fetch Hacker News top 3")
     }
+
+    /// **The other direction of SONNY-32's own fix, at the line a user actually reads.**
+    ///
+    /// The ticket asked for the decision about `.writeMarkdown` to be pinned "with a test asserting
+    /// the disclosure line, the way SONNY-10's three executor tests do" — and SONNY-10's second test
+    /// exists because a false-"yes" fix could have been bought with a blanket "no", which is the same
+    /// defect inverted. Both tests above close the false-"no" half by proving the solitary shape never
+    /// prepares; neither of them would fail if the surviving Hacker News shape started answering "no"
+    /// as well. This one does, through the real `assessRisk` copy rather than the classification set,
+    /// and through `safeModeLines` because Safe mode is the only surface that renders the sentence
+    /// (E9, `AgentActivityPresentation.approvalDisclosureLines`).
+    @Test
+    func theSurvivingHackerNewsShapeStillDisclosesThatDataLeavesTheDevice() throws {
+        let root = try makeRoot()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root, browserOpener: CountingBrowserOpener(), fetcher: CountingHackerNewsFetcher())
+        let plan = AgentPlan(
+            summary: "Save Hacker News headlines.",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(id: "fetch", operation: .fetchHNHeadlines, description: "Fetch headlines.", count: 3),
+                AgentStep(id: "write", operation: .writeMarkdown, description: "Write Markdown.", outputPath: root.appendingPathComponent("hn.md").path, count: 3)
+            ]
+        )
+
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
+
+        let copy = try #require(assessment.approvalCopy)
+        #expect(copy.dataLeavesDevice)
+        #expect(copy.dataLeavesDeviceLine == "Data leaves device: yes")
+        #expect(copy.safeModeLines.contains("Data leaves device: yes"))
+        // And the label is still Safe-mode-only, so this assertion is about the sentence's content
+        // rather than about it having quietly returned to every approval panel.
+        #expect(!copy.lines.contains { $0.hasPrefix("Data leaves device") })
+    }
 }
