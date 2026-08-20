@@ -1,0 +1,11 @@
+=== SONNY-125 PR #82 cycle 1, F1: what status does the 150 s cut actually return?
+=== six sequential GET .../slow?ms=200000, each well past the cliff
+=== started 2026-08-20T22:45:02Z UTC   curl 8.7.1
+=== command:  curl -sS --max-time 420 -w '%{http_code} %{time_total}' 'https://zpyyljfsqrxulhmgkhfp.supabase.co/functions/v1/probe/slow?ms=200000'
+run 1: 504 150.464109  body: {"code":"IDLE_TIMEOUT","message":"Request idle timeout limit (150s) reached"}
+run 2: 503 150.335363  body: 
+run 3: 504 150.371871  body: {"code":"IDLE_TIMEOUT","message":"Request idle timeout limit (150s) reached"}
+run 4: 504 150.415568  body: {"code":"IDLE_TIMEOUT","message":"Request idle timeout limit (150s) reached"}
+run 5: 504 150.303998  body: {"code":"IDLE_TIMEOUT","message":"Request idle timeout limit (150s) reached"}
+run 6: 504 150.368883  body: {"code":"IDLE_TIMEOUT","message":"Request idle timeout limit (150s) reached"}
+=== finished 2026-08-20T23:00:05Z UTC
