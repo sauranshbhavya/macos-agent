@@ -190,7 +190,11 @@ public struct FileInventory {
             }
             .sorted { $0.url.path < $1.url.path }
 
-        var claimedDestinations = claimedEarlierInThisRun.destinations
+        // A `RunClaims` rather than its raw destination set (SONNY-165): asking it whether a path
+        // is claimed, and telling it about a new one, keeps `DestinationKey.folded` in the one
+        // place that owns it. Copied because this scan accumulates its own claims as it walks —
+        // the caller's value is the starting point, not a running total.
+        var claimed = claimedEarlierInThisRun
         var records: [DocxRecord] = []
         for source in sources {
             let basename = source.url.deletingPathExtension().lastPathComponent
@@ -232,7 +236,7 @@ public struct FileInventory {
             // for a file they never had — and is a PDF short. Reached only for a *different* source,
             // because the same one was handled above.
             if fileManager.fileExists(atPath: preferred.path),
-               !claimedDestinations.contains(DestinationKey.folded(preferred.path)) {
+               !claimed.hasWritten(preferred.path) {
                 records.append(
                     DocxRecord(
                         sourceURL: source.url,
@@ -245,14 +249,14 @@ public struct FileInventory {
             }
 
             var destination = preferred
-            let renamed = claimedDestinations.contains(DestinationKey.folded(preferred.path))
+            let renamed = claimed.hasWritten(preferred.path)
             if renamed {
                 var suffix = 2
                 while true {
                     let candidate = destinationFolder.appendingPathComponent(
                         Self.pdfName(stem: "\(basename)-\(suffix)", mockDestinations: mockDestinations)
                     )
-                    if !claimedDestinations.contains(DestinationKey.folded(candidate.path)),
+                    if !claimed.hasWritten(candidate.path),
                        !fileManager.fileExists(atPath: candidate.path) {
                         destination = candidate
                         break
@@ -261,7 +265,7 @@ public struct FileInventory {
                 }
             }
 
-            claimedDestinations.insert(DestinationKey.folded(destination.path))
+            claimed.recordWrite(destination.path)
             records.append(
                 DocxRecord(
                     sourceURL: source.url,
