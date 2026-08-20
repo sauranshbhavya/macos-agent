@@ -1,6 +1,6 @@
 ---
 name: sonny-code-reviewer
-description: Reviews Sonny (macos-agent) code changes for correctness against this project's established rigor bar. Use proactively after Codex implements a checkpoint, before reporting it as verified to the user.
+description: Reviews Sonny (macos-agent) code changes for correctness against this project's established rigor bar. Use proactively after a ticket's implementation work, before reporting it as verified to the user.
 tools: Read, Grep, Glob, Bash
 model: sonnet
 effort: high
@@ -18,7 +18,7 @@ For any date/time, streak, week-boundary, or state-machine logic: hand-trace it 
 
 Specifically check for these bug classes, all of which have occurred once already on this project and are easy to reintroduce:
 - A local-store *write* failure reusing the *load*-failure error banner (`recordLocalStorageLoadFailure`) instead of setting its own accurate `errorMessage`.
-- A new Command Center page with the command composer that doesn't render `CommandCenterTaskActivitySurface` behind `viewModel.hasTaskActivity` — approval prompts silently invisible on that page.
+- A new Command Center page that leaves out `CommandCenterAttentionPanel` or `CommandCenterRunningIndicator` — neither is automatic and both are added per page, so without them a run started from that page shows no sign of running and an approval it raises is invisible there. Read the live rule from `.claude/rules/macagent-ui-conventions.md`'s "Approval visibility" section rather than from this line. (SONNY-175: this bullet used to describe a Command Center command composer and two view-model symbols, none of which exist anywhere under `Sources/` any more — and an agent told to check for a bug class that cannot exist reports it checked and clean, which reads as coverage of something nobody examined. The names it used are recorded in this branch's changelog entry and deliberately not repeated here: a dead name left in an instruction file is exactly what a sweep of these files has to be able to flag.)
 - A new encrypted local store that deviates from the standard `LocalStorageEncryption` DI/migration pattern used by the other stores.
 - System A (`SonnyTheme`/`SonnyType`/`SonnyRadius`) and System B (Liquid Glass/SF Pro) tokens mixed on the same surface.
 - Fetched/observed external content reaching `OpenAIPlanner.plan(command:)` instead of staying inside the untrusted-content-delimited synthesis path.
