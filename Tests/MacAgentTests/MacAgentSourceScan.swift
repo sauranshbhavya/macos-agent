@@ -28,12 +28,26 @@ import Testing
 /// C drops real constructions carrying a trailing note. Block comments are matched with a depth
 /// counter, because Swift nests them.
 ///
-/// **What is still not stripped, stated rather than glossed: string literals.** A Swift string
-/// containing `"cancelCurrentRun()"` would satisfy any scan below, and nothing here can tell one
-/// from a call without parsing the language. That residual is narrow — a source file would have to
-/// carry the searched symbol inside a literal — but it is real, and the honest limit of a textual
-/// scan is that it is textual. Anything needing more than that needs a different tool, not a
-/// stronger claim about this one.
+/// **What still reaches the search, stated rather than glossed. Two things, and the first is not an
+/// oversight:**
+///
+/// - **Trailing line comments.** Only comment-*prefixed* lines are dropped, so the note on
+///   `foo() // was bar()` keeps `bar()` in the text a scan reads. That is a deliberate trade, not a
+///   gap left open: dropping every line containing a double slash is the `grep -v "//"` that cost
+///   this repository real constructions during row C, and it would silently delete any code line
+///   carrying an explanatory note — which in this codebase is a great many of them. **A scan must
+///   therefore not rely on a token's mere presence**, because a comment can add one. It can rely on
+///   counts, because a comment can only ever add: rewiring a call moves a token from one side of a
+///   pair to the other, and the side that gained cannot be talked back down. See
+///   `ClarificationExitTests.bothClarificationSurfacesRouteTheirExitThroughOneEntryPointAndOneLabel`,
+///   where a single-sided count survived exactly this mutant (PR #80 review cycle 2, N1) and the
+///   paired one kills it.
+/// - **String literals.** A Swift string containing `"cancelCurrentRun()"` satisfies any scan here,
+///   and nothing short of parsing the language can tell one from a call. Narrower than the above —
+///   a file would have to carry the searched symbol inside a literal — but real.
+///
+/// The honest limit of a textual scan is that it is textual. Anything needing more than that needs a
+/// different tool, not a stronger claim about this one.
 ///
 /// Same line-comment rule `TestSourceTree.codeLines` states for the test tree in the other target;
 /// this is the source tree's counterpart, and it is not twinned because only this target scans

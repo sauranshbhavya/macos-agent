@@ -2343,12 +2343,22 @@ final class AgentViewModel: ObservableObject {
     /// Permanently deletes a saved routine — steps, schedule, and run history all live under the
     /// same store key, so all three go together.
     ///
-    /// Guarded on the full "task in flight" condition, not just `isRunning`: a run paused at an
-    /// approval still holds a prepared plan that re-reads the store when approved, so deleting out
-    /// from under it has the same failure as deleting mid-run. `isRunning || isAwaitingApproval`
-    /// is what `checkScheduledRoutines` and every running-indicator gate already treat as "in
-    /// flight"; `deleteLocalData`'s narrower `isRunning`-only guard predates that convention and
-    /// is left as it is here.
+    /// Guarded on more than `isRunning`: a run paused at an approval still holds a prepared plan
+    /// that re-reads the store when approved, so deleting out from under it has the same failure as
+    /// deleting mid-run.
+    ///
+    /// **This guard is `isRunning || isAwaitingApproval`, which is the *running-indicator* gate, not
+    /// the app's "task in flight" condition.** The doc used to call it the latter and cite
+    /// `checkScheduledRoutines` as sharing it; that pointer went stale when the scheduler gained a
+    /// third term (`clarificationQuestion == nil`, PR #80 review, F1), and it was loose even before
+    /// — `isTaskInFlight` has always been the three-term property, and its own doc comment says the
+    /// clarification term is the one that keeps getting left out. Corrected rather than widened:
+    /// whether deleting a routine during a clarification pause should also be refused is a real
+    /// question this round did not decide, and quietly changing the guard while fixing its comment
+    /// would answer it by accident.
+    ///
+    /// `deleteLocalData`'s narrower `isRunning`-only guard predates even this convention and is left
+    /// as it is here. `deleteWorkspace` points at this comment rather than repeating it.
     func deleteRoutine(_ routine: StoredRoutine) {
         guard !isRunning, !isAwaitingApproval else {
             setError("Finish or stop the current task before deleting this routine.")
