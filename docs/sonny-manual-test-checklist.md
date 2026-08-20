@@ -304,11 +304,16 @@ compare directly — don't rely on memory of what it's supposed to look like.
 - [x] Sparkle icon, "Let Sonny take it from here…" placeholder, "Start" pill (disabled until text
       entered), separate circular mic button
 - [x] Typing enables Start; clearing text disables it again
-- [x] Hover (don't click) the mic button → hint row appears: "Speak your command — or hold
-      Ctrl-Opt-Space anywhere." Confirm it's a real inline row (pushes layout, doesn't clip) not a
-      floating tooltip. **(Fixed 2026-07-21 — tracker #2, and confirmed working 2026-07-23 —
+- [ ] Hover (don't click) the mic button → hint row appears: "Click to speak or hold
+      Ctrl-Opt-Space." Confirm it's a real inline row (pushes layout, doesn't clip) not a
+      floating tooltip, and that it goes on its own after about three seconds with the pointer left
+      where it is. **(Fixed 2026-07-21 — tracker #2, and confirmed working 2026-07-23 —
       tracker #21: hover now also survives clicking into another app and back, not just the first
-      hover right after launch.)**
+      hover right after launch. Wording, the three seconds and the *first* hover are SONNY-179,
+      2026-08-19 — re-check, this line's tick is not carried over.)**
+- [ ] SONNY-179 specifically: leave the widget alone until it collapses to the small capsule, click
+      it open again, and hover the mic **once**. The hint must appear on that first hover. Before
+      SONNY-179 the first hover after a collapse showed nothing and only the second worked.
 - [x] Leave idle, untouched, >6 seconds → auto-collapses to a small icon-only capsule. Click it →
       expands back, refocused for typing. **Then re-test the actual original complaint: type
       something, stop typing, wait >6s without submitting — confirm it does NOT collapse while there's

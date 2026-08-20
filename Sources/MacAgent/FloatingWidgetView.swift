@@ -52,21 +52,14 @@ struct FloatingWidgetView: View {
     /// multiple compacts to actually go away."
     @State private var isCompact = false
     @State private var autoDismissTask: Task<Void, Never>?
-    /// **Where the pointer is, and nothing else.** Drives a hover hint shown as a real layout row
-    /// (see `micHoverHintRow`) rather than a `.help()` tooltip — `.help()` already proved unreliable
-    /// in this exact app once before (the Insights weekly chart), and was confirmed unreliable here
-    /// too, not just assumed.
-    ///
-    /// It used to be the hint's visibility as well, and SONNY-177 is where the two came apart: the
-    /// reminder now clears itself after four seconds with the pointer still sitting on the mic, so
-    /// "the pointer is here" and "the hint is showing" are different facts. This one stays the
-    /// pointer's, which is what makes re-entry detectable — a second hover is a `false` → `true`
-    /// transition here, and the hint gets fresh seconds off it.
-    @State private var isMicHovered = false
     /// Whether a hint should be showing, and its countdown. Deliberately not `@State` — see
     /// `MicHoverHintModel`, which exists so the countdown is something a test can drive, and which
     /// records why "should be showing" is not quite "on screen": this view still has to hand it the
     /// slot, below.
+    ///
+    /// **The only thing this view keeps about the hover.** Where the pointer is is not stored here
+    /// at all — the mic's tracking view reports each arrival and departure and this responds; see
+    /// `micHintPointerEnteredMic` for the hover SONNY-179 found a stored copy swallowing.
     ///
     /// *How long* it counts for is not here and not `autoCollapseDelay`'s neighbour below: it
     /// arrives with the hint, from `AgentViewModel.micHoverHintPresentation`, because one of the two
@@ -151,18 +144,6 @@ struct FloatingWidgetView: View {
             } else {
                 pillFocused = true
                 scheduleAutoDismissIfNeeded()
-            }
-        }
-        // SONNY-177. Entering only shows the hint when the slot is *already* free, which is not the
-        // same as letting the render condition decide. A hint shown while the panel is up would sit
-        // there unrendered and appear the instant the panel closed — a stale flicker attached to
-        // nothing the user just did, and for the configuration variant it would wait there
-        // indefinitely, since that one has no countdown to expire.
-        .onChange(of: isMicHovered) { _, isHovering in
-            if isHovering, isMicHintSlotFree {
-                micHint.show(viewModel.micHoverHintPresentation)
-            } else {
-                micHint.dismiss()
             }
         }
         // The panel (or a collapse) taking the slot mid-countdown dismisses the hint and cancels
@@ -622,7 +603,41 @@ struct FloatingWidgetView: View {
         // widget needs hover to work regardless of key status (it's visible and interactive even
         // when some other app is active), so it needs a real `.activeAlways` tracking area instead
         // of SwiftUI's default — not achievable through `.onHover` itself.
-        .overlay(AlwaysActiveHoverTracker(isHovering: $isMicHovered))
+        .overlay(
+            AlwaysActiveHoverTracker(
+                onEnter: { micHintPointerEnteredMic() },
+                onExit: { micHint.dismiss() }
+            )
+        )
+    }
+
+    /// The pointer arrived on the mic. Shown as a real layout row (see `micHoverHintRow`) rather
+    /// than a `.help()` tooltip — `.help()` already proved unreliable in this exact app once before
+    /// (the Insights weekly chart), and was confirmed unreliable here too, not just assumed.
+    ///
+    /// **Called from the arrival itself, not from a change of "the pointer is on the mic"
+    /// (SONNY-179).** SONNY-177 shipped this as `.onChange(of:)` over a `@State` boolean the
+    /// tracking view wrote, and that swallowed a hover: both of the events that write such a
+    /// boolean require the pointer to *cross* a tracking area's edge while that area exists, and
+    /// this one is created and destroyed with the mic button — the auto-collapse takes the mic away
+    /// under a stationary pointer, and no crossing happens, so nothing writes `false` and the
+    /// boolean stays `true` with the pointer nowhere near the mic. The next real hover then re-wrote
+    /// `true` over `true`, which is not a change, so `.onChange` never ran and that hover showed
+    /// nothing; leaving restored the two to agreement and every hover after it worked. Exactly one
+    /// hover lost, and only the first — the founder's report. An arrival is an event, so there is no
+    /// second copy of the pointer's position left to disagree with the pointer.
+    ///
+    /// Entering only shows the hint when the slot is *already* free, which is not the same as
+    /// letting the render condition decide. A hint shown while the panel is up would sit there
+    /// unrendered and appear the instant the panel closed — a stale flicker attached to nothing the
+    /// user just did, and for the configuration variant it would wait there indefinitely, since
+    /// that one has no countdown to expire.
+    private func micHintPointerEnteredMic() {
+        if isMicHintSlotFree {
+            micHint.show(viewModel.micHoverHintPresentation)
+        } else {
+            micHint.dismiss()
+        }
     }
 
     /// Real layout row (same slot the panel occupies), not a `.help()` tooltip or a floating
@@ -634,12 +649,13 @@ struct FloatingWidgetView: View {
     /// corner shape than the pill directly beneath it read as a stray, misaligned fragment rather
     /// than a hint that visibly belongs to the row it's describing.
     ///
-    /// **The frame is unchanged by SONNY-177, and that was measured rather than assumed.** Both
-    /// sentences this row can now carry were laid out at the row's real font (SF Pro Medium 10, via
+    /// **The frame is unchanged by SONNY-179, and that was measured rather than assumed.** Both
+    /// sentences this row can carry were laid out at the row's real font (SF Pro Medium 10, via
     /// `WidgetType.captionSmall`) against the 444pt the 472pt frame leaves after its 14pt padding:
-    /// the shortcut reminder is 285.4pt and the configuration message 254.1pt, so each stays a
+    /// the shortcut reminder is 189.6pt and the configuration message 254.1pt, so each stays a
     /// single line with room to spare and nothing about the window controller's fitted-size
-    /// positioning has to be revisited.
+    /// positioning has to be revisited. (SONNY-177 measured the same two at 285.4pt and 254.1pt;
+    /// the reminder is the one whose wording SONNY-179 replaced, and it got shorter.)
     private func micHoverHintRow(_ hint: MicHoverHintPresentation) -> some View {
         Text(hint.message)
             .font(WidgetType.captionSmall)
@@ -1477,21 +1493,37 @@ private struct WidgetFailurePanel: View {
 /// which AppKit fires regardless of key-window status. `.inVisibleRect` keeps the tracked region
 /// correct automatically as the view's frame changes (this panel resizes/repositions often), with
 /// no manual re-registration needed.
-private struct AlwaysActiveHoverTracker: NSViewRepresentable {
-    @Binding var isHovering: Bool
+///
+/// **It reports the two arrivals, and holds no answer to "is the pointer here" (SONNY-179).** It
+/// used to write a `Binding<Bool>`, and a caller that reads such a boolean is reading a second copy
+/// of where the pointer is — one AppKit only ever corrects by delivering a crossing. Both events
+/// below need the pointer to cross this area's edge *while the area exists*, and this whole view is
+/// created and destroyed with the control it sits on, so a stationary pointer plus an appearing or
+/// disappearing area is a correction that never arrives and a copy that stays wrong until the next
+/// crossing spends itself repairing it. There is nothing to go stale in a callback.
+struct AlwaysActiveHoverTracker: NSViewRepresentable {
+    /// The pointer arrived. Called on every arrival, including one whose predecessor's departure
+    /// was never delivered — which is the whole of what the boolean could not do.
+    let onEnter: () -> Void
+    let onExit: () -> Void
 
     func makeNSView(context: Context) -> TrackingNSView {
         let view = TrackingNSView()
-        view.isHovering = $isHovering
+        view.onEnter = onEnter
+        view.onExit = onExit
         return view
     }
 
+    /// Both closures are re-read on every update, because they close over the view they were built
+    /// from and that view's state moves under them.
     func updateNSView(_ nsView: TrackingNSView, context: Context) {
-        nsView.isHovering = $isHovering
+        nsView.onEnter = onEnter
+        nsView.onExit = onExit
     }
 
     final class TrackingNSView: NSView {
-        var isHovering: Binding<Bool>?
+        var onEnter: (() -> Void)?
+        var onExit: (() -> Void)?
 
         override func updateTrackingAreas() {
             super.updateTrackingAreas()
@@ -1509,11 +1541,11 @@ private struct AlwaysActiveHoverTracker: NSViewRepresentable {
         }
 
         override func mouseEntered(with event: NSEvent) {
-            isHovering?.wrappedValue = true
+            onEnter?()
         }
 
         override func mouseExited(with event: NSEvent) {
-            isHovering?.wrappedValue = false
+            onExit?()
         }
     }
 }
