@@ -58,19 +58,35 @@ public struct ConversionClaim: Hashable, Sendable {
 /// contradiction that showed the key was wrong. See ``ConversionClaim`` for why the pair's second
 /// half is the folder rather than the filename.
 ///
-/// ``destinations`` holds `DestinationKey.folded` keys; ``convertedSources`` holds
-/// ``ConversionClaim``s, which fold both of their halves in their own initializer.
+/// **Both sets enforce their own key rule rather than trusting callers to apply it** (SONNY-165).
+/// ``destinations`` holds `DestinationKey.folded` keys — folded by this type's initializer and by
+/// ``recordWrite(_:)``, the only two ways a key gets in — and ``convertedSources`` holds
+/// ``ConversionClaim``s, which fold both of their halves in their own initializer. Reading either
+/// set from outside is what the four accessors below are for; the stored properties are
+/// `private(set)` so there is no second way to add a key, and therefore no second place the rule
+/// could be spelled differently.
+///
+/// That symmetry is the point. The destination side used to be copied out raw and folded by hand at
+/// four call sites in `FileInventory.docxFiles`, so this type's own guarantee was true only because
+/// four separate places remembered it — while ``ConversionClaim``, added one review round later,
+/// folded inside itself. One file, one rule, two enforcement mechanisms, agreeing right up until
+/// one of them was edited.
 public struct RunClaims: Equatable, Sendable {
-    public var destinations: Set<String>
-    public var convertedSources: Set<ConversionClaim>
+    public private(set) var destinations: Set<String>
+    public private(set) var convertedSources: Set<ConversionClaim>
 
     public static let none = RunClaims()
 
+    /// Folds `destinations` on the way in, so a `RunClaims` built anywhere satisfies the type's
+    /// stated invariant. `convertedSources` needs no fold here — ``ConversionClaim`` has already
+    /// folded both of its halves by the time one exists.
     public init(destinations: Set<String> = [], convertedSources: Set<ConversionClaim> = []) {
-        self.destinations = destinations
+        self.destinations = Set(destinations.map(DestinationKey.folded))
         self.convertedSources = convertedSources
     }
 
+    /// Whether this run has already claimed or written `path`. The counterpart to
+    /// ``recordWrite(_:)``, and the reason no caller needs to know that these keys are folded.
     public func hasWritten(_ path: String) -> Bool {
         destinations.contains(DestinationKey.folded(path))
     }
