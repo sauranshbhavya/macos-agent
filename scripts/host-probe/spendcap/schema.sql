@@ -66,16 +66,32 @@ BEGIN
 END $$;
 
 -- Sweep: reclaim holds whose request died before settling -- the platform-timeout case.
+--
+-- The aggregate is the whole point, and its absence was a real bug (PR #82 cycle 1, F2).
+-- `UPDATE ... FROM` is a join, and when several source rows match one target row Postgres
+-- applies exactly ONE of them and silently discards the rest. Subtracting straight from `dead`
+-- therefore reclaimed a single expired hold per user-period while marking every one of them
+-- settled, so the remainder was lost for good: three orphaned 300-credit holds against a 1000
+-- cap left 600 permanently unusable, and `sweep()` reported success. Summing per user-period
+-- first gives one source row per target row, which is the shape `UPDATE ... FROM` requires.
 CREATE OR REPLACE FUNCTION sweep() RETURNS int LANGUAGE plpgsql AS $$
 DECLARE n int;
 BEGIN
   WITH dead AS (
     UPDATE reservation SET settled = true
      WHERE NOT settled AND expires_at < now() RETURNING *
+  ), per_period AS (
+    SELECT user_id, period_start, sum(amount) AS total, count(*) AS holds
+      FROM dead GROUP BY user_id, period_start
   ), released AS (
-    UPDATE usage_period u SET reserved = u.reserved - d.amount
-      FROM dead d WHERE u.user_id = d.user_id AND u.period_start = d.period_start
-    RETURNING 1
-  ) SELECT count(*) INTO n FROM released;
+    UPDATE usage_period u SET reserved = u.reserved - p.total
+      FROM per_period p
+     WHERE u.user_id = p.user_id AND u.period_start = p.period_start
+    RETURNING p.holds
+  )
+  -- Holds reclaimed, not rows touched. The previous version counted `usage_period` rows and
+  -- called them holds, so it answered 1 for the three-hold case above -- a count that agreed
+  -- with the bug instead of exposing it.
+  SELECT coalesce(sum(holds), 0) INTO n FROM released;
   RETURN n;
 END $$;

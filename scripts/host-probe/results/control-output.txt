@@ -1,4 +1,4 @@
-=== 2026-08-20T21:21:22Z UTC  postgres 17.11 (Debian 17.11-1.pgdg13+2)
+=== 2026-08-20T22:49:30Z UTC  postgres 17.11 (Debian 17.11-1.pgdg13+2)
 
 --- naive read-then-write, two racers, cap 100. WITHOUT the CHECK constraint
   racer A: read=0 
@@ -6,13 +6,25 @@
   final spent/reserved/cap -> 0 200 100
 
 --- naive read-then-write, two racers, cap 100. WITH the CHECK constraint
-  racer A: read=0 ERROR:  new row for relation "naive" violates check constraint "never_over_cap" DETAIL:  Failing row contains (11111111-1111-1111-1111-111111111111, 2026-08-01, 100, 0, 200). 
   racer B: read=0 
+  racer A: ERROR:  new row for relation "naive" violates check constraint "never_over_cap" DETAIL:  Failing row contains (11111111-1111-1111-1111-111111111111, 2026-08-01, 100, 0, 200). read=0 
   final spent/reserved/cap -> 0 100 100
 
 --- and the single-statement reserve, same race, for comparison
-  racer A: 100
-  racer B: REFUSED
+  racer B: 100
+  racer A: REFUSED
   final spent/reserved/cap -> 0 100 100
 
-=== finished 2026-08-20T21:21:24Z UTC
+=== CONTROL 2: does race.sh's TEST 3 actually catch a broken sweep? (PR #82 cycle 1, F2)
+--- the pre-fix sweep is reinstalled, TEST 3's shape is replayed, then the fix restored.
+--- a test that passes against both implementations would be testing nothing.
+  the BROKEN sweep (subtracts straight from the expired rows):
+    sweep() reported: 2 hold(s)   [4 orphans existed]
+    user A after     : 0 600 1000
+    full cap for A   : REFUSED
+  the FIXED sweep (sums per user-period first):
+    sweep() reported: 4 hold(s)   [4 orphans existed]
+    user A after     : 0 0 1000
+    full cap for A   : 1000
+
+=== finished 2026-08-20T22:49:35Z UTC

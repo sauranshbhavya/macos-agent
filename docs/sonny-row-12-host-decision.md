@@ -6,7 +6,14 @@ Every figure in the results tables was observed against a live endpoint. **None 
 host's documentation.** Where a documented figure appears it is labelled as one and placed beside
 the measurement that tested it, because comparing the two is the point of the ticket.
 
-Repository figures — payload sizes, iteration counts — are stamped at `87199ff`, the branch point.
+Repository figures — payload sizes, iteration counts — were measured at `87199ff` and **re-verified
+at `a44156f`**, this branch's head. **The branch point is `d71690f`, not `87199ff`**: the branch was
+rebased after PR #79 merged, and an earlier draft of this line called `87199ff` the branch point
+(PR #82 cycle 1, F5). That re-verification was not ceremonial — `git diff --stat 87199ff a44156f --
+Sources/` is 4 files and 156 insertions, so the tree under those figures genuinely moved. All three
+still hold: `maximumImageBytes: 3_000_000` (`RedactedCaptureEncoder.swift:92`),
+`maximumIterations: 12` (`VisionSessionContainment.swift:239`), and the streaming sweep still
+returns zero matches.
 
 The harness, the probe sources and the raw logs live in `scripts/host-probe/`. §13 says how to
 re-run any row below.
@@ -31,8 +38,13 @@ survives its own test.
 call gets 105 seconds by contract; the platform allows 150 on the plan measured. That is real
 margin, not a rounding error, but it is also not generous — §8 says what to do with it.
 
-**Nothing here is a recommendation to change the decision.** The recommendation in §12 is to keep
-Supabase and to record two consequences that the measurements make concrete.
+**Read §12 before acting on any of this.** On **2026-08-21**, after these measurements were taken
+and on the strength of them, the founder decided that **the gateway will run on a VM rather than on
+Edge Functions** — staged deploymind → Oracle → AWS — while **Supabase keeps auth and Postgres**.
+So the Edge ceilings below stop binding on the shipping architecture: the gateway will choose its
+own limits. What survives that decision intact is the spend-cap proof (§9), which is Postgres's and
+so still live, the payload arithmetic (§2), and the gzip cost (§4.2). **The measurements are kept in
+full because they are the evidence the decision was made against**, not despite being superseded.
 
 ---
 
@@ -84,15 +96,22 @@ the platform rather than the probe. Routes: `echo` (read the body, report what a
 `drip?ms=N` (stream from the first byte). One `curl` per measurement, with the body and the metrics
 taken from the same request.
 
-**The control arm ran first, on `localhost`, before any host number was attributed to anything.**
-Same handler, same runtime family Supabase Edge Functions use (Deno 2.7.12), nothing in between:
+A control arm ran on `localhost` before any host was touched: same handler, same runtime family
+Supabase Edge Functions use (Deno 2.7.12), nothing in between. **The figures cited below are not
+that first run.** They come from a clean re-run taken at 21:53–21:57 UTC — *after* the host runs of
+21:20–21:46 — because the first run's log turned out to be unusable, for the reason two paragraphs
+down. Said plainly rather than left to be inferred from timestamps: **the control that is quoted
+here post-dates the measurements it is a control for.** What it establishes is unaffected — the
+machine, the uplink, `curl` and the handler are the same in both windows, and the arm's purpose is
+to show that none of them is a bottleneck — but a reader is entitled to know the order, and an
+earlier draft of this section implied the opposite by opening "ran first" (PR #82 cycle 1, F10).
 
 | arm | result |
 |---|---|
 | all four sizes, raw and gzip | `200`, 5–30 ms |
 | `slow?ms=105000` | `200` at **105.005 s** |
 | `up?ms=105000` (real outbound fetch) | `200` at **105.015 s** |
-| body ladder | `200` at 16,800,000; no limit in the runtime itself |
+| body ladder | `200` at 16,800,000, where the ladder **stopped at its cap** rather than being refused |
 
 So the machine, the uplink, `curl` and the probe code all hold a 105-second request and a 4.2 MB
 body without complaint. **Anything that fails on a host below is the host.**
@@ -169,28 +188,55 @@ handler. What can be said is that no request was terminated for a CPU reason at 
 |---|---|---|---|
 | 1 s | `slow` | `200` | 1.19 s |
 | **105 s** | **`slow`** | **`200`** | **105.19 s** |
-| 150 s | `slow` | `546` | 150.16 s |
-| 200 s | `slow` | `546` | 150.65 s |
-| 400 s | `slow` | `546` | 150.27 s |
+| 150 s | `slow` | `546` † | 150.16 s |
+| 200 s | `slow` | `546` † | 150.65 s |
+| 400 s | `slow` | `546` † | 150.27 s |
 | **105 s** | **`up`** (real outbound `fetch`) | **`200`** | **105.72 s** |
-| 200 s | `up` | `546` | 150.36 s |
+| 200 s | `up` | `546` † | 150.36 s |
+
+† **The status varies run to run** — `546`, `504` and `503` have all been observed at this same
+cliff. These four are what this battery returned; see below.
 
 **The cliff is 150 seconds, and it is a hard one** — 150 s, 200 s and 400 s all terminate within
-0.5 s of the same wall-clock. The contract needs 105. The refusal body is:
+0.5 s of the same wall-clock. The contract needs 105.
+
+**The status is not single-valued, and an earlier version of this document said it was** (PR #82
+cycle 1, F1). It reported `546 WORKER_RESOURCE_LIMIT` as *the* outcome, because that is what all
+four cut-off requests in the original battery returned. It is one of at least three. Across three
+independent sittings against the same endpoint and the same `slow?ms=200000` request:
+
+| sitting | observed |
+|---|---|
+| original battery, 2026-08-20 | 4 × `546 WORKER_RESOURCE_LIMIT` |
+| cycle-1 reviewer, independently | 2 × `546`, 2 × `504 IDLE_TIMEOUT` |
+| this session's six-run re-measurement, 2026-08-20 (`results/supabase-cutoff-statuses.txt`) | 5 × `504 IDLE_TIMEOUT`, 1 × `503` with an **empty body** |
+
+So the same request, cut off at the same limit, answers `546`, `504` or `503` depending on nothing
+the caller controls. The two bodies:
 
 ```json
 {"code":"WORKER_RESOURCE_LIMIT","message":"Function failed due to not having enough compute resources (please check logs)"}
+{"code":"IDLE_TIMEOUT","message":"Request idle timeout limit (150s) reached"}
 ```
 
-**That message is misleading and a future session should not believe it.** The function was
-*sleeping* — it consumed no CPU and allocated nothing. The trigger was wall clock, and the error
-names compute resources. Anyone debugging a real occurrence would go looking for a CPU or memory
-problem that is not there.
+and the `503` carried no body at all — so a client parsing the error object gets nothing to parse.
 
-The 150 s figure is the **Free plan's**. Supabase documents 400 s for paid plans; that is a
-documentation figure, it was not measured here, and it is only ever more headroom than what was
-measured. **The number that decides the row was taken on the tighter of the two plans**, which
-makes it the conservative one — the decision holds on Free, so it holds on Pro.
+**Only one of those messages is misleading, and the original document blamed the wrong thing by
+generalising from it.** `IDLE_TIMEOUT`'s text is accurate and even names the limit. The
+`WORKER_RESOURCE_LIMIT` text is not: the function under test was *sleeping* — it consumed no CPU and
+allocated nothing — and the message blames compute resources, so anyone debugging a real occurrence
+from it would go looking for a CPU or memory problem that is not there. That warning stands for
+`546`; it does not apply to `504`.
+
+**Why the correction is worth more than the fact.** The original claim was not a guess — it was four
+consistent observations, reported as a rule. Four runs of a non-deterministic behaviour that happen
+to agree read exactly like a deterministic one, and nothing in the log said otherwise. The lesson is
+the repository's own quantified-claim rule pointed at a status code: **a single-valued answer needs
+a population, not a streak.**
+
+**The 150 s figure is the Free plan's.** Supabase documents 400 s for paid plans; that is a
+documentation figure, it was not measured here, and it is only ever more headroom. **The number that
+decided the row was taken on the tighter of the two plans**, which makes it the conservative one.
 
 ### 4.4 Streaming — where the honest failure becomes a silent one
 
@@ -208,7 +254,8 @@ success.
 
 **A streamed response that outruns the 150 s limit reaches the client as HTTP 200 with a truncated
 body.** Streaming does not evade the cut-off; it converts a diagnosable failure into an undetectable
-one. The non-streaming path fails cleanly with `546` and a parseable error object.
+one. The non-streaming path fails with a real error status — `546`, `504` or `503` (§4.3) — and,
+for the first two, a parseable error object.
 
 This is a finding in the contract's favour rather than against it. Contract §4 defines no streaming
 route, and the client streams nowhere: a sweep of `Sources/` and `Tests/` at `87199ff` for
@@ -248,11 +295,20 @@ CPU-exceeded code) at any size, raw or gzipped.
 
 **One thing that cost time and will cost the next session time too:** a Worker fetching another
 Worker **on the same zone** returns Cloudflare **error 1042**, surfacing as an upstream `404` with
-`error code: 1042` in the body. Two Workers on one `workers.dev` subdomain are the same zone. The
-`up` arms were therefore cross-wired — Cloudflare's probe fetches Supabase's `slow`, Supabase's
-fetches Cloudflare's — which is recorded here because it also bounds the measurement: Cloudflare's
-`up` arm cannot be pushed past Supabase's own 150 s ceiling, so it was tested at 105 s only. The
-in-handler `slow` arm carries the 400-second result.
+`error code: 1042` in the body. Two Workers on one `workers.dev` subdomain are the same zone.
+
+**Evidence: `results/cloudflare-1042-same-zone.txt`.** When this document was first written that
+claim had none — it came from an interactive observation during setup that was never written to a
+log, which made it the one assertion here resting on a session's memory rather than a file (PR #82
+cycle 1, F7). It has since been reproduced deliberately: a throwaway Worker pointed at another
+Worker on the same subdomain returned `error code: 1042` on **all three** runs, and the same code
+reaching a **cross-zone** upstream returned `200` twice with the upstream genuinely waiting its
+1000 ms. The control matters — without it the finding could equally have been a broken handler.
+
+The `up` arms were therefore cross-wired — Cloudflare's probe fetches Supabase's `slow`, Supabase's
+fetches Cloudflare's — which also bounds the measurement: Cloudflare's `up` arm cannot be pushed
+past Supabase's own 150 s ceiling, so it was tested at 105 s only. The in-handler `slow` arm carries
+the 400-second result.
 
 ---
 
@@ -322,12 +378,17 @@ request lands near 105 and the platform allows 150. But the same 150 s ceiling a
 Three things follow, none of which is a change to the plan:
 
 - **The gateway must not stream** (§4.4). Not a preference — streaming is what turns the cut-off
-  from a `546` into a silent truncation the client cannot detect.
-- **`546` needs a home in the error taxonomy.** Contract §7's taxonomy has no entry for it, and
-  §12 promises the client sees a typed `504 provider.timeout` rather than a transport error. A raw
-  `546` with a body about "compute resources" satisfies neither. **This is SONNY-136's** (backend
-  unreachable, error copy) **and SONNY-131's** (vision mid-loop failure), and it is named on both
-  by the ticket comment recorded alongside this document rather than left to be discovered.
+  from a real error status into a silent truncation the client cannot detect.
+- **The cut-off's status has no home in the error taxonomy — and it is not one status.** `546`,
+  `504` and `503` have all been observed at the same cliff (§4.3). Contract §7's taxonomy has an
+  entry for none of them, and §12 promises the client sees a typed `504 provider.timeout` rather
+  than a transport error; a bare platform `504` that happens to share that number is not the same
+  thing, and the `503` arrived with no body at all. **This was named on SONNY-136** (backend
+  unreachable, error copy) **and SONNY-131** (vision mid-loop failure) when this document was
+  written. **The 2026-08-21 VM decision (§12.2) makes that work moot for the shipping
+  architecture** — the gateway sets its own timeouts and returns its own typed errors — and both
+  comments have been corrected accordingly. Kept here because it is what a gateway on Edge Functions
+  would have had to absorb, which is part of what the decision was taken against.
 - **The Pro plan's documented 400 s is headroom nobody has measured.** If the 45 s ever looks tight,
   that is the first measurement to take, and it takes ten minutes with `scripts/host-probe/`.
 
@@ -406,11 +467,42 @@ property holds**, which is why both scripts are committed and why `control.sh` e
 
 ### 9.5 The residual, named rather than hidden
 
-A reservation whose request the platform kills between reserve and settle leaks cap until swept.
-**That is not theoretical here** — §4.3 measured exactly the event that produces those orphans, at
-150 seconds. Hence the expiry column and `sweep()`, both demonstrated above. **Choosing the expiry
-window and scheduling the sweep is SONNY-135's**, which the contract already names as the owner of
-the spend-cap mechanism; this document supplies the shape and the evidence it works, not the values.
+**Two residuals, and the first one shipped as a bug in this branch's own first draft.**
+
+**One — orphaned holds, and the sweep that reclaims them.** A reservation whose request the platform
+kills between reserve and settle leaks cap until swept. **That is not theoretical here** — §4.3
+measured exactly the event that produces those orphans. Hence the expiry column and `sweep()`.
+
+The first `sweep()` written here **was wrong, and wrong in the direction that loses money silently**
+(PR #82 cycle 1, F2). It subtracted straight from the expired rows with `UPDATE … FROM`, which is a
+join: when several source rows match one target row Postgres applies exactly one and discards the
+rest. So it reclaimed a single hold per user-period while marking every one of them settled, and the
+remainder became permanently unusable cap. Reproduced before fixing: three orphaned 300-credit holds
+against a 1000 cap left **600 credits lost for good**, and the function reported success. The fix
+sums per user-period first, so there is one source row per target row. **Its return value was
+mislabelled too** — it counted `usage_period` rows and called them holds, so it answered `1` for
+that three-hold case, a number that agreed with the bug instead of exposing it.
+
+So this section can no longer say "the evidence it works" without qualification, and does not. What
+is demonstrated is that the *fixed* sweep reclaims every expired hold across multiple holds and
+multiple users — `sweep()` returns 4 for four orphans, both users return to zero reserved, and both
+can re-reserve their full cap. `race.sh`'s TEST 3 now uses that multi-orphan shape deliberately,
+because the single-orphan version it replaced **passed against the broken sweep**; `control.sh`
+replays both implementations against it so that claim is evidenced rather than asserted.
+
+**Two — `settle()` caps the charge at the reservation, and the excess vanishes.** It writes
+`spent + LEAST(p_actual, r.amount)`, so a call that cost more than was held is charged the hold and
+the difference is absorbed silently: reserve 100, spend 900, and **800 credits of real provider
+spend never reach the cap**. Demonstrated in `race.sh` TEST 5. That is the direction this ticket
+cares about — the failure is money the founder pays that the cap never sees, which is the exact hole
+SONNY-16 recorded as an accepted cost and this mechanism exists to close. It is a residual rather
+than a bug because the alternative is a decision, not a fix: charging the true cost can push a
+period past its cap, and whether that is allowed, refused, or clamped is a pricing question.
+
+**Both belong to SONNY-135**, which the contract already names as the owner of the spend-cap
+mechanism — the expiry window, the sweep's schedule, and what an over-reservation settle should do.
+This document supplies the shape, the demonstrated behaviour of the corrected code, and the two
+residuals; not the values.
 
 ---
 
@@ -495,23 +587,54 @@ exists."
 
 ---
 
-## 12. The recommendation — the founder's decision, not this session's
+## 12. The recommendation this ticket made, and the decision the founder actually took
 
-**Keep Supabase. Everything the ticket put at risk survived its own test.** The two limits that
-could have invalidated the row are 16× and 1.43× clear of what the contract needs, the atomic spend
-cap the hybrid shape could not answer is a single Postgres statement, and the fallback is a measured
-number rather than a documentation quote.
+### 12.1 What this ticket recommended, 2026-08-20
 
-Three things to decide, all of which are the founder's:
+**Keep Supabase, gateway included.** Everything the ticket put at risk survived its own test: the two
+limits that could have invalidated the row are 16× and 1.43× clear of what the contract needs, the
+atomic spend cap the hybrid shape could not answer is a single Postgres statement, and the fallback
+is a measured number rather than a documentation quote.
 
-1. **Free or Pro, and when.** Free measured 150 s and costs nothing, but pauses a project after a
-   week of inactivity, which makes it wrong for staging. $35/month is the realistic floor.
-2. **Whether the 45-second margin is comfortable.** It is real margin on a limit that is documented
-   to be 400 s on Pro — but that 400 is unmeasured, and §8's three consequences hold either way.
-3. **Whether to settle the egress question before or after the first Pro invoice** (§10.3).
+### 12.2 What the founder decided, 2026-08-21 — and it supersedes the above
 
-Nothing here needs a decision to *proceed*: SONNY-126 and the rest of row 12 can start against
-Supabase on the strength of these measurements.
+Recorded on SONNY-125 by the coordinator; that comment is the source, this is the durable copy.
+
+**The gateway runs on a VM, not on serverless functions.** Hosting is staged across the product's
+life: **deploymind** (the cofounder Bhavya's deployment project) for development, **Oracle Cloud**
+for beta testing, **AWS** for the v1 release. **Supabase keeps auth and Postgres — only the gateway
+moves.**
+
+**What stops binding.** Every Edge-Function ceiling measured in this document — the 150-second wall
+clock, the streaming truncation, the platform body limits, and Edge egress metering. The gateway now
+chooses and enforces its own timeouts and limits instead of inheriting a platform's. **SONNY-188 was
+cancelled as moot** on the same decision.
+
+**What transfers, and it is the more valuable half.** The spend-cap race demonstration (§9) is a
+property of Postgres, and the database stays on Supabase Postgres, so it holds unchanged — including
+both residuals in §9.5, which are now fully live rather than conditional. The gzip inflation cost
+(§4.2) is a CPU fact about the payload rather than about a host, so it transfers to whatever runs
+the gateway. **Deferred:** the Supabase plan tier, Free versus Pro, which the founder will settle
+with Bhavya before the v1 release.
+
+**The derived constraint for SONNY-126:** three hosts across the product's life means the gateway
+must be **host-portable from day one** — containerized, per-environment configuration, and a deploy
+path not coupled to any single host.
+
+### 12.3 Why the measurements still matter after being superseded
+
+**They are the evidence base the decision was made against, and that is not a consolation.** A
+platform whose request-body ceiling is unpublished and whose wall clock ends at 150 seconds is a
+different thing to choose than one whose ceilings you set yourself, and that difference was only
+visible once someone measured it. The 45-second margin in §8, the silent truncation in §4.4 and the
+three-way status split in §4.3 are what a gateway on Edge Functions would actually have had to live
+with. Deciding to leave was a decision taken with those numbers in hand rather than against a
+documentation page — which is what SONNY-125 existed to make possible.
+
+Three of them also outlive the platform outright: the **payload sizes** (§2) are the client's, the
+**spend-cap mechanism** (§9) is Postgres's, and the **gzip cost** (§4.2) is the payload's. The
+Cloudflare arm (§5) becomes what it always was — a measured comparison — rather than a fallback
+anyone now needs.
 
 ---
 
@@ -526,7 +649,10 @@ MODE=sizes                          ./scripts/host-probe/probe.sh <base-url> <la
 MODE=times TIMES="1000 105000 150000 200000 400000" ./scripts/host-probe/probe.sh <base-url> <label>
 MODE=up    TIMES="105000"           ./scripts/host-probe/probe.sh <base-url> <label>
 MODE=drip  TIMES="200000"           ./scripts/host-probe/probe.sh <base-url> <label>
-CEIL_FROM=4200000 CEIL_CAP=67108864 MODE=ceiling ./scripts/host-probe/probe.sh <base-url> <label>
+# the ceiling ladder ran in two passes; the first alone cannot reach the headline figure,
+# because its cap stops the ladder at 33,600,000 (PR #82 cycle 1, F8)
+CEIL_FROM=4200000  CEIL_CAP=67108864  MODE=ceiling ./scripts/host-probe/probe.sh <base-url> <label>
+CEIL_FROM=33600000 CEIL_CAP=134217728 MODE=ceiling ./scripts/host-probe/probe.sh <base-url> <label>
 ./scripts/host-probe/spendcap/race.sh && ./scripts/host-probe/spendcap/control.sh
 ```
 
@@ -561,7 +687,12 @@ the operator's shell, never in a committed file.
 
 - **The egress metering question** (§10.3) — whether an Edge Function's outbound `fetch` to a model
   provider counts against Supabase's egress meter. Undocumented, and the two answers differ by
-  orders of magnitude in what a Pro plan buys. Settleable by measurement against the usage page.
-- **`546 WORKER_RESOURCE_LIMIT` has no home in the error taxonomy** (§8) — contract §7 has no entry
-  and §12 promises the client a typed `504 provider.timeout`. Named on SONNY-131 and SONNY-136 in
-  this ticket's closing comment.
+  orders of magnitude in what a Pro plan buys. Filed as **SONNY-188**, and **cancelled as moot on
+  2026-08-21** by the VM decision (§12.2): the gateway leaves Edge Functions, so no large outbound
+  flow crosses Supabase's meter at all. Recorded rather than deleted, because the question was real
+  when it was asked and the reason it stopped mattering is the decision, not an answer.
+- **The cut-off status has no home in the error taxonomy** (§8) — and it is `546`, `504` *or* `503`
+  depending on the run, not one status as this document first claimed. Named on SONNY-131 and
+  SONNY-136 in this ticket's closing comment, and **corrected there on 2026-08-21**, in the same
+  comments that record the VM decision making the taxonomy work moot for the shipping
+  architecture.
