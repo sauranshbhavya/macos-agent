@@ -689,8 +689,25 @@ final class AgentViewModel: ObservableObject {
             && !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
+    /// Whether `cancelCurrentRun()` would actually end something — true in exactly the states it
+    /// has a branch for, so the predicate and the function cannot disagree.
+    ///
+    /// **The clarification term is SONNY-166's, and its absence was the bug's sharpest edge.** A
+    /// clarification pause has `isRunning == false` (`performStart`'s defer has fired) and
+    /// `approvalRequest == nil`, so the old two-term expression was false throughout it: the view
+    /// model did not merely fail to *offer* a way out, it reported that there was none. The exit now
+    /// exists, so the predicate says so.
+    ///
+    /// **This adds no control to Command Center's running indicator, deliberately.**
+    /// `CommandCenterRunningIndicator` is the only reader, and all four of its call sites are
+    /// wrapped in `if viewModel.isRunning || viewModel.isAwaitingApproval` — both false during a
+    /// clarification — so the indicator does not render at all in this state and its Cancel button
+    /// cannot appear. That is the right outcome twice over: the indicator would otherwise say
+    /// "Running: …" about a task that is not running, and the clarification's own exit lives on the
+    /// panel that is asking the question, on both surfaces. Pinned by
+    /// `theRunningIndicatorStaysAbsentDuringAClarification`.
     var canCancel: Bool {
-        isAwaitingApproval || (isRunning && currentTask != nil)
+        isAwaitingApproval || clarificationQuestion != nil || (isRunning && currentTask != nil)
     }
 
     /// The message shown when voice is asked for and the app is not configured to do it.
@@ -1026,6 +1043,14 @@ final class AgentViewModel: ObservableObject {
         preparedRun = nil
         approvalRequest = nil
         stepStatuses = [:]
+        // Both halves of the pause carry-over, not just one. These two are always written together
+        // (an approval pause sets both, and as of SONNY-166 so does a clarification pause) and read
+        // together, so clearing only the date left the command able to outlive the run that set it.
+        // Nothing read the stale value on any live path — every reader is inside a branch that
+        // rewrites both first — but a pair whose reset covers one member is the shape a later reader
+        // gets wrong, and the clarification exit's whole correctness argument is that the pair
+        // describes *this* run.
+        pendingCommandForPriorTaskContext = nil
         pendingTaskHistoryStartedAt = nil
         plannerFallbackNotice = nil
 
@@ -1181,6 +1206,16 @@ final class AgentViewModel: ObservableObject {
                 clarificationAutoExecute = autoExecute
                 clarificationOrigin = origin
                 clarificationWorkspaceBinding = explicitWorkspaceBinding
+                // The same two values the approval pause below preserves, for the same reason and
+                // now for a second one (SONNY-166). A pause is not a terminal state, so no history
+                // row is written here — `recordPriorTaskContext` is called without `startedAt:`
+                // just below, and `recordTaskHistoryIfTerminal`'s own guards refuse a
+                // `.clarificationNeeded` status anyway. But abandoning the question *is* terminal,
+                // and a row needs the instant the run began and the text the user actually
+                // submitted. Neither survives the pause otherwise: `command` was cleared
+                // synchronously by `start()`, and `taskHistoryStartedAt` is local to this call.
+                pendingCommandForPriorTaskContext = submittedCommand
+                pendingTaskHistoryStartedAt = taskHistoryStartedAt
                 finalSummary = "Clarification needed before I can act."
                 logStore.append(.summarize, "Clarification needed: \(question)")
                 recordPriorTaskContext(
@@ -1472,6 +1507,80 @@ final class AgentViewModel: ObservableObject {
             // This function has no `defer`, and this branch returns without ever re-entering
             // `performStart` — so without this call a task cancelled at its approval prompt would
             // leave the switch on and clipboard history paused indefinitely.
+            finishRecordingPolicyIfSettled()
+            return
+        }
+
+        // **The fourth exit (SONNY-166): a clarification the user does not want to answer.**
+        //
+        // Before this, the only three ways out of a clarification pause were answering it, wiping
+        // all local data, and quitting — `clarificationQuestion` had exactly those three clearing
+        // sites. The pause looks idle from outside (`isRunning` is false, `approvalRequest` is nil),
+        // so nothing that gates on those two could offer a way out, and the composer is disabled by
+        // the in-flight term besides.
+        //
+        // **Cancelled, not failed, and "no action was taken" is literal.** A clarification is raised
+        // inside `AgentRunner.prepare` and `performStart` returns on it before `executePreparedRun`
+        // is reached at all, so every step is still `.pending` and nothing has executed. This is the
+        // one pause where that is true of the whole plan rather than of the remaining steps.
+        //
+        // Placed after the approval branch for reading order only — it mirrors the two surfaces'
+        // permission-over-clarification precedence. The two states are mutually exclusive by
+        // construction: `performStart` returns on the clarification before it ever builds an
+        // approval request, and `submitClarification` clears the question before re-entering
+        // `start()`, so neither branch can shadow the other whichever came first.
+        if clarificationQuestion != nil {
+            // The row the Tasks list owes the user, on the founder's decision of 2026-08-20: the
+            // same `.canceled` disposition cancelling at an approval prompt already writes, so the
+            // two exits from a paused run leave the same trace. Both values were preserved across
+            // the pause by `performStart`'s clarification branch — without them there is no
+            // `startedAt`, and `recordTaskHistoryIfTerminal` refuses to write a row at all.
+            // "Don't save this task" still suppresses it: that check lives inside
+            // `recordTaskHistoryIfTerminal`, so this path inherits it rather than restating it.
+            if let preparedRun, let pendingCommandForPriorTaskContext {
+                recordPriorTaskContext(
+                    command: pendingCommandForPriorTaskContext,
+                    preparedRun: preparedRun,
+                    status: .canceled,
+                    summary: ClarificationPresentation.canceledSummary,
+                    startedAt: pendingTaskHistoryStartedAt
+                )
+            }
+            clarificationQuestion = nil
+            clarificationAnswer = ""
+            // The three values the pause held so that answering could resume the task the user
+            // actually started. Nothing is going to resume, so they die with it — an origin or a
+            // binding surviving into the next run is the leak `explicitWorkspaceBinding`'s own
+            // lifecycle rules exist to prevent.
+            clarificationAutoExecute = false
+            clarificationOrigin = .commandCenter
+            clarificationWorkspaceBinding = nil
+            preparedRun = nil
+            runner = nil
+            pendingCommandForPriorTaskContext = nil
+            pendingTaskHistoryStartedAt = nil
+            markAllSteps(.canceled)
+            // `submitClarification` sets "Enter an answer before continuing." when Send is pressed
+            // on an empty field, and that error outlives the question it was about. The widget's
+            // and Command Center's shared precedence puts `.failure` above `.result`, so leaving it
+            // would show the user a stale validation nudge where the cancellation belongs.
+            errorMessage = nil
+            finalSummary = ClarificationPresentation.canceledSummary
+            logStore.append(.summarize, "Clarification canceled by user")
+            // Same reason the approval branch clears these: the pause ends here rather than
+            // resuming, so the boundary the paused task was assessed under must not be inherited by
+            // whatever the user types next.
+            activeTaskScope = .unscoped
+            explicitWorkspaceBinding = nil
+            // **The ticket's own requirement, and the reason it is the last line.** This function
+            // has no `defer`, and `finishRecordingPolicyIfSettled` guards on
+            // `approvalRequest == nil, clarificationQuestion == nil, !isRunning` — so calling it
+            // before the clear above would return without doing anything, leaving "Don't save this
+            // task" on and clipboard history paused until the next launch. That is the exact
+            // consequence SONNY-120 recorded as a known limit and this ticket exists to close.
+            //
+            // No `currentTask?.cancel()`: `performStart`'s defer set it to `nil` on the way into the
+            // pause, so there is no task here to cancel.
             finishRecordingPolicyIfSettled()
             return
         }
