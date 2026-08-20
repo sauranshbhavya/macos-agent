@@ -157,6 +157,73 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/attention-reaches-user
+Status: complete
+Date: 2026-08-20
+Tickets: **SONNY-166** (high) — a clarification could not be abandoned; the only ways out were answer, wipe all local data, or quit. **SONNY-113** — a scheduled routine's outcome reached nobody until Command Center was next opened, including the worst case where the schedule had been paused. **SONNY-25** — the two `FloatingWidgetWindowController.show()` callers SONNY-8 left direct: the notification's default action and launch. One session, from `main` at `87199ff`. The theme: Sonny has something to tell or ask the user, and the user either cannot get it or cannot get out of it.
+Reviewed by: pending — fresh session per WORKFLOW.md step 7.
+
+Spec sections covered: none newly. Touches §3.3 (the widget's states) and the notification fallback, both already specified; no spec text changes.
+Files changed:
+- `Sources/MacAgent/AgentViewModel.swift` — `canCancel` gains the clarification term; `cancelCurrentRun()` gains the clarification branch; the clarification pause preserves the same two carry-over values the approval pause does; `performStart`'s per-task reset clears both halves of that pair rather than one.
+- `Sources/MacAgent/AgentActivityPresentation.swift` — new `ClarificationPresentation` (the founder's Cancel label and cancellation summary, one copy for two surfaces).
+- `Sources/MacAgent/FloatingWidgetView.swift` — the clarification panel's Cancel; the scheduled-run notice strip; `WidgetNoticeStrip` gains a defaulted `tint`; `isCollapsible` refuses while a scheduled notice is set, with an `onChange` that re-runs the decision when one arrives.
+- `Sources/MacAgent/CommandCenterView.swift` — the mirrored Cancel in `CommandCenterAttentionPanel.clarificationContent`.
+- `Sources/MacAgent/SonnyNotificationService.swift` — the `SONNY_SCHEDULED` category (no actions), `postScheduledRunNotification`, and a third default-action destination.
+- `Sources/MacAgent/AppDelegate.swift` — the scheduled subscription posts through the new category; its click opens Command Center; the stale reachability comment corrected.
+- `Tests/MacAgentTests/ClarificationExitTests.swift` — new, 11 tests.
+- `Tests/MacAgentTests/MacAgentSourceScan.swift` — new, the `Sources/MacAgent/` scanner three suites share.
+- `Tests/MacAgentTests/ScheduledRoutineRunTests.swift` — 3 tests added.
+- `Tests/MacAgentTests/ProductShellTests.swift` — 1 test added.
+- `docs/sonny-v1-implementation-changelog.md` — this entry.
+
+Tests: CLAUDE.md's flagged command. Base **1410 in 111 suites, exit 0 at `87199ff`** (`main`, clean tree, measured by this session rather than inherited). Head **1425 in 112 suites, exit 0 at `d6d15cd`**, clean tree — 15 added, no test removed or weakened. **Compiler warnings: `scripts/warnings` reports 0, exit 0, at `d6d15cd` (clean), 131s cold.** **Mutation batteries through `scripts/mutate`, 20 mutants across three runs, all killed:** 9 for SONNY-166 (M1–M6 at `ae0591f`, M7–M9 re-run at `f5e01ca` — see below, one of them survived first time and that is the branch's most useful finding), 8 for SONNY-113 at `f771c69`, 3 for SONNY-25 at `d6d15cd`.
+
+Behavior added:
+- **A clarification can be abandoned.** One control on each surface — a 23x23 circular `xmark` on the widget's question row, a text button beside Command Center's Send — both calling `cancelCurrentRun()`, both naming `ClarificationPresentation.cancelLabel`.
+- **Abandoning is cancellation.** It writes a `.canceled` task-history row, clears the question, the answer, the three carried continuation values, the prepared run, the step statuses, the stale empty-answer nudge, and the workspace scope and binding — then puts "Don't save this task" back off and resumes clipboard history through `finishRecordingPolicyIfSettled()`.
+- **`canCancel` is true during a clarification**, so the predicate and the function agree.
+- **A scheduled routine's outcome posts its own notification category** with no actions, whose click opens Command Center.
+- **The widget carries the scheduled notice** as a dismissible strip, and does not collapse while one is set.
+
+Behavior preserved (required, no blanket claims):
+- **Answering a clarification is unchanged.** `submitClarification` still wraps only the Q&A around the original command, still re-enters `start()` with the preserved auto-execute flag, origin and binding. Pinned by `answeringAClarificationStillContinuesTheTask`, which asserts the continuation text, the origin, and that the summary is *not* the cancellation's.
+- **Cancelling at an approval prompt is unchanged**, including its own `.canceled` row and its "Approval canceled. No action was taken." summary. Re-pinned here rather than assumed, because this branch moved a value that branch reads.
+- **Command Center's running indicator gains no second Cancel.** All four of its call sites gate on `isRunning || isAwaitingApproval`, both false during a clarification, so widening `canCancel` adds nothing there — asserted on the literal gate those sites evaluate.
+- **The four existing notification subscriptions are untouched.** Permission, error, local-storage and finished-run all post exactly as before, through the same gate; only the fifth changed category.
+- **`WidgetNoticeStrip`'s two existing callers render identically.** The new `tint` defaults to the error red they were hard-coded to, so neither call site changed.
+- **The launch presentation still calls `widgetController.show()` directly**, exactly as SONNY-25's analysis instructed, and is now pinned so nobody changes it blind.
+- **`hasVisibleWidgetPanel` is untouched.** The scheduled strip is a notice, not a panel; the widget's panel precedence and the compositing decision that shares it are unchanged.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**A source scan that does not strip comments tests the prose, not the code — measured here, not reasoned.** The first version of the test pinning that both clarification surfaces route through one entry point searched `CommandCenterView.swift`'s clarification region for `cancelCurrentRun()`. A mutant rewiring that button to `submitClarification()` **survived the whole suite**, because the comment three lines above it reads "it calls the same `cancelCurrentRun()` the widget's own control does". The assertion passed on the sentence describing the code. This is the same family as the repo's quantified-claim rule — a sweep has to tolerate, or exclude, the markup it is searching — and it is now `MacAgentSource.read`, which drops comment-*prefixed* lines (not every line containing a double slash, which loses real constructions carrying a trailing note; the rule `TestSourceTree.codeLines` already states for the test tree). The mutant dies now. **The general lesson is narrower than "strip comments": a test whose subject is a file's text is only as strong as the difference between the text that matters and the text that describes it, and in this repository the descriptive text is voluminous and quotes symbol names constantly.**
+
+**Two of these three tickets were substantially fixed before this branch started, and the kickoff prompt said otherwise.** SONNY-25's live item — the notification click not focusing the composer or expanding the capsule — was closed by SONNY-121 on `feature/task-history-controls`; SONNY-113's root cause, the permanently-closed notification gate, was closed by SONNY-56 on the same branch. Both were verified against `87199ff` rather than taken from the tickets' text, which predates those merges. WORKFLOW.md's rule (the description is the contract, the prompt is context) resolved it: the work became verifying the current state, closing what each ticket genuinely still owned, and pinning the dispositions so they cannot be undone silently. **The generalisable part: a ticket filed months before it is scheduled describes a tree that no longer exists, and the first job is re-deriving what is still true — the same discipline SONNY-169 applied to its own list of warnings, where re-deriving the *diagnosis* mattered more than re-deriving the list.**
+
+**A clarification is raised before anything executes, which is what makes the founder's chosen copy honest.** SONNY-166's description says the abandoned task "has already done work — a plan exists and steps may have run." Steps cannot have run: `AgentActionExecutor.prepare` returns the question inside `PreparedAgentRun`, and `performStart` returns on it before `executePreparedRun` is reached, with every step still `.pending`. So "Canceled. No action was taken." is literal. Worth recording because the opposite reading would have forced a different disposition — a partially-executed run cannot honestly be called cancelled.
+
+**The exit needed the clarification pause to start carrying what the approval pause already carried.** A task-history row needs `startedAt` and the submitted command; `start()` clears `command` synchronously and `taskHistoryStartedAt` is local to `performStart`, so neither survives a pause unless it is stored. The approval pause stores both in `pendingCommandForPriorTaskContext`/`pendingTaskHistoryStartedAt`; the clarification pause stored neither, which is why `recordTaskHistoryIfTerminal` had always returned `nil` there. The fix is symmetry, not a new mechanism — and it exposed that `performStart`'s per-task reset cleared only the date half of that pair. No live path read the stale command (every reader rewrites both first), but the pair is now reset together, because the exit's correctness argument is precisely that the pair describes *this* run.
+
+**`finishRecordingPolicyIfSettled()` has to be the last line of the branch, and the guard is why.** It refuses unless `approvalRequest == nil, clarificationQuestion == nil, !isRunning`. Called before the question is cleared it returns having done nothing, leaving the switch on and clipboard history paused until relaunch — the exact consequence SONNY-120 recorded as a known limit and this ticket was filed to close. The clipboard half is measured rather than asserted: the resume is two `changeCount` reads (resynchronise, then the immediate poll inside the restart) and nothing else in that path reads it, so a delta of two is both halves having run.
+
+**A notification category is a promise about what the notice is.** All three scheduled outcomes posted through `postErrorNotification`, so a routine that ran fine arrived in the failure category — and that category carries Retry, wired to `retryLastCommand()`. `performScheduledRun` deliberately never writes `lastCommand`, and `aScheduledRunDoesNotBecomeTheRetryTarget` had been demonstrating that property since routine scheduling shipped: pressing Retry on "your 9am routine failed" would re-dispatch whatever the user last typed. **The defect existed the whole time and was unreachable the whole time**, because the gate suppressed every notification; SONNY-56 opening the gate made it live without anyone touching this code. That is the shape worth remembering — *fixing a gate promotes every latent defect behind it to a live one*, and the branch that opens a gate is not the branch that will notice.
+
+**A notice strip on the widget is only a surface if the widget is expanded.** Every strip renders inside the `else` branch of `if isCompact`, and compact is the widget's steady state when nobody is using Sonny — which is exactly the state a scheduled routine fires in. Adding the strip without the collapse refusal would have put the notice on a surface the user cannot see and reported the gap as closed. The refusal follows the rule `.permission` and `.clarification` already follow, and the notice has an explicit Dismiss, so nothing is stuck.
+
+**Where the remaining hole is, stated precisely.** The notification fires only when the user is *not* working in Sonny. `SonnyAttention` counts Command Center being active and the widget panel being key. Routine detail, workspace detail and Settings are **sheets** presented over the four pages that render the notice, so a user sitting in one of them is "working in Sonny" (no notification) and cannot see the notice (covered). The widget strip is what closes that, and it is the reason the founder chose to add it rather than accept the gap.
+
+Known limitations / deferred scope:
+- **The live one-second clipboard poll timer never fires in a test process**, so "and it keeps recording a minute later" is a manual-test item rather than an assertion. What is asserted is that the view model resynchronised and restarted the monitor, which is the whole of what that path decides.
+- **`observeWidgetPresentationRequests()`'s sink body is still exercised by no test** — SONNY-25's own recorded, accepted gap, unchanged. Reaching it means driving `applicationDidFinishLaunching`, which registers a real `NSStatusItem`, a Carbon hotkey and the schedule timer. It is narrower now: the *decision* at each call site is pinned even though the AppKit call is not.
+- **`SonnyNotificationService` cannot be constructed in a test process** — `UNUserNotificationCenter.current()` aborts with an uncaught Objective-C exception when there is no bundle identity, so it cannot even be caught. Every claim about categories, actions and click destinations is held by source scan for that reason, stated in the tests themselves.
+- **One ticket filed: SONNY-187.** The local-storage notice channel has both of the defects fixed here — it posts through the failure category with the same wrong Retry, and it plus `plannerFallbackNotice` have the same compact-widget hole. Deliberately not widened into: the founder's decision was about the scheduled channel, and changing when the widget collapses for two other channels is a behaviour change nobody asked for. `FloatingWidgetView.isCollapsible` points at that ticket so the narrowness reads as a decision. Backlog, untriaged, unattached.
+- Nothing else deferred.
+
+Open questions (required, write "none" if true): none.
+
+Next branch: unchanged by this branch — it touches no roadmap row.
+
 ### Branch: fix/nested-run-plumbing
 Status: complete
 Date: 2026-08-20
