@@ -627,16 +627,13 @@ struct FloatingWidgetView: View {
     /// hover lost, and only the first — the founder's report. An arrival is an event, so there is no
     /// second copy of the pointer's position left to disagree with the pointer.
     ///
-    /// Entering only shows the hint when the slot is *already* free, which is not the same as
-    /// letting the render condition decide. A hint shown while the panel is up would sit there
-    /// unrendered and appear the instant the panel closed — a stale flicker attached to nothing the
-    /// user just did, and for the configuration variant it would wait there indefinitely, since
-    /// that one has no countdown to expire.
+    /// An arrival while the panel or the compact capsule owns the hint's slot shows nothing, and
+    /// why that is so — and why it is not left to the render condition — is on `pointerArrived`,
+    /// which is where the rule now lives so that a test can hold it. All that is left here is which
+    /// boolean to hand it.
     private func micHintPointerEnteredMic() {
-        if isMicHintSlotFree {
-            micHint.show(viewModel.micHoverHintPresentation)
-        } else {
-            micHint.dismiss()
+        micHint.pointerArrived(slotIsFree: isMicHintSlotFree) {
+            viewModel.micHoverHintPresentation
         }
     }
 

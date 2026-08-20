@@ -110,8 +110,30 @@ final class MicHoverHintModel: ObservableObject {
     /// is counting" — as residual B, false for exactly the finished-task case.)
     private(set) var dismissCountdown: Task<Void, Never>?
 
-    /// Called when the pointer arrives on the mic and the hint's slot is free. The caller
-    /// establishes both of those; this does not check either.
+    /// The pointer arrived on the mic — the one entry point the view calls on an arrival, and the
+    /// only one it needs (SONNY-179).
+    ///
+    /// **The slot rule lives here rather than in the view, so that a test holds it.** An arrival
+    /// while the panel or the compact capsule owns the row's slot shows nothing at all, which is
+    /// not the same as letting the render condition decide: a hint set while the panel is up would
+    /// sit there unrendered and appear the instant the panel closed, a stale flicker attached to
+    /// nothing the user just did — and the configuration variant would wait there indefinitely,
+    /// having no countdown to expire. Written as `if` in the view it was a mutant nothing killed;
+    /// written here it is a rule with a test. What is left in the view is which boolean it passes.
+    ///
+    /// `hint` is deferred rather than resolved by the caller because there is nothing to resolve
+    /// when the slot is taken, and a caller that had to resolve it anyway would make that fact
+    /// unobservable.
+    func pointerArrived(slotIsFree: Bool, hint: () -> MicHoverHintPresentation) {
+        guard slotIsFree else {
+            dismiss()
+            return
+        }
+        show(hint())
+    }
+
+    /// Shows a hint and arms its countdown, unconditionally. `pointerArrived` is the arrival's own
+    /// entry point and establishes the slot is free before calling this; this checks nothing.
     ///
     /// Restarts the countdown whenever the hint being shown has one — hovering away and back is a
     /// fresh hover and gets fresh seconds, which is the whole of the re-arm. A hint with no delay
