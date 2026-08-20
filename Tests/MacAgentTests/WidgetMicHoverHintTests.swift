@@ -14,10 +14,11 @@ import Testing
 /// below are the two extremes and nothing in between: one short enough to be instant, one long
 /// enough that the only way it can finish is cancellation.
 ///
-/// **What is not reachable from here**, stated rather than implied: `FloatingWidgetView`'s three
-/// call sites into this model — pointer in/out, the panel or a collapse taking the slot, and the
-/// view disappearing — are view wiring, and a view cannot be asked what it renders. The founder's
-/// manual items 1, 2, 3 and 5 are the verification for those.
+/// **What is not reachable from here**, stated rather than implied: `FloatingWidgetView`'s four
+/// calls into this model are view wiring, and a view cannot be asked what it renders. One `show`,
+/// when the pointer enters and the hint's slot is free; and three `dismiss`es — the pointer
+/// leaving, the pointer entering while the panel or the compact capsule already owns the slot, and
+/// the view disappearing. The founder's manual items 1, 2, 3 and 5 are the verification for those.
 @Suite
 @MainActor
 struct WidgetMicHoverHintTests {
@@ -129,9 +130,17 @@ struct WidgetMicHoverHintTests {
         #expect(model.visibleHint != nil, "the abandoned countdown cleared a hint it never armed for")
     }
 
-    /// Re-showing without an intervening dismiss — the panel closing and the pointer never having
-    /// left, say — must also abandon the previous countdown rather than leave two running, or the
-    /// older one clears the newer hint at the older hover's deadline.
+    /// Re-showing without an intervening dismiss must also abandon the previous countdown rather
+    /// than leave two running, or the older one clears the newer hint at the older hover's
+    /// deadline.
+    ///
+    /// **No call path does this today, and the example this comment used to give was wrong.** It
+    /// named the panel closing with the pointer never having left; that path calls nothing at all,
+    /// because the slot-becoming-free direction deliberately does not re-show. Nor can the hover
+    /// hook produce two `show`s in a row: reaching a second `false` → `true` transition means
+    /// passing through `true` → `false` first, which dismisses on the way out. So this pins the
+    /// model's own contract for a caller that does not exist yet, which is what makes `show` safe
+    /// to call twice — not a sequence the shipping view can currently produce.
     @Test
     func showingAgainReplacesTheCountdownRatherThanAddingASecond() async throws {
         let model = MicHoverHintModel()

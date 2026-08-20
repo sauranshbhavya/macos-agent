@@ -8,20 +8,34 @@ import SwiftUI
 /// **Resolved by `AgentViewModel`, never by the view.** The choice between the two variants below
 /// turns on voice readiness, and a view is not allowed to read that — a view that branches on it
 /// can hide or refuse a control for a reason it never shows, which is the bug SONNY-173 fixed and
-/// `WidgetVoiceEntryTests.theCompositeVoiceReadinessIsReadInOneFileOnly` now forbids by scanning
-/// this whole directory. That scan reads comments as well as code, which is why this comment
-/// describes the rule rather than naming the properties it is about.
+/// `WidgetVoiceEntryTests.theCompositeVoiceReadinessIsReadInOneFileOnly` now forbids. That scan
+/// reads comments as well as code, which is why this comment describes the rule rather than naming
+/// the properties it is about. It enumerates `Sources/MacAgent` one level deep, so it covers every
+/// Swift file sitting directly in this directory — all of them today, since none live in a
+/// subdirectory — rather than the subtree.
+///
+/// **What that guard reaches, and what it does not.** It stops a view working out *which* variant
+/// applies, which is what makes resolving one here the only way to get a correct hint. It cannot
+/// stop a view ignoring the resolved value and rendering a literal of its own: a view cannot be
+/// asked what it renders, the same boundary SONNY-173 recorded rather than a new one.
 ///
 /// **The delay travels with the message because the two variants differ in kind, not in wording.**
 /// The shortcut reminder is a reminder, and a reminder that will not leave is nagging, so it goes
 /// after four seconds even if the pointer never moves. The configuration message reports something
-/// broken and what to do about it, so it stays for as long as the pointer does — exactly like the
-/// message the same condition shows when the mic is actually pressed. Keeping the duration beside
-/// the text rather than in a separate constant is what stops a third variant from being added with
-/// nobody deciding which of the two it behaves like.
+/// broken and what to do about it, so it stays for the whole hover — and it is the same sentence
+/// the same condition shows when the mic is actually pressed, which is deliberately persistent for
+/// the same reason.
+///
+/// **What that buys, stated no larger than it is.** `autoDismissDelay` has no default, so a third
+/// variant cannot be written without its author putting either a duration or `nil` in front of
+/// themselves. It does *not* pin that this model counts for the duration it was handed — a mutant
+/// replacing the sleep with a hardcoded four seconds survives the suite, recorded as residual A on
+/// SONNY-177 by PR #74's review. Harmless today, because `micHoverReminderDismissDelay` is the only
+/// non-`nil` delay any caller passes; the gap is real the moment a second one exists.
 struct MicHoverHintPresentation: Equatable {
     let message: String
-    /// `nil` when the hint stays for as long as the pointer does.
+    /// `nil` when the hint has no countdown at all, so nothing but a dismissal ends it — which for
+    /// the shipping caller means it lasts the whole hover.
     let autoDismissDelay: Duration?
 }
 
@@ -36,41 +50,70 @@ struct MicHoverHintPresentation: Equatable {
 /// **A separate object rather than more `@State` on `FloatingWidgetView`, for the reason the mic's
 /// `.disabled` predicate moved onto the view model (SONNY-173): a view cannot be asked what it
 /// renders.** A countdown written inline in a view is enforced by nothing but a reader noticing.
-/// Here the countdown is the whole of what this ticket changes, so it lives where a test can drive
-/// it and await the real task instead of sleeping and hoping.
+/// The countdown is the behaviour SONNY-177 adds, so it lives where a test can drive it and await
+/// the real task instead of sleeping and hoping.
 ///
 /// **The mechanism is `FloatingWidgetView`'s existing auto-collapse timer, not a second invention**
-/// — a cancellable `Task`, `try? await Task.sleep(for:)`, `guard !Task.isCancelled`. Only the
-/// duration differs, and it arrives with the hint.
+/// — a cancellable `Task`, `try? await Task.sleep(for:)`, `guard !Task.isCancelled`. The shape is
+/// what is shared, and only the shape: this one runs for a duration that arrives with each hint
+/// (and may be absent entirely, where the auto-collapse delay is one constant), it clears a hint
+/// rather than collapsing the widget, and it lives here rather than in `@State`.
 ///
 /// **What that mechanism does under this panel's unusual conditions**, since this window is always
-/// visible and rarely key, so a timer here does not live in ordinary circumstances:
+/// visible and rarely key, so a timer here does not live in ordinary circumstances. None of the
+/// three is exercised by the suite — no test process can sleep a Mac, occlude a window, or provoke
+/// App Nap — so each is argued from the mechanism and measured by nothing:
 /// - *The app being inactive changes nothing.* This is Swift concurrency, not a run-loop timer, so
-///   it is tied to neither key-window status nor an event-tracking run-loop mode — the two ways a
-///   naive `Timer` would have stalled here exactly when the widget is most likely to be hovered.
+///   it is subject to neither key-window status nor a run-loop mode. Those are two different
+///   hazards and only the second belongs to a `Timer`: a run-loop timer stalls outside the modes it
+///   was scheduled in, while key-window dependence is `NSTrackingArea`'s failure mode — the one
+///   `AlwaysActiveHoverTracker` exists for, and the reason hover here needs `.activeAlways` at all.
 /// - *Across machine sleep the countdown keeps counting.* `Task.sleep(for:)` measures on
 ///   `ContinuousClock`, which advances while the Mac is asleep, so four seconds spent asleep are
 ///   four seconds spent: the hint is already gone on the first frame after wake rather than
 ///   resuming a countdown the user has long since walked away from. That is the wanted behaviour
 ///   for a reminder, and it is the default rather than something arranged.
 /// - *Occlusion is not a state anything here observes.* A countdown started before another window
-///   covered the widget still fires on time, so the hint is gone by the time the widget is visible
-///   again. The reverse case cannot arise: a covered widget receives no mouse-entered event, so
+///   covered the widget keeps counting and fires while covered — that is the claim, not the larger
+///   one that being covered clears the hint. A hint whose seconds run out behind that window is
+///   gone when the widget is revealed; one covered for less time than it had left is still there,
+///   correctly. The reverse case cannot arise: a covered widget receives no mouse-entered event, so
 ///   there is nothing to start.
 @MainActor
 final class MicHoverHintModel: ObservableObject {
-    /// Non-`nil` exactly when the hint is on screen — the hint's own truth, deliberately not the
-    /// pointer's.
+    /// The hint this model says should be showing, `nil` when there is none — the hint's own truth,
+    /// deliberately not the pointer's.
+    ///
+    /// **Not the same as "on screen".** The row also needs its slot, so `FloatingWidgetView`
+    /// renders this only while neither the panel nor the compact capsule owns that slot, and
+    /// dismisses it when either takes one. Non-`nil` and unrendered is therefore reachable — for
+    /// the frame between a slot being taken and the change hook firing, and for the whole of a unit
+    /// test, where there is no view at all.
     @Published private(set) var visibleHint: MicHoverHintPresentation?
 
-    /// The live countdown, exposed so a test awaits the real task rather than sleeping and hoping.
-    /// `nil` whenever nothing is counting, which includes while a hint that never times out is up.
+    /// The most recently armed countdown, exposed so a test awaits the real task rather than
+    /// sleeping and hoping.
+    ///
+    /// **It is not a live-countdown flag, and the obvious reading of it is wrong.** Nothing clears
+    /// this when a countdown finishes on its own — the task writes `visibleHint` and stops — so
+    /// after a reminder times out normally this still holds that finished task while `visibleHint`
+    /// is `nil`. It is `nil` before anything has been shown, after `dismiss()`, and after showing a
+    /// hint that has no countdown; non-`nil` otherwise, whether running or long since finished.
+    ///
+    /// What it never holds is a *cancelled* task: every path that cancels one either clears this or
+    /// replaces it within the same call. That is the property worth relying on — at most one
+    /// uncancelled countdown exists at a time, and it is this one. Nothing in `Sources/` reads it;
+    /// only tests do. (PR #74's review recorded the earlier sentence here — "`nil` whenever nothing
+    /// is counting" — as residual B, false for exactly the finished-task case.)
     private(set) var dismissCountdown: Task<Void, Never>?
 
-    /// The pointer entered the mic and the hint's slot is free.
+    /// Called when the pointer enters the mic and the hint's slot is free. The caller establishes
+    /// both of those; this does not check either.
     ///
-    /// Always restarts the countdown: hovering away and back is a fresh hover and gets fresh
-    /// seconds, which is the whole of the re-arm.
+    /// Restarts the countdown whenever the hint being shown has one — hovering away and back is a
+    /// fresh hover and gets fresh seconds, which is the whole of the re-arm. A hint with no delay
+    /// arms nothing, so there "restarting" is only the cancelling: whatever was counting stops, and
+    /// nothing takes its place.
     func show(_ hint: MicHoverHintPresentation) {
         dismissCountdown?.cancel()
         visibleHint = hint
@@ -85,7 +128,11 @@ final class MicHoverHintModel: ObservableObject {
         }
     }
 
-    /// The pointer left, the panel took the slot, or the view went away.
+    /// Every way a hint stops being wanted, which is four call sites in `FloatingWidgetView` rather
+    /// than the three an earlier telling of this comment named: the pointer left; the pointer
+    /// entered while the panel or the compact capsule already owned the slot, where there is
+    /// nothing to show and the call does nothing; the slot was taken while a hint was up; and the
+    /// view went away.
     ///
     /// Cancelling here is the load-bearing half, not the clearing: a countdown left running
     /// outlives the hint it was counting for and clears whichever hint is up when it lands, which
