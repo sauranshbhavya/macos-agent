@@ -157,6 +157,59 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/store-load-integrity
+Status: complete
+Date: 2026-08-20
+Tickets: **SONNY-67** (the routine store's read door admitted pre-set resolver pins), **SONNY-78** (a corrupt workspace store silently unbound a task's scope), **SONNY-154** (the privacy wipe's only behavioural test covered eight of nine stores). One session, serial, from `main` at `ee94ae2`. Cluster 3 of three, and the theme is one sentence: **corruption is not absence.** Two of the three are a read path that answered the same way for "this file will not decode" and "there is nothing here", and the third is the store that was missing from the test proving a wipe reaches everything.
+Reviewed by: pending — fresh session per WORKFLOW.md step 7.
+
+Spec sections covered: none newly; §15.4's local-storage integrity, and the wipe's own behaviour under the founder's 2026-08-16 delete-means-deleted rule.
+
+Files changed (across `02552b3`, `d002a8a`, `e389b76`, `5bc2383`, plus this entry's commit):
+- `Sources/MacAgentCore/AutomationStores.swift` (`StoredRoutine.strippingResolverPins`; `RoutineStore.loadAll` applies it)
+- `Sources/MacAgentCore/LocalStorageEncryption.swift` (`LocalStorageDecoded.map`, so a store can clean what it decoded before the legacy-plaintext rewrite decides whether to persist it)
+- `Sources/MacAgent/AgentViewModel.swift` (`resolveTaskScope` uses `findWorkspace(named:)` and reports a real load failure)
+- Tests: `AutomationStoresTests` (+4), `AgentViewModelLocalStorageTests` (+3), `LocalStorageSecurityTests` (fixture extended to nine stores, counts and a new fixture-count assertion)
+
+Tests: **1427 in 111 suites, exit 0 at `5bc2383`** via CLAUDE.md's flagged command; baseline **1420 in 111 at `ee94ae2`**, measured on this checkout before any change. Per-ticket: 1424 at `02552b3`, 1427 at `d002a8a`, 1427 at `e389b76` (a fixture extension adds no test function), 1427 at `5bc2383`. **Compiler warnings: 0 at `5bc2383`, whole tree, via `scripts/warnings`** (every file compiled, build directory emptied first; 122s). **Mutation via `scripts/mutate`: 6/6 killed at `5bc2383`.** An earlier run at `e389b76` was 4 killed / 2 survived; those two survivors are the pitfall below and they produced a shipped test rebuild.
+
+Behavior added:
+- A `routines.json` written by something that is not Sonny loses any pre-set `resolvedAppName`/`resolvedBundleIdentifier` when it is read, so a step cannot arrive carrying an app identity the executor never resolved.
+- An unreadable `workspaces.json` now says so through the local-storage notice instead of silently unbinding the task's workspace.
+- The wipe's one behavioural test deletes nine real store files, the vision session journal included.
+
+Behavior preserved (required, no blanket claims):
+- **A legitimately saved routine round-trips byte-identically** — pinned by its own test, because the strip is only safe if it removes nothing a real store had.
+- **A workspace deleted between dispatch and assessment still binds to nothing, silently** — that fallback is correct, and reporting it as a storage fault would put a decryption banner in front of a healthy store. Pinned separately from the corrupt case.
+- **A readable store still binds the scope** — the fix did not turn scope resolution into a failure path.
+- **The legacy-plaintext migration still runs and still rewrites**, and now persists the stripped form rather than re-encrypting what it just removed.
+- **The wipe's URL list is unchanged** — it was right all along; only the test that exercises it was short.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**The pitfall of the branch, and it is the same class as cluster 2's: a test can measure something other than the thing it names.** SONNY-78's three tests ran a task to completion and asserted on `localStorageNotice`. `performStart` ends in `refreshSavedItems()`, which reads the workspace store itself and records or clears **the same `.savedWorkspaces` source** — so the corrupt-store test saw the notice whether or not `resolveTaskScope` reported anything, and the healthy-store test saw it cleared whether or not `resolveTaskScope` wrongly reported one. Both were measuring the post-run refresh. The battery is what found it: mutants deleting the record call and adding a spurious one both survived a green suite. The rebuilt tests dispatch a prebuilt plan whose only step is `clarify`, which returns from `performStart` *before* that refresh and *after* the scope resolution, so the notice has exactly one possible author. **Two branches running, two vacuous-test findings, both from a mutation battery and neither from a passing suite** — the suite cannot tell "this assertion holds because of my change" from "this assertion holds anyway".
+
+**Strip rather than reject, at the read door.** SONNY-67 could have refused a routine carrying a pre-set pin. That turns a tampered file into a store that will not load at all, costing a user their real routines to punish bytes they may not have written; stripping returns the routine to the only state Sonny could have saved it in and lets the executor resolve the pins itself. The enumeration that makes it safe: the two writers of those fields in `Sources/` both write onto a top-level plan's steps, for operations `forbiddenStepOperations` refuses inside a routine, and the planner cannot emit them at all — so no legitimate routine carries one, and the round-trip test is the standing proof.
+
+**A hand-maintained list of resolver-only fields is the defect one level up.** SONNY-67 exists because one door knew a rule and another did not, so the strip ships with a `Mirror`-based forcing test: a field added to `AgentStep` lands in the enumeration and fails until someone classifies it as planner-writable or resolver-only. Reflection rather than a source scan because it sees stored properties whether or not they are set, which a fixture-based encode would not.
+
+**The load-failure channel already answered SONNY-78's open UI question.** The ticket left "refuse the task, or bind it and let the assessment throw" undecided. Since the consequence rule a workspace scope gates no prompt at all — its escalation is `.advisory` — so a lost boundary costs legibility rather than permission, and blocking a task the user asked for in order to report a storage problem inverts escalate-never-block for no safety gain. The notice publishes to `localStorageNotice` and never to `errorMessage`, which is the existing rule for exactly this: a corrupt store is not this task failing.
+
+Known limitations / deferred scope:
+- **SONNY-191** (filed): task history re-derives the workspace name independently of whether the scope bound, so a run that went unscoped is still filed, displayed and counted as belonging to that workspace. Left out of SONNY-78 deliberately — it happens identically when the workspace was merely deleted, a case SONNY-78 preserves as legitimate, so fixing it only for corruption would make history depend on *why* the scope failed. The ticket carries the choice it needs, including a third option neither review comment raised (record the name plus a did-not-bind flag).
+- **The other `try?`-against-a-store sites are unchanged**, and deliberately: SONNY-30 enumerated seven in `AgentActionExecutor.swift`, each reached only after the real failure surfaced through a plain `try` upstream, each carrying a written justification. This ticket's site was the one where nothing upstream throws.
+- Nothing else deferred.
+
+Open questions (required, write "none" if true): none.
+
+Manual checklist for the founder (packaged app):
+1. Bind a task to a workspace from its card and run something ordinary — the task runs and no storage banner appears.
+2. Make `~/Library/Application Support/Sonny/workspaces.json` unreadable (copy any other file over it), then dispatch a task from a workspace card. The task should still run, and the local-storage notice should name "saved workspaces" rather than nothing happening.
+3. Restore the file. The notice clears on the next task or refresh, and the workspace binds again.
+4. Delete a workspace, then dispatch a task that names it — no storage banner; it simply runs unbound. This is the case that must *not* look like a fault.
+
+Next branch: none scheduled — this is the last of the three clusters.
+
 ### Branch: fix/hover-teardown-and-app-icons
 Status: complete
 Date: 2026-08-20
