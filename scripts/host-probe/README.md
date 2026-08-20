@@ -53,11 +53,28 @@ be paired with a different request's outcome.
 Both need an account you own. **No credential belongs in this repository** — log in with the
 vendor CLI so the token lands in your home directory, and pass identifiers on the command line.
 
+**Run the Supabase deploy from this directory, not from `supabase/`.** The CLI resolves
+`supabase/functions/<name>/index.ts` relative to the working directory, so `scripts/host-probe/` is
+the right place to stand; from `supabase/` it looks for `supabase/supabase/functions/...` and fails.
+
 ```sh
-supabase functions deploy probe --project-ref <ref> --no-verify-jwt   # from supabase/
-wrangler deploy                                                       # from cloudflare/
-wrangler deploy -c wrangler-upstream.toml                             # the slow upstream
+cd scripts/host-probe
+supabase functions deploy probe --project-ref <ref> --no-verify-jwt
+(cd cloudflare && wrangler deploy)                              # the probe
+(cd cloudflare && wrangler deploy -c wrangler-upstream.toml)    # the slow upstream
 ```
+
+**The tree deploys as-is — all three entry points import the single `handler.js` at the root of this
+directory by relative path**, and that is checked rather than assumed: a deploy from the committed
+tree logs `Uploading asset (probe): handler.js` beside `index.ts`, so the bundler really does follow
+the import out of the function directory. It did not always: the first committed version had every
+entry point importing `./handler.js` from a directory that had no copy of it, so none of the three
+would have deployed at all (PR #82 cycle 1, F4).
+
+**One wrinkle worth knowing when a deploy dies with `exit 137`.** That is a SIGKILL, not a code
+error: with Docker running, the CLI bundles inside a container that can be OOM-killed. With Docker
+stopped it bundles through the API instead and succeeds. If you see 137, stopping Docker is a
+reasonable first move rather than a puzzling one.
 
 `wrangler.toml`'s `UPSTREAM_URL` and Supabase's `UPSTREAM_URL` secret must point at **each
 other's** host, not at a second Worker on the same account: a Worker fetching another Worker on
@@ -90,6 +107,19 @@ passes whether or not the property holds.
   concurrently, and their wall-clock figures will contend for the same uplink.
 - **It cannot answer a billing question.** Whether an outbound `fetch` from a function meters as
   egress is a question for the vendor's invoice, not for this harness.
+
+## The three deployed endpoints, and which may be torn down
+
+- **`probe` (Supabase Edge Function)** and **`sonny-host-probe` (Worker)** are the two measured
+  hosts. Teardown-eligible once nobody needs to re-check a row.
+- **`sonny-slow-upstream` (Worker) is load-bearing, not spare.** It is the upstream the Supabase
+  function's `up` route fetches — Supabase's `UPSTREAM_URL` secret points at it. Deleting it does not
+  degrade that arm, it breaks it: `up` answers `502` with an `upstream_error`. Tear it down only
+  together with the other two.
+
+The cross-wiring is deliberate and is not a matter of taste — a Worker fetching another Worker on
+the **same** zone returns Cloudflare error 1042, reproduced in
+`results/cloudflare-1042-same-zone.txt` with a cross-zone control beside it.
 
 ## Two naming details that are deliberate
 

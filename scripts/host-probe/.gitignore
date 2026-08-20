@@ -1,3 +1,13 @@
 # Generated on demand by make_payload.py — up to tens of megabytes each, and reproducible
 # exactly from the size alone, so they are regenerated rather than stored.
 payloads/
+
+# Vendor CLI state, written into this directory by `wrangler deploy` and `supabase functions
+# deploy`. Not secrets — no token is in them — but they carry the operator's account id,
+# organization id and the email address their Cloudflare account is named after, and none of
+# that belongs in a repository. They were staged once during SONNY-125's cycle-1 fix round and
+# caught before the commit (PR #82 cycle 1).
+.wrangler/
+cloudflare/.wrangler/
+supabase/.temp/
+.temp/
