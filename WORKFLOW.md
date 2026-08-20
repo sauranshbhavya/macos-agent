@@ -171,7 +171,8 @@ Implement against the pulled ticket and repository conventions (`CLAUDE.md`, the
 changelog's per-branch decisions, `.claude/rules/`). The v1 rigor bar is unchanged:
 
 - Build: `swift build`. Tests: the exact flagged command in `CLAUDE.md` — plain
-  `swift test` does not link.
+  `swift test` fails at compile with "no such module 'Testing'", and neither half of the
+  flag set is optional. CLAUDE.md's Commands section says which flag fixes which failure.
 - **Evidence, not assertion.** A ticket is done when its acceptance criteria are
   demonstrated by test output and exit codes, not when the work "looks done."
   `CLAUDE.md`'s claims-and-evidence conventions bind every claim made under this workflow —
