@@ -17,15 +17,20 @@ env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disabl
   -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/Frameworks \
   -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/usr/lib
 ```
-Plain `swift test` will fail to link. The flags above are required, not optional.
+Plain `swift test` does not work here, and both halves of the invocation are required. Without `-Xswiftc -F` it fails at compile: `error: no such module 'Testing'`. With that flag alone it builds and links fine — it prints `Build complete!` — and then dies at run time in `swiftpm-testing-helper` with `Library not loaded: @rpath/Testing.framework`, which is what the two `-rpath` pairs fix. Nothing here fails at link, measured both ways at `f4c1228`; the earlier wording said "will fail to link", which sends anyone reading the real error looking for the wrong failure (SONNY-180's sweep).
 
 Mutation batteries run through `scripts/mutate`, never hand-rolled in a session scratchpad. It
 refuses to start while `git status --porcelain` prints anything: a hand-rolled battery reverts its
 mutants with `git checkout -- <file>`, which restores from HEAD, so run over uncommitted work it
 deletes the work instead of the mutation — five times so far, three of them producing false
 measurements, once in the reassuring direction where a bogus kill claimed coverage that was not
-there. `scripts/mutate --help` has the plan format;
-`scripts/mutate selftest` re-proves the refusal still fires.
+there. It also refuses to run beside another battery in the same checkout, and builds into a
+scratch directory of its own rather than the shared `.build/`, because a battery sharing a build
+directory reports a contaminated result its own output cannot be told apart from a clean one
+(SONNY-176); `scripts/mutate unlock` clears a lock a killed run left behind.
+`scripts/mutate --help` has the plan format, and a "What this does and does not prevent" section
+stating what is left over; `scripts/mutate selftest` re-proves every one of those refusals still
+fires.
 
 `swift run MacAgent` works for everyday iteration, but a bare SwiftPM executable has no real
 app-bundle identity — `UNUserNotificationCenter`, the microphone permission prompt
@@ -100,7 +105,7 @@ When spawning any subagent — Agent tool calls, or `agent()` calls inside a Wor
 
 - All 9 local stores (routines, workspaces, clipboard history + settings, snippets, recent artifacts, Shortcut run history, task history, the vision session journal) share one DI/encryption/legacy-plaintext-migration pattern via `LocalStorageEncryption`. A new store should follow it, not invent a variant.
 - A local-store *write* failure and a *load* failure are different things with different correct user-facing messages — `recordLocalStorageLoadFailure` is load/decrypt-only wording ("could not be decrypted or decoded"); a write failure needs its own accurate `errorMessage` (see `applyClipboardHistoryNoticeChoice` in `AgentViewModel.swift` for the pattern). Conflating them is a real bug that's happened once already.
-- Command Center has no command composer or approval UI of its own anymore (both removed — the floating widget is the sole command surface and the only place `.permission`/`.clarification`/`.failure` render). A page just needs `CommandCenterRunningIndicator`, gated on `viewModel.isRunning || viewModel.isAwaitingApproval`, so a task started from that page still shows *something* is happening — not automatic, add it per page. See `.claude/rules/macagent-ui-conventions.md`'s "Approval visibility" section for the full current model.
+- Command Center has no command *composer* anymore — the floating widget is the sole place to type or speak a command. It does have its own permission/clarification/failure surface: `CommandCenterAttentionPanel` (`CommandCenterView.swift`), rendered by the four pages that also host `CommandCenterStorageNotice`, self-gating on its own state, and mirroring the widget's precedence so the two can never disagree. `CommandCenterRunningIndicator` is the separate, compact "something is running" line, gated on `viewModel.isRunning || viewModel.isAwaitingApproval`. Neither is automatic — a new page adds both, or a run started from it shows nothing and an approval it raises is invisible there. `.claude/rules/macagent-ui-conventions.md`'s "Approval visibility" section is the full model and the one source of truth; this line only points at it. (SONNY-180: this used to say Command Center had no approval UI either, and that the widget was the only place those three states render. The composer half was right; the approval half was the opposite of true, and contradicted the very section it cites.)
 - `ViewThatFits` (horizontal candidate with a `minWidth` floor on the label, falling back to vertical) is the fix for label+control settings rows that need to survive a narrow, non-fullscreen window. Reuse `SettingsAdaptiveControlRow`, don't hand-roll a fixed `HStack`.
 - Figma MCP is capped at 6 tool calls/month total, shared across every connection to the account. Assume it's exhausted; default to manual SVG export + Figma's "Copy as CSS," which has also proven more precise (exact shadow recipes, exact hex values).
 - The full manual test suite requires a human at the actual app — no agent has any way to screenshot or drive the live macOS app itself, and no agent should try to build one (GUI-automation harnesses via `osascript`/System Events have been attempted twice; both failed and wasted a full session each). The user does all manual/visual verification, from the manual-test items each ticket declares.

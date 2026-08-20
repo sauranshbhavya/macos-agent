@@ -32,19 +32,46 @@
 # throwaway repository, dirties it, runs this harness against it, and asserts both that the run
 # was refused and that the uncommitted bytes are still there afterwards.
 #
+# The second route to a false measurement, closed by SONNY-176, found by PR #73's fix round on
+# 2026-08-19: a session started a build while a battery was mid-mutant, and the two shared .build/.
+# A battery's whole output is which mutants were KILLED and which SURVIVED, read off compile and
+# test results, so anything else compiling into the same build directory changes what is being
+# read. A shared llbuild database or module cache surfaces as a transient compile failure, which
+# this harness records as `KILLED (build failure)` — a false kill, the reassuring direction again,
+# and one nothing in the report can show: a contaminated run prints the same counts a clean one
+# does.
+#
+# Two mechanisms, because the two halves of that are enforceable in different ways:
+#
+#   * A run lock, kept in .git/ so it can never dirty the tree, held for the battery's whole
+#     duration. A second `scripts/mutate` in this checkout is refused, naming the run that holds
+#     it. It is taken BEFORE the dirty-tree guard on purpose: a battery that is mid-mutant has a
+#     dirty tree by construction, so a second run reaching that guard first would be refused for
+#     the wrong reason and told to "commit or stash the paths above" — and the path above would be
+#     a mutant.
+#   * A build directory private to the battery (--scratch-path, with the clang module cache inside
+#     it). Nothing a shell script does can stop another terminal from running `swift build`, so
+#     this stops that build from mattering instead: it writes .build/, the battery writes its own
+#     scratch directory, and neither can corrupt the other's artifacts.
+#
+# What is left over after those two is written out in `--help`, under "What this does and does not
+# prevent", rather than implied away.
+#
 # Usage
 #   scripts/mutate <plan>                run every mutant in the plan
 #   scripts/mutate <plan> --only M3,M7   run only these mutants
 #   scripts/mutate <plan> --check        parse the plan and match every mutant; run no tests
 #   scripts/mutate selftest              exercise this harness against a throwaway repository
+#   scripts/mutate unlock                clear a run lock left behind by a killed battery
 #   scripts/mutate --help                the plan format, with an example
 #
 # Exit codes
 #   0  the battery ran and every mutant was killed
 #   2  the battery ran and at least one mutant SURVIVED — a survivor is a finding, not an error
-#   1  the battery did not run, or its result could not be trusted: a dirty tree, an unparseable
-#      plan, a mutant whose `from` text does not match exactly once, a red baseline, or a tree
-#      left dirty by the suite itself
+#   1  the battery did not run, or its result could not be trusted: a dirty tree, another battery
+#      already holding this checkout, a suite command that would build into the shared .build/, an
+#      unparseable plan, a mutant whose `from` text does not match exactly once, a red baseline, or
+#      a tree left dirty by the suite itself
 
 set -euo pipefail
 
@@ -52,9 +79,16 @@ SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]
 readonly SELF
 readonly SCRIPT_NAME="scripts/mutate"
 
-# The exact flagged test command from CLAUDE.md; plain `swift test` does not link here. Single
-# quotes are deliberate — $PWD is expanded by the subshell that runs the command, not now.
-readonly DEFAULT_TEST_CMD='env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disable-sandbox -Xswiftc -F -Xswiftc /Library/Developer/CommandLineTools/Library/Developer/Frameworks -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/Frameworks -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/usr/lib'
+# The exact flagged test command from CLAUDE.md, plus two flags that are only isolation. Plain
+# `swift test` never gets as far as running here — CLAUDE.md's Commands section has which flag
+# fixes which failure — and the flagged command's own CLANG_MODULE_CACHE_PATH and default build
+# directory both sit in .build/, which every other build in this checkout also writes. Single quotes are deliberate — $MUTATE_SCRATCH is expanded by the subshell that runs
+# the command, not now.
+#
+# Isolation does not change what is measured, which was checked rather than assumed: at c3b8166
+# the flagged command and this one each reported 1410 tests in 111 suites, and a cold build of
+# each carried the same six compiler-warning sites.
+readonly DEFAULT_TEST_CMD='env CLANG_MODULE_CACHE_PATH="$MUTATE_SCRATCH/clang-module-cache" swift test --scratch-path "$MUTATE_SCRATCH" --disable-sandbox -Xswiftc -F -Xswiftc /Library/Developer/CommandLineTools/Library/Developer/Frameworks -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/Frameworks -Xlinker -rpath -Xlinker /Library/Developer/CommandLineTools/Library/Developer/usr/lib'
 
 TEST_CMD="${MUTATE_TEST_CMD:-$DEFAULT_TEST_CMD}"
 readonly TEST_CMD
@@ -66,6 +100,18 @@ WORKDIR=""
 # from anywhere — puts the file back instead of leaving a mutant behind for someone to commit.
 ACTIVE_FILE=""
 ACTIVE_BACKUP=""
+
+# The run lock. LOCK_DIR is set as soon as this process knows where the lock lives — including in a
+# process the lock REFUSED — so LOCK_OWNED, not LOCK_DIR, is what release_lock tests. A refused
+# second invocation must never remove the lock the first one is still holding.
+LOCK_DIR=""
+LOCK_OWNED=""
+
+# The build directory this battery compiles into, and the one-line description of it the report
+# prints. Both are set by require_isolated_test_command, which is also what refuses a replacement
+# suite command that would build into the shared .build/ instead.
+MUTATE_SCRATCH=""
+TEST_CMD_ISOLATION=""
 
 # Set only by finish(), which is the one way this script is allowed to end. Everything else —
 # `set -u` on an unbound variable, `set -e` on a failed command, a syntax error on a path never
@@ -86,6 +132,16 @@ finish() {
   exit "$1"
 }
 
+# Defined above cleanup on purpose: cleanup runs from the EXIT trap, which is armed near the top
+# of this file, and a trap that calls a function defined further down would fail rather than clean
+# up if the harness ever died in between.
+release_lock() {
+  if [[ -n "$LOCK_OWNED" && -n "$LOCK_DIR" && -d "$LOCK_DIR" ]]; then
+    rm -rf -- "$LOCK_DIR"
+  fi
+  LOCK_OWNED=""
+}
+
 cleanup() {
   if [[ -n "$ACTIVE_FILE" && -f "$ACTIVE_BACKUP" ]]; then
     cp "$ACTIVE_BACKUP" "$ACTIVE_FILE" 2>/dev/null || true
@@ -96,6 +152,9 @@ cleanup() {
     rm -rf -- "$WORKDIR"
     WORKDIR=""
   fi
+  # After the restore above, never before it: the lock is what keeps a second battery out, and the
+  # tree has to be back to what HEAD says before that second battery can possibly start.
+  release_lock
 }
 
 # Runs last in every EXIT trap, after the cleanup it must not pre-empt.
@@ -125,13 +184,15 @@ usage() {
   cat <<'USAGE'
 Usage: scripts/mutate <plan> [--only ID[,ID...]] [--check]
        scripts/mutate selftest
+       scripts/mutate unlock
        scripts/mutate --help
 
 Runs a mutation battery against the COMMITTED tree: for each mutant it replaces an exact block
 of text, runs the test suite, records which tests failed, and restores the file byte for byte.
 
-It refuses to start while the working tree is dirty. That refusal is the point of the script,
-and there is no flag that turns it off.
+It refuses to start while the working tree is dirty, and it refuses to start beside another
+battery in the same checkout. Those two refusals are the point of the script, and no flag turns
+either of them off.
 
 Plan format — one record per mutant, directives at column 0:
 
@@ -167,10 +228,48 @@ as clean runs.
 Keep the plan file outside the working tree. A plan committed nowhere is an untracked file, and
 an untracked file is a dirty tree — the harness will refuse its own plan.
 
+Concurrency, and the build directory:
+  A battery holds a run lock for its whole duration, in .git/ where it cannot dirty the tree, so a
+  second `scripts/mutate` in this checkout is refused instead of interleaving with the first. It
+  also builds into a scratch directory of its own rather than the shared .build/, so an ordinary
+  `swift build` from another terminal cannot corrupt what this run measures.
+
+  `scripts/mutate unlock` clears a lock left behind by a killed run. It refuses while the owning
+  process is still alive, so it cannot break a live battery — and once that process is gone, the
+  same command clears what it left.
+
+  The first battery in a checkout pays for one cold build of that private scratch directory
+  (about a minute and a half in this repository). Every battery after it reuses the directory and
+  builds incrementally, so the cost is paid once, not per run.
+
+What this does and does not prevent:
+  Prevented: a second `scripts/mutate` in this checkout; and any other build in this checkout
+  corrupting this run's compiled artifacts, its llbuild database, or its clang module cache.
+
+  Not prevented, and worth knowing rather than assuming otherwise:
+
+    * Nothing here stops another terminal from running `swift build` mid-battery. That build can
+      no longer hurt the battery, but the battery still hurts it: it compiles whatever is on disk
+      at that moment, which during a run includes a mutant.
+    * A process that WRITES a tracked file during a mutant's suite run is caught after that
+      mutant, by the dirty-tree check between mutants, not while it runs. A `git checkout` in this
+      checkout mid-build is the loud version and usually breaks the build outright with "input
+      file ... was modified during the build".
+    * SwiftPM's caches under ~ (dependency clones, the manifest cache) are shared by every build
+      on this machine and are outside a script's reach.
+    * The lock is per-worktree, deliberately: each worktree has its own .build/, so two worktrees
+      running batteries at once share nothing and are not refused.
+    * MUTATE_TEST_CMD replaces the suite command outright. If the replacement invokes SwiftPM it
+      must carry --scratch-path "$MUTATE_SCRATCH" or the run is refused; if it invokes something
+      else, this script cannot know what that something else shares.
+
 Environment:
   MUTATE_TEST_CMD   Replaces the suite command. Add `--filter <Suite>` through it for a fast
-                    re-run of one mutant. The report always prints the command it actually ran,
-                    so a pasted log can never misrepresent what was measured.
+                    re-run of one mutant, keeping --scratch-path "$MUTATE_SCRATCH" in it. The
+                    report always prints the command it actually ran, so a pasted log can never
+                    misrepresent what was measured.
+  MUTATE_SCRATCH    Exported by the harness, not set by you: the build directory private to this
+                    run. A replacement suite command that builds with SwiftPM has to use it.
 
 Output:
   Per-mutant logs are written under .build/mutate/<sha>-<timestamp>/, because .build/ is
@@ -226,6 +325,196 @@ $dirty
 The battery stops here rather than carrying an unexplained change into the next mutant, which
 would make every result after this one describe a tree nobody chose. Restore the paths above by
 hand and work out what wrote them before re-running.
+EOF
+  finish 1
+}
+
+# ---------------------------------------------------------------------------------------------
+# The second guard: one battery at a time, in a build directory of its own.
+#
+# The lock lives inside .git/, which `git status` never reports, so taking it cannot dirty the tree
+# the next check is about to insist is clean. .git/ is also per-worktree — `git rev-parse
+# --absolute-git-dir` answers .git/worktrees/<name> inside a linked worktree — and per-worktree is
+# exactly the right scope, because each worktree has its own .build/ and two of them running
+# batteries at once share nothing.
+#
+# `mkdir` is the whole atomicity argument: on any POSIX filesystem it either creates the directory
+# or fails because it exists, in one step, with no window between the test and the create.
+# ---------------------------------------------------------------------------------------------
+
+lock_field() {
+  [[ -f "$LOCK_DIR/owner" ]] || return 0
+  sed -n "s/^$1 //p" "$LOCK_DIR/owner" | head -1
+}
+
+# Prints why the lock is stale, or prints nothing at all if its owner is genuinely still running a
+# battery. Both halves of a pid check matter here: a pid that no longer exists is the ordinary
+# killed-run case, and a pid that exists but belongs to something else is pid reuse, which on a Mac
+# that has wrapped around its pid space is not exotic. The one case this reads as live when it is
+# not is a pid reused by anything whose command line happens to say "mutate" — another battery, or
+# an editor with this file open. That error refuses a run rather than allowing two, and
+# `scripts/mutate unlock` reports the same reading, so the way out of it is visible.
+lock_stale_reason() {
+  local pid="$1" owner_command
+  if [[ ! -f "$LOCK_DIR/owner" ]]; then
+    printf 'it carries no owner record, so whatever made it died between the mkdir and the write'
+    return 0
+  fi
+  if [[ ! "$pid" =~ ^[0-9]+$ ]]; then
+    printf 'its owner record names no usable pid'
+    return 0
+  fi
+  owner_command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  if [[ -z "$owner_command" ]]; then
+    printf 'the process that took it (pid %s) is gone' "$pid"
+    return 0
+  fi
+  case "$owner_command" in
+    *mutate*) return 0 ;;
+  esac
+  printf 'pid %s belongs to something else now: %s' "$pid" "$owner_command"
+}
+
+refuse_concurrent_run() {
+  local pid="$1"
+  cat >&2 <<EOF
+$SCRIPT_NAME: refusing to run — another battery already holds this checkout.
+
+  pid     : ${pid:-unknown}
+  started : $(lock_field started)
+  plan    : $(lock_field plan)
+  head    : $(lock_field head)
+  lock    : $LOCK_DIR
+
+Two batteries in one checkout share the working tree and the build directory. The tree already
+carries the other run's mutant, and both runs compile out of the same directory, so each one is
+measuring a tree and a set of artifacts the other is changing underneath it. Nothing in either
+report could show that: a contaminated battery prints the same counts a clean one does, and the
+comfortable direction to be wrong in is a false KILL, which claims coverage that is not there.
+
+Wait for that run to finish. If it is already gone, \`$SCRIPT_NAME unlock\` clears the lock — it
+refuses while the owner is alive, so it cannot break a live run.
+EOF
+  finish 1
+}
+
+acquire_lock() {
+  local plan="$1" git_dir attempt reason owner_pid
+  git_dir="$(git rev-parse --absolute-git-dir 2>/dev/null)" \
+    || die "not inside a git repository — there is nowhere to hold the run lock"
+  LOCK_DIR="$git_dir/mutate.lock"
+
+  for attempt in 1 2 3; do
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+      LOCK_OWNED="yes"
+      {
+        printf 'pid %s\n' "$$"
+        printf 'started %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+        printf 'plan %s\n' "$plan"
+        printf 'head %s\n' "$(git rev-parse HEAD 2>/dev/null || printf 'unknown')"
+      } >"$LOCK_DIR/owner"
+      return 0
+    fi
+
+    owner_pid="$(lock_field pid)"
+    reason="$(lock_stale_reason "$owner_pid")"
+    [[ -n "$reason" ]] || refuse_concurrent_run "$owner_pid"
+    printf '%s: cleared a stale lock — %s.\n' "$SCRIPT_NAME" "$reason" >&2
+    rm -rf -- "$LOCK_DIR"
+  done
+
+  die "could not take the run lock at $LOCK_DIR — it is being created and cleared underneath this
+       run. Something else is starting batteries in a loop; stop that before measuring anything."
+}
+
+# `scripts/mutate unlock`. Every state a lock can be left in has a way out that is not a hand-edit:
+# gone owner or unreadable record, cleared here; live owner, refused here and cleared by this same
+# command once that process ends, however it ends.
+unlock_command() {
+  require_command git
+  local root git_dir pid reason
+  root="$(git rev-parse --show-toplevel)" || die "not inside a git repository"
+  cd "$root"
+  git_dir="$(git rev-parse --absolute-git-dir)" || die "not inside a git repository"
+  LOCK_DIR="$git_dir/mutate.lock"
+
+  if [[ ! -d "$LOCK_DIR" ]]; then
+    printf '%s: no run lock is held in this checkout.\n' "$SCRIPT_NAME"
+    printf '    looked at %s\n' "$LOCK_DIR"
+    finish 0
+  fi
+
+  pid="$(lock_field pid)"
+  reason="$(lock_stale_reason "$pid")"
+  if [[ -z "$reason" ]]; then
+    cat >&2 <<EOF
+$SCRIPT_NAME: refusing to clear the lock — pid $pid is still running a battery.
+
+  started : $(lock_field started)
+  plan    : $(lock_field plan)
+  head    : $(lock_field head)
+
+Clearing it now would let a second battery start beside that one, which is the measurement this
+lock exists to prevent. End that run first (\`kill $pid\`) and its own trap releases the lock on the
+way out. If it was killed with -9 and left this behind, run this command again — with the process
+gone the lock is stale and this clears it.
+EOF
+    finish 1
+  fi
+
+  rm -rf -- "$LOCK_DIR"
+  printf '%s: cleared a stale lock — %s.\n' "$SCRIPT_NAME" "$reason"
+  finish 0
+}
+
+# Where this battery builds. Same shape and the same reason as the log directory below: .build/ is
+# gitignored here, so a scratch directory inside it cannot dirty the tree, and a repository that
+# does not ignore .build/ gets one outside the working tree instead.
+mutate_scratch_path() {
+  if git check-ignore -q ".build/mutate-scratch" 2>/dev/null; then
+    printf '%s/.build/mutate-scratch' "$1"
+  else
+    printf '%s/scratch' "$WORKDIR"
+  fi
+}
+
+# MUTATE_TEST_CMD replaces the suite command outright, which means it can replace the isolation
+# with it. A replacement that invokes SwiftPM without a scratch path builds into the shared .build/
+# — the exact hazard this file just spent two mechanisms on — so it is refused rather than warned
+# about, because a warning in a report nobody re-reads is the non-mechanism this repository keeps
+# rejecting. A replacement that is not a SwiftPM invocation at all has no build directory to share;
+# the selftest's stand-ins are all of that kind, and the report says so rather than claiming an
+# isolation that means nothing there.
+#
+# The word test is deliberately narrow: `swift` followed by whitespace and not preceded by a word
+# character or a dot. `-Xswiftc` and `sample.swift` are both `swift` inside a longer token and
+# neither is a SwiftPM invocation.
+require_isolated_test_command() {
+  case " $TEST_CMD " in
+    *[!A-Za-z0-9_.]swift[[:space:]]*) ;;
+    *)
+      TEST_CMD_ISOLATION="not a SwiftPM invocation — it has no build directory to share"
+      return 0
+      ;;
+  esac
+  case "$TEST_CMD" in
+    *--scratch-path*|*MUTATE_SCRATCH*)
+      TEST_CMD_ISOLATION="$MUTATE_SCRATCH (this run's own, not the shared .build/)"
+      return 0
+      ;;
+  esac
+  cat >&2 <<EOF
+$SCRIPT_NAME: refusing to run — MUTATE_TEST_CMD builds with SwiftPM and names no scratch path.
+
+  $TEST_CMD
+
+That builds into the same .build/ every other build in this checkout writes, and a shared build
+directory is how a battery ends up reporting a result nothing in its output can show is wrong.
+This run's own directory is exported as \$MUTATE_SCRATCH — put it in the command:
+
+  MUTATE_TEST_CMD='swift test --scratch-path "\$MUTATE_SCRATCH" --filter SomeTests'
+
+Single-quote it, so \$MUTATE_SCRATCH expands when the command runs rather than when you set it.
 EOF
   finish 1
 }
@@ -386,6 +675,17 @@ battery() {
   root="$(git rev-parse --show-toplevel)" || die "not inside a git repository"
   cd "$root"
 
+  # Before require_clean_tree, deliberately, and the order is load-bearing rather than tidy. A
+  # battery that is mid-mutant has a dirty tree by construction, so a second run reaching the tree
+  # guard first is refused with the wrong message: it prints the mutated file and says "commit or
+  # stash the paths above". Telling a second session to commit a mutant is worse than not refusing
+  # it at all.
+  acquire_lock "$plan"
+
+  MUTATE_SCRATCH="$(mutate_scratch_path "$root")"
+  export MUTATE_SCRATCH
+  require_isolated_test_command
+
   require_clean_tree
 
   local sha branch
@@ -432,6 +732,8 @@ battery() {
   printf '    plan       : %s (%d of %d mutants selected)\n' "$plan" "${#selected[@]}" "$M_COUNT"
   printf '    test cmd   : %s\n' "$TEST_CMD"
   printf '    tree       : clean\n'
+  printf '    lock       : held by this run (pid %s) at %s\n' "$$" "$LOCK_DIR"
+  printf '    build dir  : %s\n' "$TEST_CMD_ISOLATION"
   printf '\n'
 
   # Pre-flight before anything runs: every selected mutant must match exactly once. Reported for
@@ -866,6 +1168,143 @@ printf \"X  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n\""
   st_contains "and listed again in the summary" "$ST_OUT" "SURVIVORS"
   st_absent "a survivor is not reported as a kill" "$ST_OUT" "KILLED"
 
+  printf '\n==> The default suite command — the one every real battery uses — is isolated\n'
+  # Nothing else here can reach this line. Every check in this selftest replaces the suite
+  # command with a stand-in, so the default is the one thing a real battery depends on that a
+  # selftest never executes — and it is also the line an edit would most plausibly undo, by
+  # pasting CLAUDE.md's flagged command back over it. Read as text, because that is what can be
+  # checked without a Swift toolchain.
+  local default_cmd
+  default_cmd="$(sed -n 's/^readonly DEFAULT_TEST_CMD=//p' "$SELF")"
+  st_contains "the default builds into the run's own scratch directory" \
+    "$default_cmd" '--scratch-path "$MUTATE_SCRATCH"'
+  st_contains "and keeps its clang module cache inside it" \
+    "$default_cmd" 'CLANG_MODULE_CACHE_PATH="$MUTATE_SCRATCH/'
+  st_absent "and no longer writes anything into the shared .build/" \
+    "$default_cmd" '$PWD/.build/'
+
+  printf '\n==> A stale lock does not become a new way to be stuck\n'
+  # Three ways a lock goes stale, each recoverable with no hand-edit. A killed run leaves a lock
+  # whose pid is gone; a Mac that has wrapped its pid space leaves one whose pid now belongs to
+  # something else; and a run killed between the mkdir and the write leaves one with no owner
+  # record at all.
+  ( exit 0 ) &
+  local dead_pid=$!
+  wait "$dead_pid" 2>/dev/null || true
+  mkdir -p .git/mutate.lock
+  printf 'pid %s\nstarted 2026-01-01 00:00:00\nplan gone.plan\nhead unknown\n' "$dead_pid" \
+    >.git/mutate.lock/owner
+  st_run "$kills_the_mutant" "$root/kill.plan"
+  st_eq "a battery behind a dead owner's lock still runs" "$ST_EXIT" "0"
+  st_contains "and says it cleared a stale lock" "$ST_OUT" "cleared a stale lock"
+  st_contains "and says which process is gone" "$ST_OUT" "pid $dead_pid) is gone"
+
+  sleep 30 &
+  local other_pid=$!
+  mkdir -p .git/mutate.lock
+  printf 'pid %s\nstarted 2026-01-01 00:00:00\nplan gone.plan\nhead unknown\n' "$other_pid" \
+    >.git/mutate.lock/owner
+  st_run "$kills_the_mutant" "$root/kill.plan"
+  st_eq "a lock whose pid was reused is not treated as live" "$ST_EXIT" "0"
+  st_contains "and the reclaim says what the pid is now" "$ST_OUT" "belongs to something else now"
+  kill "$other_pid" 2>/dev/null || true
+  wait "$other_pid" 2>/dev/null || true
+
+  mkdir -p .git/mutate.lock
+  st_run "$kills_the_mutant" "$root/kill.plan"
+  st_eq "a lock with no owner record is reclaimed" "$ST_EXIT" "0"
+  st_contains "and says the record is missing" "$ST_OUT" "no owner record"
+
+  printf '\n==> unlock clears what a killed run left, and reports an empty checkout honestly\n'
+  st_run "$always_pass" unlock
+  st_eq "unlock with no lock exits 0" "$ST_EXIT" "0"
+  st_contains "and says there is nothing held" "$ST_OUT" "no run lock is held"
+  ( exit 0 ) &
+  dead_pid=$!
+  wait "$dead_pid" 2>/dev/null || true
+  mkdir -p .git/mutate.lock
+  printf 'pid %s\nstarted 2026-01-01 00:00:00\nplan gone.plan\nhead unknown\n' "$dead_pid" \
+    >.git/mutate.lock/owner
+  st_run "$always_pass" unlock
+  st_eq "unlock on a stale lock exits 0" "$ST_EXIT" "0"
+  st_contains "and says what it cleared" "$ST_OUT" "cleared a stale lock"
+  if [[ -d .git/mutate.lock ]]; then
+    st_fail "unlock left the stale lock in place"
+  else
+    st_pass "the stale lock is gone"
+  fi
+
+  printf '\n==> A second battery inside a live one is refused BY THE LOCK, not by the tree guard\n'
+  # The stand-in suite re-enters this script from inside the first run — the one moment a second
+  # invocation would really interleave with a battery. The exit code alone proves nothing here,
+  # and that is the whole reason this group is shaped the way it is: a mutant is applied at that
+  # moment, so the tree genuinely IS dirty, and with the lock deleted outright require_clean_tree
+  # would still exit 1 on the nested run. It would do it while printing the mutated file and the
+  # words "Commit or stash the paths above" — advice that, followed, commits a mutant. So the
+  # assertions below are that the refusal carries the lock's wording and carries neither of the
+  # dirty-tree guard's two sentences.
+  cat >"$root/reenter.sh" <<REENTER
+#!/usr/bin/env bash
+# Stands in for the suite. Re-enters the harness only while the mutant is in the file. The nested
+# run gets a suite command of its own so that a broken lock cannot recurse: with the mutant already
+# applied its plan matches nothing and its pre-flight refuses.
+if grep -q 'hour < 13' sample.swift; then
+  MUTATE_TEST_CMD='printf "X  Test run started.\n"' "$SELF" "$root/kill.plan" \
+    >"$root/nested.out" 2>&1
+  printf '%s' \$? >"$root/nested.exit"
+  MUTATE_TEST_CMD='printf "X  Test run started.\n"' "$SELF" unlock \
+    >"$root/nested-unlock.out" 2>&1
+  printf '%s' \$? >"$root/nested-unlock.exit"
+  if [[ -d .git/mutate.lock ]]; then printf 'yes' >"$root/lock-survived"; else printf 'no' >"$root/lock-survived"; fi
+  printf 'X  Test run started.\n'
+  printf 'X  Test labelIsMorningBeforeNoon() failed after 0.001 seconds with 1 issue.\n'
+  printf 'X  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n'
+  exit 1
+fi
+printf 'X  Test run started.\n'
+printf 'X  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n'
+REENTER
+  chmod +x "$root/reenter.sh"
+  st_run "$root/reenter.sh" "$root/kill.plan"
+  st_eq "the outer battery is undisturbed and still kills its mutant" "$ST_EXIT" "0"
+  st_contains "the outer battery reported its kill" "$ST_OUT" "KILLED by 1 test(s)"
+  st_eq "the nested battery exits 1" "$(cat "$root/nested.exit" 2>/dev/null)" "1"
+  local nested_out
+  nested_out="$(cat "$root/nested.out" 2>/dev/null)"
+  st_contains "the nested refusal names the conflict" "$nested_out" "another battery already holds"
+  st_contains "and names the run holding it" "$nested_out" "pid     :"
+  st_contains "and names the recovery" "$nested_out" "unlock"
+  st_absent "the nested refusal is not the dirty-tree guard" "$nested_out" "working tree is not clean"
+  st_absent "and never tells anyone to commit a mutant" "$nested_out" "Commit or stash"
+  st_eq "the refused run did not delete the live lock" "$(cat "$root/lock-survived" 2>/dev/null)" "yes"
+  st_eq "unlock refuses to break a live battery" "$(cat "$root/nested-unlock.exit" 2>/dev/null)" "1"
+  st_contains "and says which process still holds it" \
+    "$(cat "$root/nested-unlock.out" 2>/dev/null)" "still running a battery"
+  if [[ -d .git/mutate.lock ]]; then
+    st_fail "the lock outlived the battery that took it"
+  else
+    st_pass "the lock is released when the battery ends"
+  fi
+  st_eq "the tree is clean after the nested attempt" "$(git status --porcelain)" ""
+
+  printf '\n==> A replacement suite command may not quietly build into the shared .build/\n'
+  st_run 'swift test --disable-sandbox' "$root/kill.plan"
+  st_eq "a SwiftPM command with no scratch path exits 1" "$ST_EXIT" "1"
+  st_contains "and says what is missing" "$ST_OUT" "names no scratch path"
+  st_contains "and hands over the variable to use" "$ST_OUT" "MUTATE_SCRATCH"
+  if [[ -d .git/mutate.lock ]]; then
+    st_fail "the refused run left its lock behind"
+  else
+    st_pass "the refused run released its lock"
+  fi
+  st_run ": swift test --scratch-path \"\$MUTATE_SCRATCH\"
+$kills_the_mutant" "$root/kill.plan"
+  st_eq "the same command carrying a scratch path runs" "$ST_EXIT" "0"
+  st_contains "and the report says the build directory is this run's own" "$ST_OUT" "this run's own"
+  st_run "$kills_the_mutant" "$root/kill.plan"
+  st_contains "a stand-in that is not SwiftPM is reported as having nothing to isolate" \
+    "$ST_OUT" "no build directory to share"
+
   printf '\n==> An interrupted battery restores the mutant instead of leaving it in the tree\n'
   # The stand-in suite signals the harness while the mutant is applied — the one moment when an
   # abandoned run would leave mutated source on disk for someone to commit.
@@ -883,6 +1322,11 @@ printf \"X  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n\""
     st_pass "the mutant is gone from the working tree"
   fi
   st_eq "the tree is clean after an interrupt" "$(git status --porcelain)" ""
+  if [[ -d .git/mutate.lock ]]; then
+    st_fail "an interrupted battery left its lock behind — every later run would need a reclaim"
+  else
+    st_pass "an interrupted battery released its lock"
+  fi
 
   printf '\n==> A mutant file git does not track is refused, wherever it points\n'
   # `>>> file ../outside.txt` used to pass pre-flight and be mutated, with "Summary at <sha>"
@@ -939,6 +1383,11 @@ PLAN
     st_pass "the mutant is gone from the working tree"
   fi
   st_eq "the tree is clean after an internal error" "$(git status --porcelain)" ""
+  if [[ -d .git/mutate.lock ]]; then
+    st_fail "a harness death left its lock behind"
+  else
+    st_pass "a harness death released its lock"
+  fi
 
   printf '\n==> The file is restored byte for byte and the tree is left clean\n'
   if cmp -s sample.swift "$root/sample.pristine"; then
@@ -970,6 +1419,10 @@ main() {
     selftest)
       [[ $# -eq 1 ]] || die "selftest takes no arguments"
       selftest
+      ;;
+    unlock)
+      [[ $# -eq 1 ]] || die "unlock takes no arguments"
+      unlock_command
       ;;
     "")
       usage >&2
