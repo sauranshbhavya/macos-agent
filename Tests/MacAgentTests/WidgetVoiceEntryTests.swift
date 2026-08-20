@@ -4,11 +4,12 @@ import Testing
 import MacAgentCore
 
 /// SONNY-173. The floating widget's mic button and the push-to-talk hotkey are two doors onto one
-/// action, and with no `OPENAI_API_KEY` exported they answered differently: the hotkey said
-/// "OPENAI_API_KEY is not set", the button did nothing whatsoever. Nothing was missing — the button
-/// carried `.disabled(!viewModel.canUseVoice && ...)`, a disabled SwiftUI button never runs its
-/// action, and so the guard that already held the right message could not be reached from the one
-/// surface most people press.
+/// action, and with no API key exported they answered differently: the hotkey said the key was not
+/// set, the button did nothing whatsoever. Nothing was missing — the button carried
+/// `.disabled(!viewModel.canUseVoice && ...)`, a disabled SwiftUI button never runs its action, and
+/// so the guard that already held the right message could not be reached from the one surface most
+/// people press. (That message named the variable when this was written; SONNY-177 made it
+/// provider-neutral, and the tests below take it from the constant rather than quoting it.)
 ///
 /// What is pinned here is the split that fixes it, not the API key. `canUseVoice` folded one
 /// **actionable** failure the user can go and fix together with five **transient** ones that clear
@@ -64,12 +65,84 @@ struct WidgetVoiceEntryTests {
     /// The words themselves, once, so a rewrite of the copy is a deliberate act rather than a
     /// silent one. Every other assertion in this file compares against the constant, which would
     /// stay true no matter what the constant said.
+    ///
+    /// **The last two expectations are the rule rather than the sentence** — SONNY-177, founder
+    /// decision 2026-08-19, wording approved the same day. No provider name and no
+    /// environment-variable name, because other providers are coming and SONNY-136 deletes the
+    /// variable this used to name; and, since dropping that name costs the reader the most specific
+    /// thing the message could have told them, the instruction has to survive. The exact-match above
+    /// goes stale the next time the copy changes, by design. Those two should not.
+    ///
+    /// Checking for "relaunch" is a crude stand-in and knowingly so: nothing here can decide whether
+    /// a sentence is actionable, only that the half of the instruction most easily lost in a rewrite
+    /// is still present.
     @Test
-    func theConfigurationMessageIsTheOneTheUserHasAlwaysSeen() {
+    func theConfigurationMessageNamesNoProviderAndStillSaysWhatToDo() {
         #expect(
             AgentViewModel.missingAPIKeyVoiceMessage
-                == "OPENAI_API_KEY is not set. Export it before launching Sonny, then relaunch the app."
+                == "No API key is set up. Add one, then relaunch Sonny."
         )
+        // The hint's other variant, pinned in the same place: SONNY-177 moved this literal out of
+        // `FloatingWidgetView` and was explicitly not to change a word of it.
+        #expect(
+            AgentViewModel.micHoverShortcutReminder
+                == "Speak your command — or hold Ctrl-Opt-Space anywhere"
+        )
+        #expect(!AgentViewModel.missingAPIKeyVoiceMessage.contains("OPENAI"))
+        #expect(AgentViewModel.missingAPIKeyVoiceMessage.contains("relaunch"))
+    }
+
+    /// SONNY-177. The hover hint is one condition with two answers, and a view may read neither half
+    /// of the readiness that picks between them — so the pick happens on the view model, and this is
+    /// the resolved value a view actually receives.
+    ///
+    /// The blocked case states a blocker that is deliberately *not* the API-key message, for the
+    /// reason `aConfigurationProblemRefusesVoiceWithoutDisablingTheControl` gives: it proves the
+    /// hint's text arrives from the blocker rather than from a literal that happens to sit beside
+    /// it, which is what has to keep holding once SONNY-136 changes what the blocker reports.
+    @Test
+    func theHoverHintRemindsWhenVoiceWorksAndReportsTheProblemWhenItDoesNot() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let working = try makeViewModel(root: root)
+        working.voiceConfigurationBlockerOverride = { nil }
+        #expect(working.micHoverHintPresentation.message == AgentViewModel.micHoverShortcutReminder)
+        #expect(
+            working.micHoverHintPresentation.autoDismissDelay == .seconds(4),
+            "a reminder that will not leave is nagging — four seconds, and it goes"
+        )
+
+        let blocked = try makeViewModel(root: root)
+        blocked.voiceConfigurationBlockerOverride = { "Sonny has no transcription provider configured." }
+        #expect(
+            blocked.micHoverHintPresentation.message == "Sonny has no transcription provider configured."
+        )
+        #expect(
+            blocked.micHoverHintPresentation.autoDismissDelay == nil,
+            "the message reporting something broken stays for the whole hover"
+        )
+    }
+
+    /// SONNY-177's structural half. The hover and the press are one condition on one control, and
+    /// they say the same thing because they take it from the same place — not because two literals
+    /// happen to match today, which is precisely how the mic and the hotkey came to disagree in
+    /// SONNY-173.
+    @Test
+    func hoveringAndPressingTheMicSayTheSameThingWhenVoiceIsUnconfigured() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let viewModel = try makeViewModel(root: root)
+        viewModel.voiceConfigurationBlockerOverride = { "Sonny has no transcription provider configured." }
+
+        let hovered = viewModel.micHoverHintPresentation.message
+
+        // `#require`, not `#expect`: see the note on the suite.
+        try #require(viewModel.canUseVoice == false)
+        viewModel.toggleVoiceRecording(origin: .widget)
+
+        #expect(viewModel.errorMessage == hovered)
+        #expect(viewModel.errorIsPersistent)
     }
 
     /// The live rule, with no override in the way, in whatever environment the suite is actually
