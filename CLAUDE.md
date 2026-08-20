@@ -19,6 +19,25 @@ env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disabl
 ```
 Plain `swift test` does not work here, and both halves of the invocation are required. Without `-Xswiftc -F` it fails at compile: `error: no such module 'Testing'`. With that flag alone it builds and links fine — it prints `Build complete!` — and then dies at run time in `swiftpm-testing-helper` with `Library not loaded: @rpath/Testing.framework`, which is what the two `-rpath` pairs fix. Nothing here fails at link, measured both ways at `f4c1228`; the earlier wording said "will fail to link", which sends anyone reading the real error looking for the wrong failure (SONNY-180's sweep).
 
+Compiler warnings are counted by `scripts/warnings`, never read off a `swift build` or `swift test`
+log. A warning is emitted when a file is *compiled*, and an incremental build does not recompile an
+unchanged file — so the shared `.build/` output a session actually reads says nothing at all about
+the files it did not touch. "Zero compiler warnings" produced that way is not a weak claim, it is a
+claim about nothing, and it reads identically to a true one: sessions reported it as evidence
+repeatedly across 2026-08-17's reviews while `main` in fact carried five, one of them introduced
+that same day by a PR whose own implementer, reviewer and coordinator rerun all missed it because
+none of them could have seen it (SONNY-169). The script empties a build directory of its own —
+never the shared `.build/`, so it costs you no incremental rebuild afterwards — and recompiles
+every file, so its count is the whole population of the tree rather than of whatever was edited
+last. About 95s. Exit 0 for none, 2 for some, 1 when no trustworthy measurement was made; a failed
+build is reported as a failed build and never as zero. It measures the working tree, uncommitted
+work included, and stamps the SHA and the uncommitted-file count on its own report, so a number
+cannot be quoted without the tree it came from. `scripts/warnings --help` has a "What this does and
+does not prevent" section — debug only, because `@testable import` needs `-enable-testing` and
+release does not pass it, so no single build can cover the test targets and release at once.
+`scripts/warnings selftest` re-proves every guard, including the one that matters: it reproduces
+the vanishing warning on a second incremental build, then shows the harness reporting it anyway.
+
 Mutation batteries run through `scripts/mutate`, never hand-rolled in a session scratchpad. It
 refuses to start while `git status --porcelain` prints anything: a hand-rolled battery reverts its
 mutants with `git checkout -- <file>`, which restores from HEAD, so run over uncommitted work it
