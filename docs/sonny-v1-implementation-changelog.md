@@ -157,6 +157,61 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/nested-run-plumbing
+Status: complete
+Date: 2026-08-20
+Tickets: **SONNY-163** (a routine run as a unit of a chain did not inherit that chain's claimed destinations or converted sources), **SONNY-51** (the routine browser binding does not reach `.playMedia` — a decision, taken here, not an implementation), **SONNY-165** (`RunClaims.hasWritten` dead while four call sites hand-folded the destination key), **SONNY-77** (`DocxRecord.isMockDestination` written and never read). One session, serial, from `main` at `d71690f`, in that order. Cluster 2 of three: SONNY-163 is the work, and the other three are cleanups and one decision in the files it touches.
+Reviewed by: pending — fresh session per WORKFLOW.md step 7.
+
+Spec sections covered: none newly; correctness and shape work behind §4A.3's DOCX conversion and §4A.5's routines.
+
+Files changed (across `e7e72cd`, `e87a84f`, `031e308`, `da04ced`, `2bad6d8`, plus this entry's commit):
+- `Sources/MacAgentCore/AgentActionExecutor.swift` (both nested-plan closures pass the context's claims through)
+- `Sources/MacAgentCore/CapabilityAdapter.swift` (`claimedEarlierInThisRun` becomes `let`; the `preferredBrowser` note records SONNY-51's decision)
+- `Sources/MacAgentCore/RunClaims.swift` (stored sets `private(set)`, the memberwise initializer folds, doc comment describes enforcement)
+- `Sources/MacAgentCore/FileInventory.swift` (`docxFiles` asks a `RunClaims` instead of hand-folding a copied set; `DocxRecord.isMockDestination` deleted)
+- `Sources/MacAgentCore/RunRoutineCapabilityAdapter.swift` (comment only — SONNY-51 decided rather than filed)
+- `docs/sonny-founder-design-decisions.md` (the 2026-08-20 media-seam decision, beside the 2026-08-04 routine-browser rule whose caveat raised it)
+- Tests: `AgentRunnerTests` (+2, the chain-with-a-routine pair, plus a writing converter fake), `AgentActionExecutorTests` (+1 `RunClaims` invariant, two constructions updated)
+
+Tests: **1420 in 111 suites, exit 0 at `2bad6d8`** via CLAUDE.md's flagged command; baseline **1417 in 111 at `d71690f`**, measured on this checkout before any change. Per-ticket: 1419 at `e7e72cd`, 1420 at `e87a84f`, 1420 at `031e308` (a deletion with no behaviour), 1420 at `da04ced` (records only), 1420 at `2bad6d8`. **Compiler warnings: 0 at `2bad6d8`, whole tree, via `scripts/warnings`** (every file compiled, build directory emptied first; 111s). **Mutation via `scripts/mutate`: 4/4 killed at `2bad6d8`** — both closures losing the claims, and both of `RunClaims`' folding doors. An earlier run at `da04ced` was 4 killed / 1 survived; that survivor is the pitfall below and it produced a shipped fix.
+
+Behavior added:
+- A routine run as a unit of a chain now sees what earlier units of that chain wrote and converted, so it renames around them instead of reporting the user's document "skipped because a PDF already exists" for a PDF the same run made seconds earlier.
+
+Behavior preserved (required, no blanket claims):
+- **A routine run on its own still starts from no claims**, which is what `RunClaims` documents for any single-unit plan; pinned by its own test rather than left to follow from the change.
+- **The docx destination rules are untouched** — the skip-if-it-predates-the-run branch, the rename-around-a-claim branch, and the already-converted-into-this-folder branch all behave exactly as before; the eleven existing tests that exercise them are unmodified and are what kills the fold mutant.
+- **`.playMedia` still opens on the media seam** — SONNY-51 changed no code, only the record of why.
+- **`DocxRecord`'s remaining fields are unchanged**, including `renamedToAvoidCollision`, which is read and which sat beside the deleted one.
+- **The planner, the approval engine and every store are untouched** by this branch.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**The probe SONNY-163 asked for found something worse than the ticket estimated, and the difference was the reason to run it.** The ticket called the cost "reachable in principle, not demonstrated" and expected a re-conversion or a rename around an unknown claim, with "no data lost either way". The measured shape — a chain converting folder A, then a `run_routine` converting folder B, both into one output folder, both holding a `report.docx` — previewed `Out/report.pdf` **twice**, one promised file for two documents, and then reported "No DOCX files needed conversion in …/B. Skipped 1 existing PDF outputs." with a single file in the folder. Nothing is overwritten, and the user is still a document short with an explanation pointing at a file they never had. That is SONNY-76's own defect reached through the routine door.
+
+**Capture beats a parameter when the failure mode is forgetting.** `preferredBrowser` travels to a nested plan as an explicit closure argument because the adapter computes it. Claims are not the adapter's to compute or choose, so the closures capture the value their context was built with. That also leaves the stored closure types unchanged, which is what SONNY-163 assumed a fix could not do — the fix it feared (changing the closure signatures on a type two other lanes were editing) was never necessary.
+
+**A survivor is a finding, and this one was a hazard the fix itself introduced.** A mutant seeding a claim on `context.claimedEarlierInThisRun` before the nested call survived the whole suite; re-aimed at the exact destination the routine was about to write, it survived again. The reason is structural: the closures capture, and the property is a `var`, so an adapter could mutate its copy of the context and reasonably expect the nested call to see it — and it never would. Nothing does that today, so it was a hazard rather than a defect, but it was one this branch created, because before it the closures passed no claims and the property had no counterpart to disagree with. The property is now a `let`; the divergence is a compile error instead of a behaviour no test can observe. **The first version of that mutant was also mis-aimed** — it seeded a path nothing in the plan touches, which by construction can change no outcome — and re-aiming it before drawing a conclusion is what turned an unfalsifiable mutant into a real finding.
+
+**Two homes for one rule, twice in one branch, in two different disguises.** SONNY-165's is the plain one: `RunClaims` said its destination set held folded keys, and that was true only because four call sites in `FileInventory.docxFiles` each remembered to fold — while `ConversionClaim`, added one review round later in the same file, folded inside itself. The `let` above is the same shape wearing a different hat: a stored property and a captured value spelling the same fact. Both are closed the same way, by removing the second home rather than by making the two agree.
+
+**The reach of the media seam is narrower than "media URLs do not bind" suggests, and measuring it changed the decision.** `context.mediaOpener.open` has exactly one call site — the fallback taken when provider playback is blocked — and of the ways that fallback ends, only two touch a browser: an explicit `https://open.spotify.com/…` or `https://music.apple.com/…` on the step. The Apple Music catalog result rewrites to `music://`, the Apple Music search fallback builds `music://`, the Spotify search fallback builds `spotify:search:` — all app-scheme, routed by the OS to the provider app. The founder's decision (2026-08-20) is to leave it: binding would force an https provider link through a named browser and could override the handler that would otherwise open the Spotify or Music app, and that downside is unmeasurable from this repository because it depends on what each user has installed.
+
+Known limitations / deferred scope:
+- **`AgentActionExecutor.assessRisk` threads no claims at all**, to nested plans or between a chain's units — it builds one context with `.none` for the whole plan. Out of SONNY-163's scope, which names preview and execute, and inert today: the docx adapter has no `assessRisk` override, and every sibling adapter's collision escalation reads the filesystem rather than the claim set. Recorded rather than filed, because nothing observable follows from it at this SHA; a future adapter that escalated on a claimed destination would make it real.
+- **`AgentActionExecutor.unclaimedOutputPath` hand-folds a plain `Set<String>` of its own.** It is not a `RunClaims`, and SONNY-165's done-when is scoped to `FileInventory.swift`. Left alone deliberately.
+- Nothing else deferred; no discovery tickets were spawned by this branch.
+
+Open questions (required, write "none" if true): none.
+
+Manual checklist for the founder (packaged app):
+1. Teach Sonny a routine that converts the DOCX files in one folder into a shared output folder. Then, in one command, ask it to convert a *different* folder into that same output folder and run that routine — where both folders hold a document with the same name. Both documents should come out, the second under a `-2` name, and the summary should say it was renamed rather than skipped.
+2. Run that routine on its own afterwards. It should behave exactly as it always did — no rename, no mention of a collision.
+3. Ordinary DOCX conversion with no routine involved: unchanged, including the "skipped, a PDF already exists" case for a PDF that really does predate the run.
+
+Next branch: cluster 3, `fix/store-load-integrity` (SONNY-67, SONNY-78, SONNY-154), from `main` after this merges.
+
 ### Branch: fix/disclosure-truthfulness
 Status: complete
 Date: 2026-08-20
