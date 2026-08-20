@@ -345,23 +345,28 @@ public enum PlanScopedResources {
     /// classifier that also required an empty one would fire on no real plan while still passing
     /// unit tests built from unresolved steps.
     ///
-    /// **What that costs, stated as the class it actually is.** Any step reaching classification
-    /// with both `contextSource` and a non-empty `inputPath` names Finder even when
-    /// `selectedDirectoryPath` returned the supplied path at `:20-23` and never talked to Finder.
-    /// The reachable form of that is **cross-step, not per-step**:
+    /// **What that used to cost, and why the resolver rather than this file paid it (SONNY-73).**
+    /// A step reaching classification with both `contextSource` and a non-empty `inputPath` named
+    /// Finder even when `selectedDirectoryPath` returned the supplied path at `:20-25` and never
+    /// talked to Finder. The reachable form was **cross-step as well as per-step**:
     /// `pinningSelectedDirectoryInput` pools the plan's matching steps, taking `primary` from the
-    /// first non-empty `inputPath` among them (`:60-63`) and `contextSource` from the first non-nil
-    /// among them (`:64`) — independently. So a scan carrying an explicit path with no
-    /// `contextSource`, beside a zip carrying `contextSource` with no path, resolves from the scan's
-    /// path with zero Finder contact, back-fills it into the zip (`:77-80`), and the zip is reported
-    /// as driving Finder. Both steps individually satisfy `OpenAIPlanner`'s Finder-context rule
-    /// (`OpenAIPlanner.swift:162`), so per-step planner compliance does **not** bound this — an
-    /// earlier version of this comment claimed it did, and that claim was wrong. What does bound it
-    /// is direction: the error is always an extra escalation, never a silent blessing, which is the
+    /// first non-empty `inputPath` among them and `contextSource` from the first non-nil among them
+    /// — independently. So a scan carrying an explicit path with no `contextSource`, beside a zip
+    /// carrying `contextSource` with no path, resolved from the scan's path with zero Finder
+    /// contact, back-filled it into the zip, and the zip was reported as driving Finder. Both steps
+    /// individually satisfy `OpenAIPlanner`'s Finder-context rule, so per-step planner compliance
+    /// did **not** bound it — an earlier version of this comment claimed it did, and that claim was
+    /// wrong. The error was always an extra escalation and never a silent blessing, which is the
     /// direction this file takes everywhere else (`convert_docx_to_pdf` reports Word even when the
-    /// converter falls back to its mock). Making the report exact belongs to the resolver, which is
-    /// the only place that knows whether Finder was contacted — filed as SONNY-73, deliberately not
-    /// done here: this classifier is pure and cannot observe it.
+    /// converter falls back to its mock); what it cost instead was a false sentence on the
+    /// ran-without-asking trace, the one channel the consequence rule relies on to make its
+    /// silences legible.
+    ///
+    /// It is fixed in `FinderSelectionResolver`, the only place that can know whether Finder was
+    /// contacted: when the resolution is satisfied from a pooled explicit path, the pin now clears
+    /// `contextSource` on every matching step, so this classifier keeps reporting exactly what the
+    /// field says and the field has stopped lying. Nothing here changed, and nothing here needs to
+    /// — which is why this stayed a separate ticket rather than a looser key on this switch.
     ///
     /// Reported per step rather than per plan because that is all a step-scoped classifier can see.
     /// The selection is read once for the whole plan, so in a mixed plan the step that declares
