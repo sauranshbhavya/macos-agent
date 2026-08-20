@@ -54,17 +54,53 @@ import Testing
 /// `Sources/`.
 @MainActor
 enum MacAgentSource {
-    /// A file under `Sources/MacAgent/`, resolved from this file's own location so the scan works
-    /// from any checkout, with both comment syntaxes dropped.
-    static func read(_ name: String) throws -> String {
-        let repository = URL(fileURLWithPath: #filePath)
+    /// `Sources/MacAgent/`, resolved from this file's own location so a scan works from any
+    /// checkout.
+    static var appSourceDirectory: URL {
+        URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()   // MacAgentTests
             .deletingLastPathComponent()   // Tests
             .deletingLastPathComponent()   // repository root
-        let url = repository
             .appendingPathComponent("Sources/MacAgent")
-            .appendingPathComponent(name)
-        let source = try String(contentsOf: url, encoding: .utf8)
+    }
+
+    /// Every `.swift` file compiled into the `MacAgent` target, at any depth, in a stable order —
+    /// for a scan whose subject is a *population* rather than one file.
+    ///
+    /// **Recursive, and that is the whole reason this exists rather than a `contentsOfDirectory`
+    /// call at the call site.** A SwiftPM target's `path:` is compiled recursively, so a file at
+    /// `Sources/MacAgent/Anything/New.swift` is in the target and invisible to a one-level scan.
+    /// `TestSourceTree` in the other target already paid for that lesson — its own doc records a
+    /// review building exactly such a file and watching all nine pins pass — and there is no reason
+    /// to relearn it on this side. No subdirectory exists here today, so the difference is latent
+    /// rather than live.
+    ///
+    /// A second, one-level copy of this enumeration lives as `appSourceFiles()` inside
+    /// `WidgetVoiceEntryTests` (SONNY-173's readiness scan). It is deliberately not consolidated
+    /// here by SONNY-178, whose scope is a hover audit — noted so the duplication reads as seen
+    /// rather than missed.
+    static func appSourceFiles() throws -> [URL] {
+        guard let walker = FileManager.default.enumerator(at: appSourceDirectory, includingPropertiesForKeys: nil) else {
+            throw ScanError.unreadableSourceDirectory(appSourceDirectory.path)
+        }
+        var files: [URL] = []
+        for case let url as URL in walker where url.pathExtension == "swift" {
+            files.append(url)
+        }
+        return files.sorted { $0.path < $1.path }
+    }
+
+    enum ScanError: Error {
+        case unreadableSourceDirectory(String)
+    }
+
+    /// A file under `Sources/MacAgent/`, resolved from this file's own location so the scan works
+    /// from any checkout, with both comment syntaxes dropped.
+    static func read(_ name: String) throws -> String {
+        let source = try String(
+            contentsOf: appSourceDirectory.appendingPathComponent(name),
+            encoding: .utf8
+        )
         return strippingBlockComments(source)
             .split(separator: "\n", omittingEmptySubsequences: false)
             .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
