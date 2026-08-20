@@ -135,13 +135,16 @@ struct HoverTeardownAuditTests {
     @Test
     func everyOtherHoverFlagLivesInStateAndDiesWithItsView() throws {
         let contentView = try MacAgentSource.read("ContentView.swift")
-        #expect(contentView.contains("@State private var didPushCursor = false"))
-        #expect(contentView.contains("@State private var isHovering = false"))
+        // `@State private var <name>` and not the type or its default: the storage kind is the
+        // property under test, and a reformat that adds `= nil` is not a lifetime change. A pin
+        // that fails on one cries wolf about the other.
+        #expect(contentView.contains("@State private var didPushCursor"))
+        #expect(contentView.contains("@State private var isHovering"))
 
         let commandCenter = try MacAgentSource.read("CommandCenterView.swift")
-        #expect(commandCenter.contains("@State private var isLearnMoreExpanded = false"))
-        #expect(commandCenter.contains("@State private var learnMoreHoverTask: Task<Void, Never>?"))
-        #expect(commandCenter.contains("@State private var hoveredDayIndex: Int?"))
+        #expect(commandCenter.contains("@State private var isLearnMoreExpanded"))
+        #expect(commandCenter.contains("@State private var learnMoreHoverTask"))
+        #expect(commandCenter.contains("@State private var hoveredDayIndex"))
 
         // The sixth is the exception that proves the rule, and it is the one SONNY-179 rewrote:
         // the widget keeps a hint model, deliberately *not* a copy of where the pointer is.
