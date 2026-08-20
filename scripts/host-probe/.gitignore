@@ -1,0 +1,3 @@
+# Generated on demand by make_payload.py — up to tens of megabytes each, and reproducible
+# exactly from the size alone, so they are regenerated rather than stored.
+payloads/

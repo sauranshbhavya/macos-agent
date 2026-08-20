@@ -1,0 +1,28 @@
+=== 2026-08-20T21:20:39Z UTC  postgres 17.11 (Debian 17.11-1.pgdg13+2)
+
+--- TEST 1: two racing reserves, cap fits ONE. Expect exactly one to win.
+A=100
+  B=REFUSED   (B blocked 1.58s waiting on A's row lock, then re-evaluated)
+  spent reserved cap -> 0 100 100
+
+--- CONTROL for TEST 1: the naive read-then-write, same race. Expect it to overshoot.
+  both read 0 under their own snapshots, both wrote.
+  spent reserved cap -> 0 100 100   <- the CHECK is the only thing between this and a double charge
+
+--- TEST 2: 50 concurrent reserves, cap fits exactly 10. Expect 10 wins, 40 refusals.
+  wins:     10
+  refusals: 40
+  spent reserved cap -> 0 1000 1000
+
+--- TEST 3: a request the platform kills mid-flight leaks its hold until swept.
+  after reserve, before settle -> 0 900 1000
+  a second 900 now      -> REFUSED
+  sweep() reclaimed     -> 1 expired hold(s)
+  after sweep           -> 0 0 1000
+  a second 900 now      -> 900
+
+--- TEST 4: settle is idempotent. A retried settle must charge once.
+  after first settle  -> 400 0 1000
+  after second settle -> 400 0 1000   (unchanged = idempotent)
+
+=== finished 2026-08-20T21:20:45Z UTC
