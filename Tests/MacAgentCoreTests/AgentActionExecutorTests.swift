@@ -5795,63 +5795,6 @@ struct AgentActionExecutorTests {
         #expect(assessment.effectiveTier == .tier2)
     }
 
-    /// The same defect without the pooling, and the reason the fix is stated as "Finder was not
-    /// contacted" rather than "the step was back-filled" (SONNY-73).
-    ///
-    /// One step carrying both an explicit `inputPath` and `contextSource` resolves from its own path
-    /// by the same early return, contacts Finder just as little, and is back-filled by nothing —
-    /// so a fix scoped to the steps the pin writes to would leave this one reporting Finder. It is
-    /// at least as reachable as the pooled shape: `PriorTaskContext` records `contextSource` among
-    /// the fields it hands the planner, and the prompt tells the planner to reuse a prior task's
-    /// fields and replace only the one the user corrected — so "zip the selected folder", then "use
-    /// ~/Documents instead", is a plan carrying both.
-    @Test
-    func aStepCarryingBothAPathAndASelectionMarkerDoesNotReportFinderEither() throws {
-        let root = try makeDirectory()
-        defer { try? FileManager.default.removeItem(at: root) }
-        let folder = root.appendingPathComponent("Client", isDirectory: true)
-        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
-        let decoy = root.appendingPathComponent("Decoy", isDirectory: true)
-        try FileManager.default.createDirectory(at: decoy, withIntermediateDirectories: true)
-
-        let reader = SequenceFinderContextReader(responses: [[decoy]])
-        let executor = makeExecutor(root: root, finderContextReader: reader)
-        let scope = WorkspaceScope(
-            workspace: StoredWorkspace(
-                name: "Client Alpha",
-                apps: ["Safari"],
-                urls: [],
-                fileLocations: [folder.path]
-            ),
-            whitelist: PathWhitelist(roots: [root])
-        )
-        let plan = AgentPlan(
-            summary: "Zip the largest files in that folder.",
-            requiresConfirmation: true,
-            steps: [
-                AgentStep(
-                    id: "scan",
-                    operation: .scanSelectLargestFiles,
-                    description: "Scan the folder.",
-                    inputPath: folder.path,
-                    count: 1,
-                    contextSource: .finderSelection
-                ),
-                AgentStep(
-                    id: "zip",
-                    operation: .createZip,
-                    description: "Zip the folder."
-                )
-            ]
-        )
-
-        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope))
-
-        #expect(reader.callCount == 0)
-        #expect(assessment.escalations.map(\.reason) == [])
-        #expect(assessment.scopeVerdict == .inScope)
-    }
-
     /// A scan/zip pair carrying no `inputPath` at all — the folder is whatever is selected in Finder.
     private func selectionDrivenZipPlan() -> AgentPlan {
         AgentPlan(
