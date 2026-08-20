@@ -106,9 +106,18 @@ public struct RunRoutineCapabilityAdapter: CapabilityAdapter {
     /// That seam qualifier is load-bearing, not hedging (PR #28, F4). `.openURL`, `.openAppSearchURL`
     /// and the Hacker News open all go through `CapabilityExecutionContext.browserOpener` and so
     /// bind. `.playMedia` does not: it opens through `context.mediaOpener`, which reaches
-    /// `NSWorkspace.shared.open` directly (`MediaPlaybackService.swift:1015`), so a media step
-    /// carrying an explicit `open.spotify.com`-style URL still lands in the system default browser.
+    /// `NSWorkspace.shared.open` directly, so a media step carrying an explicit
+    /// `open.spotify.com`-style URL still lands in the system default browser.
     /// "Every URL the routine opens" was the original claim here and it was too broad.
+    ///
+    /// **That is a decision as of 2026-08-20, not an outstanding gap** (SONNY-51). Binding it would
+    /// mean giving `MediaOpening` a browser preference, and forcing an https provider link through a
+    /// named browser could override the handler that would otherwise open the Spotify or Music app —
+    /// turning an app-open into a web-player open, which is worse than the inconsistency it fixes and
+    /// cannot be measured from this repository because it depends on what each user has installed.
+    /// The full reasoning, the measured reach (the media opener's fallback ends in an app-scheme URI
+    /// in every case but an explicit https provider link), and the cost are recorded in
+    /// `docs/sonny-founder-design-decisions.md`.
     ///
     /// Byte-for-byte the workspace rule (`WorkspaceBrowserCatalog.firstBrowser(in:)`, reused rather
     /// than reimplemented so there is one definition of "browser-capable"), deliberately so: a
@@ -132,11 +141,15 @@ public struct RunRoutineCapabilityAdapter: CapabilityAdapter {
     /// `WorkspaceBrowserCatalog`'s Arc, Firefox and Edge entries reachable — they were bundle
     /// identifiers no resolution path could ever produce while only the twelve-app catalog answered.
     ///
-    /// Only `.openApp` steps are considered. A nested workspace open is *rejected by
-    /// `SaveRoutineCapabilityAdapter.validateRoutineSteps`* — but that is the save capability's
-    /// boundary, not the store's: `RoutineStore.save` validates `schedule` and nothing else, so a
-    /// routine carrying one can still be written directly and reach here. Treated as unhandled
-    /// rather than impossible for that reason (PR #28, F5).
+    /// Only `.openApp` steps are considered, and a nested workspace open is therefore not handled
+    /// here. **The reason changed and the sentence had not** (PR #81's review): this used to say
+    /// `RoutineStore.save` "validates `schedule` and nothing else", which stopped being true at
+    /// SONNY-52 — `save` calls `StoredRoutine.validateStepSafety` before it persists, so the store
+    /// refuses a nested `open_workspace` at the same choke point the save capability does, and no
+    /// product path can write one. What can still produce such a routine is
+    /// `saveBypassingStepValidation`, module-internal and test-only by design, or a store file
+    /// edited outside Sonny. So this stays treated as unhandled rather than impossible — the same
+    /// conclusion as PR #28's F5, now resting on the reason that is actually true.
     private func browser(for routine: StoredRoutine, context: CapabilityExecutionContext) -> MacApp? {
         let apps = routine.steps
             .filter { $0.operation == .openApp }

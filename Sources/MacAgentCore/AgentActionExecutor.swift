@@ -626,8 +626,9 @@ public final class AgentActionExecutor {
     /// Runs an already-approved plan.
     ///
     /// `preferredBrowser` binds every URL this plan opens *on the injected browser-opener seam*
-    /// to one browser — not `.playMedia`, which opens on the media seam (SONNY-51). It is threaded as a
-    /// parameter rather than held on the executor deliberately: `execute` suspends at every step,
+    /// to one browser — not `.playMedia`, which opens on the media seam and stays there by decision
+    /// (SONNY-51, founder 2026-08-20). It is threaded as a parameter rather than held on the
+    /// executor deliberately: `execute` suspends at every step,
     /// so executor-held state would be readable — and mutable — by any other main-actor task that
     /// interleaved, and a routine's browser could leak into a command the user ran meanwhile.
     /// Only `RunRoutineCapabilityAdapter` passes a non-nil value, through `executeNestedPlan`.
@@ -1463,17 +1464,52 @@ public final class AgentActionExecutor {
                 }
                 return try self.assessRisk(plan: plan, scope: nestedScope)
             },
+            // **The nested plan inherits this context's claims** (SONNY-163). Both closures used to
+            // call through with no `RunClaims`, so a routine run as a unit of a chain started from
+            // `.none` and could not tell "this run wrote that PDF two seconds ago" from "that PDF
+            // predates this run".
+            //
+            // Measured rather than reasoned, which the ticket asked for. A chain of
+            // `[scan_docx, convert]` over folder A followed by a `run_routine` converting folder B,
+            // both into one output folder, both holding a `report.docx`: the preview promised
+            // `Out/report.pdf` *twice* — a plan naming one file for two documents — and the run then
+            // reported "No DOCX files needed conversion in …/B. Skipped 1 existing PDF outputs.",
+            // leaving one file in the folder. The user is told their second document was skipped
+            // because a PDF already exists, and that PDF is the one this same run made seconds
+            // earlier. That is the sentence SONNY-76 exists to prevent, reached through the routine
+            // door rather than the chain door, and it costs the user a document.
+            //
+            // **Captured, not added as a closure parameter.** `preferredBrowser` travels as an
+            // explicit argument because the *adapter* computes it — the routine's binding is derived
+            // from the routine's own steps. Claims are not the adapter's to compute or to choose: the
+            // value in force is whatever this context was built with, so capturing it is both the
+            // honest semantic and the shape no adapter can accidentally drop. It also keeps the
+            // stored closure types unchanged, which is what SONNY-163 assumed a fix could not do.
+            //
+            // Recursion is bounded at one level: `StoredRoutine.forbiddenStepOperations` refuses a
+            // nested `run_routine`, so a routine's plan can never re-enter this closure.
+            //
+            // `SaveRoutineCapabilityAdapter` previews a nested plan it will not run, and inherits the
+            // claims too. Deliberate rather than overlooked: the alternative is a second rule for
+            // which nested previews see the run's claims, and the listing it produces ("Will
+            // include: …") describes what those steps would do if run, for which the run's own
+            // claims are the accurate context.
             previewNestedPlan: { [weak self] plan in
                 guard let self else {
                     throw AgentExecutionError.invalidPlan("Executor is unavailable for nested preview.")
                 }
-                return try self.preview(plan: plan)
+                return try self.preview(plan: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
             },
             executeNestedPlan: { [weak self] plan, nestedBrowser, log in
                 guard let self else {
                     throw AgentExecutionError.invalidPlan("Executor is unavailable for nested execution.")
                 }
-                return try await self.execute(plan: plan, preferredBrowser: nestedBrowser, log: log)
+                return try await self.execute(
+                    plan: plan,
+                    preferredBrowser: nestedBrowser,
+                    claimedEarlierInThisRun: claimedEarlierInThisRun,
+                    log: log
+                )
             },
             visionSession: visionSession,
             recordingPolicy: recordingPolicy
