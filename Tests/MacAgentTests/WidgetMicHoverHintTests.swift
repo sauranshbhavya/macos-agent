@@ -16,10 +16,12 @@ import Testing
 /// enough that the only way it can finish is cancellation.
 ///
 /// **What is not reachable from here**, stated rather than implied: `FloatingWidgetView`'s four
-/// calls into this model are view wiring, and a view cannot be asked what it renders. One `show`,
-/// when the pointer arrives and the hint's slot is free; and three `dismiss`es — the pointer
-/// leaving, the pointer arriving while the panel or the compact capsule already owns the slot, and
-/// the view disappearing. The founder's manual items 1, 2, 3 and 5 are the verification for those.
+/// calls into this model are view wiring, and a view cannot be asked what it renders. One
+/// `pointerArrived`, when the pointer reaches the mic; and three `dismiss`es — the pointer leaving,
+/// the slot being taken while a hint was up, and the view disappearing. The founder's manual items
+/// 1, 2, 3 and 5 are the verification for those. What an arrival then *does*, slot rule included,
+/// is `pointerArrived`'s and is tested here (SONNY-179); what the view still owns alone is which
+/// boolean it passes.
 ///
 /// The last suite below reaches one step further than that, into the tracking view those calls hang
 /// off, because SONNY-179's bug lived in what the view remembered *between* two of them rather than
@@ -108,6 +110,33 @@ struct WidgetMicHoverHintTests {
         // "For the whole hover" is a bound at both ends: it does still go when the pointer does.
         model.dismiss()
         #expect(model.visibleHint == nil)
+    }
+
+    /// An arrival that finds the hint's slot taken shows nothing — and does not even ask what it
+    /// would have shown, which is the assertion that says the arrival stopped rather than that the
+    /// answer happened to be discarded.
+    ///
+    /// It also clears whatever was up, which is not redundant with the slot hook that fires when
+    /// the panel takes the slot: the two orders both happen. The panel can open under a pointer
+    /// already sitting on the mic, and the pointer can arrive on a mic the panel is already over.
+    @Test
+    func anArrivalWithTheSlotTakenShowsNothingAndClearsWhatWasUp() {
+        let model = MicHoverHintModel()
+        var resolutions = 0
+        let resolve = {
+            resolutions += 1
+            return Self.reminder(clearingAfter: Self.noSoonerThanTheTestEnds)
+        }
+
+        model.pointerArrived(slotIsFree: true, hint: resolve)
+        #expect(model.visibleHint != nil, "a free slot must show the hint")
+        #expect(resolutions == 1)
+
+        model.pointerArrived(slotIsFree: false, hint: resolve)
+
+        #expect(model.visibleHint == nil, "a taken slot must leave no hint set")
+        #expect(model.dismissCountdown == nil, "and nothing counting toward a row that is not there")
+        #expect(resolutions == 1, "the hint was resolved for an arrival that could not show it")
     }
 
     /// The failure mode this design is shaped around: a countdown that outlives the hint it was
