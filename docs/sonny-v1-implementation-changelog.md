@@ -157,6 +157,58 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: docs/row-12-host-decision
+Status: complete
+Date: 2026-08-20
+Tickets: SONNY-125 (choose the backend host, and prove a real payload lands on it — row 12's first ticket, and a hard gate on every other server ticket in the row). One session, from `main` at `87199ff`.
+Reviewed by: fresh session per WORKFLOW.md step 7 — pending at the time this entry was written.
+
+Spec sections covered: none. No product behaviour changes and no `Sources/` or `Tests/` file is in the diff.
+Files changed:
+- `docs/sonny-row-12-host-decision.md` — new. The decision document: method, control arm, per-host results, the spend-cap demonstration, cost, what was not measured and why, and how to re-run any row.
+- `docs/sonny-row-12-plan.md` — §4.8 replaced (was "deliberately not decided yet"); dated supersession notes added to §3.1 and §3.2, whose central claims this ticket falsified.
+- `scripts/host-probe/` — new. The measurement harness: one handler deployed unchanged to both hosts and run locally, a curl driver that logs the literal command before each measurement, a payload generator, the Postgres spend-cap demonstration and its control, and the raw result files.
+- `docs/sonny-v1-implementation-changelog.md` — this entry.
+
+Tests: **none run, and the reason is structural rather than a judgment call.** The diff touches no file under `Sources/` or `Tests/`, so WORKFLOW.md step 7's rerun exemption applies. That `scripts/` is not compiled is checked rather than assumed: `Package.swift` gives each of its four targets an explicit `path:` (lines 23, 28, 36, 41) and every one of them names `Sources/…` or `Tests/…`, so nothing under `scripts/` reaches the compiler. **No test count and no warning count is claimed by this branch** — claiming either from a tree this diff cannot affect would be a number about nothing, which is the failure `scripts/warnings` exists to prevent.
+
+Behavior added:
+- **No product behaviour.** What this branch adds is a decision backed by observations, and a harness that lets anyone re-derive them.
+
+Behavior preserved (required, no blanket claims):
+- **No file under `Sources/` or `Tests/` is in this diff**, `VisionModelClient.swift` and `RedactedCaptureEncoder.swift` included — both were read to re-derive SONNY-114's settled figures, neither was edited.
+- **`server/` does not exist and was not created.** Everything deployed for this ticket is a throwaway echo/sleep handler living under `scripts/host-probe/`; `feature/row-12-server-foundation` still owns `server/`.
+- **The repo-wide `.gitignore` is untouched.** It ignores `*.log`, which would have silently dropped this branch's evidence files; the fix was to write `results/<label>.txt` and add a `.gitignore` local to `scripts/host-probe/` for the generated payloads, rather than edit a shared config file that row 12's plan §4.5 already assigns to another ticket.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**The decision survived its own test, and the axis that nearly failed was not the one the plan worried about.** §3.1 of the plan framed the host question around request-body ceilings. Supabase took **67,200,000 bytes unrefused** — 16× the contract's 4,200,000 — so the unpublished-ceiling objection is answered with a wide margin. The axis that actually has an edge is wall clock: `200` at **105.19 s**, and a hard cut at **150 s**, measured identically at 150 s, 200 s and 400 s requested. The contract needs 105. That is 45 seconds of margin, real but not generous, and it is the number the row now lives on.
+
+**A streamed response turns that clean failure into a silent one.** A `drip` request asking for 200 s returned **HTTP 200 at 150.5 s with a truncated body** — `json.decoder.JSONDecodeError: Unterminated string` — and `curl` reported success. Reproduced twice. The non-streaming path fails as `546 WORKER_RESOURCE_LIMIT` with a parseable error object. So "the gateway must not stream" is now an evidenced rule rather than an incidental property of a contract that happens to define no streaming route. Whoever writes SONNY-131 should not treat streaming as a free optimisation.
+
+**`546`'s error message is misleading and a future session should not believe it.** The body says "Function failed due to not having enough compute resources." The function was *sleeping* — no CPU, no allocation. The trigger is wall clock. Anyone debugging a real occurrence would go hunting for a CPU or memory problem that is not there.
+
+**"A proxy is I/O-bound, so the CPU limit does not matter" is no longer completely true, and this is where that changed.** That rebuttal is recorded in the plan's own §4.8 and it predates compression. Contract §6.4 obliges the gateway to accept `Content-Encoding: gzip` **and apply size limits to the decoded body**, which is CPU work on a multi-megabyte payload. Measured on both platforms: neither inflates the body for you — the handler receives `still_gzipped: true` — and inflating 3,177,921 → 4,200,000 cost 26 ms on Supabase and 28 ms on Cloudflare, against a 2 s CPU budget and a 10 ms one respectively. Not a problem today. It is the first thing to re-measure if `maximumImageBytes` ever rises.
+
+**The per-user spend cap is one `UPDATE`, and the control is the part worth reading.** Under READ COMMITTED an `UPDATE` that meets a concurrently-updated row re-evaluates its own `WHERE` against the new row version, so carrying the cap test inside the `WHERE` makes the second of two racers fail to match and be refused. Demonstrated against Postgres 17.11: two racers → one wins one `REFUSED`; 50 concurrent against a cap fitting 10 → **exactly 10 wins, 40 refusals**, landing on the cap. **The first control for this was wrong and it is recorded because of how it was wrong**: it asserted "both read 0, both wrote" without showing either, and its own final state contradicted it — the `CHECK` constraint had stopped the second write, so the control was demonstrating the constraint while claiming to demonstrate the race. Rebuilt and split, the naive read-then-write **without** the constraint reaches `reserved = 200` against a cap of 100, an over-spend reproduced rather than argued. A race test with no control passes whether or not the property holds.
+
+**A shared log file silently destroyed the provenance of the control arm.** Two `probe.sh` runs under one label appended to one file through `tee -a`; the result interleaved, and the file ended up carrying a ceiling ladder that no command in the session's history accounts for. Nothing was cited from it. The control was re-run in isolation, `probe.sh` now takes a per-label lock and refuses the second run — the same shape as `scripts/mutate`'s, and for the same reason — and the contaminated file is kept as `local-deno-INTERLEAVED-superseded.txt` with a header rather than deleted. **The two host logs were then checked the same way and are clean**: every run in each is strictly sequential, verified against its own start/finish timestamps, which is why the decision's figures are quotable at all.
+
+**Two Cloudflare Workers on one account cannot fetch each other.** A Worker fetching another Worker on the same zone returns Cloudflare **error 1042**, surfacing as an upstream `404`. Both `workers.dev` Workers on one subdomain are the same zone. The slow-upstream arms were therefore cross-wired between the two platforms, which also bounds Cloudflare's `up` measurement to Supabase's own 150 s ceiling — the 400-second Cloudflare result comes from the in-handler `slow` arm, not from `up`.
+
+**Vercel is no longer excluded, and the plan said so before this ticket ran.** SONNY-125's decisions-carried section required re-checking the hosts ruled out against a 12 MB body rather than inheriting the exclusion. Doing that: Vercel's documented 4.5 MB body limit is now **above** the settled 4,200,000, and its documented Hobby duration is 300 s. Both are documentation figures and neither was measured — the founder chose not to spend an account on it — but "Vercel fails" is out of date and §3.1 now says so where a reader will meet it.
+
+Known limitations / deferred scope:
+- **The body ceiling was stopped, not found**, on both hosts — 67,200,000 on Supabase, 33,600,000 on Cloudflare, each a `200` rather than a refusal. Recorded in the logs as a stop. Past 16× the contract's limit each further rung costs about a minute of upload and changes no decision.
+- **The 150 s cliff is the Free plan's.** Supabase documents 400 s for paid plans; that figure is unmeasured, and it is only ever more headroom than what was measured. The decision was deliberately taken on the tighter plan.
+- **`actual_ms` bounds CPU from above rather than measuring it.** Neither platform exposes a per-request CPU figure to the handler. What can be stated is that no request was terminated for a CPU reason at any size, and that Cloudflare returned no error 1102.
+- **One cost question is open and is not answerable from documentation or from this harness:** whether an Edge Function's outbound `fetch` to a model provider meters as Supabase egress. Supabase's own definition names only data sent "to a connected client." The two readings differ by orders of magnitude in what a Pro plan buys — at the contract limit, 4,960 screen-control sessions a month versus effectively unbounded. Settleable by sending a known volume and watching the usage page. Named in the ticket's closing comment.
+- **The probe endpoints were left deployed** so a reviewer can spot-check a row rather than take the logs on trust. They are unauthenticated echo/sleep handlers with no state and no product logic, and they cost nothing on either free tier; the decision document carries the three commands that remove them.
+
+Open questions (required, write "none" if true): three, all the founder's and none blocking row 12 from proceeding — Free versus Pro and when ($35/month is the realistic floor, since Free pauses a project after a week of inactivity and staging is exactly that); whether 45 seconds of wall-clock margin is comfortable; and whether to settle the egress-metering question before or after the first Pro invoice.
+
+Next branch: unchanged. Row 12 continues with `feature/row-12-server-foundation` (SONNY-126), which this ticket gated and now unblocks.
+
 ### Branch: fix/attention-reaches-user
 Status: complete
 Date: 2026-08-20
@@ -290,6 +342,7 @@ Manual checklist for the founder (packaged app):
 3. Ordinary DOCX conversion with no routine involved: unchanged, including the "skipped, a PDF already exists" case for a PDF that really does predate the run.
 
 Next branch: cluster 3, `fix/store-load-integrity` (SONNY-67, SONNY-78, SONNY-154), from `main` after this merges.
+
 
 ### Branch: fix/disclosure-truthfulness
 Status: complete
