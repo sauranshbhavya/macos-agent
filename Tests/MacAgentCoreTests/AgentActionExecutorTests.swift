@@ -5729,6 +5729,72 @@ struct AgentActionExecutorTests {
         #expect(assessment.scopeVerdict == .inScope)
     }
 
+    /// **SONNY-73 — Finder named on a run that never contacted Finder, pooled shape.**
+    ///
+    /// `pinningSelectedDirectoryInput` pools its inputs across the plan's matching steps and takes
+    /// the two independently: the primary path is the first non-empty `inputPath` among them, the
+    /// context source the first non-nil. So a scan carrying an explicit folder with no
+    /// `contextSource`, beside a zip carrying `contextSource` with no folder, is satisfied from the
+    /// scan's path — `selectedDirectoryPath` returns it before it ever looks at `contextSource` —
+    /// and the Apple-Events reader is never called. The back-fill wrote the path onto the zip and
+    /// left its `contextSource` in place, so the classifier reported Finder anyway. Both steps
+    /// individually satisfy the planner's Finder-context rule, so per-step planner compliance does
+    /// not exclude the shape.
+    ///
+    /// `reader.callCount == 0` and the absent escalation are the two halves of the same claim, and
+    /// the test needs both: zero reads alone was already true before the fix, and it is precisely
+    /// what made the escalation false.
+    @Test
+    func aPooledExplicitPathDoesNotReportFinderWhenFinderWasNeverContacted() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("Client", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let decoy = root.appendingPathComponent("Decoy", isDirectory: true)
+        try FileManager.default.createDirectory(at: decoy, withIntermediateDirectories: true)
+
+        // A selection is available. Nothing may reach for it, and the folder it would hand back is
+        // deliberately not the one the plan names, so a read that did happen would be visible in the
+        // escalations as well as in the call count.
+        let reader = SequenceFinderContextReader(responses: [[decoy]])
+        let executor = makeExecutor(root: root, finderContextReader: reader)
+        let scope = WorkspaceScope(
+            workspace: StoredWorkspace(
+                name: "Client Alpha",
+                apps: ["Safari"],
+                urls: [],
+                fileLocations: [folder.path]
+            ),
+            whitelist: PathWhitelist(roots: [root])
+        )
+        let plan = AgentPlan(
+            summary: "Zip the largest files in that folder.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "scan",
+                    operation: .scanSelectLargestFiles,
+                    description: "Scan the folder.",
+                    inputPath: folder.path,
+                    count: 1
+                ),
+                AgentStep(
+                    id: "zip",
+                    operation: .createZip,
+                    description: "Zip the selected folder.",
+                    contextSource: .finderSelection
+                )
+            ]
+        )
+
+        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope))
+
+        #expect(reader.callCount == 0)
+        #expect(assessment.escalations.map(\.reason) == [])
+        #expect(assessment.scopeVerdict == .inScope)
+        #expect(assessment.effectiveTier == .tier2)
+    }
+
     /// A scan/zip pair carrying no `inputPath` at all — the folder is whatever is selected in Finder.
     private func selectionDrivenZipPlan() -> AgentPlan {
         AgentPlan(

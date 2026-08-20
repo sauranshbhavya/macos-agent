@@ -443,13 +443,26 @@ struct WorkspaceScopeTests {
         #expect(PlanScopedResources.resources(in: openArtifact) == [.fileLocation("~/Documents/report.pdf")])
     }
 
-    /// Attribution, at plan level. `pinningSelectedDirectoryInput` reads the selection once for the
-    /// whole plan, taking `contextSource` from the first matching step that carries one and pinning
-    /// the result onto every matching step — so a plan where only the scan declares itself
-    /// selection-driven still has both steps working from the selection. The step-scoped classifier
-    /// names Finder on the declaring step, once, and the plan-level verdict is the same either way.
-    /// Asserted so the "once, on the step that declares it" half is a decision on the record rather
-    /// than an accident of which step happened to be first.
+    /// Attribution: the step-scoped classifier names Finder once, on the step that declares itself
+    /// selection-driven, and the plan-level verdict is the same either way. Asserted so the "once,
+    /// on the step that declares it" half is a decision on the record rather than an accident of
+    /// which step happened to be first.
+    ///
+    /// **A classifier contract, not a claim about the resolver's output (SONNY-73).** Read the plan
+    /// below before reading anything into this test about what a real run does: its scan step
+    /// carries an explicit `inputPath` *and* `contextSource`, which is the residual shape SONNY-73
+    /// could not reach. `FinderSelectionResolver.pinningSelectedDirectoryInput` resolves it from that
+    /// path without contacting Finder, but it clears `contextSource` only on the steps it back-fills,
+    /// and here it back-fills nothing — both steps arrive with a path. So the **resolved form of this
+    /// exact plan still produces a Finder finding**, measured through `prepare` then
+    /// `approvalRequest` at `6fb86bb`: the scan keeps `contextSource`, the escalation reads "Finder
+    /// is not part of the … workspace.", and the verdict is `.outOfScope`. That residual is tracked
+    /// as SONNY-185 and needs a resolve-phase provenance pin, not a rule over these fields.
+    ///
+    /// What this test pins is therefore the classifier's own contract — Finder named once, on the
+    /// declaring step — and nothing about which plans reach it. The end-to-end cases live elsewhere:
+    /// `aSelectionDrivenZipEscalatesOnFinderEvenThoughTheResolvePhaseAlreadyPinnedTheFolder` for a
+    /// genuine selection, and `AgentRunnerTests`' two-phase pair for the pooled shape SONNY-73 fixed.
     @Test
     func aMixedSelectionDrivenPlanNamesFinderOnceOnTheStepThatDeclaresIt() {
         let scope = makeScope(apps: ["Safari"], urls: [])

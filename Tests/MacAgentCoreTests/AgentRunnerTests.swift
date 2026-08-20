@@ -1085,11 +1085,14 @@ struct AgentRunnerTests {
         #expect(request.assessment.defaultTier == .tier2)
         #expect(request.assessment.effectiveTier == .tier3)
         #expect(request.requirement == .explicitApproval)
+        // SONNY-33 reframed this sentence and deliberately left everything around it alone: same
+        // tiers, same `.destructive` class, same prompt. The reason now says when the overwrite
+        // would happen, because it is not this save that would do it.
         #expect(request.assessment.escalations.contains(
             CapabilityRiskEscalation(
                 fromTier: .tier2,
                 toTier: .tier3,
-                reason: "Zip output already exists at \(output.path).",
+                reason: "When run, this routine will need approval: Zip output already exists at \(output.path).",
                 consequence: .destructive
             )
         ))
@@ -1167,6 +1170,210 @@ struct AgentRunnerTests {
         // Three files, not two: the pre-existing zip that carries the destructive escalation is
         // itself the third file the scan finds.
         #expect(result.summary == "Created largest.zip with 3 largest files from \(root.path). Revealed \(output.path) in Finder.")
+    }
+
+    /// **SONNY-33's defect, at the sentence a user reads** (founder decision 2026-08-04, option (a)).
+    ///
+    /// The fold above is true at assessment time and attributed to the wrong action: a save writes
+    /// `routines.json` and nothing else, so "Draft output already exists at …/weekly.md." described a
+    /// file this button would not touch. Asserted through `AgentRunner.approvalRequest` rather than
+    /// the adapter, because the framing only matters where it is rendered, and this is the call the
+    /// widget and Command Center panels both read from.
+    ///
+    /// The negative half is the point of the test. The bare sentence must be *gone*, not merely
+    /// accompanied — a fix that appended an advisory beside the original save-attributed wording
+    /// would satisfy a `contains` check on the new string and leave the defect on screen.
+    @Test
+    func aNestedCollisionIsFramedAsWhenRunRatherThanAsTheSaveOwnRisk() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let draftOutput = root.appendingPathComponent("weekly.md")
+        try write("last week's note", to: draftOutput)
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        let runner = AgentRunner(
+            planner: StaticPlanner(
+                plan: saveRoutinePlanWithNestedDraft(name: "Weekly Note", output: draftOutput)
+            ),
+            executor: makeExecutor(root: root, routineStore: routineStore)
+        )
+
+        let prepared = try await runner.prepare(command: "Teach Sonny a routine that drafts my weekly note")
+        let request = try runner.approvalRequest(for: prepared, logAssessment: true, scope: .unscoped, context: approvalContext(for: prepared))
+
+        #expect(request.assessment.escalations.map(\.reason) == [
+            "When run, this routine will need approval: Draft output already exists at \(draftOutput.path)."
+        ])
+        // The save-attributed framing is gone rather than joined by a second sentence.
+        let rendered = request.assessment.escalations.map(\.reason).joined(separator: " ")
+        #expect(!rendered.hasPrefix("Draft output already exists"))
+
+        // Tier math and prompt unchanged by the reframe — the advisory keeps its teeth.
+        #expect(request.assessment.defaultTier == .tier2)
+        #expect(request.assessment.effectiveTier == .tier3)
+        #expect(request.requirement == .explicitApproval)
+        #expect(request.assessment.escalations.allSatisfy { $0.consequence == .destructive })
+    }
+
+    /// The other side of the same line: the save *does* have one risk of its own — replacing a
+    /// routine the user already built — and that sentence is correctly attributed already. A reframe
+    /// applied one line lower, or to the whole list instead of the folded part, would tell the user
+    /// that replacing this routine is something that happens later. It happens when they press the
+    /// button.
+    @Test
+    func theSaveOwnReplacementWarningKeepsItsOwnFrameBesideAReframedNestedOne() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let draftOutput = root.appendingPathComponent("weekly.md")
+        try write("last week's note", to: draftOutput)
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try routineStore.save(StoredRoutine(name: "Weekly Note", steps: [openAppStep(id: "open-safari")]))
+        let runner = AgentRunner(
+            planner: StaticPlanner(
+                plan: saveRoutinePlanWithNestedDraft(name: "Weekly Note", output: draftOutput)
+            ),
+            executor: makeExecutor(root: root, routineStore: routineStore)
+        )
+
+        let prepared = try await runner.prepare(command: "Teach Sonny a routine that drafts my weekly note")
+        let request = try runner.approvalRequest(for: prepared, logAssessment: true, scope: .unscoped, context: approvalContext(for: prepared))
+
+        #expect(request.assessment.escalations.map(\.reason) == [
+            "When run, this routine will need approval: Draft output already exists at \(draftOutput.path).",
+            "Routine named Weekly Note already exists and would be replaced."
+        ])
+    }
+
+    /// **SONNY-73 over the real two-phase dispatch, which is where its fix could break SONNY-59.**
+    ///
+    /// `AgentRunner.prepare` resolves the plan and hands the *resolved* plan to `approvalRequest`,
+    /// which resolves it again — so `FinderSelectionResolver.pinningSelectedDirectoryInput` runs
+    /// twice over one run, and on the second pass every matching step already carries the
+    /// `inputPath` the first pass pinned from the live selection. A clearing rule keyed on "this
+    /// resolution was satisfied from an explicit path" answers *true* on that second pass and
+    /// deletes the Finder report from a run that genuinely did read the selection. Every existing
+    /// test stays green while it happens, because they all call `assessRisk` once, on a raw plan.
+    ///
+    /// So the rule is keyed on the steps the pin *back-fills*, which is the one signal that
+    /// distinguishes the two: in the genuine case the declaring step arrives with no path and is
+    /// back-filled on the first pass and nothing is back-filled on the second, while in the pooled
+    /// case the declaring step is the one being back-filled. This test is the guard on that.
+    @Test
+    func aSelectionDrivenZipStillReportsFinderThroughPrepareThenApproval() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("Client", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write("contents", to: folder.appendingPathComponent("a.txt"))
+
+        let reader = FakeFinderContextReader(selection: [folder])
+        // The planner is never consulted: `prepare(plan:source:)` is the pre-built entry point.
+        let runner = AgentRunner(
+            planner: StaticPlanner(plan: selectionDrivenZipPlan()),
+            executor: makeExecutor(root: root, finderContextReader: reader)
+        )
+        let scope = TaskWorkspaceScope.scoped(
+            WorkspaceScope(
+                workspace: StoredWorkspace(
+                    name: "Client Alpha",
+                    apps: ["Safari"],
+                    urls: [],
+                    fileLocations: [folder.path]
+                ),
+                whitelist: PathWhitelist(roots: [root])
+            )
+        )
+
+        let prepared = try runner.prepare(plan: selectionDrivenZipPlan(), source: .planner)
+        let request = try runner.approvalRequest(
+            for: prepared,
+            scope: scope,
+            context: approvalContext(for: prepared)
+        )
+
+        #expect(request.assessment.escalations.map(\.reason) == ["Finder is not part of the Client Alpha workspace."])
+        #expect(request.assessment.scopeVerdict == .outOfScope)
+    }
+
+    /// The same two-phase path for the shape SONNY-73 is actually about: a scan carrying an explicit
+    /// folder beside a zip carrying only `contextSource`. Finder is never contacted, and the report
+    /// has to stay absent across both resolutions rather than only the first.
+    @Test
+    func aPooledExplicitPathReportsNoFinderThroughPrepareThenApproval() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("Client", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write("contents", to: folder.appendingPathComponent("a.txt"))
+        let decoy = root.appendingPathComponent("Decoy", isDirectory: true)
+        try FileManager.default.createDirectory(at: decoy, withIntermediateDirectories: true)
+
+        let runner = AgentRunner(
+            planner: StaticPlanner(plan: selectionDrivenZipPlan()),
+            executor: makeExecutor(root: root, finderContextReader: FakeFinderContextReader(selection: [decoy]))
+        )
+        let scope = TaskWorkspaceScope.scoped(
+            WorkspaceScope(
+                workspace: StoredWorkspace(
+                    name: "Client Alpha",
+                    apps: ["Safari"],
+                    urls: [],
+                    fileLocations: [folder.path]
+                ),
+                whitelist: PathWhitelist(roots: [root])
+            )
+        )
+        let plan = AgentPlan(
+            summary: "Zip the largest files in that folder.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "scan",
+                    operation: .scanSelectLargestFiles,
+                    description: "Scan the folder.",
+                    inputPath: folder.path,
+                    count: 1
+                ),
+                AgentStep(
+                    id: "zip",
+                    operation: .createZip,
+                    description: "Zip the selected folder.",
+                    contextSource: .finderSelection
+                )
+            ]
+        )
+
+        let prepared = try runner.prepare(plan: plan, source: .planner)
+        let request = try runner.approvalRequest(
+            for: prepared,
+            scope: scope,
+            context: approvalContext(for: prepared)
+        )
+
+        #expect(request.assessment.escalations.map(\.reason) == [])
+        #expect(request.assessment.scopeVerdict == .inScope)
+    }
+
+    /// A scan/zip pair carrying no `inputPath` at all — the folder is whatever is selected in Finder.
+    private func selectionDrivenZipPlan() -> AgentPlan {
+        AgentPlan(
+            summary: "Zip the largest files in the selected folder.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "scan",
+                    operation: .scanSelectLargestFiles,
+                    description: "Scan the selected folder.",
+                    count: 1,
+                    contextSource: .finderSelection
+                ),
+                AgentStep(
+                    id: "zip",
+                    operation: .createZip,
+                    description: "Zip the selected folder.",
+                    contextSource: .finderSelection
+                )
+            ]
+        )
     }
 
     private func makeExecutor(
@@ -1410,6 +1617,34 @@ struct AgentRunnerTests {
                     description: "Save routine.",
                     routineName: name,
                     routineSteps: largestPlan(root: root, output: output).steps
+                )
+            ]
+        )
+    }
+
+    /// A `create_local_draft` nested step rather than the zip one above, deliberately: the reframe is
+    /// a `map` over whatever the fold carries, and a second adapter's sentence is what shows that
+    /// rather than a comment saying so.
+    private func saveRoutinePlanWithNestedDraft(name: String, output: URL) -> AgentPlan {
+        AgentPlan(
+            summary: "Teach routine.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "save-routine",
+                    operation: .saveRoutine,
+                    description: "Save routine.",
+                    routineName: name,
+                    routineSteps: [
+                        AgentStep(
+                            id: "draft",
+                            operation: .createLocalDraft,
+                            description: "Draft the weekly note.",
+                            outputPath: output.path,
+                            draftTitle: "Weekly",
+                            draftContent: "This week."
+                        )
+                    ]
                 )
             ]
         )
