@@ -110,7 +110,14 @@ public struct DocxRecord: Equatable, Sendable {
     public var sourceURL: URL
     public var destinationURL: URL
     public var skippedBecausePDFExists: Bool
-    public var isMockDestination: Bool
+    /// **`isMockDestination` used to sit here and was deleted (SONNY-77).** It was written at every
+    /// construction site and read by nothing — a public stored property on a public `Equatable` type,
+    /// so it read as a contract and silently widened `==` while carrying no meaning to any caller. The
+    /// information is not lost with it: whether destinations are mock-named is decided from
+    /// `DocumentConverting.usesMockNaming`, which `DocxConversionCapabilityAdapter.spec(in:)` reads
+    /// off the injected converter and passes into `docxFiles(in:outputFolder:mockDestinations:…)`,
+    /// and the `.mock.pdf` suffix on `destinationURL` is itself the observable signal.
+    ///
     /// Whether `destinationURL` carries a `-2`, `-3`, … suffix because an earlier document in the
     /// same scan already claimed the name this document's basename produces. Reported to the user
     /// in the preview and the run summary — a file appearing under a name they did not ask for is
@@ -121,13 +128,11 @@ public struct DocxRecord: Equatable, Sendable {
         sourceURL: URL,
         destinationURL: URL,
         skippedBecausePDFExists: Bool,
-        isMockDestination: Bool,
         renamedToAvoidCollision: Bool = false
     ) {
         self.sourceURL = sourceURL
         self.destinationURL = destinationURL
         self.skippedBecausePDFExists = skippedBecausePDFExists
-        self.isMockDestination = isMockDestination
         self.renamedToAvoidCollision = renamedToAvoidCollision
     }
 }
@@ -223,8 +228,7 @@ public struct FileInventory {
                     DocxRecord(
                         sourceURL: source.url,
                         destinationURL: preferred,
-                        skippedBecausePDFExists: true,
-                        isMockDestination: mockDestinations
+                        skippedBecausePDFExists: true
                     )
                 )
                 continue
@@ -241,8 +245,7 @@ public struct FileInventory {
                     DocxRecord(
                         sourceURL: source.url,
                         destinationURL: preferred,
-                        skippedBecausePDFExists: true,
-                        isMockDestination: mockDestinations
+                        skippedBecausePDFExists: true
                     )
                 )
                 continue
@@ -271,7 +274,6 @@ public struct FileInventory {
                     sourceURL: source.url,
                     destinationURL: destination,
                     skippedBecausePDFExists: false,
-                    isMockDestination: mockDestinations,
                     renamedToAvoidCollision: renamed
                 )
             )
