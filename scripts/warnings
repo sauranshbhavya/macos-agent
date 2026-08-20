@@ -1,0 +1,795 @@
+#!/usr/bin/env bash
+#
+# scripts/warnings — report every compiler warning in this tree, from a build that compiled all of it.
+#
+# Why this exists, stated plainly because "zero compiler warnings" was reported as evidence
+# repeatedly across 2026-08-17's reviews and was not true at any point during them.
+#
+# A warning is emitted when a file is compiled. An unchanged file is not recompiled, so its
+# warnings are simply absent from the next build's output. Every routine build in this repository
+# is incremental — `swift build` and the flagged `swift test` both write the shared .build/ — so
+# the output a session actually reads says nothing at all about the files it did not touch. A
+# session that reads `Build complete!` off such a build and writes "zero compiler warnings" has not
+# made a weak claim; it has made a claim about nothing, and it reads identically to a true one.
+#
+# That is not a hypothetical. Measured at 59d66a9 while SONNY-169 was being implemented, with five
+# warnings still live in the tree: one test file was edited, and the incremental rebuild recompiled
+# exactly that file and printed `Build complete!` with zero warnings in its output. Five, reported
+# as none, by a build that did nothing wrong.
+#
+# So the mechanism is not a rule telling sessions to look — that rule already existed implicitly,
+# and it produced five. It is a build where every file is compiled, every time:
+#
+#   * The build directory is emptied before every run, so nothing is up to date and nothing can be
+#     skipped. That is the whole point of the script and there is no flag to turn it off. What
+#     survives the wipe is only what was fetched from the network — checkouts/, repositories/,
+#     artifacts/ — so a run needs no network and still recompiles every line of source.
+#   * That directory is this script's own — .build/warnings-scratch, inside .build/ but never the
+#     .build/debug/ that swift build and swift test share — for the same reason scripts/mutate
+#     builds somewhere private (SONNY-176): a run whose artifacts another build is also writing
+#     reports a result its own output cannot be told apart from a clean one. Nothing an ordinary
+#     build depends on is read or written here, so the next one is as incremental as it would
+#     have been.
+#   * A run lock, so two of these cannot share one scratch directory. The wipe is what makes this
+#     necessary rather than merely tidy — a second run emptying the directory underneath the first
+#     can leave it reporting a partial compile, and a partial compile's missing warnings look
+#     exactly like absent ones.
+#
+# Unlike scripts/mutate, this refuses nothing about a dirty tree, and that difference is deliberate:
+# a battery rewrites files, so it must run against something a SHA names, while this only reads,
+# and checking work that is not committed yet is the entire point. It reports what it measured
+# against instead — the SHA, and how many files are uncommitted — so a number can never be quoted
+# without the tree it came from.
+#
+# What is left over after all of that is written out in `--help`, under "What this does and does
+# not prevent", rather than implied away. `scripts/warnings selftest` re-proves that each guard
+# above still fires, including the one that matters most: that a warning in a file nothing has
+# touched is still reported.
+#
+# Usage
+#   scripts/warnings              build every file and report every warning
+#   scripts/warnings selftest     exercise this harness against a throwaway repository
+#   scripts/warnings unlock       clear a run lock left behind by a killed run
+#   scripts/warnings --help       the full contract, and what it does not cover
+#
+# Exit codes
+#   0  the build succeeded and no warning came from this repository's own sources
+#   2  the build succeeded and at least one did — a warning is a finding, not an error
+#   1  no measurement was made, or it could not be trusted: a failed build, another run already
+#      holding this checkout, or a build log this script could not account for line by line
+
+set -euo pipefail
+
+readonly SCRIPT_NAME="scripts/warnings"
+
+# The frameworks directory the test targets need. Without `-Xswiftc -F <this>` the test targets do
+# not compile at all — `error: no such module 'Testing'` — which would make this script report a
+# build failure on a perfectly good tree. CLAUDE.md's Commands section is the same flag and the
+# same reason. The `-Xlinker -rpath` pairs that sit beside it there are deliberately NOT here: they
+# fix a *run-time* dylib lookup in swiftpm-testing-helper, and this script never runs a test.
+readonly TESTING_FRAMEWORKS_DIR="/Library/Developer/CommandLineTools/Library/Developer/Frameworks"
+
+# Kept in sync with the wipe guard in wipe_build_outputs(); nothing else may be passed to it.
+readonly SCRATCH_BASENAME="warnings-scratch"
+
+ROOT=""
+SCRATCH=""
+WORKDIR=""
+LOCK_DIR=""
+LOCK_OWNED=""
+
+# Manufactured, not preserved. On bash 3.2 — the shell this actually runs under — the presence of
+# an EXIT trap makes a `set -u` death exit 0, and the usual `rc=$?; trap - EXIT; exit $rc` remedy
+# does not help because $? is already 0 by the time the trap runs. scripts/mutate measured this
+# three ways and carries the same pair of functions; this is that pattern, not a second opinion.
+EXIT_INTENDED=""
+
+finish() {
+  EXIT_INTENDED="yes"
+  exit "$1"
+}
+
+# Defined above cleanup deliberately: cleanup runs from an EXIT trap armed near the top of this
+# file, and a trap calling a function defined further down would fail rather than clean up.
+release_lock() {
+  if [[ -n "$LOCK_OWNED" && -n "$LOCK_DIR" && -d "$LOCK_DIR" ]]; then
+    rm -rf -- "$LOCK_DIR"
+  fi
+  LOCK_OWNED=""
+}
+
+cleanup() {
+  if [[ -n "$WORKDIR" && -d "$WORKDIR" ]]; then
+    rm -rf -- "$WORKDIR"
+    WORKDIR=""
+  fi
+  release_lock
+}
+
+assert_intended_exit() {
+  if [[ -z "$EXIT_INTENDED" ]]; then
+    printf '%s: exiting 1 — the harness ended at a point that is not one of its exits.\n' \
+      "$SCRIPT_NAME" >&2
+    printf '%s: any output above this line is not a warning report. See the error above it.\n' \
+      "$SCRIPT_NAME" >&2
+    exit 1
+  fi
+}
+
+trap 'cleanup; assert_intended_exit' EXIT
+trap 'finish 130' INT TERM
+
+die() {
+  printf '%s: %s\n' "$SCRIPT_NAME" "$*" >&2
+  finish 1
+}
+
+require_command() {
+  command -v "$1" >/dev/null 2>&1 || die "required command not found: $1"
+}
+
+usage() {
+  cat <<'USAGE'
+Usage: scripts/warnings
+       scripts/warnings selftest
+       scripts/warnings unlock
+       scripts/warnings --help
+
+Builds this package — every target, tests included — with every file compiled, and reports every
+compiler warning that came from this repository's own sources.
+
+It empties its build directory first, every run, with no flag to stop it. That is the point: an
+incremental build does not recompile an unchanged file, so it cannot report that file's warnings,
+and "zero warnings" read off one is a claim about nothing. The directory it empties is its own —
+.build/warnings-scratch, which lives inside .build/ but is not the .build/debug/ that swift build
+and swift test share — so running this costs you no incremental rebuild afterwards and disturbs no
+build running beside it. On a failed build it also writes .build/warnings-failed-build.log; those
+two paths are everything it puts in your tree, and both are gitignored.
+
+It reports the SHA it measured at and how many files were uncommitted, so a count can be quoted
+with the tree it came from. It does not refuse a dirty tree — checking work you have not committed
+yet is what this is for.
+
+Exit codes
+  0  built cleanly, no warnings from this repository's sources
+  2  built cleanly, and found warnings — a finding, not an error
+  1  no trustworthy measurement: build failed, another run holds this checkout, or the build log
+     contained a `warning:` line this script could not account for
+
+What this does and does not prevent
+
+  It prevents the one failure it was built for: a warning going unreported because the file it
+  lives in did not happen to be recompiled. Every file is compiled on every run, so the count is
+  the whole population of this tree, not the population of what you edited.
+
+  It does not check the release configuration, and no single build could. The test targets use
+  `@testable import`, which needs `-enable-testing`; release does not pass it, so
+  `swift build -c release --build-tests` fails outright with "module 'MacAgent' was not compiled
+  for testing" (measured at 59d66a9). Debug is therefore the only configuration that can cover
+  Sources/ and Tests/ at once, and it is the configuration every session builds and tests in.
+  Warnings that only whole-module optimisation would raise are outside what this reports.
+
+  It does not report warnings from dependencies. SwiftPM suppresses warnings for packages that are
+  not the root package, so the compiler never emits them; this cannot report what was never said.
+  A warning that does arrive from outside this repository's sources is printed under "elsewhere"
+  with its own count, and deliberately does not move the count above or the exit code: it is real,
+  it is visible, and it is not this repository's to fix. Nothing is dropped either way — a
+  `warning:` line the parser cannot classify at all suppresses the count and is printed instead,
+  because a parser that quietly discards what it did not expect is one more way to print zero and
+  mean nothing.
+
+  It does not check any tree but this one, on this machine, with this toolchain. A warning that
+  needs a different SDK or a newer compiler is not visible here.
+
+  It costs about 95s and a build directory of its own — 800 MB here once warm, beside the shared
+  .build/ and scripts/mutate's scratch. It persists between runs so SwiftPM need not re-fetch the
+  dependency, but the compiled output inside it is emptied every run and never reused.
+
+  It is a check, not a gate. Nothing runs it for you. WORKFLOW.md steps 5 and 7 require it, which
+  is a rule pointing at a mechanism rather than a mechanism — the honest residual, stated here
+  rather than implied away. Run it before a PR opens, and before anyone writes the phrase "zero
+  compiler warnings" anywhere.
+USAGE
+}
+
+# ---------------------------------------------------------------------------------------------
+# The run lock. Same shape and the same reasoning as scripts/mutate's: kept inside .git/ so taking
+# it cannot dirty the tree, per-worktree because `git rev-parse --absolute-git-dir` answers
+# .git/worktrees/<name> inside a linked worktree and each worktree has its own scratch directory
+# anyway, and taken with `mkdir` because on any POSIX filesystem that either creates the directory
+# or fails because it exists, in one step, with no window in between.
+# ---------------------------------------------------------------------------------------------
+
+lock_field() {
+  [[ -f "$LOCK_DIR/owner" ]] || return 0
+  sed -n "s/^$1 //p" "$LOCK_DIR/owner" | head -1
+}
+
+# Prints why the lock is stale, or prints nothing if its owner is genuinely still running. Both
+# halves of the pid check matter: a pid that no longer exists is the ordinary killed-run case, and
+# a pid that exists but belongs to something else is pid reuse. The one case this reads as live
+# when it is not is a pid reused by something whose command line says "warnings" — that refuses a
+# run rather than allowing two, and `unlock` reports the same reading, so the way out stays visible.
+lock_stale_reason() {
+  local pid="$1" owner_command
+  if [[ ! -f "$LOCK_DIR/owner" ]]; then
+    printf 'it carries no owner record, so whatever made it died between the mkdir and the write'
+    return 0
+  fi
+  if [[ ! "$pid" =~ ^[0-9]+$ ]]; then
+    printf 'its owner record names no usable pid'
+    return 0
+  fi
+  owner_command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  if [[ -z "$owner_command" ]]; then
+    printf 'the process that took it (pid %s) is gone' "$pid"
+    return 0
+  fi
+  case "$owner_command" in
+    *warnings*) return 0 ;;
+  esac
+  printf 'pid %s belongs to something else now: %s' "$pid" "$owner_command"
+}
+
+refuse_concurrent_run() {
+  local pid="$1"
+  cat >&2 <<EOF
+$SCRIPT_NAME: refusing to run — another run already holds this checkout.
+
+  pid     : ${pid:-unknown}
+  started : $(lock_field started)
+  head    : $(lock_field head)
+  lock    : $LOCK_DIR
+
+Both runs would share one scratch directory, and this script empties that directory before it
+builds. A second wipe landing mid-build leaves the first run reading a partial compile, whose
+missing warnings are indistinguishable from absent ones — the exact reading this script exists to
+make impossible.
+
+Wait for that run to finish. If it is already gone, \`$SCRIPT_NAME unlock\` clears the lock — it
+refuses while the owner is alive, so it cannot break a live run.
+EOF
+  finish 1
+}
+
+acquire_lock() {
+  local git_dir attempt reason owner_pid
+  git_dir="$(git rev-parse --absolute-git-dir 2>/dev/null)" \
+    || die "not inside a git repository — there is nowhere to hold the run lock"
+  LOCK_DIR="$git_dir/warnings.lock"
+
+  for attempt in 1 2 3; do
+    if mkdir "$LOCK_DIR" 2>/dev/null; then
+      LOCK_OWNED="yes"
+      {
+        printf 'pid %s\n' "$$"
+        printf 'started %s\n' "$(date '+%Y-%m-%d %H:%M:%S')"
+        printf 'head %s\n' "$(git rev-parse HEAD 2>/dev/null || printf 'unknown')"
+      } >"$LOCK_DIR/owner"
+      return 0
+    fi
+
+    owner_pid="$(lock_field pid)"
+    reason="$(lock_stale_reason "$owner_pid")"
+    [[ -n "$reason" ]] || refuse_concurrent_run "$owner_pid"
+    printf '%s: cleared a stale lock — %s.\n' "$SCRIPT_NAME" "$reason" >&2
+    rm -rf -- "$LOCK_DIR"
+  done
+
+  die "could not take the run lock at $LOCK_DIR — it is being created and cleared underneath this
+       run. Something else is starting runs in a loop; stop that before measuring anything."
+}
+
+unlock_command() {
+  require_command git
+  local git_dir pid reason
+  ROOT="$(git rev-parse --show-toplevel)" || die "not inside a git repository"
+  cd "$ROOT"
+  git_dir="$(git rev-parse --absolute-git-dir)" || die "not inside a git repository"
+  LOCK_DIR="$git_dir/warnings.lock"
+
+  if [[ ! -d "$LOCK_DIR" ]]; then
+    printf '%s: no run lock is held in this checkout.\n' "$SCRIPT_NAME"
+    printf '    looked at %s\n' "$LOCK_DIR"
+    finish 0
+  fi
+
+  pid="$(lock_field pid)"
+  reason="$(lock_stale_reason "$pid")"
+  if [[ -z "$reason" ]]; then
+    cat >&2 <<EOF
+$SCRIPT_NAME: refusing to clear the lock — pid $pid is still running.
+
+  started : $(lock_field started)
+  head    : $(lock_field head)
+
+Clearing it now would let a second run start beside that one and empty its build directory
+mid-build. End that run first (\`kill $pid\`) and its own trap releases the lock on the way out. If
+it was killed with -9 and left this behind, run this command again — with the process gone the
+lock is stale and this clears it.
+EOF
+    finish 1
+  fi
+
+  rm -rf -- "$LOCK_DIR"
+  printf '%s: cleared a stale lock — %s.\n' "$SCRIPT_NAME" "$reason"
+  finish 0
+}
+
+# ---------------------------------------------------------------------------------------------
+# Building.
+# ---------------------------------------------------------------------------------------------
+
+# Same shape and the same reason as scripts/mutate's scratch path: .build/ is gitignored here, so a
+# directory inside it cannot dirty the tree, and a repository that does not ignore .build/ gets one
+# outside the working tree instead.
+compute_scratch_path() {
+  if git check-ignore -q ".build/$SCRATCH_BASENAME" 2>/dev/null; then
+    SCRATCH="$ROOT/.build/$SCRATCH_BASENAME"
+  else
+    SCRATCH="$WORKDIR/$SCRATCH_BASENAME"
+  fi
+}
+
+# Empties the build directory so that nothing is up to date and every file is compiled. This is the
+# script's whole purpose, so it is worth being exact about what survives: checkouts/, repositories/
+# and artifacts/ are what SwiftPM fetched from the network, they are pinned by Package.resolved,
+# and dependency warnings are suppressed by SwiftPM anyway — keeping them means a run needs no
+# network while still recompiling every line of source this repository owns.
+#
+# The case guard is not decoration. A wipe is the one irreversible thing here, so a bug in the path
+# computation above must not be able to reach a directory that is not this script's own.
+wipe_build_outputs() {
+  case "$SCRATCH" in
+    "" ) die "internal error: no scratch path computed" ;;
+    */"$SCRATCH_BASENAME") ;;
+    *) die "internal error: refusing to empty $SCRATCH — that is not this script's scratch directory" ;;
+  esac
+
+  if [[ ! -d "$SCRATCH" ]]; then
+    mkdir -p "$SCRATCH"
+    return 0
+  fi
+  find "$SCRATCH" -mindepth 1 -maxdepth 1 \
+    ! -name checkouts ! -name repositories ! -name artifacts \
+    -exec rm -rf -- {} +
+}
+
+# ---------------------------------------------------------------------------------------------
+# Reading the build log.
+#
+# Kept as its own function taking a log path, because the third of its three outcomes is the one
+# worth testing directly: a `warning:` line this script does not recognise is REPORTED, never
+# dropped. A parser that quietly discards what it did not expect is another way to print zero and
+# mean nothing, which is the failure this whole script is about.
+#
+# The compiler prints each diagnostic as a header line, then a rendering of the source around it.
+# Every line of that rendering carries a `|` gutter — including the one that repeats the message
+# under a `\`-` marker — so the rendering is recognised and skipped rather than counted a second
+# time. Diagnostics also repeat verbatim across compilation jobs; dedup happens after this.
+# ---------------------------------------------------------------------------------------------
+
+classify_log() {
+  local log="$1" mine="$2" elsewhere="$3" unaccounted="$4" root="$5"
+  : >"$mine"; : >"$elsewhere"; : >"$unaccounted"
+  awk -v mine="$mine" -v elsewhere="$elsewhere" -v unaccounted="$unaccounted" -v root="$root/" '
+    index($0, "warning:") == 0 { next }
+
+    # The source rendering under a diagnostic: "  123 | let x = 1" and
+    # "      |     `- warning: ...". A source line that literally contains the text "warning:"
+    # lands here too, which is correct — it is a quotation, not a diagnostic.
+    /^[[:space:]]*[0-9]*[[:space:]]*\|/ { next }
+    /^[[:space:]]*\^/                   { next }
+    # The "[#SomeDiagnosticID]: <url>" footer the compiler prints after an explained diagnostic.
+    /^\[#[A-Za-z0-9_.]+\]:/             { next }
+
+    # A real diagnostic header: <path>:<line>:<column>: warning: <message>
+    /^[^[:space:]].*:[0-9]+:[0-9]+: warning: / {
+      if (index($0, root) == 1) {
+        print substr($0, length(root) + 1) > mine
+      } else {
+        print $0 > elsewhere
+      }
+      next
+    }
+
+    { print $0 > unaccounted }
+  ' "$log"
+}
+
+# ---------------------------------------------------------------------------------------------
+# The report.
+# ---------------------------------------------------------------------------------------------
+
+describe_tree() {
+  local sha dirty count
+  sha="$(git rev-parse --short HEAD 2>/dev/null || printf 'unknown')"
+  dirty="$(git -c status.showUntrackedFiles=normal status --porcelain 2>/dev/null || true)"
+  if [[ -z "$dirty" ]]; then
+    printf '%s (clean)' "$sha"
+  else
+    count="$(printf '%s\n' "$dirty" | grep -c '^' || true)"
+    printf '%s plus %s uncommitted file(s)' "$sha" "$count"
+  fi
+}
+
+print_warning_list() {
+  local file="$1"
+  local line location message
+  while IFS= read -r line; do
+    location="${line%%: warning: *}"
+    message="${line#*: warning: }"
+    printf '  %s\n      %s\n' "$location" "$message"
+  done <"$file"
+}
+
+run_check() {
+  require_command git
+  require_command swift
+  require_command awk
+
+  ROOT="$(git rev-parse --show-toplevel 2>/dev/null)" || die "not inside a git repository"
+  cd "$ROOT"
+  [[ -f "Package.swift" ]] || die "no Package.swift at $ROOT — there is nothing to build"
+
+  acquire_lock
+  WORKDIR="$(mktemp -d "${TMPDIR:-/tmp}/warnings.XXXXXX")"
+  compute_scratch_path
+
+  local log="$WORKDIR/build.log"
+  local mine="$WORKDIR/mine" elsewhere="$WORKDIR/elsewhere" unaccounted="$WORKDIR/unaccounted"
+  local started ended elapsed status
+  local tree
+  tree="$(describe_tree)"
+
+  printf '%s: emptying %s so every file is compiled...\n' "$SCRIPT_NAME" "${SCRATCH#$ROOT/}" >&2
+  wipe_build_outputs
+
+  printf '%s: building %s. Cold build; give it a minute or two.\n' "$SCRIPT_NAME" "$tree" >&2
+  started="$(date +%s)"
+  set +e
+  swift build --build-tests --scratch-path "$SCRATCH" \
+    -Xswiftc -F -Xswiftc "$TESTING_FRAMEWORKS_DIR" >"$log" 2>&1
+  status=$?
+  set -e
+  ended="$(date +%s)"
+  elapsed=$((ended - started))
+
+  if [[ $status -ne 0 ]]; then
+    cat >&2 <<EOF
+
+$SCRIPT_NAME: the build failed, so there is no warning count to report.
+
+A failed build is not zero warnings. It compiled some files and stopped, so the number this script
+would have printed describes only whatever was reached before the error — which is why it prints
+none at all. The compiler's own output follows; fix that first, then re-run.
+
+EOF
+    grep -E '(^|[^A-Za-z])error: ' "$log" | head -20 >&2 || true
+    # The log lives in WORKDIR, which cleanup() deletes on the way out, so it is copied somewhere
+    # durable BEFORE any path is named. Printing WORKDIR's path first — which this did until PR
+    # #78's review — hands the reader a file that is already gone by the time they open it, and
+    # names it as the surviving copy when the copy is the thing that might have failed.
+    local kept=""
+    if mkdir -p "$ROOT/.build" 2>/dev/null \
+      && cp "$log" "$ROOT/.build/warnings-failed-build.log" 2>/dev/null; then
+      kept="$ROOT/.build/warnings-failed-build.log"
+    fi
+    if [[ -n "$kept" ]]; then
+      printf '\n  full build log: %s\n' "${kept#$ROOT/}" >&2
+    else
+      printf '\n  The full build log could not be saved — %s is not writable — so it goes with this\n' \
+        "$ROOT/.build" >&2
+      printf '  run. The errors above are the only surviving record; re-run to reproduce it.\n' >&2
+    fi
+    finish 1
+  fi
+
+  classify_log "$log" "$mine" "$elsewhere" "$unaccounted" "$ROOT"
+
+  local mine_unique elsewhere_unique unaccounted_unique
+  mine_unique="$WORKDIR/mine.unique"
+  elsewhere_unique="$WORKDIR/elsewhere.unique"
+  unaccounted_unique="$WORKDIR/unaccounted.unique"
+  sort -u "$mine" >"$mine_unique"
+  sort -u "$elsewhere" >"$elsewhere_unique"
+  sort -u "$unaccounted" >"$unaccounted_unique"
+
+  local n_mine n_elsewhere n_unaccounted n_raw
+  n_mine="$(grep -c '^' <"$mine_unique" || true)"
+  n_elsewhere="$(grep -c '^' <"$elsewhere_unique" || true)"
+  n_unaccounted="$(grep -c '^' <"$unaccounted_unique" || true)"
+  n_raw="$(grep -c '^' <"$mine" || true)"
+
+  printf '\n'
+  printf '%s\n' "-------------------------------------------------------------------------------"
+  printf '  measured at : %s\n' "$tree"
+  if [[ "$tree" == *uncommitted* ]]; then
+    printf '                (the working tree as it stands, not the commit)\n'
+  fi
+  printf '  built with  : swift build --build-tests --scratch-path <this script'"'"'s own> \\\n'
+  printf '                  -Xswiftc -F -Xswiftc %s\n' "$TESTING_FRAMEWORKS_DIR"
+  printf '  compiled    : every file — the build directory was emptied first\n'
+  printf '  config      : debug (release cannot build the test targets; see --help)\n'
+  printf '  elapsed     : %ss\n' "$elapsed"
+  printf '%s\n' "-------------------------------------------------------------------------------"
+  printf '\n'
+
+  if [[ "$n_unaccounted" -gt 0 ]]; then
+    printf '%s: %s line(s) of this build log say "warning:" and this script cannot classify them.\n' \
+      "$SCRIPT_NAME" "$n_unaccounted" >&2
+    printf '\n' >&2
+    cat "$unaccounted_unique" >&2
+    cat >&2 <<'EOF'
+
+No count is printed, because a parser that quietly drops what it did not expect is one more way to
+print zero and mean nothing. Teach classify_log() what these lines are, then re-run.
+EOF
+    finish 1
+  fi
+
+  if [[ "$n_elsewhere" -gt 0 ]]; then
+    printf 'Elsewhere — %s warning(s) from outside this repository'"'"'s sources:\n\n' "$n_elsewhere"
+    print_warning_list "$elsewhere_unique"
+    printf '\nThese are reported but not counted below: they are not this repository'"'"'s to fix.\n\n'
+  fi
+
+  if [[ "$n_mine" -eq 0 ]]; then
+    printf '%s: 0 warnings.\n' "$SCRIPT_NAME"
+    printf '\nEvery file in Sources/ and Tests/ was compiled during this run, so that is the whole\n'
+    printf 'population of this tree — not the population of whatever was edited last.\n'
+    finish 0
+  fi
+
+  printf '%s: %s warning(s), from %s diagnostic line(s) across the build'"'"'s compilation jobs.\n\n' \
+    "$SCRIPT_NAME" "$n_mine" "$n_raw"
+  print_warning_list "$mine_unique"
+  printf '\n'
+  finish 2
+}
+
+# ---------------------------------------------------------------------------------------------
+# selftest — the proof that each guard above still fires.
+#
+# It stands up a throwaway SwiftPM package in a temporary git repository and runs this same script
+# against it. The test that matters most is the second one: it demonstrates the hazard first (a
+# plain incremental rebuild does not report a warning that is still in the tree) and then shows
+# this script reporting it anyway. A check nobody has watched fire is the class of claim this
+# repository distrusts everywhere else.
+# ---------------------------------------------------------------------------------------------
+
+ST_FAILURES=0
+ST_CHECKS=0
+ST_ROOT=""
+
+selftest_cleanup() {
+  if [[ -n "$ST_ROOT" && -d "$ST_ROOT" ]]; then
+    rm -rf -- "$ST_ROOT"
+  fi
+}
+
+st_pass() { ST_CHECKS=$((ST_CHECKS + 1)); printf '    PASS  %s\n' "$1"; }
+
+st_fail() {
+  ST_CHECKS=$((ST_CHECKS + 1))
+  printf '    FAIL  %s\n' "$1"
+  printf '          %s\n' "$2"
+  ST_FAILURES=$((ST_FAILURES + 1))
+}
+
+st_eq() {
+  if [[ "$2" == "$3" ]]; then st_pass "$1"; else st_fail "$1" "expected [$3], got [$2]"; fi
+}
+
+st_contains() {
+  case "$2" in
+    *"$3"*) st_pass "$1" ;;
+    *) st_fail "$1" "expected output to contain [$3]" ;;
+  esac
+}
+
+st_absent() {
+  case "$2" in
+    *"$3"*) st_fail "$1" "expected output NOT to contain [$3]" ;;
+    *) st_pass "$1" ;;
+  esac
+}
+
+st_write_package() {
+  local dir="$1" warned="$2"
+  mkdir -p "$dir/Sources/Widget"
+  cat >"$dir/Package.swift" <<'EOF'
+// swift-tools-version: 6.0
+import PackageDescription
+
+let package = Package(
+    name: "Widget",
+    targets: [.target(name: "Widget", path: "Sources/Widget")]
+)
+EOF
+  printf '.build/\n' >"$dir/.gitignore"
+  cat >"$dir/Sources/Widget/Clean.swift" <<'EOF'
+public struct Clean {
+    public static func value() -> Int { 1 }
+}
+EOF
+  if [[ "$warned" == "warned" ]]; then
+    cat >"$dir/Sources/Widget/Warned.swift" <<'EOF'
+public struct Warned {
+    public static func value() -> Int {
+        let neverRead = 41
+        return 42
+    }
+}
+EOF
+  else
+    cat >"$dir/Sources/Widget/Warned.swift" <<'EOF'
+public struct Warned {
+    public static func value() -> Int {
+        return 42
+    }
+}
+EOF
+  fi
+}
+
+selftest() {
+  require_command git
+  require_command swift
+  trap 'selftest_cleanup; assert_intended_exit' EXIT
+
+  ST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/warnings-selftest.XXXXXX")"
+  local repo="$ST_ROOT/repo"
+  mkdir -p "$repo"
+
+  printf '%s selftest\n\n' "$SCRIPT_NAME"
+
+  git -C "$repo" init -q
+  git -C "$repo" config user.email selftest@example.com
+  git -C "$repo" config user.name selftest
+  st_write_package "$repo" warned
+  git -C "$repo" add -A
+  git -C "$repo" -c commit.gpgsign=false commit -qm "throwaway package with one deliberate warning"
+
+  local out status
+
+  printf '  a warning in this repository'"'"'s sources is found, and exits 2\n'
+  set +e
+  out="$(cd "$repo" && "$SELF" 2>&1)"
+  status=$?
+  set -e
+  st_eq "exits 2 (a warning is a finding, not an error)" "$status" "2"
+  st_contains "names the file" "$out" "Sources/Widget/Warned.swift"
+  st_contains "names the warning" "$out" "neverRead"
+  st_contains "counts exactly one" "$out" "1 warning(s)"
+  st_absent "does not blame the clean file" "$out" "Sources/Widget/Clean.swift"
+
+  printf '\n  THE ONE THAT MATTERS: a warning in a file nothing has touched is still reported\n'
+  # First, demonstrate the hazard with a plain incremental build into a directory of its own. The
+  # warning is still in the tree the whole time; the second build simply does not recompile the
+  # file that holds it, so it reports nothing.
+  local demo="$ST_ROOT/incremental"
+  ( cd "$repo" && swift build --scratch-path "$demo" >"$ST_ROOT/first.log" 2>&1 ) || true
+  ( cd "$repo" && swift build --scratch-path "$demo" >"$ST_ROOT/second.log" 2>&1 ) || true
+  st_contains "a cold incremental build does show it" "$(cat "$ST_ROOT/first.log")" "neverRead"
+  st_absent   "a second incremental build does NOT — the hazard, reproduced" \
+              "$(cat "$ST_ROOT/second.log")" "neverRead"
+  # Now this script, twice, with nothing changed in between. Both runs must report it.
+  set +e
+  out="$(cd "$repo" && "$SELF" 2>&1)"; status=$?
+  set -e
+  st_eq "this script, run again with nothing changed, still exits 2" "$status" "2"
+  st_contains "and still names the warning" "$out" "neverRead"
+
+  printf '\n  a clean tree exits 0\n'
+  st_write_package "$repo" clean
+  git -C "$repo" add -A
+  git -C "$repo" -c commit.gpgsign=false commit -qm "remove the warning"
+  set +e
+  out="$(cd "$repo" && "$SELF" 2>&1)"; status=$?
+  set -e
+  st_eq "exits 0" "$status" "0"
+  st_contains "says zero" "$out" "0 warnings"
+
+  printf '\n  a failed build is never reported as zero warnings\n'
+  printf 'this is not swift\n' >>"$repo/Sources/Widget/Warned.swift"
+  set +e
+  out="$(cd "$repo" && "$SELF" 2>&1)"; status=$?
+  set -e
+  st_eq "exits 1, not 0" "$status" "1"
+  st_contains "says the build failed" "$out" "the build failed"
+  st_absent "prints no count" "$out" "0 warnings."
+  # PR #78 F3: the only path this prints must be one that still exists once the run has exited.
+  # The build log is written inside a temp directory the EXIT trap deletes, so naming that path
+  # hands the reader a dead file.
+  st_contains "names the durable copy of the build log" "$out" ".build/warnings-failed-build.log"
+  st_absent "and never the temp path it deletes on exit" "$out" "/build.log"
+  if [[ -f "$repo/.build/warnings-failed-build.log" ]]; then
+    st_pass "and that copy is really on disk afterwards"
+  else
+    st_fail "and that copy is really on disk afterwards" "no file at $repo/.build/warnings-failed-build.log"
+  fi
+  git -C "$repo" checkout -q -- Sources/Widget/Warned.swift
+
+  printf '\n  an uncommitted change is measured, and said to have been\n'
+  st_write_package "$repo" warned
+  set +e
+  out="$(cd "$repo" && "$SELF" 2>&1)"; status=$?
+  set -e
+  st_eq "exits 2 on a dirty tree rather than refusing" "$status" "2"
+  st_contains "says the tree was dirty" "$out" "uncommitted file(s)"
+  git -C "$repo" checkout -q -- .
+
+  printf '\n  a second run in the same checkout is refused\n'
+  local git_dir
+  git_dir="$(git -C "$repo" rev-parse --absolute-git-dir)"
+  mkdir -p "$git_dir/warnings.lock"
+  # A pid that is alive and whose command line says "warnings" — this selftest's own shell is both.
+  { printf 'pid %s\n' "$$"; printf 'started now\n'; printf 'head deadbeef\n'; } \
+    >"$git_dir/warnings.lock/owner"
+  set +e
+  out="$(cd "$repo" && "$SELF" 2>&1)"; status=$?
+  set -e
+  st_eq "exits 1" "$status" "1"
+  st_contains "names the holder" "$out" "another run already holds this checkout"
+  set +e
+  out="$(cd "$repo" && "$SELF" unlock 2>&1)"; status=$?
+  set -e
+  st_eq "unlock refuses while the owner is alive" "$status" "1"
+  st_contains "and says why" "$out" "still running"
+  # Now make it stale the way a killed run does, and prove unlock clears it.
+  printf 'pid 999999999\nstarted now\nhead deadbeef\n' >"$git_dir/warnings.lock/owner"
+  set +e
+  out="$(cd "$repo" && "$SELF" unlock 2>&1)"; status=$?
+  set -e
+  st_eq "unlock clears a stale lock" "$status" "0"
+  st_contains "and says so" "$out" "cleared a stale lock"
+
+  printf '\n  the log parser drops nothing it does not recognise\n'
+  ROOT="/repo"
+  local synth="$ST_ROOT/synthetic.log"
+  cat >"$synth" <<'EOF'
+/repo/Sources/Widget/Warned.swift:3:13: warning: initialization of immutable value 'neverRead' was never used
+  3 |         let neverRead = 41
+    |             `- warning: initialization of immutable value 'neverRead' was never used
+    |             ^
+[#no-usage]: <https://docs.swift.org/compiler/documentation/diagnostics/no-usage>
+/elsewhere/Dependency/Thing.swift:9:1: warning: something in a dependency
+ld: warning: some linker warning with no source position
+  7 |     let s = "warning: this is a quotation, not a diagnostic"
+EOF
+  classify_log "$synth" "$ST_ROOT/m" "$ST_ROOT/e" "$ST_ROOT/u" "/repo"
+  st_eq "one warning attributed to this repository" \
+        "$(sort -u "$ST_ROOT/m" | grep -c '^' || true)" "1"
+  st_contains "with the repository prefix stripped" "$(cat "$ST_ROOT/m")" \
+              "Sources/Widget/Warned.swift:3:13:"
+  st_eq "one attributed elsewhere" "$(sort -u "$ST_ROOT/e" | grep -c '^' || true)" "1"
+  st_eq "the linker line is kept, not dropped" \
+        "$(sort -u "$ST_ROOT/u" | grep -c '^' || true)" "1"
+  st_contains "and it is the linker line" "$(cat "$ST_ROOT/u")" "ld: warning:"
+
+  printf '\n'
+  if [[ "$ST_FAILURES" -eq 0 ]]; then
+    printf '%s selftest: %s checks, 0 failures — every guard fired.\n' "$SCRIPT_NAME" "$ST_CHECKS"
+    finish 0
+  fi
+  printf '%s selftest: %s checks, %s failure(s).\n' "$SCRIPT_NAME" "$ST_CHECKS" "$ST_FAILURES" >&2
+  finish 1
+}
+
+# ---------------------------------------------------------------------------------------------
+
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+readonly SELF
+
+main() {
+  case "${1:-}" in
+    --help|-h|help) usage; finish 0 ;;
+    selftest) [[ $# -eq 1 ]] || die "selftest takes no arguments"; selftest ;;
+    unlock)   [[ $# -eq 1 ]] || die "unlock takes no arguments"; unlock_command ;;
+    "")       run_check ;;
+    *)        die "unknown argument: $1 (try --help)" ;;
+  esac
+}
+
+main "$@"

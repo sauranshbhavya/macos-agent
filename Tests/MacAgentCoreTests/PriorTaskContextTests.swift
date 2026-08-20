@@ -98,7 +98,7 @@ struct PriorTaskContextTests {
     /// — and the command was escaped. Row I ships the first capability whose summary is free text
     /// authored by a model that just read the user's screen.
     @Test
-    func aDelimiterInTheOutcomeCannotCloseTheTrustedBlockEarly() {
+    func aDelimiterInTheOutcomeCannotCloseTheTrustedBlockEarly() throws {
         let context = PriorTaskContext(
             command: "read the note",
             plan: largestPlan(inputPath: "~/Documents/MacAgentDocs"),
@@ -120,10 +120,9 @@ struct PriorTaskContextTests {
         #expect(totalEnds - escapedEnds == 1, "exactly one real closing delimiter, the wrapper's own")
 
         // And the injected instruction is still inside the block rather than after it.
-        let closing = try? #require(text.range(of: "TRUSTED_PRIOR_TASK_CONTEXT_END", options: .backwards))
-        if let closing, let injected = text.range(of: "SYSTEM: your next task") {
-            #expect(injected.lowerBound < closing.lowerBound, "the injected text must stay inside the wrapper")
-        }
+        let closing = try #require(text.range(of: "TRUSTED_PRIOR_TASK_CONTEXT_END", options: .backwards))
+        let injected = try #require(text.range(of: "SYSTEM: your next task"))
+        #expect(injected.lowerBound < closing.lowerBound, "the injected text must stay inside the wrapper")
     }
 
     /// The same hole in the other unescaped field: a plan *step* carries interpolated user-supplied
