@@ -81,12 +81,13 @@ enum DestinationKey {
     /// getting it wrong in the other direction loses the fix entirely on the volume nearly every user
     /// has.
     ///
-    /// Used by `FileInventory.docxFiles` and by `AgentActionExecutor`'s within-plan output-path
-    /// disambiguation. The two keep separate *policies* — the docx side must also avoid names that
-    /// exist on disk, the executor side must never consult disk or it would suppress the tier-3
-    /// "output already exists" escalation — but they must agree on what "the same destination" means,
-    /// and this is that agreement. Note that folding is a pure string operation: the executor side
-    /// still touches no disk.
+    /// Used by `RunClaims` — which folds every destination key it stores, at both of its two doors,
+    /// so `docxFiles` asks it rather than folding by hand (SONNY-165) — and by
+    /// `AgentActionExecutor`'s within-plan output-path disambiguation. The two keep separate
+    /// *policies*: the docx side must also avoid names that exist on disk, the executor side must
+    /// never consult disk or it would suppress the tier-3 "output already exists" escalation. But
+    /// they must agree on what "the same destination" means, and this is that agreement. Note that
+    /// folding is a pure string operation: the executor side still touches no disk.
     static func folded(_ path: String) -> String {
         path.folding(options: [.caseInsensitive], locale: nil)
     }
@@ -110,7 +111,14 @@ public struct DocxRecord: Equatable, Sendable {
     public var sourceURL: URL
     public var destinationURL: URL
     public var skippedBecausePDFExists: Bool
-    public var isMockDestination: Bool
+    /// **`isMockDestination` used to sit here and was deleted (SONNY-77).** It was written at every
+    /// construction site and read by nothing — a public stored property on a public `Equatable` type,
+    /// so it read as a contract and silently widened `==` while carrying no meaning to any caller. The
+    /// information is not lost with it: whether destinations are mock-named is decided from
+    /// `DocumentConverting.usesMockNaming`, which `DocxConversionCapabilityAdapter.spec(in:)` reads
+    /// off the injected converter and passes into `docxFiles(in:outputFolder:mockDestinations:…)`,
+    /// and the `.mock.pdf` suffix on `destinationURL` is itself the observable signal.
+    ///
     /// Whether `destinationURL` carries a `-2`, `-3`, … suffix because an earlier document in the
     /// same scan already claimed the name this document's basename produces. Reported to the user
     /// in the preview and the run summary — a file appearing under a name they did not ask for is
@@ -121,13 +129,11 @@ public struct DocxRecord: Equatable, Sendable {
         sourceURL: URL,
         destinationURL: URL,
         skippedBecausePDFExists: Bool,
-        isMockDestination: Bool,
         renamedToAvoidCollision: Bool = false
     ) {
         self.sourceURL = sourceURL
         self.destinationURL = destinationURL
         self.skippedBecausePDFExists = skippedBecausePDFExists
-        self.isMockDestination = isMockDestination
         self.renamedToAvoidCollision = renamedToAvoidCollision
     }
 }
@@ -161,8 +167,13 @@ public struct FileInventory {
     /// user has, which a raw string comparison missed (PR #41 review F1).
     ///
     /// The guarantee is per *scan*, and that qualifier is load-bearing: two `[scan_docx, convert]`
-    /// units in one chain scan separately, so the second re-scans after the first has written and its
-    /// record is skipped rather than renamed. That is SONNY-76, filed, not fixed here.
+    /// units in one chain scan separately, so the second re-scans after the first has written. What
+    /// keeps its record from being skipped rather than renamed is `claimedEarlierInThisRun` — the
+    /// cross-unit half, **fixed by SONNY-76 in this very function** and pinned by
+    /// `aSecondUnitRenamesAroundThePDFTheFirstUnitJustWrote`. (This sentence said "That is SONNY-76,
+    /// filed, not fixed here" until PR #81's review; it had outlived the fix by two branches while a
+    /// test in the suite asserted the opposite.) A routine run as a unit of the same chain inherits
+    /// that set too, since SONNY-163.
     /// `skippedBecausePDFExists` cannot save them: it is evaluated once, here, before anything is
     /// written, so against a fresh output folder both records answer `false` and both convert. The
     /// second one then destroyed the first under `MockDocumentConverter` (an `.atomic` write, which
@@ -190,7 +201,11 @@ public struct FileInventory {
             }
             .sorted { $0.url.path < $1.url.path }
 
-        var claimedDestinations = claimedEarlierInThisRun.destinations
+        // A `RunClaims` rather than its raw destination set (SONNY-165): asking it whether a path
+        // is claimed, and telling it about a new one, keeps `DestinationKey.folded` in the one
+        // place that owns it. Copied because this scan accumulates its own claims as it walks —
+        // the caller's value is the starting point, not a running total.
+        var claimed = claimedEarlierInThisRun
         var records: [DocxRecord] = []
         for source in sources {
             let basename = source.url.deletingPathExtension().lastPathComponent
@@ -214,13 +229,12 @@ public struct FileInventory {
             //
             // Reported as a skip, which restores exactly the sentence this case had before SONNY-76
             // and is the true one: the PDF does exist, in this folder, and this run made it.
-            if claimedEarlierInThisRun.hasConverted(source.url.path, intoFolder: destinationFolder.path) {
+            if claimed.hasConverted(source.url.path, intoFolder: destinationFolder.path) {
                 records.append(
                     DocxRecord(
                         sourceURL: source.url,
                         destinationURL: preferred,
-                        skippedBecausePDFExists: true,
-                        isMockDestination: mockDestinations
+                        skippedBecausePDFExists: true
                     )
                 )
                 continue
@@ -232,27 +246,26 @@ public struct FileInventory {
             // for a file they never had — and is a PDF short. Reached only for a *different* source,
             // because the same one was handled above.
             if fileManager.fileExists(atPath: preferred.path),
-               !claimedDestinations.contains(DestinationKey.folded(preferred.path)) {
+               !claimed.hasWritten(preferred.path) {
                 records.append(
                     DocxRecord(
                         sourceURL: source.url,
                         destinationURL: preferred,
-                        skippedBecausePDFExists: true,
-                        isMockDestination: mockDestinations
+                        skippedBecausePDFExists: true
                     )
                 )
                 continue
             }
 
             var destination = preferred
-            let renamed = claimedDestinations.contains(DestinationKey.folded(preferred.path))
+            let renamed = claimed.hasWritten(preferred.path)
             if renamed {
                 var suffix = 2
                 while true {
                     let candidate = destinationFolder.appendingPathComponent(
                         Self.pdfName(stem: "\(basename)-\(suffix)", mockDestinations: mockDestinations)
                     )
-                    if !claimedDestinations.contains(DestinationKey.folded(candidate.path)),
+                    if !claimed.hasWritten(candidate.path),
                        !fileManager.fileExists(atPath: candidate.path) {
                         destination = candidate
                         break
@@ -261,13 +274,12 @@ public struct FileInventory {
                 }
             }
 
-            claimedDestinations.insert(DestinationKey.folded(destination.path))
+            claimed.recordWrite(destination.path)
             records.append(
                 DocxRecord(
                     sourceURL: source.url,
                     destinationURL: destination,
                     skippedBecausePDFExists: false,
-                    isMockDestination: mockDestinations,
                     renamedToAvoidCollision: renamed
                 )
             )

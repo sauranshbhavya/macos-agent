@@ -186,7 +186,10 @@ public struct CapabilityExecutionContext {
     public var hotKeyReady: () -> Bool
     /// The browser this execution should prefer for every URL it opens *on the injected
     /// browser-opener seam*, or `nil` for the system default. `.playMedia` is on a different seam
-    /// and does not consult this (SONNY-51).
+    /// and does not consult this — **decided, not pending** (SONNY-51, founder 2026-08-20): a media
+    /// step's fallback link is playback, which the OS routes, and forcing an https provider link
+    /// through a named browser could override the handler that would otherwise open the Spotify or
+    /// Music app. The reasoning and the cost are in `docs/sonny-founder-design-decisions.md`.
     ///
     /// Set only for the nested execution of a routine that names a browser-capable app among its
     /// own steps (SONNY-24), mirroring what a workspace already does with its apps list. It is
@@ -207,7 +210,15 @@ public struct CapabilityExecutionContext {
     /// Accumulated from what each unit's previews say they write, so it needs no second return
     /// channel and covers writes from any capability rather than only the docx one — a PDF this run
     /// produced is this run's whether a conversion or something else made it.
-    public var claimedEarlierInThisRun: RunClaims
+    ///
+    /// **`let`, not `var`, since SONNY-163 made the nested-plan closures inherit it.** Those closures
+    /// capture the value this context was built with, and a `var` here would let an adapter mutate
+    /// its own copy of the context and reasonably expect the nested call to see the change — which it
+    /// would not, silently. A mutation battery found exactly that: a mutant seeding a claim on this
+    /// property before calling `executeNestedPlan` changed nothing, because the property and the
+    /// captured value are two homes for one fact. `let` deletes the second home, so the divergence is
+    /// a compile error rather than a behaviour nothing can observe.
+    public let claimedEarlierInThisRun: RunClaims
 
     /// The browser a URL-opening step should use: the one the user named on that step if it resolves
     /// to something installed, otherwise whatever was already in force (SONNY-157).

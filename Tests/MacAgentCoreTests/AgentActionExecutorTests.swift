@@ -1693,6 +1693,31 @@ struct AgentActionExecutorTests {
         #expect(DestinationKey.folded("İstanbul.pdf") != DestinationKey.folded("istanbul.pdf"))
     }
 
+    /// **`RunClaims` folds its own keys, on both of the two ways one gets in** (SONNY-165).
+    ///
+    /// The destination set's guarantee used to hold only because four call sites in
+    /// `FileInventory.docxFiles` each remembered to apply `DestinationKey.folded` before touching it,
+    /// while `ConversionClaim` — added one review round later, in the same file — folded inside
+    /// itself. Two mechanisms for one rule, agreeing until one is edited. Both are the type's now,
+    /// and this holds both doors: the memberwise initializer and `recordWrite`.
+    ///
+    /// Case is the fold's own business, so the assertions use it rather than a path the caller could
+    /// have normalised by hand. `hasWritten` folding its *argument* is the half that makes the four
+    /// former call sites able to stop caring.
+    @Test
+    func runClaimsFoldsDestinationKeysWhicheverDoorTheyComeIn() {
+        let built = RunClaims(destinations: ["/tmp/Reports/REPORT.PDF"])
+        #expect(built.hasWritten("/tmp/Reports/report.pdf"))
+        #expect(!built.hasWritten("/tmp/Reports/report-2.pdf"))
+
+        var recorded = RunClaims.none
+        recorded.recordWrite("/tmp/Reports/REPORT.PDF")
+        #expect(recorded.hasWritten("/tmp/Reports/report.pdf"))
+
+        // Both doors agree, which is the property that stops the rule having two spellings.
+        #expect(built == recorded)
+    }
+
     /// **The preview and the run agree about what the second unit will write.** Threading the claimed
     /// set through `executeChain` alone would have left the approval panel naming `report.pdf` while
     /// the run wrote `report-2.pdf` — a plan promising one file and writing another, which is exactly
@@ -2002,8 +2027,7 @@ struct AgentActionExecutorTests {
         let record = DocxRecord(
             sourceURL: root.appendingPathComponent("report.docx"),
             destinationURL: destination,
-            skippedBecausePDFExists: false,
-            isMockDestination: true
+            skippedBecausePDFExists: false
         )
 
         await #expect(throws: DocumentConversionError.mockWriteFailed(
@@ -2025,8 +2049,7 @@ struct AgentActionExecutorTests {
         let record = DocxRecord(
             sourceURL: root.appendingPathComponent("report.docx"),
             destinationURL: destination,
-            skippedBecausePDFExists: false,
-            isMockDestination: true
+            skippedBecausePDFExists: false
         )
 
         let converted = try await converter.convert([record]) { _ in }

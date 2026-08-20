@@ -1376,6 +1376,126 @@ struct AgentRunnerTests {
         )
     }
 
+    /// **SONNY-163, measured before it was fixed.** A chain whose second unit is a `run_routine`
+    /// converting a document into a folder an earlier unit of the same chain has already written to.
+    ///
+    /// Before the fix, `previewNestedPlan`/`executeNestedPlan` handed the routine's plan `RunClaims`
+    /// of `.none`, so the routine's unit could not tell "this run wrote that PDF two seconds ago"
+    /// from "that PDF predates this run" — and took the skip branch, which is for the second. The
+    /// probe run recorded on SONNY-163 produced: both units previewing the *same* destination path,
+    /// then "No DOCX files needed conversion in …/B. Skipped 1 existing PDF outputs.", with one file
+    /// in the output folder. The user is told their second document was skipped for a file they
+    /// never had, and is a PDF short — the exact sentence SONNY-76 exists to prevent, reached
+    /// through the routine door instead of the chain door.
+    ///
+    /// Both halves are asserted because they fail differently: the preview half is a plan that
+    /// promises one file twice, and the execute half is the missing document.
+    @Test
+    func aRoutineUnitOfAChainInheritsWhatEarlierUnitsOfThatChainClaimed() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folderA = root.appendingPathComponent("A", isDirectory: true)
+        let folderB = root.appendingPathComponent("B", isDirectory: true)
+        let output = root.appendingPathComponent("Out", isDirectory: true)
+        for directory in [folderA, folderB, output] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        // The same basename in both folders, converting into one shared output folder: the shape
+        // where "already claimed by this run" and "predates this run" give different answers.
+        try write("docx a", to: folderA.appendingPathComponent("report.docx"))
+        try write("docx b", to: folderB.appendingPathComponent("report.docx"))
+
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try routineStore.save(
+            StoredRoutine(
+                name: "Convert B",
+                steps: [
+                    AgentStep(id: "scan-b", operation: .scanDocx, description: "Scan B.", inputPath: folderB.path),
+                    AgentStep(id: "convert-b", operation: .convertDocxToPDF, description: "Convert B.", outputPath: output.path)
+                ]
+            )
+        )
+        let plan = AgentPlan(
+            summary: "Convert A, then run the routine that converts B.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "scan-a", operation: .scanDocx, description: "Scan A.", inputPath: folderA.path),
+                AgentStep(id: "convert-a", operation: .convertDocxToPDF, description: "Convert A.", outputPath: output.path),
+                AgentStep(id: "run", operation: .runRoutine, description: "Run routine.", routineName: "Convert B")
+            ]
+        )
+        let runner = AgentRunner(
+            planner: StaticPlanner(plan: plan),
+            executor: makeExecutor(root: root, documentConverter: WritingDocumentConverter(), routineStore: routineStore)
+        )
+
+        let prepared = try runner.prepare(plan: plan, source: .planner)
+
+        // The preview promises two distinct files, not the same one twice.
+        let promised = prepared.previews.flatMap(\.writes)
+        #expect(promised.count == 2)
+        #expect(Set(promised).count == 2)
+        #expect(promised.contains(output.appendingPathComponent("report.pdf").path))
+        #expect(promised.contains(output.appendingPathComponent("report-2.pdf").path))
+
+        let result = try await runner.execute(
+            prepared,
+            approvalDecision: .approved(.tier3),
+            scope: .unscoped,
+            context: ApprovalContext(safeMode: false)
+        )
+
+        // And the run converts both documents rather than skipping one for a PDF this run made.
+        #expect(try FileManager.default.contentsOfDirectory(atPath: output.path).sorted() == ["report-2.pdf", "report.pdf"])
+        #expect(!result.summary.contains("Skipped 1 existing PDF outputs"))
+        #expect(result.summary.contains("another document would produce the same PDF name"))
+        // What the run wrote is exactly what the prepared plan named — the invariant
+        // `aChainWritesOnlyFilesThePreparedPlanAlreadyNamed` states, held across the routine door.
+        #expect(Set(result.previews.flatMap(\.writes)) == Set(promised))
+    }
+
+    /// The counter-pin: a routine run on its own still starts from no claims. `RunClaims` documents
+    /// the set as empty for a single-unit plan, and threading the outer value must not turn a plain
+    /// "run my convert routine" into a run that believes something was already written.
+    @Test
+    func aRoutineRunOnItsOwnStillStartsFromNoClaims() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folderB = root.appendingPathComponent("B", isDirectory: true)
+        let output = root.appendingPathComponent("Out", isDirectory: true)
+        for directory in [folderB, output] {
+            try FileManager.default.createDirectory(at: directory, withIntermediateDirectories: true)
+        }
+        try write("docx b", to: folderB.appendingPathComponent("report.docx"))
+
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try routineStore.save(
+            StoredRoutine(
+                name: "Convert B",
+                steps: [
+                    AgentStep(id: "scan-b", operation: .scanDocx, description: "Scan B.", inputPath: folderB.path),
+                    AgentStep(id: "convert-b", operation: .convertDocxToPDF, description: "Convert B.", outputPath: output.path)
+                ]
+            )
+        )
+        let runner = AgentRunner(
+            planner: StaticPlanner(plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Convert B")),
+            executor: makeExecutor(root: root, documentConverter: WritingDocumentConverter(), routineStore: routineStore)
+        )
+
+        let prepared = try runner.prepare(plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Convert B"), source: .planner)
+        let result = try await runner.execute(
+            prepared,
+            approvalDecision: .approved(.tier3),
+            scope: .unscoped,
+            context: ApprovalContext(safeMode: false)
+        )
+
+        // The preferred name, not a rename: nothing was claimed before this routine ran.
+        #expect(try FileManager.default.contentsOfDirectory(atPath: output.path) == ["report.pdf"])
+        #expect(!result.summary.contains("another document would produce the same PDF name"))
+    }
+
     private func makeExecutor(
         root: URL,
         zipArchiver: ZipArchiving = RecordingZipArchiver(),
@@ -1882,6 +2002,29 @@ private struct NoopAppOpener: AppOpening {
 
 private struct NoopFileOpener: FileOpening {
     func openFile(_ url: URL) async throws {}
+}
+
+/// Writes its outputs, unlike `FakeDocumentConverter`, and refuses an occupied destination the way
+/// both shipped converters do. SONNY-163's shape needs both: the second unit's "does this PDF
+/// already exist?" check is only meaningful once the first unit's PDF is really on disk.
+private struct WritingDocumentConverter: DocumentConverting {
+    var isAvailable: Bool { true }
+    var modeName: String { "Writing fake converter" }
+    var usesMockNaming: Bool { false }
+
+    func convert(_ records: [DocxRecord], log: @escaping (String) -> Void) async throws -> [DocxRecord] {
+        var converted: [DocxRecord] = []
+        for record in records where !record.skippedBecausePDFExists {
+            guard !FileManager.default.fileExists(atPath: record.destinationURL.path) else {
+                throw DocumentConversionError.conversionFailed(
+                    "Could not move exported PDF to \(record.destinationURL.path): a file already exists there."
+                )
+            }
+            try "fake pdf".data(using: .utf8)?.write(to: record.destinationURL)
+            converted.append(record)
+        }
+        return converted
+    }
 }
 
 private struct FakeDocumentConverter: DocumentConverting {
