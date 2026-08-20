@@ -96,6 +96,60 @@ struct ProductShellTests {
         #expect(viewModel.widgetPresentationRequest == 2)
     }
 
+    /// **SONNY-25's two audited `FloatingWidgetWindowController.show()` callers, pinned so neither
+    /// is changed blind.**
+    ///
+    /// SONNY-8 routed every *hand-driven* summon through `widgetPresentationRequest` and left these
+    /// two direct, each for a stated reason. One has since moved and the other deliberately has not,
+    /// and both dispositions are decisions rather than leftovers — which is the whole thing this
+    /// ticket was filed to preserve, since its own analysis asks a future session not to redo it.
+    ///
+    /// - **The notification's default action is no longer direct.** SONNY-121 rerouted it through
+    ///   the counter, because `show()` fronts the panel and cannot do either of the other two things
+    ///   a click needs: it has no reference to the view's `isCompact` state, and it cannot move
+    ///   keyboard focus, which lives in `FloatingWidgetView`'s own `@FocusState`. Before that, a
+    ///   click landed on a compact capsule with an unfocused composer.
+    /// - **Launch is still direct, and must stay so.** `show()` creates the panel and
+    ///   `FloatingWidgetView.onAppear` focuses the composer on first render, so the counter buys
+    ///   nothing there; routing launch through it would make the launch path depend on
+    ///   `observeWidgetPresentationRequests()` having been installed first — an ordering dependency
+    ///   for no user-visible gain.
+    ///
+    /// **Read rather than run, and this is the case that best shows why the tool exists.** Neither
+    /// line can execute in a test process: `SonnyNotificationService.init?` returns nil without
+    /// bundle identity, and `applicationDidFinishLaunching` registers a real `NSStatusItem`, a
+    /// Carbon hotkey and the schedule timer. That is also the accepted coverage gap SONNY-25
+    /// recorded — `observeWidgetPresentationRequests()`'s sink body has never been exercised by any
+    /// test — which stands, and is narrower now: the *decision* at each call site is held even
+    /// though the AppKit call is not.
+    @Test
+    func theNotificationClickAndLaunchKeepTheirAuditedPresentationPaths() throws {
+        let delegate = try MacAgentSource.read("AppDelegate.swift")
+
+        let onOpen = try MacAgentSource.region(of: delegate, from: "onOpen: {", to: "onOpenTask:")
+        #expect(onOpen.contains("requestWidgetPresentation()"))
+        #expect(!onOpen.contains("widgetController.show()"))
+
+        let launch = try MacAgentSource.region(
+            of: delegate,
+            from: "func applicationDidFinishLaunching(",
+            to: "private var isUserWorkingInSonny: Bool {"
+        )
+        #expect(launch.contains("widgetController.show()"))
+        #expect(!launch.contains("requestWidgetPresentation()"))
+
+        // The counter is only worth routing a click through because the view does *both* halves with
+        // it. A reroute that reached a view doing only one of them would be the old bug wearing the
+        // new mechanism.
+        let onChange = try MacAgentSource.region(
+            of: try MacAgentSource.read("FloatingWidgetView.swift"),
+            from: ".onChange(of: viewModel.widgetPresentationRequest) { _, _ in",
+            to: ".onChange(of: isMicHintSlotFree)"
+        )
+        #expect(onChange.contains("expandFromCompact()"))
+        #expect(onChange.contains("pillFocused = true"))
+    }
+
     @Test
     func commandCenterDestinationsKeepTheLockedSidebarOrder() {
         // Settings is no longer a sidebar destination (2026-07-18) — it moved to its own dialog,

@@ -792,11 +792,20 @@ private struct CommandCenterStorageNotice: View {
 ///
 /// Until branch 10 these three states rendered *only* in the floating widget, which was fine while
 /// every task was started by a user who was looking at it. Scheduled routines break that
-/// assumption: a run fires with nobody watching, and the system-notification fallback is
-/// unreachable by deliberate decision (the widget is a permanent overlay with no dismiss action),
-/// so without a Command-Center-native surface an unattended run that needs approval or fails would
-/// be silently stuck. `docs/sonny-ui-backend-roadmap.md` names this a hard prerequisite for
-/// background execution, not polish.
+/// assumption: a run fires with nobody watching, and at the time the system-notification fallback
+/// was unreachable — every post was gated on a test that had been permanently true since the widget
+/// became a permanent overlay — so without a Command-Center-native surface an unattended run that
+/// failed would be silently stuck. `docs/sonny-ui-backend-roadmap.md` names this a hard prerequisite
+/// for background execution, not polish.
+///
+/// **That gate is gone, and this panel is not.** SONNY-56 replaced it with the founder's rule of
+/// 2026-08-17 — notify when Sonny is not the app the user is working in — so notifications do fire
+/// now; see `SonnyAttention`. The sentence above is kept in the past tense rather than deleted
+/// because it is why this panel was built, but nothing here should be read as saying a notification
+/// cannot reach the user today. The panel's own reason survives the gate's repair intact: a
+/// notification is suppressed precisely when the user *is* working in Sonny, which is when this
+/// surface is the one they are looking at. (PR #80 review; the same stale claim was corrected in
+/// `AppDelegate` by SONNY-113 and this was the copy of it left behind.)
 ///
 /// The widget is deliberately **not** changed to compensate: it keeps showing all three states for
 /// every task regardless of origin, so both surfaces can show controls for the same task at once.
@@ -955,6 +964,19 @@ private struct CommandCenterAttentionPanel: View {
             )
             .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
             .onSubmit { viewModel.submitClarification() }
+
+            // The widget's Cancel, mirrored (SONNY-166). Declining-then-answering order matches the
+            // permission row's Deny-then-Allow directly above, and it calls the same
+            // `cancelCurrentRun()` the widget's own control does — the two surfaces render one
+            // task's state, so an exit that behaved differently depending on which one the user
+            // happened to be looking at is exactly what this panel's mirroring rule forbids.
+            //
+            // Never `.disabled`: the whole point is that this is the way out when the user has
+            // nothing to type. Send is still gated on a non-empty answer, as before.
+            Button(ClarificationPresentation.cancelLabel) {
+                viewModel.cancelCurrentRun()
+            }
+            .buttonStyle(CommandCenterRowActionStyle())
 
             Button("Send") {
                 viewModel.submitClarification()
@@ -1474,10 +1496,26 @@ private struct InProgressTaskGroup: View {
             )
 
             // Deliberately NOT gated on `isExpanded` (user decision, 2026-08-06, PR #31 review
-            // F1). This indicator carries the app's only cancel control for a plain running task:
-            // `cancelCurrentRun()` has exactly three call sites repo-wide, and the other two —
-            // `CommandCenterAttentionPanel`'s Deny and the widget's `onDeny` — fire only on an
-            // approval, so nothing else can stop a run that isn't waiting for one. The indicator
+            // F1). This indicator carries the app's only cancel control for a **plain** running
+            // task — one waiting on nothing — and that is the property, stated instead of the census
+            // it used to carry.
+            //
+            // Every other `cancelCurrentRun()` call site is gated on a state a plain running task is
+            // not in: an approval (`CommandCenterAttentionPanel`'s Deny, the widget's `onDeny`), a
+            // clarification (both surfaces' Cancel, SONNY-166), or a live screen-control session
+            // (`emergencyStopVisionSession`, which returns unless `isVisionSessionLive`). So nothing
+            // else can stop a run that is simply running. `grep -rn "cancelCurrentRun()" Sources/`
+            // is the enumeration; check the gate on any site the grep turns up that is not named
+            // here.
+            //
+            // **The count is gone because it went stale twice without anyone noticing.** "Exactly
+            // three call sites repo-wide" was true the day it was written (2026-08-06). The screen-
+            // control emergency stop made it four on 2026-08-15, and SONNY-166's two Cancels made it
+            // six on 2026-08-20 — at which point a reader checking the claim would have found the
+            // number wrong and had no way to tell whether the *reasoning* had rotted with it. A
+            // property survives edits a census cannot; this repo's own rule is to count with a SHA
+            // or give the grep, and an unstamped number in a comment can be neither. (PR #80 review,
+            // F5.) The indicator
             // convention exists precisely so a running task always shows something; a persisted
             // collapse preference must not be able to silently remove this page's primary cancel
             // affordance on every future run.

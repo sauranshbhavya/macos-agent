@@ -32,6 +32,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             // which is the honest fallback — there is no dialog to open.
             guard let taskID else { return }
             _ = viewModel.requestTaskDetail(taskID: taskID)
+        },
+        // A scheduled routine's notice opens Command Center (SONNY-113). That is where its controls
+        // are: the notice strip carrying the reason renders on four pages there, and a schedule
+        // Sonny paused is switched back on from the Routines page. The widget shows the same notice
+        // as a strip, but it has no control for the thing the worst case needs doing.
+        onOpenScheduledRun: { [weak self] in
+            self?.windowCoordinator.showCommandCenter()
         }
     )
     private var pushToTalkHotKey: PushToTalkHotKey?
@@ -205,14 +212,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Scheduled runs are the one case this fallback was actually designed for: the run happens
         // with nobody watching, which is precisely when no Sonny surface is in front of the user.
-        // Unlike the two above, this path is genuinely reachable rather than accepted-as-unused.
+        //
+        // **This used to end "unlike the two above, this path is genuinely reachable rather than
+        // accepted-as-unused", and that contrast is now false in both directions (SONNY-113).** When
+        // it was written every path was dead, this one included — `isAnySonnySurfaceVisible` was
+        // permanently true. Since SONNY-56 replaced that gate, every path here is reachable, so
+        // there is nothing to be unlike. A sentence that stayed on the page through the change that
+        // falsified it is exactly what makes a comment worse than none: a session reading it would
+        // conclude the other subscriptions are still decorative.
+        //
+        // Its own category, not `postErrorNotification` (SONNY-113). See
+        // `SonnyNotificationCategory.scheduled` for why the Retry button that carried was wrong
+        // twice over — a success wearing a failure's chrome, and an action that re-runs the user's
+        // own last command rather than the routine.
         viewModel.$scheduledRunNotice
             .compactMap { $0 }
             .sink { [weak self] message in
                 guard let self, !isUserWorkingInSonny else {
                     return
                 }
-                notificationService.postErrorNotification(message: message)
+                notificationService.postScheduledRunNotification(message: message)
             }
             .store(in: &cancellables)
     }
