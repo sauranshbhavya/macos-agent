@@ -1287,6 +1287,263 @@ struct ScheduledRoutineRunTests {
 
     // MARK: - Fixture
 
+    // MARK: - The outcome actually reaching the user (SONNY-113)
+
+    /// **Every notice the scheduler can write names the routine it is about.**
+    ///
+    /// This became load-bearing when the notice grew two surfaces it did not have: a system
+    /// notification (the gate that suppressed every one of them was replaced by SONNY-56) and the
+    /// widget's own strip. On both, the text is all the user gets — there is no row, no page and no
+    /// context around it — so a notice that does not say which routine it means is a banner that
+    /// tells someone with four routines nothing they can act on.
+    ///
+    /// **The population is read out of the source rather than listed from memory**, because a claim
+    /// about "every" writer is exactly the kind this repository has got wrong by enumerating one
+    /// path and generalising. If a seventh writer is added, the count below fails and whoever added
+    /// it comes here to drive it.
+    @Test
+    func everyScheduledNoticeTheSchedulerCanWriteNamesItsRoutine() async throws {
+        let writers = try MacAgentSource.occurrences(
+            of: "scheduledRunNotice = \"",
+            in: "AgentViewModel.swift"
+        )
+        #expect(writers == 6, "A scheduled-notice writer was added or removed; drive it below.")
+
+        // 1. Skipped because the schedule is not trusted for unattended running.
+        let untrusted = try makeFixture()
+        defer { untrusted.cleanUp() }
+        try untrusted.saveRoutine(unattendedTrusted: false)
+        untrusted.viewModel.checkScheduledRoutines(now: untrusted.tenAM)
+        try await untrusted.waitForIdle()
+        #expect(try #require(untrusted.viewModel.scheduledRunNotice).contains("Morning"))
+
+        // 2. Missed — past the catch-up window, the laptop-shut-all-day case.
+        let missed = try makeFixture()
+        defer { missed.cleanUp() }
+        try missed.saveRoutine(unattendedTrusted: true)
+        missed.viewModel.checkScheduledRoutines(now: missed.nineAM.addingTimeInterval(14 * 60 * 60))
+        try await missed.waitForIdle()
+        #expect(try #require(missed.viewModel.scheduledRunNotice).contains("Morning"))
+
+        // 3. A clarification nobody is present to answer — the routine deleted inside the window
+        //    between the schedule firing and the task body's first line.
+        let clarified = try makeFixture()
+        defer { clarified.cleanUp() }
+        try clarified.saveRoutine(unattendedTrusted: true)
+        clarified.viewModel.checkScheduledRoutines(now: clarified.tenAM)
+        try clarified.routineStore.delete(routineNamed: "Morning")
+        try await clarified.waitForIdle()
+        #expect(try #require(clarified.viewModel.scheduledRunNotice).contains("Morning"))
+
+        // 4. It ran.
+        let ran = try makeFixture()
+        defer { ran.cleanUp() }
+        try ran.saveRoutine(unattendedTrusted: true)
+        ran.viewModel.checkScheduledRoutines(now: ran.tenAM)
+        try await ran.waitForIdle()
+        #expect(try #require(ran.viewModel.scheduledRunNotice).contains("Morning"))
+
+        // 5. It failed — a step that throws at execute time rather than at plan time, so this lands
+        //    in the generic catch rather than in any of the branches above it.
+        let failed = try makeFixture()
+        defer { failed.cleanUp() }
+        try failed.saveRoutine(
+            unattendedTrusted: true,
+            steps: [
+                AgentStep(
+                    id: "calc",
+                    operation: .calculateUtility,
+                    description: "Calculate apples.",
+                    searchQuery: "apples"
+                )
+            ]
+        )
+        failed.viewModel.checkScheduledRoutines(now: failed.tenAM)
+        try await failed.waitForIdle()
+        let failureNotice = try #require(failed.viewModel.scheduledRunNotice)
+        #expect(failureNotice.contains("Morning"))
+        #expect(failureNotice.contains("failed on its scheduled run"))
+
+        // 6. Sonny paused the schedule — the worst case this ticket names, because the routine is
+        //    now switched off and will not run again.
+        let paused = try makeFixture()
+        defer { paused.cleanUp() }
+        try paused.saveRoutineBypassingValidation(
+            unattendedTrusted: true,
+            steps: [
+                AgentStep(
+                    id: "vision",
+                    operation: .visionSession,
+                    description: "Control Notes.",
+                    appName: "Notes",
+                    // Without a goal `prepare` throws first and the run lands in the *failure*
+                    // branch instead — measured while writing this, and the reason case 5 and case 6
+                    // are genuinely different paths rather than the same one twice.
+                    visionGoal: "do a thing"
+                )
+            ]
+        )
+        paused.viewModel.checkScheduledRoutines(now: paused.tenAM)
+        try await paused.waitForIdle()
+        let pausedNotice = try #require(paused.viewModel.scheduledRunNotice)
+        #expect(pausedNotice.contains("Morning"))
+        #expect(pausedNotice.contains("paused its schedule"))
+        #expect(try paused.routineStore.routine(named: "Morning").schedule?.isEnabled == false)
+    }
+
+    /// **The scheduled notice no longer posts through the failure category (SONNY-113).**
+    ///
+    /// It did, and that carried a Retry button, which is wired to `retryLastCommand()` — and
+    /// `aScheduledRunDoesNotBecomeTheRetryTarget` in this same suite demonstrates what that button
+    /// would have done: re-dispatch the user's own last submitted command, a task with no
+    /// relationship to the routine the banner is about. It also meant a routine that ran fine
+    /// arrived in the category Sonny reserves for failures.
+    ///
+    /// Asserted by reading the wiring because it cannot be asserted by running it:
+    /// `SonnyNotificationService.init?` returns nil without bundle identity, and
+    /// `UNUserNotificationCenter.current()` aborts the process rather than throwing when there is
+    /// none — so the subscription this pins does not exist in a test run at all. See
+    /// `MacAgentSource` for why a scan is the honest tool here and what makes this one sound.
+    @Test
+    func theScheduledNoticePostsThroughItsOwnActionlessCategory() throws {
+        let delegate = try MacAgentSource.read("AppDelegate.swift")
+        let subscription = try MacAgentSource.region(
+            of: delegate,
+            from: "viewModel.$scheduledRunNotice",
+            to: ".store(in: &cancellables)"
+        )
+        #expect(subscription.contains("postScheduledRunNotification"))
+        #expect(!subscription.contains("postErrorNotification"))
+
+        // And the category it posts into offers nothing to press. The two neighbours that do carry
+        // actions are checked alongside it, so this fails if the empty array is ever filled in by
+        // copying one of them.
+        let service = try MacAgentSource.read("SonnyNotificationService.swift")
+        let scheduledCategory = try MacAgentSource.region(
+            of: service,
+            from: "identifier: SonnyNotificationCategory.scheduled,",
+            to: ")"
+        )
+        #expect(scheduledCategory.contains("actions: [],"))
+        #expect(!scheduledCategory.contains("retryAction"))
+        #expect(!scheduledCategory.contains("allowAction"))
+
+        // The click goes to Command Center, not the widget: the notice strip renders there and the
+        // Routines page is where a paused schedule is switched back on.
+        #expect(service.contains("case SonnyNotificationCategory.scheduled:"))
+        #expect(service.contains("self?.onOpenScheduledRun()"))
+        let wiring = try MacAgentSource.region(
+            of: delegate,
+            from: "onOpenScheduledRun: { [weak self] in",
+            to: "}"
+        )
+        #expect(wiring.contains("showCommandCenter()"))
+    }
+
+    /// **The widget carries the notice too, and does not shrink away from it (SONNY-113, founder
+    /// decision 2026-08-20).**
+    ///
+    /// The notification only fires when the user is *not* working in Sonny. When they are — Command
+    /// Center open behind a routine-detail, workspace-detail or Settings sheet, all three of which
+    /// cover the four pages that render this notice, or typing into the widget with Command Center
+    /// closed — nothing fired and nothing rendered. The widget strip closes that, but only if the
+    /// widget is expanded: every strip lives in the `else` branch of `if isCompact`, and compact is
+    /// the widget's steady state when nobody is using Sonny, which is exactly the state a routine
+    /// fires in. So the collapse refusal is not a nicety attached to the strip — without it the
+    /// strip would have been added to a surface the user cannot see.
+    @Test
+    func theWidgetRendersTheScheduledNoticeAndStaysExpandedWhileItIsSet() throws {
+        let widget = try MacAgentSource.read("FloatingWidgetView.swift")
+
+        // The strip itself, not merely a mention of the property somewhere in a 1,600-line file.
+        let strip = try MacAgentSource.region(
+            of: widget,
+            from: "if let notice = viewModel.scheduledRunNotice {",
+            to: "if let notice = viewModel.localStorageNotice {"
+        )
+        #expect(strip.contains("WidgetNoticeStrip("))
+        #expect(strip.contains("Dismiss scheduled run notice"))
+        // **The tint, pinned (PR #80 review, F4).** `WidgetNoticeStrip.tint` defaults to the error
+        // red its two older callers ship, so a mutant deleting this one argument silently reports a
+        // routine that ran fine in Sonny's failure colour — the same mistake as posting it in the
+        // failure notification category, one surface further in, and the whole reason the parameter
+        // exists. The default being the *wrong* value for this caller is what makes an omission
+        // invisible without this line.
+        #expect(strip.contains("tint: WidgetTheme.primaryAction"))
+        // Same glyph Command Center shows for the same notice, so one event does not read as two
+        // different kinds of thing depending on which surface the user happens to be looking at.
+        #expect(strip.contains("clock.arrow.circlepath"))
+
+        let collapseRule = try MacAgentSource.region(
+            of: widget,
+            from: "private var isCollapsible: Bool {",
+            to: "private var shouldClearOutcomeOnDismiss: Bool {"
+        )
+        #expect(collapseRule.contains("viewModel.scheduledRunNotice == nil"))
+
+        // And an arriving notice re-runs that decision rather than waiting for something else to
+        // change, so a routine firing at an already-compact widget expands it there and then.
+        #expect(widget.contains(".onChange(of: viewModel.scheduledRunNotice)"))
+    }
+
+    /// **A scheduled routine does not fire while a clarification is waiting (PR #80 review, F1,
+    /// founder decision 2026-08-20).**
+    ///
+    /// `checkScheduledRoutines` guarded only on `isRunning` and `isAwaitingApproval`, and a
+    /// clarification pause makes both false — `performStart`'s defer has already set `isRunning`
+    /// false and a clarification never writes `approvalRequest`. So a routine could start on top of
+    /// a user's half-finished task.
+    ///
+    /// The cost was specific rather than aesthetic: `finishRecordingPolicyIfSettled()` refuses while
+    /// `isRunning`, so a user cancelling their clarification inside that window got no reset — "Don't
+    /// save this task" stayed on and clipboard history stayed paused until relaunch. See
+    /// `ClarificationExitTests.cancellingAClarificationWithNothingElseRunningCompletesTheRecordingPolicyReset`,
+    /// which asserts both halves of that dependency.
+    ///
+    /// **The second half of this test is the part that matters**: the occurrence is only *delayed*.
+    /// Nothing here resolves it, so the very next tick runs it once the question is gone. A guard
+    /// that dropped the run instead would have traded one silent failure for another.
+    @Test
+    func aPendingClarificationStopsTheSchedulerFromStartingAnything() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.saveRoutine(unattendedTrusted: true)
+
+        // A real clarification through the real dispatch path — a bare "=" is a command the
+        // deterministic fixture genuinely cannot act on.
+        fixture.viewModel.command = "="
+        fixture.viewModel.start(origin: .widget, fromComposer: true)
+        try await fixture.waitForIdle()
+        let question = try #require(fixture.viewModel.clarificationQuestion)
+        // The window: the two older terms are both false, which is why they could not close it.
+        #expect(fixture.viewModel.isRunning == false)
+        #expect(fixture.viewModel.isAwaitingApproval == false)
+
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
+        try await fixture.waitForIdle()
+
+        // Nothing started, nothing was reported, and the user's question is untouched.
+        #expect(fixture.viewModel.scheduledRunNotice == nil)
+        #expect(fixture.viewModel.clarificationQuestion == question)
+        #expect(try fixture.routineStore.routine(named: "Morning").effectiveRecentRunDates.isEmpty)
+        // The occurrence is still outstanding — the baseline is exactly where enabling the schedule
+        // left it, never advanced to the occurrence, so this is a deferral rather than a skip.
+        // `resolveOccurrence` is what would have consumed it, and it runs on every outcome
+        // including the skips, so an unmoved baseline is the one thing that distinguishes "not
+        // started" from "handled and reported".
+        #expect(try fixture.routineStore.routine(named: "Morning").schedule?.lastRunAt == fixture.enabledAt)
+
+        // Delay, not loss: with the question answered away, the same tick runs it.
+        fixture.viewModel.cancelCurrentRun()
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
+        try await fixture.waitForIdle()
+
+        #expect(try #require(fixture.viewModel.scheduledRunNotice).contains("ran on schedule"))
+        #expect(try fixture.routineStore.routine(named: "Morning").effectiveRecentRunDates.isEmpty == false)
+        // And the baseline moved this time, so the two halves are distinguishable by the same field.
+        #expect(try fixture.routineStore.routine(named: "Morning").schedule?.lastRunAt == fixture.nineAM)
+    }
+
     private func makeFixture() throws -> Fixture {
         try Fixture()
     }

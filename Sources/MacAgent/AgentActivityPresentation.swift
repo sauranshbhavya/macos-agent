@@ -221,6 +221,35 @@ enum AgentActivityPresentation {
     }
 }
 
+/// The copy for abandoning a clarification (SONNY-166).
+///
+/// **One copy, because two surfaces have to say the same thing.** The floating widget's
+/// clarification panel and `CommandCenterAttentionPanel`'s mirror it — `.claude/rules/
+/// macagent-ui-conventions.md`'s "Approval visibility" rule is that the two can never disagree
+/// about one task, and two identical literals is exactly the shape that held until one of them
+/// stopped saying anything (SONNY-173's missing-key message). The widget's control is icon-only, so
+/// there `cancelLabel` is its tooltip and its VoiceOver name rather than visible text.
+///
+/// **The founder's wording, given verbatim on 2026-08-20**, chosen over "Never mind" and "Stop" so
+/// that Sonny's two exits from a paused run speak with one voice: cancelling at an approval prompt
+/// already writes "Approval canceled. No action was taken."
+///
+/// Nothing here explains how it works, per the founder's rule of 2026-08-14 — the label is the
+/// whole message.
+enum ClarificationPresentation {
+    /// The Command Center button's visible text, and the widget button's tooltip and accessibility
+    /// label.
+    static let cancelLabel = "Cancel"
+
+    /// What Sonny says once the question is abandoned.
+    ///
+    /// "No action was taken" is literally true rather than a softening: a clarification is raised
+    /// inside `AgentRunner.prepare` and `performStart` returns on it before `executePreparedRun` is
+    /// ever reached, so every step is still `.pending` and nothing has run. See
+    /// `AgentViewModel.cancelCurrentRun()`'s clarification branch.
+    static let canceledSummary = "Canceled. No action was taken."
+}
+
 /// "Don't save this task" — the widget control's copy (SONNY-120).
 ///
 /// **The label carries the whole meaning, because no sentence may sit beside it.** The founder's
