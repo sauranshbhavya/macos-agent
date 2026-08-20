@@ -1579,8 +1579,16 @@ final class AgentViewModel: ObservableObject {
             // task" on and clipboard history paused until the next launch. That is the exact
             // consequence SONNY-120 recorded as a known limit and this ticket exists to close.
             //
-            // No `currentTask?.cancel()`: `performStart`'s defer set it to `nil` on the way into the
-            // pause, so there is no task here to cancel.
+            // **No `currentTask?.cancel()`, and the honest reason is the scheduler guard rather
+            // than the defer.** This used to read "`performStart`'s defer set it to `nil` on the way
+            // into the pause, so there is no task here to cancel", which was false in exactly one
+            // window: `checkScheduledRoutines` could start a routine during the pause, and
+            // `currentTask` was then that run — so cancelling a clarification would have killed a
+            // scheduled run the user never started, and the reset below would have been refused
+            // anyway because `isRunning` was true. `checkScheduledRoutines` now refuses to start
+            // anything while a clarification is open (PR #80 review, F1), which is what makes the
+            // claim true rather than the defer: no other path can put a task here while the question
+            // stands. Pinned by `aPendingClarificationStopsTheSchedulerFromStartingAnything`.
             finishRecordingPolicyIfSettled()
             return
         }
@@ -3170,7 +3178,26 @@ final class AgentViewModel: ObservableObject {
     /// catch-up in the first place.
     func checkScheduledRoutines(now: Date = Date()) {
         // Never interrupt or race a task already in flight, whoever started it.
-        guard !isRunning, !isAwaitingApproval else {
+        //
+        // **The third term is the founder's decision of 2026-08-20 (PR #80 review, F1), and it
+        // closes a real overlap rather than a theoretical one.** A clarification pause looks idle
+        // from out here — `performStart`'s defer has set `isRunning` false and a clarification never
+        // writes `approvalRequest` — so the two-term guard let a routine fire on top of a user's
+        // half-finished task. What that cost is specific: `finishRecordingPolicyIfSettled()` refuses
+        // while `isRunning`, so a user cancelling their clarification during the scheduled run's
+        // window got no reset at all — "Don't save this task" stayed on and clipboard history stayed
+        // paused until relaunch, which is the exact failure SONNY-166 was filed to end, reintroduced
+        // through a door that ticket never looked at.
+        //
+        // **A delay, not a loss.** The occurrence stays outstanding because nothing here resolves
+        // it, and the 30-second tick (plus the wake observer) picks it up on the next pass, which is
+        // the same catch-up path a routine firing during any other in-flight task already takes.
+        //
+        // Spelled out rather than written `!isTaskInFlight`, which is exactly these three terms
+        // today. A background trigger's refusal set should not change because a UI predicate grows a
+        // fourth term later; if a new state ought to block the scheduler, it gets added here on
+        // purpose.
+        guard !isRunning, !isAwaitingApproval, clarificationQuestion == nil else {
             return
         }
 
