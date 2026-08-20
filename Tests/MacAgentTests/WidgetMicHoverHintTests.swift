@@ -211,12 +211,22 @@ struct WidgetMicHoverHintTests {
 /// departure was never delivered is still an arrival. That is the one property the old design could
 /// not have, and it is the whole of the fix; a first hover is not a case anything here names.
 ///
+/// **The tracker is wired the way the app wires it, which is the point and was once the hole.** The
+/// arrival goes to `MicHoverHintModel.pointerArrived`, exactly as `FloatingWidgetView`'s
+/// `micHintPointerEnteredMic` sends it. These tests first shipped calling `show` directly, so the
+/// one test pinning "a repeat arrival is still an arrival" routed around the very function this
+/// branch created to be the arrival's one entry point — and a mutant that swallowed the repeat
+/// *inside* `pointerArrived`, which is the shipped bug re-expressed one layer down, survived the
+/// whole suite. Measured at `5cac908`, found by PR #75's review as F1, and the reason a test's
+/// wiring is now a thing this file states rather than a detail.
+///
 /// **What is still out of reach**, since this suite gets closer to the view than its neighbour
 /// above and should not be read as reaching it. `makeNSView`/`updateNSView` handing these two
-/// closures to the tracking view is view wiring, and so is what `FloatingWidgetView` puts in them;
-/// a view cannot be asked what it renders or what it wired. The founder's manual items are the
-/// verification for those. What is reachable is the tracking view itself, which is an `NSView` a
-/// test can build and send real enter/exit events to.
+/// closures to the tracking view is view wiring, and so is *which* slot boolean
+/// `micHintPointerEnteredMic` hands over; a view cannot be asked what it renders or what it wired.
+/// The founder's manual items are the verification for those. What is reachable is everything from
+/// the tracking view inward, which is an `NSView` a test can build and send real enter/exit events
+/// to, and the model it feeds.
 @Suite
 @MainActor
 struct MicHoverArrivalTests {
@@ -237,6 +247,27 @@ struct MicHoverArrivalTests {
         )
     }
 
+    /// A tracking view wired the way `FloatingWidgetView` wires one: `onEnter` calls
+    /// `pointerArrived` with the slot's answer and a closure that resolves the hint, `onExit` calls
+    /// `dismiss`. Nothing here reaches past `pointerArrived` into `show`, because the app does not.
+    ///
+    /// The slot is free throughout this suite — what it does when taken is
+    /// `anArrivalWithTheSlotTakenShowsNothingAndClearsWhatWasUp`'s, and it needs no event to say it.
+    private static func trackerFeeding(
+        _ model: MicHoverHintModel
+    ) -> AlwaysActiveHoverTracker.TrackingNSView {
+        let tracker = AlwaysActiveHoverTracker.TrackingNSView()
+        tracker.onEnter = {
+            model.pointerArrived(slotIsFree: true) {
+                WidgetMicHoverHintTests.reminder(
+                    clearingAfter: WidgetMicHoverHintTests.noSoonerThanTheTestEnds
+                )
+            }
+        }
+        tracker.onExit = { model.dismiss() }
+        return tracker
+    }
+
     /// The bug, reproduced as the sequence that produced it: two arrivals with no departure
     /// delivered between them, because the mic was taken away and given back under a pointer that
     /// never moved.
@@ -244,16 +275,14 @@ struct MicHoverArrivalTests {
     /// The second arrival is the hover the founder lost. It must show the hint and it must arm a
     /// *different* countdown — "there is a countdown" would still be true if the second arrival had
     /// done nothing at all and left the first one's running.
+    ///
+    /// It travels the app's own route to get there — `TrackingNSView.mouseEntered` to `onEnter` to
+    /// `pointerArrived` — so a repeat swallowed at *either* end fails this, which is the whole of
+    /// what F1 corrected.
     @Test
     func anArrivalWhoseDepartureWasNeverDeliveredStillShowsTheHint() throws {
         let model = MicHoverHintModel()
-        let tracker = AlwaysActiveHoverTracker.TrackingNSView()
-        tracker.onEnter = {
-            model.show(WidgetMicHoverHintTests.reminder(
-                clearingAfter: WidgetMicHoverHintTests.noSoonerThanTheTestEnds
-            ))
-        }
-        tracker.onExit = { model.dismiss() }
+        let tracker = Self.trackerFeeding(model)
 
         let arrival = try #require(Self.crossing(.mouseEntered))
 
@@ -277,13 +306,7 @@ struct MicHoverArrivalTests {
     @Test
     func aDepartureClearsTheHintAndLeavesNothingCounting() throws {
         let model = MicHoverHintModel()
-        let tracker = AlwaysActiveHoverTracker.TrackingNSView()
-        tracker.onEnter = {
-            model.show(WidgetMicHoverHintTests.reminder(
-                clearingAfter: WidgetMicHoverHintTests.noSoonerThanTheTestEnds
-            ))
-        }
-        tracker.onExit = { model.dismiss() }
+        let tracker = Self.trackerFeeding(model)
 
         tracker.mouseEntered(with: try #require(Self.crossing(.mouseEntered)))
         #expect(model.visibleHint != nil)

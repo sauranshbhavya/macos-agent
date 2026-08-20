@@ -153,10 +153,18 @@ final class MicHoverHintModel: ObservableObject {
         }
     }
 
-    /// Every way a hint stops being wanted, which is four call sites in `FloatingWidgetView`: the
-    /// pointer left; the pointer arrived while the panel or the compact capsule already owned the
-    /// slot, where there is nothing to show and the call does nothing; the slot was taken while a
-    /// hint was up; and the view went away.
+    /// Every way a hint stops being wanted. **Four call sites, and since SONNY-179 only three of
+    /// them are in `FloatingWidgetView`** — counted rather than carried over, because the sentence
+    /// this replaced said four *there* after the fourth had moved: the pointer left
+    /// (`FloatingWidgetView.swift:609`); the slot was taken while a hint was up (`:155`); the view
+    /// went away (`:159`); and the pointer arrived while the panel or the compact capsule already
+    /// owned the slot, which is `pointerArrived` above, in this file.
+    ///
+    /// **That fourth one is not a no-op**, which the same replaced sentence also claimed. There may
+    /// be no hint to show, but there can be one already up — the panel can open under a pointer
+    /// that then leaves and comes back, and an arrival can land on a mic the panel is already over.
+    /// It clears that hint and cancels its countdown like any other dismissal, which is what
+    /// `anArrivalWithTheSlotTakenShowsNothingAndClearsWhatWasUp` asserts.
     ///
     /// Cancelling here is the load-bearing half, not the clearing: a countdown left running
     /// outlives the hint it was counting for and clears whichever hint is up when it lands, which
