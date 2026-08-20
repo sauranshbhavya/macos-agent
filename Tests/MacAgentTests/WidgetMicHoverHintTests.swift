@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import MacAgent
@@ -16,26 +17,31 @@ import Testing
 ///
 /// **What is not reachable from here**, stated rather than implied: `FloatingWidgetView`'s four
 /// calls into this model are view wiring, and a view cannot be asked what it renders. One `show`,
-/// when the pointer enters and the hint's slot is free; and three `dismiss`es — the pointer
-/// leaving, the pointer entering while the panel or the compact capsule already owns the slot, and
+/// when the pointer arrives and the hint's slot is free; and three `dismiss`es — the pointer
+/// leaving, the pointer arriving while the panel or the compact capsule already owns the slot, and
 /// the view disappearing. The founder's manual items 1, 2, 3 and 5 are the verification for those.
+///
+/// The last suite below reaches one step further than that, into the tracking view those calls hang
+/// off, because SONNY-179's bug lived in what the view remembered *between* two of them rather than
+/// in either one.
 @Suite
 @MainActor
 struct WidgetMicHoverHintTests {
     /// Short enough that awaiting the real countdown costs nothing, so these tests pin the mechanism
-    /// without pinning the shipping four seconds — that number is asserted once, on the value the
+    /// without pinning the shipping three seconds — that number is asserted once, on the value the
     /// view model resolves, in `WidgetVoiceEntryTests`.
-    private static let promptly = Duration.milliseconds(1)
+    static let promptly = Duration.milliseconds(1)
 
     /// Long enough that this countdown cannot possibly fire on its own while the assertions run, so
     /// a countdown that finishes at all has been cancelled. Deliberately seconds rather than
     /// minutes: a mutant that stops cancelling is caught either way, and this is what it costs when
-    /// one is.
-    private static let noSoonerThanTheTestEnds = Duration.seconds(3)
+    /// one is. Deliberately *not* the shipping three either, so no assertion here can be satisfied
+    /// by the two happening to be the same number.
+    static let noSoonerThanTheTestEnds = Duration.seconds(5)
 
-    private static func reminder(clearingAfter delay: Duration?) -> MicHoverHintPresentation {
+    static func reminder(clearingAfter delay: Duration?) -> MicHoverHintPresentation {
         MicHoverHintPresentation(
-            message: "Speak your command — or hold Ctrl-Opt-Space anywhere",
+            message: AgentViewModel.micHoverShortcutReminder,
             autoDismissDelay: delay
         )
     }
@@ -134,13 +140,13 @@ struct WidgetMicHoverHintTests {
     /// than leave two running, or the older one clears the newer hint at the older hover's
     /// deadline.
     ///
-    /// **No call path does this today, and the example this comment used to give was wrong.** It
-    /// named the panel closing with the pointer never having left; that path calls nothing at all,
-    /// because the slot-becoming-free direction deliberately does not re-show. Nor can the hover
-    /// hook produce two `show`s in a row: reaching a second `false` → `true` transition means
-    /// passing through `true` → `false` first, which dismisses on the way out. So this pins the
-    /// model's own contract for a caller that does not exist yet, which is what makes `show` safe
-    /// to call twice — not a sequence the shipping view can currently produce.
+    /// **The shipping view produces exactly this sequence, and that is new in SONNY-179.** Two
+    /// earlier tellings of this comment called it unreachable: the second said a second `show`
+    /// required a `false` → `true` transition of a stored hover boolean and so had to pass through a
+    /// dismissing `true` → `false` first. There is no such boolean now — the view responds to each
+    /// arrival — so two arrivals with no departure delivered between them, which is the very
+    /// sequence the old boolean turned into a swallowed hover, now reach `show` twice in a row. See
+    /// `MicHoverArrivalTests`.
     @Test
     func showingAgainReplacesTheCountdownRatherThanAddingASecond() async throws {
         let model = MicHoverHintModel()
@@ -154,5 +160,139 @@ struct WidgetMicHoverHintTests {
 
         await superseded.value
         #expect(model.visibleHint != nil, "the superseded countdown cleared the hint that replaced it")
+    }
+}
+
+/// SONNY-179. The hint did not show on the first hover of a session, showed on the second, and
+/// showed on every hover after that — exactly one lost, and always the first.
+///
+/// **The cause was a stored copy of where the pointer is, not the hint's own machinery.** SONNY-177
+/// shipped the mic's tracking view writing a `Binding<Bool>` and `FloatingWidgetView` reacting to
+/// that boolean *changing*. Both of the events that write it — `mouseEntered` and `mouseExited` —
+/// need the pointer to cross the tracking area's edge while that area exists, and the area is
+/// created and destroyed with the mic button: the widget's own six-second auto-collapse takes the
+/// mic away under a stationary pointer, no crossing happens, so nothing writes `false` and the
+/// boolean stays `true` with the pointer nowhere near the mic. Expanding again and hovering wrote
+/// `true` over `true` — not a change, so the hook never ran and that hover showed nothing. Leaving
+/// finally wrote `false`, the two agreed again, and every later hover worked. The founder's report,
+/// mechanism for mechanism.
+///
+/// So the fix deleted the copy: the tracking view reports the two arrivals and the view responds to
+/// each, and what these tests pin is that it responds to *each* — an arrival whose predecessor's
+/// departure was never delivered is still an arrival. That is the one property the old design could
+/// not have, and it is the whole of the fix; a first hover is not a case anything here names.
+///
+/// **What is still out of reach**, since this suite gets closer to the view than its neighbour
+/// above and should not be read as reaching it. `makeNSView`/`updateNSView` handing these two
+/// closures to the tracking view is view wiring, and so is what `FloatingWidgetView` puts in them;
+/// a view cannot be asked what it renders or what it wired. The founder's manual items are the
+/// verification for those. What is reachable is the tracking view itself, which is an `NSView` a
+/// test can build and send real enter/exit events to.
+@Suite
+@MainActor
+struct MicHoverArrivalTests {
+    /// A real `NSEvent` of the kind AppKit delivers, so these tests enter through
+    /// `mouseEntered(with:)`/`mouseExited(with:)` themselves rather than through a seam added for
+    /// their benefit.
+    private static func crossing(_ type: NSEvent.EventType) -> NSEvent? {
+        NSEvent.enterExitEvent(
+            with: type,
+            location: .zero,
+            modifierFlags: [],
+            timestamp: 0,
+            windowNumber: 0,
+            context: nil,
+            eventNumber: 0,
+            trackingNumber: 0,
+            userData: nil
+        )
+    }
+
+    /// The bug, reproduced as the sequence that produced it: two arrivals with no departure
+    /// delivered between them, because the mic was taken away and given back under a pointer that
+    /// never moved.
+    ///
+    /// The second arrival is the hover the founder lost. It must show the hint and it must arm a
+    /// *different* countdown — "there is a countdown" would still be true if the second arrival had
+    /// done nothing at all and left the first one's running.
+    @Test
+    func anArrivalWhoseDepartureWasNeverDeliveredStillShowsTheHint() throws {
+        let model = MicHoverHintModel()
+        let tracker = AlwaysActiveHoverTracker.TrackingNSView()
+        tracker.onEnter = {
+            model.show(WidgetMicHoverHintTests.reminder(
+                clearingAfter: WidgetMicHoverHintTests.noSoonerThanTheTestEnds
+            ))
+        }
+        tracker.onExit = { model.dismiss() }
+
+        let arrival = try #require(Self.crossing(.mouseEntered))
+
+        tracker.mouseEntered(with: arrival)
+        let first = try #require(model.dismissCountdown, "the first hover must show the hint")
+
+        // No `mouseExited` in between — that is the whole point. AppKit never delivered one because
+        // the pointer never crossed anything: the mic went away underneath it.
+        tracker.mouseEntered(with: arrival)
+
+        #expect(model.visibleHint != nil, "the second hover showed nothing — SONNY-179's bug")
+        #expect(
+            model.dismissCountdown != first,
+            "and it must be a fresh countdown, not the one the first hover left running"
+        )
+    }
+
+    /// The departure still ends the hint, which is the half the fix must not have cost. Asserted
+    /// after an arrival rather than on its own, so a tracker that simply never called `onEnter`
+    /// could not satisfy it.
+    @Test
+    func aDepartureClearsTheHintAndLeavesNothingCounting() throws {
+        let model = MicHoverHintModel()
+        let tracker = AlwaysActiveHoverTracker.TrackingNSView()
+        tracker.onEnter = {
+            model.show(WidgetMicHoverHintTests.reminder(
+                clearingAfter: WidgetMicHoverHintTests.noSoonerThanTheTestEnds
+            ))
+        }
+        tracker.onExit = { model.dismiss() }
+
+        tracker.mouseEntered(with: try #require(Self.crossing(.mouseEntered)))
+        #expect(model.visibleHint != nil)
+
+        tracker.mouseExited(with: try #require(Self.crossing(.mouseExited)))
+
+        #expect(model.visibleHint == nil, "the pointer left and the hint stayed")
+        #expect(model.dismissCountdown == nil, "a countdown outlived the hint it was counting for")
+    }
+
+    /// The routing on its own, counted, with the hint out of the picture entirely: two arrivals in
+    /// a row are two arrivals, and a departure is not one of them.
+    ///
+    /// **What this adds over the two above, stated no larger than it is.** Both of those would
+    /// already fail against a tracker that swapped its handlers or called both from one override —
+    /// they drive a real model and its state answers for the routing. What they cannot do is say
+    /// *how many* times an arrival arrived, because `show` is idempotent enough that a second call
+    /// and a missing one look alike from the outside once the countdown identity has been checked.
+    /// This says it in the only terms that can: a counter per override.
+    @Test
+    func eachOverrideCallsOnlyItsOwnHandler() throws {
+        var arrivals = 0
+        var departures = 0
+        let tracker = AlwaysActiveHoverTracker.TrackingNSView()
+        tracker.onEnter = { arrivals += 1 }
+        tracker.onExit = { departures += 1 }
+
+        tracker.mouseEntered(with: try #require(Self.crossing(.mouseEntered)))
+        #expect((arrivals, departures) == (1, 0))
+
+        tracker.mouseExited(with: try #require(Self.crossing(.mouseExited)))
+        #expect((arrivals, departures) == (1, 1))
+
+        tracker.mouseEntered(with: try #require(Self.crossing(.mouseEntered)))
+        tracker.mouseEntered(with: try #require(Self.crossing(.mouseEntered)))
+        #expect(
+            (arrivals, departures) == (3, 1),
+            "every arrival is an arrival, including one that repeats the last one"
+        )
     }
 }

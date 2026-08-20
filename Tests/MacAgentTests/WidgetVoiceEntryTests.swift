@@ -82,12 +82,16 @@ struct WidgetVoiceEntryTests {
             AgentViewModel.missingAPIKeyVoiceMessage
                 == "No API key is set up. Add one, then relaunch Sonny."
         )
-        // The hint's other variant, pinned in the same place: SONNY-177 moved this literal out of
-        // `FloatingWidgetView` and was explicitly not to change a word of it.
+        // The hint's other variant, pinned in the same place. SONNY-179's wording, given verbatim by
+        // the founder; SONNY-177 shipped "Speak your command — or hold Ctrl-Opt-Space anywhere".
         #expect(
-            AgentViewModel.micHoverShortcutReminder
-                == "Speak your command — or hold Ctrl-Opt-Space anywhere"
+            AgentViewModel.micHoverShortcutReminder == "Click to speak or hold Ctrl-Opt-Space."
         )
+        // The em dash is the thing the founder asked to be rid of, so it is asserted as an absence
+        // and not merely implied by the literal above — a later reword may not quietly bring one
+        // back, and neither message may carry one.
+        #expect(!AgentViewModel.micHoverShortcutReminder.contains("—"))
+        #expect(!AgentViewModel.missingAPIKeyVoiceMessage.contains("—"))
         #expect(!AgentViewModel.missingAPIKeyVoiceMessage.contains("OPENAI"))
         #expect(AgentViewModel.missingAPIKeyVoiceMessage.contains("relaunch"))
     }
@@ -109,8 +113,8 @@ struct WidgetVoiceEntryTests {
         working.voiceConfigurationBlockerOverride = { nil }
         #expect(working.micHoverHintPresentation.message == AgentViewModel.micHoverShortcutReminder)
         #expect(
-            working.micHoverHintPresentation.autoDismissDelay == .seconds(4),
-            "a reminder that will not leave is nagging — four seconds, and it goes"
+            working.micHoverHintPresentation.autoDismissDelay == .seconds(3),
+            "a reminder that will not leave is nagging — three seconds, and it goes (SONNY-179)"
         )
 
         let blocked = try makeViewModel(root: root)
