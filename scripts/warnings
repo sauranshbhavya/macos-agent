@@ -166,15 +166,24 @@ What this does and does not prevent
 
   It does not report warnings from dependencies. SwiftPM suppresses warnings for packages that are
   not the root package, so the compiler never emits them; this cannot report what was never said.
-  Warnings arriving from anywhere other than this repository's own sources are still counted and
-  printed under "elsewhere" rather than dropped, because a line this script did not expect is the
-  one thing it must never silently discard.
+  A warning that does arrive from outside this repository's sources is printed under "elsewhere"
+  with its own count, and deliberately does not move the count above or the exit code: it is real,
+  it is visible, and it is not this repository's to fix. Nothing is dropped either way — a
+  `warning:` line the parser cannot classify at all suppresses the count and is printed instead,
+  because a parser that quietly discards what it did not expect is one more way to print zero and
+  mean nothing.
 
   It does not check any tree but this one, on this machine, with this toolchain. A warning that
   needs a different SDK or a newer compiler is not visible here.
 
-  It is a check, not a gate. Nothing runs it for you. It has to be run — before a PR opens, and
-  before anyone writes the phrase "zero compiler warnings" anywhere.
+  It costs about 95s and a build directory of its own — 800 MB here once warm, beside the shared
+  .build/ and scripts/mutate's scratch. It persists between runs so SwiftPM need not re-fetch the
+  dependency, but the compiled output inside it is emptied every run and never reused.
+
+  It is a check, not a gate. Nothing runs it for you. WORKFLOW.md steps 5 and 7 require it, which
+  is a rule pointing at a mechanism rather than a mechanism — the honest residual, stated here
+  rather than implied away. Run it before a PR opens, and before anyone writes the phrase "zero
+  compiler warnings" anywhere.
 USAGE
 }
 
