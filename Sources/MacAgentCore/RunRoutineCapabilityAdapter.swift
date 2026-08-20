@@ -141,11 +141,15 @@ public struct RunRoutineCapabilityAdapter: CapabilityAdapter {
     /// `WorkspaceBrowserCatalog`'s Arc, Firefox and Edge entries reachable — they were bundle
     /// identifiers no resolution path could ever produce while only the twelve-app catalog answered.
     ///
-    /// Only `.openApp` steps are considered. A nested workspace open is *rejected by
-    /// `SaveRoutineCapabilityAdapter.validateRoutineSteps`* — but that is the save capability's
-    /// boundary, not the store's: `RoutineStore.save` validates `schedule` and nothing else, so a
-    /// routine carrying one can still be written directly and reach here. Treated as unhandled
-    /// rather than impossible for that reason (PR #28, F5).
+    /// Only `.openApp` steps are considered, and a nested workspace open is therefore not handled
+    /// here. **The reason changed and the sentence had not** (PR #81's review): this used to say
+    /// `RoutineStore.save` "validates `schedule` and nothing else", which stopped being true at
+    /// SONNY-52 — `save` calls `StoredRoutine.validateStepSafety` before it persists, so the store
+    /// refuses a nested `open_workspace` at the same choke point the save capability does, and no
+    /// product path can write one. What can still produce such a routine is
+    /// `saveBypassingStepValidation`, module-internal and test-only by design, or a store file
+    /// edited outside Sonny. So this stays treated as unhandled rather than impossible — the same
+    /// conclusion as PR #28's F5, now resting on the reason that is actually true.
     private func browser(for routine: StoredRoutine, context: CapabilityExecutionContext) -> MacApp? {
         let apps = routine.steps
             .filter { $0.operation == .openApp }
