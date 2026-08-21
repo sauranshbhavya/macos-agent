@@ -2165,7 +2165,7 @@ struct ProductShellTests {
     /// cycle 2, F4).
     ///
     /// The foreground path reported this through `setError`, which writes `errorMessage` — and
-    /// `publishLocalStorageLoadError`'s own doc comment, twelve hundred lines up, records exactly
+    /// `publishLocalStorageLoadError`'s own doc comment, some seven hundred lines up, records exactly
     /// what that costs: "routing a corrupt-store notice there made a *successful* task render as a
     /// failure in the widget, since the widget picks `.failure` ahead of `.result`". So a task that
     /// ran, produced its result and stored its row would show "Could not save this task's plan: …"
@@ -2200,9 +2200,29 @@ struct ProductShellTests {
         // The task succeeded and still says so — this is the assertion the old channel broke.
         #expect(viewModel.errorMessage == nil, "a plan-persist failure is not this task failing")
         #expect(viewModel.finalSummary.contains("42"))
-        // The widget renders `.failure` ahead of `.result`, so `errorMessage` being nil is what
-        // keeps the result on screen. Asserted through the same predicate the widget reads.
-        #expect(!viewModel.hasVisibleWidgetPanel || viewModel.errorMessage == nil)
+        // **The premise this test's own claim rests on, pinned rather than assumed** (PR #89
+        // cycle 3). This line read `!hasVisibleWidgetPanel || errorMessage == nil`, which cannot
+        // fail: the line above already asserts `errorMessage == nil`, so the right disjunct is true
+        // whatever the panel does — and the panel predicate is false here anyway, since this run's
+        // origin is `.commandCenter`. A test line that cannot fail is this branch's own recurring
+        // theme, so it is replaced rather than deleted.
+        //
+        // What is genuinely worth holding is the ordering the whole fix depends on: "the result
+        // stays on screen because `errorMessage` is nil" is only true while `FloatingWidgetView`
+        // picks `.failure` ahead of `.result`. Reorder those two arms and this fix silently stops
+        // mattering, with every view-model assertion above still green. Nothing else in the suite
+        // pins it, and a view-model test cannot reach the view — so it is read off the source, in
+        // the scan shape this target already uses.
+        let widgetState = try MacAgentSource.braceBlock(
+            of: try MacAgentSource.read("FloatingWidgetView.swift"),
+            openedBy: "private var state: WidgetState {"
+        )
+        let failureArm = try #require(widgetState.range(of: "return .failure("))
+        let resultArm = try #require(widgetState.range(of: "return .result("))
+        #expect(
+            failureArm.lowerBound < resultArm.lowerBound,
+            "the widget must still pick .failure ahead of .result, or this fix no longer keeps the result on screen"
+        )
 
         // The row landed, with its result, and the published list agrees with the file.
         let record = try #require(try fixture.taskHistoryStore.loadAll().last)

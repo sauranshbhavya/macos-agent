@@ -160,8 +160,9 @@ public struct TaskPlanDetailStore: @unchecked Sendable {
     /// `TaskHistoryStore.defaultMaxItems`, and **giving this store a shorter life than the task row
     /// is precisely what the founder's 2026-08-17 split condition forbids** — a follow-up must not
     /// quietly get weaker on an older task. A production path that passed anything here would be
-    /// doing that; none does, and `theShippedPlanCapIsTheHistoryCapAndNoProductionPathOverridesIt`
-    /// pins it.
+    /// doing that; none does, and `noProductionPathPassesACapToThePlanStore` pins it, while
+    /// `thePlanStoreCapsAtExactlyTheHistoryStoresNumber` pins the value itself off a store built the
+    /// way production builds one.
     ///
     /// Floored at 1, like its sibling: a store built with 0 would evict everything on the next
     /// write, which is silent data loss rather than a small cap.
