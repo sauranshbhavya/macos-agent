@@ -23,9 +23,9 @@ public enum LocalStoreKind: CaseIterable, Hashable, Sendable {
     /// and no output to keep; suppressing it would mean suppressing the user's own preference.
     ///
     /// This third case exists because the founder's own trace/artifact enumeration named eight of
-    /// the nine stores. Without it the classification cannot be exhaustive, and an exhaustive
-    /// classification is the whole point. (Planning session's addition, recorded on SONNY-14
-    /// rather than silently inserted.)
+    /// the nine stores that existed when it was made. Without it the classification cannot be
+    /// exhaustive, and an exhaustive classification is the whole point. (Planning session's
+    /// addition, recorded on SONNY-14 rather than silently inserted.)
     case notWrittenByTasks
 }
 
@@ -38,8 +38,8 @@ public enum LocalStoreKind: CaseIterable, Hashable, Sendable {
 ///   somebody decides what it is.
 /// - `LocalStorageSecurityTests.everyLocalStoreFileIsClassifiedExactlyOnce` matches these cases'
 ///   file URLs against `LocalDataDeletionService.defaultStoreFileURLs()`, so a **new store file
-///   fails the suite** until it gets a case here. A tenth store is already implied by row 12's
-///   work; that arrival is meant to fail loudly rather than pass silently.
+///   fails the suite** until it gets a case here. Row E's `task-plan-details.json` is the tenth,
+///   and it arrived exactly that way: the suite failed until it was classified here.
 ///
 /// `fileURL(fileManager:)` delegates to the store types themselves rather than repeating their
 /// filenames, so the two lists cannot drift apart: a store that moves moves in both.
@@ -53,6 +53,7 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
     case recentArtifacts
     case shortcutRunHistory
     case taskHistory
+    case taskPlanDetails
 
     /// Deliberately one `case` per store rather than three grouped ones: each line is a separate
     /// classification decision, and a reviewer should be able to disagree with exactly one of them.
@@ -61,7 +62,7 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
         case .visionSessionJournal:
             // Row I's action journal: what the screen-control loop did and what it observed after
             // each action. A record *of* the run, never the point of it — and the most sensitive
-            // trace of the nine.
+            // trace of the ten.
             return .trace
         case .routines:
             // "Save this as a routine" is the ask itself. Suppressing it would break the task.
@@ -96,6 +97,12 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
         case .taskHistory:
             // The command, its outcome and its timings. The trace this feature is named after.
             return .trace
+        case .taskPlanDetails:
+            // What each finished task planned, kept so a follow-up on it has something to correct
+            // against (row E, SONNY-147). A record *of* the run, exactly like the row it hangs off
+            // — and it is suppressed for the same reason and at the same moment, since a suppressed
+            // run writes no row for a detail to belong to.
+            return .trace
         }
     }
 
@@ -122,6 +129,8 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
             return ShortcutRunHistoryStore(fileManager: fileManager).fileURL
         case .taskHistory:
             return TaskHistoryStore(fileManager: fileManager).fileURL
+        case .taskPlanDetails:
+            return TaskPlanDetailStore(fileManager: fileManager).fileURL
         }
     }
 }

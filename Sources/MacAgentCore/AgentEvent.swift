@@ -117,18 +117,44 @@ public struct AgentRunResult: Equatable, Sendable {
     public var plan: AgentPlan
     public var previews: [ActionPreview]
     public var summary: String
+    /// Who wrote `summary` (SONNY-147).
+    ///
+    /// **Declared where the text is authored, and carried from there**, because by the time this
+    /// value becomes a `CompletedTaskRecord.result` the string has passed through three layers and
+    /// nothing downstream can tell a model's sentence from an adapter's template.
+    ///
+    /// **Defaulted to `.codeAuthored`, and the enumeration is what makes that honest rather than
+    /// convenient.** At `ebd6c1d`, `grep -rn "AgentRunResult(" Sources | wc -l` finds 27
+    /// construction sites: 26 interpolate counts, names and paths into templates written in this
+    /// repository, and one — `VisionSessionCapabilityAdapter.swift:278` — carries free text a model
+    /// composed after reading the user's screen. Two of those 26 do not author at all, they
+    /// *forward*: `RunRoutineCapabilityAdapter` wraps a nested run's summary in a sentence of its
+    /// own, and `AgentActionExecutor.executeChain` joins one summary per chain segment. Both pass
+    /// this field through, so a routine carrying a screen-control step and a chain with a vision
+    /// segment both come out `.modelAuthored`. A default that a new model-authored producer forgets
+    /// to override would be a real hole; the defence is that this comment, the type's own
+    /// enumeration and `theOnlyModelAuthoredRunSummaryIsTheVisionSessions` all point at the same
+    /// list.
+    public var summaryProvenance: StoredTaskResult.Provenance
     public var suggestions: [RunSuggestion]
 
     public init(
         plan: AgentPlan,
         previews: [ActionPreview],
         summary: String,
+        summaryProvenance: StoredTaskResult.Provenance = .codeAuthored,
         suggestions: [RunSuggestion] = []
     ) {
         self.plan = plan
         self.previews = previews
         self.summary = summary
+        self.summaryProvenance = summaryProvenance
         self.suggestions = suggestions
+    }
+
+    /// This run's summary as it will be stored, with the provenance it was authored under.
+    public var storedResult: StoredTaskResult {
+        StoredTaskResult.declaring(summaryProvenance, text: summary)
     }
 }
 

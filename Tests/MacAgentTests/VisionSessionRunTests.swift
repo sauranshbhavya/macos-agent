@@ -272,6 +272,11 @@ struct VisionSessionRunTests {
         let model: ScriptedVisionModel
         let synthesizer: RecordingSynthesizer
         let journal: VisionSessionJournalStore
+        /// Row E (SONNY-147). Exposed so a test can read what a screen-control run actually stored,
+        /// off the file rather than off published state.
+        let taskHistoryStore: TaskHistoryStore
+        let taskPlanDetailStore: TaskPlanDetailStore
+        let routineStore: RoutineStore
         let root: URL
 
         func tearDown() {
@@ -314,14 +319,20 @@ struct VisionSessionRunTests {
         let userDefaults = try #require(UserDefaults(suiteName: suiteName))
         userDefaults.removePersistentDomain(forName: suiteName)
 
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        let taskHistoryStore = TaskHistoryStore(fileURL: root.appendingPathComponent("task-history.json"))
+        let taskPlanDetailStore = TaskPlanDetailStore(
+            fileURL: root.appendingPathComponent("task-plan-details.json")
+        )
         let viewModel = AgentViewModel(
-            routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
+            routineStore: routineStore,
             workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json")),
             snippetStore: SnippetStore(fileURL: root.appendingPathComponent("snippets.json")),
             recentArtifactStore: RecentArtifactStore(fileURL: root.appendingPathComponent("artifacts.json")),
             shortcutCatalog: NoShortcuts(),
             shortcutRunHistoryStore: ShortcutRunHistoryStore(fileURL: root.appendingPathComponent("shortcut-history.json")),
-            taskHistoryStore: TaskHistoryStore(fileURL: root.appendingPathComponent("task-history.json")),
+            taskHistoryStore: taskHistoryStore,
+            taskPlanDetailStore: taskPlanDetailStore,
             visionSessionJournalStore: VisionSessionJournalStore(fileURL: root.appendingPathComponent("vision-sessions.json")),
             clipboardHistorySettingsStore: ClipboardHistorySettingsStore(
                 fileURL: root.appendingPathComponent("clipboard-settings.json")
@@ -366,6 +377,9 @@ struct VisionSessionRunTests {
             model: model,
             synthesizer: synthesizer,
             journal: journal,
+            taskHistoryStore: taskHistoryStore,
+            taskPlanDetailStore: taskPlanDetailStore,
+            routineStore: routineStore,
             root: root
         )
     }
@@ -1921,6 +1935,128 @@ struct VisionSessionRunTests {
         #expect(fixture.viewModel.errorMessage?.contains("never controls a terminal") == true)
         #expect(fixture.viewModel.errorMessage?.contains("that window is showing a shell") == false)
     }
+
+    // MARK: - What a screen-control run stores (row E, SONNY-147)
+
+    /// **The one model-authored result in the product, declared and carried all the way to disk.**
+    ///
+    /// This is SONNY-147's "assert the vision path declares model-authored", taken end to end
+    /// through the real dispatch path rather than at the adapter: `startVisionSession` builds a plan
+    /// and hands it to `start(prebuiltPlan:)`, so the row this writes is the row a typed command
+    /// would have written. Read back off the file, not off published state.
+    @Test
+    func aScreenControlRunStoresItsSummaryAsModelAuthored() async throws {
+        let fixture = try makeFixture(replies: [
+            #"{"action":"click","x":100,"y":100,"target":"Bookmarks","consequence":"ordinary","rationale":"open the sidebar"}"#,
+            #"{"action":"done","rationale":"The reading list is open."}"#
+        ])
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "open my reading list", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        let record = try #require(try fixture.taskHistoryStore.loadAll().last)
+        let result = try #require(record.result)
+        #expect(result.provenance == .modelAuthored)
+        #expect(result.text == "The reading list is open.")
+        // And the plan that produced it landed in the sibling store, keyed on this row's own id.
+        let taskID = try #require(record.id)
+        let detail = try #require(try fixture.taskPlanDetailStore.detail(forTaskID: taskID))
+        #expect(detail.planSummary == "Control Safari: open my reading list")
+        #expect(detail.steps.map(\.operation) == [.visionSession])
+        #expect(detail.completedAt == record.completedAt)
+    }
+
+    /// **The chain join must not launder the model's text.** A plan that does some work with
+    /// Sonny's own tools and *then* controls an app is a shape the product supports and describes to
+    /// the user in so many words — `AgentActionExecutor.visionSplitDisclosure` writes "Sonny will do
+    /// 1 step with its own tools, then attempt … by controlling Safari directly". Two units of work
+    /// means `executeChain`, which joins one summary per segment, and the joined string contains the
+    /// model's sentence. Declaring the join `.codeAuthored` because the joining happens in this
+    /// repository is exactly the mistake this fails on.
+    @Test
+    func aChainWhoseScreenControlSegmentWrotePartOfTheSummaryStoresItAsModelAuthored() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"The reading list is open."}"#],
+            // The planner for this run, returning the mixed shape: one ordinary step, then vision.
+            // The calculator is the only second step available here that touches nothing — this
+            // fixture injects no hermetic app/browser seams, so an `open_app` step would really open
+            // Safari on the developer's machine.
+            delegationPlanner: MixedVisionAndToolPlanner()
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "add these up and then open my reading list"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        let record = try #require(try fixture.taskHistoryStore.loadAll().last)
+        let result = try #require(record.result)
+        #expect(result.provenance == .modelAuthored, "the chain's join must not launder the model's text")
+        // Both halves are in the stored string, which is what makes the provenance question real
+        // rather than academic.
+        #expect(result.text.contains("2"))
+        #expect(result.text.contains("The reading list is open."))
+        // And the whole plan reached the plan store, both steps of it.
+        let taskID = try #require(record.id)
+        let detail = try #require(try fixture.taskPlanDetailStore.detail(forTaskID: taskID))
+        #expect(detail.steps.map(\.operation) == [.calculateUtility, .visionSession])
+    }
+
+    // MARK: - Running a screen-control task again (row E, SONNY-149)
+
+    /// **"Run again" on a screen-control task starts a fresh session and replays nothing.**
+    ///
+    /// This is the case the whole no-replay decision is easiest to get wrong on, because "retry a
+    /// screen-control task" reads like replaying the clicks — and replaying stored clicks blind is
+    /// precisely the unsafe thing. The journal is a record of what happened, not a script: the second
+    /// run goes back through the planner, resolves to a vision session of its own, and is gated as
+    /// any new vision command is.
+    ///
+    /// Asserted on the journal itself, not on "a run happened": two sessions with different ids, the
+    /// first one's entries untouched, and the new task-history row pointing at the new session.
+    @Test
+    func runningAgainAScreenControlTaskStartsAFreshSessionAndExtendsNoJournal() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":100,"y":100,"target":"Bookmarks","consequence":"ordinary","rationale":"open the sidebar"}"#,
+                #"{"action":"done","rationale":"The reading list is open."}"#,
+                // The second run's whole script.
+                #"{"action":"done","rationale":"It was already open."}"#
+            ],
+            // The second run reaches the planner, because a run-again dispatches the record's
+            // command text rather than the plan the first run produced. This is what turns that
+            // text back into a vision plan.
+            delegationPlanner: VisionOnlyPlanner()
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "open my reading list", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+        let firstRow = try #require(try fixture.taskHistoryStore.loadAll().last)
+        let firstSessionID = try #require(firstRow.visionSessionID)
+        let firstSession = try #require(try fixture.journal.record(withID: firstSessionID))
+        #expect(firstSession.entries.count == 1, "the first session really did do something")
+
+        fixture.viewModel.runTaskAgain(firstRow)
+        try await waitForIdle(fixture.viewModel)
+
+        // A second row, and it points at a different session.
+        let rows = try fixture.taskHistoryStore.loadAll()
+        #expect(rows.count == 2)
+        let secondSessionID = try #require(rows.last?.visionSessionID)
+        #expect(secondSessionID != firstSessionID, "a fresh session, not the old one carried forward")
+
+        // Two sessions in the journal, and the first is byte-for-byte what it was: not extended,
+        // not reopened, not replayed.
+        let sessions = try fixture.journal.loadAll()
+        #expect(sessions.count == 2)
+        #expect(try fixture.journal.record(withID: firstSessionID) == firstSession)
+        let secondSession = try #require(try fixture.journal.record(withID: secondSessionID))
+        #expect(secondSession.entries.isEmpty, "the second run's own actions, not the first's")
+        // And the second run really was planned rather than replayed.
+        #expect(fixture.viewModel.finalSummary == "It was already open.")
+    }
 }
 
 /// A planner that answers every instruction with a vision-bearing plan.
@@ -1973,6 +2109,49 @@ private struct UnreachableVisionPlanner: Planning {
     struct ReachedThePlanner: Error {}
     func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
         throw ReachedThePlanner()
+    }
+}
+
+/// One ordinary step, then a screen-control session — the mixed shape
+/// `AgentActionExecutor.visionSplitDisclosure` exists to describe, and the only reachable way a
+/// model-authored summary reaches `executeChain`'s join.
+private struct MixedVisionAndToolPlanner: Planning {
+    func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
+        AgentPlan(
+            summary: "Add up and then read the list",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(id: "calc", operation: .calculateUtility, description: "Calculate", searchQuery: "1 + 1"),
+                AgentStep(
+                    id: "vision",
+                    operation: .visionSession,
+                    description: "Control Safari",
+                    appName: "Safari",
+                    visionGoal: "open my reading list"
+                )
+            ]
+        )
+    }
+}
+
+/// Turns any command into a one-step screen-control plan for Safari — what a planner does with
+/// "Control Safari: open my reading list", which is the text `startVisionSession` puts in the
+/// command field and therefore the text a run-again sends back through it.
+private struct VisionOnlyPlanner: Planning {
+    func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
+        AgentPlan(
+            summary: "Control Safari",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(
+                    id: "vision",
+                    operation: .visionSession,
+                    description: "Control Safari",
+                    appName: "Safari",
+                    visionGoal: "open my reading list"
+                )
+            ]
+        )
     }
 }
 

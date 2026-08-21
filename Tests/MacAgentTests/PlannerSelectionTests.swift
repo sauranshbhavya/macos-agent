@@ -178,6 +178,10 @@ private func makeViewModel(root: URL, plannerSelection: String?) throws -> Agent
             fileURL: root.appendingPathComponent("task-history.json"),
             encryption: encryption
         ),
+        taskPlanDetailStore: TaskPlanDetailStore(
+            fileURL: root.appendingPathComponent("task-plan-details.json"),
+            encryption: encryption
+        ),
         clipboardHistorySettingsStore: ClipboardHistorySettingsStore(
             fileURL: root.appendingPathComponent("clipboard-history-settings.json"),
             encryption: encryption

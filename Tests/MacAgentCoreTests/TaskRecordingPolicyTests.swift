@@ -21,15 +21,17 @@ struct TaskRecordingPolicyTests {
     }
 
     /// Named explicitly as well, so a reclassification that silently changes what the switch reaches
-    /// fails here and not only in the classification's own test. These are the founder's five.
+    /// fails here and not only in the classification's own test. The founder's five, plus row E's
+    /// plan details (SONNY-147), which is a trace for the same reason the row it hangs off is.
     @Test
-    func theWithheldStoresAreTheFiveTracesAndTheKeptOnesAreTheFourOthers() {
+    func theWithheldStoresAreTheSixTracesAndTheKeptOnesAreTheFourOthers() {
         let withheld = Set(LocalStore.allCases.filter { !TaskRecordingPolicy.suppressTraces.allowsWriting(to: $0) })
         #expect(withheld == [
             .clipboardHistory,
             .recentArtifacts,
             .shortcutRunHistory,
             .taskHistory,
+            .taskPlanDetails,
             .visionSessionJournal
         ])
         let kept = Set(LocalStore.allCases.filter { TaskRecordingPolicy.suppressTraces.allowsWriting(to: $0) })

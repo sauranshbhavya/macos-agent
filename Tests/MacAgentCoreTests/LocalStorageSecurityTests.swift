@@ -338,25 +338,29 @@ struct LocalStorageSecurityTests {
 
         let result = try service.deleteAllLocalData()
 
-        // Nine, not eight (SONNY-154): the vision session journal is the ninth store and was the one
-        // this test did not create, so the only place the wipe's behaviour is actually exercised
-        // covered every store except the most sensitive one.
+        // Ten since row E (SONNY-147): `task-plan-details.json` holds what each finished task
+        // planned. Nine, not eight, was SONNY-154's correction — the vision session journal was the
+        // store this test did not create, so the only place the wipe's behaviour is actually
+        // exercised covered every store except the most sensitive one.
         //
         // **What the count assertion is for, corrected** (PR #83, F7). It is *not* drift protection
         // between the fixture's files and its returned URLs — the two deletion counts below already
         // provide that, since a fixture returning a URL it did not create reports a missing file and
-        // fails. What this adds is a tripwire on the fixture's own size: nine is now stated in a
+        // fails. What this adds is a tripwire on the fixture's own size: the count is stated in a
         // third place, so extending the fixture cannot pass by adjusting one number, and whoever
         // changes it has to come here and ask whether `LocalDataDeletionService`'s real list moved
-        // too. That question going unasked is how the journal stayed uncovered.
-        #expect(fileURLs.count == 9)
-        #expect(result == LocalDataDeletionResult(deletedFileCount: 9, missingFileCount: 0))
+        // too. That question going unasked is how the journal stayed uncovered. Ten since row E's
+        // plan details; the number is deliberately not spelled in this sentence a second time, since
+        // a sentence that names it is a fourth place to update and this one already went stale once
+        // (PR #89 cycle 2, F3).
+        #expect(fileURLs.count == 10)
+        #expect(result == LocalDataDeletionResult(deletedFileCount: 10, missingFileCount: 0))
         for fileURL in fileURLs {
             #expect(!FileManager.default.fileExists(atPath: fileURL.path))
         }
 
         let secondResult = try service.deleteAllLocalData()
-        #expect(secondResult == LocalDataDeletionResult(deletedFileCount: 0, missingFileCount: 9))
+        #expect(secondResult == LocalDataDeletionResult(deletedFileCount: 0, missingFileCount: 10))
     }
 
     @Test(.requiresUnprivilegedProcess)
@@ -398,15 +402,21 @@ struct LocalStorageSecurityTests {
     /// The wipe's reach, pinned by count and by name. Relocated here from the deleted ledger
     /// suite (PR #49 N4): the ninth store's own `urls.count == 9` pin died with it, and without
     /// a successor a store added to the app but forgotten from this list would vanish from the
-    /// wipe silently. Nine stores is the current whole population, since row I's action journal.
+    /// wipe silently. Ten stores is the current whole population, since row E's plan details.
+    ///
+    /// **The count is contended, and this is the arithmetic to update.** Row J's SONNY-140 adds an
+    /// approved-apps store; whichever of the two lands second raises this number and the one in
+    /// `everyLocalStoreFileIsClassifiedExactlyOnce` again. Row E landed first, at `ebd6c1d`.
     @Test
-    func theWipeReachesExactlyTheNineLocalStores() {
+    func theWipeReachesExactlyTheTenLocalStores() {
         let urls = LocalDataDeletionService.defaultStoreFileURLs()
-        #expect(urls.count == 9)
+        #expect(urls.count == 10)
         let fileNames = Set(urls.map(\.lastPathComponent))
         // Nine since row I: `vision-sessions.json` is the action journal (SONNY-96). A wipe that
         // left a record of every click Sonny made inside the user's apps would be the loudest
-        // possible failure of a privacy wipe.
+        // possible failure of a privacy wipe. Ten since row E: `task-plan-details.json` holds what
+        // each finished task planned, and a wipe that left the plan of every task Sonny ever ran
+        // fails in exactly the same way.
         #expect(fileNames == [
             "routines.json",
             "workspaces.json",
@@ -416,7 +426,8 @@ struct LocalStorageSecurityTests {
             "recent-artifacts.json",
             "shortcuts-run-history.json",
             "task-history.json",
-            "vision-sessions.json"
+            "vision-sessions.json",
+            "task-plan-details.json"
         ])
     }
 
@@ -424,9 +435,9 @@ struct LocalStorageSecurityTests {
     /// decision of 2026-08-16 is that its reach is a rule, not a list — so a store that reaches the
     /// wipe without a `LocalStore` case has to fail here rather than default to "recorded".
     ///
-    /// Row 12's work already implies a tenth store. When it lands, this test is meant to fail: the
-    /// new file has no case, so it matches nothing. Classifying it is the fix; deleting the
-    /// assertion is not.
+    /// Row E's `task-plan-details.json` is the tenth, and it arrived exactly the way this test was
+    /// built to make it arrive: the new file had no case, so it matched nothing and the suite
+    /// failed until it was classified. Classifying is the fix; deleting the assertion is not.
     @Test
     func everyLocalStoreFileIsClassifiedExactlyOnce() {
         let wipedURLs = LocalDataDeletionService.defaultStoreFileURLs()
@@ -440,7 +451,7 @@ struct LocalStorageSecurityTests {
         let classifiedURLs = LocalStore.allCases.map { $0.fileURL() }
         #expect(Set(classifiedURLs) == Set(wipedURLs))
         #expect(Set(classifiedURLs).count == LocalStore.allCases.count)
-        #expect(LocalStore.allCases.count == 9)
+        #expect(LocalStore.allCases.count == 10)
     }
 
     /// Pins *which* kind each store is, not merely that it has one. Exhaustiveness alone would let
@@ -458,11 +469,12 @@ struct LocalStorageSecurityTests {
             .recentArtifacts,
             .shortcutRunHistory,
             .taskHistory,
+            .taskPlanDetails,
             .visionSessionJournal
         ])
         // Never suppressed: the thing the user actually asked for.
         #expect(stores(.artifact) == [.routines, .workspaces, .snippets])
-        // The ninth store, which the founder's own enumeration did not reach: no task writes it.
+        // The one store the founder's own enumeration did not reach: no task writes it.
         #expect(stores(.notWrittenByTasks) == [.clipboardHistorySettings])
 
         // Every kind is used, so none is a case nothing ever means.
@@ -500,6 +512,13 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
         fileURL: root.appendingPathComponent("vision-sessions.json"),
         encryption: encryption
     )
+    // The tenth store (row E, SONNY-147): what each finished task planned. Created here rather than
+    // only listed, for the reason the journal's own line above records — a store the fixture lists
+    // but never writes is a store whose deletion this test never actually runs.
+    let taskPlanDetailStore = TaskPlanDetailStore(
+        fileURL: root.appendingPathComponent("task-plan-details.json"),
+        encryption: encryption
+    )
 
     try routineStore.save(
         StoredRoutine(
@@ -532,6 +551,14 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
             startedAt: .fixture
         )
     )
+    try taskPlanDetailStore.save(
+        StoredTaskPlanDetail(
+            taskID: "delete-plan-detail",
+            completedAt: .fixture,
+            planSummary: "delete plan summary",
+            steps: []
+        )
+    )
 
     return [
         routineStore.fileURL,
@@ -542,7 +569,8 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
         recentArtifactStore.fileURL,
         shortcutRunHistoryStore.fileURL,
         taskHistoryStore.fileURL,
-        visionSessionJournalStore.fileURL
+        visionSessionJournalStore.fileURL,
+        taskPlanDetailStore.fileURL
     ]
 }
 

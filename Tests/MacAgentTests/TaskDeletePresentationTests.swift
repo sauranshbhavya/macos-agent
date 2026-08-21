@@ -136,8 +136,22 @@ struct TaskDeletePresentationTests {
             TaskDeletePresentation.showsScreenRecordSection(afterDelete)
                 == TaskDeletePresentation.showsScreenRecordSection(neverHad)
         )
-        #expect(TaskDeletePresentation.sheetHeight(for: afterDelete) == TaskDeletePresentation.sheetHeight(for: neverHad))
-        #expect(TaskDeletePresentation.sheetHeight(for: afterDelete) != TaskDeletePresentation.sheetHeight(for: whilePresent))
+        // The sheet is the same sheet, section for section and point for point (row E moved the
+        // height to `TaskDetailPresentation`, which sums over the sections present rather than
+        // branching on this one state).
+        let noResult = record(visionSessionID: "session-1")
+        #expect(
+            TaskDetailPresentation.sections(for: noResult, screenRecord: afterDelete)
+                == TaskDetailPresentation.sections(for: noResult, screenRecord: neverHad)
+        )
+        #expect(
+            TaskDetailPresentation.sheetHeight(for: noResult, screenRecord: afterDelete)
+                == TaskDetailPresentation.sheetHeight(for: noResult, screenRecord: neverHad)
+        )
+        #expect(
+            TaskDetailPresentation.sheetHeight(for: noResult, screenRecord: afterDelete)
+                != TaskDetailPresentation.sheetHeight(for: noResult, screenRecord: whilePresent)
+        )
         // And no delete action for a section that is not there.
         #expect(!TaskDeletePresentation.showsScreenRecordDeleteAction(afterDelete))
     }
@@ -187,7 +201,15 @@ struct TaskDeletePresentationTests {
 
         #expect(evicted == .none)
         #expect(evicted == neverRan)
-        #expect(TaskDeletePresentation.sheetHeight(for: evicted) == TaskDeletePresentation.sheetHeight(for: neverRan))
+        let noResult = record(visionSessionID: "oldest")
+        #expect(
+            TaskDetailPresentation.sections(for: noResult, screenRecord: evicted)
+                == TaskDetailPresentation.sections(for: noResult, screenRecord: neverRan)
+        )
+        #expect(
+            TaskDetailPresentation.sheetHeight(for: noResult, screenRecord: evicted)
+                == TaskDetailPresentation.sheetHeight(for: noResult, screenRecord: neverRan)
+        )
     }
 
     /// An unreadable journal is deliberately *not* folded into "gone". It keeps the load-failure
@@ -224,7 +246,9 @@ struct TaskDeletePresentationTests {
         #expect(state != .none)
         // It renders — an unreadable journal is a real problem the user is entitled to see.
         #expect(TaskDeletePresentation.showsScreenRecordSection(state))
-        #expect(TaskDeletePresentation.sheetHeight(for: state) == 560)
+        #expect(
+            TaskDetailPresentation.sheetHeight(for: record(visionSessionID: "session-1"), screenRecord: state) == 560
+        )
         // But it offers no delete.
         #expect(!TaskDeletePresentation.showsScreenRecordDeleteAction(state))
     }
