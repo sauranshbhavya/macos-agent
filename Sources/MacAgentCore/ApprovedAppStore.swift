@@ -50,7 +50,7 @@ public struct ApprovedApp: Codable, Equatable, Sendable {
 ///
 /// **The shared pattern, not a variant** (`CLAUDE.md`): a defaulted `encryption:` parameter,
 /// AES-GCM behind the `SONNYENC1\n` header, and transparent legacy-plaintext migration on the
-/// first successful load. The nine stores before it work this way and this one has no reason to
+/// first successful load. The ten stores before it work this way and this one has no reason to
 /// differ.
 ///
 /// **A stored grant never outranks a refusal, and that is belt and braces rather than the load
