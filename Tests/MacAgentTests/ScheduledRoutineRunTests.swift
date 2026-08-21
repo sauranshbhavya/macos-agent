@@ -160,6 +160,68 @@ struct ScheduledRoutineRunTests {
         #expect(saved.schedule?.lastRunAt == fixture.nineAM)
     }
 
+    /// **A scheduled run stores what it produced and the plan it ran** (row E, SONNY-147).
+    ///
+    /// This path dropped the result until now while the very next line used `result.summary` for its
+    /// notice, so it is the write path most likely to be missed — and it is a separate function from
+    /// the manual one, not a shared helper, so a manual-path test says nothing about it.
+    @Test
+    func aScheduledRunStoresWhatItProducedAndThePlanItRan() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        try fixture.saveRoutine(unattendedTrusted: true)
+
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
+        try await fixture.waitForIdle()
+
+        let record = try #require(try fixture.taskHistoryStore.loadAll().last)
+        #expect(record.trigger == .scheduled)
+        #expect(record.outcomeStatus == .completed)
+        let result = try #require(record.result)
+        #expect(result.text.contains("Ran routine Morning."))
+        #expect(result.text.contains("2"))
+        #expect(result.provenance == .codeAuthored)
+        // The notice the user sees and the row both carry the same text.
+        #expect(try #require(fixture.viewModel.scheduledRunNotice).contains(result.text))
+
+        let taskID = try #require(record.id)
+        let detail = try #require(try fixture.taskPlanDetailStore.detail(forTaskID: taskID))
+        // The one-step `run_routine` plan this path prepares, which is what a follow-up on a
+        // scheduled run gets to correct against.
+        #expect(detail.steps.map(\.operation) == [.runRoutine])
+        #expect(detail.completedAt == record.completedAt)
+    }
+
+    /// A scheduled run that fails keeps the failure text rather than an empty field, and stores no
+    /// plan — that catch is reachable before `prepare` returns as well as after it.
+    @Test
+    func aFailedScheduledRunStoresItsFailureTextAndNoPlan() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.cleanUp() }
+        // A calculator step the calculator cannot evaluate: the run prepares, executes and throws.
+        try fixture.saveRoutine(
+            unattendedTrusted: true,
+            steps: [
+                AgentStep(
+                    id: "calc",
+                    operation: .calculateUtility,
+                    description: "Calculate apples.",
+                    searchQuery: "apples"
+                )
+            ]
+        )
+
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
+        try await fixture.waitForIdle()
+
+        let record = try #require(try fixture.taskHistoryStore.loadAll().last)
+        #expect(record.outcomeStatus == .failed)
+        let result = try #require(record.result)
+        #expect(!result.text.isEmpty)
+        #expect(try #require(fixture.viewModel.scheduledRunNotice).contains(result.text))
+        #expect(try fixture.taskPlanDetailStore.loadAll().isEmpty)
+    }
+
     /// The occurrence must not be reconsidered on the next tick. Without the baseline advance the
     /// timer would re-run the same routine every 30 seconds, forever.
     @Test
@@ -1559,6 +1621,7 @@ struct ScheduledRoutineRunTests {
         let routineStore: RoutineStore
         let snippetStore: SnippetStore
         let taskHistoryStore: TaskHistoryStore
+        let taskPlanDetailStore: TaskPlanDetailStore
         let nineAM: Date
         let tenAM: Date
         let enabledAt: Date
@@ -1579,6 +1642,9 @@ struct ScheduledRoutineRunTests {
             routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
             snippetStore = SnippetStore(fileURL: root.appendingPathComponent("snippets.json"))
             taskHistoryStore = TaskHistoryStore(fileURL: root.appendingPathComponent("task-history.json"))
+            taskPlanDetailStore = TaskPlanDetailStore(
+                fileURL: root.appendingPathComponent("task-plan-details.json")
+            )
 
             browserOpener = HermeticBrowserOpener()
             appOpener = HermeticAppOpener()
@@ -1610,6 +1676,7 @@ struct ScheduledRoutineRunTests {
                     fileURL: root.appendingPathComponent("shortcuts-run-history.json")
                 ),
                 taskHistoryStore: taskHistoryStore,
+                taskPlanDetailStore: taskPlanDetailStore,
                 clipboardHistorySettingsStore: ClipboardHistorySettingsStore(
                     fileURL: root.appendingPathComponent("clipboard-history-settings.json")
                 ),

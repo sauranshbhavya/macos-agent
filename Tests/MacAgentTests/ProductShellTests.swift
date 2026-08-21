@@ -643,7 +643,7 @@ struct ProductShellTests {
             "routineStore", "workspaceStore", "snippetStore", "recentArtifactStore",
             "shortcutCatalog", "browserOpener", "appOpener", "fileOpener", "mediaOpener",
             "runningAppSwitcher", "shortcutInvoker", "finderContextReader", "documentConverter",
-            "zipArchiver", "shortcutRunHistoryStore", "taskHistoryStore",
+            "zipArchiver", "shortcutRunHistoryStore", "taskHistoryStore", "taskPlanDetailStore",
             "clipboardHistorySettingsStore", "clipboardHistoryMonitor", "localDataDeletionService",
             "priorTaskContextStore", "taskUsageRecorder", "plannerProviderRegistry",
             "plannerSelection", "userDefaults", "whitelist", "routineScheduleTimer", "wakeObserver",
@@ -2014,6 +2014,105 @@ struct ProductShellTests {
         #expect(viewModel.finalSummary == "Approval canceled. No action was taken.")
     }
 
+    // MARK: - What a finished task stores (row E, SONNY-147)
+
+    /// **The whole storage half, on the real dispatch path, read off the files.** A completed run
+    /// keeps what it produced on its row, and the plan that produced it in the sibling store keyed
+    /// on that row's own id.
+    @Test
+    func aCompletedRunStoresWhatItProducedAndThePlanThatProducedIt() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        viewModel.command = "= 12 + 30"
+
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        let record = try #require(try fixture.taskHistoryStore.loadAll().last)
+        let result = try #require(record.result)
+        #expect(result.text.contains("42"))
+        #expect(result.text == viewModel.finalSummary, "the row keeps the text the user was shown")
+        // Every summary in the product but the vision session's is a template this repository wrote.
+        #expect(result.provenance == .codeAuthored)
+
+        let taskID = try #require(record.id)
+        let detail = try #require(try fixture.taskPlanDetailStore.detail(forTaskID: taskID))
+        #expect(!detail.planSummary.isEmpty)
+        #expect(detail.steps.map(\.operation) == [.calculateUtility])
+        #expect(detail.completedAt == record.completedAt)
+        // One row, one plan — nothing writes a second entry per run.
+        #expect(try fixture.taskPlanDetailStore.loadAll().count == 1)
+    }
+
+    /// A failed run keeps the failure the user was shown, not an empty field. This is the case a
+    /// stored result is most useful for and the one most easily left to a clean-finish-only path.
+    @Test
+    func aFailedRunStoresTheFailureTextTheUserWasShown() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        viewModel.command = "calc apples"
+
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        let record = try #require(try fixture.taskHistoryStore.loadAll().last)
+        #expect(record.outcomeStatus == .failed)
+        let result = try #require(record.result)
+        #expect(result.text.contains("Could not calculate that expression"))
+        #expect(result.text == viewModel.errorMessage)
+        #expect(result.provenance == .codeAuthored)
+    }
+
+    /// A cancelled run keeps the words it ended with rather than nothing — and it still stores the
+    /// plan, because a plan was prepared before the approval pause it was cancelled at.
+    @Test
+    func aCanceledRunStoresTheTextItEndedWithAndItsPlan() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        try fixture.snippetStore.save(StoredSnippet(trigger: ";cancel-result", expansion: "Old text"))
+        viewModel.command = "snippet save ;cancel-result = Hello"
+
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+        #expect(viewModel.approvalRequest != nil)
+        viewModel.cancelCurrentRun()
+
+        let record = try #require(try fixture.taskHistoryStore.loadAll().last)
+        #expect(record.outcomeStatus == .canceled)
+        let result = try #require(record.result)
+        #expect(result.text == "Approval canceled. No action was taken.")
+        #expect(result.text == viewModel.finalSummary)
+
+        let taskID = try #require(record.id)
+        let detail = try #require(try fixture.taskPlanDetailStore.detail(forTaskID: taskID))
+        #expect(detail.steps.map(\.operation) == [.saveSnippet])
+    }
+
+    /// **Suppression reaches the new store too, and is asserted rather than inherited.** The
+    /// byte-identical sweep above already covers this store because it enumerates the
+    /// classification — but that sweep would also pass if the store were misclassified `.artifact`,
+    /// since it only compares the files a trace classification names. This names the file.
+    @Test
+    func aSuppressedRunStoresNeitherARowNorAPlan() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        viewModel.taskRecordingPolicy = .suppressTraces
+        viewModel.command = "= 7 + 7"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        // The run itself happened — this is suppression, not refusal.
+        #expect(viewModel.finalSummary.contains("14"))
+        #expect(try fixture.taskHistoryStore.loadAll().isEmpty)
+        #expect(try fixture.taskPlanDetailStore.loadAll().isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: fixture.taskPlanDetailStore.fileURL.path))
+    }
+
     @Test
     func directWorkspaceDispatchTagsTheCompletedTaskRecord() async throws {
         let fixture = try makeProductShellFixture()
@@ -2551,6 +2650,7 @@ private func makeProductShellFixture() throws -> (
     workspaceStore: WorkspaceStore,
     snippetStore: SnippetStore,
     taskHistoryStore: TaskHistoryStore,
+    taskPlanDetailStore: TaskPlanDetailStore,
     userDefaults: UserDefaults,
     userDefaultsSuiteName: String,
     browserOpener: HermeticBrowserOpener,
@@ -2572,6 +2672,7 @@ private func makeProductShellFixture(
     workspaceStore: WorkspaceStore,
     snippetStore: SnippetStore,
     taskHistoryStore: TaskHistoryStore,
+    taskPlanDetailStore: TaskPlanDetailStore,
     userDefaults: UserDefaults,
     userDefaultsSuiteName: String,
     browserOpener: HermeticBrowserOpener,
@@ -2598,6 +2699,13 @@ private func makeProductShellFixture(
     )
     let taskHistoryStore = TaskHistoryStore(
         fileURL: root.appendingPathComponent("task-history.json"),
+        encryption: encryption
+    )
+    // Row E's plan details (SONNY-147), under the fixture root for the same reason the journal is:
+    // an un-injected store resolves to the user's real
+    // ~/Library/Application Support/Sonny/task-plan-details.json.
+    let taskPlanDetailStore = TaskPlanDetailStore(
+        fileURL: root.appendingPathComponent("task-plan-details.json"),
         encryption: encryption
     )
     let browserOpener = HermeticBrowserOpener()
@@ -2632,6 +2740,7 @@ private func makeProductShellFixture(
             encryption: encryption
         ),
         taskHistoryStore: taskHistoryStore,
+        taskPlanDetailStore: taskPlanDetailStore,
         // Injected under the fixture root rather than defaulted, or it resolves to the real
         // ~/Library/Application Support/Sonny/vision-sessions.json. No test read it before
         // SONNY-120, so nothing was wrong yet — which is exactly the hermeticity-by-accident the
@@ -2659,7 +2768,7 @@ private func makeProductShellFixture(
         whitelist: PathWhitelist(roots: [root])
     )
     let suiteName = userDefaultsSuiteName ?? "ProductShellInjected-\(UUID().uuidString)"
-    return (viewModel, root, routineStore, workspaceStore, snippetStore, taskHistoryStore, userDefaults, suiteName, browserOpener, appOpener)
+    return (viewModel, root, routineStore, workspaceStore, snippetStore, taskHistoryStore, taskPlanDetailStore, userDefaults, suiteName, browserOpener, appOpener)
 }
 
 /// The 30 seconds is a deadlock backstop, not a timing assertion (SONNY-159/160/161): this target is

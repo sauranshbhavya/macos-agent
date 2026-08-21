@@ -265,6 +265,11 @@ final class AgentViewModel: ObservableObject {
     private let zipArchiver: any ZipArchiving
     private let shortcutRunHistoryStore: ShortcutRunHistoryStore
     private let taskHistoryStore: TaskHistoryStore
+    /// What each finished task planned (row E, SONNY-147) — the heavy half of a task's record, kept
+    /// beside `task-history.json` rather than inside it so the file that is read on every list
+    /// render, search and Insights pass stays small. Not `private`: SONNY-150's follow-up reads it
+    /// back to rehydrate a `PriorTaskContext`, and the tests read it to assert what was written.
+    let taskPlanDetailStore: TaskPlanDetailStore
     /// The action journal (row I, SONNY-96). Injected like every other store so a test writes to its
     /// own file rather than the user's.
     let visionSessionJournalStore: VisionSessionJournalStore
@@ -473,6 +478,7 @@ final class AgentViewModel: ObservableObject {
         zipArchiver: any ZipArchiving = ProcessZipArchiver(),
         shortcutRunHistoryStore: ShortcutRunHistoryStore = ShortcutRunHistoryStore(),
         taskHistoryStore: TaskHistoryStore = TaskHistoryStore(),
+        taskPlanDetailStore: TaskPlanDetailStore = TaskPlanDetailStore(),
         visionSessionJournalStore: VisionSessionJournalStore = VisionSessionJournalStore(),
         clipboardHistorySettingsStore: ClipboardHistorySettingsStore = ClipboardHistorySettingsStore(),
         clipboardHistoryMonitor: ClipboardHistoryMonitor? = nil,
@@ -513,6 +519,7 @@ final class AgentViewModel: ObservableObject {
         self.zipArchiver = zipArchiver
         self.shortcutRunHistoryStore = shortcutRunHistoryStore
         self.taskHistoryStore = taskHistoryStore
+        self.taskPlanDetailStore = taskPlanDetailStore
         self.visionSessionJournalStore = visionSessionJournalStore
         self.clipboardHistorySettingsStore = clipboardHistorySettingsStore
         self.clipboardHistoryMonitor = clipboardHistoryMonitor
@@ -1347,6 +1354,10 @@ final class AgentViewModel: ObservableObject {
                 preparedRun: prepared,
                 status: .completed,
                 summary: result.summary,
+                // Carried from the adapter that authored the text (SONNY-147) rather than assumed
+                // here — a run that resolved to a screen-control session comes back
+                // `.modelAuthored`, and so does a chain or a routine that contained one.
+                resultProvenance: result.summaryProvenance,
                 startedAt: taskHistoryStartedAt
             )
             refreshSavedItems()
@@ -1979,10 +1990,12 @@ final class AgentViewModel: ObservableObject {
         }
 
         do {
-            // Dependents first. Row E's detail store joins this block.
+            // Dependents first. Row E's detail store joined this block as SONNY-116's own comment
+            // said it would.
             if let visionSessionID = record.visionSessionID {
                 try visionSessionJournalStore.delete(id: visionSessionID)
             }
+            try taskPlanDetailStore.delete(id: id)
             // The row, last.
             try taskHistoryStore.delete(id: id)
         } catch {
@@ -3044,6 +3057,9 @@ final class AgentViewModel: ObservableObject {
                     preparedRun: preparedRun,
                     status: .completed,
                     summary: result.summary,
+                    // Same reason as `performStart`'s completed path: the provenance travels with
+                    // the result, and an approved run reaches storage through this second door.
+                    resultProvenance: result.summaryProvenance,
                     startedAt: pendingTaskHistoryStartedAt
                 )
             }
@@ -3098,12 +3114,19 @@ final class AgentViewModel: ObservableObject {
     }
 
     /// Returns the task-history row id this call wrote, or `nil` when it wrote none.
+    ///
+    /// - Parameter resultProvenance: who wrote `summary` (SONNY-147). Defaults to `.codeAuthored`,
+    ///   which is correct for every caller here except the two that pass an `AgentRunResult`'s own
+    ///   summary — those forward `result.summaryProvenance`, which the adapter that authored the
+    ///   text set. The declaration is made where the text is written, not here; this parameter only
+    ///   carries it the last hop to storage.
     @discardableResult
     private func recordPriorTaskContext(
         command: String,
         preparedRun: PreparedAgentRun,
         status: PriorTaskOutcomeStatus,
         summary: String,
+        resultProvenance: StoredTaskResult.Provenance = .codeAuthored,
         startedAt: Date? = nil
     ) -> String? {
         priorTaskContextStore.record(
@@ -3118,15 +3141,27 @@ final class AgentViewModel: ObservableObject {
             routineStore: routineStore,
             workspaceStore: workspaceStore
         )
-        return recordTaskHistoryIfTerminal(command: command, status: status, startedAt: startedAt, workspaceName: workspaceName)
+        return recordTaskHistoryIfTerminal(
+            command: command,
+            status: status,
+            startedAt: startedAt,
+            workspaceName: workspaceName,
+            result: StoredTaskResult.declaring(resultProvenance, text: summary),
+            plan: preparedRun.plan
+        )
     }
 
     /// Returns the task-history row id this call wrote, or `nil` when it wrote none.
+    ///
+    /// The overload for a run that never reached a prepared plan. It stores the result the same way
+    /// and stores no plan detail, which is exactly what a follow-up on such a task will find: the
+    /// command and the outcome, and nothing about a plan that was never produced.
     @discardableResult
     private func recordPriorTaskContext(
         command: String,
         status: PriorTaskOutcomeStatus,
         summary: String,
+        resultProvenance: StoredTaskResult.Provenance = .codeAuthored,
         startedAt: Date? = nil
     ) -> String? {
         priorTaskContextStore.record(
@@ -3140,7 +3175,14 @@ final class AgentViewModel: ObservableObject {
             routineStore: routineStore,
             workspaceStore: workspaceStore
         )
-        return recordTaskHistoryIfTerminal(command: command, status: status, startedAt: startedAt, workspaceName: workspaceName)
+        return recordTaskHistoryIfTerminal(
+            command: command,
+            status: status,
+            startedAt: startedAt,
+            workspaceName: workspaceName,
+            result: StoredTaskResult.declaring(resultProvenance, text: summary),
+            plan: nil
+        )
     }
 
     /// Returns the id of the row it wrote, or `nil` when it wrote none — suppressed, non-terminal,
@@ -3153,7 +3195,9 @@ final class AgentViewModel: ObservableObject {
         command: String,
         status: PriorTaskOutcomeStatus,
         startedAt: Date?,
-        workspaceName: String?
+        workspaceName: String?,
+        result: StoredTaskResult,
+        plan: AgentPlan?
     ) -> String? {
         guard [.completed, .failed, .canceled].contains(status),
               let startedAt else {
@@ -3181,17 +3225,69 @@ final class AgentViewModel: ObservableObject {
             // present only on clean finishes would be missing from exactly the runs someone
             // most wants to read afterwards. `nil` for every task that ran no session, which
             // is every task the product had before row I.
-            visionSessionID: activeVisionSessionID
+            visionSessionID: activeVisionSessionID,
+            // What the run produced, on every terminal exit for the same reason (SONNY-147): a
+            // failed run's text is the one a user most wants to read back, and a cancelled run
+            // still says "Canceled." rather than nothing.
+            result: result
         )
 
         do {
-            try taskHistoryStore.record(record)
+            let evictedTaskIDs = try taskHistoryStore.record(record)
+            recordTaskPlanDetail(for: record, plan: plan, evictedTaskIDs: evictedTaskIDs)
             refreshTaskHistory()
             return record.id
         } catch {
             setError("Could not save task history: \(error.localizedDescription)")
             logStore.append(.observe, "Could not record task history: \(error.localizedDescription)")
             return nil
+        }
+    }
+
+    /// Writes this task's plan beside its row, and drops the plans of the rows that write evicted.
+    ///
+    /// **After the row, never before.** The row is the only thing that makes a plan detail
+    /// reachable — `TaskPlanDetailStore` is keyed on `CompletedTaskRecord.id` and has no other index
+    /// — so a detail written first and then orphaned by a failed row write would be unreachable
+    /// bytes nothing could ever delete through the product. This is the write-side mirror of
+    /// `deleteTask`'s dependents-first rule, and it points the same way: the row bounds the
+    /// dependent's reachability in both directions.
+    ///
+    /// **The eviction handoff is not an optimisation.** `TaskHistoryStore.record(_:)` returns the
+    /// ids it evicted, and they are dropped in this same write. Without it the two stores would only
+    /// stay level while every row had a plan — and a run that failed before preparing one writes a
+    /// row with no detail, so the detail store would fill more slowly, evict later, and keep the
+    /// plans of tasks the user can no longer see. "Same cap, same eviction" is the founder's
+    /// requirement of 2026-08-17; this is what makes it true rather than approximately true.
+    ///
+    /// A failure here is a *write* failure and gets write wording. It is reported rather than
+    /// swallowed — the task itself succeeded, and the honest consequence is narrow and worth saying:
+    /// a follow-up on this task will have its command and its outcome but not its plan.
+    private func recordTaskPlanDetail(
+        for record: CompletedTaskRecord,
+        plan: AgentPlan?,
+        evictedTaskIDs: [String]
+    ) {
+        // Classified `.trace`, so it is withheld by the same switch that withheld the row. Asked
+        // explicitly rather than inferred from having got past the row's own guard: the reach of
+        // "Don't save this task" is a rule read off `LocalStore.kind`, and a store that relied on a
+        // sibling's guard would be the one store the rule did not actually cover.
+        guard taskRecordingPolicy.allowsWriting(to: .taskPlanDetails) else {
+            return
+        }
+
+        do {
+            guard let plan, let taskID = record.id else {
+                try taskPlanDetailStore.delete(ids: evictedTaskIDs)
+                return
+            }
+            try taskPlanDetailStore.save(
+                StoredTaskPlanDetail(taskID: taskID, completedAt: record.completedAt, plan: plan),
+                evictedTaskIDs: evictedTaskIDs
+            )
+        } catch {
+            setError("Could not save this task's plan: \(error.localizedDescription)")
+            logStore.append(.observe, "Could not record this task's plan: \(error.localizedDescription)")
         }
     }
 
@@ -3446,7 +3542,16 @@ final class AgentViewModel: ObservableObject {
                 context: approvalContext()
             )
             recordScheduledRunInHistory(name: name, at: occurrence)
-            recordScheduledTaskHistory(status: .completed, startedAt: startedAt)
+            recordScheduledTaskHistory(
+                status: .completed,
+                startedAt: startedAt,
+                // The result was dropped here until SONNY-147, while the very next line used it for
+                // the notice — proof it was in scope and simply not threaded. `result.plan` is the
+                // one-step `run_routine` plan this path prepares, which is what a follow-up on a
+                // scheduled run gets to correct against.
+                result: result.storedResult,
+                plan: result.plan
+            )
             scheduledRunNotice = "“\(name)” ran on schedule. \(result.summary)"
         } catch let error as RiskApprovalError {
             // The tier-3+ backstop firing. `AgentRunner` re-assesses at execute time and requires
@@ -3473,7 +3578,15 @@ final class AgentViewModel: ObservableObject {
             pauseSchedule(routineNamed: name, because: scheduledRunPauseCause(for: error))
         } catch {
             logStore.append(.summarize, "Scheduled run failed: \(error.localizedDescription)")
-            recordScheduledTaskHistory(status: .failed, startedAt: startedAt)
+            recordScheduledTaskHistory(
+                status: .failed,
+                startedAt: startedAt,
+                // The same text the notice below shows, so a failed scheduled run's detail says what
+                // went wrong instead of nothing. No plan: this catch is reachable before `prepare`
+                // returns as well as after, so there is not always one to store.
+                result: .codeAuthored(error.localizedDescription),
+                plan: nil
+            )
             scheduledRunNotice = "“\(name)” failed on its scheduled run: \(error.localizedDescription)"
         }
     }
@@ -3489,20 +3602,39 @@ final class AgentViewModel: ObservableObject {
     ///
     /// A routine is also the wrong shape for that feature even setting the confusion aside: its
     /// steps are saved and fixed, so there is no command text for a correction to rewrite.
-    private func recordScheduledTaskHistory(status: PriorTaskOutcomeStatus, startedAt: Date) {
+    private func recordScheduledTaskHistory(
+        status: PriorTaskOutcomeStatus,
+        startedAt: Date,
+        result: StoredTaskResult,
+        plan: AgentPlan?
+    ) {
         guard let command = scheduledRunDisplayCommand else {
             return
         }
+        let record = CompletedTaskRecord(
+            command: command,
+            startedAt: startedAt,
+            completedAt: Date(),
+            outcomeStatus: status,
+            trigger: .scheduled,
+            result: result
+        )
         do {
-            try taskHistoryStore.record(
-                CompletedTaskRecord(
-                    command: command,
-                    startedAt: startedAt,
-                    completedAt: Date(),
-                    outcomeStatus: status,
-                    trigger: .scheduled
+            let evictedTaskIDs = try taskHistoryStore.record(record)
+            // No `taskRecordingPolicy` check on either write, and deliberately: a scheduled run
+            // passes through no composer, so there is no "Don't save this task" switch to have been
+            // left on — the same reasoning already written above beside `makeExecutor(recordingPolicy:
+            // .record)` and `recentArtifactStore`. `recordTaskPlanDetail` is not reused here for
+            // exactly that reason; it asks the policy, which is right for a foreground run and wrong
+            // for this one.
+            if let plan, let taskID = record.id {
+                try taskPlanDetailStore.save(
+                    StoredTaskPlanDetail(taskID: taskID, completedAt: record.completedAt, plan: plan),
+                    evictedTaskIDs: evictedTaskIDs
                 )
-            )
+            } else {
+                try taskPlanDetailStore.delete(ids: evictedTaskIDs)
+            }
             refreshTaskHistory()
         } catch {
             recordLocalStorageWriteFailure(
