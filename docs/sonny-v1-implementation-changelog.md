@@ -161,6 +161,68 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: chore/cleanup-sweep
+Status: complete
+Date: 2026-08-21
+Tickets: **SONNY-182** (three superseded Power Mode claims in §23 and roadmap row 18, plus the twelve more the sweep found and filed), **SONNY-183** (SONNY-112's two claims, swept by claim to seven live sites), **SONNY-189** (the notification-cannot-fire and widget-composites claims, six reported and eleven found), **SONNY-199** (two mic-hover tests that armed a live wall-clock deadline against their own assertions, plus the flake-reads-as-a-kill hazard in `scripts/mutate --help`), **SONNY-184** (all three `scripts/warnings` hardening residuals — the unclassifiable-line escape, three selftest gaps, and cross-tool locking with `scripts/mutate`), **SONNY-200** (the model-authored provenance scan counts the value rather than two property spellings, and the chain's negative case becomes behavioural), **SONNY-185** (a step declaring the Finder selection while carrying its own folder no longer names Finder), **SONNY-190** (a nested routine no longer resolves its outputs against an empty set), **SONNY-197** (a stored result's provenance reaches `PriorTaskOutcome`), **SONNY-202** (one read of the grants file per vision iteration), **SONNY-198** (HIGH — a newline in an interpolated value could forge a field line inside the trusted prior-task block). One session, serial, from `main` at `16033d6`. A cleanup sweep of small independent tickets that block nothing, cleared out of the way of the big clusters; the tickets have no common subject and the branch is not a roadmap row.
+Reviewed by: fresh session per WORKFLOW.md step 7 — pending at PR-open time. **SONNY-198 is explicitly flagged for a full adversarial cycle and is not in the right-sized lane** the other ten ran in.
+
+Spec sections covered: none implemented. §23's two decision-record bullets and the roadmap's row-18 cell are amended in place with dated supersessions; §12.4/§12.5's untrusted-content boundary is *hardened* by SONNY-198 rather than extended.
+Files changed:
+- `Sources/MacAgentCore/PriorTaskContext.swift` — SONNY-198's line-break fold inside `escapeForPlanner`; SONNY-197's `PriorTaskOutcome.provenance`.
+- `Sources/MacAgentCore/AgentPlan.swift` — SONNY-185's `AgentStep.resolvedFromFinderSelection`, decode-excluded.
+- `Sources/MacAgentCore/FinderSelectionResolver.swift` — writes that pin on the steps it back-fills, and only when Finder was read.
+- `Sources/MacAgentCore/PlanScopedResources.swift` — the Finder classifier keyed on the pin.
+- `Sources/MacAgentCore/AgentActionExecutor.swift` — SONNY-190's `resolveDefaultOutputs(in:claimedEarlierInThisRun:)`.
+- `Sources/MacAgentCore/VisionSessionEnvironment.swift`, `Sources/MacAgentCore/VisionSessionRunner.swift` — SONNY-202's `visionIterationWillBegin()`.
+- `Sources/MacAgent/AgentViewModel.swift`, `Sources/MacAgent/AgentViewModel+VisionSession.swift` — the per-iteration grants cache, the provenance forward, and SONNY-189's two corrected doc comments.
+- `Sources/MacAgent/CommandCenterView.swift`, `Sources/MacAgent/FloatingWidgetView.swift`, `Sources/MacAgentCore/AgentEvent.swift` — stale-claim corrections.
+- `scripts/warnings`, `scripts/mutate` — SONNY-184 in full, and SONNY-199's hazard note.
+- Tests: `PriorTaskContextTests`, `AgentRunnerTests`, `AgentActionExecutorTests`, `WorkspaceScopeTests`, `AutomationStoresTests`, `RunSummaryProvenanceTests`, `WidgetMicHoverHintTests`, `FollowUpOnTaskTests`, `VisionSessionRunTests`, `ProductShellTests`, `RoutineActivationTests`.
+- Records: `CLAUDE.md`, `README.md`, `.claude/rules/macagent-ui-conventions.md`, `docs/sonny-major-release-spec.md`, `docs/sonny-v1-implementation-changelog.md`, `docs/sonny-ui-backend-roadmap.md`, `docs/sonny-ui-backend-gaps.md`, `docs/sonny-row-12-plan.md`, `docs/sonny-row-c-plan.md`.
+Tests: the flagged command in `CLAUDE.md` -> **PASS, 1612 tests in 122 suites** at `96fe75c` (1597 at `67a84d6` before the code tickets). `scripts/warnings` -> **0 warnings, exit 0**, measured at `0d9cffe` (clean tree, 100s), which is this branch's last code commit — the changelog entry itself is the only change after it. `scripts/warnings selftest` -> **61 checks, 0 failures**; `scripts/mutate selftest` -> every check passed. Four mutation batteries, all through `scripts/mutate`: SONNY-200 2/2 killed at `67a84d6`, SONNY-185 3/3 killed at `8b9d03c`, SONNY-202 1 killed / **1 survived by design** at `5c56819`, SONNY-198 4/4 killed at `0d9cffe`.
+
+Behavior added:
+- A step that declares itself Finder-selection-driven *and* carries its own folder no longer reports Finder on the ran-without-asking trace.
+- A nested routine's generated output no longer overwrites a file the outer plan already produced.
+- A prior task's summary now reaches the planner's context carrying who wrote it.
+- A newline in a stored result can no longer forge a field line inside the trusted prior-task block.
+- `scripts/warnings` exits 3 with a count rather than exiting 1 with none when its parser meets a line it cannot classify, and refuses to run beside a mutation battery (and vice versa).
+
+Behavior preserved (required, no blanket claims):
+- **A genuine Finder selection still escalates on Finder**, through `prepare` then `approvalRequest`, for the zip pair and now the docx pair too.
+- **An unresolved plan naming `contextSource` still names Finder** — the founder chose the two-disjunct key precisely so this did not change, and `aSelectionDrivenStepNamesFinderBeforeAnythingHasPinnedItsFolder` is untouched.
+- **Within-plan output disambiguation is unchanged**: `prepare` and `assessRisk` keep the empty seed, and `aChainWritesOnlyFilesThePreparedPlanAlreadyNamed` passes.
+- **A grant revoked mid-session still ends the session at the next iteration**, not at the next launch — the mutant widening the cache past one iteration is killed by that test and by the unreadable-file one.
+- **The trusted block's shape is byte-identical for a summary with no line breaks**, so no ordinary prior-task context changed.
+- **Escaping of the two delimiters is unchanged**; the fold runs before it and `noInterpolatedFieldCanForgeTheTrustedBoundary` still passes.
+- **`hasVisibleWidgetPanel`'s behaviour is untouched** by SONNY-189 — only the comments describing it changed, and the 13 assertions across 5 files still pass.
+- **The wipe still reaches exactly eleven stores**, and the new view-model property is classified against it rather than left unregistered.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+**Fixing the instance that was reported is not fixing the claim, and three of the four records tickets under-counted their own population.** SONNY-183 named six sites and asked its implementer to sweep by claim rather than by file; doing that found a seventh, `CommandCenterRunningIndicator`'s doc comment — and that one was *load-bearing for a second stale record*, because `docs/sonny-ui-backend-roadmap.md` cited it as the evidence that the gap was still open. SONNY-189 named six and the same method found eleven, two of them in `README.md` and a test suite doc. SONNY-182 named three and the sweep found twelve more, filed as SONNY-205 rather than absorbed, with an inline pointer in both fixed bullets so a reader is told immediately that the bullet is not the whole population. **The generalisable part: a claim has a population, and the ticket that reports one instance is reporting a sample.**
+
+**A stale count can be stale in both directions at once.** SONNY-183 recorded "nine local stores" as the correction to "eight", verified at `61ad19e`. Row J landed on 2026-08-21 and there are eleven. Both numbers in one ticket were wrong by the time it was implemented, which is why `RoutineActivationTests`' comment now names the shared pattern instead of a count that has moved twice, and why `docs/sonny-row-c-plan.md`'s subtraction was re-run rather than re-stated.
+
+**The residual SONNY-73 could not reach needed a second field, not a cleverer rule** (SONNY-185). After the first resolve pass, a step that declared the Finder selection and arrived with its own folder is byte-for-byte identical to a genuine declaring step the pin filled in — same `contextSource`, same `inputPath` — so no rule reading those two fields can separate them, and `pinningSelectedDirectoryInput` runs *twice* over one run. The fact only that function knows is whether Finder was read on the pass that filled a step in, so it is written down: `AgentStep.resolvedFromFinderSelection`, resolver-only and decode-excluded on the same terms as `resolvedAppName`. The founder chose the classifier's key over a stricter alternative: **`declared && (pinned || nothing has resolved a path yet)`** rather than `declared && pinned`. The stricter one was exact and was safe today — `classification` is reached from `WorkspaceScopeEvaluator.evaluate` alone, whose only caller is `AgentActionExecutor.scopeFindings`, whose only caller is `assessRisk`, whose first statement resolves — but it would have made this the one place the classifier can go *quiet* about a resource rather than loud, on the strength of an enumeration that can go stale.
+
+**A reachability estimate written from the mechanism was wrong by an order of magnitude, in the dangerous direction** (SONNY-190). The ticket priced the nested-routine collision as needing two generated defaults in the same second and said explicitly not to trust that reasoning without a probe. The probe: `Timestamp.fileSafe` is whole-second and two file writes inside one run are milliseconds apart, so on the real clock an outer draft followed by a routine containing one produced **one** file, holding the routine's text, three runs out of three. The user's document was destroyed every time, and the run's own `previews.writes` named the same path twice, which reads as two files. **Measure before pricing; a "narrow window" argued from a timestamp's format is not a measurement.**
+
+**A test can name a property and measure something else, and only the killer names show it** (SONNY-198). The battery's LF-only mutant was killed by `aRunOfLineBreaksFoldsToASingleMarker` and *not* by `everyUnicodeLineSeparatorIsFoldedAndNotOnlyLineFeed`, the test written for it — because that test split the emitted block on `"\n"` to count lines, so a CR- or NEL-forged line was not a line as far as its own assertions were concerned. It passed for a reason other than the one its name asserts, against both trees. This is the same hazard SONNY-199 documents from the other side, met in one branch: **read the killer names, not the count.**
+
+**A flake and a kill are the same observation** (SONNY-199). Two mic-hover tests armed the surviving hint's countdown at five seconds and then bet that everything after it would finish inside those five seconds; on a `@MainActor` suite that Swift Testing interleaves with every other `@MainActor` suite, that bet loses under a battery's load. The fix is two constants where there was one — a bounded deadline for a countdown a test cancels and awaits, an unreachable one for a hint an assertion expects to survive — and the hazard is now in `scripts/mutate --help`, because a battery decides a mutant was killed by whether the suite failed and reads a flake as a guard that does not exist.
+
+**An optimization that is unobservable by construction cannot have a non-vacuous test, and saying so is the honest answer** (SONNY-202). Deleting the per-iteration grants cache falls back to a fresh read and behaves identically, so the mutant for it **survives, and is recorded as a survivor rather than papered over**. What can break is the dangerous direction — a cache outliving an iteration — and that is pinned by two existing tests, which the corresponding mutant is killed by.
+
+Known limitations / deferred scope:
+- **SONNY-205** (filed here, Backlog, untriaged): twelve live sites in `docs/sonny-major-release-spec.md` still carry the two Power Mode claims SONNY-182 fixed in §23 — four for "paid-only" and eight for the 8-app cap, with §24.1's paste-into-every-new-chat prompt block the worst position of the set. Not absorbed because SONNY-182 states its population in its own title, and because the 8-app residual is not mechanical: §13.7's per-app eval bar was superseded by the same C3 ruling, so a real sweep has to decide what §13.7 becomes.
+- **The approval-time preview of a nested routine still names the unbumped path** (SONNY-190). `preview` does not resolve and each adapter computes its own default directly, so the run now writes a different name than that line predicts — a cosmetic inaccuracy where the previous behaviour was a silent deletion. Recorded on the ticket; no landing spot named yet.
+- `scripts/warnings` exit 3 is unreachable on this repository's own build today; it is covered end to end by the selftest using a real positionless SwiftPM warning.
+
+Open questions (required, write "none" if true): none. The two decisions this branch could not make for itself — `scripts/warnings`' unclassifiable-line behaviour and the cross-tool lock shape (SONNY-184), and the Finder classifier's key (SONNY-185) — were put to the founder and answered, and both answers are recorded at the code they govern.
+
+Next branch: not a roadmap row; the sweep exists to clear these out of the way of the big clusters, which resume where the roadmap left them.
+
 ### Branch: chore/collapse-twinned-test-helpers
 Status: complete
 Date: 2026-08-21
