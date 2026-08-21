@@ -1567,6 +1567,42 @@ struct AgentActionExecutorTests {
         #expect(written == promised)
     }
 
+    /// **The negative half of the chain's provenance rule, and the half nothing asserted**
+    /// (SONNY-200). `executeChain` starts a `.codeAuthored` accumulator and raises it to
+    /// `.modelAuthored` only when a segment came back model-authored;
+    /// `VisionSessionRunTests.aChainWhoseScreenControlSegmentWrotePartOfTheSummaryStoresItAsModelAuthored`
+    /// covers the raising, and until this test nothing covered the not-raising.
+    ///
+    /// That gap mattered because the only thing standing over the accumulator's *declaration* was a
+    /// textual scan, and the scan could not see the shape the declaration is written in: a type
+    /// annotation between the property name and the value
+    /// (`var summaryProvenance: StoredTaskResult.Provenance = .codeAuthored`) matches neither
+    /// `summaryProvenance: .modelAuthored` nor `summaryProvenance = .modelAuthored`. A mutant
+    /// flipping it survived. This test does not care how the line is spelled — it runs two ordinary
+    /// units and reads the answer back — which is why it is the real guard and the scan is the
+    /// backstop rather than the other way round.
+    ///
+    /// The direction is the safe one, which is why this is a test rather than a bug: over-marking a
+    /// code-authored summary costs nothing today, because nothing reads the flag to grant trust.
+    /// It is still a lie about who wrote the text, and the first reader that does consult the flag
+    /// inherits it.
+    @Test
+    func anOrdinaryChainsJoinedSummaryStaysCodeAuthored() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root)
+
+        let prepared = try executor.prepare(plan: untitledDraftChainPlan(firstTitle: nil, secondTitle: nil))
+        let result = try await executor.execute(plan: prepared.plan) { _, _ in }
+
+        // Two units really ran and their summaries really were joined — otherwise this would be
+        // asserting the default on a single-unit run, where the accumulator is never raised or
+        // lowered by anything and the assertion would hold against a broken join.
+        #expect(result.previews.flatMap(\.writes).count == 2)
+        #expect(result.summary.contains(" "))
+        #expect(result.summaryProvenance == .codeAuthored)
+    }
+
     // MARK: - SONNY-28: two documents never convert onto one PDF
     //
     // `FileInventory.docxFiles` derives each destination from the document's *basename* and
