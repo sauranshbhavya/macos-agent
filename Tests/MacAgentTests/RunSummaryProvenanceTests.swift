@@ -26,15 +26,35 @@ import MacAgentCore
 /// one today.
 @MainActor
 struct RunSummaryProvenanceTests {
-    /// The declaration this whole enum exists for: one site, and it is the screen-control session's.
+    /// **Both spellings of a declaration, because Swift has two and this codebase uses both.**
+    ///
+    /// A labelled argument at construction — `AgentRunResult(…, summaryProvenance: .modelAuthored)` —
+    /// and an assignment after it — `result.summaryProvenance = .modelAuthored`. The scan counted
+    /// only the first, so a second declaring site written the second way passed it (PR #89 cycle 2,
+    /// M14). That spelling is not hypothetical: `AgentActionExecutor.executeChain` already assigns
+    /// `summaryProvenance = .modelAuthored` inside its join, which is the *forwarding* site and is
+    /// pinned by name in `theTwoForwardingSitesPassTheProvenanceOnRatherThanDeclaringOne` below —
+    /// so the enumeration here has to be able to see that shape in order to tell a new declaration
+    /// from the forward it already knows about.
+    ///
+    /// Which is why the expected map has two entries rather than one, and why the forward is
+    /// expected *by name and by count*: this test says "exactly these sites declare or assign it,
+    /// and no others", and the other test says which of them is a forward.
+    static let declaringSpellings = [
+        "summaryProvenance: .modelAuthored",   // labelled argument at construction
+        "summaryProvenance = .modelAuthored"   // assignment afterwards
+    ]
+
+    /// The declaration this whole enum exists for: one authoring site, and it is the screen-control
+    /// session's — plus the one forwarding site that assigns the same value along a chain.
     @Test
     func theOnlyModelAuthoredRunSummaryIsTheVisionSessions() throws {
         var declaringFiles: [String: Int] = [:]
         for url in try MacAgentSource.coreSourceFiles() {
-            let count = MacAgentSource.count(
-                of: "summaryProvenance: .modelAuthored",
-                inText: try MacAgentSource.read(url)
-            )
+            let text = try MacAgentSource.read(url)
+            let count = Self.declaringSpellings.reduce(0) { total, spelling in
+                total + MacAgentSource.count(of: spelling, inText: text)
+            }
             guard count > 0 else {
                 continue
             }
@@ -42,29 +62,62 @@ struct RunSummaryProvenanceTests {
         }
 
         #expect(
-            declaringFiles == ["VisionSessionCapabilityAdapter.swift": 1],
+            declaringFiles == [
+                // The one authoring site: free text a model wrote after reading the user's screen.
+                "VisionSessionCapabilityAdapter.swift": 1,
+                // The chain join, which forwards rather than authors — pinned as a forward below.
+                "AgentActionExecutor.swift": 1
+            ],
             """
-            Exactly one site in Sources/MacAgentCore may declare `.modelAuthored`, and it is the \
-            screen-control session's. Found: \(declaringFiles.sorted { $0.key < $1.key }).
+            Exactly two sites in Sources/MacAgentCore may carry `.modelAuthored`, in either \
+            spelling: the screen-control session declares it, and the chain join forwards it. \
+            Found: \(declaringFiles.sorted { $0.key < $1.key }).
             A new model-authored producer is not forbidden — but `.codeAuthored` is the default for \
-            every other site, so a second one arriving means this enumeration, `StoredTaskResult`'s \
+            every other site, so a third one arriving means this enumeration, `StoredTaskResult`'s \
             own doc comment and `AgentRunResult.summaryProvenance`'s all now describe a world with \
-            one, and all three have to be updated together.
+            one authoring site, and all three have to be updated together.
             """
         )
     }
 
-    /// The app target declares none at all. `MacAgent` builds no `AgentRunResult`; if it ever does,
-    /// the enumeration above stops being the whole population and this says so.
+    /// The app target declares none at all, in either spelling. `MacAgent` builds no
+    /// `AgentRunResult`; if it ever does, the enumeration above stops being the whole population and
+    /// this says so.
     @Test
     func theAppTargetDeclaresNoRunSummaryProvenanceAtAll() throws {
         for url in try MacAgentSource.appSourceFiles() {
             let text = try MacAgentSource.read(url)
-            #expect(
-                MacAgentSource.count(of: "summaryProvenance: .modelAuthored", inText: text) == 0,
-                "\(MacAgentSource.relativePath(of: url)) declares a model-authored run summary"
-            )
+            for spelling in Self.declaringSpellings {
+                #expect(
+                    MacAgentSource.count(of: spelling, inText: text) == 0,
+                    "\(MacAgentSource.relativePath(of: url)) carries a model-authored run summary (\(spelling))"
+                )
+            }
         }
+    }
+
+    /// **The scan can see both spellings**, asserted against the code rather than trusted.
+    ///
+    /// The enumeration above is only a guard if its search terms cover the ways Swift lets you write
+    /// the thing. Counting one spelling and calling it a population is what let M14 through, so this
+    /// pins that the assignment form really is searched for and really does occur — a term that
+    /// matched nothing anywhere would be a term nobody would notice had stopped working.
+    @Test
+    func bothDeclarationSpellingsAreSearchedForAndBothOccur() throws {
+        #expect(Self.declaringSpellings.count == 2)
+
+        let executor = try MacAgentSource.read(
+            MacAgentSource.coreSourceDirectory.appendingPathComponent("AgentActionExecutor.swift")
+        )
+        #expect(
+            MacAgentSource.count(of: "summaryProvenance = .modelAuthored", inText: executor) == 1,
+            "the assignment spelling must still occur, or the search term for it is unexercised"
+        )
+
+        let vision = try MacAgentSource.read(
+            MacAgentSource.coreSourceDirectory.appendingPathComponent("VisionSessionCapabilityAdapter.swift")
+        )
+        #expect(MacAgentSource.count(of: "summaryProvenance: .modelAuthored", inText: vision) == 1)
     }
 
     /// The two sites that **forward** a provenance rather than authoring one, pinned by name because

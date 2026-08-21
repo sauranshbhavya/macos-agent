@@ -2161,6 +2161,61 @@ struct ProductShellTests {
         #expect(viewModel.errorMessage?.contains("Could not calculate that expression") == true)
     }
 
+    /// **A plan write that fails must not turn a successful task into a failed one** (PR #89
+    /// cycle 2, F4).
+    ///
+    /// The foreground path reported this through `setError`, which writes `errorMessage` — and
+    /// `publishLocalStorageLoadError`'s own doc comment, twelve hundred lines up, records exactly
+    /// what that costs: "routing a corrupt-store notice there made a *successful* task render as a
+    /// failure in the widget, since the widget picks `.failure` ahead of `.result`". So a task that
+    /// ran, produced its result and stored its row would show "Could not save this task's plan: …"
+    /// in place of what it produced. Documented mode, zero tests.
+    ///
+    /// A plan-persistence failure is a **degraded follow-up**, not a task failure: the run happened,
+    /// the row landed, and what is lost is that a later follow-up on this task will have its command
+    /// and its outcome but not its plan. It gets its own accurate channel, the same
+    /// `recordLocalStorageWriteFailure` its scheduled twin uses, which is also what CLAUDE.md's
+    /// write-failure gotcha requires — never the load-failure banner, whose text is hardcoded to
+    /// "could not be decrypted or decoded".
+    @Test(.requiresUnprivilegedProcess)
+    func aPlanWriteFailureLeavesTheTaskLookingSuccessfulAndSaysWhatActuallyFailed() async throws {
+        let planRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ForegroundPlanFailure-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: planRoot, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: planRoot.path)
+            try? FileManager.default.removeItem(at: planRoot)
+        }
+        let fixture = try makeProductShellFixture(planDetailRoot: planRoot)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        // Read-only: every other store sits under the fixture root and stays writable, so the row
+        // write lands and only the plan write fails.
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: planRoot.path)
+
+        viewModel.command = "= 12 + 30"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        // The task succeeded and still says so — this is the assertion the old channel broke.
+        #expect(viewModel.errorMessage == nil, "a plan-persist failure is not this task failing")
+        #expect(viewModel.finalSummary.contains("42"))
+        // The widget renders `.failure` ahead of `.result`, so `errorMessage` being nil is what
+        // keeps the result on screen. Asserted through the same predicate the widget reads.
+        #expect(!viewModel.hasVisibleWidgetPanel || viewModel.errorMessage == nil)
+
+        // The row landed, with its result, and the published list agrees with the file.
+        let record = try #require(try fixture.taskHistoryStore.loadAll().last)
+        #expect(record.outcomeStatus == .completed)
+        #expect(record.result?.text.contains("42") == true)
+        #expect(viewModel.taskHistoryRecords.map(\.id) == [record.id])
+
+        // And the failure is a quiet, accurate notice on the storage channel.
+        let notice = try #require(viewModel.localStorageNotice)
+        #expect(notice.hasPrefix("Sonny could not save this task's plan: "))
+        #expect(!notice.contains("decrypted or decoded"))
+    }
+
     @Test
     func directWorkspaceDispatchTagsTheCompletedTaskRecord() async throws {
         let fixture = try makeProductShellFixture()
@@ -2694,7 +2749,10 @@ private final class ProductShellActivationRecorder: ApplicationActivationApplyin
 private func makeProductShellFixture(
     /// Injected only so a test can drive task-history eviction without ten thousand records — the
     /// same seam and the same reason as `TaskHistoryStore.maxItems`'s own doc comment gives.
-    taskHistoryMaxItems: Int = TaskHistoryStore.defaultMaxItems
+    taskHistoryMaxItems: Int = TaskHistoryStore.defaultMaxItems,
+    /// For the one test that has to make the plan store unwritable while every other store stays
+    /// writable. Everything else leaves it under the fixture root.
+    planDetailRoot: URL? = nil
 ) throws -> (
     viewModel: AgentViewModel,
     root: URL,
@@ -2713,7 +2771,8 @@ private func makeProductShellFixture(
     return try makeProductShellFixture(
         userDefaults: userDefaults,
         userDefaultsSuiteName: userDefaultsSuiteName,
-        taskHistoryMaxItems: taskHistoryMaxItems
+        taskHistoryMaxItems: taskHistoryMaxItems,
+        planDetailRoot: planDetailRoot
     )
 }
 
@@ -2721,7 +2780,8 @@ private func makeProductShellFixture(
 private func makeProductShellFixture(
     userDefaults: UserDefaults,
     userDefaultsSuiteName: String? = nil,
-    taskHistoryMaxItems: Int = TaskHistoryStore.defaultMaxItems
+    taskHistoryMaxItems: Int = TaskHistoryStore.defaultMaxItems,
+    planDetailRoot: URL? = nil
 ) throws -> (
     viewModel: AgentViewModel,
     root: URL,
@@ -2763,7 +2823,7 @@ private func makeProductShellFixture(
     // an un-injected store resolves to the user's real
     // ~/Library/Application Support/Sonny/task-plan-details.json.
     let taskPlanDetailStore = TaskPlanDetailStore(
-        fileURL: root.appendingPathComponent("task-plan-details.json"),
+        fileURL: (planDetailRoot ?? root).appendingPathComponent("task-plan-details.json"),
         encryption: encryption
     )
     let browserOpener = HermeticBrowserOpener()

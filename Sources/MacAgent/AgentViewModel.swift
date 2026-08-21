@@ -2033,9 +2033,10 @@ final class AgentViewModel: ObservableObject {
     /// the suppression, because row I built a `nil` journal store as "run the session, record
     /// nothing".
     ///
-    /// It is the fifth `.trace` store and the one `LocalStoreClassification` calls the most
-    /// sensitive of the nine; it had no seam test, no mutation and no entry under Known limits,
-    /// while the other four were each closed or recorded.
+    /// It is a `.trace` store — the sixth, since row E's plan details — and the one
+    /// `LocalStoreClassification` calls the most sensitive of the ten; it had no seam test, no
+    /// mutation and no entry under Known limits, while the other traces were each closed or
+    /// recorded.
     var visionSessionJournalStoreForThisRun: VisionSessionJournalStore? {
         taskRecordingPolicy.allowsWriting(to: .visionSessionJournal) ? visionSessionJournalStore : nil
     }
@@ -3425,9 +3426,19 @@ final class AgentViewModel: ObservableObject {
     /// plans of tasks the user can no longer see. "Same cap, same eviction" is the founder's
     /// requirement of 2026-08-17; this is what makes it true rather than approximately true.
     ///
-    /// A failure here is a *write* failure and gets write wording. It is reported rather than
-    /// swallowed — the task itself succeeded, and the honest consequence is narrow and worth saying:
-    /// a follow-up on this task will have its command and its outcome but not its plan.
+    /// **A failure here is reported on the storage channel and never as this task failing** (PR #89
+    /// cycle 2, F4). It is a *write* failure and gets write wording, and it goes to
+    /// `recordLocalStorageWriteFailure` — `localStorageNotice` — exactly as its scheduled twin does.
+    ///
+    /// It used to call `setError`, and `publishLocalStorageLoadError`'s own doc comment already
+    /// records what that costs: routing a storage notice into `errorMessage` makes a *successful*
+    /// task render as a failure, because `FloatingWidgetView` picks `.failure` ahead of `.result`.
+    /// So a task that ran, produced its result and wrote its row would show "Could not save this
+    /// task's plan" where its result belonged. A plan-persistence failure is a **degraded
+    /// follow-up**, not a failed task: the run happened, the row landed, and what is lost is that a
+    /// later follow-up will have this task's command and outcome but not its plan. Reported rather
+    /// than swallowed, because that consequence is narrow and worth saying — just not in the slot
+    /// that means "the thing you asked for did not happen".
     private func recordTaskPlanDetail(
         for record: CompletedTaskRecord,
         plan: AgentPlan?,
@@ -3451,7 +3462,7 @@ final class AgentViewModel: ObservableObject {
                 evictedTaskIDs: evictedTaskIDs
             )
         } catch {
-            setError("Could not save this task's plan: \(error.localizedDescription)")
+            recordLocalStorageWriteFailure("Sonny could not save this task's plan: \(error.localizedDescription)")
             logStore.append(.observe, "Could not record this task's plan: \(error.localizedDescription)")
         }
     }
