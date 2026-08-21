@@ -471,7 +471,7 @@ struct LocalStorageSecurityTests {
         ])
         // Never suppressed: the thing the user actually asked for.
         #expect(stores(.artifact) == [.routines, .workspaces, .snippets])
-        // The ninth store, which the founder's own enumeration did not reach: no task writes it.
+        // The one store the founder's own enumeration did not reach: no task writes it.
         #expect(stores(.notWrittenByTasks) == [.clipboardHistorySettings])
 
         // Every kind is used, so none is a case nothing ever means.

@@ -134,10 +134,16 @@ struct TaskResultStorageTests {
     // MARK: - Provenance propagation
 
     /// The forwarding sites — `RunRoutineCapabilityAdapter`'s wrapper sentence and
-    /// `AgentActionExecutor.executeChain`'s join — are pinned end to end in the app target instead
-    /// of here, by `aRoutineWhoseScreenControlStepWroteTheSummaryStoresItAsModelAuthored`: a
-    /// hand-built `AgentRunResult` passing its own provenance to another hand-built one asserts the
-    /// test's arithmetic rather than the adapter's.
+    /// `AgentActionExecutor.executeChain`'s join — are pinned in the app target rather than here,
+    /// because a hand-built `AgentRunResult` passing its own provenance to another hand-built one
+    /// asserts the test's arithmetic rather than the adapter's. The chain is pinned end to end by
+    /// `VisionSessionRunTests.aChainWhoseScreenControlSegmentWrotePartOfTheSummaryStoresItAsModelAuthored`,
+    /// and both forwarding sites plus the whole one-model-authored-site enumeration are pinned by
+    /// `RunSummaryProvenanceTests`. (This comment cited a
+    /// `aRoutineWhoseScreenControlStepWroteTheSummary…` test that has never existed: it was the name
+    /// of a test drafted against a routine carrying a vision step, which
+    /// `StoredRoutine.forbiddenStepOperations` refuses outright — the draft failed with
+    /// `unsafeRoutineStep("vision_session")` and became the chain test instead. PR #89 review.)
     ///
     /// The default is `.codeAuthored`, which is what keeps 26 of the 27 construction sites correct
     /// without saying anything — and what makes the one that must say something worth asserting.
@@ -264,36 +270,133 @@ struct TaskResultStorageTests {
         #expect(try plans.detail(forTaskID: writtenIDs[0]) == nil)
     }
 
-    /// The two stores name the same cap, read off one constant rather than two literals.
+    /// The two stores name the same cap, read off one constant rather than two literals — the
+    /// no-drift property, checked on a store built the way every production path builds one.
     @Test
-    func thePlanStoreCapsAtExactlyTheHistoryStoresNumber() {
-        #expect(TaskPlanDetailStore.maxDetails == TaskHistoryStore.defaultMaxItems)
-        #expect(TaskPlanDetailStore.maxDetails == 10_000)
+    func thePlanStoreCapsAtExactlyTheHistoryStoresNumber() throws {
+        let root = try makeStorageDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        #expect(makePlanStore(root: root).maxDetails == TaskHistoryStore.defaultMaxItems)
+        #expect(makePlanStore(root: root).maxDetails == 10_000)
     }
 
-    /// Its own eviction is the backstop for whatever the handoff misses, and it uses the history
-    /// store's rule: oldest-first by `completedAt`.
+    /// **The injectable cap is a test seam and not a way to ship a shorter life**, which is the one
+    /// thing the founder's 2026-08-17 split condition forbids: this store must not outlive the task
+    /// row by less, or follow-ups quietly get weaker on older tasks. Enumerated the way
+    /// `TaskHistoryStore`'s own equivalent is — the production construction sites are
+    /// `AgentViewModel`'s default parameter, `LocalDataDeletionService.defaultStoreFileURLs()` and
+    /// `LocalStore.fileURL(fileManager:)`, and none of the three passes a cap.
+    @Test
+    func theShippedPlanCapIsTheHistoryCapAndNoProductionPathOverridesIt() throws {
+        let source = try coreSource(named: "TaskPlanDetailStore.swift")
+        #expect(source.contains("maxDetails: Int = TaskHistoryStore.defaultMaxItems"))
+
+        for file in ["AgentViewModel.swift", "LocalDataDeletionService.swift", "LocalStoreClassification.swift"] {
+            let text = try sourceNamed(file)
+            let constructions = text.components(separatedBy: "TaskPlanDetailStore(").count - 1
+            #expect(constructions >= 1, "\(file) should still construct the store")
+            #expect(
+                !text.contains("maxDetails:"),
+                "\(file) passes a cap to TaskPlanDetailStore — a shorter life is a founder decision, not a parameter"
+            )
+        }
+    }
+
+    /// A store built with a nonsense cap floors at 1 rather than evicting everything on the next
+    /// write, which would be silent data loss dressed as a small cap.
+    @Test
+    func aPlanStoreBuiltWithZeroFloorsAtOneRatherThanErasingItself() throws {
+        let root = try makeStorageDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = makePlanStore(root: root, maxDetails: 0)
+
+        #expect(store.maxDetails == 1)
+        try store.save(StoredTaskPlanDetail(taskID: "a", completedAt: .storageFixture, planSummary: "a", steps: []))
+        #expect(try store.loadAll().map(\.taskID) == ["a"])
+    }
+
+    /// **Its own eviction is the backstop for whatever the handoff misses**, and it uses the history
+    /// store's rule: oldest-first by `completedAt`. Reachable rather than decorative — the handoff
+    /// carries the evicted ids in the same write as the new detail, so a write that throws after the
+    /// row write already landed loses them for good, and this is the only thing that brings the
+    /// store back down afterwards.
+    ///
+    /// The cap is injected at 2 rather than driven to 10,000, for the reason
+    /// `TaskHistoryStore.maxItems`'s own doc comment records: pinning eviction at the real number
+    /// costs about a third of a second of solid CPU per test, and this target runs beside
+    /// wall-clock-sensitive vision tests. Eviction does not care what the number is; the real
+    /// number is pinned separately, twice.
+    ///
+    /// **The version this replaces asserted the opposite of its own name** (PR #89 review): three
+    /// entries against a 10,000 cap, a local named `overCap` holding three, and a final assertion
+    /// that nothing had been evicted. It passed, it read like coverage, and mutating `evicted(_:)`
+    /// to return its input unchanged survived the whole suite.
     @Test
     func thePlanStoreEvictsOldestFirstWhenNothingElseHasTrimmedIt() throws {
         let root = try makeStorageDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
-        // The real cap is 10,000, which no test should write; this proves the rule by driving the
-        // same code with a hand-built over-cap array through one save.
-        let store = makePlanStore(root: root)
-        let overCap = (0..<3).map { index in
-            StoredTaskPlanDetail(
-                taskID: "t\(index)",
-                completedAt: Date(timeInterval: Double(index), since: .storageFixture),
-                planSummary: "p\(index)",
-                steps: []
+        let store = makePlanStore(root: root, maxDetails: 2)
+
+        for index in 0..<3 {
+            try store.save(
+                StoredTaskPlanDetail(
+                    taskID: "t\(index)",
+                    completedAt: Date(timeInterval: Double(index), since: .storageFixture),
+                    planSummary: "p\(index)",
+                    steps: []
+                )
             )
         }
-        for detail in overCap {
-            try store.save(detail)
+
+        // The oldest went, and it went by `completedAt` rather than by insertion order.
+        #expect(try store.loadAll().map(\.taskID).sorted() == ["t1", "t2"])
+        #expect(try store.detail(forTaskID: "t0") == nil)
+    }
+
+    /// Oldest-first means oldest by the stored timestamp, not by the order the writes arrived — the
+    /// half a test that inserts in chronological order cannot see.
+    @Test
+    func thePlanStoreEvictsByCompletedAtAndNotByWriteOrder() throws {
+        let root = try makeStorageDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = makePlanStore(root: root, maxDetails: 2)
+
+        // Written newest-first, so insertion order and chronological order disagree.
+        for index in [2, 1, 0] {
+            try store.save(
+                StoredTaskPlanDetail(
+                    taskID: "t\(index)",
+                    completedAt: Date(timeInterval: Double(index), since: .storageFixture),
+                    planSummary: "p\(index)",
+                    steps: []
+                )
+            )
         }
 
-        // Nothing is evicted below the cap — the backstop must not trim a healthy store.
-        #expect(try store.loadAll().map(\.taskID) == ["t0", "t1", "t2"])
+        // `t0` is the oldest by `completedAt` and the last one written; it is the one that goes.
+        #expect(try store.loadAll().map(\.taskID).sorted() == ["t1", "t2"])
+    }
+
+    /// And it does not trim a store that is inside its cap.
+    @Test
+    func thePlanStoreLeavesAHealthyStoreAlone() throws {
+        let root = try makeStorageDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = makePlanStore(root: root, maxDetails: 4)
+
+        for index in 0..<3 {
+            try store.save(
+                StoredTaskPlanDetail(
+                    taskID: "t\(index)",
+                    completedAt: Date(timeInterval: Double(index), since: .storageFixture),
+                    planSummary: "p\(index)",
+                    steps: []
+                )
+            )
+        }
+
+        #expect(try store.loadAll().map(\.taskID).sorted() == ["t0", "t1", "t2"])
     }
 
     // MARK: - The plan detail's caps
@@ -409,12 +512,45 @@ struct TaskResultStorageTests {
 
     private func makePlanStore(
         root: URL,
-        encryption: LocalStorageEncryption? = nil
+        encryption: LocalStorageEncryption? = nil,
+        maxDetails: Int = TaskHistoryStore.defaultMaxItems
     ) -> TaskPlanDetailStore {
         TaskPlanDetailStore(
             fileURL: root.appendingPathComponent("task-plan-details.json"),
-            encryption: encryption ?? storageTestEncryption()
+            encryption: encryption ?? storageTestEncryption(),
+            maxDetails: maxDetails
         )
+    }
+
+    /// A file under `Sources/MacAgentCore/`, comments stripped, for the two enumeration pins above.
+    ///
+    /// Deliberately tiny and local rather than a second general-purpose scanner: `MacAgentSource` in
+    /// the app test target is this repository's one source scanner and stays that way, and it cannot
+    /// be imported here. What these two pins need is a substring check over one file, so this reads
+    /// one file and drops comment-prefixed lines — enough that a mention in a doc comment cannot
+    /// satisfy either of them, which is the only property they rely on.
+    private func coreSource(named name: String) throws -> String {
+        try sourceNamed(name)
+    }
+
+    private func sourceNamed(_ name: String) throws -> String {
+        let root = URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .deletingLastPathComponent()
+            .appendingPathComponent("Sources")
+        for target in ["MacAgentCore", "MacAgent"] {
+            let candidate = root.appendingPathComponent(target).appendingPathComponent(name)
+            guard FileManager.default.fileExists(atPath: candidate.path) else {
+                continue
+            }
+            return try String(contentsOf: candidate, encoding: .utf8)
+                .split(separator: "\n", omittingEmptySubsequences: false)
+                .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }
+                .joined(separator: "\n")
+        }
+        Issue.record("No source file named \(name) under Sources/MacAgentCore or Sources/MacAgent")
+        return ""
     }
 }
 

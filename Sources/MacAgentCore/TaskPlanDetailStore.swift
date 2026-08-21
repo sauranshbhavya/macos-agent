@@ -149,9 +149,23 @@ public struct StoredTaskPlanDetail: Codable, Equatable, Sendable {
 /// runs that failed before a plan existed have none, so the detail store would lag behind and keep
 /// entries for rows the user can no longer see.
 public struct TaskPlanDetailStore: @unchecked Sendable {
-    /// The same number `TaskHistoryStore` caps at, referenced rather than repeated so the two
-    /// cannot drift apart in a later edit.
-    public static var maxDetails: Int { TaskHistoryStore.defaultMaxItems }
+    /// This store's cap, defaulting to `TaskHistoryStore.defaultMaxItems` — referenced rather than
+    /// repeated, so the two numbers cannot drift apart in a later edit, and
+    /// `thePlanStoreCapsAtExactlyTheHistoryStoresNumber` pins that they have not.
+    ///
+    /// **Injectable for one reason: so a test can exercise `evicted(_:)` without ten thousand
+    /// entries** — the same reason and the same shape as `TaskHistoryStore.maxItems`, whose doc
+    /// comment records what pinning eviction at the real cap cost that suite in CPU. It is not a way
+    /// to change the shipped cap: that value is the founder's decision of 2026-08-16, it lives in
+    /// `TaskHistoryStore.defaultMaxItems`, and **giving this store a shorter life than the task row
+    /// is precisely what the founder's 2026-08-17 split condition forbids** — a follow-up must not
+    /// quietly get weaker on an older task. A production path that passed anything here would be
+    /// doing that; none does, and `theShippedPlanCapIsTheHistoryCapAndNoProductionPathOverridesIt`
+    /// pins it.
+    ///
+    /// Floored at 1, like its sibling: a store built with 0 would evict everything on the next
+    /// write, which is silent data loss rather than a small cap.
+    public let maxDetails: Int
 
     public let fileURL: URL
     private let fileManager: FileManager
@@ -160,10 +174,12 @@ public struct TaskPlanDetailStore: @unchecked Sendable {
     public init(
         fileURL: URL? = nil,
         fileManager: FileManager = .default,
-        encryption: LocalStorageEncryption = .shared
+        encryption: LocalStorageEncryption = .shared,
+        maxDetails: Int = TaskHistoryStore.defaultMaxItems
     ) {
         self.fileManager = fileManager
         self.encryption = encryption
+        self.maxDetails = max(1, maxDetails)
         if let fileURL {
             self.fileURL = fileURL
         } else {
@@ -236,14 +252,20 @@ public struct TaskPlanDetailStore: @unchecked Sendable {
     }
 
     /// Oldest-first by `completedAt` — `TaskHistoryStore.capped(_:)`'s rule, on the same field, at
-    /// the same number. A backstop rather than the primary mechanism: the eviction handoff in
-    /// `save(_:evictedTaskIDs:)` normally keeps this store at or below the history store's count
-    /// already.
+    /// the same number.
+    ///
+    /// **A backstop rather than the primary mechanism, and a reachable one.** The eviction handoff
+    /// in `save(_:evictedTaskIDs:)` normally keeps this store at or below the history store's count,
+    /// so in ordinary running this never fires. It is not dead code: the handoff carries the evicted
+    /// ids in the *same* write as the new detail, so a write that throws after the row write already
+    /// succeeded loses those ids for good — nothing re-derives them, and the next successful write
+    /// carries only its own. Every such failure leaves this store one entry above where it should
+    /// be, and this is the only thing that ever brings it back down.
     private func evicted(_ details: [StoredTaskPlanDetail]) -> [StoredTaskPlanDetail] {
-        guard details.count > Self.maxDetails else {
+        guard details.count > maxDetails else {
             return details
         }
-        return Array(details.sorted { $0.completedAt < $1.completedAt }.suffix(Self.maxDetails))
+        return Array(details.sorted { $0.completedAt < $1.completedAt }.suffix(maxDetails))
     }
 
     private func write(_ details: [StoredTaskPlanDetail]) throws {
