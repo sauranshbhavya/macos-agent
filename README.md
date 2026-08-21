@@ -136,6 +136,9 @@ Mock mode writes clearly marked `.mock.pdf` placeholders, not real PDFs.
 
 ## Tests
 
+**These commands cover the app half only.** The server has its own suite — `cd server && npm test`,
+and `npm run test:db` for the tests that need a Postgres. See `server/README.md`.
+
 ```bash
 swift test
 ```
@@ -180,6 +183,14 @@ Coverage spans strict plan decoding, the full capability-adapter registry, risk-
 10. In Command Center > Insights, confirm the stat cards, weekly chart, and recent-activity list reflect real completed tasks. In Settings > Privacy & Permissions, run "Delete Local Data" and confirm the destructive confirmation dialog and the nine-store deletion.
 
 ## Architecture
+
+**The repository has two halves.** `Sources/` and `Tests/` are the macOS app, below. `server/` is
+the backend gateway — TypeScript on Node 22, its own build, its own tests, its own deploy, and its
+own `server/README.md`. It holds provider credentials and forwards to model providers; Sonny's agent
+loop stays on the Mac. `swift build` says nothing about it, and `CLAUDE.md`'s Commands section has
+both halves' commands.
+
+### The app half
 
 Two Swift package targets:
 
