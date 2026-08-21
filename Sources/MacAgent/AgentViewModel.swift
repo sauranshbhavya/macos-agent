@@ -3556,7 +3556,26 @@ final class AgentViewModel: ObservableObject {
             refreshTaskHistory()
             return record.id
         } catch {
-            setError("Could not save task history: \(error.localizedDescription)")
+            // **A lost row is a storage problem, not a failed task** (SONNY-201), so it goes to
+            // `localStorageNotice` with its own write wording — matching `recordScheduledTaskHistory`,
+            // which is the same failure on the unattended path and already answered this way, and
+            // matching `recordTaskPlanDetail` one line above, which PR #89's F4 moved for the same
+            // reason.
+            //
+            // It called `setError`, and the cost is the one `publishLocalStorageLoadError`'s own doc
+            // comment records: `errorMessage` means "the thing you asked for did not happen", and the
+            // widget picks `.failure` ahead of `.result` — so a task that ran and produced its result
+            // showed "Could not save task history: …" where that result belonged. The run happened;
+            // what is lost is the row.
+            //
+            // **A heavier loss than the plan write's, and still not a task failure.** A failed plan
+            // write leaves the task fully visible and only its plan missing; a failed row write
+            // leaves it absent from the Tasks list, from search, from Insights, and from anything a
+            // follow-up could be aimed at. That is worth saying plainly, which is what the wording
+            // does — it is not worth saying in the slot that means the task itself failed.
+            recordLocalStorageWriteFailure(
+                "Sonny could not save this task to task history: \(error.localizedDescription)"
+            )
             logStore.append(.observe, "Could not record task history: \(error.localizedDescription)")
             return nil
         }

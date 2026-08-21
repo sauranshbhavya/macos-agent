@@ -332,6 +332,55 @@ struct ScheduledRoutineRunTests {
         #expect(fixture.viewModel.scheduledRunNotice?.contains("ran on schedule") == true)
     }
 
+    /// **The row write's own failure, on this path, pinned** (SONNY-201).
+    ///
+    /// This path already answered correctly — `recordScheduledTaskHistory` has used
+    /// `recordLocalStorageWriteFailure` since it was written — and nothing exercised it, so the
+    /// property that made it the reference for the foreground fix was itself only a reading of the
+    /// source. Its foreground twin is
+    /// `ProductShellTests.aRowWriteFailureLeavesTheTaskLookingSuccessfulAndSaysWhatActuallyFailed`,
+    /// which is this test with one directory changed, as the pair above already is for the plan
+    /// write.
+    ///
+    /// The half that matters here is the last assertion: the routine really ran, and its own notice
+    /// still says so. A lost row must not turn a scheduled run that worked into one the user is told
+    /// failed, any more than it may on the attended path.
+    @Test(.requiresUnprivilegedProcess)
+    func aRowWriteFailureIsAStorageNoticeRatherThanAFailedScheduledRun() async throws {
+        let historyRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScheduledRowFailure-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: historyRoot, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: historyRoot.path)
+            try? FileManager.default.removeItem(at: historyRoot)
+        }
+        let fixture = try makeFixture(taskHistoryRoot: historyRoot)
+        defer { fixture.cleanUp() }
+        try fixture.saveRoutine(unattendedTrusted: true)
+        // Read-only: the plan store sits under the fixture root and stays writable, so the row write
+        // is the only one that fails — the reverse of the pair above.
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: historyRoot.path)
+
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
+        try await fixture.waitForIdle()
+
+        // The row did not land, and nothing was written beside it either: the plan write is guarded
+        // by the row's own `return`, which is `recordScheduledTaskHistory`'s two-catch shape.
+        #expect(try fixture.taskHistoryStore.loadAll().isEmpty)
+        #expect(fixture.viewModel.taskHistoryRecords.isEmpty)
+        #expect(try fixture.taskPlanDetailStore.loadAll().isEmpty)
+
+        // Write wording naming this failure, not the plan write's and not the load banner's.
+        let notice = try #require(fixture.viewModel.localStorageNotice)
+        #expect(notice.hasPrefix("Sonny could not save this scheduled run to task history: "))
+        #expect(!notice.contains("what this scheduled run planned"))
+        #expect(!notice.contains("decrypted or decoded"))
+
+        // And the routine itself ran and still reports that it did.
+        #expect(fixture.viewModel.errorMessage == nil, "a lost row is not the routine failing")
+        #expect(fixture.viewModel.scheduledRunNotice?.contains("ran on schedule") == true)
+    }
+
     /// The occurrence must not be reconsidered on the next tick. Without the baseline advance the
     /// timer would re-run the same routine every 30 seconds, forever.
     @Test
@@ -1718,9 +1767,14 @@ struct ScheduledRoutineRunTests {
 
     private func makeFixture(
         taskHistoryMaxItems: Int = TaskHistoryStore.defaultMaxItems,
-        planDetailRoot: URL? = nil
+        planDetailRoot: URL? = nil,
+        taskHistoryRoot: URL? = nil
     ) throws -> Fixture {
-        try Fixture(taskHistoryMaxItems: taskHistoryMaxItems, planDetailRoot: planDetailRoot)
+        try Fixture(
+            taskHistoryMaxItems: taskHistoryMaxItems,
+            planDetailRoot: planDetailRoot,
+            taskHistoryRoot: taskHistoryRoot
+        )
     }
 
     @MainActor
@@ -1747,7 +1801,10 @@ struct ScheduledRoutineRunTests {
         /// delete-ordering test. Everything else leaves it under `root`.
         init(
             taskHistoryMaxItems: Int = TaskHistoryStore.defaultMaxItems,
-            planDetailRoot: URL? = nil
+            planDetailRoot: URL? = nil,
+            /// The mirror of `planDetailRoot`, for the test that has to fail the *row* write while
+            /// the plan store stays writable (SONNY-201).
+            taskHistoryRoot: URL? = nil
         ) throws {
             root = FileManager.default.temporaryDirectory
                 .appendingPathComponent("ScheduledRoutineRunTests-\(UUID().uuidString)", isDirectory: true)
@@ -1764,7 +1821,7 @@ struct ScheduledRoutineRunTests {
             routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
             snippetStore = SnippetStore(fileURL: root.appendingPathComponent("snippets.json"))
             taskHistoryStore = TaskHistoryStore(
-                fileURL: root.appendingPathComponent("task-history.json"),
+                fileURL: (taskHistoryRoot ?? root).appendingPathComponent("task-history.json"),
                 maxItems: taskHistoryMaxItems
             )
             taskPlanDetailStore = TaskPlanDetailStore(

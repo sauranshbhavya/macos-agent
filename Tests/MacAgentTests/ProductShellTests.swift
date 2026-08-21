@@ -2237,6 +2237,61 @@ struct ProductShellTests {
         #expect(!notice.contains("decrypted or decoded"))
     }
 
+    /// **A row write that fails must not turn a successful task into a failed one either**
+    /// (SONNY-201).
+    ///
+    /// The sibling of the plan-write test above, and it was the one neighbour still on the wrong
+    /// channel: after PR #89's F4 moved the plan write onto `recordLocalStorageWriteFailure`, the two
+    /// adjacent failures inside one function disagreed with each other — the plan write a notice, the
+    /// row write a `setError`. So a task that ran and produced its result showed "Could not save task
+    /// history: …" in place of it, which is the exact mode `publishLocalStorageLoadError` was written
+    /// to end.
+    ///
+    /// **The heavier loss of the two, and still not a task failure.** A lost plan leaves the task
+    /// fully visible with its plan missing; a lost row leaves it absent from the Tasks list, from
+    /// search, from Insights and from anything a follow-up could aim at. That is worth saying — just
+    /// not in the slot that means the task itself did not happen. The scheduled path already
+    /// answered it this way; `ScheduledRoutineRunTests.aRowWriteFailureIsAStorageNoticeRatherThanAFailedScheduledRun`
+    /// is the twin, and it is new too: the behaviour was right there and untested.
+    @Test(.requiresUnprivilegedProcess)
+    func aRowWriteFailureLeavesTheTaskLookingSuccessfulAndSaysWhatActuallyFailed() async throws {
+        let historyRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ForegroundRowFailure-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: historyRoot, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: historyRoot.path)
+            try? FileManager.default.removeItem(at: historyRoot)
+        }
+        let fixture = try makeProductShellFixture(taskHistoryRoot: historyRoot)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        // Read-only: every other store, the plan store included, sits under the fixture root and
+        // stays writable, so the row write is the only one that fails.
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: historyRoot.path)
+
+        viewModel.command = "= 12 + 30"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        // The task succeeded and still says so — the assertion the old channel broke.
+        #expect(viewModel.errorMessage == nil, "a lost history row is not this task failing")
+        #expect(viewModel.finalSummary.contains("42"))
+
+        // The failure is a quiet, accurate notice on the storage channel, in write wording rather
+        // than the load banner's "could not be decrypted or decoded".
+        let notice = try #require(viewModel.localStorageNotice)
+        #expect(notice.hasPrefix("Sonny could not save this task to task history: "))
+        #expect(!notice.contains("decrypted or decoded"))
+
+        // And the row really did not land, or this test drives some other branch entirely.
+        #expect(try fixture.taskHistoryStore.loadAll().isEmpty)
+        #expect(viewModel.taskHistoryRecords.isEmpty)
+        // The plan store was reachable throughout, so nothing was orphaned by a write that skipped
+        // it: `recordTaskPlanDetail` is never called when the row write throws, which is the
+        // dependents-after-the-row rule that function's own doc comment states.
+        #expect(try fixture.taskPlanDetailStore.loadAll().isEmpty)
+    }
+
     @Test
     func directWorkspaceDispatchTagsTheCompletedTaskRecord() async throws {
         let fixture = try makeProductShellFixture()
@@ -2911,7 +2966,10 @@ private func makeProductShellFixture(
     taskHistoryMaxItems: Int = TaskHistoryStore.defaultMaxItems,
     /// For the one test that has to make the plan store unwritable while every other store stays
     /// writable. Everything else leaves it under the fixture root.
-    planDetailRoot: URL? = nil
+    planDetailRoot: URL? = nil,
+    /// The mirror of `planDetailRoot`, for the test that has to fail the *row* write while every
+    /// other store — the plan store included — stays writable (SONNY-201).
+    taskHistoryRoot: URL? = nil
 ) throws -> (
     viewModel: AgentViewModel,
     root: URL,
@@ -2931,7 +2989,8 @@ private func makeProductShellFixture(
         userDefaults: userDefaults,
         userDefaultsSuiteName: userDefaultsSuiteName,
         taskHistoryMaxItems: taskHistoryMaxItems,
-        planDetailRoot: planDetailRoot
+        planDetailRoot: planDetailRoot,
+        taskHistoryRoot: taskHistoryRoot
     )
 }
 
@@ -2940,7 +2999,8 @@ private func makeProductShellFixture(
     userDefaults: UserDefaults,
     userDefaultsSuiteName: String? = nil,
     taskHistoryMaxItems: Int = TaskHistoryStore.defaultMaxItems,
-    planDetailRoot: URL? = nil
+    planDetailRoot: URL? = nil,
+    taskHistoryRoot: URL? = nil
 ) throws -> (
     viewModel: AgentViewModel,
     root: URL,
@@ -2974,7 +3034,7 @@ private func makeProductShellFixture(
         encryption: encryption
     )
     let taskHistoryStore = TaskHistoryStore(
-        fileURL: root.appendingPathComponent("task-history.json"),
+        fileURL: (taskHistoryRoot ?? root).appendingPathComponent("task-history.json"),
         encryption: encryption,
         maxItems: taskHistoryMaxItems
     )
