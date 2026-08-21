@@ -1154,6 +1154,56 @@ struct VisionSessionRunTests {
         #expect(try fixture.approvedApps.loadAll().isEmpty)
     }
 
+    /// **The second guard on the screen-check half of §4.3's ordering** (PR #88 records round, F8).
+    ///
+    /// §4.3 has two halves and they fail to different mutations. *Capture before question* is held
+    /// by `thePerAppQuestionArrivesOnlyAfterACaptureThatWasScannedAndNeverSent` and by the test
+    /// below it. *Shell verdict before question* — an unlisted app whose window is showing a shell
+    /// must be refused rather than asked about — was held by
+    /// `aFirstCaptureShowingAShellRefusesBeforeAnyPerAppApprovalIsAskedOrGrantMinted` and **by
+    /// nothing else**, which made the accidental-approval trap the founder's decision exists to
+    /// close a single point of failure, sitting on the adjacent-lines reorder a future session is
+    /// most likely to make.
+    ///
+    /// **The observable here is deliberately not the one that test uses.** It reads the *persisted
+    /// session record* rather than published view-model state: under the correct ordering the
+    /// session ends and the journal keeps `screen_shows_shell` with no entries, and under the
+    /// reorder the loop is parked on a question and there is no end record at all. So an edit that
+    /// broke one test's surface leaves the other's intact, and the wait below settles on whichever
+    /// happens first rather than on a timeout.
+    ///
+    /// It also pins something the other test does not: **what the audit trail says happened.** A
+    /// refusal the record describes differently from the panel is a refusal nobody can audit, and
+    /// for this ordering the record is the only place the difference is durable.
+    @Test
+    func theRecordOfAnUnapprovedShellAppSaysTheShellRefusedItAndNotThatItWasAsked() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"click","x":10,"y":10,"target":"OK","consequence":"ordinary","rationale":"r"}"#],
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false,
+            recognizer: ScriptedRecognizer([Self.shellScreen])
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "run the deploy script", appName: "VS Code")
+        // Whichever comes first — a question, or the session ending. Under the reorder the question
+        // wins and the assertions below fail on a missing record rather than on a 30s backstop.
+        try await waitUntil("the session to settle one way or the other") {
+            fixture.viewModel.approvalRequest != nil || !fixture.viewModel.isRunning
+        }
+
+        let record = try #require(
+            try fixture.journal.loadAll().first,
+            "the session should have ended and written its record, not parked on a question"
+        )
+        #expect(record.endReasonCode == "screen_shows_shell")
+        #expect(record.entries.isEmpty, "nothing was done, so nothing is journalled")
+        #expect(record.appDisplayName == "VS Code")
+        // And the two facts the trap is about: nobody was asked, and nothing was minted.
+        #expect(fixture.viewModel.approvalRequest == nil)
+        #expect(try fixture.approvedApps.loadAll().isEmpty)
+    }
+
     /// **F8's second guard on §4.3's ordering, from a genuinely different angle.**
     ///
     /// The founder's whole decision rests on one property — no per-app question before a capture has

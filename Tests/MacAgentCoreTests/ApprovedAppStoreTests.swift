@@ -272,8 +272,13 @@ struct ApprovedAppStoreTests {
         #expect(!FileManager.default.fileExists(atPath: store.fileURL.path))
     }
 
-    /// The default path lands beside the other nine, under Application Support/Sonny, and carries
+    /// The default path lands beside the other ten, under Application Support/Sonny, and carries
     /// the filename the wipe's list and `LocalStore` both resolve through this same type.
+    ///
+    /// **The count is not written down twice on purpose.** It has now been wrong three times on this
+    /// branch — nine, then ten, then nine again after the rebase falsified a line the previous fix
+    /// had not looked at — so what the assertions below check is the *filename* and the *directory*,
+    /// and membership of the list the wipe actually uses. Those cannot go stale.
     @Test
     func theDefaultFileSitsBesideTheOtherStores() {
         let store = ApprovedAppStore()
