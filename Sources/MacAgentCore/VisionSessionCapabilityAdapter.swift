@@ -278,7 +278,13 @@ public struct VisionSessionCapabilityAdapter: CapabilityAdapter {
         return AgentRunResult(
             plan: plan,
             previews: try preview(plan: plan, context: context),
-            summary: outcome.summary
+            summary: outcome.summary,
+            // **The one model-authored run summary in the product** (SONNY-147). This text is
+            // whatever the model wrote after looking at the user's screen, and the session prompt
+            // actively asks it to describe what it saw — so an injection attempt's designed
+            // response is to be transcribed into exactly this string. Declared here, at the only
+            // place that knows, and carried from here to storage.
+            summaryProvenance: .modelAuthored
         )
     }
 

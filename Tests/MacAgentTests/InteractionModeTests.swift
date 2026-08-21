@@ -318,6 +318,7 @@ private func makeModeFixture() throws -> ModeFixture {
                 fileURL: root.appendingPathComponent("shortcuts-run-history.json")
             ),
             taskHistoryStore: TaskHistoryStore(fileURL: root.appendingPathComponent("task-history.json")),
+            taskPlanDetailStore: TaskPlanDetailStore(fileURL: root.appendingPathComponent("task-plan-details.json")),
             clipboardHistorySettingsStore: ClipboardHistorySettingsStore(
                 fileURL: root.appendingPathComponent("clipboard-history-settings.json")
             ),

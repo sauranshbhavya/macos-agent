@@ -146,7 +146,8 @@ struct OpenAIPlannerTests {
         #expect(input.count == 3)
         let contextText = try #require(Self.messageText(input[1]))
         #expect(contextText.contains("Previous command: find the 3 largest files in ~/Desktop/SomeFolder"))
-        #expect(contextText.contains("Previous plan summary: - unavailable; prior task failed before preparation completed"))
+        // Reworded by SONNY-150 to state the fact without a cause — see `PriorTaskContext`.
+        #expect(contextText.contains("Previous plan summary: - not recorded"))
         #expect(contextText.contains("Previous outcome: failed - The folder ~/Desktop/SomeFolder could not be scanned."))
         #expect(Self.messageText(input[2]) == "use ~/Documents instead")
     }

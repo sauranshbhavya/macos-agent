@@ -133,13 +133,13 @@ enum TaskDeletePresentation {
         }
     }
 
-    /// The sheet is taller only when it has a screen-record section to hold. Keyed on the resolved
-    /// state rather than on `record.visionSessionID`, or a task whose session is gone would open a
-    /// 560-tall sheet with a gap where the section used to be — visibly unlike a task that never ran
-    /// one, which is the difference this ticket exists to remove.
-    static func sheetHeight(for state: TaskScreenRecordState) -> CGFloat {
-        showsScreenRecordSection(state) ? 560 : 320
-    }
+    /// **The height moved to `TaskDetailPresentation` (row E, SONNY-148).** It used to live here as
+    /// `showsScreenRecordSection(state) ? 560 : 320`, and the property that mattered was that it is
+    /// keyed on the *resolved* state rather than on `record.visionSessionID` — otherwise a task
+    /// whose session is gone opens a 560-tall sheet with a gap where the section used to be, visibly
+    /// unlike a task that never ran one, which is the difference row D exists to remove. That
+    /// property is unchanged and still tested; a second optional section simply made a two-way
+    /// branch the wrong shape, so the height is a sum over the sections that are present.
 
     // MARK: - Resolution
 

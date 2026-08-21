@@ -125,10 +125,12 @@ public struct VisionSessionRecord: Codable, Equatable, Identifiable, Sendable {
 /// The action journal — the **ninth** local store, on the shared pattern exactly.
 ///
 /// (Called the *eleventh* until PR #50's F8: that ordinal came from SONNY-91's contract, which
-/// counted the V2 ledger the founder deleted and the consent store that was never built.
-/// `LocalDataDeletionService.defaultStoreFileURLs()` returns nine, and
-/// `theWipeReachesExactlyTheNineLocalStores` asserts it. F8 corrected the changelog and the PR body
-/// and missed this copy — the same two-copies failure as F6.)
+/// counted the V2 ledger the founder deleted and the consent store that was never built. F8
+/// corrected the changelog and the PR body and missed this copy — the same two-copies failure as
+/// F6. Ninth is still true of *this* store's arrival order and is left as written; the population
+/// is now ten, since row E's `TaskPlanDetailStore`, and `LocalDataDeletionService.defaultStoreFileURLs()`
+/// returns that many with `theWipeReachesExactlyTheTenLocalStores` asserting it — the renamed
+/// successor to the test this paragraph used to name, which was itself the third copy to go stale.)
 ///
 /// **A sibling store rather than an extension of an existing one, and the reasoning is recorded here
 /// because SONNY-96 asks for one decision with reasons.** The ticket offered "extend V2's store or

@@ -94,7 +94,11 @@ public struct LocalDataDeletionService: @unchecked Sendable {
             SnippetStore(fileManager: fileManager).fileURL,
             RecentArtifactStore(fileManager: fileManager).fileURL,
             ShortcutRunHistoryStore(fileManager: fileManager).fileURL,
-            TaskHistoryStore(fileManager: fileManager).fileURL
+            TaskHistoryStore(fileManager: fileManager).fileURL,
+            // Row E's plan details. Deleted with the same wipe as the rows they hang off — a wipe
+            // that left the plan of every task Sonny ran would be the same failure as leaving the
+            // rows themselves.
+            TaskPlanDetailStore(fileManager: fileManager).fileURL
         ]
     }
 

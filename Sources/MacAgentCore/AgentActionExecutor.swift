@@ -1562,6 +1562,7 @@ public final class AgentActionExecutor {
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
         var summaries: [String] = []
+        var summaryProvenance: StoredTaskResult.Provenance = .codeAuthored
         var suggestions: [RunSuggestion] = []
         var previews: [ActionPreview] = []
         var previousArtifactPath: String?
@@ -1580,6 +1581,13 @@ public final class AgentActionExecutor {
                 claimed.recordConversion(ofSource: converted.sourcePath, to: converted.destinationPath)
             }
             summaries.append(result.summary)
+            // Forwarded, not authored (SONNY-147): a chain whose vision segment wrote free text
+            // produces a joined summary that contains it, so the join is model-authored as soon as
+            // any one segment was. `.codeAuthored` on the whole because the joining is done here
+            // would launder the one segment the declaration exists to mark.
+            if result.summaryProvenance == .modelAuthored {
+                summaryProvenance = .modelAuthored
+            }
             suggestions.append(contentsOf: result.suggestions)
             // Accumulate each segment's real result previews — re-running previewChain after
             // execution would re-resolve default output paths and misreport what was written.
@@ -1592,7 +1600,13 @@ public final class AgentActionExecutor {
         }
 
         let summary = summaries.joined(separator: " ")
-        return AgentRunResult(plan: plan, previews: previews, summary: summary, suggestions: suggestions)
+        return AgentRunResult(
+            plan: plan,
+            previews: previews,
+            summary: summary,
+            summaryProvenance: summaryProvenance,
+            suggestions: suggestions
+        )
     }
 
     /// The plan cut into the units the executor dispatches: **a unit is a maximal run of consecutive

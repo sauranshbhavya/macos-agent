@@ -8,19 +8,46 @@ public struct PriorTaskContext: Codable, Equatable, Sendable {
     public var steps: [PriorTaskStepContext]
     public var outcome: PriorTaskOutcome
     public var createdAt: Date
+    /// Whether the user **pointed at this task on purpose** (row E, SONNY-150), rather than it
+    /// being left behind by the last run.
+    ///
+    /// **It is what exempts a context from the ten-minute window, and the exemption is the whole
+    /// reason this flag exists.** The window is there so an *automatic* context does not leak into
+    /// an unrelated later command — a task from an hour ago has nothing to do with what the user is
+    /// typing now. A context the user armed by opening one task and pressing Follow up is not that
+    /// case, and applying the window to it silently kills the feature: `createdAt` carries the
+    /// original task's real timestamp, so a task from yesterday reads as expired on the very next
+    /// `currentContext()` call, the read drops it, and the follow-up reaches the planner with no
+    /// context at all — looking, from the outside, exactly like it worked.
+    ///
+    /// **The other obvious fix is worse.** Stamping `Date()` instead would keep the context alive by
+    /// making `Captured at:` a lie *inside the trusted block*, which is the one place in the prompt
+    /// the planner's own system prompt describes as authoritative.
+    ///
+    /// **Exemption from the timer is not permission to persist.** An armed context is consumed by
+    /// the next dispatch and cleared — arm, use once, gone — the same lifecycle
+    /// `AgentViewModel.pendingWorkspaceBinding` already has. It must not survive into the command
+    /// after it, and `PriorTaskContextStore.consumeArmedContext()` is what makes that true rather
+    /// than incidental.
+    ///
+    /// Defaulted `false`, so every automatically-recorded context is unchanged and every existing
+    /// call site keeps its behaviour.
+    public var isArmed: Bool
 
     public init(
         previousCommand: String,
         planSummary: String,
         steps: [PriorTaskStepContext],
         outcome: PriorTaskOutcome,
-        createdAt: Date
+        createdAt: Date,
+        isArmed: Bool = false
     ) {
         self.previousCommand = previousCommand
         self.planSummary = planSummary
         self.steps = steps
         self.outcome = outcome
         self.createdAt = createdAt
+        self.isArmed = isArmed
     }
 
     public init(
@@ -52,11 +79,42 @@ public struct PriorTaskContext: Codable, Equatable, Sendable {
         )
     }
 
+    /// The context for a follow-up the user **explicitly armed** on a past task (SONNY-150).
+    ///
+    /// Rehydrated from what that task stored: its command, the plan summary and steps
+    /// `TaskPlanDetailStore` kept, and an outcome built from the row's status and stored result.
+    /// Everything reaches the planner through `plannerContextText`, which escapes every field it
+    /// interpolates — so the escaping is inherited by construction rather than remembered at the
+    /// call site. **Nothing may assemble a prompt string from a stored record anywhere else.**
+    ///
+    /// - Parameter completedAt: the original task's own completion time, kept as `createdAt`. See
+    ///   `isArmed` for why neither of the two obvious alternatives works.
+    public init(
+        armedFollowUpOn command: String,
+        planSummary: String,
+        steps: [PriorTaskStepContext],
+        outcome: PriorTaskOutcome,
+        completedAt: Date
+    ) {
+        self.init(
+            previousCommand: command.trimmingCharacters(in: .whitespacesAndNewlines),
+            planSummary: planSummary.trimmingCharacters(in: .whitespacesAndNewlines),
+            steps: steps,
+            outcome: outcome,
+            createdAt: completedAt,
+            isArmed: true
+        )
+    }
+
+    /// An armed context never expires; an automatic one expires exactly as it always has.
     public func isExpired(
         at now: Date,
         expirationInterval: TimeInterval = Self.defaultExpirationInterval
     ) -> Bool {
-        now.timeIntervalSince(createdAt) > expirationInterval
+        guard !isArmed else {
+            return false
+        }
+        return now.timeIntervalSince(createdAt) > expirationInterval
     }
 
     public var shortDisplayText: String {
@@ -73,11 +131,18 @@ public struct PriorTaskContext: Codable, Equatable, Sendable {
             "\(index + 1). \(Self.escapeForPlanner(step.plannerText))"
         }
 
+        // **These two say what is missing and never why** (SONNY-150). They used to read
+        // "prior task failed before preparation completed", which names a cause that is only
+        // sometimes the reason. Row E made the other case common: every task recorded before this
+        // row has no stored plan, so a follow-up on one would put that sentence twice, directly
+        // above `Previous outcome: completed - …` — a flat contradiction inside a segment the
+        // planner's own system prompt describes as authoritative. "Not recorded" is true of the
+        // live no-plan case and the rehydrated pre-row-E case alike.
         let planSummaryText = planSummary.isEmpty
-            ? "- unavailable; prior task failed before preparation completed"
+            ? "- not recorded"
             : Self.escapeForPlanner(planSummary)
         let stepsText = stepLines.isEmpty
-            ? "- none available; prior task failed before preparation completed"
+            ? "- none recorded"
             : stepLines.joined(separator: "\n")
 
         return """
@@ -223,6 +288,21 @@ public final class PriorTaskContextStore {
             return nil
         }
         return storedContext
+    }
+
+    /// Spends an armed context: after this, the run that just read it is the only one that ever
+    /// sees it (SONNY-150).
+    ///
+    /// **Explicit rather than left to the replacement that usually happens anyway.** Every terminal
+    /// path does call `record(...)` afterwards, which overwrites the stored context — but "usually
+    /// overwritten later" is not the same promise as "spent now", and the difference is a follow-up
+    /// silently attaching itself to a second command on whatever path turns out not to record.
+    /// A no-op on an ordinary context, which has its own expiry.
+    public func consumeArmedContext() {
+        guard storedContext?.isArmed == true else {
+            return
+        }
+        storedContext = nil
     }
 
     public func record(command: String, plan: AgentPlan, outcome: PriorTaskOutcome) {

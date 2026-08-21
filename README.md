@@ -61,8 +61,8 @@ https://drive.google.com/file/d/12lJnnqiBrbGnua2pGyE2GsYaVBcil0qe/view?usp=shari
 - Save and open workspace launchers made from installed apps and safe URLs (apps open before URLs). A workspace may also list an app Sonny cannot open — that entry counts for scope and grants no launch.
 
 **Local storage and privacy**
-- Nine local stores (routines, workspaces, clipboard history, clipboard settings, snippets, recent artifacts, Shortcut run history, task history, and the vision session journal) are encrypted at rest with AES-GCM; the symmetric key lives in Keychain. Legacy plaintext migrates transparently on next load.
-- A destructive "Delete Local Data" action in Settings deletes exactly those nine store files (not generated artifacts, not the Keychain key, not `OPENAI_API_KEY`).
+- Ten local stores (routines, workspaces, clipboard history, clipboard settings, snippets, recent artifacts, Shortcut run history, task history, the vision session journal, and what past tasks planned) are encrypted at rest with AES-GCM; the symmetric key lives in Keychain. Legacy plaintext migrates transparently on next load.
+- A destructive "Delete Local Data" action in Settings deletes exactly those ten store files (not generated artifacts, not the Keychain key, not `OPENAI_API_KEY`).
 - A permission readiness panel covers eight items: API key, microphone, voice hotkey, Desktop/Documents, Finder automation, Microsoft Word automation, Accessibility, and Screen Recording.
 
 **Command Center** (four destinations: `Tasks` / `Insights` / `Routines` / `Workspaces`)
@@ -120,7 +120,7 @@ If a prompt is denied, allow the launching host app in System Settings, then rel
 - Tier 0/1 typed and voice commands stay frictionless by design; tier 2+ pauses for a visible approval prompt (lightweight confirmation or explicit approval, depending on tier) on whichever surface started the command.
 - Executors use fixed native adapters only: `/usr/bin/zip`, `/usr/bin/osascript`, `/usr/bin/shortcuts`, `NSWorkspace`, `AVFoundation`, and `URLSession`. Sonny never accepts generated AppleScript, shell, or code from the model.
 - Routines and workspaces are declarative JSON, not executable scripts; a routine cannot nest another routine, a workspace action, or a clarification step.
-- All nine local stores are encrypted at rest (AES-GCM, Keychain-backed key); `OPENAI_API_KEY` remains environment-variable-only.
+- All ten local stores are encrypted at rest (AES-GCM, Keychain-backed key); `OPENAI_API_KEY` remains environment-variable-only.
 
 ## DOCX Conversion
 
@@ -180,7 +180,7 @@ Coverage spans strict plan decoding, the full capability-adapter registry, risk-
 7. Click `Speak`, say `Open Safari`, click `Stop`, and confirm Sonny transcribes and acts without another manual execute click.
 8. Hold `Control-Option-Space`, say `Open Notes`, release the keys, and confirm Sonny transcribes and acts automatically.
 9. Use generated result buttons such as reveal zip, open Markdown, reveal Markdown, or reveal PDFs.
-10. In Command Center > Insights, confirm the stat cards, weekly chart, and recent-activity list reflect real completed tasks. In Settings > Privacy & Permissions, run "Delete Local Data" and confirm the destructive confirmation dialog and the nine-store deletion.
+10. In Command Center > Insights, confirm the stat cards, weekly chart, and recent-activity list reflect real completed tasks. In Settings > Privacy & Permissions, run "Delete Local Data" and confirm the destructive confirmation dialog and the ten-store deletion.
 
 ## Architecture
 
@@ -194,7 +194,7 @@ both halves' commands.
 
 Two Swift package targets:
 
-- **`MacAgentCore`** — business logic only, no UI. Owns the capability-adapter registry (every executable action is a `CapabilityAdapter` with its own `preview`/`assessRisk`/`execute`), the risk/approval engine (`AgentRunner`, `RiskApprovalPolicy`, `RiskApprovalDecision`), the nine encrypted local stores — `RoutineStore`, `WorkspaceStore`, `ClipboardHistoryStore`, `ClipboardHistorySettingsStore`, `SnippetStore`, `RecentArtifactStore`, `ShortcutRunHistoryStore`, `TaskHistoryStore`, `VisionSessionJournalStore` — planner integration (`PlannerProviderRegistry`, `OpenAIPlanner`, `CerebrasPlanner`, `OpenAITranscriber`, `ToolRegistry`), web research (`PublicWebPageLoader`, `OpenAIWebResearchSynthesizer`, `TavilySearchProvider`, `WebResearchMarkdownCapabilityAdapter`), media playback resolution (`SpotifyPlaybackResolver`, `AppleMusicPlaybackResolver`), screen-aware app control (`VisionSessionRunner`, `VisionSessionCapabilityAdapter`), the instant-utility resolver (`InstantCommandResolver`), and the path/URL safety boundary (`PathWhitelist`, `SafeURL`). The count is of stores, not of files: those nine types live in seven files, because `AutomationStores.swift` holds routines and workspaces and `ClipboardHistoryService.swift` holds history and settings. `LocalStorageEncryption` is the encryption/migration mechanism all nine share, not a tenth store.
+- **`MacAgentCore`** — business logic only, no UI. Owns the capability-adapter registry (every executable action is a `CapabilityAdapter` with its own `preview`/`assessRisk`/`execute`), the risk/approval engine (`AgentRunner`, `RiskApprovalPolicy`, `RiskApprovalDecision`), the ten encrypted local stores — `RoutineStore`, `WorkspaceStore`, `ClipboardHistoryStore`, `ClipboardHistorySettingsStore`, `SnippetStore`, `RecentArtifactStore`, `ShortcutRunHistoryStore`, `TaskHistoryStore`, `VisionSessionJournalStore`, `TaskPlanDetailStore` — planner integration (`PlannerProviderRegistry`, `OpenAIPlanner`, `CerebrasPlanner`, `OpenAITranscriber`, `ToolRegistry`), web research (`PublicWebPageLoader`, `OpenAIWebResearchSynthesizer`, `TavilySearchProvider`, `WebResearchMarkdownCapabilityAdapter`), media playback resolution (`SpotifyPlaybackResolver`, `AppleMusicPlaybackResolver`), screen-aware app control (`VisionSessionRunner`, `VisionSessionCapabilityAdapter`), the instant-utility resolver (`InstantCommandResolver`), and the path/URL safety boundary (`PathWhitelist`, `SafeURL`). The count is of stores, not of files: those ten types live in eight files, because `AutomationStores.swift` holds routines and workspaces and `ClipboardHistoryService.swift` holds history and settings. `LocalStorageEncryption` is the encryption/migration mechanism all ten share, not a store of its own.
 - **`MacAgent`** — the executable. `AppDelegate` + `AppWindowCoordinator` manage the menu-bar status item and the Command Center window, both observing one shared `AgentViewModel`. `FloatingWidgetView` (with `FloatingWidgetWindowController` and the System B tokens in `SonnyWidgetTheme.swift`) is the sole command surface — the old menu-bar popover was removed; `ContentView.swift` now only hosts the shared System A design tokens (`SonnyTheme`/`SonnyType`/`SonnyRadius`); `CommandCenterView` renders the Command Center window's four destinations (`CommandCenterDestination` — tasks, insights, routines, workspaces), with Settings and Profile as dialogs. `AgentActivityPresentation` maps internal operation/phase names to user-facing task-activity copy.
 
 See `.claude/rules/macagentcore-conventions.md` and `.claude/rules/macagent-ui-conventions.md` for the specific patterns each target follows (capability-adapter shape, risk-tier gating discipline, local-store encryption pattern, shared-state rules, design-token boundaries) — those are kept current as the source of truth for contributors; this README stays at the orientation level.

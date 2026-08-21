@@ -81,6 +81,29 @@ public struct CompletedTaskRecord: Codable, Equatable, Sendable {
     /// the journal (rows D/E) leaves task history intact and merely un-followable, rather than
     /// tearing rows out of a history the journal was never the point of.
     public var visionSessionID: String?
+    /// What this task produced — the text the user was shown when it finished (SONNY-147).
+    ///
+    /// **Present on failures and cancellations too**, carrying the text that was actually shown:
+    /// "Canceled." for a cancelled run, the error's own description for a failed one. A field that
+    /// only survived clean finishes would be empty on exactly the runs someone most wants to read
+    /// afterwards.
+    ///
+    /// Optional, per the twice-documented `AutomationStores.swift` decode rule and the precedent of
+    /// `trigger`, `visionSessionID` and `id` above: every `task-history.json` written before row E
+    /// has no such key, and a non-Optional field with a Swift-side default would throw
+    /// `keyNotFound` on all of them. **`nil` means "recorded before Sonny kept results", which is
+    /// every pre-existing record — and it is deliberately distinguishable from a result whose text
+    /// is empty.** Nothing backfills it: that information is gone, and inventing it would be worse
+    /// than its absence.
+    ///
+    /// **A `StoredTaskResult` and not a `String`**, so the writer has to say whether a model wrote
+    /// the text. See that type for what the declaration buys and the one thing it cannot promise.
+    ///
+    /// **The plan that produced it is not here.** It lives in `TaskPlanDetailStore`, keyed on this
+    /// record's `id` — the founder's decision of 2026-08-17, on measured size. The result stays on
+    /// the row because it is small, because it is the first thing task detail renders, and because
+    /// keeping it here means a task can say what it produced without a second file read.
+    public var result: StoredTaskResult?
 
     public init(
         id: String? = UUID().uuidString,
@@ -90,7 +113,8 @@ public struct CompletedTaskRecord: Codable, Equatable, Sendable {
         outcomeStatus: PriorTaskOutcomeStatus,
         workspaceName: String? = nil,
         trigger: TaskTrigger? = nil,
-        visionSessionID: String? = nil
+        visionSessionID: String? = nil,
+        result: StoredTaskResult? = nil
     ) {
         self.id = id
         self.command = command.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -100,6 +124,7 @@ public struct CompletedTaskRecord: Codable, Equatable, Sendable {
         self.workspaceName = workspaceName
         self.trigger = trigger
         self.visionSessionID = visionSessionID
+        self.result = result
     }
 
     public var effectiveTrigger: TaskTrigger {
@@ -132,14 +157,23 @@ public struct TaskHistoryStore: @unchecked Sendable {
     ///   app, not in a changelog, not in a PR body. The product never promises search finds
     ///   everything, so there is nothing to walk back.
     ///
-    /// **Which record size that measurement assumes, because it is about to change.** 130 ms is
+    /// **Which record size that measurement assumes, and what row E actually did to it.** 130 ms is
     /// today's eight-field record: 374 bytes encoded, 3.78 MiB at the cap (measured at `36cef9e`).
-    /// Row E's SONNY-147 adds a stored result, a plan summary and the plan's steps, which takes a
-    /// record to roughly 4.1 kB at that ticket's 2,000-character result cap — about **11x**, not the
-    /// "roughly triples" its own note estimated, and 40 MiB at this cap. Re-measured at that size,
-    /// `record(_:)` is **307 ms** median. Worth noting the cost does *not* scale with the bytes:
-    /// eleven times the file for 2.4 times the time, because encryption and I/O throughput dominate
-    /// the per-record JSON work. Both figures argue the same way — keep the cap.
+    /// SONNY-119 then measured the shape row E was approved on — a stored result *plus* the plan
+    /// summary and the plan's steps, all on this record — at roughly 4.1 kB per record, 40 MiB at
+    /// this cap and **307 ms** median for `record(_:)`: about **11x** the bytes, not the "roughly
+    /// triples" that ticket's own note estimated, for 2.4 times the time, because encryption and I/O
+    /// throughput dominate the per-record JSON work at these sizes.
+    ///
+    /// That measurement is why the shape changed. The founder's decision of 2026-08-17 moved the
+    /// plan summary and steps into `TaskPlanDetailStore`, leaving this record one new field —
+    /// `result`, capped at 1,000 characters. Record size is additive in it (SONNY-119's own "+
+    /// result 200 chars, 8 steps" row is exactly 374 + 200 + its 1,729 B of steps), so the worst
+    /// case here is about **1.4 kB** a record and **13 MiB** at this cap, and the typical case is a
+    /// few hundred bytes above today's 374. The 40 MiB and 307 ms figures describe the design that
+    /// was not built; they are kept because they are the reason it was not.
+    ///
+    /// Every figure argues the same way — keep the cap.
     ///
     /// **The shipped number, and the only one any production path uses.** Enumerated at `5bbe380`:
     /// the three places that build a `TaskHistoryStore` outside tests — `AgentViewModel`'s default
@@ -185,10 +219,21 @@ public struct TaskHistoryStore: @unchecked Sendable {
         }
     }
 
-    public func record(_ record: CompletedTaskRecord) throws {
+    /// Appends one record, evicting the oldest once the cap is passed.
+    ///
+    /// - Returns: the ids of the records this call evicted, oldest-first, so a caller can drop
+    ///   whatever hangs off them. `TaskPlanDetailStore` is the one dependent today, and this return
+    ///   value is what makes its "same cap, same eviction" claim a built property rather than a
+    ///   coincidence that holds only while every row happens to have a plan. Discardable, because
+    ///   the tests and the scheduled path that write rows with nothing hanging off them should not
+    ///   have to say so.
+    @discardableResult
+    public func record(_ record: CompletedTaskRecord) throws -> [String] {
         var records = try loadAll()
         records.append(record)
-        try write(capped(records))
+        let (kept, evicted) = cappedAndEvicted(records)
+        try write(kept)
+        return evicted.compactMap(\.id)
     }
 
     /// Removes one record by its `id`, leaving every other record exactly as it was.
@@ -268,15 +313,14 @@ public struct TaskHistoryStore: @unchecked Sendable {
         return backfilled
     }
 
-    private func capped(_ records: [CompletedTaskRecord]) -> [CompletedTaskRecord] {
+    private func cappedAndEvicted(
+        _ records: [CompletedTaskRecord]
+    ) -> (kept: [CompletedTaskRecord], evicted: [CompletedTaskRecord]) {
         guard records.count > maxItems else {
-            return records
+            return (records, [])
         }
-        return Array(
-            records
-                .sorted { $0.completedAt < $1.completedAt }
-                .suffix(maxItems)
-        )
+        let ordered = records.sorted { $0.completedAt < $1.completedAt }
+        return (Array(ordered.suffix(maxItems)), Array(ordered.dropLast(maxItems)))
     }
 
     private func write(_ records: [CompletedTaskRecord]) throws {

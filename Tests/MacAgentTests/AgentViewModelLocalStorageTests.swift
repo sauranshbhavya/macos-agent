@@ -470,6 +470,12 @@ struct AgentViewModelLocalStorageTests {
         #expect(try fixture.journal.record(withID: "session-1") == nil)
         // The unrelated task's own session is untouched — the delete is per-task, not a wipe.
         #expect(try fixture.journal.record(withID: "session-2") != nil)
+        // Row E's plan detail is the third dependent, and it goes too (SONNY-147). A stored plan
+        // surviving its row would be unreachable bytes: this store is keyed on the row's id and has
+        // no other index, so nothing in the product could ever find or delete it again.
+        #expect(try fixture.planDetails.detail(forTaskID: try #require(doomed.id)) == nil)
+        // The unrelated task keeps its own.
+        #expect(try fixture.planDetails.loadAll().map(\.taskID) == ["survivor-task"])
     }
 
     /// **The ordering test the ticket asks for, and the reason it exists.** Dependents are deleted
@@ -500,8 +506,10 @@ struct AgentViewModelLocalStorageTests {
 
         viewModel.deleteTask(doomed)
 
-        // The dependent went first and is gone.
+        // The dependents went first and are gone — both of them, so a third one added later
+        // inherits the invariant rather than restating it.
         #expect(try fixture.journal.record(withID: "session-1") == nil)
+        #expect(try fixture.planDetails.detail(forTaskID: try #require(doomed.id)) == nil)
         // The row survived, still carrying its now-unresolvable link.
         let survivingRow = try #require(try fixture.history.loadAll().first { $0.id == doomed.id })
         #expect(survivingRow.visionSessionID == "session-1")
@@ -574,6 +582,7 @@ struct AgentViewModelLocalStorageTests {
     private struct LinkedTaskFixture {
         var history: TaskHistoryStore
         var journal: VisionSessionJournalStore
+        var planDetails: TaskPlanDetailStore
     }
 
     /// Two tasks: one that ran a screen-control session and one that did not, plus a second session
@@ -591,6 +600,10 @@ struct AgentViewModelLocalStorageTests {
             fileURL: root.appendingPathComponent("vision-sessions.json"),
             encryption: encryption
         )
+        let planDetails = TaskPlanDetailStore(
+            fileURL: root.appendingPathComponent("task-plan-details.json"),
+            encryption: encryption
+        )
         let base = Date(timeIntervalSince1970: 1_700_000_000)
         for id in ["session-1", "session-2"] {
             try journal.save(
@@ -602,15 +615,15 @@ struct AgentViewModelLocalStorageTests {
                 )
             )
         }
-        try history.record(
-            CompletedTaskRecord(
-                command: "reply in Discord",
-                startedAt: base,
-                completedAt: base.addingTimeInterval(30),
-                outcomeStatus: .completed,
-                visionSessionID: "session-1"
-            )
+        let doomedRecord = CompletedTaskRecord(
+            command: "reply in Discord",
+            startedAt: base,
+            completedAt: base.addingTimeInterval(30),
+            outcomeStatus: .completed,
+            visionSessionID: "session-1",
+            result: .modelAuthored("The reply is sent.")
         )
+        try history.record(doomedRecord)
         try history.record(
             CompletedTaskRecord(
                 command: "unrelated",
@@ -619,7 +632,25 @@ struct AgentViewModelLocalStorageTests {
                 outcomeStatus: .completed
             )
         )
-        return LinkedTaskFixture(history: history, journal: journal)
+        // A plan for the doomed task and one for a task this fixture never deletes, so a delete that
+        // wiped the store rather than one entry fails as loudly as one that deleted nothing.
+        try planDetails.save(
+            StoredTaskPlanDetail(
+                taskID: try #require(doomedRecord.id),
+                completedAt: doomedRecord.completedAt,
+                planSummary: "Reply in Discord.",
+                steps: []
+            )
+        )
+        try planDetails.save(
+            StoredTaskPlanDetail(
+                taskID: "survivor-task",
+                completedAt: base.addingTimeInterval(130),
+                planSummary: "Something else.",
+                steps: []
+            )
+        )
+        return LinkedTaskFixture(history: history, journal: journal, planDetails: planDetails)
     }
 }
 
@@ -687,6 +718,13 @@ private func makeViewModel(
         ),
         taskHistoryStore: TaskHistoryStore(
             fileURL: (taskHistoryRoot ?? root).appendingPathComponent("task-history.json"),
+            encryption: encryption
+        ),
+        // Row E's plan details (SONNY-147). Under `root`, not `taskHistoryRoot`: the ordering test
+        // makes the history directory read-only and needs every dependent to stay writable, exactly
+        // as the vision journal already does.
+        taskPlanDetailStore: TaskPlanDetailStore(
+            fileURL: root.appendingPathComponent("task-plan-details.json"),
             encryption: encryption
         ),
         visionSessionJournalStore: VisionSessionJournalStore(
