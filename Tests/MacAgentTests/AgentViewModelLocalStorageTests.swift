@@ -745,14 +745,73 @@ struct AgentViewModelLocalStorageTests {
         )
         return LinkedTaskFixture(history: history, journal: journal, planDetails: planDetails)
     }
+
+    // MARK: - SONNY-187: what the storage notice's own notification offers
+
+    /// **The storage notice no longer posts through the failure category, and no longer carries a
+    /// Retry** (SONNY-187, founder decision 2026-08-21).
+    ///
+    /// It did, and that button is wired to `retryLastCommand()` — so a banner reading "your snippets
+    /// file could not be decrypted" offered to re-dispatch whatever the user had last typed, a task
+    /// with no relationship to the file. Reachable from a bookkeeping write failing during a run
+    /// that otherwise succeeded, which makes it an offer to re-run a task that had just worked.
+    ///
+    /// **Worse on this channel than on the scheduled one SONNY-113 fixed.** `localStorageNotice`
+    /// exists precisely so a storage problem is not confused with a task outcome — its own
+    /// declaration says a corrupt store must never make a successful task read as failed — so moving
+    /// it off `errorMessage` and then posting it in the failure notification category undid the move
+    /// at the last hop.
+    ///
+    /// Asserted by reading the wiring because it cannot be asserted by running it:
+    /// `SonnyNotificationService.init?` returns nil without bundle identity, and
+    /// `UNUserNotificationCenter.current()` aborts the process rather than throwing when there is
+    /// none — so the subscription this pins does not exist in a test run at all. Same shape and same
+    /// reasoning as `ScheduledRoutineRunTests.theScheduledNoticePostsThroughItsOwnActionlessCategory`.
+    ///
+    /// **This is one half of SONNY-187 and the ticket stays open for the other**: both notice strips
+    /// are still invisible while the widget is compact, which the founder left for its own decision.
+    /// `FloatingWidgetView.isCollapsible` carries that pointer.
+    @Test
+    func theStorageNoticePostsThroughItsOwnActionlessCategoryRatherThanTheFailureOne() throws {
+        let delegate = try MacAgentSource.read("AppDelegate.swift")
+        let subscription = try MacAgentSource.region(
+            of: delegate,
+            from: "viewModel.$localStorageNotice",
+            to: ".store(in: &cancellables)"
+        )
+        #expect(subscription.contains("postStorageNoticeNotification"))
+        #expect(!subscription.contains("postErrorNotification"))
+
+        // And the category it posts into offers nothing to press. The two neighbours that do carry
+        // actions are named here too, so this fails if the empty array is ever filled in by copying
+        // one of them.
+        let service = try MacAgentSource.read("SonnyNotificationService.swift")
+        let storageCategory = try MacAgentSource.region(
+            of: service,
+            from: "identifier: SonnyNotificationCategory.storage,",
+            to: ")"
+        )
+        #expect(storageCategory.contains("actions: [],"))
+        #expect(!storageCategory.contains("retryAction"))
+        #expect(!storageCategory.contains("allowAction"))
+
+        // The click opens Command Center: the notice renders there as a row on four pages, and
+        // Settings' local-data controls are the nearest thing to somewhere to act on it. Without its
+        // own case the default arm would front the widget, which offers nothing but Dismiss.
+        #expect(service.contains("case SonnyNotificationCategory.storage:"))
+        #expect(service.contains("self?.onOpenStorageNotice()"))
+        let wiring = try MacAgentSource.region(
+            of: delegate,
+            from: "onOpenStorageNotice: { [weak self] in",
+            to: "}"
+        )
+        #expect(wiring.contains("showCommandCenter()"))
+    }
 }
 
-/// A plan that prepares straight into a clarification, so `performStart` returns before
-/// `refreshSavedItems()` runs. That early return is what isolates `resolveTaskScope`'s own
-/// load-failure reporting from the identical reporting the post-run refresh does (SONNY-78).
 /// A one-step plan that completes hermetically, carrying a `workspaceName` on the step.
 ///
-/// `clarifyingPlan` above is the right shape for the scope-only tests, which need an early return
+/// `clarifyingPlan` below is the right shape for the scope-only tests, which need an early return
 /// before `refreshSavedItems()`. A test that reads a task-history *row* back cannot use it: a
 /// `.clarificationNeeded` status is not terminal, so `recordTaskHistoryIfTerminal` writes nothing.
 private func calculatingPlan(workspaceName: String?) -> AgentPlan {
@@ -771,6 +830,9 @@ private func calculatingPlan(workspaceName: String?) -> AgentPlan {
     )
 }
 
+/// A plan that prepares straight into a clarification, so `performStart` returns before
+/// `refreshSavedItems()` runs. That early return is what isolates `resolveTaskScope`'s own
+/// load-failure reporting from the identical reporting the post-run refresh does (SONNY-78).
 private func clarifyingPlan(workspaceName: String? = nil) -> AgentPlan {
     AgentPlan(
         summary: "Ask first.",
