@@ -115,7 +115,7 @@ struct InteractionModeTests {
                 for classes in [[CapabilityRiskEscalation.Consequence.destructive], [.affectsOthers], [.advisory, .destructive]] {
                     let requirement = RiskApprovalPolicy.default.requirement(
                         for: modeAssessment(tier: tier, classes: classes),
-                        context: ApprovalContext(safeMode: mode.asksBeforeEveryAction)
+                        context: ApprovalContext(mode: mode, appControl: .notApplicable)
                     )
                     #expect(
                         requirement != .autoRun && requirement != .lightweightConfirmation,
@@ -141,7 +141,7 @@ struct InteractionModeTests {
                 let byMode = Dictionary(uniqueKeysWithValues: AgentInteractionMode.allCases.map { mode in
                     (mode, RiskApprovalPolicy.default.requirement(
                         for: assessment,
-                        context: ApprovalContext(safeMode: mode.asksBeforeEveryAction)
+                        context: ApprovalContext(mode: mode, appControl: .notApplicable)
                     ))
                 })
                 #expect(byMode[.normal] == byMode[.power], "tier \(tier), classes \(classes)")

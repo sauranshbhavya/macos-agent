@@ -411,7 +411,7 @@ struct VisionSessionContainmentTests {
         for mode in AgentInteractionMode.allCases {
             let (assessment, requirement) = containment.requirement(
                 for: ordinary,
-                context: ApprovalContext(safeMode: mode.asksBeforeEveryAction)
+                context: ApprovalContext(mode: mode, appControl: .notApplicable)
             )
             #expect(assessment.effectiveTier == .tier1, "\(mode)")
             #expect(assessment.escalations.isEmpty, "\(mode)")
@@ -437,7 +437,7 @@ struct VisionSessionContainmentTests {
             for mode in AgentInteractionMode.allCases {
                 let (assessment, requirement) = containment.requirement(
                     for: decision,
-                    context: ApprovalContext(safeMode: mode.asksBeforeEveryAction)
+                    context: ApprovalContext(mode: mode, appControl: .notApplicable)
                 )
                 #expect(assessment.effectiveTier == .tier3, "\(decision.target)/\(mode)")
                 #expect(assessment.escalations.map(\.consequence) == [expectedClass], "\(decision.target)/\(mode)")
