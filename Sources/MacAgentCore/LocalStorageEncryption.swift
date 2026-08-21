@@ -166,7 +166,10 @@ public enum LocalStorageMigrationLog {
     static func recordStrippedResolverPins(store: String, stepCount: Int) {
         logger.warning(
             """
-            Stripped executor-resolved app pins from \(stepCount, privacy: .public) step(s) while             loading \(store, privacy: .public). Sonny never writes those fields into a stored             routine, so the file was not written by Sonny. The routines themselves are intact and             the pins are resolved again at run time.
+            Stripped executor-resolved app pins from \(stepCount, privacy: .public) step(s) while \
+            loading \(store, privacy: .public). Sonny never writes those fields into a stored \
+            routine, so the file was not written by Sonny. The routines themselves are intact and \
+            the pins are resolved again at run time.
             """
         )
     }
