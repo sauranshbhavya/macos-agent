@@ -1,3 +1,4 @@
+# ── Swift half ───────────────────────────────────────────────────────────────
 .build/
 .DS_Store
 DerivedData/
@@ -6,5 +7,34 @@ DerivedData/
 *.xcodeproj/
 *.log
 
-# Founder-only reference doc, not part of the repo's tracked history
+# ── Server half (server/, added by SONNY-126) ────────────────────────────────
+# Dependencies and build output. Both are reproducible from the lockfile and the
+# source, and node_modules in particular is large enough to make every diff unreadable.
+node_modules/
+server/dist/
+server/coverage/
+server/*.tsbuildinfo
+
+# Local environment files. This is the line that matters most in this file: provider
+# credentials are the entire reason the backend exists, and `.env` is the one place a
+# real key is genuinely likely to be typed. `server/.env.example` is committed and
+# carries placeholders only; every other .env is ignored, including per-environment
+# ones, so a file named after staging or production cannot slip in either.
+.env
+.env.*
+!.env.example
+server/.env
+server/.env.*
+!server/.env.example
+
+# Vendor CLI state. Written into the working tree by deploy tooling; carries account
+# and organisation identifiers rather than tokens, and belongs to nobody's history.
+# (SONNY-125 caught these staged twice; this is the repo-wide version of the ignore
+# that branch could only add inside scripts/host-probe/.)
+.wrangler/
+**/.wrangler/
+.temp/
+**/supabase/.temp/
+
+# ── Founder-only reference doc, not part of the repo's tracked history ───────
 docs/sonny-v1-product-overview.md
