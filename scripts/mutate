@@ -257,6 +257,16 @@ What this does and does not prevent:
       file ... was modified during the build".
     * SwiftPM's caches under ~ (dependency clones, the manifest cache) are shared by every build
       on this machine and are outside a script's reach.
+    * A FLAKY TEST READS AS A KILL. A mutant is judged killed by whether the suite failed, so a
+      test that fails for a timing reason of its own is indistinguishable from one that caught the
+      mutant — and it fails in the reassuring direction, recording a guard that does not exist.
+      A battery puts more sustained load on the machine than an ordinary run, which is exactly the
+      condition a timing-sensitive test needs to fail; two mic-hover-hint tests were found this way
+      (SONNY-199, 2 failures in 12 full-suite runs on PR #89, since fixed). The mitigation is in
+      the report already: every kill names the tests that produced it. Read the names, not the
+      count. A mutant killed only by a test with no plausible connection to it is a flake wearing a
+      kill's clothes. A flaky BASELINE is the harmless direction by comparison — it aborts the run,
+      which costs a rerun and tells no lies.
     * The lock is per-worktree, deliberately: each worktree has its own .build/, so two worktrees
       running batteries at once share nothing and are not refused.
     * MUTATE_TEST_CMD replaces the suite command outright. If the replacement invokes SwiftPM it
