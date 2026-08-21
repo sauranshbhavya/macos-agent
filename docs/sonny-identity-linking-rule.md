@@ -1,6 +1,6 @@
 # The identity-linking rule
 
-SONNY-127. Decided 2026-08-21, pinned by tests in `server/test/linking.test.ts`.
+SONNY-127. Decided 2026-08-21, pinned by tests in `server/test/linking.db.test.ts`.
 
 This is the rule that keeps one person on one account when they sign in three different ways. It is
 decided on this branch even though Google and Apple ship on the next one, because getting it wrong
@@ -116,7 +116,7 @@ they would encode one provider's policy into our identity key.
 
 ## 6. What is pinned by tests
 
-`server/test/linking.test.ts`, all against a real Postgres:
+`server/test/linking.db.test.ts`, all against a real Postgres:
 
 - the same verified address by two methods lands on **one** account (rule 2)
 - the same `(provider, subject)` twice lands on one account and does not duplicate (rule 1)

@@ -183,7 +183,7 @@ describeDb("the identity-linking rule", () => {
       const viaApple = await resolve(client, {
         provider: "apple", subject: "apple-sub-link", email: "ccc@privaterelay.appleid.com", emailVerified: true,
       });
-      await linkExplicitly(client, viaApple.identityId, primary.accountId, primary.accountId);
+      await linkExplicitly(client, viaApple.identityId, primary.accountId, primary.accountId, viaApple.identityId);
 
       const { rows } = await client.query(
         "SELECT account_id, link_method FROM sonny.identity WHERE id = $1", [viaApple.identityId],
@@ -202,7 +202,7 @@ describeDb("the identity-linking rule", () => {
       const dead = await resolve(client, emailAssertion("dead@example.com"));
       await client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [dead.accountId]);
       const other = await resolve(client, emailAssertion("other@example.com"));
-      await expect(linkExplicitly(client, other.identityId, dead.accountId, dead.accountId)).rejects.toThrow(LinkError);
+      await expect(linkExplicitly(client, other.identityId, dead.accountId, dead.accountId, other.identityId)).rejects.toThrow(LinkError);
     });
 
     it("REFUSES when the caller's session is not on the target account", async () => {
@@ -216,16 +216,35 @@ describeDb("the identity-linking rule", () => {
         provider: "apple", subject: "apple-hijack", email: "eee@privaterelay.appleid.com", emailVerified: true,
       });
       await expect(
-        linkExplicitly(client, loose.identityId, theirs.accountId, mine.accountId),
+        linkExplicitly(client, loose.identityId, theirs.accountId, mine.accountId, loose.identityId),
       ).rejects.toThrow(LinkError);
       const { rows } = await client.query("SELECT account_id FROM sonny.identity WHERE id = $1", [loose.identityId]);
       expect(rows[0].account_id).not.toBe(theirs.accountId);
     });
 
+    it("REFUSES to move an identity the caller did not just prove", async () => {
+      // PR #87 R2. F7 closed the target half and left this one open: authenticating the target says
+      // the caller owns the destination and nothing about what is being moved there, so a caller
+      // signed in on their own account could name a stranger's identity and take it.
+      const mine = await resolve(client, emailAssertion("attacker@example.com"));
+      const strangerIdentity = await resolve(client, emailAssertion("stranger@example.com"));
+      const myOwn = await resolve(client, {
+        provider: "apple", subject: "apple-mine", email: "fff@privaterelay.appleid.com", emailVerified: true,
+      });
+      await expect(
+        // caller is signed in on their own account (target ok) and names the stranger's identity
+        linkExplicitly(client, strangerIdentity.identityId, mine.accountId, mine.accountId, myOwn.identityId),
+      ).rejects.toThrow(LinkError);
+      const { rows } = await client.query(
+        "SELECT account_id FROM sonny.identity WHERE id = $1", [strangerIdentity.identityId],
+      );
+      expect(rows[0].account_id).not.toBe(mine.accountId);
+    });
+
     it("refuses to link an identity that does not exist", async () => {
       const target = await resolve(client, emailAssertion("target@example.com"));
       await expect(
-        linkExplicitly(client, "00000000-0000-0000-0000-000000000000", target.accountId, target.accountId),
+        linkExplicitly(client, "00000000-0000-0000-0000-000000000000", target.accountId, target.accountId, "00000000-0000-0000-0000-000000000000"),
       ).rejects.toThrow(LinkError);
     });
   });
@@ -240,7 +259,7 @@ describeDb("the identity-linking rule", () => {
         provider: "apple", subject: "apple-sub-split", email: "ddd@privaterelay.appleid.com",
         emailVerified: true, supabaseUserId: "22222222-2222-2222-2222-222222222222",
       });
-      await linkExplicitly(client, viaApple.identityId, primary.accountId, primary.accountId);
+      await linkExplicitly(client, viaApple.identityId, primary.accountId, primary.accountId, viaApple.identityId);
 
       const { rows } = await client.query(
         "SELECT DISTINCT supabase_user_id FROM sonny.identity WHERE account_id = $1 ORDER BY 1",
@@ -319,11 +338,13 @@ describeDb("the identity-linking rule", () => {
       expect(resolved.created).toBe(false);
     });
 
-    it("does not spin forever on a conflict that cannot clear — it fails, once, and says so", async () => {
-      // The bounded retry, exercised. An identity on a CLOSED account is invisible to rule 1 and
-      // visible to the unique constraint, which is the exact stuck state. The trigger prevents it
-      // arising through any normal path, so it is planted here directly -- and the point is that
-      // even if some future path recreates it, the resolver fails loudly instead of hanging.
+    it("an identity inserted onto an ALREADY-closed account cannot occupy the address", async () => {
+      // This test used to assert the stuck state was merely *loud*: an identity on a closed account
+      // was invisible to rule 1 and visible to the unique constraint, so the resolver failed with
+      // IdentityConflict and the address stayed unusable. Under 0004 the state cannot arise —
+      // `identity_insert_derives_closed` marks the row at insert time, so it never occupies the
+      // partial unique index, and the address stays available. That is the fix, so the assertion
+      // changed with it.
       const closed = await client.query<{ id: string }>("INSERT INTO sonny.account DEFAULT VALUES RETURNING id");
       await client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [closed.rows[0]!.id]);
       await client.query(
@@ -331,32 +352,88 @@ describeDb("the identity-linking rule", () => {
            email_is_relay, link_method) VALUES ($1,'email','stuck@example.com','stuck@example.com',true,false,'primary')`,
         [closed.rows[0]!.id],
       );
-      await expect(resolve(client, emailAssertion("stuck@example.com"))).rejects.toThrow(IdentityConflict);
+      const marked = await client.query(
+        "SELECT account_closed FROM sonny.identity WHERE subject = 'stuck@example.com'",
+      );
+      expect(marked.rows[0].account_closed).toBe(true);
+
+      const fresh = await resolve(client, emailAssertion("stuck@example.com"));
+      expect(fresh.created).toBe(true);
     });
 
-    it("survives the interleaving of resolve() and a concurrent account close", async () => {
-      // The race the reviewer proved: an account is closed while a sign-in for its address is in
-      // flight. The trigger releases the identity, so the address stays usable rather than becoming
-      // permanently stuck -- which is what it did before, as a PERMANENT IdentityConflict.
-      const first = await resolve(client, emailAssertion("interleave@example.com"));
-      await Promise.all([
-        client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [first.accountId]),
-        (async () => { try { await resolve(client, emailAssertion("interleave@example.com")); } catch { /* either order is legal */ } })(),
-      ]);
-      // Whatever order they landed in, the address must still be signable-up afterwards.
-      const after = await resolve(client, emailAssertion("interleave@example.com"));
+    it("survives a REAL two-connection race between resolve() and a close", async () => {
+      // **The previous version of this test did not race** (PR #87 R10). Both halves ran on one
+      // `pg.Client`, which serialises its queries, so they executed in sequence — and its only
+      // assertion was `toBeTruthy()`, which cannot fail for a uuid. It would have passed against
+      // the very defect it was named for.
+      //
+      // This one uses two connections and holds the closer's transaction open across the resolver's
+      // insert window, which is the interleaving that stranded an identity. `SELECT ... FOR SHARE`
+      // in resolve() is what makes the resolver block on the closer's row lock and re-read, instead
+      // of inserting into the gap.
+      const victim = await resolve(client, emailAssertion("realrace@example.com"));
+
+      const closer = new pg.Client({ connectionString: url });
+      const racer = new pg.Client({ connectionString: url });
+      await closer.connect();
+      await racer.connect();
+      try {
+        await closer.query("BEGIN");
+        await closer.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [victim.accountId]);
+
+        // Starts while the closer still holds the row lock, so it must block rather than proceed.
+        const racing = resolve(racer, emailAssertion("realrace@example.com"));
+        await new Promise((r) => setTimeout(r, 150));
+        await closer.query("COMMIT");
+
+        const result = await racing;
+        // Whichever way it went, it must NOT have landed on the account that was closing.
+        expect(result.accountId).not.toBe(victim.accountId);
+        expect(result.created).toBe(true);
+      } finally {
+        await closer.end();
+        await racer.end();
+      }
+
+      // And the address is still usable afterwards, which is what "not stranded" means.
+      const after = await resolve(client, emailAssertion("realrace@example.com"));
       expect(after.accountId).toBeTruthy();
+      const live = await client.query(
+        "SELECT count(*)::int AS n FROM sonny.identity WHERE subject = 'realrace@example.com' AND NOT account_closed",
+      );
+      expect(live.rows[0].n).toBe(1);
     });
 
-    it("releases identities however the account was closed, not only via the handler", async () => {
-      // The structural fix. A retention sweep, an operator's UPDATE, anything -- the trigger is what
-      // makes the exclusion and the unique constraint agree.
+    it("MARKS identities however the account was closed, keeping them and their audit trail", async () => {
+      // The structural fix, and 0004's correction to it: 0003 DELETEd these rows, which broke the
+      // close handler's own read of supabase_user_id and destroyed link_method. They are marked now.
       const account = await resolve(client, emailAssertion("sweeper@example.com"));
       await client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [account.accountId]);
-      const { rows } = await client.query("SELECT 1 FROM sonny.identity WHERE account_id = $1", [account.accountId]);
-      expect(rows).toHaveLength(0);
+
+      const { rows } = await client.query(
+        "SELECT account_closed, link_method, supabase_user_id FROM sonny.identity WHERE account_id = $1",
+        [account.accountId],
+      );
+      expect(rows).toHaveLength(1);            // kept, not deleted
+      expect(rows[0].account_closed).toBe(true);
+      expect(rows[0].link_method).toBe("primary"); // audit trail survives
+
+      // and the address is free again, because the partial index only covers live identities
       const reused = await resolve(client, emailAssertion("sweeper@example.com"));
       expect(reused.created).toBe(true);
+    });
+
+    it("marks identities on a SECOND deleted_at update too", async () => {
+      // 0003 guarded on `OLD.deleted_at IS NULL`, so an operator correcting a timestamp, or a retry,
+      // skipped the trigger and left identities live on a closed account.
+      const account = await resolve(client, emailAssertion("twice@example.com"));
+      await client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [account.accountId]);
+      await client.query("UPDATE sonny.identity SET account_closed = false WHERE account_id = $1", [account.accountId]);
+      await client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [account.accountId]);
+      const { rows } = await client.query(
+        "SELECT account_closed FROM sonny.identity WHERE account_id = $1", [account.accountId],
+      );
+      expect(rows[0].account_closed).toBe(true);
     });
   });
 

@@ -61,6 +61,14 @@ describeDb("migrations against a real Postgres", () => {
     const newest = applied.rows[0]!.id;
     const rolled = await down(client);
     expect(rolled).toBe(newest);
+    // **Assert the schema actually changed, not only the ledger** (PR #87 R17). Generalising this
+    // test past a single migration dropped its schema assertion, leaving it checking that a row
+    // disappeared from a table the runner itself writes -- which happens whether or not the
+    // rollback SQL ran at all. 0004's trigger is the observable thing its rollback removes.
+    const { rows: triggers } = await client.query(
+      "SELECT tgname FROM pg_trigger WHERE tgname = 'account_close_marks_identities' AND NOT tgisinternal",
+    );
+    expect(triggers).toHaveLength(0);
     const { rows: ledger } = await client.query(
       "SELECT id FROM sonny_meta.schema_migration WHERE id = $1", [newest],
     );

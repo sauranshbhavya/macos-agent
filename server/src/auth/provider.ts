@@ -25,6 +25,14 @@ export interface VerifiedSession {
   readonly refreshToken: string;
   /** Seconds. The provider's, not ours — the contract's response reports what it was given. */
   readonly expiresIn: number;
+  /**
+   * Seconds until the *refresh* token expires, when the provider reports one.
+   *
+   * Optional because Supabase Auth does not always surface it, and §3.2's `refresh_expires_at` is
+   * therefore emitted only when it is known. A server-invented value would be a client scheduling
+   * a sign-out against a number nobody measured.
+   */
+  readonly refreshExpiresIn?: number | undefined;
 }
 
 export class ProviderRejected extends Error {}
