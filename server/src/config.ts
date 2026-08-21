@@ -57,7 +57,24 @@ const schema = z.object({
    * trusting them with nothing in front of the container lets a client choose its own apparent IP.
    * Set only where a proxy really terminates the connection.
    */
-  TRUST_PROXY: z.enum(["true", "false"]).default("false"),
+  /**
+   * Which proxies to believe about the client address, as a comma-separated list of CIDRs or IPs.
+   *
+   * **A boolean had no safe setting** (PR #87 F4). `false` behind a load balancer makes every
+   * request report the balancer's address, so the per-source rate limit collapses into one global
+   * bucket and one attacker exhausts everyone's budget. `true` makes `request.ip` read from
+   * `X-Forwarded-For`, which any caller can set, so the same attacker gets an unlimited supply of
+   * fresh identities. Naming the proxies is what makes the header trustworthy exactly as far as it
+   * is: Fastify walks the chain and stops at the first hop that is not on this list.
+   *
+   * Empty means trust nothing, which is correct with no proxy in front and is the default.
+   *
+   * A hop count was the other form the review offered and is deliberately not supported: Fastify's
+   * own types reject a number here, and a count says "believe the last N hops" without saying who
+   * they are — which is the same act of faith the boolean made, one step smaller. Naming the
+   * proxies is the form that actually constrains anything.
+   */
+  TRUSTED_PROXIES: z.string().trim().default(""),
   /**
    * Salt for the rate-limit bucket hashes (SONNY-127). **No default, deliberately.** The buckets
    * hash email addresses, and an unsalted hash of an address is one rainbow-table lookup from the
@@ -66,6 +83,17 @@ const schema = z.object({
    * accepts its absence and `requireRateLimitSalt` is what refuses at the point of use.
    */
   RATE_LIMIT_SALT: nonEmpty.optional(),
+
+  /**
+   * Mounts `DELETE /v1/account` with **no authentication** (SONNY-127, PR #87 F1).
+   *
+   * That route verifies no token and takes its subject from a header, because SONNY-128's
+   * authenticated-request middleware does not exist yet. A proof of concept destroyed another
+   * account with a made-up bearer token and `SONNY_ENV=production`. It is therefore off by default
+   * and **refused outright in production** by `loadConfig` below, so it cannot be enabled by a
+   * misplaced environment variable on the one host where it would matter.
+   */
+  ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE: z.enum(["true", "false"]).default("false"),
 });
 
 export interface Config {
@@ -75,8 +103,9 @@ export interface Config {
   readonly buildId: string;
   readonly databaseUrl: string | undefined;
   readonly logLevel: z.infer<typeof schema>["LOG_LEVEL"];
-  readonly trustProxy: boolean;
+  readonly trustProxy: boolean | string[];
   readonly rateLimitSalt: string;
+  readonly allowUnauthenticatedAccountDelete: boolean;
   readonly credentials: readonly ProviderCredentials[];
 }
 
@@ -107,6 +136,19 @@ export function providerCredentials(env: NodeJS.ProcessEnv): readonly ProviderCr
 
 export class ConfigError extends Error {}
 
+/**
+ * `""` -> false (trust nothing), a bare number -> that many hops, otherwise the CIDR/IP list.
+ *
+ * Returning `false` rather than an empty array matters: Fastify treats `[]` as a list that matches
+ * nothing, which is the same behaviour, but `false` is the value its documentation describes for
+ * "no proxy", and the two have differed across releases. Being explicit costs nothing.
+ */
+export function parseTrustedProxies(raw: string): boolean | string[] {
+  const trimmed = raw.trim();
+  if (trimmed === "") return false;
+  return trimmed.split(",").map((entry) => entry.trim()).filter(Boolean);
+}
+
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const parsed = schema.safeParse(env);
   if (!parsed.success) {
@@ -128,6 +170,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     );
   }
   const value = parsed.data;
+
+  // **Refused rather than ignored.** Silently forcing it off in production would leave a deployment
+  // believing a route is mounted that is not, which is its own confusion; refusing at startup makes
+  // the mistake impossible to hold.
+  if (value.SONNY_ENV === "production" && value.ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE === "true") {
+    throw new ConfigError(
+      "ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE may never be true when SONNY_ENV=production. " +
+        "That route authenticates nothing and takes its subject from a header; it exists only " +
+        "until SONNY-128 supplies authenticated-request middleware.",
+    );
+  }
+
   return {
     environment: value.SONNY_ENV,
     port: value.PORT,
@@ -135,8 +189,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     buildId: value.SONNY_BUILD_ID,
     databaseUrl: value.DATABASE_URL,
     logLevel: value.LOG_LEVEL,
-    trustProxy: value.TRUST_PROXY === "true",
+    trustProxy: parseTrustedProxies(value.TRUSTED_PROXIES),
     rateLimitSalt: value.RATE_LIMIT_SALT ?? "",
+    allowUnauthenticatedAccountDelete: value.ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE === "true",
     credentials: providerCredentials(env),
   };
 }

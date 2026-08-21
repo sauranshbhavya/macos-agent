@@ -214,6 +214,9 @@ have. An omitted privacy field must be a loud error, not a quiet guess.
   opaque because opacity enforced the rule mechanically; under the founder's 2026-08-21 decision to
   use Supabase Auth it is a JWT, so **the rule is now a contract obligation the client must keep
   rather than one its encoding keeps for it**, and SONNY-128's review is where that is checked.
+  **Verification of a presented access token — signature and expiry — is SONNY-128's and does not
+  exist yet** (noted 2026-08-21, PR #87 F2). SONNY-127 issues tokens and supplies the skew tolerance
+  that verification will apply; no route on that branch verifies one.
 - **Refresh token** — long-lived, opaque, rotated on every use, stored in the Keychain through the
   existing `KeychainSecretStore` (the concrete struct at `KeychainSecretStore.swift:21`, behind the
   `KeychainSecretStoring` protocol at `:4-7`) as a new account on the existing store, following the
@@ -254,8 +257,11 @@ time. A client that has both never has to choose between a wrong local clock and
   previous token stays valid for a short overlap window, so a crash between receiving a new token and
   writing it to the Keychain does not sign the user out. Presenting a refresh token that has already
   been rotated away *past* the overlap is treated as theft: the whole token family is revoked and the
-  response is `401 auth.token_revoked`. The overlap's length is SONNY-127's to set; the shape is
-  fixed here because retrofitting reuse detection after tokens exist is the expensive path.
+  response is `401 auth.token_revoked`. The overlap's length is **not** SONNY-127's to set after all: under the
+  2026-08-21 decision to serve auth from Supabase Auth it is the platform's, and is **10 seconds**
+  by default (corrected 2026-08-21, PR #87 F10 — this line previously said SONNY-127's, which was
+  written before that decision). The shape is fixed here because retrofitting reuse detection after
+  tokens exist is the expensive path, and the platform's shape matches it.
 - Sign-out revokes the family server-side and clears the Keychain entry locally. **Sign-out, "delete
   my local data", and "reset the encryption identity" are three different actions with three
   different blast radii.** Branch 7 deliberately made local data deletion leave the Keychain

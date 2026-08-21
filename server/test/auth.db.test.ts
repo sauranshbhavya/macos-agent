@@ -12,7 +12,7 @@ const describeDb = url ? describe : describe.skip;
 const config: Config = {
   environment: "local", port: 0, host: "127.0.0.1", buildId: "t",
   databaseUrl: url, logLevel: "fatal", trustProxy: false,
-  rateLimitSalt: "test-salt", credentials: [],
+  rateLimitSalt: "test-salt", allowUnauthenticatedAccountDelete: false, credentials: [],
 };
 
 /** A provider that records what it was asked and answers however the test needs. */
@@ -33,7 +33,13 @@ class FakeProvider implements AuthProvider {
     if (!this.accept) throw new ProviderRejected("refresh rejected");
     return this.session;
   }
+  revokedUsers: string[] = [];
   async signOut() { if (!this.accept) throw new ProviderRejected("already gone"); }
+  async signOutAllForUser(id: string) { this.revokedUsers.push(id); }
+  async userFromAccessToken(token: string): Promise<string> {
+    if (token !== "at") throw new ProviderRejected("bad token");
+    return this.session.supabaseUserId;
+  }
   async deleteUser() {}
 }
 
@@ -54,6 +60,9 @@ describeDb("the auth endpoints", () => {
   });
 
   const build = () => buildApp(config, { provider, db: async () => client });
+  /** The gate `loadConfig` refuses in production. Only the deletion tests turn it on. */
+  const buildWithDelete = () =>
+    buildApp({ ...config, allowUnauthenticatedAccountDelete: true }, { provider, db: async () => client });
 
   describe("POST /v1/auth/email/start", () => {
     it("answers identically for an address with an account and one without", async () => {
@@ -199,54 +208,42 @@ describeDb("the auth endpoints", () => {
   });
 
   describe("DELETE /v1/account", () => {
-    it("closes the account and makes it unusable for sign-in", async () => {
+    it("is NOT MOUNTED unless the gate is explicitly on", async () => {
+      // The finding, inverted (PR #87 F1). The previous version of this block asserted that an
+      // unauthenticated caller with a header could destroy an account, and asserted it PASSED —
+      // a green test blessing a destructive primitive that authenticates nothing, which would go
+      // live the moment SONNY-128 mounted middleware around it. A proof of concept destroyed
+      // another account with a made-up bearer token under SONNY_ENV=production.
       const app = build();
-      await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "bye@example.com" } });
-      const session = await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "bye@example.com", code: "1" } });
-      if (session.statusCode !== 200) throw new Error(`verify failed ${session.statusCode}: ${session.body}`);
-      const accountId = session.json().user.id;
-
-      const deleted = await app.inject({
+      const response = await app.inject({
         method: "DELETE", url: "/v1/account",
-        headers: { authorization: "Bearer at", "sonny-account-id": accountId },
+        headers: { authorization: "Bearer anything", "sonny-account-id": "11111111-1111-1111-1111-111111111111" },
       });
-      expect(deleted.statusCode).toBe(204);
-
-      const { rows } = await client.query("SELECT deleted_at FROM sonny.account WHERE id = $1", [accountId]);
-      expect(rows[0].deleted_at).not.toBeNull();
-
-      // and a fresh sign-in for the same address does NOT resurrect it
-      await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "bye@example.com" } });
-      const again = await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "bye@example.com", code: "1" } });
-      expect(again.json().user.id).not.toBe(accountId);
+      expect(response.statusCode).toBe(404);
+      expect(response.json().error.code).toBe("resource.not_found");
       await app.close();
     });
 
-    it("does not remove the row, because the retention ticket needs the handle", async () => {
-      // The sequencing this ticket owes: closing keeps the only key the retained content is
-      // addressable by. A DELETE here would orphan it permanently.
-      const app = build();
-      await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "keeprow@example.com" } });
-      const accountId = (await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "keeprow@example.com", code: "1" } })).json().user.id;
-      await app.inject({ method: "DELETE", url: "/v1/account", headers: { authorization: "Bearer at", "sonny-account-id": accountId } });
-      const { rows } = await client.query("SELECT id FROM sonny.account WHERE id = $1", [accountId]);
-      expect(rows).toHaveLength(1);
-      await app.close();
-    });
+    it("REFUSES cross-account deletion — the route cannot attribute a caller", async () => {
+      // With the gate on, the route still must not become a way to delete someone else's account
+      // on the strength of a header. It cannot tell who is asking, so what it must not do is act
+      // as though it can.
+      const app = buildWithDelete();
+      await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "victim@example.com" } });
+      const victim = (await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "victim@example.com", code: "1" } })).json().user.id;
 
-    it("is idempotent, and answers the same for an id that does not exist", async () => {
-      // 204 either way: answering 404 would tell an unauthenticated prober which ids are real.
-      const app = build();
-      const missing = await app.inject({
+      const attack = await app.inject({
         method: "DELETE", url: "/v1/account",
-        headers: { authorization: "Bearer at", "sonny-account-id": "00000000-0000-0000-0000-000000000000" },
+        headers: { authorization: "Bearer made-up-token", "sonny-account-id": victim },
       });
-      expect(missing.statusCode).toBe(204);
+      expect(attack.statusCode).toBe(401);
+      const { rows } = await client.query("SELECT deleted_at FROM sonny.account WHERE id = $1", [victim]);
+      expect(rows[0].deleted_at).toBeNull();
       await app.close();
     });
 
     it("refuses without a bearer token", async () => {
-      const app = build();
+      const app = buildWithDelete();
       const response = await app.inject({ method: "DELETE", url: "/v1/account" });
       expect(response.statusCode).toBe(401);
       expect(response.json().error.code).toBe("auth.unauthenticated");

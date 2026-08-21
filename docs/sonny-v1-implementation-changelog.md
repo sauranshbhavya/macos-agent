@@ -174,7 +174,7 @@ Files changed:
 - `server/src/db/migrations/0002_accounts_and_identities.sql` — new.
 - `server/src/config.ts`, `server/src/app.ts`, `server/.env.example` — the rate-limit salt and the optional auth mount.
 - `server/scripts/check-secrets.sh`, `check-secrets-selftest.sh` — an eleventh pattern and six cases, for a secret this branch introduces whose value has no recognisable shape.
-- `server/test/` — `linking.db.test.ts`, `authlimits.db.test.ts`, `auth.db.test.ts`, `clock.test.ts` new; `migrate.db.test.ts` generalised past a single migration; `vitest.config.ts` serialised.
+- `server/test/` — `linking.db.test.ts`, `authlimits.db.test.ts`, `auth.db.test.ts`, `clock.test.ts` new; `migrate.db.test.ts` generalised past a single migration; **`health.test.ts` and `errors.test.ts` amended** for the config fields this branch adds — omitted from the first version of this list (PR #87 F10). `vitest.config.ts` serialised.
 - `docs/sonny-identity-linking-rule.md` — new. The rule, its reasoning, and what is pinned.
 - `docs/sonny-backend-api-contract.md` — §3.1 amended, a note in §3.6, a row in §14.
 
@@ -219,7 +219,9 @@ Known limitations / deferred scope:
 - **Supabase's own send ceiling sits above ours.** Custom SMTP raises it from 2/hour to 30/hour project-wide. Our limits are set below it deliberately; if they ever cross, the project limit becomes the real one and returns an error we do not control.
 - **Deleting an account does not reach retained content.** Stated on both tickets: this branch closes the row and releases the address; `feature/row-12-retention` sweeps what hangs off `deleted_at`.
 
-Open questions (required, write "none" if true): **one** — when the Resend domain exists. Nothing else in row 12 is blocked by it; the model, the rule and the endpoints are complete and proven against a fake provider.
+Open questions (required, write "none" if true): **one** — when the Resend domain exists.
+
+**What "complete" does and does not mean here, corrected after the adversarial review (PR #87 F10).** The first version of this entry called the endpoints complete and proven, which overstated it in a way a reader would act on. Precisely: **no server process mounts these routes.** `buildApp` takes auth as an optional argument and nothing in `server.ts` supplies one, so the running gateway serves `GET /v1/health` and nothing else. The routes are exercised only by tests, through `app.inject`, against a fake provider. **Three security properties land in SONNY-128, not here:** access-token *verification* (signature and expiry — `clock.ts`'s tolerance is what it will apply, and no route calls it today), authenticated-request middleware (without which `DELETE /v1/account` is gated off and refused in production), and single-flight refresh. What SONNY-127 does own and has proven is the account model, the linking rule, the code lifecycle, the rate limits, and the token responses.
 
 Next branch: `feature/row-12-social-signin` (Google, then Apple), which this ticket's rule was designed for and must not have to reshape.
 
