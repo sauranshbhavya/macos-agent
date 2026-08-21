@@ -2,6 +2,7 @@
 paths:
   - "Sources/MacAgentCore/**"
   - "Tests/MacAgentCoreTests/**"
+  - "Tests/MacAgentTestSupport/**"
 ---
 # MacAgentCore conventions
 

@@ -20,6 +20,11 @@ import Testing
 /// drift. Both files now live once, in `MacAgentTestSupport`, so those three compare a thing to
 /// itself and are gone. The two tests below were never about twinning and are untouched in substance:
 /// the gate is one file's text now rather than two, and the `0o500` scan always read the whole tree.
+///
+/// **Formerly `TwinnedTestSupportTests.swift`**, renamed by SONNY-172 when the twins were
+/// consolidated. Five changelog entries written before that date still name it that way and are not
+/// rewritten, because they were true when written — this line is the forwarding address, so a grep
+/// for the old name out of an old record lands here rather than nowhere.
 @Suite
 struct UnprivilegedGateTests {
     /// This file carries the scan's search strings as literals, so it matches itself unless excluded
