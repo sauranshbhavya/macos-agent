@@ -96,6 +96,12 @@ no default for any secret, no fallback. `src/config.ts` validates the environmen
 with Zod and fails with `EX_CONFIG` (78) naming the offending variable — never its value, because
 an invalid-config line that echoed the environment would put credentials into the logs.
 
+**`TRUST_PROXY` defaults to `false` and should stay that way unless a proxy really terminates the
+connection in front of the container.** Fastify's `trustProxy` makes `request.ip` and
+`request.protocol` read from `X-Forwarded-For` and `X-Forwarded-Proto`, which any caller can set —
+so with nothing in front, the client chooses its own apparent address. Set it only where a load
+balancer is genuinely there.
+
 `.env.example` is committed and carries placeholders only. `server/.env` is gitignored, along with
 every `.env.*` variant, so a file named after staging or production cannot slip in either.
 
@@ -106,7 +112,11 @@ local redaction feature, are exempted by exact match in `scripts/secret-scan-bas
 explains why an exact-string baseline is safer than a path skip or a looser pattern.
 
 `./scripts/check-secrets-selftest.sh` plants credential-shaped strings in a scratch repository and
-proves the scanner refuses each one. **It found three defects in the scanner** — two on its first
+proves the scanner refuses each one — including one regression guard that was measured rather than
+assumed: re-adding the `example` term the allowlist once carried takes the suite to 20/21. The
+angle-bracket term it once carried is **not** guarded and cannot be, because the allowlist now tests
+the matched substring and no credential pattern here matches a `<`; that is belt-and-braces, not a
+check. **It found three defects in the scanner** — two on its first
 run (a pattern beginning with a hyphen that `grep` parsed as options, so it silently never ran; and
 `example` in the allowlist matching `db.example.com`) and a third on the next (a fix that would have
 exempted every PEM header in the tree, a real key included). It is not decoration. (This line said

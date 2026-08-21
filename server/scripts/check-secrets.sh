@@ -54,7 +54,11 @@ PATTERNS=(
 #   - `<[a-z-]+>` was meant for `<your-key>` placeholders and matched **any HTML tag**, so a `<p>`
 #     anywhere on a line exempted every pattern on it. Replaced with the angle-bracket forms this
 #     repository actually uses for placeholders.
-ALLOW='replace-me|placeholder|changeme|your-key-here|postgres://postgres:postgres@|<(ref|your-[a-z-]+|project-[a-z-]+)>'
+# The alphanumeric-only terms are anchored to a word boundary on each side. Without that,
+# `placeholder` or `changeme` appearing INSIDE a matched key body -- which is alphanumeric, so it
+# can contain them -- exempted the whole match. Anchoring is the cheap half of that problem; the
+# expensive half is in the "does not prevent" section below.
+ALLOW='\breplace-me\b|\bplaceholder\b|\bchangeme\b|\byour-key-here\b|postgres://postgres:postgres@|<(ref|your-[a-z-]+|project-[a-z-]+)>'
 
 BASELINE="server/scripts/secret-scan-baseline.txt"
 [[ -f "$BASELINE" ]] || { echo "check-secrets: missing $BASELINE" >&2; exit 2; }
@@ -87,8 +91,17 @@ for pattern in "${PATTERNS[@]}"; do
     # line meant any allowlisted term anywhere on it exempted every finding on that line -- so a
     # line containing the word "placeholder", or (before the term was narrowed) any HTML tag at
     # all, carried a real credential straight through. A reviewer landed four probes through it.
-    matched=$(echo "$text" | grep -Eo -e "$pattern" | head -1)
-    [[ -n "$matched" ]] && echo "$matched" | grep -Eq "$ALLOW" && continue
+    # **Every match on the line, not the first.** `head -1` took only the leading match, so a line
+    # whose FIRST match was allowlisted -- the local `postgres://postgres:postgres@` DSN is the
+    # obvious one -- exempted a real credential of the SAME pattern appearing later on it. That was
+    # a live probe of the cycle-1 reviewer's and it still landed after the substring fix. The line
+    # is a finding if ANY of its matches is not allowlisted.
+    unallowed=0
+    while IFS= read -r matched; do
+      [[ -z "$matched" ]] && continue
+      echo "$matched" | grep -Eq "$ALLOW" || { unallowed=1; break; }
+    done < <(echo "$text" | grep -Eo -e "$pattern")
+    (( unallowed )) || continue
     # Exact-match baseline of known-synthetic fixtures. See secret-scan-baseline.txt for why this
     # is an exact-string list rather than a path skip or a looser pattern.
     baselined=0
@@ -148,6 +161,15 @@ exit 0
 #     here reassembles string concatenation, and this file's own selftest exploits that.
 #   - **Anything at all, if nobody runs it.** There is no CI in this repository and no hook was
 #     added; `npm run check:secrets` is a command, not a gate. Making it one is row 20's question.
+#   - **An ENCRYPTED private key.** A PEM carrying `Proc-Type: 4,ENCRYPTED` and a `DEK-Info` header
+#     puts those lines between the BEGIN marker and the base64 body, which breaks the 120-character
+#     run the multi-line pass requires, so the file passes. An encrypted key still needs its
+#     passphrase, but it is a credential in the repository either way.
+#   - **A placeholder term sitting inside a matchable key body.** The alphanumeric ALLOW terms are
+#     word-anchored above, which stops the common case, but a key body containing `placeholder`
+#     with non-word characters either side would still exempt its own match. Fixing that properly
+#     means the allowlist knowing which pattern matched, which is more machinery than this script
+#     is worth today.
 #   - **A false sense of the baseline.** `secret-scan-baseline.txt` exempts by exact match, so an
 #     entry added carelessly exempts that string everywhere, forever. Stale entries are reported;
 #     wrong ones are not.

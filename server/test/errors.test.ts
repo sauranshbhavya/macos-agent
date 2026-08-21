@@ -112,6 +112,24 @@ describe("error responses use the contract's envelope, not the framework's", () 
     await app.close();
   });
 
+  it("a malformed URL is rejected before routing and still uses the envelope", async () => {
+    // The last door out of the framework's own shape. `setErrorHandler` and `setNotFoundHandler`
+    // cover errors raised during routing and handling; a URL Fastify cannot parse is refused
+    // before either runs. Measured before the fix, `GET /v1/%zz` returned
+    // {"error":"Bad Request","code":"FST_ERR_BAD_URL","message":"'/v1/%zz' is not a valid url
+    // component","statusCode":400} -- framework shape, a framework error code, and the offending
+    // path echoed straight back to the caller.
+    const app = buildApp(config);
+    const response = await app.inject({ method: "GET", url: "/v1/%zz" });
+    expect(response.statusCode).toBe(400);
+    expectContractEnvelope(response.json(), "request.invalid");
+    expect(response.body).not.toContain("FST_ERR");
+    expect(response.body).not.toContain("%zz");
+    expect(response.body).not.toHaveProperty("statusCode");
+    expect(response.headers["sonny-api-version"]).toBe("1.0");
+    await app.close();
+  });
+
   it("a 405 still answers in the taxonomy rather than the framework's shape", async () => {
     const app = buildApp(config);
     const response = await app.inject({ method: "DELETE", url: "/v1/health" });
