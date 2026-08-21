@@ -3125,7 +3125,14 @@ final class AgentViewModel: ObservableObject {
     }
 
     func approvalContext() -> ApprovalContext {
-        ApprovalContext(safeMode: interactionMode.asksBeforeEveryAction)
+        // The mode travels whole now (SONNY-142). It used to be folded through
+        // `asksBeforeEveryAction` into a boolean here, which made Normal and Power indistinguishable
+        // to the engine — correct while the engine distinguished two postures, and wrong the moment
+        // row J gave Power a rule of its own.
+        //
+        // `appControl` is `.notApplicable` at every construction site until SONNY-143 resolves it,
+        // which is deliberate and is why the parameter is not defaulted: every caller answers it.
+        ApprovalContext(mode: interactionMode, appControl: .notApplicable)
     }
 
     private func executePreparedRun(
