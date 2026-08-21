@@ -37,6 +37,60 @@ private enum WidgetState {
     case failure(String)
 }
 
+/// The composer pill's geometry, gathered in one place because SONNY-207 was two of these numbers
+/// disagreeing with each other.
+///
+/// **The pill is a stadium, and the top-left of a stadium is not usable area.** `widgetGlassPill()`
+/// fills a `Capsule()`, so on a pill H points tall the leading cap is a semicircle of radius H/2 and
+/// the glass at the pill's leading inset does not start at the pill's top edge — it starts wherever
+/// that circle crosses. At the 40pt height the pill shipped with, this never mattered: the field
+/// row's content is short and vertically centred, nowhere near the corner. Row E (SONNY-150) put a
+/// chip row at the *top* of the pill, at the same 14pt leading inset and with no top inset at all,
+/// and a 66pt pill's cap radius is 33 — so the chip's leading half sat outside the glass entirely
+/// and read as cut. **Nothing clipped it.** The widget clips no content anywhere; the fill simply
+/// was not behind it, and over a transparent panel that looks identical to a clip. Relaxing a
+/// `clipShape` would have fixed nothing, because there is none to relax.
+///
+/// Two things follow, and the fix is both together:
+///
+/// - **Neither the chip row nor the pill states a height any more.** The row was framed to a
+///   hardcoded 18 while a chip measures 21, and the pill's height was computed from that same 18 —
+///   so the pill was three points shorter than its own content before the corner is even considered.
+///   Both heights now come from the chips. (`theChipRowIsAtLeastAsTallAsTheChipsItHolds` measures
+///   the 21 through the same `NSHostingController.view.fittingSize` seam
+///   `FloatingWidgetWindowController` sizes the real window with, rather than trusting this
+///   sentence.)
+/// - **The chip row is inset from the pill's top edge by `chipRowSpacing`** — the same 8pt that
+///   separates it from the field row, and the same 8pt of slack the Start button already leaves
+///   below itself, so the pill's spare space reads even top and bottom. With one chip the pill is
+///   then 8 + 21 + 8 + 40 = 77 tall, its cap radius 38.5, and the chip's own leading cap clears the
+///   stadium with room over the hairline. `everyChipCombinationClearsTheStadiumsLeadingCap` does
+///   that arithmetic against the measured pill.
+///
+/// **What deliberately did not move.** The step-log panel, the mic-hint row and the notice strip
+/// each repeat 472 from the same wireframe column. They are separate components, unifying them is
+/// not SONNY-207's, and only the composer's own numbers were named here.
+enum WidgetComposerGeometry {
+    /// The wireframe's composer column. The mic and "Don't save this task" buttons float outside it.
+    static let pillWidth: CGFloat = 472
+
+    /// The pill's leading inset — where the chip row and the field row's icon both start.
+    static let leadingInset: CGFloat = 14
+
+    /// The field row's height, and so the height of the circular-button box beside the pill:
+    /// bottom-aligning a box of this height against the pill lands those buttons' centres on the
+    /// field's, whatever the chip row does above it.
+    static let fieldRowHeight: CGFloat = 40
+
+    /// Used twice, and the second use is the fix: the gap between the chip row and the field row,
+    /// and the chip row's inset from the pill's top edge.
+    static let chipRowSpacing: CGFloat = 8
+
+    /// The widget's own outer padding, around everything. Named because a measurement of the whole
+    /// widget has to subtract it to reach the pill.
+    static let widgetOuterPadding: CGFloat = 16
+}
+
 struct FloatingWidgetView: View {
     @ObservedObject var viewModel: AgentViewModel
     @FocusState private var pillFocused: Bool
@@ -139,10 +193,11 @@ struct FloatingWidgetView: View {
                 }
 
                 // **Bottom-aligned since the pill can carry a chip row** (SONNY-150). With
-                // `.center` the two circular buttons would float against the middle of a 66pt pill
-                // while the text field sat at its foot. Their own 40pt box makes their centres land
-                // exactly on the field row's, and in the no-chip case the whole thing is
-                // pixel-identical to what it was: a 40pt pill beside a 40pt box.
+                // `.center` the two circular buttons would float against the middle of a pill that
+                // is taller than they are while the text field sat at its foot. Their own
+                // field-row-height box makes their centres land exactly on the field row's, and in
+                // the no-chip case the whole thing is pixel-identical to what it was: a 40pt pill
+                // beside a 40pt box.
                 //
                 // `micButton` always renders, so the box is never empty and its spacing never opens
                 // a gap where a hidden `dontSaveButton` used to be.
@@ -152,7 +207,7 @@ struct FloatingWidgetView: View {
                         dontSaveButton
                         micButton
                     }
-                    .frame(height: 40)
+                    .frame(height: WidgetComposerGeometry.fieldRowHeight)
                 }
             }
         }
@@ -161,7 +216,7 @@ struct FloatingWidgetView: View {
         // Real headroom for the (now much smaller, border-led) shadow plus a little breathing
         // room around the glass edge — not shadow-bleed-driven the way the old, larger padding
         // was, since there's no more large drop shadow needing room to fade out.
-        .padding(16)
+        .padding(WidgetComposerGeometry.widgetOuterPadding)
         .onAppear {
             pillFocused = true
             scheduleAutoDismissIfNeeded()
@@ -553,17 +608,8 @@ struct FloatingWidgetView: View {
             || viewModel.priorTaskContext?.isArmed == true
     }
 
-    /// The pill's height. 40 with no chip — exactly what it has always been — and taller by one
-    /// chip row plus its spacing when there is one.
-    private var composerPillHeight: CGFloat {
-        hasComposerChips ? 40 + Self.composerChipRowHeight + Self.composerChipRowSpacing : 40
-    }
-
-    private static let composerChipRowHeight: CGFloat = 18
-    private static let composerChipRowSpacing: CGFloat = 8
-
     private var composerPill: some View {
-        VStack(alignment: .leading, spacing: Self.composerChipRowSpacing) {
+        VStack(alignment: .leading, spacing: WidgetComposerGeometry.chipRowSpacing) {
             // **A row of their own, above the field** — the founder's decision of 2026-08-21, taken
             // against the two alternatives. Three chips inline leave the text field about 57 points
             // wide, at the exact moment the user is typing a correction into it; a chip that names
@@ -573,6 +619,11 @@ struct FloatingWidgetView: View {
             // with them, do not displace them — so the workspace binding and "Won't be saved" keep
             // the reading position they have always had and the follow-up joins after them, rather
             // than the newest arrival taking the front.
+            //
+            // **This row states no height of its own** (SONNY-207) — see
+            // `WidgetComposerGeometry`. It used to be framed to a hardcoded 18, three points
+            // shorter than a chip actually is, and the pill's height was computed from that same
+            // 18 rather than from the chips.
             if hasComposerChips {
                 HStack(spacing: 8) {
                     workspaceBindingChip
@@ -580,14 +631,20 @@ struct FloatingWidgetView: View {
                     followUpChip
                     Spacer(minLength: 0)
                 }
-                .frame(height: Self.composerChipRowHeight)
             }
 
             composerFieldRow
         }
-        .padding(.leading, 14)
-        .padding(.trailing, isTaskInFlight ? 14 : 8)
-        .frame(width: 472, height: composerPillHeight)
+        // The chip row's inset from the pill's top edge, and the reason nothing is clipped —
+        // `WidgetComposerGeometry` has the geometry this number answers to. Zero when there is no
+        // chip row, so the no-chip pill stays exactly the 40pt bar it has always been.
+        .padding(.top, hasComposerChips ? WidgetComposerGeometry.chipRowSpacing : 0)
+        .padding(.leading, WidgetComposerGeometry.leadingInset)
+        .padding(.trailing, isTaskInFlight ? WidgetComposerGeometry.leadingInset : 8)
+        // Width only. The height is whatever the content needs — a pill that declares its own
+        // height is a second opinion about how tall a chip is, and SONNY-207 was that opinion
+        // being wrong.
+        .frame(width: WidgetComposerGeometry.pillWidth)
         .widgetGlassPill()
     }
 
@@ -630,15 +687,17 @@ struct FloatingWidgetView: View {
         }
         // The field row is always 40 tall, whether or not a chip row sits above it. That is what
         // keeps the two circular buttons beside the pill level with the field: the composer row
-        // aligns them to the pill's bottom edge and gives them a 40-tall box of their own.
+        // aligns them to the pill's bottom edge and gives them a box of their own the same height.
         //
         // The trailing inset: 8pt matches the Start button's own vertical inset (24pt tall in a
         // 40pt row leaves 8pt above and below); a uniform 14pt left it visibly farther from the
         // trailing edge than from the top and bottom. Applied on the pill rather than here, and
         // conditional because the button is not rendered while a task is in flight — that state
         // keeps its shipped 14pt rather than pulling the disabled field 6pt closer to the capsule's
-        // curve to fix a complaint about a different state.
-        .frame(height: 40)
+        // curve to fix a complaint about a different state. The chip row's own inset above the
+        // pill's top edge is the same 8pt for the same reason, so the pill's slack reads even top
+        // and bottom.
+        .frame(height: WidgetComposerGeometry.fieldRowHeight)
     }
 
     /// "Don't save this task" (SONNY-120).
