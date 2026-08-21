@@ -2002,6 +2002,61 @@ struct VisionSessionRunTests {
         let detail = try #require(try fixture.taskPlanDetailStore.detail(forTaskID: taskID))
         #expect(detail.steps.map(\.operation) == [.calculateUtility, .visionSession])
     }
+
+    // MARK: - Running a screen-control task again (row E, SONNY-149)
+
+    /// **"Run again" on a screen-control task starts a fresh session and replays nothing.**
+    ///
+    /// This is the case the whole no-replay decision is easiest to get wrong on, because "retry a
+    /// screen-control task" reads like replaying the clicks — and replaying stored clicks blind is
+    /// precisely the unsafe thing. The journal is a record of what happened, not a script: the second
+    /// run goes back through the planner, resolves to a vision session of its own, and is gated as
+    /// any new vision command is.
+    ///
+    /// Asserted on the journal itself, not on "a run happened": two sessions with different ids, the
+    /// first one's entries untouched, and the new task-history row pointing at the new session.
+    @Test
+    func runningAgainAScreenControlTaskStartsAFreshSessionAndExtendsNoJournal() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":100,"y":100,"target":"Bookmarks","consequence":"ordinary","rationale":"open the sidebar"}"#,
+                #"{"action":"done","rationale":"The reading list is open."}"#,
+                // The second run's whole script.
+                #"{"action":"done","rationale":"It was already open."}"#
+            ],
+            // The second run reaches the planner, because a run-again dispatches the record's
+            // command text rather than the plan the first run produced. This is what turns that
+            // text back into a vision plan.
+            delegationPlanner: VisionOnlyPlanner()
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "open my reading list", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+        let firstRow = try #require(try fixture.taskHistoryStore.loadAll().last)
+        let firstSessionID = try #require(firstRow.visionSessionID)
+        let firstSession = try #require(try fixture.journal.record(withID: firstSessionID))
+        #expect(firstSession.entries.count == 1, "the first session really did do something")
+
+        fixture.viewModel.runTaskAgain(firstRow)
+        try await waitForIdle(fixture.viewModel)
+
+        // A second row, and it points at a different session.
+        let rows = try fixture.taskHistoryStore.loadAll()
+        #expect(rows.count == 2)
+        let secondSessionID = try #require(rows.last?.visionSessionID)
+        #expect(secondSessionID != firstSessionID, "a fresh session, not the old one carried forward")
+
+        // Two sessions in the journal, and the first is byte-for-byte what it was: not extended,
+        // not reopened, not replayed.
+        let sessions = try fixture.journal.loadAll()
+        #expect(sessions.count == 2)
+        #expect(try fixture.journal.record(withID: firstSessionID) == firstSession)
+        let secondSession = try #require(try fixture.journal.record(withID: secondSessionID))
+        #expect(secondSession.entries.isEmpty, "the second run's own actions, not the first's")
+        // And the second run really was planned rather than replayed.
+        #expect(fixture.viewModel.finalSummary == "It was already open.")
+    }
 }
 
 /// A planner that answers every instruction with a vision-bearing plan.
@@ -2067,6 +2122,27 @@ private struct MixedVisionAndToolPlanner: Planning {
             requiresConfirmation: false,
             steps: [
                 AgentStep(id: "calc", operation: .calculateUtility, description: "Calculate", searchQuery: "1 + 1"),
+                AgentStep(
+                    id: "vision",
+                    operation: .visionSession,
+                    description: "Control Safari",
+                    appName: "Safari",
+                    visionGoal: "open my reading list"
+                )
+            ]
+        )
+    }
+}
+
+/// Turns any command into a one-step screen-control plan for Safari — what a planner does with
+/// "Control Safari: open my reading list", which is the text `startVisionSession` puts in the
+/// command field and therefore the text a run-again sends back through it.
+private struct VisionOnlyPlanner: Planning {
+    func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
+        AgentPlan(
+            summary: "Control Safari",
+            requiresConfirmation: false,
+            steps: [
                 AgentStep(
                     id: "vision",
                     operation: .visionSession,

@@ -1704,6 +1704,56 @@ final class AgentViewModel: ObservableObject {
         dispatch(command: lastCommand, origin: origin, workspaceBinding: retryBinding)
     }
 
+    /// Runs a past task again by **re-asking Sonny with the same words**, never by replaying the
+    /// plan the first run produced (row E, SONNY-149).
+    ///
+    /// **The reason replay is not on the table is the risk gate, not the stale coordinates.** Sonny's
+    /// gate is pre-execution and whole-plan: `AgentRunner.execute` assesses once, up front, and
+    /// `executeChain` runs every segment with no re-gating. So re-executing a previously approved
+    /// plan would carry an approval granted for a world that has since changed — the file that did
+    /// not exist then exists now, so the destructive escalation that should fire would not.
+    /// Re-asking through the planner keeps every gate honest by construction rather than by anyone
+    /// remembering. Two secondary reasons agree with it: nothing in this codebase replays a stored
+    /// plan today, and a screen-control replay would click at coordinates that have moved.
+    ///
+    /// **What that means for the user, which reads like a regression and is not.** The workspace
+    /// binding is re-resolved and any approval is re-requested, so a task that asked for permission
+    /// the first time asks again. That is the same property that makes replay unsafe, seen from the
+    /// other side. A run-again of a screen-control task starts a *fresh* session and never replays
+    /// the journal's recorded actions — the journal is a record of what happened, not a script.
+    ///
+    /// **No `isTaskInFlight` guard of its own, deliberately.** `dispatch` refuses every in-flight
+    /// state already — `isAwaitingApproval` at its own first line, and `isRunning`, an open
+    /// clarification and a transcription in flight through `canSubmit` — and it logs the refusal at
+    /// the one place every programmatic door passes through. A copy of that rule here would be a
+    /// second place for it to drift, and a second refusal message for the same event, which the
+    /// choke point's own comment rules out. The detail sheet disables the control while a task is in
+    /// flight, the same way the workspace card does, so this path is the backstop rather than the
+    /// user's experience of it.
+    ///
+    /// **A sibling of `retryLastCommand`, not a change to it.** That mechanism is the single-slot
+    /// most-recent-command retry and keeps its own `lastCommand` and `lastAssessedScope`; this takes
+    /// an arbitrary historical record and reads the binding off the record itself.
+    ///
+    /// - Returns: whether the dispatch was accepted, so the sheet can close on a real start and stay
+    ///   open on a refusal rather than hiding the fact that nothing happened.
+    @discardableResult
+    func runTaskAgain(_ record: CompletedTaskRecord) -> Bool {
+        dispatch(
+            command: record.command,
+            // Stated rather than defaulted, per `.claude/rules/macagent-ui-conventions.md`: a new
+            // task-submitting entry point passes its own real origin. This one is pressed in
+            // Command Center's task detail, so `.commandCenter` is the true answer and `dispatch`'s
+            // default happening to match it is not a reason to leave it out.
+            origin: .commandCenter,
+            // The record's own stored workspace, which degrades safely on its own:
+            // `resolveTaskScope` returns `.unscoped` for a name that no longer resolves to a stored
+            // workspace, so running again a task whose workspace was deleted or renamed runs
+            // unscoped rather than erroring or binding to an empty boundary.
+            workspaceBinding: record.workspaceName
+        )
+    }
+
     /// Submits the clarification answer as a **new** run, not a resume: this appends the Q&A to
     /// the command and calls `start()`, which clears `plan`/`stepStatuses`/`preparedRun` and
     /// re-plans from scratch. (Approval is the real resume — it reuses the existing prepared

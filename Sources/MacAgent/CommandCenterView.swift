@@ -528,6 +528,7 @@ private struct TasksFoundationView: View {
         }
         .sheet(item: $selectedLogEntry) { entry in
             TaskLogDetailDialog(
+                viewModel: viewModel,
                 record: entry.record,
                 screenRecord: entry.screenRecord,
                 onDeleteTask: {
@@ -1804,6 +1805,12 @@ private struct TaskLogEntry: Identifiable {
 /// and are never rendered here, because a list of internal step descriptions on a user-facing
 /// receipt is the surface the 2026-07-18 direction rejected.
 private struct TaskLogDetailDialog: View {
+    /// **Observed, not passed as resolved values** (row E, SONNY-149). The two delete actions arrive
+    /// as closures because they are one-shot commands the presenting view has to follow with its own
+    /// bookkeeping. "Run again" is different: its control has to disable itself the moment another
+    /// task starts, from anywhere, while this sheet is open — and a `Bool` handed in at presentation
+    /// time is a snapshot of a world that moves.
+    @ObservedObject var viewModel: AgentViewModel
     let record: CompletedTaskRecord
     /// Resolved once, before this sheet was presented, for the one row the user clicked — so the
     /// lazy-read property the old `.task` block existed for is kept, without the state settling a
@@ -2019,12 +2026,41 @@ private struct TaskLogDetailDialog: View {
         }
     }
 
-    /// "Delete task" sits in the sheet's footer rather than beside the screen-record action, so the
-    /// two are never mistaken for a pair of similar buttons: one acts on the whole receipt and lives
-    /// at its foot, the other acts on the section it sits inside.
+    /// The sheet's footer: what you can do with this task.
+    ///
+    /// **"Delete task" sits here rather than beside the screen-record action**, so the two are never
+    /// mistaken for a pair of similar buttons: one acts on the whole receipt and lives at its foot,
+    /// the other acts on the section it sits inside.
+    ///
+    /// **"Run again" is at the leading edge and the delete at the trailing one, with the whole
+    /// footer between them** (row E, SONNY-149). Same reasoning one level up: an ordinary action and
+    /// a destructive one adjacent to each other, in the same row-action shape, differing only in
+    /// tint, is a misclick waiting to happen. The separation is what makes them read as two
+    /// different kinds of thing rather than two options.
     private var deleteTaskFooter: some View {
         HStack {
+            if TaskDetailPresentation.showsRunAgain(for: record) {
+                Button(TaskDetailPresentation.runAgainActionLabel) {
+                    // Closed only on a real start. A refused dispatch leaves the sheet open, because
+                    // closing it would hide the fact that nothing happened — and the refusal's own
+                    // trace lives at the dispatch choke point, not here.
+                    if viewModel.runTaskAgain(record) {
+                        dismiss()
+                    }
+                }
+                .buttonStyle(CommandCenterRowActionStyle())
+                .sonnyPointerCursor()
+                // Hidden-versus-disabled goes the other way from the composer's chips: this control
+                // is the reason a user opened the sheet, and a control that vanishes while another
+                // task runs reads as a feature that broke. The workspace card's own
+                // `.disabled(isTaskInFlight)` is the precedent being followed.
+                .disabled(viewModel.isTaskInFlight)
+                .accessibilityLabel(TaskDetailPresentation.runAgainActionLabel)
+                .help(TaskDetailPresentation.runAgainActionLabel)
+            }
+
             Spacer()
+
             Button(TaskDeletePresentation.taskActionLabel) {
                 showTaskDeleteConfirmation = true
             }
