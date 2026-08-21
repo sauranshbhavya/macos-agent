@@ -180,6 +180,14 @@ changelog's per-branch decisions, `.claude/rules/`). The v1 rigor bar is unchang
   from it is a claim about nothing that reads exactly like a true one. It was written as
   evidence repeatedly on 2026-08-17 while `main` carried five. The closing comment carries
   the script's count and the SHA it stamped, the same way it carries the test count.
+- **Which half you verify is the half you touched.** The three commands above are the app
+  half (`Sources/`, `Tests/`). A change under `server/` is verified by the server's own
+  commands — `npm run build`, `npm test`, `npm run typecheck`, `npm run check:secrets`
+  (CLAUDE.md's Commands section, "The server half") — and `swift build` / `scripts/warnings`
+  say nothing about it: `scripts/warnings` measures a Swift compile a `server/` diff cannot
+  alter, so it would report zero over a server change while never compiling what changed. A
+  change touching both halves runs both halves' commands; neither substitutes for the other,
+  and green on the wrong half is not evidence (SONNY-193).
 - **Evidence, not assertion.** A ticket is done when its acceptance criteria are
   demonstrated by test output and exit codes, not when the work "looks done."
   `CLAUDE.md`'s claims-and-evidence conventions bind every claim made under this workflow —
@@ -280,7 +288,15 @@ than validating:
   exception covers both reruns: a diff provably confined to docs/comments may skip them —
   anything touching `Sources/` or `Tests/` never skips, and no session invents its own
   threshold beyond that line. A reviewer that reruns only the suite cannot see a warning
-  the implementer introduced, which is how one merged on 2026-08-17.
+  the implementer introduced, which is how one merged on 2026-08-17. **A server-only diff is
+  the symmetric case, and it is not the docs/comments exemption:** it touches neither
+  `Sources/` nor `Tests/`, so the Swift suite and `scripts/warnings` provably cannot see it
+  (Package.swift's four target paths all name `Sources/…` or `Tests/…`, so nothing under
+  `server/` reaches a Swift target), and rerunning them proves nothing about it — rerun the
+  server's own commands (`npm run build`, `npm test`, `npm run typecheck`) instead, and the
+  Swift reruns are owed only when the diff actually touches the app half. A diff touching
+  both halves reruns both. PR #85's reviewer reran the full Swift suite for a server-only
+  diff for want of this branch (SONNY-193).
 - Posts findings to the affected tickets (or the PR) carrying the same evidentiary bar as
   implementers: the literal command run and the tail of its output (exit code, test
   counts). Its "all green" is a spot-checkable record, not an assertion to trust.
