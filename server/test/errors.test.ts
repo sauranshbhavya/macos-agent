@@ -99,7 +99,7 @@ describe("error responses use the contract's envelope, not the framework's", () 
   it("an unexpected throw becomes server.error and never leaks the thrown message", async () => {
     const app = buildApp(config);
     app.get("/v1/boom", async () => {
-      throw new Error("connection string postgres://u:p@h/db failed");
+      throw new Error("connection string postgres://postgres:postgres@localhost:5432/db failed");
     });
     const response = await app.inject({ method: "GET", url: "/v1/boom" });
     expect(response.statusCode).toBe(500);
