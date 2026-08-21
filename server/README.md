@@ -117,7 +117,7 @@ the `example` term the allowlist once carried makes `a key whose body contains '
 fail. And re-adding any angle-bracket term breaks the paired pooler checks: **that term was a live
 hole, not the harmless leftover an earlier version of this file called it.** The DSN pattern uses
 negated character classes, so `<` and `>` reach the matched substring — which exempted
-`postgresql://postgres.<project-ref>:PASSWORD@…pooler.supabase.com`, Supabase's own pooler shape,
+`postgresql://postgres.<project-ref>:<the password>@…pooler.supabase.com`, Supabase's own pooler shape,
 with the password intact. **It found three defects in the scanner** — two on its first
 run (a pattern beginning with a hyphen that `grep` parsed as options, so it silently never ran; and
 `example` in the allowlist matching `db.example.com`) and a third on the next (a fix that would have
