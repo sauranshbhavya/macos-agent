@@ -3,6 +3,140 @@ import Testing
 @testable import MacAgentCore
 
 struct AutomationStoresTests {
+    // MARK: - SONNY-67: the routine store's read door
+
+    /// **The defect, end to end.** A `routines.json` written by something that is not Sonny can carry
+    /// `resolvedAppName`/`resolvedBundleIdentifier` pre-set on a step. Nothing downstream questions a
+    /// pin that arrives already set — `RunningAppSwitchCapabilityAdapter`'s pin-once guard honours it
+    /// at every gate, correctly and by design — so the store's read door is where it has to be
+    /// removed. Written here as an encrypted store, through the store's own writer, so the test
+    /// exercises the real decode path rather than a hand-rolled plaintext file.
+    @Test
+    func aTamperedRoutineLosesItsPreSetResolverPinsOnLoad() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+
+        var tampered = AgentStep(id: "switch", operation: .openApp, description: "Open Safari.", appName: "Safari")
+        tampered.resolvedAppName = "Safari"
+        tampered.resolvedBundleIdentifier = "com.attacker.lookalike"
+        // `saveBypassingStepValidation` is the module-internal test-only write door; it is what a
+        // hand-written file is being stood in for here.
+        try store.saveBypassingStepValidation(StoredRoutine(name: "Tampered", steps: [tampered]))
+
+        let loaded = try store.routine(named: "Tampered")
+
+        #expect(loaded.steps.count == 1)
+        #expect(loaded.steps[0].resolvedAppName == nil)
+        #expect(loaded.steps[0].resolvedBundleIdentifier == nil)
+        // Everything else the step said survives — this strips a pin, it does not sanitise a step.
+        #expect(loaded.steps[0].appName == "Safari")
+        #expect(loaded.steps[0].operation == .openApp)
+    }
+
+    /// Nested `routineSteps` are refused at the write door and so can only exist in a file Sonny did
+    /// not write — which is the same file this is defending against. The strip recurses for that
+    /// reason, and this is the pin.
+    @Test
+    func preSetPinsAreStrippedInsideNestedRoutineStepsToo() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+
+        var nested = AgentStep(id: "nested", operation: .openApp, description: "Open Safari.", appName: "Safari")
+        nested.resolvedAppName = "Safari"
+        nested.resolvedBundleIdentifier = "com.attacker.lookalike"
+        var outer = AgentStep(id: "outer", operation: .openApp, description: "Open Safari.", appName: "Safari")
+        outer.routineSteps = [nested]
+        try store.saveBypassingStepValidation(StoredRoutine(name: "Nested", steps: [outer]))
+
+        let loaded = try store.routine(named: "Nested")
+
+        let innerStep = try #require(loaded.steps.first?.routineSteps?.first)
+        #expect(innerStep.resolvedAppName == nil)
+        #expect(innerStep.resolvedBundleIdentifier == nil)
+    }
+
+    /// The other direction, and the one that makes the strip safe to apply unconditionally: a routine
+    /// saved the way the product saves them round-trips byte-identically. If this ever fails, the
+    /// strip has started removing something a legitimate store had.
+    @Test
+    func aLegitimatelySavedRoutineRoundTripsUnchanged() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        let routine = StoredRoutine(
+            name: "Morning",
+            steps: [
+                AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari"),
+                AgentStep(id: "url", operation: .openURL, description: "Open the board.", targetURL: "https://example.com", browserName: "Arc")
+            ]
+        )
+        try store.save(routine)
+
+        #expect(try store.routine(named: "Morning") == routine)
+    }
+
+    /// The decision behind SONNY-67's log line, held as a value (founder decision 2026-08-21, F6).
+    /// The warning itself is an `os.Logger` call, which no test in this repository observes — the two
+    /// existing `LocalStorageMigrationLog` warnings have none either, and reading them back needs
+    /// `OSLogStore`. What *is* cheap to hold is the condition that decides whether it is emitted, so
+    /// that lives in its own function and this pins it.
+    @Test
+    func onlyStepsCarryingAPinAreCountedForTheStripWarning() {
+        var pinnedName = AgentStep(id: "a", operation: .openApp, description: "a", appName: "Safari")
+        pinnedName.resolvedAppName = "Safari"
+        var pinnedIdentifier = AgentStep(id: "b", operation: .openApp, description: "b", appName: "Notes")
+        pinnedIdentifier.resolvedBundleIdentifier = "com.apple.Notes"
+        var pinnedBoth = AgentStep(id: "c", operation: .openApp, description: "c", appName: "Mail")
+        pinnedBoth.resolvedAppName = "Mail"
+        pinnedBoth.resolvedBundleIdentifier = "com.apple.mail"
+        let clean = AgentStep(id: "d", operation: .openApp, description: "d", appName: "Music")
+
+        #expect(StoredRoutine.resolverPinnedStepCount([clean]) == 0)
+        // Either pin counts the step, and a step carrying both counts once — the unit is the step,
+        // matching what the strip clears.
+        #expect(StoredRoutine.resolverPinnedStepCount([pinnedName, pinnedIdentifier, pinnedBoth, clean]) == 3)
+
+        // Recursive, like the strip: a nested step's pin is a pin.
+        var outer = AgentStep(id: "outer", operation: .openApp, description: "outer", appName: "Safari")
+        outer.routineSteps = [pinnedBoth, clean]
+        #expect(StoredRoutine.resolverPinnedStepCount([outer]) == 1)
+    }
+
+    /// **The forcing function.** The strip clears two named fields, and a hand-maintained list of
+    /// resolver-only fields is exactly the thing that goes stale — the defect this ticket closes
+    /// exists because one door knew a rule and another did not.
+    ///
+    /// `Mirror` enumerates `AgentStep`'s stored properties whether or not they are set, so a field
+    /// added to that type lands in `actual` and fails this test until someone classifies it. The two
+    /// questions to answer then are: can the planner write it (is it in `AgentPlanDecoder.stepKeys`
+    /// and the schema?), and if not, must `StoredRoutine.strippingResolverPins` clear it?
+    @Test
+    func everyAgentStepFieldIsClassifiedAgainstTheResolverOnlyStrip() {
+        let probe = AgentStep(id: "probe", operation: .clarify, description: "Probe.")
+        let actual = Set(Mirror(reflecting: probe).children.compactMap(\.label))
+
+        /// Planner-writable: present in `AgentPlanDecoder.stepKeys` and in the planner schema.
+        let plannerWritable: Set<String> = [
+            "id", "operation", "description", "inputPath", "outputPath", "count", "targetURL",
+            "appName", "question", "mediaProvider", "mediaTitle", "mediaArtist", "contextSource",
+            "routineName", "routineSteps", "workspaceName", "workspaceApps", "workspaceURLs",
+            "workspaceFileLocations", "workspaceAppsToRemove", "workspaceURLsToRemove",
+            "workspaceFileLocationsToRemove", "sourceURLs", "searchQuery", "draftTitle",
+            "draftContent", "shortcutName", "shortcutInput", "visionGoal", "browserName"
+        ]
+        /// Resolver-only: written by the executor, never decodable from a planner response, and
+        /// therefore stripped by the routine store's read door.
+        let resolverOnly: Set<String> = ["resolvedAppName", "resolvedBundleIdentifier"]
+
+        #expect(
+            actual == plannerWritable.union(resolverOnly),
+            "an AgentStep field is unclassified: decide whether the routine store must strip it"
+        )
+        #expect(plannerWritable.intersection(resolverOnly).isEmpty)
+    }
+
     @Test
     func storedRoutineIdentityMatchesItsName() {
         let routine = StoredRoutine(name: "Morning Setup", steps: [])
