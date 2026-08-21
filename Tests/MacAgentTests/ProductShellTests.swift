@@ -2603,8 +2603,14 @@ struct ProductShellTests {
         viewModel.command = "snippet save ;cross-surface-test = Hello"
 
         // Default origin is `.commandCenter` — simulates a task a Command-Center-only entry point
-        // (a row action) started, reaching the exact state only the widget renders controls for:
-        // "Command Center itself has no approval/permission UI of its own" (macagent-ui-conventions.md).
+        // (a row action) started, reaching a state *both* surfaces render controls for. Until
+        // SONNY-183 this comment read "the exact state only the widget renders controls for:
+        // 'Command Center itself has no approval/permission UI of its own'
+        // (macagent-ui-conventions.md)" — quoting that file for a sentence it does not contain and
+        // that is the opposite of what it says: `CommandCenterAttentionPanel` renders this state on
+        // the four pages that host `CommandCenterStorageNotice` and wires Deny/Allow to the same
+        // `cancelCurrentRun()`/`start()` entry points the widget uses. What the test asserts is
+        // unchanged and is still worth pinning; only the premise was wrong.
         viewModel.start()
         try await waitForViewModelToBecomeIdle(viewModel)
         #expect(viewModel.activeTaskOrigin == .commandCenter)

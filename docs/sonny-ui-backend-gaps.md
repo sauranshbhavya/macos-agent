@@ -96,7 +96,15 @@ consequence lands on future work, not this branch: scheduled/background routine 
 approval/clarification/failure-reporting with no one actually watching the widget, and — since the
 notification fallback isn't reachable and won't be made reachable by adding a dismiss action — that
 branch must give Command Center its own real, native surface for those three states rather than
-relying on the widget or on notifications. See `docs/sonny-ui-backend-roadmap.md`'s "Command
+relying on the widget or on notifications. **Done, and marked 2026-08-21 by SONNY-183:** branch 10
+built `CommandCenterAttentionPanel` (`Sources/MacAgent/CommandCenterView.swift`), which renders all
+three states on the four pages that host `CommandCenterStorageNotice` and wires Deny/Allow to the
+same `cancelCurrentRun()`/`start()` entry points the widget uses. The unattended half of the premise
+was never real either — a scheduled routine cannot leave an approval pending, because
+`performScheduledRun` executes with `approvalDecision: .approved(.tier2)` and routes every
+`RiskApprovalError` to `pauseSchedule` (SONNY-31's notify-and-pause design, traced by SONNY-64 /
+PR #40's review). The clause above about the notification fallback is a separate claim, separately
+stale, and SONNY-189 owns it. See `docs/sonny-ui-backend-roadmap.md`'s "Command
 Center's own missing permission/clarification/failure UI" entry for the specifics.
 
 ~~**Composited-position staleness, expanded beyond dragging:** the "not continuously tracked while
