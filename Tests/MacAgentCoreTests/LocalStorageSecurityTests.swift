@@ -346,10 +346,13 @@ struct LocalStorageSecurityTests {
         // **What the count assertion is for, corrected** (PR #83, F7). It is *not* drift protection
         // between the fixture's files and its returned URLs — the two deletion counts below already
         // provide that, since a fixture returning a URL it did not create reports a missing file and
-        // fails. What this adds is a tripwire on the fixture's own size: nine is now stated in a
+        // fails. What this adds is a tripwire on the fixture's own size: the count is stated in a
         // third place, so extending the fixture cannot pass by adjusting one number, and whoever
         // changes it has to come here and ask whether `LocalDataDeletionService`'s real list moved
-        // too. That question going unasked is how the journal stayed uncovered.
+        // too. That question going unasked is how the journal stayed uncovered. Ten since row E's
+        // plan details; the number is deliberately not spelled in this sentence a second time, since
+        // a sentence that names it is a fourth place to update and this one already went stale once
+        // (PR #89 cycle 2, F3).
         #expect(fileURLs.count == 10)
         #expect(result == LocalDataDeletionResult(deletedFileCount: 10, missingFileCount: 0))
         for fileURL in fileURLs {

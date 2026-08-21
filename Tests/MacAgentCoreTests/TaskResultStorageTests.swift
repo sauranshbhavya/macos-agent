@@ -270,15 +270,38 @@ struct TaskResultStorageTests {
         #expect(try plans.detail(forTaskID: writtenIDs[0]) == nil)
     }
 
-    /// The two stores name the same cap, read off one constant rather than two literals — the
-    /// no-drift property, checked on a store built the way every production path builds one.
+    /// **The two stores keep the same cap, checked on a store built the way production builds one —
+    /// with the cap argument omitted.**
+    ///
+    /// The version this replaces went through `makePlanStore`, which passes `maxDetails` explicitly,
+    /// so it never once exercised the store's own default. Combined with a source check that only
+    /// asserted the default *contained* `defaultMaxItems`, shipping
+    /// `= TaskHistoryStore.defaultMaxItems / 2` — a 5,000 plan cap against a 10,000 history — passed
+    /// the whole suite (PR #89 cycle 2, M13). Two assertions that between them looked like a guard
+    /// and were not: one read a string that a halved expression still satisfies, and the other read
+    /// a value the test itself had supplied.
+    ///
+    /// Shaped after `TaskHistoryRetentionTests.theShippedCapIsTenThousandAndNoProductionPathOverridesIt`
+    /// one file over, which had this right already: build it with no cap argument and read the value
+    /// back.
     @Test
     func thePlanStoreCapsAtExactlyTheHistoryStoresNumber() throws {
         let root = try makeStorageDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
 
-        #expect(makePlanStore(root: root).maxDetails == TaskHistoryStore.defaultMaxItems)
-        #expect(makePlanStore(root: root).maxDetails == 10_000)
+        // Every production construction shape, none of them passing a cap.
+        #expect(TaskPlanDetailStore(fileURL: root.appendingPathComponent("p.json")).maxDetails == 10_000)
+        #expect(TaskPlanDetailStore(fileManager: .default).maxDetails == 10_000)
+        #expect(
+            TaskPlanDetailStore(fileURL: root.appendingPathComponent("p.json")).maxDetails
+                == TaskHistoryStore.defaultMaxItems
+        )
+        // And the two stores agree, which is the property the split condition rests on: this store
+        // must not outlive the task row by less.
+        #expect(
+            TaskPlanDetailStore(fileURL: root.appendingPathComponent("p.json")).maxDetails
+                == TaskHistoryStore(fileURL: root.appendingPathComponent("h.json")).maxItems
+        )
     }
 
     /// **The injectable cap is a test seam and not a way to ship a shorter life**, which is the one
@@ -287,11 +310,13 @@ struct TaskResultStorageTests {
     /// `TaskHistoryStore`'s own equivalent is — the production construction sites are
     /// `AgentViewModel`'s default parameter, `LocalDataDeletionService.defaultStoreFileURLs()` and
     /// `LocalStore.fileURL(fileManager:)`, and none of the three passes a cap.
+    ///
+    /// The source check here is deliberately **not** the guard on the default's value — the test
+    /// above is, by reading it off a store. This one holds the other half: that no *caller* supplies
+    /// one. A `contains` on the declaration was the whole guard once, and a halved default satisfied
+    /// it (PR #89 cycle 2, M13).
     @Test
     func theShippedPlanCapIsTheHistoryCapAndNoProductionPathOverridesIt() throws {
-        let source = try coreSource(named: "TaskPlanDetailStore.swift")
-        #expect(source.contains("maxDetails: Int = TaskHistoryStore.defaultMaxItems"))
-
         for file in ["AgentViewModel.swift", "LocalDataDeletionService.swift", "LocalStoreClassification.swift"] {
             let text = try sourceNamed(file)
             let constructions = text.components(separatedBy: "TaskPlanDetailStore(").count - 1
@@ -522,17 +547,15 @@ struct TaskResultStorageTests {
         )
     }
 
-    /// A file under `Sources/MacAgentCore/`, comments stripped, for the two enumeration pins above.
+    /// A file under `Sources/`, comments stripped, for the no-caller enumeration above.
     ///
     /// Deliberately tiny and local rather than a second general-purpose scanner: `MacAgentSource` in
     /// the app test target is this repository's one source scanner and stays that way, and it cannot
-    /// be imported here. What these two pins need is a substring check over one file, so this reads
-    /// one file and drops comment-prefixed lines — enough that a mention in a doc comment cannot
-    /// satisfy either of them, which is the only property they rely on.
-    private func coreSource(named name: String) throws -> String {
-        try sourceNamed(name)
-    }
-
+    /// be imported here. What that pin needs is a substring check over three files, so this reads one
+    /// and drops comment-prefixed lines — enough that a mention in a doc comment cannot satisfy it,
+    /// which is the only property it relies on. **It is not used to assert the cap's value**: a
+    /// source check on a declaration is satisfied by any expression containing the searched text,
+    /// which is how a halved default shipped past one.
     private func sourceNamed(_ name: String) throws -> String {
         let root = URL(fileURLWithPath: #filePath)
             .deletingLastPathComponent()
