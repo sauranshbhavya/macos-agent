@@ -304,26 +304,64 @@ compare directly — don't rely on memory of what it's supposed to look like.
 - [x] Sparkle icon, "Let Sonny take it from here…" placeholder, "Start" pill (disabled until text
       entered), separate circular mic button
 - [x] Typing enables Start; clearing text disables it again
-- [ ] Hover (don't click) the mic button → hint row appears: "Click to speak or hold
+- [x] Hover (don't click) the mic button → hint row appears: "Click to speak or hold
       Ctrl-Opt-Space." Confirm it's a real inline row (pushes layout, doesn't clip) not a
       floating tooltip, and that it goes on its own after about three seconds with the pointer left
       where it is. **(Fixed 2026-07-21 — tracker #2, and confirmed working 2026-07-23 —
       tracker #21: hover now also survives clicking into another app and back, not just the first
       hover right after launch. Wording, the three seconds and the *first* hover are SONNY-179,
-      2026-08-19 — re-check, this line's tick is not carried over.)**
-- [ ] SONNY-179 specifically. **The precondition is the whole mechanism — without it this item
+      2026-08-19 — re-checked and confirmed by the founder 2026-08-20, ticked by SONNY-178.)**
+- [x] SONNY-179 specifically — **confirmed by the founder 2026-08-20** ("collapse with the pointer
+      on the mic, expand, hover once, hint appears"), ticked by SONNY-178. **The precondition is the whole mechanism — without it this item
       passes on the broken build too and proves nothing.** Hover the mic and *leave the pointer
       resting on it* while the widget collapses to the small capsule (~6s after the last thing you
       did). Then click the capsule open and hover the mic **once**. The hint must appear on that
       first hover. It is the pointer being on the mic *at the moment of the collapse* that stranded
       the old boolean; with the pointer anywhere else, the next hover was a real transition and the
       hint appeared even before this branch.
-- [ ] SONNY-179, the risk the fix takes on. Hover the mic and keep the pointer **moving slightly
+- [x] SONNY-179, the risk the fix takes on — **confirmed by the founder 2026-08-20**, ticked by
+      SONNY-178. **What this one observed, and how far it reaches** — scoped, because the first
+      version of this note stated a universal negative from a single observation (PR #84 review, F5).
+      *Measured once*: on Apple Silicon, macOS 26.5.2 (build 25F84), 2026-08-20, hovering the mic and
+      keeping the pointer moving slightly inside the button for about ten seconds while the hint row
+      appeared and disappeared, resizing the window beneath it. **In that run the hint went once and
+      did not come back**, so on that machine, that OS build and that gesture, the re-registering
+      tracking area produced no extra `mouseEntered`. That is the open risk of responding to every
+      arrival, and it did not fire. It is **not** established as a property of AppKit: one
+      observation cannot rule out a different OS version, a different pointing device, or a faster
+      resize cadence. Re-run this row on any macOS upgrade rather than treating it as settled. Hover the mic and keep the pointer **moving slightly
       inside the button** for about ten seconds. The hint must go once at ~3s and must **not** come
       back. Every mouse-entered now re-shows the hint and re-arms the three seconds — that is the
       fix, and it also means the old design's accidental absorbing of a repeat is gone, so this is
       the check that AppKit is not manufacturing extra arrivals when the row appearing and
       disappearing resizes the window under a moving pointer.
+- [ ] **The pointing-hand cursor survives a teardown under the pointer** (SONNY-178, PR #84 review
+      F3). This is the joint the cursor refutation could not verify: `.onDisappear` popping the
+      pushed cursor is read from the code, and nothing in a test process can make SwiftUI tear a view
+      down under a real pointer. Two gestures, both in **Command Center** (this row lives in §3a
+      because that is where the audit's record points, not because the widget is involved):
+      *(a)* open the account menu, rest the pointer on a row so the cursor is the **pointing hand**,
+      and press **Escape**. The arrow must return **immediately** — a hand that persists over the
+      rest of the app is the leak, and it would survive until something else pushed and popped.
+      *(b)* Open a workspace detail sheet, rest the pointer on a control showing the pointing hand,
+      and dismiss the sheet with Escape. Same expectation.
+- [ ] **A dwell timer does not outlive the menu that owns it** (SONNY-178, PR #84 review F2 — the
+      one live defect the audit's second pass found). Open the account menu, rest the pointer on
+      **Learn more**, and within a fraction of a second — before the flyout opens — press
+      **Escape**. Then open the account menu again. The Learn-more flyout must be **closed**: before
+      the fix, the pending dwell fired after the row was gone and left the flyout flag set, so the
+      next opening of the menu showed it already open with no hover.
+- [ ] **The re-arm** (SONNY-178). Hover the mic, let the hint go on its own at ~3s, then move the
+      pointer **off** the mic and back **on**. The hint must appear again, with a fresh three-second
+      countdown — not stay away because it has "already been shown". This is the property that makes
+      a second hover and a first the same event, which is the whole of SONNY-179's design; the
+      collapse item above only proves one specific stranded case.
+- [ ] **The no-API-key variant** (SONNY-178). With no API key configured, hover the mic. A different
+      message appears — the configuration one, naming what to do — and it must **not** time out: it
+      stays for as long as the pointer rests there. The two variants differ in kind, not in wording
+      (`MicHoverHintPresentation.autoDismissDelay` is `nil` for this one), so a shared countdown
+      would be wrong rather than merely inconsistent. Check the wording matches what pressing the
+      mic says, since the same condition drives both.
 - [x] Leave idle, untouched, >6 seconds → auto-collapses to a small icon-only capsule. Click it →
       expands back, refocused for typing. **Then re-test the actual original complaint: type
       something, stop typing, wait >6s without submitting — confirm it does NOT collapse while there's
@@ -609,6 +647,29 @@ it feels confusing in practice, not just whether it's "technically correct."
 - [ ] **(new 2026-07-30)** Delete a workspace that has completed tasks tagged to it — Insights'
       workspace breakdown keeps the old rows under the stale name (point-in-time text, by design),
       nothing crashes or re-attributes
+
+- [ ] **(new 2026-08-20, SONNY-65)** Open a workspace's detail sheet. Its **Apps** rows now show the
+      app's real icon beside the name. Cross-check against the card behind the sheet: the same app
+      must show the same icon on both, since both now resolve through `WorkspaceAppIconResolver`.
+      The name is still the full verbatim string — an icon is *additional* to it, never instead of
+      it, because the whole point of this sheet is checking an entry against the one a consent
+      prompt named.
+- [ ] **(new 2026-08-20, SONNY-65)** Add an app to a workspace that is **not installed on this Mac**
+      (any plausible name will do). Its row must show the **name only** — no icon, and specifically
+      **not** the dashed-square placeholder the card's stack uses for the same case. A placeholder
+      here would imply the entry is broken; it is stored, valid, and simply unresolvable on this
+      machine.
+- [ ] **(new 2026-08-20, SONNY-65)** In the same sheet, confirm the **URLs** and **File locations**
+      rows show no icon at all. All three dimensions share one row view, so this is the check that
+      the icon is dimension-scoped rather than leaking into rows that have nothing to resolve.
+- [ ] **(new 2026-08-20, SONNY-65)** Narrow the Command Center window (not fullscreen) with a
+      detail sheet open. The app rows must still read properly — icon and name on one line, remove
+      button reachable, nothing character-wrapped. The row is a `SettingsAdaptiveControlRow`, and
+      an icon is new width inside it.
+- [ ] **(new 2026-08-20, SONNY-65)** If any entry shows a muted "Not in effect — …" note, confirm
+      that note still reads as the **dominant** signal on the row rather than the icon beside the
+      name. SONNY-41's inert rendering stays primary over any icon decoration; the two are
+      independent fields, so this is a visual judgement no test can make.
 
 ### Settings — `10-MainAppSettings.svg`/`.png`, opened via the bottom-left account row
 - [x] Account row shows your real macOS full name only, no email/plan badge

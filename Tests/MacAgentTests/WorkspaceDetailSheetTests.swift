@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import MacAgent
@@ -1096,6 +1097,220 @@ struct WorkspaceDetailSheetTests {
         // load banner would render a *successful* task as a failure in the widget.
         #expect(viewModel.localStorageNotice == nil)
     }
+
+    // MARK: - App icons on the sheet's rows (SONNY-65)
+
+    /// **The founder's ask of 2026-08-07: icon beside the name, apps only.**
+    ///
+    /// Asserted on the presentation rather than the view, per this suite's own standard — the icon
+    /// is resolved in `WorkspaceDetailPresentation` precisely so that it *can* be. What the view
+    /// does with a resolved icon is a manual item, as it is for every other field here.
+    @Test
+    func onlyAppRowsCarryAnIconAndUrlsAndFoldersCarryNone() {
+        let presentation = WorkspaceDetailPresentation(
+            workspace: StoredWorkspace(
+                name: "Client Alpha",
+                apps: ["Safari", "Notes"],
+                urls: ["https://example.com"],
+                fileLocations: ["~/Documents/Alpha"]
+            ),
+            taskHistoryRecords: [],
+            iconResolver: StubWorkspaceAppIconResolver(resolving: ["Safari"])
+        )
+
+        // Apps: every row carries an icon presentation, and it is for that row's own app.
+        #expect(presentation.apps.entries.map(\.appIcon?.appName) == ["Safari", "Notes"])
+        // The other two dimensions carry none at all — the row view is shared across all three, so
+        // this is what keeps a folder from being asked for an app icon.
+        #expect(presentation.urls.entries.allSatisfy { $0.appIcon == nil })
+        #expect(presentation.fileLocations.entries.allSatisfy { $0.appIcon == nil })
+    }
+
+    /// **The fallback constraint, which is the one place this ticket departs from the card.**
+    ///
+    /// An app the catalog cannot resolve renders **name-only**. The card's tile does the opposite —
+    /// `app.dashed` on a bordered chip — and reusing it wholesale would have violated this ticket's
+    /// own constraint, which is why the resolver is reused and the fallback is not.
+    ///
+    /// Two different `nil`s reach the same rendering, and both are asserted: `appIcon` itself being
+    /// `nil` (not an app), and `appIcon?.icon` being `nil` (an app that resolves to nothing). The
+    /// view branches on the second, so a row for an uninstalled app is name-only exactly like a URL.
+    @Test
+    func anUnresolvableAppFallsBackToNameOnlyRatherThanAPlaceholder() {
+        let presentation = WorkspaceDetailPresentation(
+            workspace: StoredWorkspace(
+                name: "Client Alpha",
+                apps: ["Safari", "NotInstalledApp"],
+                urls: [],
+                fileLocations: []
+            ),
+            taskHistoryRecords: [],
+            iconResolver: StubWorkspaceAppIconResolver(resolving: ["Safari"])
+        )
+
+        let entries = presentation.apps.entries
+        #expect(entries[0].appIcon?.icon != nil)
+        #expect(entries[1].appIcon?.icon == nil)
+        // And the name is untouched either way — the verbatim string is the sheet's recorded
+        // rationale (a user checks an entry against the one a consent prompt named), so an icon is
+        // additional to it and never a replacement.
+        #expect(entries.map(\.value) == ["Safari", "NotInstalledApp"])
+    }
+
+    /// **Equality stays independent of what is installed**, which is why the entry carries a
+    /// `WorkspaceAppIconPresentation?` rather than a bare `NSImage?`.
+    ///
+    /// That type excludes icon content from its `==` on purpose. A bare image on the entry would
+    /// have put it back into this type's synthesized equality, making two presentations of the same
+    /// workspace compare unequal on a machine where one app happens to be installed — a difference
+    /// no user could see and every diffing test would trip over.
+    @Test
+    func twoPresentationsOfOneWorkspaceCompareEqualWhateverResolved() {
+        let workspace = StoredWorkspace(
+            name: "Client Alpha",
+            apps: ["Safari", "NotInstalledApp"],
+            urls: [],
+            fileLocations: []
+        )
+        let everything = WorkspaceDetailPresentation(
+            workspace: workspace,
+            taskHistoryRecords: [],
+            iconResolver: StubWorkspaceAppIconResolver(resolving: ["Safari", "NotInstalledApp"])
+        )
+        let nothing = WorkspaceDetailPresentation(
+            workspace: workspace,
+            taskHistoryRecords: [],
+            iconResolver: StubWorkspaceAppIconResolver(resolving: [])
+        )
+
+        // One resolved both icons and the other resolved neither.
+        #expect(everything.apps.entries.allSatisfy { $0.appIcon?.icon != nil })
+        #expect(nothing.apps.entries.allSatisfy { $0.appIcon?.icon == nil })
+        // And they are still the same presentation.
+        #expect(everything == nothing)
+    }
+
+    /// **The row renders the icon *beside* the name, not instead of it** — the ticket's central
+    /// constraint, and the one the four tests above could not reach.
+    ///
+    /// Found by a mutant, not by reading: blanking the name whenever an icon resolved
+    /// (`Text(entry.appIcon?.icon == nil ? entry.value : "")`) **passed the whole suite**. Every
+    /// assertion above is about the presentation, and the presentation was still correct — the view
+    /// was simply declining to render a field it had. That is the same shape as PR #80's F2, where a
+    /// scan anchored on a call site missed what the callee did with what it was handed.
+    ///
+    /// So this reads the view, through `MacAgentSource`. This suite's header says view-level claims
+    /// are a recorded limitation with a manual item rather than a fake test, and that still holds
+    /// for anything about *appearance* — spacing, alignment, whether 16pt reads right beside 13pt
+    /// text. It does not have to hold for *whether a field is rendered at all*, which is textual and
+    /// therefore checkable, and which is the half a user would actually lose.
+    ///
+    /// **Three assertions, and each one exists because the ones before it are not enough.** This doc
+    /// said "two assertions" for a round after it needed three, never mentioning the one that does
+    /// the most work (PR #84 cycle 3, C3):
+    ///
+    /// 1. **The name is rendered** — `Text(entry.value)` appears once in the row.
+    /// 2. **It is not inside the icon's conditional** — that block, delimited by its own braces.
+    /// 3. **It is a direct child of the row's stack, inside no conditional at all** — every nested
+    ///    brace span stripped, and the name must survive that.
+    ///
+    /// **Why 1 and 2 are not enough, measured rather than argued.** The second assertion originally
+    /// used `region(of:from:to:)` with `Text(entry.value)` as the `to:` anchor, and that function
+    /// ends its region *at* the end anchor — so "the region does not contain `entry.value`" was true
+    /// wherever that line sat. It could not fail. Two of the reviewer's mutants survived all 1446
+    /// tests, and **both keep `Text(entry.value)` byte-identical, changing only its depth**:
+    ///
+    /// - **W** wraps it inside the icon's `if let` — nothing renders on an icon-less row. Assertion 2,
+    ///   once brace-delimited, kills this.
+    /// - **I** renders it only when no icon resolved — icon-only rows, verbatim what the ticket
+    ///   forbids. **Assertion 2 cannot see this**, because I nests the name in a *different*
+    ///   conditional that the icon-branch check never looks at, and assertion 1 counts a token
+    ///   without caring where it sits. Only assertion 3 kills it.
+    ///
+    /// The generalisable form: **"renders unconditionally" is a claim about depth.** A count sees a
+    /// token and not its position; a single-branch check sees one branch and not the others.
+    ///
+    /// **What none of the three covers, and it is a different axis entirely:** styling. A mutant
+    /// adding `.opacity(entry.appIcon?.icon == nil ? 1 : 0)` to the name passes all three — the
+    /// `Text` is present, outside the icon branch, and a direct child — while rendering the name
+    /// invisible whenever an icon resolved. That is the reviewer's N4 survivor, recorded rather than
+    /// closed: a textual scan can say *where* a view sits, never how it looks. The covering check is
+    /// the manual row that has a human open the sheet and read the names.
+    @Test
+    func theSheetRowRendersTheNameUnconditionallyBesideAnyIcon() throws {
+        let row = try MacAgentSource.region(
+            of: MacAgentSource.read("CommandCenterView.swift"),
+            from: "private func entryRow(_ entry: WorkspaceScopeEntryPresentation) -> some View {",
+            to: "private struct WorkspaceScopeAddTarget: Identifiable {"
+        )
+        #expect(MacAgentSource.count(of: "Text(entry.value)", inText: row) == 1)
+
+        // The conditional's own body, brace-matched — not "everything up to the name", which is
+        // what made this vacuous.
+        let iconBranch = try MacAgentSource.braceBlock(
+            of: row,
+            openedBy: "if let nsImage = entry.appIcon?.icon {"
+        )
+        // The name is not in here: neither the value itself, nor a second `Text(` that could render
+        // it under another spelling. A conditional that draws the icon draws only the icon.
+        #expect(!iconBranch.contains("entry.value"))
+        #expect(MacAgentSource.count(of: "Text(", inText: iconBranch) == 0)
+
+        // **And the name is a *direct child* of the row's stack, inside no conditional at all.**
+        // The two assertions above still do not say that: one counts a token across the whole row,
+        // the other looks inside a single branch. A mutant that keeps `Text(entry.value)` byte for
+        // byte and wraps it in `if entry.appIcon?.icon == nil { … }` passes both — a different
+        // conditional, so the icon-branch check never sees it, and the count is unchanged. That is
+        // the reviewer's mutant I, and this is the line that kills it.
+        let stack = try MacAgentSource.braceBlock(
+            of: row,
+            openedBy: "HStack(alignment: .top, spacing: 8) {"
+        )
+        #expect(MacAgentSource.topLevel(of: stack).contains("Text(entry.value)"))
+        // And the icon really is gated on a resolved image rather than on the entry being an app,
+        // which is what routes an unresolvable app to the same name-only rendering a URL gets.
+        #expect(row.contains("if let nsImage = entry.appIcon?.icon {"))
+    }
+
+    /// **SONNY-41's inert rendering survives the icon field** — this ticket's third constraint, as
+    /// far as a presentation-level test can carry it.
+    ///
+    /// `inertNote` and `appIcon` are independent fields, so nothing here can displace anything; the
+    /// point of asserting it is that the icon was added *to* the row rather than in place of part
+    /// of it. The visual half — that a 16pt square beside the name does not out-shout a muted note
+    /// on the line beneath it — is a manual item, like every other rendering claim in this suite.
+    ///
+    /// **Worth knowing, because it makes the constraint mostly structural:** an app entry is inert
+    /// only when its name is empty (`WorkspaceScope`, "The app name is empty." — the catalog stopped
+    /// making apps inert in SONNY-82). An empty name resolves no icon in production, so an inert app
+    /// row is name-only anyway. The two can only coexist in a fixture, which is why this test
+    /// asserts the fields' independence rather than staging a combination the app cannot reach.
+    @Test
+    func anInertAppRowKeepsItsInertNoteAndTheIconFieldDoesNotDisplaceIt() {
+        let presentation = WorkspaceDetailPresentation(
+            workspace: StoredWorkspace(
+                name: "Client Alpha",
+                apps: ["Safari", "   "],
+                urls: [],
+                fileLocations: []
+            ),
+            taskHistoryRecords: [],
+            iconResolver: StubWorkspaceAppIconResolver(resolving: ["Safari"])
+        )
+
+        let entries = presentation.apps.entries
+        #expect(entries.count == 2)
+        // The live one: icon resolved, no note.
+        #expect(entries[0].appIcon?.icon != nil)
+        #expect(entries[0].inertNote == nil)
+        // The inert one: the note is intact, and it still carries an icon *field* — so the row is
+        // rendering both facts rather than the icon having taken the note's place. It resolves no
+        // image, which is the production shape too.
+        #expect(entries[1].inertNote == "Not in effect — The app name is empty.")
+        #expect(entries[1].appIcon != nil)
+        #expect(entries[1].appIcon?.icon == nil)
+    }
+
 }
 
 /// Arms a pending approval the consequence rule still produces: a typed snippet save whose
@@ -1494,5 +1709,22 @@ struct ClarificationGateTests {
         func tearDown() {
             try? FileManager.default.removeItem(at: root)
         }
+    }
+}
+
+/// Resolves an icon for a named set of apps and nothing else, so a test can drive both branches of
+/// the fallback without depending on what is installed on the machine running it.
+///
+/// A distinct, non-`nil` `NSImage` per app: the assertions below are about *whether* an icon
+/// resolved, and a shared instance would let a mix-up between two rows pass.
+@MainActor
+private struct StubWorkspaceAppIconResolver: WorkspaceAppIconResolving {
+    let resolving: Set<String>
+
+    func icon(forAppName appName: String) -> NSImage? {
+        guard resolving.contains(appName) else {
+            return nil
+        }
+        return NSImage(size: NSSize(width: 16, height: 16))
     }
 }
