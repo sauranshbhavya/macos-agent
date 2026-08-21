@@ -58,6 +58,24 @@ check "an HTML tag does not exempt a key"    1 '<p>token ghp_'"$(printf 'G%.0s' 
 check "placeholder DSN beside a real key"    1 'postgres://postgres:postgres@localhost/db sk-ant-'"$(printf 'H%.0s' {1..30})"
 check "a <ref> placeholder is still allowed" 0 'deploy probe --project-ref <ref>'
 
+# C2: two matches of the SAME pattern on one line, the first allowlisted. `head -1` took only
+# the leading match, so the allowlisted local DSN shadowed a real credential after it.
+check "an allowlisted match does not shadow a later one" 1 'postgres://postgres:postgres@localhost/db then postgres://real:'"$(printf 'S%.0s' {1..12})"'@prod.internal/db'
+
+# R3. Three documents claimed the selftest guarded two regressions -- the `example` term and the
+# any-HTML-tag term. Measured: re-adding either passed 18/18, so neither was guarded.
+#
+# The two turn out to be different problems. `example` CAN still bite, because a key body is
+# alphanumeric and can contain the letters e-x-a-m-p-l-e; the check below plants it inside a
+# matched substring and fails if the term returns -- verified by re-adding it, which takes the
+# suite to 20/21.
+#
+# The angle-bracket term cannot bite at all any more, and no check is added for it. Since the
+# allowlist tests the MATCHED SUBSTRING rather than the line, and every credential pattern here
+# matches only alphanumerics and a few separators, a term requiring literal `<` and `>` can never
+# match what it is now shown. That is belt-and-braces, not a guard, and the documents say so.
+check "a key whose body contains 'example' is refused" 1 'k = sk-'"$(printf 'e%.0s' {1..6})"'xample'"$(printf 'T%.0s' {1..30})"
+
 # The multi-line pass. grep is line-based, so a PEM shaped the way a real key file is -- header,
 # newline, base64 body across many lines -- is invisible to every single-line pattern. This writes
 # one and requires a refusal, and writes a header with no body and requires a pass.

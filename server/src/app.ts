@@ -1,7 +1,7 @@
 import { randomUUID } from "node:crypto";
-import Fastify, { type FastifyInstance } from "fastify";
+import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
 import type { Config } from "./config.js";
-import { registerErrorHandlers } from "./errors.js";
+import { classify, errorBody, registerErrorHandlers } from "./errors.js";
 import { registerHealth } from "./routes/health.js";
 
 /** The API minor version this build serves. `Sonny-Api-Version`, contract §2.3. */
@@ -49,6 +49,30 @@ export function buildApp(config: Config): FastifyInstance {
      * false; a deployment that really does sit behind a load balancer sets `TRUST_PROXY`.
      */
     trustProxy: config.trustProxy,
+
+    /**
+     * The last door out of the framework's own envelope.
+     *
+     * `setErrorHandler` and `setNotFoundHandler` cover errors raised *during* routing and
+     * handling. A malformed URL is rejected **before** either runs — `GET /v1/%zz` produced
+     * `{"error":"Bad Request","code":"FST_ERR_BAD_URL","message":"'/v1/%zz' is not a valid url
+     * component","statusCode":400}`, which is Fastify's shape, names a framework error code, and
+     * **echoes the offending path back to the caller**. `frameworkErrors` is the hook for that
+     * class, and with it every response this server can produce carries contract §7.1's envelope.
+     */
+    frameworkErrors: (error, request, reply) => {
+      const mapped = classify(error);
+      request.log.info({ err: error, code: mapped.code }, "request rejected before routing");
+      // The reply handed to `frameworkErrors` is generically narrower than a route's, because no
+      // route schema has been resolved -- there is no route yet. The cast is to the ordinary
+      // reply interface and nothing more; the values sent are the same `ErrorBody` every other
+      // handler sends.
+      void (reply as unknown as FastifyReply)
+        .status(mapped.status)
+        .header("Sonny-Api-Version", API_VERSION)
+        .header("Sonny-Request-Id", request.id)
+        .send(errorBody(mapped.code, mapped.message, request.id, { retryable: mapped.retryable }));
+    },
 
     // Request-log volume is controlled by LOG_LEVEL per environment rather than by Fastify's
     // `disableRequestLogging`, which is deprecated in Fastify 5 and whose replacement --
