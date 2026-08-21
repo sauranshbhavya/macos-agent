@@ -133,6 +133,35 @@ enum MacAgentSource {
         throw ScanError.unbalancedBraces(anchor)
     }
 
+    /// `block` with every nested brace span removed — what is left is the code at the block's own
+    /// top level, inside no further conditional or closure.
+    ///
+    /// **This is what "renders unconditionally" means, and neither of the weaker forms says it.**
+    /// Counting a token across the whole block cannot tell a direct child from one buried in an
+    /// `if`; asserting a token is absent from *one* conditional cannot see it moved into a second.
+    /// Both gaps were live at once on this branch: the reviewer's two mutants kept
+    /// `Text(entry.value)` byte-identical and merely changed its depth, so a count and a
+    /// single-branch check both passed (PR #84 review, F1).
+    ///
+    /// Same textual limits as everything here: braces inside string literals would miscount.
+    static func topLevel(of block: String) -> String {
+        var result = ""
+        var depth = 0
+        for character in block {
+            switch character {
+            case "{":
+                depth += 1
+            case "}":
+                depth = max(depth - 1, 0)
+            default:
+                if depth == 0 {
+                    result.append(character)
+                }
+            }
+        }
+        return result
+    }
+
     enum ScanError: Error {
         case unreadableSourceDirectory(String)
         case unbalancedBraces(String)
