@@ -171,7 +171,13 @@ Files changed:
 - `README.md` — Architecture and Tests sections, which described a Swift-only repository.
 - `docs/sonny-v1-implementation-changelog.md` — this entry.
 
-Tests: **both halves, and that is now a sentence with two meanings.** Swift, via CLAUDE.md's flagged command: **1438 tests in 112 suites, exit 0 at `d8d493b`**, plus `swift build` clean — unchanged from `main`, and expected to be, since no file under `Sources/` or `Tests/` is in this diff. Server, via `npm test`: **17 passed, 6 skipped (23) at `d8d493b`**; with a Postgres supplied, `npm run test:db`: **23 passed (23)**. `npm run build` clean. `./server/scripts/check-secrets.sh tracked`: **clean, 319 files, 10 patterns, 8 baselined fixtures**. `./server/scripts/check-secrets-selftest.sh`: **12 passed, 0 failed**. `git status` is clean after all of it, which is the ticket's own proof that `.gitignore` covers the server's output rather than a claim that it does.
+Tests: **both halves, and that is now a sentence with two meanings.** All figures below at **`8073ef1`**, the head after the rebase onto `main` at `0ad955b` (PR #84), on a clean tree.
+
+Swift, via CLAUDE.md's flagged command: **1447 tests in 113 suites, exit 0**, plus `swift build` clean. **`scripts/warnings`: 0 warnings**, whole tree, every file compiled, 91s cold. Both were rerun after the rebase and both moved for a reason outside this branch — the count was 1438 in 112 before it, and PR #84 brought nine tests and a suite. **No file under `Sources/` or `Tests/` is in this branch's diff**, so this branch's own contribution to that delta is zero.
+
+Server: **`npm test` 35 passed, 7 skipped (42)**; **`npm run test:db` 42 passed (42)** against Postgres 17.11; `npm run build` and `npm run typecheck` clean, exit 0. **`check-secrets.sh tracked`: clean — 325 files, 10 patterns, 8 baselined fixtures.** **`check-secrets-selftest.sh`: 20 passed, 0 failed**, up from 12 at the first commit. **`deploy.sh local`: end to end**, verified serving `8073ef1`, and the malformed-URL case re-probed through the running container rather than only through `app.inject`.
+
+`git status` is clean after all of it, which is the ticket's own proof that `.gitignore` covers the server's output rather than a claim that it does. **The earlier version of this line described `d8d493b` and was two commits behind its own head when the entry was published** — it reported 17/6 server tests, 319 scanned files and 12 selftest checks, every one of which the cycle-1 round had already superseded (PR #85 cycle 3, R6).
 
 Behavior added:
 - **A server that builds, tests and runs**, with `GET /v1/health` returning `{status, version, environment}` — `version` being the build identifier injected at image build time, which is what makes two deployments distinguishable.
