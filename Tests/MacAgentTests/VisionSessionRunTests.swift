@@ -2749,6 +2749,45 @@ struct VisionSessionRunTests {
         #expect(detail.completedAt == record.completedAt)
     }
 
+    /// **The live recording path carries the same declaration into the planner's context**
+    /// (SONNY-197), which is the hop that used to drop it — `PriorTaskOutcome` had two stored
+    /// properties and provenance was not one of them, so the value `recordPriorTaskContext` already
+    /// received as `resultProvenance` reached `StoredTaskResult` on disk and stopped there.
+    ///
+    /// Asserted beside the on-disk test above rather than in place of it, because they are two
+    /// different hops out of the same call: one writes the record, the other writes the context the
+    /// next command's planner will read. Both were being handed the same value; only one used it.
+    @Test
+    func aScreenControlRunsPriorTaskContextIsMarkedModelAuthoredToo() async throws {
+        let fixture = try makeFixture(replies: [
+            #"{"action":"done","rationale":"The reading list is open."}"#
+        ])
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "open my reading list", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        let context = try #require(fixture.viewModel.priorTaskContext)
+        #expect(context.outcome.provenance == .modelAuthored)
+        #expect(context.outcome.summary == "The reading list is open.")
+    }
+
+    /// And an ordinary run's does not, so the marking means something. A calculator command is
+    /// entirely deterministic string-building by this repository.
+    @Test
+    func anOrdinaryRunsPriorTaskContextStaysCodeAuthored() async throws {
+        let fixture = try makeFixture(replies: [])
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "calc 2*2"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        let context = try #require(fixture.viewModel.priorTaskContext)
+        #expect(context.outcome.provenance == .codeAuthored)
+        #expect(context.outcome.summary.contains("4"))
+    }
+
     /// **The chain join must not launder the model's text.** A plan that does some work with
     /// Sonny's own tools and *then* controls an app is a shape the product supports and describes to
     /// the user in so many words — `AgentActionExecutor.visionSplitDisclosure` writes "Sonny will do

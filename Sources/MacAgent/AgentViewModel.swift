@@ -1833,7 +1833,11 @@ final class AgentViewModel: ObservableObject {
                 // The stored result, or nothing. `PriorTaskOutcome.plannerText` already falls back
                 // to the bare status for an empty summary, so a record from before row E reads as
                 // "completed" rather than as "completed - " with a dangling separator.
-                summary: record.result?.text ?? ""
+                summary: record.result?.text ?? "",
+                // And who wrote it, which used to be dropped here while sitting on the same
+                // expression (SONNY-197). A record with no stored result has no text either, so
+                // `.codeAuthored` is the only honest answer for the empty case rather than a guess.
+                provenance: record.result?.provenance ?? .codeAuthored
             ),
             completedAt: record.completedAt
         )
@@ -3431,7 +3435,7 @@ final class AgentViewModel: ObservableObject {
         priorTaskContextStore.record(
             command: command,
             plan: preparedRun.plan,
-            outcome: PriorTaskOutcome(status: status, summary: summary)
+            outcome: PriorTaskOutcome(status: status, summary: summary, provenance: resultProvenance)
         )
         priorTaskContext = priorTaskContextStore.currentContext()
         return recordTaskHistoryIfTerminal(
@@ -3458,7 +3462,7 @@ final class AgentViewModel: ObservableObject {
     ) -> String? {
         priorTaskContextStore.record(
             command: command,
-            outcome: PriorTaskOutcome(status: status, summary: summary)
+            outcome: PriorTaskOutcome(status: status, summary: summary, provenance: resultProvenance)
         )
         priorTaskContext = priorTaskContextStore.currentContext()
         return recordTaskHistoryIfTerminal(
