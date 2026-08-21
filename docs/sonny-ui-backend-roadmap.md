@@ -140,16 +140,37 @@ and a UI decision — inline filtering of the existing list vs. a dropdown of ma
 results view — before implementation, since that shapes what the query path needs to return (full
 records vs. ranked snippets).
 
-## Command Center's own missing permission/clarification/failure UI
+## ~~Command Center's own missing permission/clarification/failure UI~~ — built in branch 10
+
+**Resolved (built 2026-07-27, marked here 2026-08-21 by SONNY-183).** `CommandCenterAttentionPanel`
+(`Sources/MacAgent/CommandCenterView.swift`) is the surface this entry says is missing. It renders
+`.permission`/`.clarification`/`.failure` on the four pages that host `CommandCenterStorageNotice`,
+self-gates on its own state, mirrors `FloatingWidgetView`'s precedence exactly so the two can never
+disagree, and wires Deny/Allow to the same `cancelCurrentRun()`/`start()` entry points. The one
+source of truth is `.claude/rules/macagent-ui-conventions.md`'s "Approval visibility" section, which
+also records the part of this entry's premise that was never real: a *scheduled* routine cannot
+leave an approval pending at all, because `performScheduledRun` executes with
+`approvalDecision: .approved(.tier2)` and routes every `RiskApprovalError` to `pauseSchedule`
+(SONNY-31's notify-and-pause design, traced by SONNY-64 / PR #40's review). So the hard prerequisite
+this entry names was both built and, in its unattended half, aimed at a reachability that did not
+exist. The rest of the entry is kept below as written, unmarked sentences included, because it is
+the record of why the surface was built. **The one thing below that is still wrong on its own terms
+is the notification-fallback claim, which SONNY-189 owns.**
 
 **Backend:** not backend work itself, but directly relevant to any backend work that can trigger a
 task without the floating widget being the surface that's actually in front of the user —
 scheduled/background routine execution (branch 10) is the clearest case.
 
-**Current state:** today, `.permission`/`.clarification`/`.failure` are only ever actionable/visible
-through the floating widget (`FloatingWidgetView.showsPanel` leaves these three states ungated
-specifically because Command Center's own `CommandCenterRunningIndicator` deliberately shows none of
-them — see its doc comment in `Sources/MacAgent/CommandCenterView.swift`). The system-notification
+**State when this was written (2026-07-20), not now:** ~~today, `.permission`/`.clarification`/`.failure`
+are only ever actionable/visible through the floating widget (`FloatingWidgetView.showsPanel` leaves
+these three states ungated specifically because Command Center's own `CommandCenterRunningIndicator`
+deliberately shows none of them — see its doc comment in
+`Sources/MacAgent/CommandCenterView.swift`).~~ **Struck 2026-08-21 by SONNY-183.**
+`CommandCenterRunningIndicator` does still show none of the three — that half is unchanged and its
+doc comment still says so — but it is no longer the only thing on the page:
+`CommandCenterAttentionPanel` sits alongside it and renders all three. The doc comment this paragraph
+cites as its evidence carried the same stale sentence until SONNY-183 corrected it too, so the
+citation was pointing at a copy of the claim rather than at a check of it. The system-notification
 fallback that's supposed to cover "user isn't looking at the widget" is currently unreachable in
 practice, and — per direct decision, 2026-07-20 — will stay that way: the widget is a permanent
 on-screen overlay by design, no dismiss/hide action is being added, and notifications are accepted as
