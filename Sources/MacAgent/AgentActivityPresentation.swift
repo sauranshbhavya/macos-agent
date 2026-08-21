@@ -250,16 +250,6 @@ enum ClarificationPresentation {
     static let canceledSummary = "Canceled. No action was taken."
 }
 
-/// "Don't save this task" — the widget control's copy (SONNY-120).
-///
-/// **The label carries the whole meaning, because no sentence may sit beside it.** The founder's
-/// decision of 2026-08-16: the feature is not called Incognito, because incognito borrows a promise
-/// from browsers this cannot keep — files still get created, apps still open, the command still goes
-/// to the provider — and the 2026-08-14 rule forbids the clarifying sentence that would normally fix
-/// an over-promising name. So the name was narrowed until no sentence is needed.
-///
-/// Nothing here explains how it works. There is no tooltip, no help text and no disclosure line, and
-/// `TaskRecordingPresentationTests` refuses copy that reads like one.
 /// The armed-follow-up chip and the action that arms it (row E, SONNY-150).
 ///
 /// Copy approved by the founder on 2026-08-21, with the alternatives put beside it: the chip states
@@ -312,6 +302,16 @@ enum FollowUpPresentation {
     }
 }
 
+/// "Don't save this task" — the widget control's copy (SONNY-120).
+///
+/// **The label carries the whole meaning, because no sentence may sit beside it.** The founder's
+/// decision of 2026-08-16: the feature is not called Incognito, because incognito borrows a promise
+/// from browsers this cannot keep — files still get created, apps still open, the command still goes
+/// to the provider — and the 2026-08-14 rule forbids the clarifying sentence that would normally fix
+/// an over-promising name. So the name was narrowed until no sentence is needed.
+///
+/// Nothing here explains how it works. There is no tooltip, no help text and no disclosure line, and
+/// `TaskRecordingPresentationTests` refuses copy that reads like one.
 enum TaskRecordingPresentation {
     /// The control's accessibility label and its only name.
     static let controlLabel = "Don't save this task"

@@ -71,6 +71,67 @@ struct PriorTaskContextTests {
         #expect(context.plannerContextText.contains("Previous outcome: failed - Folder does not exist."))
     }
 
+    // MARK: - The armed context's two halves (row E, SONNY-150)
+
+    /// **"Spent now", at the store, with nothing else in the room.**
+    ///
+    /// SONNY-150 required both halves of the arm's lifecycle pinned: it survives past ten minutes,
+    /// and it is gone after one run. The first was pinned; the second was not, and a mutant that
+    /// gutted `consumeArmedContext()` entirely survived the whole suite (PR #89 review, M4).
+    /// `FollowUpOnTaskTests.anArmedContextIsSpentByOneRunAndTheNextCommandSeesNoTraceOfIt` passes
+    /// either way, because the follow-up's own terminal `recordPriorTaskContext` overwrites the
+    /// stored context a moment later — which is *exactly* the "usually overwritten later is not the
+    /// same promise as spent now" gap this method exists to close. A test that cannot tell the two
+    /// apart cannot hold the method, so this one calls it directly and asserts on the store.
+    @Test
+    func consumingAnArmedContextSpendsItImmediately() throws {
+        let store = PriorTaskContextStore(now: { Date(timeIntervalSince1970: 1_000) })
+        store.replace(
+            with: PriorTaskContext(
+                armedFollowUpOn: "zip the largest files in ~/Downloads",
+                planSummary: "Zip them.",
+                steps: [],
+                outcome: PriorTaskOutcome(status: .completed, summary: "Zipped 3 files."),
+                completedAt: Date(timeIntervalSince1970: 500)
+            )
+        )
+        // It really is installed and readable first, or the assertion below passes for free.
+        #expect(try #require(store.currentContext()).isArmed)
+
+        store.consumeArmedContext()
+
+        #expect(store.currentContext() == nil, "an armed context is spent by the read that consumed it")
+    }
+
+    /// And it is a no-op on an ordinary context, which has its own expiry and is not the user's
+    /// deliberate arm. A `consumeArmedContext` that cleared everything would silently delete the
+    /// within-ten-minutes follow-up this row was told not to change.
+    @Test
+    func consumingIsANoOpOnAnOrdinaryContext() throws {
+        let store = PriorTaskContextStore(now: { Date(timeIntervalSince1970: 1_000) })
+        store.record(
+            command: "zip the largest files in ~/Downloads",
+            outcome: PriorTaskOutcome(status: .completed, summary: "Zipped 3 files.")
+        )
+
+        store.consumeArmedContext()
+
+        let survivor = try #require(store.currentContext())
+        #expect(survivor.previousCommand == "zip the largest files in ~/Downloads")
+        #expect(!survivor.isArmed)
+        // Twice, because a no-op that is only a no-op the first time is not one.
+        store.consumeArmedContext()
+        #expect(store.currentContext() != nil)
+    }
+
+    /// Consuming when nothing is installed is not an error and does not invent one.
+    @Test
+    func consumingAnEmptyStoreIsSilent() {
+        let store = PriorTaskContextStore(now: { Date(timeIntervalSince1970: 1_000) })
+        store.consumeArmedContext()
+        #expect(store.currentContext() == nil)
+    }
+
     @Test
     func plannerTextContainsTrustedPriorTaskFieldsAndEscapesDelimiters() throws {
         let context = PriorTaskContext(

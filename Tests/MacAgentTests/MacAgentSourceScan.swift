@@ -90,6 +90,42 @@ enum MacAgentSource {
         return files.sorted { $0.path < $1.path }
     }
 
+    /// `Sources/MacAgentCore/`, resolved the same way.
+    ///
+    /// **Why a scanner named for the app target reads the other one.** The enumeration this was
+    /// added for — that exactly one `AgentRunResult` construction site in the whole product declares
+    /// `.modelAuthored` (row E, SONNY-147) — is a property of `MacAgentCore`'s sources, and the core
+    /// test target has no source scanner. Building a second one there would put two independently
+    /// maintained copies of the comment-stripping discipline in the repository, and this file's own
+    /// doc records what a scan that any comment syntax can satisfy is worth. One scanner, reachable
+    /// from the target that has it, with the test that needs it living beside the scanner.
+    static var coreSourceDirectory: URL {
+        URL(fileURLWithPath: #filePath)
+            .deletingLastPathComponent()   // MacAgentTests
+            .deletingLastPathComponent()   // Tests
+            .deletingLastPathComponent()   // repository root
+            .appendingPathComponent("Sources/MacAgentCore")
+    }
+
+    /// Every `.swift` file compiled into the `MacAgentCore` target, at any depth, in a stable order.
+    /// Recursive for the reason `appSourceFiles()` gives.
+    static func coreSourceFiles() throws -> [URL] {
+        guard let walker = FileManager.default.enumerator(at: coreSourceDirectory, includingPropertiesForKeys: nil) else {
+            throw ScanError.unreadableSourceDirectory(coreSourceDirectory.path)
+        }
+        var files: [URL] = []
+        for case let url as URL in walker where url.pathExtension == "swift" {
+            files.append(url)
+        }
+        return files.sorted { $0.path < $1.path }
+    }
+
+    /// A file's path relative to `Sources/MacAgentCore/`, slash-separated.
+    static func coreRelativePath(of url: URL) -> String {
+        let prefix = coreSourceDirectory.path + "/"
+        return url.path.hasPrefix(prefix) ? String(url.path.dropFirst(prefix.count)) : url.lastPathComponent
+    }
+
     /// A file's path relative to `Sources/MacAgent/`, slash-separated — the key a population scan
     /// should group by. `lastPathComponent` collides across directories; this cannot.
     static func relativePath(of url: URL) -> String {

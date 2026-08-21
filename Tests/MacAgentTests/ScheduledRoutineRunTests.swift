@@ -222,6 +222,116 @@ struct ScheduledRoutineRunTests {
         #expect(try fixture.taskPlanDetailStore.loadAll().isEmpty)
     }
 
+    /// **The scheduled path's own plan-less eviction branch** (PR #89 review, M6s), which is the
+    /// mirror of `ProductShellTests.aRowWithNoPlanStillDropsThePlanOfTheRowItEvicted` and needs its
+    /// own test because this is a separate function with its own copy of the branch — not a shared
+    /// helper. `recordScheduledTaskHistory` deliberately does not reuse `recordTaskPlanDetail`,
+    /// because that one asks the recording policy and a scheduled run is never suppressed.
+    ///
+    /// A failing scheduled run writes a row and no plan, so it takes the `else` branch. At a cap of
+    /// two, its row displaces the oldest — and the oldest's plan has to go with it, or the plan
+    /// store outlives the rows it hangs off and the founder's "same cap, same eviction" condition
+    /// stops holding on exactly the runs that fail.
+    @Test
+    func aFailedScheduledRunWithNoPlanStillDropsThePlanOfTheRowItEvicted() async throws {
+        let fixture = try makeFixture(taskHistoryMaxItems: 2)
+        defer { fixture.cleanUp() }
+        // Two rows already at the cap, each with a plan, seeded through the real stores.
+        var seededIDs: [String] = []
+        for index in 0..<2 {
+            let record = CompletedTaskRecord(
+                command: "seeded \(index)",
+                startedAt: Date(timeInterval: Double(index), since: fixture.nineAM),
+                completedAt: Date(timeInterval: Double(index) + 1, since: fixture.nineAM),
+                outcomeStatus: .completed,
+                trigger: .scheduled,
+                result: .codeAuthored("done \(index)")
+            )
+            let id = try #require(record.id)
+            seededIDs.append(id)
+            try fixture.taskHistoryStore.record(record)
+            try fixture.taskPlanDetailStore.save(
+                StoredTaskPlanDetail(
+                    taskID: id,
+                    completedAt: record.completedAt,
+                    planSummary: "plan \(index)",
+                    steps: []
+                )
+            )
+        }
+        #expect(try fixture.taskPlanDetailStore.loadAll().count == 2)
+
+        // A scheduled routine whose only step the calculator cannot evaluate: it runs, it throws,
+        // and its history row is written with no plan.
+        try fixture.saveRoutine(
+            unattendedTrusted: true,
+            steps: [
+                AgentStep(
+                    id: "calc",
+                    operation: .calculateUtility,
+                    description: "Calculate apples.",
+                    searchQuery: "apples"
+                )
+            ]
+        )
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
+        try await fixture.waitForIdle()
+
+        let rows = try fixture.taskHistoryStore.loadAll()
+        #expect(rows.count == 2, "the cap held")
+        #expect(rows.last?.outcomeStatus == .failed)
+        let failedID = try #require(rows.last?.id)
+        // It really stored no plan, or this test drives the other branch.
+        #expect(try fixture.taskPlanDetailStore.detail(forTaskID: failedID) == nil)
+        // And the displaced row's plan went with it.
+        #expect(try fixture.taskPlanDetailStore.detail(forTaskID: seededIDs[0]) == nil)
+        #expect(try fixture.taskPlanDetailStore.loadAll().map(\.taskID) == [seededIDs[1]])
+    }
+
+    /// **A plan write that fails after the row landed says so, and does not swallow the row** (PR
+    /// #89 review).
+    ///
+    /// One `do` covered both writes, so a failure in the second reported "could not save this
+    /// scheduled run to task history" — false, the row was on disk — and skipped
+    /// `refreshTaskHistory()`, leaving the row that *did* land missing from the published list until
+    /// something else refreshed it. Two failures with different consequences and different
+    /// recoveries need two messages.
+    @Test(.requiresUnprivilegedProcess)
+    func aPlanWriteFailureKeepsTheScheduledRowAndSaysWhatActuallyFailed() async throws {
+        let planRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ScheduledPlanFailure-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: planRoot, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: planRoot.path)
+            try? FileManager.default.removeItem(at: planRoot)
+        }
+        let fixture = try makeFixture(planDetailRoot: planRoot)
+        defer { fixture.cleanUp() }
+        try fixture.saveRoutine(unattendedTrusted: true)
+        // Read-only: task history sits elsewhere and stays writable, so only the plan write fails.
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: planRoot.path)
+
+        fixture.viewModel.checkScheduledRoutines(now: fixture.tenAM)
+        try await fixture.waitForIdle()
+
+        // The row landed, and it kept everything it was supposed to.
+        let record = try #require(try fixture.taskHistoryStore.loadAll().last)
+        #expect(record.outcomeStatus == .completed)
+        #expect(record.trigger == .scheduled)
+        #expect(record.result?.text.contains("Ran routine Morning.") == true)
+        // The published list agrees with the file rather than being one refresh behind.
+        #expect(fixture.viewModel.taskHistoryRecords.map(\.id) == [record.id])
+        // The message names what actually failed, and it is write wording rather than the
+        // load-failure banner's "could not be decrypted or decoded".
+        let notice = try #require(fixture.viewModel.localStorageNotice)
+        #expect(notice.hasPrefix("Sonny could not save what this scheduled run planned: "))
+        #expect(!notice.contains("to task history"))
+        #expect(!notice.contains("decrypted or decoded"))
+        // And the run itself still reported success on its own channel — the plan store is not the
+        // routine.
+        #expect(fixture.viewModel.scheduledRunNotice?.contains("ran on schedule") == true)
+    }
+
     /// The occurrence must not be reconsidered on the next tick. Without the baseline advance the
     /// timer would re-run the same routine every 30 seconds, forever.
     @Test
@@ -1606,8 +1716,11 @@ struct ScheduledRoutineRunTests {
         #expect(try fixture.routineStore.routine(named: "Morning").schedule?.lastRunAt == fixture.nineAM)
     }
 
-    private func makeFixture() throws -> Fixture {
-        try Fixture()
+    private func makeFixture(
+        taskHistoryMaxItems: Int = TaskHistoryStore.defaultMaxItems,
+        planDetailRoot: URL? = nil
+    ) throws -> Fixture {
+        try Fixture(taskHistoryMaxItems: taskHistoryMaxItems, planDetailRoot: planDetailRoot)
     }
 
     @MainActor
@@ -1626,7 +1739,16 @@ struct ScheduledRoutineRunTests {
         let tenAM: Date
         let enabledAt: Date
 
-        init() throws {
+        /// `taskHistoryMaxItems` is injected only so a test can drive eviction without ten thousand
+        /// records — the seam `TaskHistoryStore.maxItems`'s own doc comment exists for.
+        ///
+        /// `planDetailRoot` exists for the one test that has to make the plan store unwritable while
+        /// task history stays writable, the same shape `AgentViewModelLocalStorageTests` uses for its
+        /// delete-ordering test. Everything else leaves it under `root`.
+        init(
+            taskHistoryMaxItems: Int = TaskHistoryStore.defaultMaxItems,
+            planDetailRoot: URL? = nil
+        ) throws {
             root = FileManager.default.temporaryDirectory
                 .appendingPathComponent("ScheduledRoutineRunTests-\(UUID().uuidString)", isDirectory: true)
             try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
@@ -1641,9 +1763,12 @@ struct ScheduledRoutineRunTests {
 
             routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
             snippetStore = SnippetStore(fileURL: root.appendingPathComponent("snippets.json"))
-            taskHistoryStore = TaskHistoryStore(fileURL: root.appendingPathComponent("task-history.json"))
+            taskHistoryStore = TaskHistoryStore(
+                fileURL: root.appendingPathComponent("task-history.json"),
+                maxItems: taskHistoryMaxItems
+            )
             taskPlanDetailStore = TaskPlanDetailStore(
-                fileURL: root.appendingPathComponent("task-plan-details.json")
+                fileURL: (planDetailRoot ?? root).appendingPathComponent("task-plan-details.json")
             )
 
             browserOpener = HermeticBrowserOpener()

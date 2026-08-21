@@ -2113,6 +2113,54 @@ struct ProductShellTests {
         #expect(!FileManager.default.fileExists(atPath: fixture.taskPlanDetailStore.fileURL.path))
     }
 
+    /// **The eviction handoff's plan-less branch, which is the branch the split's own condition
+    /// exists for** (PR #89 review, M6).
+    ///
+    /// "Same cap, same eviction" is what makes the plan store share the task row's life. The two
+    /// stores only stay level on their own while *every* row has a plan — and a run that fails
+    /// before preparing one writes a row with none, which is exactly when the handoff has to fire.
+    /// `theHistoryStoreReportsWhatItEvictedAndThePlanStoreDropsThoseInTheSameWrite` writes a plan on
+    /// every row, so it exercises the branch that already worked; removing the plan-less branch's
+    /// `delete(ids:)` survived the whole suite.
+    ///
+    /// So: two rows with plans, then a **failing** run that produces a row and no plan, at a cap of
+    /// two. The failing run's row displaces the oldest, and the oldest's plan must go with it.
+    @Test
+    func aRowWithNoPlanStillDropsThePlanOfTheRowItEvicted() async throws {
+        let fixture = try makeProductShellFixture(taskHistoryMaxItems: 2)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        for expression in ["= 1 + 1", "= 2 + 2"] {
+            viewModel.command = expression
+            viewModel.start()
+            try await waitForViewModelToBecomeIdle(viewModel)
+        }
+        let seeded = try fixture.taskHistoryStore.loadAll()
+        #expect(seeded.count == 2)
+        let doomedID = try #require(seeded.first?.id)
+        #expect(try fixture.taskPlanDetailStore.detail(forTaskID: doomedID) != nil, "the row about to be evicted has a plan")
+        #expect(try fixture.taskPlanDetailStore.loadAll().count == 2)
+
+        // A run that fails before a plan exists: the row is written through the overload that has
+        // no `preparedRun`, so `recordTaskPlanDetail` takes its plan-less branch.
+        viewModel.command = "calc apples"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        let rows = try fixture.taskHistoryStore.loadAll()
+        #expect(rows.count == 2, "the cap held")
+        #expect(rows.map(\.command) == ["= 2 + 2", "calc apples"])
+        #expect(rows.last?.outcomeStatus == .failed)
+        // The failing row really did store no plan — otherwise this test drives the other branch.
+        let failedID = try #require(rows.last?.id)
+        #expect(try fixture.taskPlanDetailStore.detail(forTaskID: failedID) == nil)
+        // And the evicted row's plan went with its row, in that same write.
+        #expect(try fixture.taskPlanDetailStore.detail(forTaskID: doomedID) == nil)
+        #expect(try fixture.taskPlanDetailStore.loadAll().count == 1, "only the surviving row's plan is left")
+        #expect(viewModel.errorMessage?.contains("Could not calculate that expression") == true)
+    }
+
     @Test
     func directWorkspaceDispatchTagsTheCompletedTaskRecord() async throws {
         let fixture = try makeProductShellFixture()
@@ -2643,7 +2691,11 @@ private final class ProductShellActivationRecorder: ApplicationActivationApplyin
 }
 
 @MainActor
-private func makeProductShellFixture() throws -> (
+private func makeProductShellFixture(
+    /// Injected only so a test can drive task-history eviction without ten thousand records — the
+    /// same seam and the same reason as `TaskHistoryStore.maxItems`'s own doc comment gives.
+    taskHistoryMaxItems: Int = TaskHistoryStore.defaultMaxItems
+) throws -> (
     viewModel: AgentViewModel,
     root: URL,
     routineStore: RoutineStore,
@@ -2658,13 +2710,18 @@ private func makeProductShellFixture() throws -> (
 ) {
     let userDefaultsSuiteName = "ProductShellTests-\(UUID().uuidString)"
     let userDefaults = try #require(UserDefaults(suiteName: userDefaultsSuiteName))
-    return try makeProductShellFixture(userDefaults: userDefaults, userDefaultsSuiteName: userDefaultsSuiteName)
+    return try makeProductShellFixture(
+        userDefaults: userDefaults,
+        userDefaultsSuiteName: userDefaultsSuiteName,
+        taskHistoryMaxItems: taskHistoryMaxItems
+    )
 }
 
 @MainActor
 private func makeProductShellFixture(
     userDefaults: UserDefaults,
-    userDefaultsSuiteName: String? = nil
+    userDefaultsSuiteName: String? = nil,
+    taskHistoryMaxItems: Int = TaskHistoryStore.defaultMaxItems
 ) throws -> (
     viewModel: AgentViewModel,
     root: URL,
@@ -2699,7 +2756,8 @@ private func makeProductShellFixture(
     )
     let taskHistoryStore = TaskHistoryStore(
         fileURL: root.appendingPathComponent("task-history.json"),
-        encryption: encryption
+        encryption: encryption,
+        maxItems: taskHistoryMaxItems
     )
     // Row E's plan details (SONNY-147), under the fixture root for the same reason the journal is:
     // an un-injected store resolves to the user's real

@@ -23,9 +23,9 @@ public enum LocalStoreKind: CaseIterable, Hashable, Sendable {
     /// and no output to keep; suppressing it would mean suppressing the user's own preference.
     ///
     /// This third case exists because the founder's own trace/artifact enumeration named eight of
-    /// the nine stores. Without it the classification cannot be exhaustive, and an exhaustive
-    /// classification is the whole point. (Planning session's addition, recorded on SONNY-14
-    /// rather than silently inserted.)
+    /// the nine stores that existed when it was made. Without it the classification cannot be
+    /// exhaustive, and an exhaustive classification is the whole point. (Planning session's
+    /// addition, recorded on SONNY-14 rather than silently inserted.)
     case notWrittenByTasks
 }
 
@@ -62,7 +62,7 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
         case .visionSessionJournal:
             // Row I's action journal: what the screen-control loop did and what it observed after
             // each action. A record *of* the run, never the point of it — and the most sensitive
-            // trace of the nine.
+            // trace of the ten.
             return .trace
         case .routines:
             // "Save this as a routine" is the ask itself. Suppressing it would break the task.

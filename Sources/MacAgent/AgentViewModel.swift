@@ -3784,8 +3784,25 @@ final class AgentViewModel: ObservableObject {
             trigger: .scheduled,
             result: result
         )
+        // **Two writes, two catches, matching the foreground path** (PR #89 review). One `do` around
+        // both said "could not save this scheduled run to task history" when only the *plan* write
+        // had failed — the row had landed — and skipped `refreshTaskHistory()`, so the row that did
+        // land was missing from the list until something else refreshed it. Two failures with
+        // different consequences need two messages and two recoveries; `recordTaskHistoryIfTerminal`
+        // and `recordTaskPlanDetail` already split them this way for a foreground run, and these are
+        // separate functions rather than one shared helper, so agreeing is something to do rather
+        // than something inherited.
+        let evictedTaskIDs: [String]
         do {
-            let evictedTaskIDs = try taskHistoryStore.record(record)
+            evictedTaskIDs = try taskHistoryStore.record(record)
+        } catch {
+            recordLocalStorageWriteFailure(
+                "Sonny could not save this scheduled run to task history: \(error.localizedDescription)"
+            )
+            return
+        }
+
+        do {
             // No `taskRecordingPolicy` check on either write, and deliberately: a scheduled run
             // passes through no composer, so there is no "Don't save this task" switch to have been
             // left on — the same reasoning already written above beside `makeExecutor(recordingPolicy:
@@ -3800,12 +3817,19 @@ final class AgentViewModel: ObservableObject {
             } else {
                 try taskPlanDetailStore.delete(ids: evictedTaskIDs)
             }
-            refreshTaskHistory()
         } catch {
+            // A *write* failure, with its own accurate wording — never the load-failure banner,
+            // whose text is hardcoded to "could not be decrypted or decoded" and would be wrong
+            // twice over here. The honest consequence is narrow and worth saying: the run is in the
+            // history, and a follow-up on it will have its command and its outcome but not its plan.
             recordLocalStorageWriteFailure(
-                "Sonny could not save this scheduled run to task history: \(error.localizedDescription)"
+                "Sonny could not save what this scheduled run planned: \(error.localizedDescription)"
             )
         }
+
+        // Regardless of the plan write, because the row landed either way and the list has to agree
+        // with the file. The foreground path refreshes on the same rule.
+        refreshTaskHistory()
     }
 
     /// Switches a routine's schedule off after an approval refusal and says so, once.

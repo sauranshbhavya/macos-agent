@@ -192,7 +192,11 @@ struct TwinnedTestSupportTests {
             }
         }
 
-        #expect(lockedAndGated == 4, "expected four gated directory-locking tests, found \(lockedAndGated)")
+        // Five since row E (SONNY-151, PR #89's fix round):
+        // `ScheduledRoutineRunTests.aPlanWriteFailureKeepsTheScheduledRowAndSaysWhatActuallyFailed`
+        // makes the plan store's directory read-only while task history stays writable, which is the
+        // only way to fail the second of that path's two writes without failing the first.
+        #expect(lockedAndGated == 5, "expected five gated directory-locking tests, found \(lockedAndGated)")
         #expect(
             mismatches.isEmpty,
             """
