@@ -10,6 +10,17 @@ AI-native macOS agent platform. Two Swift package targets: `MacAgentCore` (busin
 
 ## Commands
 
+**This repository has two halves, and one build command verifies one of them.** `Sources/` and
+`Tests/` are the macOS app, built with SwiftPM. `server/` is the backend gateway (SONNY-126),
+TypeScript on Node 22, with its own build, its own tests and its own deploy. **A session that runs
+`swift build`, sees green and reports the work done is saying nothing about `server/`** — it has not
+been compiled, its tests have not run, and a type error in it is entirely invisible to the Swift
+toolchain. Whichever half a change touches, run that half's commands; a change touching both runs
+both. This paragraph exists because before `server/` landed, `swift build` really was the whole
+repository, and that assumption is now wrong in a way that produces a confidently false "done".
+
+### The app half — `Sources/`, `Tests/`
+
 ```
 swift build
 env CLANG_MODULE_CACHE_PATH="$PWD/.build/clang-module-cache" swift test --disable-sandbox \
@@ -51,6 +62,46 @@ directory reports a contaminated result its own output cannot be told apart from
 `scripts/mutate --help` has the plan format, and a "What this does and does not prevent" section
 stating what is left over; `scripts/mutate selftest` re-proves every one of those refusals still
 fires.
+
+### The server half — `server/`
+
+```
+cd server
+npm install                 # once, and after any dependency change
+npm run build               # TypeScript -> dist/. This is the server's `swift build`.
+npm test                    # Vitest. This is the server's flagged test command.
+npm run typecheck           # types only, no emit
+npm run check:secrets       # refuse a credential in the repository
+./scripts/check-secrets-selftest.sh   # prove that scanner still refuses things
+./scripts/deploy.sh local   # build the image, run it, verify /v1/health serves that build
+```
+
+`npm test` runs with **no external dependency** and skips the database tests, printing a warning
+that says it did so — a suite that quietly runs zero tests looks exactly like a suite that passed.
+To run them, supply a Postgres; `npm run test:db` defaults to the container below:
+
+```
+docker run -d --name sonny-gw-db -e POSTGRES_PASSWORD=postgres -p 55433:5432 postgres:17
+cd server && npm run test:db
+docker rm -f sonny-gw-db
+```
+
+Migrations are `npm run migrate -- up | down | status`, need `DATABASE_URL`, and every migration
+file must carry a `-- @rollback` section or the runner refuses it at load. `server/README.md` has
+the rule for verifying one on staging before it touches production, the three-deploy credential
+rotation, and why staging is never seeded from production.
+
+**`./scripts/deploy.sh staging` and `production` are stubs and exit 3 today.** They build the image
+and then say plainly that nothing was pushed and nothing is running, because no host exists yet: the
+gateway runs on a VM with staged hosts — development first tries deploymind, beta on Oracle Cloud,
+v1 on AWS (`docs/sonny-row-12-host-decision.md` §12.2) — and none is reachable. `local` is real and
+verifies that the build it just made is the one answering. **The first real remote deploy is owed
+and recorded on SONNY-126.**
+
+Nothing under `server/` names a host, deliberately. Each one receives an OCI image and a set of
+environment variables, so moving between them is a redeploy rather than a rewrite.
+
+### Packaging the app
 
 `swift run MacAgent` works for everyday iteration, but a bare SwiftPM executable has no real
 app-bundle identity — `UNUserNotificationCenter`, the microphone permission prompt
