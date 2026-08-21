@@ -182,6 +182,29 @@ struct CommandCenterView: View {
         .popover(isPresented: $isAccountMenuPresented, arrowEdge: .top) {
             accountMenuContent
         }
+        // **The Learn-more dwell timer does not outlive the menu that owns it (PR #84 review, F2).**
+        //
+        // `isLearnMoreExpanded` and `learnMoreHoverTask` are `@State` on `CommandCenterView` — the
+        // window root — while the views their hover tracks live inside the popover above, which is
+        // torn down independently of this view. That is structurally the case SONNY-179 fixed on the
+        // mic, and it was reachable: rest the pointer on the Learn-more row, and inside the 100ms
+        // dwell dismiss the menu with Escape. The row goes without AppKit delivering an exit, so
+        // nothing cancels the task, and it then sets the flag with no hover anywhere. Nothing
+        // presents at the time — the row that carries the flyout's `.popover` is gone — but the flag
+        // survives on the root, so the *next* time the user opens the account menu the flyout
+        // springs open unbidden.
+        //
+        // **Keyed on the menu closing, not on a teardown callback.** `isAccountMenuPresented` going
+        // false is the event that means "the row and the flyout are gone"; responding to it is
+        // SONNY-179's shape rather than teaching a flag to notice its own destruction. The flyout
+        // state is not a copy of where the pointer is — it is real UI state — so what is wrong here
+        // is a pending timer writing it after its trigger died, and cancelling that timer is the fix.
+        .onChange(of: isAccountMenuPresented) { _, isPresented in
+            guard !isPresented else { return }
+            learnMoreHoverTask?.cancel()
+            learnMoreHoverTask = nil
+            isLearnMoreExpanded = false
+        }
     }
 
     private var profileAvatar: some View {
@@ -3314,7 +3337,7 @@ private struct WorkspaceDetailView: View {
                             .resizable()
                             .scaledToFit()
                             .frame(width: 16, height: 16)
-                            .clipShape(RoundedRectangle(cornerRadius: 4))
+                            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
                             .padding(.top, 1)
                             // The name is already the row's accessible content, and the icon adds
                             // nothing a screen reader can use — same call the card's tiles make.
