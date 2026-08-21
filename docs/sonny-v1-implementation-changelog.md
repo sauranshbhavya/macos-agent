@@ -157,6 +157,66 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: feature/row-12-server-foundation
+Status: complete
+Date: 2026-08-21
+Tickets: SONNY-126 (server foundation — `server/`, config, secrets, three environments, deploy). One session, from `main` at `029a837`. **The first non-Swift code in this repository.**
+Reviewed by: fresh session per WORKFLOW.md step 7, full treatment — pending at the time this entry was written. The ticket specifies full treatment because this diff creates a toolchain.
+
+Spec sections covered: none directly. Builds the foundation §16.5's credential boundary needs; every route beyond health belongs to another ticket.
+Files changed:
+- `server/` — new. `src/` (Fastify app, Zod-validated config, `GET /v1/health`, plain-SQL migration runner), `test/` (Vitest), `scripts/` (secret scanner, its selftest, deploy), `Dockerfile`, `.env.example`, `README.md`.
+- `.gitignore` — extended **before** the first server file landed, in its own commit, as the ticket requires.
+- `CLAUDE.md` — Commands section only, split into an app half and a server half.
+- `README.md` — Architecture and Tests sections, which described a Swift-only repository.
+- `docs/sonny-v1-implementation-changelog.md` — this entry.
+
+Tests: **both halves, and that is now a sentence with two meanings.** Swift, via CLAUDE.md's flagged command: **1438 tests in 112 suites, exit 0 at `d8d493b`**, plus `swift build` clean — unchanged from `main`, and expected to be, since no file under `Sources/` or `Tests/` is in this diff. Server, via `npm test`: **17 passed, 6 skipped (23) at `d8d493b`**; with a Postgres supplied, `npm run test:db`: **23 passed (23)**. `npm run build` clean. `./server/scripts/check-secrets.sh tracked`: **clean, 319 files, 10 patterns, 8 baselined fixtures**. `./server/scripts/check-secrets-selftest.sh`: **12 passed, 0 failed**. `git status` is clean after all of it, which is the ticket's own proof that `.gitignore` covers the server's output rather than a claim that it does.
+
+Behavior added:
+- **A server that builds, tests and runs**, with `GET /v1/health` returning `{status, version, environment}` — `version` being the build identifier injected at image build time, which is what makes two deployments distinguishable.
+- **A portable container.** Multi-stage, non-root, 259 MB, no host named anywhere in it.
+- **A deploy path that verifies itself.** `./scripts/deploy.sh local` builds, runs, and confirms `/v1/health` reports *the build it just made* — so a deploy that appeared to succeed while something older kept serving is a failure rather than a pass.
+- **Two live credentials per provider**, as an ordered list, with a test walking all three steps of a zero-downtime rotation.
+- **Plain-SQL migrations with a mandatory rollback half**, forward and back, pinned against a real Postgres.
+- **A secret scanner and a selftest for it**, reporting location and pattern and never the matched value.
+
+Behavior preserved (required, no blanket claims):
+- **No file under `Sources/` or `Tests/` is in this diff.** The app is untouched: same 1438 tests in 112 suites as `main`, `swift build` clean.
+- **`Package.swift`, `Packaging/` and `scripts/package-app.sh` are untouched**, all three on the ticket's never-touch list. `Package.swift` names four explicit target paths, none of which reaches `server/`, so the Swift build cannot see the new code at all.
+- **`WORKFLOW.md` is untouched.** How backend work is reviewed is row 20's question (SONNY-108), and the ticket forbids a unilateral edit here.
+- **Everything in `CLAUDE.md` outside the Commands section is untouched**, including the flagged test command's wording, which the ticket says stays exactly as it is.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**The stack was the founder's decision, taken on 2026-08-21 from three proposed options.** TypeScript on Node 22 with Fastify, Vitest and Docker, over Go with chi and over Deno 2 with Hono. The reasoning recorded so it is not re-litigated: it is his declared default, which matters concretely rather than as deference — his standing preferences are TypeScript strict and Zod at boundaries, and the API contract is unusually strict about boundaries (`retention` never defaulted, `snake_case` wire format, unknown response fields ignored), so Zod at the edge fits a contract that specific. Go was the strongest technical alternative and was named as such: a ~15 MB static binary against ~150 MB, lower memory on multi-megabyte bodies, simpler ops across three clouds. It was declined for a third language in the repository. **The probe harness's Deno was explicitly context rather than a default**, and was not carried forward.
+
+**Portability is the container, not the language, and that is why nothing under `server/` names a host.** The gateway's host changes three times across the product's life. Every one of them receives an OCI image and a set of environment variables. The `Dockerfile` deliberately carries no `HEALTHCHECK`, because each host configures probes its own way and baking one in would express a host preference in the one file that must not have any.
+
+**The health endpoint's silence is the design, and it is pinned by a test.** It returns status, version and environment and nothing else. This route is unauthenticated and reachable by anyone who finds the hostname: a liveness probe that reported which providers have credentials would hand an unauthenticated caller the shape of the system, and one that checked the database would turn a single database blip into a load balancer removing every healthy instance. Readiness is a different concern and belongs to the first ticket with a dependency worth gating traffic on. A test asserts the exact key set so a later helpful addition fails rather than ships.
+
+**Credentials are an ordered list rather than a `primary`/`secondary` pair, and the rotation is the reason.** With two named fields, retiring the primary means editing two variables in one step, and any deploy catching them half-applied has either a duplicated key or a missing one. With an ordered list a rotation is three independent deploys, each valid alone — add at position 2, promote to 1, drop the old — and at no point is the server without a working credential, which is what "no downtime" actually means. The reader stops at the first gap rather than scanning a fixed range, so a typo'd `_4` with no `_3` cannot silently become the second credential.
+
+**The secret scanner found two real defects in itself within a minute of the selftest existing, and a third the day it was written.** (a) The private-key pattern begins with a hyphen, so `grep -EnI "$pattern"` parsed it as options and **that pattern silently never ran** — the scanner reported "clean" over a tree it had never searched for private keys. (b) `example` in the allowlist matched `db.example.com` and so exempted a password-bearing connection string. (c) The first fix for the PEM findings — baselining `-----BEGIN RSA PRIVATE KEY-----` as a literal — was wrong in the same shape as the bug it was fixing: it would have exempted **every** PEM header in the tree, a real key included. The selftest caught that too, on the next run. The pattern now requires key material after the header, so no baseline entry is needed for any of them. **A scanner that has only ever printed "clean" is a scanner nobody has tested**, which is the same lesson SONNY-169's warnings harness records.
+
+**An exact-string baseline beats the alternatives for the redaction fixtures, and the alternatives were each considered.** Eight strings in `Tests/` are credential-shaped by design — they are fixtures for the local redaction feature, whose job is detecting exactly that. Skipping `Tests/` by path would hide a real key pasted into any test forever; loosening the patterns would blind the scanner to the vendor prefixes it exists for; an entropy heuristic fails silently in the one direction that matters. An exact-match baseline can only exempt what is written in it, and adding a real key to it means committing that key to a reviewable file. Stale entries are reported so the list cannot rot. **`Tests/` is on the ticket's never-touch list, so marking the fixtures in place was not an option** — the baseline had to live on the scanner's side.
+
+**The selftest's own test data cannot be baselined, and the fix is structural.** Baselining the password-bearing DSN the selftest plants exempted the very string that case exists to plant, so the test could never fail. It is now assembled from three separate statements, so no single line of the source matches the pattern while the runtime value does. Same class as (c) above, caught the same way.
+
+**Fastify 5 deprecates `disableRequestLogging`, and the replacement is a class to subclass.** Rather than subclass a controller to express a preference this server does not need yet, the option was removed and request-log volume is controlled by `LOG_LEVEL` per environment — request lines are emitted at `info`, so `warn` silences them. Recorded because the deprecation warning appeared five times in the first test run, and this repository's history with warnings makes landing a noisy suite on day one the wrong precedent.
+
+**`vitest@2` carries a critical advisory through its `vite` chain.** Upgraded to `vitest@4.1.11` before the first commit; `npm audit` reports 0 vulnerabilities. Dev-only either way, but the first dependency tree in a repository sets what the next session inherits.
+
+Known limitations / deferred scope:
+- **Two acceptance criteria are not met, and cannot be on this branch.** The ticket requires the health endpoint to answer "locally, on staging, and on production", and a migration applied and rolled back "on staging". **Staging and production do not exist**: the founder confirmed on 2026-08-21 that deploymind cannot receive a deploy yet, and neither Oracle nor AWS is provisioned. Everything was built and proved locally instead — the deploy path end to end, the migration lifecycle against a real Postgres — and `deploy.sh staging|production` exits 3 with an explicit statement of what did not happen rather than pretending. **The first real remote deploy is owed**, and with it the founder's two manual-test items, both of which need two live deployments. Recorded on the ticket rather than absorbed.
+- **No CI.** There is none in this repository and none was added; the ticket's non-goals rule CI for the Swift half out of scope, and row 20 owns the question. So both halves' commands are run by sessions and by the founder, and nothing enforces that.
+- **The container is 259 MB.** Go would have been ~15 MB. That is the cost of the stack decision and it was named at the time it was taken.
+- **`GET /v1/meta` and the version gate are still unowned** — SONNY-155, Backlog, untriaged, as contract §4.1 records. Not this ticket's, whose non-goals exclude any endpoint beyond health.
+
+Open questions (required, write "none" if true): **one** — when deploymind can receive a deploy, which is the founder's and Bhavya's. Nothing in row 12 is blocked by it: every ticket after this one builds against a server that runs locally.
+
+Next branch: row 12 continues per its ticket set. This ticket unblocks all of them.
+
 ### Branch: chore/stop-hook-session-scope
 Status: complete
 Date: 2026-08-21
