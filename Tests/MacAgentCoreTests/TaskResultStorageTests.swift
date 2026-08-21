@@ -311,12 +311,19 @@ struct TaskResultStorageTests {
     /// `AgentViewModel`'s default parameter, `LocalDataDeletionService.defaultStoreFileURLs()` and
     /// `LocalStore.fileURL(fileManager:)`, and none of the three passes a cap.
     ///
-    /// The source check here is deliberately **not** the guard on the default's value — the test
-    /// above is, by reading it off a store. This one holds the other half: that no *caller* supplies
-    /// one. A `contains` on the declaration was the whole guard once, and a halved default satisfied
-    /// it (PR #89 cycle 2, M13).
+    /// **Renamed in PR #89 cycle 3, because the old name outlived what it asserts.** It was
+    /// `theShippedPlanCapIsTheHistoryCapAndNoProductionPathOverridesIt`, and cycle 2 moved the first
+    /// half of that claim into `thePlanStoreCapsAtExactlyTheHistoryStoresNumber` — where it belongs,
+    /// since a value has to be read off a store rather than off a declaration. A doc comment saying
+    /// so was not enough: a name is what a reader greps and what a failure prints, so a name
+    /// promising a check the body no longer performs is a claim, and claims here get corrected
+    /// rather than annotated.
+    ///
+    /// What is left is the other half, and it is deliberately **not** a guard on the default's
+    /// value: it holds that no *caller* supplies one. A `contains` on the declaration was once the
+    /// whole guard, and a halved default satisfied it (PR #89 cycle 2, M13).
     @Test
-    func theShippedPlanCapIsTheHistoryCapAndNoProductionPathOverridesIt() throws {
+    func noProductionPathPassesACapToThePlanStore() throws {
         for file in ["AgentViewModel.swift", "LocalDataDeletionService.swift", "LocalStoreClassification.swift"] {
             let text = try sourceNamed(file)
             let constructions = text.components(separatedBy: "TaskPlanDetailStore(").count - 1
