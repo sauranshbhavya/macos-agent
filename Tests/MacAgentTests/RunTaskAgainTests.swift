@@ -183,7 +183,7 @@ struct RunTaskAgainTests {
         for status in [PriorTaskOutcomeStatus.completed, .failed, .canceled] {
             var record = makeRecord(command: "summarize my week")
             record.outcomeStatus = status
-            #expect(TaskDetailPresentation.showsRunAgain(for: record), "\(status) should offer Run again")
+            #expect(TaskDetailPresentation.showsTaskActions(for: record), "\(status) should offer Run again")
         }
     }
 
@@ -192,8 +192,8 @@ struct RunTaskAgainTests {
     /// offering it.
     @Test
     func runAgainIsWithheldForARecordWithNothingToRun() {
-        #expect(!TaskDetailPresentation.showsRunAgain(for: makeRecord(command: "")))
-        #expect(!TaskDetailPresentation.showsRunAgain(for: makeRecord(command: "   ")))
+        #expect(!TaskDetailPresentation.showsTaskActions(for: makeRecord(command: "")))
+        #expect(!TaskDetailPresentation.showsTaskActions(for: makeRecord(command: "   ")))
     }
 
     /// **No stored-plan door was opened.** `runTaskAgain` reaches `dispatch`, which reaches `start`,

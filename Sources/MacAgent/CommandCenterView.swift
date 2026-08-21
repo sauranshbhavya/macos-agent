@@ -2039,7 +2039,7 @@ private struct TaskLogDetailDialog: View {
     /// different kinds of thing rather than two options.
     private var deleteTaskFooter: some View {
         HStack {
-            if TaskDetailPresentation.showsRunAgain(for: record) {
+            if TaskDetailPresentation.showsTaskActions(for: record) {
                 Button(TaskDetailPresentation.runAgainActionLabel) {
                     // Closed only on a real start. A refused dispatch leaves the sheet open, because
                     // closing it would hide the fact that nothing happened — and the refusal's own
@@ -2057,6 +2057,19 @@ private struct TaskLogDetailDialog: View {
                 .disabled(viewModel.isTaskInFlight)
                 .accessibilityLabel(TaskDetailPresentation.runAgainActionLabel)
                 .help(TaskDetailPresentation.runAgainActionLabel)
+
+                // Beside "Run again", not beside the delete: the two are what you can do *with*
+                // this task, and the delete is what you can do *to* it (row E, SONNY-150).
+                Button(FollowUpPresentation.actionLabel) {
+                    if viewModel.followUpOnTask(record) {
+                        dismiss()
+                    }
+                }
+                .buttonStyle(CommandCenterRowActionStyle())
+                .sonnyPointerCursor()
+                .disabled(viewModel.isTaskInFlight)
+                .accessibilityLabel(FollowUpPresentation.actionLabel)
+                .help(FollowUpPresentation.actionLabel)
             }
 
             Spacer()
