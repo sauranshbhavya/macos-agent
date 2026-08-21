@@ -251,6 +251,17 @@ struct PriorTaskContextTests {
     // was already escaped, so a test that puts the payload there passes while the real hole stays
     // open. The reachable producer is the one model-authored summary in the product.
 
+    /// **Lines as anything that renders one, not as `\n` alone**, and this helper exists because the
+    /// first version of these tests got it wrong in a way a green run could not show. A mutation
+    /// narrowing the fold to line feed only was killed by the wrong test: `everyUnicodeLineSeparator…`
+    /// split the emitted block on `"\n"`, so a CR- or NEL-forged line was not a line as far as its
+    /// own assertions were concerned and its counts did not move. The test named the property and
+    /// measured something else. Splitting the same way the fold folds is what makes the assertion
+    /// about the thing the name claims.
+    private func renderedLines(of text: String) -> [String] {
+        text.components(separatedBy: .newlines)
+    }
+
     /// The exact payload from the ticket, through the field that can actually carry it.
     ///
     /// Asserted on the emitted text rather than on a helper's return value: what matters is how many
@@ -267,8 +278,7 @@ struct PriorTaskContextTests {
         )
 
         let text = context.plannerContextText
-        let commandLines = text.split(separator: "\n", omittingEmptySubsequences: false)
-            .filter { $0.hasPrefix("Previous command:") }
+        let commandLines = renderedLines(of: text).filter { $0.hasPrefix("Previous command:") }
         #expect(commandLines.count == 1, "the block carries \(commandLines.count) command lines")
         #expect(commandLines.first == "Previous command: open my reading list")
 
@@ -299,7 +309,7 @@ struct PriorTaskContextTests {
             createdAt: Date(timeIntervalSince1970: 1_234)
         )
 
-        let lines = context.plannerContextText.split(separator: "\n", omittingEmptySubsequences: false)
+        let lines = renderedLines(of: context.plannerContextText)
         // BEGIN, four field lines, the `Previous plan steps:` header, one line per step, END.
         #expect(lines.count == 7 + context.steps.count, "the block is \(lines.count) lines: \(lines)")
         #expect(lines.first == "TRUSTED_PRIOR_TASK_CONTEXT_BEGIN")
@@ -340,7 +350,7 @@ struct PriorTaskContextTests {
                 createdAt: Date(timeIntervalSince1970: 1_234)
             )
 
-            let lines = context.plannerContextText.split(separator: "\n", omittingEmptySubsequences: false)
+            let lines = renderedLines(of: context.plannerContextText)
             #expect(
                 lines.filter { $0.hasPrefix("Previous command:") }.count == 1,
                 "\(separator.name) forged a second command line"
