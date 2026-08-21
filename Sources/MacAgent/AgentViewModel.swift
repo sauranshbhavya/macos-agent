@@ -3014,9 +3014,14 @@ final class AgentViewModel: ObservableObject {
     /// saved names using the stores' own case/diacritic folding,
     /// with a documented leftmost-then-longest tie-break and deliberate non-`\b` boundary checks —
     /// writing a second matcher here would give one concept two behaviours, which is how "why did it
-    /// tag that" bugs start. It is the same call `recordPriorTaskContext` already makes for task
-    /// history; the difference is purely *when*, and that is the whole ticket: history tags after a
-    /// task terminates, this runs before it is assessed.
+    /// tag that" bugs start.
+    ///
+    /// **This is the only site that calls it** (SONNY-191, SONNY-195). It used to say that
+    /// `recordPriorTaskContext` "already makes" the same call for task history and that the
+    /// difference was purely *when* — true, and the whole defect: a second derivation taken after
+    /// the run terminated, from a signature that can see neither the binding above nor whether the
+    /// store answered, so the row and the boundary disagreed in both directions. The row now reads
+    /// this function's answer back off `activeTaskScope`; see `assessedWorkspaceName`.
     ///
     /// Returns `.unscoped` for a name that no longer resolves to a stored record — a workspace
     /// deleted between dispatch and assessment binds to nothing rather than to an empty boundary,
@@ -3421,17 +3426,10 @@ final class AgentViewModel: ObservableObject {
             outcome: PriorTaskOutcome(status: status, summary: summary)
         )
         priorTaskContext = priorTaskContextStore.currentContext()
-        let workspaceName = WorkspaceTaskTagging.resolvedWorkspaceName(
-            command: command,
-            plan: preparedRun.plan,
-            routineStore: routineStore,
-            workspaceStore: workspaceStore
-        )
         return recordTaskHistoryIfTerminal(
             command: command,
             status: status,
             startedAt: startedAt,
-            workspaceName: workspaceName,
             result: StoredTaskResult.declaring(resultProvenance, text: summary),
             plan: preparedRun.plan
         )
@@ -3455,20 +3453,51 @@ final class AgentViewModel: ObservableObject {
             outcome: PriorTaskOutcome(status: status, summary: summary)
         )
         priorTaskContext = priorTaskContextStore.currentContext()
-        let workspaceName = WorkspaceTaskTagging.resolvedWorkspaceName(
-            command: command,
-            plan: nil,
-            routineStore: routineStore,
-            workspaceStore: workspaceStore
-        )
         return recordTaskHistoryIfTerminal(
             command: command,
             status: status,
             startedAt: startedAt,
-            workspaceName: workspaceName,
             result: StoredTaskResult.declaring(resultProvenance, text: summary),
             plan: nil
         )
+    }
+
+    /// The workspace this run was **actually bound to**, for its history row — `nil` when nothing
+    /// bound it.
+    ///
+    /// The founder's decision of 2026-08-21: a task's history record shows the workspace the run ran
+    /// in, not the one the user meant. So it reads `activeTaskScope` — the answer `resolveTaskScope`
+    /// already produced and the same value `AgentRunner.execute` was handed — rather than deriving
+    /// the name a second time.
+    ///
+    /// **It was that second derivation, and it was wrong in both directions.** Both
+    /// `recordPriorTaskContext` overloads called `WorkspaceTaskTagging.resolvedWorkspaceName` again
+    /// after the run terminated, from a signature that cannot see a binding and never learns whether
+    /// the store answered:
+    ///
+    /// - **Under-tagged** (SONNY-195): a dispatch bound through `explicitWorkspaceBinding` — the
+    ///   workspace card's "New task here" — whose command never names the workspace resolved no name
+    ///   at all. A run that really was scoped filed under nothing, while the widget's own chip said
+    ///   "In Research" for the whole of it.
+    /// - **Over-tagged** (SONNY-191): `directWorkspaceName` reads `AgentStep.workspaceName` straight
+    ///   off the plan with no store access, so a plan naming a workspace that had been deleted — or
+    ///   whose store would not decrypt, or whose name was blank — resolved that name anyway, and the
+    ///   workspace card's task count included runs it had never scoped.
+    ///
+    /// Reading the scope answers both by construction rather than by two derivations happening to
+    /// agree: `.unscoped` is exactly the set of runs no boundary applied to, whatever the cause.
+    ///
+    /// **`activeTaskScope`, not `lastAssessedScope`**, though both are live at every call site.
+    /// `lastAssessedScope` is deliberately never cleared, so a run that threw inside
+    /// `AgentRunner.prepare` — before `performStart` resolves a scope at all — would inherit the
+    /// *previous* task's workspace. `activeTaskScope` is `.unscoped` again at the top of every
+    /// `performStart`, is held across an approval or clarification pause, and is cleared in a
+    /// `defer` that runs after every one of these writes.
+    private var assessedWorkspaceName: String? {
+        guard case .scoped(let scope) = activeTaskScope else {
+            return nil
+        }
+        return scope.workspaceName
     }
 
     /// Returns the id of the row it wrote, or `nil` when it wrote none — suppressed, non-terminal,
@@ -3481,7 +3510,6 @@ final class AgentViewModel: ObservableObject {
         command: String,
         status: PriorTaskOutcomeStatus,
         startedAt: Date?,
-        workspaceName: String?,
         result: StoredTaskResult,
         plan: AgentPlan?
     ) -> String? {
@@ -3502,7 +3530,11 @@ final class AgentViewModel: ObservableObject {
             startedAt: startedAt,
             completedAt: Date(),
             outcomeStatus: status,
-            workspaceName: workspaceName,
+            // Read off the scope the run was assessed under, for the reason the line below already
+            // gives about `trigger`: a parameter restating something this type already knows is a
+            // second thing to forget to pass, and both ways of forgetting it happened
+            // (SONNY-191, SONNY-195). See `assessedWorkspaceName`.
+            workspaceName: assessedWorkspaceName,
             // Derived from origin rather than threaded through every call site — origin
             // already records who started this run, and a second parameter saying the same
             // thing is a second thing to forget to pass.
@@ -3524,7 +3556,26 @@ final class AgentViewModel: ObservableObject {
             refreshTaskHistory()
             return record.id
         } catch {
-            setError("Could not save task history: \(error.localizedDescription)")
+            // **A lost row is a storage problem, not a failed task** (SONNY-201), so it goes to
+            // `localStorageNotice` with its own write wording — matching `recordScheduledTaskHistory`,
+            // which is the same failure on the unattended path and already answered this way, and
+            // matching `recordTaskPlanDetail` one line above, which PR #89's F4 moved for the same
+            // reason.
+            //
+            // It called `setError`, and the cost is the one `publishLocalStorageLoadError`'s own doc
+            // comment records: `errorMessage` means "the thing you asked for did not happen", and the
+            // widget picks `.failure` ahead of `.result` — so a task that ran and produced its result
+            // showed "Could not save task history: …" where that result belonged. The run happened;
+            // what is lost is the row.
+            //
+            // **A heavier loss than the plan write's, and still not a task failure.** A failed plan
+            // write leaves the task fully visible and only its plan missing; a failed row write
+            // leaves it absent from the Tasks list, from search, from Insights, and from anything a
+            // follow-up could be aimed at. That is worth saying plainly, which is what the wording
+            // does — it is not worth saying in the slot that means the task itself failed.
+            recordLocalStorageWriteFailure(
+                "Sonny could not save this task to task history: \(error.localizedDescription)"
+            )
             logStore.append(.observe, "Could not record task history: \(error.localizedDescription)")
             return nil
         }

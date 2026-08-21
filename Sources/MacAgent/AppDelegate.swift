@@ -39,6 +39,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // as a strip, but it has no control for the thing the worst case needs doing.
         onOpenScheduledRun: { [weak self] in
             self?.windowCoordinator.showCommandCenter()
+        },
+        // A storage notice opens Command Center too (SONNY-187). Same destination as the scheduled
+        // notice and for a similar reason: the notice renders there as a row on four pages, and
+        // Settings' local-data controls are the nearest thing to somewhere to act on it. Its own
+        // closure rather than sharing that one, because they are two decisions about two notices
+        // that happen to agree today.
+        onOpenStorageNotice: { [weak self] in
+            self?.windowCoordinator.showCommandCenter()
         }
     )
     private var pushToTalkHotKey: PushToTalkHotKey?
@@ -182,13 +190,20 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Local-storage problems moved off `errorMessage` so a corrupt store can't make a
         // successful task read as failed. They still deserve the same fallback notification when
         // no Sonny surface is in front of the user, so subscribe to the new channel too.
+        //
+        // **Its own category, not `postErrorNotification` (SONNY-187).** Moving the notice off
+        // `errorMessage` and then posting it in the failure notification category undid the move at
+        // the last hop: the banner arrived with a Retry button wired to `retryLastCommand()`, so
+        // "your snippets file could not be decrypted" offered to re-dispatch whatever the user last
+        // typed. See `SonnyNotificationCategory.storage`. The same shape SONNY-113 gave the
+        // scheduled channel, one channel later.
         viewModel.$localStorageNotice
             .compactMap { $0 }
             .sink { [weak self] message in
                 guard let self, !isUserWorkingInSonny else {
                     return
                 }
-                notificationService.postErrorNotification(message: message)
+                notificationService.postStorageNoticeNotification(message: message)
             }
             .store(in: &cancellables)
 
