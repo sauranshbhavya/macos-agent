@@ -1603,6 +1603,87 @@ struct AgentActionExecutorTests {
         #expect(result.summaryProvenance == .codeAuthored)
     }
 
+    /// **A nested routine used to overwrite the outer plan's document, and it was the ordinary case
+    /// rather than a race** (SONNY-190).
+    ///
+    /// `resolveDefaultOutputs` disambiguates a generated default against the paths the plan has
+    /// already claimed, and a routine run as a unit of a chain re-enters `execute`, which resolves
+    /// the routine's own plan — against an empty set, because the set was a local. So the outer
+    /// draft and the nested draft generated the same `draft-<title>-<timestamp>.md` in the same
+    /// folder and the second write destroyed the first.
+    ///
+    /// **Measured before it was fixed, per the ticket, and the measurement changed its price.** It
+    /// was filed as needing the two writes to land in the same second. `Timestamp.fileSafe` is
+    /// whole-second and two file writes inside one run are milliseconds apart, so that is not a
+    /// window, it is the normal case: on the real clock the probe produced one file holding the
+    /// routine's text, three runs out of three, with the outer document gone. Nothing in the run's
+    /// own report showed it — `previews.writes` named the same path twice, which reads as two files.
+    ///
+    /// A fixed clock here, so the collision is forced rather than probable. The assertions are on
+    /// the *contents*, not only on two paths existing: a fix that bumped the name but wrote the same
+    /// text into both would satisfy a count.
+    @Test
+    func aNestedRoutinesGeneratedDraftDoesNotOverwriteTheOuterPlansOwn() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try routineStore.save(
+            StoredRoutine(
+                name: "Notes",
+                steps: [
+                    AgentStep(
+                        id: "nested-draft",
+                        operation: .createLocalDraft,
+                        description: "Create note",
+                        draftTitle: "Note",
+                        draftContent: "From the routine."
+                    )
+                ]
+            )
+        )
+        // One second for the whole run, so both defaults resolve to the same name before the fix.
+        let stamp = Date(timeIntervalSince1970: 1_800_000_000)
+        let executor = makeExecutor(root: root, routineStore: routineStore, now: { stamp })
+        let plan = AgentPlan(
+            summary: "Draft a note, then run the Notes routine.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "outer-draft",
+                    operation: .createLocalDraft,
+                    description: "Create note",
+                    draftTitle: "Note",
+                    draftContent: "From the outer plan."
+                ),
+                AgentStep(
+                    id: "run",
+                    operation: .runRoutine,
+                    description: "Run routine",
+                    routineName: "Notes"
+                )
+            ]
+        )
+
+        let prepared = try executor.prepare(plan: plan)
+        let result = try await executor.execute(plan: prepared.plan) { _, _ in }
+
+        let drafts = try FileManager.default.contentsOfDirectory(atPath: root.path)
+            .filter { $0.hasPrefix("draft-") }
+            .sorted()
+        #expect(drafts.count == 2, "the nested routine overwrote the outer plan's draft")
+        let texts = try drafts.map {
+            try String(contentsOf: root.appendingPathComponent($0), encoding: .utf8)
+        }
+        #expect(texts.contains { $0.contains("From the outer plan.") })
+        #expect(texts.contains { $0.contains("From the routine.") })
+        // And the run's own report names two distinct files rather than one path twice, which is
+        // how this was invisible: a reader counting `writes` saw two.
+        let written = result.previews.flatMap(\.writes)
+        #expect(written.count == 2)
+        #expect(Set(written).count == 2, "the run reported the same path twice")
+        #expect(written.allSatisfy { FileManager.default.fileExists(atPath: $0) })
+    }
+
     // MARK: - SONNY-28: two documents never convert onto one PDF
     //
     // `FileInventory.docxFiles` derives each destination from the document's *basename* and
