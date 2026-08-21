@@ -1205,19 +1205,37 @@ struct WorkspaceDetailSheetTests {
     /// text. It does not have to hold for *whether a field is rendered at all*, which is textual and
     /// therefore checkable, and which is the half a user would actually lose.
     ///
-    /// Two assertions, because one is not enough: the name must be rendered, **and** it must not be
-    /// rendered inside the icon's own `if let`. The first alone survives a rewrite that keeps
-    /// `Text(entry.value)` and wraps it in the icon's conditional — which is the same bug wearing
-    /// different syntax.
+    /// **Three assertions, and each one exists because the ones before it are not enough.** This doc
+    /// said "two assertions" for a round after it needed three, never mentioning the one that does
+    /// the most work (PR #84 cycle 3, C3):
     ///
-    /// **The second assertion held nothing until PR #84's review, and two mutants proved it.** It
+    /// 1. **The name is rendered** — `Text(entry.value)` appears once in the row.
+    /// 2. **It is not inside the icon's conditional** — that block, delimited by its own braces.
+    /// 3. **It is a direct child of the row's stack, inside no conditional at all** — every nested
+    ///    brace span stripped, and the name must survive that.
+    ///
+    /// **Why 1 and 2 are not enough, measured rather than argued.** The second assertion originally
     /// used `region(of:from:to:)` with `Text(entry.value)` as the `to:` anchor, and that function
-    /// ends the region *at* its end anchor — so "the region does not contain `entry.value`" was true
-    /// wherever that line sat, including inside the conditional. Both of the reviewer's mutants
-    /// survived all 1446 tests: one wrapping the name inside the icon's `if let` (nothing renders on
-    /// an icon-less row), one rendering the name only when no icon resolved (icon-only rows, exactly
-    /// what the ticket forbids). The block is now delimited by its own braces, which is the only
-    /// thing that can express "inside this conditional".
+    /// ends its region *at* the end anchor — so "the region does not contain `entry.value`" was true
+    /// wherever that line sat. It could not fail. Two of the reviewer's mutants survived all 1446
+    /// tests, and **both keep `Text(entry.value)` byte-identical, changing only its depth**:
+    ///
+    /// - **W** wraps it inside the icon's `if let` — nothing renders on an icon-less row. Assertion 2,
+    ///   once brace-delimited, kills this.
+    /// - **I** renders it only when no icon resolved — icon-only rows, verbatim what the ticket
+    ///   forbids. **Assertion 2 cannot see this**, because I nests the name in a *different*
+    ///   conditional that the icon-branch check never looks at, and assertion 1 counts a token
+    ///   without caring where it sits. Only assertion 3 kills it.
+    ///
+    /// The generalisable form: **"renders unconditionally" is a claim about depth.** A count sees a
+    /// token and not its position; a single-branch check sees one branch and not the others.
+    ///
+    /// **What none of the three covers, and it is a different axis entirely:** styling. A mutant
+    /// adding `.opacity(entry.appIcon?.icon == nil ? 1 : 0)` to the name passes all three — the
+    /// `Text` is present, outside the icon branch, and a direct child — while rendering the name
+    /// invisible whenever an icon resolved. That is the reviewer's N4 survivor, recorded rather than
+    /// closed: a textual scan can say *where* a view sits, never how it looks. The covering check is
+    /// the manual row that has a human open the sheet and read the names.
     @Test
     func theSheetRowRendersTheNameUnconditionallyBesideAnyIcon() throws {
         let row = try MacAgentSource.region(

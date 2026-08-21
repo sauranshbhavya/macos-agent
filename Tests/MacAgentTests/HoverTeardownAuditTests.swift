@@ -28,9 +28,14 @@ import Testing
 /// - **The mic** — was unsafe on both counts; SONNY-179 removed the stored copy.
 /// - **The two Learn-more sites** — flag on the window root, tracked views in a dismissible popover.
 ///   Both conditions held. Fixed on this branch by cancelling the dwell timer when the menu closes.
-/// - **The weekly chart's day columns** — safe on *both* counts, and the second is the durable one:
-///   `days` is a fixed seven-element `let`, so a column is never removed while the chart exists.
-///   (The flag also sits on the same view as the `.onHover`, so it cannot outlive it.)
+/// - **The weekly chart's day columns** — safe on **condition 2 alone**: `days` is a fixed
+///   seven-element `let`, so a column is never removed while the chart exists. Condition 1 *holds*
+///   here — `hoveredDayIndex` is `@State` on `WeeklyCompletionChart`, while the `.onHover` is on the
+///   per-column view inside its `ForEach`, so the flag does outlive what it tracks. An earlier
+///   version of this comment claimed the flag "sits on the same view as the `.onHover`", which is
+///   the exact mistake this suite was rewritten to correct, re-made one paragraph after correcting
+///   it (PR #84 cycle 3, C2). **If `days` ever stops being a fixed list, this site needs the
+///   Learn-more treatment**, and nothing else here would tell you that.
 /// - **The two `ContentView` modifiers** — the flag is `@State` on the modifier itself, which is
 ///   attached to the tracked view, so it has exactly that view's lifetime.
 @Suite
@@ -40,15 +45,19 @@ struct HoverTeardownAuditTests {
     /// that matters.**
     ///
     /// Six is the number of places hover is wired up. It is emphatically **not** the number of views
-    /// that end up tracked: `sonnyPointerCursor()` alone is applied at 29 call sites and
-    /// `sonnyHoverHighlight()` at 22, so the tracked-view population is in the dozens. The first
+    /// that end up tracked: `.sonnyPointerCursor()` alone is applied at 28 call sites and
+    /// `.sonnyHoverHighlight(…)` at 22, so the tracked-view population is in the dozens. The first
     /// version of this suite's closing record said "the population is six" without that distinction
-    /// (PR #84 review, R1).
+    /// (PR #84 review, R1). **28 and 22 are measured, not eyeballed**: `.sonnyPointerCursor()` with
+    /// its leading dot, over code lines only, is 21 in `CommandCenterView`, 3 in `RoutineDetailView`,
+    /// 2 in `ContentView`, 1 each in `ScreenAccessOnboarding` and `SonnyModeSegmentedControl`. A bare
+    /// `sonnyPointerCursor()` grep answers 29, because `ContentView` also holds the `func`
+    /// declaration and a doc-comment mention of it.
     ///
     /// **The conclusion still generalizes, and this is why:** the judgement is made per *site*,
-    /// because every view a site produces shares that site's storage shape. All 29 pointer-cursor
+    /// because every view a site produces shares that site's storage shape. All 28 pointer-cursor
     /// applications are the same modifier with the same `@State` attached to whatever view carries
-    /// it, so judging the modifier judges all 29. What a count of sites cannot do is stand in for a
+    /// it, so judging the modifier judges all 28. What a count of sites cannot do is stand in for a
     /// count of views, which is the claim that was overstated.
     ///
     /// Enumerated over the whole target recursively, and read **by URL** — passing
