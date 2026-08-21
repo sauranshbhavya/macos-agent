@@ -241,6 +241,14 @@ final class AgentViewModel: ObservableObject {
     /// The journal id of the session this task is running, or `nil`. Read once when the task's
     /// history row is written, then cleared with the rest of the per-task state.
     var activeVisionSessionID: String?
+    /// The grants file's contents for the iteration currently running, or `nil` outside one.
+    ///
+    /// Non-`nil` only between `visionIterationWillBegin()` and the run teardown that clears it, so
+    /// the three-to-four gate reads inside one iteration cost one decrypt instead of three or four
+    /// (SONNY-202). Deliberately not a session-long cache: `visionAppControlState`'s contract is
+    /// that a grant revoked mid-session ends the session at the *next* iteration, and a cache that
+    /// outlived an iteration would defer that to the next launch.
+    private var approvedAppsForThisVisionIteration: (apps: [ApprovedApp], failure: String?)?
     private let audioRecorder: AudioCommandRecorder
     private let permissionReadinessService: PermissionReadinessService
     private let routineStore: RoutineStore
@@ -1130,6 +1138,10 @@ final class AgentViewModel: ObservableObject {
             // The one place a session ends, whatever ended it — so the combination goes back to the
             // user's own apps on every exit, including the ones nobody planned for.
             releaseEmergencyStopHotKey()
+            // And the iteration's cached grants go with it, on the same "whatever ended it"
+            // reasoning: the cache is scoped to an iteration, and outside a session there is no
+            // iteration for it to belong to (SONNY-202).
+            approvedAppsForThisVisionIteration = nil
             visionUserPauseMonitor?.clearPause()
             // Cleared *after* the history row is written by `recordTaskHistoryIfTerminal`, which
             // runs earlier in this same exit path — so the row carries the link and the next task
@@ -2659,6 +2671,11 @@ final class AgentViewModel: ObservableObject {
         completedRunNotice = nil
         // A pending request to open a task's detail would point at a row the wipe has just erased.
         taskDetailRequest = nil
+        // The grants file is one of the eleven stores the wipe erases, so an in-memory copy of its
+        // contents goes with it (SONNY-202). `deleteLocalData` guards on `!isRunning` and this cache
+        // is cleared at every session exit, so it is already `nil` here — cleared anyway, because
+        // "already nil" is an argument about two other code paths and this is a property of one.
+        approvedAppsForThisVisionIteration = nil
         // And the marker that describes an outcome goes with the outcome. `deleteLocalData` writes
         // its own message into `finalSummary` immediately after this returns, and a stale `true`
         // here would make *that* message un-collapsible for a notification nobody sent.
@@ -3198,6 +3215,29 @@ final class AgentViewModel: ObservableObject {
     // Internal rather than `private`: the vision extension lives in another file and derives the
     // session's own state from this same read, which is what keeps the two answers from drifting.
     func loadApprovedAppsForGate() -> (apps: [ApprovedApp], failure: String?) {
+        if let cached = approvedAppsForThisVisionIteration {
+            return cached
+        }
+        return readApprovedAppsForGate()
+    }
+
+    /// Takes the one read this iteration will answer every gate question from.
+    // Internal rather than `private`: `visionIterationWillBegin()` lives in the vision extension,
+    // in another file, and is the only caller — the same split `loadApprovedAppsForGate` already
+    // carries, and for the same reason.
+    func cacheApprovedAppsForThisVisionIteration() {
+        approvedAppsForThisVisionIteration = readApprovedAppsForGate()
+    }
+
+    /// The read itself, which is a file read plus an AES-GCM open plus a JSON decode.
+    ///
+    /// **The cache above is written only by `visionIterationWillBegin()`, never here**, and that
+    /// asymmetry is what bounds its lifetime to one iteration (SONNY-202). A loader that populated
+    /// its own cache would keep the answer alive after the loop stopped asking, and the next reader
+    /// outside a session — a plan-time `approvalContext(visionTarget:)` — would get it. Today that
+    /// caller passes `nil` and the resolver ignores the grants entirely, so nothing would go wrong;
+    /// that is a fact about one call site rather than a property, and it is not what this rests on.
+    private func readApprovedAppsForGate() -> (apps: [ApprovedApp], failure: String?) {
         do {
             let apps = try approvedAppStore.loadAll()
             clearLocalStorageLoadFailure(.approvedApps)
