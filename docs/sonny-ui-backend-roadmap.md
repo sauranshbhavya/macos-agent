@@ -170,20 +170,35 @@ deliberately shows none of them — see its doc comment in
 doc comment still says so — but it is no longer the only thing on the page:
 `CommandCenterAttentionPanel` sits alongside it and renders all three. The doc comment this paragraph
 cites as its evidence carried the same stale sentence until SONNY-183 corrected it too, so the
-citation was pointing at a copy of the claim rather than at a check of it. The system-notification
+citation was pointing at a copy of the claim rather than at a check of it. ~~The system-notification
 fallback that's supposed to cover "user isn't looking at the widget" is currently unreachable in
 practice, and — per direct decision, 2026-07-20 — will stay that way: the widget is a permanent
 on-screen overlay by design, no dismiss/hide action is being added, and notifications are accepted as
 effectively unused for now (see `docs/sonny-ui-backend-gaps.md`'s "notification fallback path is
-currently unreachable" finding for the full reasoning).
+currently unreachable" finding for the full reasoning).~~ **Struck 2026-08-21 by SONNY-189.** The
+2026-07-20 decision was real and the widget is still a permanent overlay with no dismiss action — but
+"will stay that way" was superseded on **2026-08-17**, when the founder replaced the
+`isAnySonnySurfaceVisible` gate with a different rule: notify when Sonny is not the app the user is
+working in. Notifications fire today (SONNY-56; `AppDelegate.isUserWorkingInSonny`, and
+`SonnyAttention` where the rule lives and is tested). The old gate asked whether a Sonny surface was
+*on screen*, which the permanent overlay made permanently true; the new one asks whether the user is
+*working in* Sonny, which a permanent overlay does not make true.
 
-**UI update owed:** because the notification-fallback route is now off the table by that decision,
+~~**UI update owed:** because the notification-fallback route is now off the table by that decision,
 whichever branch ships scheduled/background execution has exactly one option, not an either/or: build
 Command Center its own real, native surface for permission/clarification/failure. A routine running
 unattended has no widget being watched and no working notification fallback — without a
 Command-Center-native surface for these three states, an unattended run that needs approval or fails
 would be silently stuck/invisible. This is a hard prerequisite for background execution being usable
-at all, not a nice-to-have polish item.
+at all, not a nice-to-have polish item.~~ **Struck 2026-08-21.** Three separate things here are no
+longer true, and it is worth being exact about which is which. The surface was built (branch 10 —
+SONNY-183 marks it at the top of this entry). The notification route came back (2026-08-17 —
+SONNY-189, struck above). And the "either/or" the paragraph collapses was never a real choice for
+the case it names, because an unattended scheduled run cannot leave an approval pending at all:
+`performScheduledRun` executes with `approvalDecision: .approved(.tier2)` and routes every
+`RiskApprovalError` to `pauseSchedule` (SONNY-31's notify-and-pause design, traced by SONNY-64 /
+PR #40's review). Sonny now has both surfaces and the notification, for the foreground runs that
+genuinely reach them.
 
 ## Workspaces' persistent "active workspace" concept
 

@@ -895,16 +895,24 @@ final class AgentViewModel: ObservableObject {
     }
 
     /// Whether the floating widget currently has real content to show — a permission/clarification/
-    /// failure state (the only place either is actionable at all, regardless of which surface
-    /// submitted the task), or a working/result state for a task the widget itself submitted.
-    /// Single source of truth for both `FloatingWidgetView`'s own panel rendering and
-    /// `FloatingWidgetWindowController`'s decision to composite into Command Center — compositing
-    /// whenever Command Center merely has key focus, regardless of this, was the real cause of the
-    /// widget silently vanishing right after launch: Command Center takes key-window focus first,
-    /// the widget composited in immediately while still idle, and an idle+composited render showed
-    /// literally nothing (no compact capsule, no pill), with no way to click back into it. Mirrors
+    /// failure state (shown regardless of which surface submitted the task), or a working/result
+    /// state for a task the widget itself submitted. Single source of truth for both
+    /// `FloatingWidgetView`'s own panel rendering and its `isMicHintSlotFree` gate. Mirrors
     /// `FloatingWidgetView`'s private `state`/`showsPanel` precedence exactly — keep both in sync if
     /// either changes.
+    ///
+    /// **Two stale claims removed here, both on 2026-08-21.** This said the widget was "the only
+    /// place either is actionable at all": `CommandCenterAttentionPanel` has rendered those three
+    /// states on four Command Center pages since branch 10 and wires Deny/Allow to the same
+    /// `cancelCurrentRun()`/`start()` entry points (SONNY-183). And it named the second reader as
+    /// `FloatingWidgetWindowController`'s decision to composite into Command Center; that mode was
+    /// superseded on 2026-07-21 and the controller has one positioning mode now (SONNY-189).
+    ///
+    /// The warning underneath both is kept, because it is the part that is still live: this
+    /// predicate is read in more than one place, and the widget once vanished silently right after
+    /// launch because a second reader disagreed with it — Command Center took key-window focus
+    /// first, the widget composited in while still idle, and an idle+composited render drew
+    /// literally nothing (no compact capsule, no pill), with no way to click back into it.
     var hasVisibleWidgetPanel: Bool {
         // Row I's two Safe-mode questions, first for the same reason the three below them are
         // unconditional: each is a parked continuation waiting on a human, and a session whose

@@ -4,8 +4,13 @@ import Testing
 import MacAgentCore
 
 /// Branch 10 checkpoint 1. Command Center gains its own permission/clarification/failure surface,
-/// which is a hard prerequisite for unattended scheduled runs: a scheduled routine has nobody
-/// watching the widget, and the system-notification fallback is unreachable by prior decision.
+/// which was framed as a hard prerequisite for unattended scheduled runs: a scheduled routine has
+/// nobody watching the widget, and at the time the system-notification fallback could not fire —
+/// every post was gated on `isAnySonnySurfaceVisible`, permanently true once the widget became a
+/// permanent overlay. **That gate is gone** (SONNY-56, the founder's rule of 2026-08-17: notify
+/// when Sonny is not the app the user is working in), so nothing here should be read as saying a
+/// notification cannot reach the user today. Kept in the past tense rather than deleted because it
+/// is why the surface was built. Corrected 2026-08-21 by SONNY-189.
 ///
 /// Two things are asserted here, and they pull in opposite directions on purpose:
 /// the new surface must be reachable from a `.commandCenter`-origin task, *and* the floating
@@ -17,8 +22,10 @@ struct CommandCenterAttentionSurfaceTests {
     /// the permanent, always-visible overlay, so for an unattended run it is the more reliable
     /// place for an approval, not the less. Adding a Command Center surface must not quietly turn
     /// that into duplicate-avoidance gating: `hasVisibleWidgetPanel` is the single source of truth
-    /// for both the widget's own panel and `FloatingWidgetWindowController`'s compositing
-    /// decision, and getting compositing wrong already made the widget vanish at launch once.
+    /// for the widget's own panel and for its mic-hover-hint slot, and a second reader disagreeing
+    /// with it already made the widget vanish at launch once. (That second reader used to be
+    /// `FloatingWidgetWindowController`'s compositing decision, which is where the vanishing came
+    /// from; the mode was superseded on 2026-07-21 and nothing composites anymore — SONNY-189.)
     @Test
     func widgetStillShowsAllThreeAttentionStatesForACommandCenterOriginTask() async throws {
         let root = try makeDirectory()
