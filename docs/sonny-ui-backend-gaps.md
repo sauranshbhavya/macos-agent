@@ -183,7 +183,7 @@ dry-run branch in `Sources/MacAgentCore` / `Sources/MacAgent/AgentViewModel.swif
 
 </details>
 
-## Not built: persisted result/output text for completed tasks
+## ~~Not built: persisted result/output text for completed tasks~~
 
 The new `TaskLogDetailDialog` (click any row in the Tasks page's Done/Canceled/Failed list) shows
 command, status, timestamps, and workspace — a "receipt," not a narrative. `CompletedTaskRecord`
@@ -194,6 +194,21 @@ finished, but it's never written into the historical record, so it's gone by the
 an old entry's detail dialog later. If a richer "what did it actually produce" view is wanted here,
 `CompletedTaskRecord` needs a new field (plus encrypted-store migration, following the same pattern
 as every other field addition to this struct) to persist that text at completion time.
+
+**Resolved on roadmap row E (SONNY-147/148), 2026-08-21.** `CompletedTaskRecord.result` persists what
+a task produced and `TaskLogDetailDialog` renders it in a wrapping **Result** block. The paragraph
+above is the original entry, unedited; four details are worth carrying rather than re-deriving.
+**The field is not a `String`** — it is `StoredTaskResult`, whose only initialisers are named
+`modelAuthored` and `codeAuthored`, because a stored summary later reaching a planner is the row I
+escaping lesson with the ten-minute bound removed. **The plan is not on the record**: the plan
+summary and steps went to `TaskPlanDetailStore`, the tenth local store, after the on-record shape
+measured at 38.81 MiB at the task-history cap against 3.53 MiB today; it shares the row's retention
+exactly, which was the founder's condition for splitting at all. **Nothing is backfilled** — a record
+written before row E has no result, and detail renders no block at all rather than an empty state,
+since telling those users their task produced nothing would be false and the no-explanatory-copy rule
+forbids the sentence that would correct it. **The steps are stored and deliberately never rendered**:
+they are context for a follow-up, and a step log on a user-facing receipt is the surface the founder
+rejected on 2026-07-18.
 
 ## Resolved: Routines row streak badge (branch 10)
 
