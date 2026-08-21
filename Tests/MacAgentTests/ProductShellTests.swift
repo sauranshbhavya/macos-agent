@@ -606,6 +606,9 @@ struct ProductShellTests {
             "taskHistoryQuery",
             "completedRunNotice",
             "taskDetailRequest",
+            // Row J's grants, cached for one vision iteration. The grants file is one of the
+            // eleven stores the wipe erases, so its in-memory copy is erased with it (SONNY-202).
+            "approvedAppsForThisVisionIteration",
             "outcomeWasNotified",
             "clarificationQuestion",
             "clarificationAnswer",

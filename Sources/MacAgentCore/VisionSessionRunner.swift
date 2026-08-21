@@ -142,6 +142,12 @@ final class VisionSessionRunner {
         var iteration = 0
         while true {
             iteration += 1
+            // Before every refusal check, so nothing below reads a stale answer, and once per
+            // iteration rather than once per session — which is the difference a revoked grant
+            // depends on (SONNY-202). The attention-pause branch below rewinds `iteration` and
+            // `continue`s, which comes back through here and re-invalidates, so a session that
+            // waited for a human re-reads rather than resuming on what it had.
+            interaction.visionIterationWillBegin()
 
 
             if let refusal = await containment.checkIterationStart(
