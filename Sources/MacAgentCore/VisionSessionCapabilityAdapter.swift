@@ -207,31 +207,69 @@ public struct VisionSessionCapabilityAdapter: CapabilityAdapter {
                 dataLeavesDevice: true,
                 undoDescription: "Sonny cannot undo what it does inside \(appName). You can stop it at any time."
             ),
-            escalations: [
-                // **Advisory, and tier 3, and both halves matter.**
-                //
-                // Tier 3 because a session that can click anything in an app is genuinely
-                // external-or-destructive class, and because the unattended scheduled path's fixed
-                // `.approved(.tier2)` ceiling must never be able to cover one. That ceiling is one
-                // of the three independent layers behind "unattended vision: never", and it works by
-                // comparing tiers — so the tier has to be honest for the layer to exist at all.
-                //
-                // Advisory because the founder decided on 2026-08-14 that Normal and Power run
-                // vision actions silently. An advisory escalation raises `effectiveTier` honestly
-                // while leaving the consequence rule's ask-term false, so the session starts without
-                // a prompt in Normal and Power, and Safe mode's floor asks anyway. The reason below
-                // still reaches the user — on the ran-without-asking trace, which is precisely what
-                // that trace is for. What stays *non*-advisory is every individual action the
-                // session goes on to take: `VisionSessionContainment` classifies each one, and a
-                // destructive or affects-others one asks in every mode.
+            escalations: escalations(for: appName, appControl: context.appControlStanding)
+        )
+    }
+
+    /// The session envelope's escalations: the standing advisory one, and — only when the user has
+    /// not yet allowed this app — the sentence that says allowing is remembered.
+    private func escalations(
+        for appName: String,
+        appControl: AppControlStanding
+    ) -> [CapabilityRiskEscalation] {
+        // **Advisory, and tier 3, and both halves matter.**
+        //
+        // Tier 3 because a session that can click anything in an app is genuinely
+        // external-or-destructive class, and because the unattended scheduled path's fixed
+        // `.approved(.tier2)` ceiling must never be able to cover one. That ceiling is one of the
+        // three independent layers behind "unattended vision: never", and it works by comparing
+        // tiers — so the tier has to be honest for the layer to exist at all.
+        //
+        // Advisory because the founder decided on 2026-08-14 that Normal and Power run vision
+        // actions silently. An advisory escalation raises `effectiveTier` honestly while leaving
+        // the consequence rule's ask-term false, so the session starts without a prompt in Normal
+        // and Power, and Safe mode's floor asks anyway. The reason still reaches the user — on the
+        // ran-without-asking trace, which is precisely what that trace is for. What stays
+        // *non*-advisory is every individual action the session goes on to take:
+        // `VisionSessionContainment` classifies each one, and a destructive or affects-others one
+        // asks in every mode.
+        var escalations: [CapabilityRiskEscalation] = [
+            CapabilityRiskEscalation(
+                fromTier: .tier2,
+                toTier: .tier3,
+                reason: "Sonny will control \(appName) directly, clicking and typing in its window, and will send redacted screenshots of that window to its vision model.",
+                consequence: .advisory
+            )
+        ]
+
+        // **The per-app question's own sentence** (SONNY-143, founder decision 2026-08-16). The
+        // panel already names the app, from `involvedResource` above; what was missing is that the
+        // answer sticks, and it goes here — the escalation reason is the existing channel for *why
+        // the user is being asked*, rendered on both approval surfaces, and it is the reason for
+        // this specific question rather than an explanation of how the product works.
+        //
+        // **Advisory, like its neighbour, and that is load-bearing rather than a copy of it.** The
+        // ask does not come from this escalation — it comes from the standing on `ApprovalContext`,
+        // through the one requirement function. Classifying this `.destructive` or `.affectsOthers`
+        // would make the consequence rule raise the ask instead, which would make the two
+        // indistinguishable in a test and would leave the sentence asking in Power, where the
+        // per-app gate does not run.
+        //
+        // It appears only for `.needsApproval`. For `.allowed` or `.notApplicable` there is no
+        // per-app question, and in Normal and Power there is then usually no prompt at all — the
+        // reason would land on the ran-without-asking trace, telling a user who was never asked what
+        // allowing would have done.
+        if appControl == .needsApproval {
+            escalations.append(
                 CapabilityRiskEscalation(
-                    fromTier: .tier2,
+                    fromTier: .tier3,
                     toTier: .tier3,
-                    reason: "Sonny will control \(appName) directly, clicking and typing in its window, and will send redacted screenshots of that window to its vision model.",
+                    reason: "Sonny has not been allowed to control \(appName) yet. Allowing it here keeps it allowed.",
                     consequence: .advisory
                 )
-            ]
-        )
+            )
+        }
+        return escalations
     }
 
     // MARK: - Execute: the loop

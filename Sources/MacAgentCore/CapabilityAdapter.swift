@@ -197,6 +197,21 @@ public struct CapabilityExecutionContext {
     /// default browser — the ordinary path must not inherit a routine's preference.
     public var preferredBrowser: MacApp?
 
+    /// The per-app control standing for the plan being assessed — row J's answer to "may Sonny
+    /// drive this app without asking", resolved **once** by the view model and carried here.
+    ///
+    /// **Carried rather than recomputed, and that is the point.** The same resolved value reaches
+    /// `RiskApprovalPolicy.requirement(for:context:)` on `ApprovalContext`, so the requirement and
+    /// the sentence explaining it cannot disagree. A second resolution here would be a second
+    /// reading of a store that can change between the two.
+    ///
+    /// **It is a copy input, never a gate.** The only reader is
+    /// `VisionSessionCapabilityAdapter.assessRisk`, which uses it to word an escalation reason; no
+    /// adapter refuses or permits anything on it, and `effectiveTier` is unmoved by it — the added
+    /// escalation targets the tier the session was already at, so the unattended path's
+    /// `.approved(.tier2)` ceiling still compares the same numbers it always did.
+    public var appControlStanding: AppControlStanding
+
     /// Destination paths, `DestinationKey.folded`, that earlier units of this same chain have already
     /// claimed or written (SONNY-76).
     ///
@@ -305,6 +320,9 @@ public struct CapabilityExecutionContext {
         now: @escaping () -> Date = Date.init,
         hotKeyReady: @escaping () -> Bool = { true },
         preferredBrowser: MacApp? = nil,
+        // Not defaulted: this is an authority-derived value, and a default here is how row J's gate
+        // would become a hook nothing calls. Both construction sites answer it.
+        appControlStanding: AppControlStanding,
         claimedEarlierInThisRun: RunClaims = .none,
         // Non-defaulted, on the same reasoning as `assessRisk(plan:scope:)` and both `AgentRunner`
         // entry points, and for a failure that is one layer quieter than either: a second
@@ -352,6 +370,7 @@ public struct CapabilityExecutionContext {
         self.now = now
         self.hotKeyReady = hotKeyReady
         self.preferredBrowser = preferredBrowser
+        self.appControlStanding = appControlStanding
         self.claimedEarlierInThisRun = claimedEarlierInThisRun
         self.taskScope = taskScope
         self.assessNestedPlan = assessNestedPlan

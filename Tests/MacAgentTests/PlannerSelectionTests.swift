@@ -186,6 +186,10 @@ private func makeViewModel(root: URL, plannerSelection: String?) throws -> Agent
             fileURL: root.appendingPathComponent("clipboard-history-settings.json"),
             encryption: encryption
         ),
+        approvedAppStore: ApprovedAppStore(
+            fileURL: root.appendingPathComponent("approved-apps.json"),
+            encryption: encryption
+        ),
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
             reader: FakePasteboardReader(),
             store: ClipboardHistoryStore(

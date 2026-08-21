@@ -161,17 +161,41 @@ public final class AgentRunner {
     ///
     /// `context` is non-defaulted for the identical reason (SONNY-97): `execute` calls this again
     /// internally, so a context threaded here and defaulted there would prompt under one
-    /// requirement and execute under another. And note where it lands — the *requirement*, never
-    /// the assessment. `assessRisk` takes no context and must never grow one: `effectiveTier`
-    /// remains a pure function of the plan, and the requirement is that tier plus the escalations'
-    /// consequence classes plus whatever the context says (Safe mode today).
+    /// requirement and execute under another.
+    ///
+    /// **Where the context lands, corrected 2026-08-20 (SONNY-143).** This used to say "`assessRisk`
+    /// takes no context and must never grow one". It takes one field of it now — `appControl`,
+    /// forwarded below — and the sentence needs restating rather than deleting, because the
+    /// invariant it was protecting is still live and still exactly as important:
+    ///
+    /// - **`effectiveTier` remains a pure function of the plan and the scope.** The standing reaches
+    ///   exactly one adapter and only to *word an escalation reason*; the escalation it adds targets
+    ///   the tier the vision session was already at, so the max-fold that computes `effectiveTier`
+    ///   returns the same tier with and without it. That is what keeps the unattended path's fixed
+    ///   `.approved(.tier2)` ceiling load-bearing, since that ceiling works by comparing tiers.
+    /// - **No adapter gates on it.** It permits nothing and refuses nothing. Every gate that reads
+    ///   the standing reads it from `ApprovalContext`, through the one requirement function.
+    /// - **The requirement is still tier plus consequence classes plus the context.** The added
+    ///   escalation is `.advisory`, so the consequence rule's ask-term is untouched by it and the
+    ///   ask still comes from the standing on `ApprovalContext` — which is what makes the two
+    ///   separable in a test at all.
+    ///
+    /// What would break the invariant is an adapter that changed a *tier* or refused on the
+    /// standing. That is the line, and it is not this.
     public func approvalRequest(
         for preparedRun: PreparedAgentRun,
         logAssessment: Bool = false,
         scope: TaskWorkspaceScope,
         context: ApprovalContext
     ) throws -> RiskApprovalRequest {
-        let assessment = try executor.assessRisk(plan: preparedRun.plan, scope: scope)
+        // **`appControl` is forwarded off the same context the requirement is computed from**, so
+        // the ask and the sentence explaining it are derived from one resolution rather than two
+        // that can disagree (SONNY-143).
+        let assessment = try executor.assessRisk(
+            plan: preparedRun.plan,
+            scope: scope,
+            appControl: context.appControl
+        )
         let request = RiskApprovalRequest(
             assessment: assessment,
             requirement: approvalPolicy.requirement(for: assessment, context: context)

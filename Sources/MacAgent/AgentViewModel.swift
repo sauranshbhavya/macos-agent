@@ -1258,7 +1258,11 @@ final class AgentViewModel: ObservableObject {
                 for: prepared,
                 logAssessment: true,
                 scope: activeTaskScope,
-                context: approvalContext()
+                // The plan is resolved by now — `AgentActionExecutor.prepare` runs
+                // `resolveDefaultOutputs` and hands back the resolved plan — so this is Launch
+                // Services' identity for the app, the same one the terminal ban judged at that
+                // door. `nil` for every plan that controls no app, which is nearly all of them.
+                context: approvalContext(visionTarget: prepared.plan.appControlTargetBundleIdentifier)
             )
             switch request.requirement {
             case .autoRun:
@@ -3124,15 +3128,88 @@ final class AgentViewModel: ObservableObject {
         hasCompletedFirstApproval = true
     }
 
-    func approvalContext() -> ApprovalContext {
-        // The mode travels whole now (SONNY-142). It used to be folded through
-        // `asksBeforeEveryAction` into a boolean here, which made Normal and Power indistinguishable
-        // to the engine — correct while the engine distinguished two postures, and wrong the moment
-        // row J gave Power a rule of its own.
-        //
-        // `appControl` is `.notApplicable` at every construction site until SONNY-143 resolves it,
-        // which is deliberate and is why the parameter is not defaulted: every caller answers it.
-        ApprovalContext(mode: interactionMode, appControl: .notApplicable)
+    /// - Parameter visionTarget: the bundle identifier of the app this run will control, or `nil`
+    ///   when it controls none. **Not defaulted, on purpose.** A default is how row I's resolver
+    ///   hook came to exist and never be called: `nil` has to be an answer a caller gives, so that
+    ///   adding a call site is adding a decision rather than inheriting one.
+    func approvalContext(visionTarget: String?) -> ApprovalContext {
+        // The mode travels whole (SONNY-142). It used to be folded through `asksBeforeEveryAction`
+        // into a boolean here, which made Normal and Power indistinguishable to the engine —
+        // correct while the engine distinguished two postures, and wrong the moment row J gave
+        // Power a rule of its own.
+        ApprovalContext(
+            mode: interactionMode,
+            appControl: AppControlResolver.standing(
+                mode: interactionMode,
+                targetBundleIdentifier: visionTarget,
+                starterList: AppControlStarterList.bundleIdentifiers,
+                approvedApps: approvedAppsForControlGate()
+            )
+        )
+    }
+
+    /// The user's own grants, for the gate, with a load failure surfaced rather than swallowed.
+    ///
+    /// **Failing closed here means asking, and that is the safe direction** — an unreadable grants
+    /// file resolves every app to `.needsApproval`, which can only raise a question. It must not be
+    /// silent about it, though: the visible symptom of a swallowed failure is Sonny asking about
+    /// apps the user already allowed, which reads as the feature working badly rather than as a file
+    /// that will not open. So the failure goes through the same banner every other store's load
+    /// failure uses, and clears itself when the file reads again.
+    private func approvedAppsForControlGate() -> [ApprovedApp] {
+        do {
+            let apps = try approvedAppStore.loadAll()
+            clearLocalStorageLoadFailure(.approvedApps)
+            return apps
+        } catch {
+            recordLocalStorageLoadFailure(.approvedApps, error: error)
+            return []
+        }
+    }
+
+    /// Writes the grant an Allow just gave, when the run being allowed controls an app that did not
+    /// have one. Returns whether the run may go ahead.
+    ///
+    /// **One approval, two effects**, and the escalation reason is what makes the second one
+    /// legible: the panel says the answer is remembered, and this is what remembers it. Denying
+    /// writes nothing, because denying is not the absence of an answer — it is an answer that grants
+    /// nothing, and a session the user refused must ask again next time.
+    ///
+    /// It runs at the **plan** gate rather than mid-loop on purpose. Written here, the very next
+    /// `visionApprovalContext` re-resolution inside the session sees `.allowed`, so the loop's
+    /// per-action gate is the consequence rule alone; without it every single action in the session
+    /// would carry an outstanding per-app question and ask again.
+    ///
+    /// **A failed write stops the run, and that is the interesting decision here.** The obvious
+    /// shape — record the failure as a storage notice and start the session anyway — was built
+    /// first and a test caught what it actually does: the session's own per-iteration re-resolution
+    /// finds no grant on its very first iteration and ends the session with *"Sonny stopped because
+    /// it is no longer allowed to control VS Code"*, said to a person who had just pressed Allow.
+    /// The run dies either way; the only question is whether the reason the user reads is true. So
+    /// the failure is reported here, once, in words that describe what happened, and the run does
+    /// not start. That is also the fail-closed direction: a session runs on a grant that exists.
+    private func rememberAppControlGrant(for preparedRun: PreparedAgentRun) -> Bool {
+        guard let target = preparedRun.plan.appControlTargetBundleIdentifier else {
+            return true
+        }
+        let displayName = preparedRun.plan.steps
+            .first { $0.operation == .visionSession }?
+            .resolvedAppName ?? target
+        do {
+            try approvedAppStore.approve(bundleIdentifier: target, displayName: displayName)
+            return true
+        } catch {
+            // A *write* failure, which is a different thing from a load failure and must never
+            // borrow its wording — "could not be decrypted or decoded" describes an existing file
+            // that will not read back, which is the wrong problem entirely. `setError` rather than
+            // `recordLocalStorageWriteFailure` because the task really did not run, which is exactly
+            // what `errorMessage` means; the sentence still names the storage cause, following
+            // `applyClipboardHistoryNoticeChoice`.
+            setError(
+                "Sonny could not remember that you allowed it to control \(displayName), so it did not start. \(error.localizedDescription)"
+            )
+            return false
+        }
     }
 
     private func executePreparedRun(
@@ -3154,7 +3231,7 @@ final class AgentViewModel: ObservableObject {
             // same reason: one origin at the prompt and another at execution would derive two
             // different requirements from one run.
             scope: activeTaskScope,
-            context: approvalContext()
+            context: approvalContext(visionTarget: preparedRun.plan.appControlTargetBundleIdentifier)
         )
         markAllSteps(.complete)
         // The task itself succeeded; a bookkeeping failure is a storage notice, not a task error.
@@ -3177,6 +3254,19 @@ final class AgentViewModel: ObservableObject {
             return
         }
         guard !isRunning, let preparedRun, let runner, let approvalRequest else {
+            return
+        }
+
+        // One approval, two effects (SONNY-143). Before the run starts, so the session's own
+        // per-iteration re-resolution sees the grant it was just given rather than asking again on
+        // its first action — and a grant that cannot be written stops the run here rather than
+        // letting that re-resolution end it a moment later with a sentence that is not true.
+        guard rememberAppControlGrant(for: preparedRun) else {
+            // `self.` is load-bearing: the `guard let approvalRequest` above shadows the published
+            // property with a non-optional local, so an unqualified assignment does not compile —
+            // and clearing it is what takes the panel down, so the user is not left staring at a
+            // question the app has already declined to act on.
+            self.approvalRequest = nil
             return
         }
 
@@ -3739,7 +3829,11 @@ final class AgentViewModel: ObservableObject {
                 // reach still asks, and the `.approved(.tier2)` ceiling below still refuses it.
                 // Reachability, not a type-level guarantee; a test named for the hazard pins it.
                 scope: .unscoped,
-                context: approvalContext()
+                // `nil`, and it is an answer rather than an omission: a stored routine can never
+                // contain a `vision_session` step (`StoredRoutine.forbiddenStepOperations`), and
+                // unattended vision is refused by three independent layers anyway. A scheduled run
+                // controls no app, so it has no per-app standing.
+                context: approvalContext(visionTarget: nil)
             )
             recordScheduledRunInHistory(name: name, at: occurrence)
             recordScheduledTaskHistory(

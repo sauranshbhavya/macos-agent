@@ -336,6 +336,7 @@ struct VisionSessionContainmentTests {
         case cancelled = "user_stopped"
         case targetIneligible = "target_ineligible"
         case screenShowsShell = "screen_shows_shell"
+        case appControlWithdrawn = "app_control_withdrawn"
         case targetNotFrontmost = "target_not_frontmost"
         case attentionLost = "attention_lost"
         case actionTypeNotAllowed = "action_not_allowed"
@@ -357,6 +358,7 @@ struct VisionSessionContainmentTests {
             return .screenShowsShell(
                 ShellSurfaceDetector.verdict(for: "user@host ~ % ls\nzsh: command not found: x")
             )
+        case .appControlWithdrawn: return .appControlWithdrawn(app: "Safari")
         case .targetNotFrontmost: return .targetNotFrontmost(expected: "Safari", actual: "Notes")
         case .attentionLost: return .attentionLost(.screenLocked)
         case .actionTypeNotAllowed: return .actionTypeNotAllowed("launch_missiles")
@@ -378,6 +380,7 @@ struct VisionSessionContainmentTests {
         case .cancelled: return .cancelled
         case .targetIneligible: return .targetIneligible
         case .screenShowsShell: return .screenShowsShell
+        case .appControlWithdrawn: return .appControlWithdrawn
         case .targetNotFrontmost: return .targetNotFrontmost
         case .attentionLost: return .attentionLost
         case .actionTypeNotAllowed: return .actionTypeNotAllowed

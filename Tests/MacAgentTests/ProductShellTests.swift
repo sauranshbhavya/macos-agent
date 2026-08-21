@@ -2889,6 +2889,10 @@ private func makeProductShellFixture(
             encryption: encryption
         ),
         clipboardHistorySettingsStore: clipboardSettingsStore,
+        approvedAppStore: ApprovedAppStore(
+            fileURL: root.appendingPathComponent("approved-apps.json"),
+            encryption: encryption
+        ),
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
             reader: ProductShellPasteboardReader(),
             store: ClipboardHistoryStore(

@@ -50,7 +50,7 @@ struct UnattendedVisionNeverTests {
         let executor = AgentActionExecutor(
             installedAppResolver: InstalledAppResolver(source: FixedAppSource([Self.safari]))
         )
-        let assessment = try executor.assessRisk(plan: Self.visionPlan(), scope: .unscoped)
+        let assessment = try executor.assessRisk(plan: Self.visionPlan(), scope: .unscoped, appControl: .notApplicable)
         #expect(assessment.effectiveTier == .tier3)
 
         let request = RiskApprovalRequest(assessment: assessment, requirement: .explicitApproval)

@@ -295,6 +295,7 @@ private func makeDispatchFixture() throws -> DispatchFixture {
         clipboardHistorySettingsStore: ClipboardHistorySettingsStore(
             fileURL: root.appendingPathComponent("clipboard-history-settings.json")
         ),
+        approvedAppStore: ApprovedAppStore(fileURL: root.appendingPathComponent("approved-apps.json")),
         localDataDeletionService: LocalDataDeletionService(fileURLs: []),
         priorTaskContextStore: PriorTaskContextStore(),
         taskUsageRecorder: TaskUsageRecorder(),

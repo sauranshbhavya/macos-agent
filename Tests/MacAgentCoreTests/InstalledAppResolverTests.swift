@@ -314,7 +314,7 @@ struct OpenAppOverTheInstalledUniverseTests {
         let fixture = try Fixture(installed: [Fixture.figma])
         defer { fixture.tearDown() }
 
-        let assessment = try fixture.executor.assessRisk(plan: Fixture.openAppPlan("Figma"), scope: .unscoped)
+        let assessment = try fixture.executor.assessRisk(plan: Fixture.openAppPlan("Figma"), scope: .unscoped, appControl: .notApplicable)
 
         #expect(assessment.effectiveTier == .tier1)
         #expect(assessment.escalations.isEmpty)
