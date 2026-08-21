@@ -98,7 +98,11 @@ public struct LocalDataDeletionService: @unchecked Sendable {
             // Row E's plan details. Deleted with the same wipe as the rows they hang off — a wipe
             // that left the plan of every task Sonny ran would be the same failure as leaving the
             // rows themselves.
-            TaskPlanDetailStore(fileManager: fileManager).fileURL
+            TaskPlanDetailStore(fileManager: fileManager).fileURL,
+            // Row J's per-app grants. A durable record of which apps the user let Sonny drive is
+            // theirs to erase along with everything else — and leaving it behind would also leave
+            // the wipe's own promise half-true.
+            ApprovedAppStore(fileManager: fileManager).fileURL
         ]
     }
 
