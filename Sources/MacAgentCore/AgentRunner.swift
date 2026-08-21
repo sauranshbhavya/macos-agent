@@ -163,39 +163,28 @@ public final class AgentRunner {
     /// internally, so a context threaded here and defaulted there would prompt under one
     /// requirement and execute under another.
     ///
-    /// **Where the context lands, corrected 2026-08-20 (SONNY-143).** This used to say "`assessRisk`
-    /// takes no context and must never grow one". It takes one field of it now — `appControl`,
-    /// forwarded below — and the sentence needs restating rather than deleting, because the
-    /// invariant it was protecting is still live and still exactly as important:
+    /// And note where it lands — the *requirement*, never the assessment. **`assessRisk` takes no
+    /// `ApprovalContext` and must never grow one:** `effectiveTier` remains a pure function of the
+    /// plan and the scope, and the requirement is that tier plus the escalations' consequence
+    /// classes plus whatever the context says (the mode, and row J's per-app standing).
     ///
-    /// - **`effectiveTier` remains a pure function of the plan and the scope.** The standing reaches
-    ///   exactly one adapter and only to *word an escalation reason*; the escalation it adds targets
-    ///   the tier the vision session was already at, so the max-fold that computes `effectiveTier`
-    ///   returns the same tier with and without it. That is what keeps the unattended path's fixed
-    ///   `.approved(.tier2)` ceiling load-bearing, since that ceiling works by comparing tiers.
-    /// - **No adapter gates on it.** It permits nothing and refuses nothing. Every gate that reads
-    ///   the standing reads it from `ApprovalContext`, through the one requirement function.
-    /// - **The requirement is still tier plus consequence classes plus the context.** The added
-    ///   escalation is `.advisory`, so the consequence rule's ask-term is untouched by it and the
-    ///   ask still comes from the standing on `ApprovalContext` — which is what makes the two
-    ///   separable in a test at all.
-    ///
-    /// What would break the invariant is an adapter that changed a *tier* or refused on the
-    /// standing. That is the line, and it is not this.
+    /// **This sentence was briefly untrue and is worth the paragraph** (PR #88's fix round). Row J's
+    /// first implementation forwarded `context.appControl` into `assessRisk` so the vision adapter
+    /// could word an escalation reason with it — the *sentence* saying that allowing an app is
+    /// remembered. The founder then decided (2026-08-21) that the per-app question is asked after
+    /// the session's first capture rather than here, because only a capture can reveal a shell in a
+    /// window whose app no name list refuses. With the question gone from this gate, the sentence
+    /// belongs with it: `VisionSessionContainment.appControlRequirement(context:)` builds that
+    /// request inside the loop, and the standing reaches an assessment nowhere. The forwarding is
+    /// removed rather than left dormant — a field nothing reads is how the next reader concludes it
+    /// is load-bearing.
     public func approvalRequest(
         for preparedRun: PreparedAgentRun,
         logAssessment: Bool = false,
         scope: TaskWorkspaceScope,
         context: ApprovalContext
     ) throws -> RiskApprovalRequest {
-        // **`appControl` is forwarded off the same context the requirement is computed from**, so
-        // the ask and the sentence explaining it are derived from one resolution rather than two
-        // that can disagree (SONNY-143).
-        let assessment = try executor.assessRisk(
-            plan: preparedRun.plan,
-            scope: scope,
-            appControl: context.appControl
-        )
+        let assessment = try executor.assessRisk(plan: preparedRun.plan, scope: scope)
         let request = RiskApprovalRequest(
             assessment: assessment,
             requirement: approvalPolicy.requirement(for: assessment, context: context)

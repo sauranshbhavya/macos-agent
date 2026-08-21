@@ -181,6 +181,44 @@ public protocol VisionSessionInteracting: AnyObject {
     ///   per call is what makes a grant revoked mid-session take effect at the next iteration rather
     ///   than at the next launch (SONNY-143).
     func visionApprovalContext(targetBundleIdentifier: String) -> ApprovalContext
+
+    /// What the per-app control gate says about this session's target, re-asked after every capture.
+    ///
+    /// **Why this exists beside `visionApprovalContext`, rather than being read off its
+    /// `appControl`.** A standing is a *policy input*: it has exactly three values because the one
+    /// requirement function has to answer for every one of them, and "the grants file would not
+    /// open" is not a policy — it is a fact about a file. `visionApprovalContext` therefore fails
+    /// closed to `.needsApproval` when the store cannot be read, which is the right thing for a
+    /// requirement (it can only raise an ask) and the wrong thing for a session, which would end
+    /// telling the user they were no longer allowed when nothing was withdrawn (PR #88, F3).
+    ///
+    /// Both answers come from **one read** in the implementation, so the two cannot drift.
+    func visionAppControlState(targetBundleIdentifier: String) -> VisionAppControlState
+
+    /// Records that the user has allowed Sonny to control this app, returning whether it was
+    /// stored.
+    ///
+    /// Called by the loop the moment the per-app question is answered, and only then — a grant is
+    /// minted by the person answering that question and by nothing else. `false` means the write
+    /// failed; the caller ends the session rather than running on a grant that does not exist.
+    func rememberAppControlGrant(bundleIdentifier: String, displayName: String) -> Bool
+}
+
+/// What the per-app control gate says about a session's target.
+///
+/// Three answers rather than ``AppControlStanding``'s three, and the difference is the point: this
+/// one can say the grants file would not open, and that enum deliberately cannot. See
+/// ``VisionSessionInteracting/visionAppControlState(targetBundleIdentifier:)``.
+public enum VisionAppControlState: Equatable, Sendable {
+    /// Sonny may control this app: the user allowed it, the starter list covers it in this mode, or
+    /// the mode asks about no app at all.
+    case allowed
+    /// The user has not allowed this app under the current mode. The session asks once, after its
+    /// first capture has cleared the screen check.
+    case needsApproval
+    /// The grants file exists and would not read back. Carries the underlying description for the
+    /// record; the user-facing sentence is `VisionContainmentRefusal.appControlUnreadable`'s.
+    case unreadable(String)
 }
 
 /// Everything a vision session needs from outside `MacAgentCore`'s pure logic, in one field.

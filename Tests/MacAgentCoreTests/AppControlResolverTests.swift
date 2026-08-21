@@ -199,34 +199,6 @@ struct AppControlResolverTests {
                 == .terminal
         )
     }
-
-    /// The plan-side half of the two production call sites: what a plan reports as its target.
-    @Test
-    func onlyAResolvedVisionStepReportsAnAppControlTarget() {
-        let ordinary = AgentPlan(summary: "s", requiresConfirmation: false, steps: [
-            AgentStep(id: "a", operation: .openApp, description: "d", appName: "Safari")
-        ])
-        #expect(ordinary.appControlTargetBundleIdentifier == nil)
-
-        let unresolved = AgentPlan(summary: "s", requiresConfirmation: false, steps: [
-            AgentStep(id: "v", operation: .visionSession, description: "d", appName: "Safari", visionGoal: "g")
-        ])
-        // An unresolved vision plan has not passed the resolve door, so it is not executable and
-        // reports no target. Correct, not a hole.
-        #expect(unresolved.appControlTargetBundleIdentifier == nil)
-
-        var resolvedStep = AgentStep(
-            id: "v",
-            operation: .visionSession,
-            description: "d",
-            appName: "Safari",
-            visionGoal: "g"
-        )
-        resolvedStep.resolvedAppName = "Safari"
-        resolvedStep.resolvedBundleIdentifier = "com.apple.Safari"
-        let resolved = AgentPlan(summary: "s", requiresConfirmation: false, steps: [resolvedStep])
-        #expect(resolved.appControlTargetBundleIdentifier == "com.apple.Safari")
-    }
 }
 
 private extension Date {

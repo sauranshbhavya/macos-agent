@@ -43,16 +43,7 @@ public enum UnattendedTrustAdvisory {
         // existed. (SONNY-37; user-ratified narrow exception to that ticket's never-touch entry,
         // which covers this file's behavior. Whether a *scheduled run's* pre-check should one day
         // assess with the run's real scope is explicitly undecided and is flagged on the ticket.)
-        // `.notApplicable` alongside it, for the same class of reason and with the same lack of
-        // behavioural consequence (SONNY-143): a routine's steps cannot include `vision_session`
-        // (`StoredRoutine.forbiddenStepOperations`), so this plan controls no app and has no per-app
-        // standing. A one-line signature propagation; nothing about this advisory's behaviour or
-        // copy changes, and the assessment it reads is byte-identical to the one it read before.
-        guard let assessment = try? executor.assessRisk(
-            plan: plan,
-            scope: .unscoped,
-            appControl: .notApplicable
-        ) else {
+        guard let assessment = try? executor.assessRisk(plan: plan, scope: .unscoped) else {
             return nil
         }
         guard assessment.effectiveTier.rawValue >= CapabilityRiskTier.tier3.rawValue else {

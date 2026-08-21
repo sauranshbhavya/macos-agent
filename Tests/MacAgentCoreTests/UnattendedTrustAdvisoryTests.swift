@@ -56,8 +56,7 @@ struct UnattendedTrustAdvisoryTests {
         // would pass vacuously for the wrong reason.
         let assessment = try executor.assessRisk(
             plan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Signature refresh"),
-            scope: .unscoped,
-            appControl: .notApplicable
+            scope: .unscoped
         )
         #expect(assessment.effectiveTier == .tier3)
 

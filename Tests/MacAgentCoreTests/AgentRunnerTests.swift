@@ -306,7 +306,7 @@ struct AgentRunnerTests {
             ]
         )
 
-        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped, appControl: .notApplicable)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
 
         #expect(assessment.defaultTier == .tier2)
         #expect(assessment.effectiveTier == .tier2)

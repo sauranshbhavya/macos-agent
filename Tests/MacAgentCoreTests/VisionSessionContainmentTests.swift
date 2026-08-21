@@ -337,6 +337,9 @@ struct VisionSessionContainmentTests {
         case targetIneligible = "target_ineligible"
         case screenShowsShell = "screen_shows_shell"
         case appControlWithdrawn = "app_control_withdrawn"
+        case appControlDeclined = "app_control_declined"
+        case appControlNotRemembered = "app_control_not_remembered"
+        case appControlUnreadable = "app_control_unreadable"
         case targetNotFrontmost = "target_not_frontmost"
         case attentionLost = "attention_lost"
         case actionTypeNotAllowed = "action_not_allowed"
@@ -359,6 +362,9 @@ struct VisionSessionContainmentTests {
                 ShellSurfaceDetector.verdict(for: "user@host ~ % ls\nzsh: command not found: x")
             )
         case .appControlWithdrawn: return .appControlWithdrawn(app: "Safari")
+        case .appControlDeclined: return .appControlDeclined(app: "Safari")
+        case .appControlNotRemembered: return .appControlNotRemembered(app: "Safari")
+        case .appControlUnreadable: return .appControlUnreadable(app: "Safari")
         case .targetNotFrontmost: return .targetNotFrontmost(expected: "Safari", actual: "Notes")
         case .attentionLost: return .attentionLost(.screenLocked)
         case .actionTypeNotAllowed: return .actionTypeNotAllowed("launch_missiles")
@@ -381,6 +387,9 @@ struct VisionSessionContainmentTests {
         case .targetIneligible: return .targetIneligible
         case .screenShowsShell: return .screenShowsShell
         case .appControlWithdrawn: return .appControlWithdrawn
+        case .appControlDeclined: return .appControlDeclined
+        case .appControlNotRemembered: return .appControlNotRemembered
+        case .appControlUnreadable: return .appControlUnreadable
         case .targetNotFrontmost: return .targetNotFrontmost
         case .attentionLost: return .attentionLost
         case .actionTypeNotAllowed: return .actionTypeNotAllowed

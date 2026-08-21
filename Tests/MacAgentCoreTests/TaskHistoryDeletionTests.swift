@@ -6,7 +6,7 @@ import Testing
 ///
 /// Before this, nothing in Sonny deleted one thing: `TaskHistoryStore`'s whole surface was
 /// `record(_:)` and `loadAll()`, the journal had `deleteAll()` and no delete-by-id, and the only
-/// deletion anywhere was the nine-store wipe.
+/// deletion anywhere was the whole-directory wipe.
 struct TaskHistoryDeletionTests {
     @Test
     func deletingByIdRemovesExactlyThatRecordAndLeavesTheOthersUntouched() throws {

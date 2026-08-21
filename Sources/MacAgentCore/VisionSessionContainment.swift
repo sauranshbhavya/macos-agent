@@ -142,18 +142,54 @@ public enum VisionContainmentRefusal: Equatable, Sendable {
     /// case rather than route around it.**
     case screenShowsShell(ShellSurfaceVerdict)
     /// The user's permission to control this app went away while the session was running
-    /// (SONNY-143) — removed in Settings, or erased with the rest of their local data.
+    /// (SONNY-143).
     ///
-    /// **Re-asked at the top of every iteration, and it ends the session rather than re-prompting.**
-    /// A grant is durable and a session is long, so the answer that started this one can stop being
-    /// true while it runs; re-reading it per iteration is what makes a revocation take effect now
-    /// rather than at the next launch. It does not re-prompt for the same reason nothing else here
-    /// does — the user has just answered this exact question, in the other direction.
+    /// **Re-asked after every capture, and it ends the session rather than re-prompting.** A grant
+    /// is durable and a session is long, so the answer that started this one can stop being true
+    /// while it runs; re-reading it each iteration is what makes a withdrawal take effect now rather
+    /// than at the next launch. It does not re-prompt for the same reason nothing else here does —
+    /// the user has just answered this exact question, in the other direction.
+    ///
+    /// **Every cause, enumerated, because the sentence asserts a fact about permission and has to be
+    /// true of all of them** (PR #88, F3 — the list here named two and there are three):
+    ///
+    /// 1. The user removed the app in Settings → Security & Access (row J's third branch, SONNY-144).
+    /// 2. A local-data wipe erased the grants file with everything else.
+    /// 3. **The user switched to Safe mid-session, for an app only the starter list vouched for.**
+    ///    The starter list contributes nothing in Safe, so an app allowed by it alone stops being
+    ///    allowed the moment the dial moves. This is a genuine withdrawal — the user turned it off
+    ///    themselves, by a different control — which is why it belongs here and not in a case of its
+    ///    own.
+    ///
+    /// **A grants file that will not open is *not* one of them.** That is `appControlUnreadable`:
+    /// nothing was withdrawn, Sonny simply cannot tell, and saying "no longer allowed" to somebody
+    /// who withdrew nothing is the same untrue sentence this branch already removed from the write
+    /// path.
     ///
     /// **Not a terminal refusal and not a substitute for one.** The deny list re-checks above this
     /// every iteration, so a terminal ends the session under `targetIneligible` before this case is
     /// ever reached, whatever any grant says.
     case appControlWithdrawn(app: String)
+    /// The user was asked whether Sonny may control this app, and said no (SONNY-143, reworked in
+    /// PR #88's fix round).
+    ///
+    /// Its own case rather than `approvalDeclined`, which names an *action*: "you did not allow
+    /// Sonny to control VS Code" and "you declined: click Delete" are different facts, and the
+    /// session record is the place that difference has to survive.
+    case appControlDeclined(app: String)
+    /// The user allowed it and the grant could not be written.
+    ///
+    /// **The session stops, and the reason says what actually happened.** Continuing would mean the
+    /// very next iteration finding no grant and ending under `appControlWithdrawn`, telling somebody
+    /// who had just pressed Allow that they were no longer allowed. The run stops either way; only
+    /// the truth of the sentence differs.
+    case appControlNotRemembered(app: String)
+    /// The grants file exists and would not read back, so the gate cannot be answered either way.
+    ///
+    /// **Fail closed and say so.** Reading an undecryptable file as "no grants" would silently
+    /// re-ask about every app the user had already allowed; reading it as a withdrawal would assert
+    /// something nobody did.
+    case appControlUnreadable(app: String)
     case targetNotFrontmost(expected: String, actual: String?)
     case attentionLost(SessionAttentionState)
     case actionTypeNotAllowed(String)
@@ -198,6 +234,15 @@ public enum VisionContainmentRefusal: Equatable, Sendable {
             // how-it-works sentence, and the place a user acts on it is the Settings row they just
             // used. One string for the panel and for the recorded reason, like every case here.
             return "Sonny stopped because it is no longer allowed to control \(app)."
+        case .appControlDeclined(let app):
+            return "Sonny stopped because you did not allow it to control \(app)."
+        case .appControlNotRemembered(let app):
+            return "Sonny stopped because it could not save that you allowed it to control \(app)."
+        case .appControlUnreadable(let app):
+            // Deliberately not "no longer allowed": nothing was withdrawn, and Sonny cannot tell
+            // either way. It names the file rather than the permission, because the file is the
+            // fact.
+            return "Sonny stopped because it could not read which apps you have allowed it to control, so it could not tell whether \(app) is one of them."
         case .targetNotFrontmost(let expected, let actual):
             let actualName = actual.map { "\($0) is" } ?? "something else is"
             return "Sonny stopped because \(expected) is no longer the app in front — \(actualName). "
@@ -229,6 +274,9 @@ public enum VisionContainmentRefusal: Equatable, Sendable {
         case .targetIneligible: return "target_ineligible"
         case .screenShowsShell: return "screen_shows_shell"
         case .appControlWithdrawn: return "app_control_withdrawn"
+        case .appControlDeclined: return "app_control_declined"
+        case .appControlNotRemembered: return "app_control_not_remembered"
+        case .appControlUnreadable: return "app_control_unreadable"
         case .targetNotFrontmost: return "target_not_frontmost"
         case .attentionLost: return "attention_lost"
         case .actionTypeNotAllowed: return "action_not_allowed"
@@ -444,6 +492,48 @@ public struct VisionSessionContainment: Sendable {
         context: ApprovalContext
     ) -> (assessment: CapabilityRiskAssessment, requirement: RiskApprovalRequirement) {
         let assessment = assessment(for: decision)
+        return (assessment, policy.requirement(for: assessment, context: context))
+    }
+
+    /// The per-app control question, as an ordinary approval request (SONNY-143; moved here from
+    /// the plan gate in PR #88's fix round).
+    ///
+    /// **Through the one requirement function, like everything else.** The caller passes the run's
+    /// `ApprovalContext`, whose `appControl` is what raises the ask — the escalation below is
+    /// `.advisory`, so the consequence rule's ask-term stays false and the standing is the only
+    /// thing that can produce a question here. That keeps the two separable in a test, and it is
+    /// why the same request is `.autoRun` for an app that is already allowed.
+    ///
+    /// **The sentence about being remembered lives in the escalation reason** — the existing channel
+    /// for *why the user is being asked*, rendered in amber on the floating widget and on
+    /// `CommandCenterAttentionPanel` alike — and not in a new explanatory line, because the product
+    /// does not explain how it works.
+    ///
+    /// `dataLeavesDevice` is `true` and that is not inherited carelessly: the first capture has been
+    /// taken by the time this is asked, but it has **not** been sent, and allowing is what makes
+    /// this and every later capture leave the device. In Safe mode that line is rendered, which is
+    /// the one place a user is told so.
+    public func appControlRequirement(
+        context: ApprovalContext
+    ) -> (assessment: CapabilityRiskAssessment, requirement: RiskApprovalRequirement) {
+        let assessment = CapabilityRiskAssessment(
+            defaultTier: .tier2,
+            approvalCopy: RiskApprovalCopy(
+                actionDescription: "Control \(target.displayName) — clicking and typing in its window",
+                riskReason: "Sonny has not been allowed to control \(target.displayName) yet.",
+                involvedResource: target.displayName,
+                dataLeavesDevice: true,
+                undoDescription: "Sonny cannot undo what it does inside \(target.displayName). You can stop it at any time."
+            ),
+            escalations: [
+                CapabilityRiskEscalation(
+                    fromTier: .tier2,
+                    toTier: .tier3,
+                    reason: "Sonny has not been allowed to control \(target.displayName) yet. Allowing it here keeps it allowed.",
+                    consequence: .advisory
+                )
+            ]
+        )
         return (assessment, policy.requirement(for: assessment, context: context))
     }
 
