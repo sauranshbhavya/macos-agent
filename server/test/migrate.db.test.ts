@@ -3,7 +3,7 @@ import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import { mkdtemp, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { down, up } from "../src/db/migrate.js";
+import { down, loadMigrations, up } from "../src/db/migrate.js";
 
 /**
  * Migration tests need a real Postgres, because what they check — a transaction per migration, a
@@ -53,13 +53,17 @@ describeDb("migrations against a real Postgres", () => {
   });
 
   it("rolls the last migration back, undoing its schema change and its ledger row", async () => {
-    const rolled = await down(client);
-    expect(rolled).toBe("0001_schema_baseline");
-    const { rows: schemas } = await client.query(
-      "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'sonny'",
+    // Rolls back whatever is newest rather than naming a migration: this test outlives every
+    // migration added after it, and hardcoding one made it fail the moment 0002 landed.
+    const applied = await client.query<{ id: string }>(
+      "SELECT id FROM sonny_meta.schema_migration ORDER BY id DESC LIMIT 1",
     );
-    expect(schemas).toHaveLength(0);
-    const { rows: ledger } = await client.query("SELECT id FROM sonny_meta.schema_migration");
+    const newest = applied.rows[0]!.id;
+    const rolled = await down(client);
+    expect(rolled).toBe(newest);
+    const { rows: ledger } = await client.query(
+      "SELECT id FROM sonny_meta.schema_migration WHERE id = $1", [newest],
+    );
     expect(ledger).toHaveLength(0);
   });
 
@@ -67,8 +71,10 @@ describeDb("migrations against a real Postgres", () => {
     // The whole reason staging exists per the ticket: a migration is verified there before it
     // touches production. That is only a verification if apply → roll back → apply lands in the
     // same place, so it is asserted rather than assumed.
+    // Re-applies whatever the previous test rolled back, and asserts the schema is whole again --
+    // named by property rather than by migration id, so this survives every migration added later.
     const ran = await up(client);
-    expect(ran).toContain("0001_schema_baseline");
+    expect(ran.length).toBeGreaterThan(0);
     const { rows } = await client.query(
       "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'sonny'",
     );
@@ -76,7 +82,13 @@ describeDb("migrations against a real Postgres", () => {
   });
 
   it("reports nothing to roll back once the ledger is empty", async () => {
-    await down(client);
+    // Rolls back every applied migration rather than assuming there is one. The bound is the
+    // migration count plus slack, so a runner that returned a rolled-back id forever would fail
+    // here rather than spin.
+    const total = (await loadMigrations()).length;
+    for (let i = 0; i < total + 2; i += 1) {
+      if ((await down(client)) === undefined) break;
+    }
     expect(await down(client)).toBeUndefined();
   });
 

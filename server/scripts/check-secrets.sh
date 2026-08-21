@@ -40,6 +40,19 @@ PATTERNS=(
   # PEM in the tree forever -- including a real one. The selftest caught that.
   '-----BEGIN [A-Z ]*PRIVATE KEY-----([A-Za-z0-9+/=[:space:]]|\\\\n){120,}'
   'postgres(ql)?://[^:[:space:]]+:[^@[:space:]]+@'   # connection string with a real password
+  # An assignment of a KNOWN-SECRET variable to something that is not a placeholder.
+  #
+  # SONNY-127 introduced RATE_LIMIT_SALT, whose value is `openssl rand -hex 32` -- 64 hex
+  # characters carrying no vendor prefix, so every pattern above misses it entirely and a real one
+  # could be committed unnoticed. The answer is NOT a generic high-entropy rule: this file's own
+  # "does not prevent" section explains why one would flag every lockfile hash and be switched off
+  # within a week. Anchoring on the variable NAME is narrow, cannot false-positive on a hash, and
+  # extends to the next such variable by adding one word here.
+  #
+  # `=` only, NOT `:`. A colon separator was tried first and matched TypeScript's type annotations --
+  # `RATE_LIMIT_SALT: nonEmpty.optional()` in config.ts became a finding on the first run. `.env`
+  # files and shell exports use `=`; nothing in this repository declares a secret with a colon.
+  '(RATE_LIMIT_SALT|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_JWT_SECRET|RESEND_API_KEY|SMTP_PASS(WORD)?)[[:space:]]*=[[:space:]]*[A-Za-z0-9_./+-]{12,}'   # name-anchored secret assignment
 )
 
 # Placeholders the repository is supposed to contain. Kept narrow on purpose: this list is the

@@ -1,0 +1,241 @@
+import type pg from "pg";
+
+/**
+ * The identity-linking rule. `docs/sonny-identity-linking-rule.md` is the reasoning; this is the
+ * implementation, and the two are meant to be read together.
+ *
+ * The one-line version: **the identity key is `(provider, subject)`, never the email address.**
+ */
+
+export const providers = ["email", "google", "apple"] as const;
+export type Provider = (typeof providers)[number];
+
+export type LinkMethod = "primary" | "verified_email_match" | "explicit";
+
+export interface Assertion {
+  readonly provider: Provider;
+  /** The provider's stable identifier. For `email`, the normalised address. */
+  readonly subject: string;
+  readonly email: string | undefined;
+  /** Whether the *provider* verified the address. An unverified assertion never links. */
+  readonly emailVerified: boolean;
+  readonly supabaseUserId?: string | undefined;
+}
+
+export interface Resolution {
+  readonly accountId: string;
+  readonly identityId: string;
+  readonly linkMethod: LinkMethod;
+  readonly created: boolean;
+  /**
+   * Set when an account was created for an assertion whose address could not be matched *because it
+   * is a relay*. The ticket forbids silently creating a second account for that person; this is what
+   * makes it not silent. Surfacing it is SONNY-128's and SONNY-129's.
+   */
+  readonly linkHint: "relay_address_may_belong_to_existing_account" | undefined;
+}
+
+/**
+ * Apple's Hide My Email relay domain.
+ *
+ * Matched on the domain rather than a pattern over the local part, because the local part is opaque
+ * and Apple does not document its shape. A list rather than a single constant because Apple has
+ * historically served more than one relay domain, and the failure of missing one is the failure this
+ * whole rule exists to prevent.
+ */
+const RELAY_DOMAINS = ["privaterelay.appleid.com", "icloud.com.privaterelay.appleid.com"] as const;
+
+export function isRelayAddress(email: string | undefined): boolean {
+  if (!email) return false;
+  const at = email.lastIndexOf("@");
+  if (at === -1) return false;
+  const domain = email.slice(at + 1).toLowerCase();
+  return RELAY_DOMAINS.some((relay) => domain === relay);
+}
+
+/**
+ * Lowercase and trim. **Plus-tags are deliberately kept**, and domain-specific rules (Gmail's dots)
+ * deliberately not applied — see the rule document §5. Where normalisation is a judgment call it
+ * errs toward *not* merging, because merging accounts is the failure being prevented.
+ */
+export function normalizeEmail(email: string): string {
+  return email.trim().toLowerCase();
+}
+
+/** Cheap structural check. Deliverability is the mail provider's answer, not a regex's. */
+export function looksLikeEmail(value: string): boolean {
+  const trimmed = value.trim();
+  if (trimmed.length === 0 || trimmed.length > 254) return false;
+  const at = trimmed.indexOf("@");
+  if (at <= 0 || at !== trimmed.lastIndexOf("@")) return false;
+  const domain = trimmed.slice(at + 1);
+  return domain.length >= 3 && domain.includes(".") && !/\s/.test(trimmed);
+}
+
+/**
+ * Resolve an assertion to an account, creating one if the rule says to.
+ *
+ * Runs in one transaction: two concurrent first-ever sign-ins for the same subject must not produce
+ * two accounts, and the unique constraint on `(provider, subject)` is what makes the race safe —
+ * the loser sees the winner's row rather than inserting a duplicate.
+ */
+export class IdentityConflict extends Error {}
+
+export async function resolve(
+  client: pg.Client,
+  assertion: Assertion,
+  attempt = 0,
+): Promise<Resolution> {
+  const email = assertion.email ? normalizeEmail(assertion.email) : undefined;
+  const relay = isRelayAddress(email);
+
+  await client.query("BEGIN");
+  try {
+    // Rule 1 — the identity key. Already known: that account, no matter what the email says now.
+    const existing = await client.query<{ id: string; account_id: string; link_method: LinkMethod }>(
+      `SELECT i.id, i.account_id, i.link_method
+         FROM sonny.identity i
+         JOIN sonny.account a ON a.id = i.account_id
+        WHERE i.provider = $1 AND i.subject = $2 AND a.deleted_at IS NULL`,
+      [assertion.provider, assertion.subject],
+    );
+    if (existing.rows[0]) {
+      // Refresh the hint and the Supabase user, both of which legitimately change over time.
+      await client.query(
+        `UPDATE sonny.identity
+            SET email_hint = COALESCE($2, email_hint),
+                email_verified = $3,
+                email_is_relay = $4,
+                supabase_user_id = COALESCE($5, supabase_user_id)
+          WHERE id = $1`,
+        [existing.rows[0].id, email ?? null, assertion.emailVerified, relay, assertion.supabaseUserId ?? null],
+      );
+      await client.query("COMMIT");
+      return {
+        accountId: existing.rows[0].account_id,
+        identityId: existing.rows[0].id,
+        linkMethod: existing.rows[0].link_method,
+        created: false,
+        linkHint: undefined,
+      };
+    }
+
+    // Rule 2 — a verified, non-relay address matching an existing verified, non-relay identity.
+    // Every clause is load-bearing: an unverified assertion is an attacker's claim, and a relay
+    // address matches nothing real, so both fall through to rule 3 rather than linking.
+    let accountId: string | undefined;
+    let linkMethod: LinkMethod = "primary";
+    if (email && assertion.emailVerified && !relay) {
+      const match = await client.query<{ account_id: string }>(
+        `SELECT i.account_id
+           FROM sonny.identity i
+           JOIN sonny.account a ON a.id = i.account_id
+          WHERE lower(i.email_hint) = $1
+            AND i.email_verified
+            AND NOT i.email_is_relay
+            AND a.deleted_at IS NULL
+          LIMIT 1`,
+        [email],
+      );
+      if (match.rows[0]) {
+        accountId = match.rows[0].account_id;
+        linkMethod = "verified_email_match";
+      }
+    }
+
+    // Rule 3 — a new account.
+    let created = false;
+    if (!accountId) {
+      const account = await client.query<{ id: string }>(
+        "INSERT INTO sonny.account DEFAULT VALUES RETURNING id",
+      );
+      accountId = account.rows[0]!.id;
+      created = true;
+    }
+
+    const identity = await client.query<{ id: string }>(
+      `INSERT INTO sonny.identity
+         (account_id, provider, subject, email_hint, email_verified, email_is_relay,
+          supabase_user_id, link_method)
+       VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
+       ON CONFLICT (provider, subject) DO NOTHING
+       RETURNING id`,
+      [accountId, assertion.provider, assertion.subject, email ?? null,
+       assertion.emailVerified, relay, assertion.supabaseUserId ?? null, linkMethod],
+    );
+
+    if (!identity.rows[0]) {
+      // Lost the race with a concurrent first sign-in for this same subject. The winner's row is
+      // the answer; ours would have been a duplicate account. Rolling back discards the account we
+      // speculatively created, which is why the INSERT and the account creation share one
+      // transaction.
+      //
+      // **Bounded, and the bound is the point.** The first version retried unboundedly, which is
+      // fine for a genuine race — the winner is visible on the next pass — and a livelock for a
+      // conflict that does not clear. One did: rule 1 excludes identities on a *deleted* account
+      // while the unique constraint does not, so signing up again with an address whose account had
+      // been closed spun forever. Closing an account now releases its identities, so the case no
+      // longer arises; the bound stays because an unbounded retry on a condition you have not
+      // enumerated is a hang waiting for a cause.
+      await client.query("ROLLBACK");
+      if (attempt >= 1) {
+        throw new IdentityConflict(
+          `identity (${assertion.provider}, subject) exists but did not resolve; ` +
+            "it may belong to an account this rule excludes",
+        );
+      }
+      return resolve(client, assertion, attempt + 1);
+    }
+
+    await client.query("COMMIT");
+    return {
+      accountId,
+      identityId: identity.rows[0].id,
+      linkMethod,
+      created,
+      // Flagged, not guessed: a relay address that produced a brand-new account is exactly the
+      // "does not silently create a second one" case.
+      linkHint: created && relay ? "relay_address_may_belong_to_existing_account" : undefined,
+    };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  }
+}
+
+export class LinkError extends Error {}
+
+/**
+ * Rule 4 — the only path that joins two *existing* accounts, and it requires an authenticated
+ * session on the target. Moves `identity` onto `targetAccountId`; the vacated account is left for
+ * the caller to close, because deleting it here would destroy content the retention ticket owns.
+ */
+export async function linkExplicitly(
+  client: pg.Client,
+  identityId: string,
+  targetAccountId: string,
+): Promise<void> {
+  await client.query("BEGIN");
+  try {
+    const target = await client.query(
+      "SELECT 1 FROM sonny.account WHERE id = $1 AND deleted_at IS NULL",
+      [targetAccountId],
+    );
+    if (target.rowCount === 0) {
+      // A deleted account must never gain identities: it would resurrect an account the user asked
+      // to remove, and do it through a path that looks like a sign-in.
+      throw new LinkError("target account does not exist or is deleted");
+    }
+    const moved = await client.query(
+      `UPDATE sonny.identity
+          SET account_id = $2, link_method = 'explicit', linked_at = now()
+        WHERE id = $1`,
+      [identityId, targetAccountId],
+    );
+    if (moved.rowCount === 0) throw new LinkError("identity does not exist");
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  }
+}

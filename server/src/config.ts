@@ -58,6 +58,14 @@ const schema = z.object({
    * Set only where a proxy really terminates the connection.
    */
   TRUST_PROXY: z.enum(["true", "false"]).default("false"),
+  /**
+   * Salt for the rate-limit bucket hashes (SONNY-127). **No default, deliberately.** The buckets
+   * hash email addresses, and an unsalted hash of an address is one rainbow-table lookup from the
+   * address itself — so a development default would be a real weakness that works everywhere and
+   * is never noticed. Required only where the auth routes are mounted; `loadConfig` therefore
+   * accepts its absence and `requireRateLimitSalt` is what refuses at the point of use.
+   */
+  RATE_LIMIT_SALT: nonEmpty.optional(),
 });
 
 export interface Config {
@@ -68,6 +76,7 @@ export interface Config {
   readonly databaseUrl: string | undefined;
   readonly logLevel: z.infer<typeof schema>["LOG_LEVEL"];
   readonly trustProxy: boolean;
+  readonly rateLimitSalt: string;
   readonly credentials: readonly ProviderCredentials[];
 }
 
@@ -127,6 +136,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     databaseUrl: value.DATABASE_URL,
     logLevel: value.LOG_LEVEL,
     trustProxy: value.TRUST_PROXY === "true",
+    rateLimitSalt: value.RATE_LIMIT_SALT ?? "",
     credentials: providerCredentials(env),
   };
 }
@@ -139,4 +149,22 @@ export function activeKey(config: Config, provider: Provider): string | undefine
 /** Every credential still honoured for `provider`, newest first. */
 export function acceptedKeys(config: Config, provider: Provider): readonly string[] {
   return config.credentials.find((entry) => entry.provider === provider)?.keys ?? [];
+}
+
+/**
+ * The rate-limit salt, or a startup failure naming it.
+ *
+ * Separate from `loadConfig` so that a deployment running no auth route is not forced to invent a
+ * salt, while one that mounts them cannot start without a real value. An empty salt is refused
+ * rather than tolerated: `bucketKey` would otherwise hash addresses unsalted and nothing would say
+ * so.
+ */
+export function requireRateLimitSalt(config: Config): string {
+  if (!config.rateLimitSalt) {
+    throw new ConfigError(
+      "RATE_LIMIT_SALT is required wherever the auth routes are mounted. " +
+        "Values are omitted deliberately; see server/.env.example for the expected shape.",
+    );
+  }
+  return config.rateLimitSalt;
 }
