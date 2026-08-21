@@ -74,10 +74,10 @@ public struct StoredTaskResult: Codable, Equatable, Sendable {
     /// `TaskHistoryStore`'s real encoder (at `36cef9e`), and its own table's "+ result 200 chars"
     /// row lands at exactly 374 + 200 + the steps it also added, so a stored result costs its own
     /// length and essentially nothing else. 1,000 therefore bounds a record at ~1.4 kB and the file
-    /// at ~13 MiB when a user is at the 10,000-record cap — against ~3.6 MiB today, and against the
-    /// ~40 MiB the pre-split design measured at. Typical is far below it: real summaries are one to
-    /// three sentences naming a path, so the cap bounds the outlier without touching the common
-    /// case, which is what the ticket asked for.
+    /// at ~13 MiB when a user is at the 10,000-record cap — against the 3.78 MiB SONNY-119 measured
+    /// today's records at, and against the 38.81 MiB the pre-split design measured at. Typical is far
+    /// below it: real summaries are one to three sentences naming a path, so the cap bounds the
+    /// outlier without touching the common case, which is what the ticket asked for.
     ///
     /// Truncation happens **at storage time, not at render time** — including on the decode path
     /// below, so a value that reached the file by some other route is bounded when it is read back
