@@ -56,7 +56,7 @@ struct SnippetRoutineAuthoringTests {
         )
 
         let preparedSave = try runner.prepare(plan: savePlan, source: .planner)
-        _ = try await runner.execute(preparedSave, approvalDecision: .approved(.tier2), scope: .unscoped, context: ApprovalContext(safeMode: false))
+        _ = try await runner.execute(preparedSave, approvalDecision: .approved(.tier2), scope: .unscoped, context: ApprovalContext(mode: .normal, appControl: .notApplicable))
 
         let saved = try routineStore.routine(named: "Onboarding")
         #expect(saved.steps.map(\.operation) == [.saveSnippet])
@@ -74,7 +74,7 @@ struct SnippetRoutineAuthoringTests {
             ]
         )
         let preparedRun = try runner.prepare(plan: runPlan, source: .planner)
-        _ = try await runner.execute(preparedRun, approvalDecision: .approved(.tier2), scope: .unscoped, context: ApprovalContext(safeMode: false))
+        _ = try await runner.execute(preparedRun, approvalDecision: .approved(.tier2), scope: .unscoped, context: ApprovalContext(mode: .normal, appControl: .notApplicable))
 
         let stored = try #require(try snippetStore.findExactTrigger(";welcome"))
         #expect(stored.expansion == "Welcome aboard!")

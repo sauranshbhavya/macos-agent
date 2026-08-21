@@ -124,7 +124,7 @@ struct PrebuiltPlanDispatchTests {
         let request = try runner.approvalRequest(
             for: prepared,
             scope: .unscoped,
-            context: ApprovalContext(safeMode: false)
+            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
         )
 
         #expect(request.assessment.effectiveTier == .tier3)
@@ -171,7 +171,7 @@ struct PrebuiltPlanDispatchTests {
         let request = try runner.approvalRequest(
             for: prepared,
             scope: .unscoped,
-            context: ApprovalContext(safeMode: false)
+            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
         )
 
         #expect(request.assessment.effectiveTier == .tier3)
@@ -205,7 +205,7 @@ struct PrebuiltPlanDispatchTests {
         let request = try runner.approvalRequest(
             for: prepared,
             scope: .unscoped,
-            context: ApprovalContext(safeMode: false)
+            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
         )
 
         #expect(request.assessment.effectiveTier == .tier2)
@@ -254,7 +254,7 @@ struct PrebuiltPlanDispatchTests {
         let request = try runner.approvalRequest(
             for: prepared,
             scope: .unscoped,
-            context: ApprovalContext(safeMode: false)
+            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
         )
 
         // Tier 2, not 3, and no escalation reason naming a loss that did not happen. Under the

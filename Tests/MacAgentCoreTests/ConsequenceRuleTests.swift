@@ -89,7 +89,7 @@ struct ConsequenceRuleTests {
                 #expect(
                     policy.requirement(
                         for: assessment(tier: tier, classes: combo.classes),
-                        context: ApprovalContext(safeMode: false)
+                        context: ApprovalContext(mode: .normal, appControl: .notApplicable)
                     ) == expected,
                     "tier \(tier), combo \(combo.name) expected \(expected)"
                 )
@@ -107,7 +107,7 @@ struct ConsequenceRuleTests {
                 #expect(
                     policy.requirement(
                         for: assessment(tier: tier, classes: combo.classes),
-                        context: ApprovalContext(safeMode: true)
+                        context: ApprovalContext(mode: .safe, appControl: .notApplicable)
                     ) == Self.safeModeTable[tier]!,
                     "tier \(tier), combo \(combo.name)"
                 )
@@ -144,8 +144,8 @@ struct ConsequenceRuleTests {
             for tier in CapabilityRiskTier.allCases {
                 for combo in Self.classCombos {
                     let assessed = assessment(tier: tier, classes: combo.classes)
-                    let safe = policy.requirement(for: assessed, context: ApprovalContext(safeMode: true))
-                    let unsafe = policy.requirement(for: assessed, context: ApprovalContext(safeMode: false))
+                    let safe = policy.requirement(for: assessed, context: ApprovalContext(mode: .safe, appControl: .notApplicable))
+                    let unsafe = policy.requirement(for: assessed, context: ApprovalContext(mode: .normal, appControl: .notApplicable))
                     #expect(
                         safe.permissivenessRank <= unsafe.permissivenessRank,
                         "tier \(tier), combo \(combo.name): safe \(safe) vs \(unsafe)"
@@ -166,7 +166,7 @@ struct ConsequenceRuleTests {
                     && combo.classes.allSatisfy({ $0 == .advisory }) {
                     let requirement = policy.requirement(
                         for: assessment(tier: tier, classes: combo.classes),
-                        context: ApprovalContext(safeMode: false)
+                        context: ApprovalContext(mode: .normal, appControl: .notApplicable)
                     )
                     #expect(
                         !requirement.requiresUserApproval,
@@ -185,14 +185,14 @@ struct ConsequenceRuleTests {
         for policy in [RiskApprovalPolicy.default] {
             for tier in CapabilityRiskTier.allCases {
                 for combo in Self.classCombos where combo.classes.contains(where: \.asksFirst) {
-                    for safeMode in [false, true] {
+                    for mode in [AgentInteractionMode.normal, .safe] {
                         let requirement = policy.requirement(
                             for: assessment(tier: tier, classes: combo.classes),
-                            context: ApprovalContext(safeMode: safeMode)
+                            context: ApprovalContext(mode: mode, appControl: .notApplicable)
                         )
                         #expect(
                             requirement != .autoRun && requirement != .lightweightConfirmation,
-                            "tier \(tier), combo \(combo.name), safeMode \(safeMode): \(requirement)"
+                            "tier \(tier), combo \(combo.name), mode \(mode): \(requirement)"
                         )
                     }
                 }
@@ -221,7 +221,7 @@ struct ConsequenceRuleTests {
         #expect(
             RiskApprovalPolicy.default.requirement(
                 for: forced,
-                context: ApprovalContext(safeMode: false)
+                context: ApprovalContext(mode: .normal, appControl: .notApplicable)
             ) == .explicitApproval
         )
     }
@@ -234,7 +234,7 @@ struct ConsequenceRuleTests {
         #expect(
             RiskApprovalPolicy.default.requirement(
                 for: bare,
-                context: ApprovalContext(safeMode: false)
+                context: ApprovalContext(mode: .normal, appControl: .notApplicable)
             ) == .explicitApproval
         )
     }
@@ -248,8 +248,8 @@ struct ConsequenceRuleTests {
         let verdicts: [ScopeVerdict?] = [nil, .inScope, .outOfScope, .unconstrained, .opaque]
         for tier in CapabilityRiskTier.allCases {
             for combo in Self.classCombos {
-                for safeMode in [false, true] {
-                    let context = ApprovalContext(safeMode: safeMode)
+                for mode in [AgentInteractionMode.normal, .safe] {
+                    let context = ApprovalContext(mode: mode, appControl: .notApplicable)
                     let baseline = RiskApprovalPolicy.default.requirement(
                         for: assessment(tier: tier, classes: combo.classes, verdict: nil),
                         context: context
@@ -314,12 +314,12 @@ struct ConsequenceRuleTests {
         let scoped = try runner.approvalRequest(
             for: prepared,
             scope: scope,
-            context: ApprovalContext(safeMode: false)
+            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
         )
         let unscoped = try runner.approvalRequest(
             for: prepared,
             scope: .unscoped,
-            context: ApprovalContext(safeMode: false)
+            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
         )
 
         #expect(scoped.assessment.effectiveTier == .tier2)
@@ -346,12 +346,12 @@ struct ConsequenceRuleTests {
         let ordinary = try runner.approvalRequest(
             for: prepared,
             scope: .unscoped,
-            context: ApprovalContext(safeMode: false)
+            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
         )
         let safe = try runner.approvalRequest(
             for: prepared,
             scope: .unscoped,
-            context: ApprovalContext(safeMode: true)
+            context: ApprovalContext(mode: .safe, appControl: .notApplicable)
         )
 
         #expect(ordinary.requirement == .autoRun)
@@ -388,12 +388,12 @@ struct ConsequenceRuleTests {
         let request = try runner.approvalRequest(
             for: prepared,
             scope: scope,
-            context: ApprovalContext(safeMode: false)
+            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
         )
         let safe = try runner.approvalRequest(
             for: prepared,
             scope: scope,
-            context: ApprovalContext(safeMode: true)
+            context: ApprovalContext(mode: .safe, appControl: .notApplicable)
         )
 
         #expect(request.assessment.effectiveTier == .tier3)
@@ -453,7 +453,7 @@ struct ConsequenceRuleTests {
             let request = try runner.approvalRequest(
                 for: prepared,
                 scope: .unscoped,
-                context: ApprovalContext(safeMode: false)
+                context: ApprovalContext(mode: .normal, appControl: .notApplicable)
             )
             #expect(request.assessment.effectiveTier == .tier3, "\(testCase.reason)")
             #expect(request.assessment.escalations.map(\.reason) == [testCase.reason])
@@ -488,7 +488,7 @@ struct ConsequenceRuleTests {
             let request = try runner.approvalRequest(
                 for: prepared,
                 scope: .unscoped,
-                context: ApprovalContext(safeMode: false)
+                context: ApprovalContext(mode: .normal, appControl: .notApplicable)
             )
             #expect(request.assessment.effectiveTier == .tier3, "\(testCase.reason)")
             #expect(request.assessment.escalations.map(\.reason) == [testCase.reason])
@@ -539,7 +539,7 @@ struct ConsequenceRuleTests {
             let request = try runner.approvalRequest(
                 for: prepared,
                 scope: .unscoped,
-                context: ApprovalContext(safeMode: false)
+                context: ApprovalContext(mode: .normal, appControl: .notApplicable)
             )
             #expect(request.assessment.effectiveTier == .tier3, "\(testCase.reason)")
             #expect(request.assessment.escalations.map(\.reason) == [testCase.reason])
@@ -594,7 +594,7 @@ struct ConsequenceRuleTests {
         let request = try runner.approvalRequest(
             for: prepared,
             scope: .unscoped,
-            context: ApprovalContext(safeMode: false)
+            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
         )
 
         #expect(request.assessment.effectiveTier == .tier3)
@@ -632,7 +632,7 @@ struct ConsequenceRuleTests {
             prepared,
             approvalDecision: .approved(.tier2),
             scope: .unscoped,
-            context: ApprovalContext(safeMode: false)
+            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
         )
 
         #expect(FileManager.default.fileExists(atPath: output.path))
@@ -666,7 +666,7 @@ struct ConsequenceRuleTests {
                 prepared,
                 approvalDecision: .approved(.tier2),
                 scope: .unscoped,
-                context: ApprovalContext(safeMode: false)
+                context: ApprovalContext(mode: .normal, appControl: .notApplicable)
             )
         }
 
@@ -699,7 +699,7 @@ struct ConsequenceRuleTests {
         let before = try runner.approvalRequest(
             for: prepared,
             scope: .unscoped,
-            context: ApprovalContext(safeMode: false)
+            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
         )
         #expect(before.requirement == .autoRun)
 
@@ -710,7 +710,7 @@ struct ConsequenceRuleTests {
                 prepared,
                 approvalDecision: .notRequested,
                 scope: .unscoped,
-                context: ApprovalContext(safeMode: false)
+                context: ApprovalContext(mode: .normal, appControl: .notApplicable)
             )
             Issue.record("Expected the drifted destructive escalation to stop the run.")
         } catch RiskApprovalError.approvalRequired(let rearmed) {
@@ -739,7 +739,7 @@ struct ConsequenceRuleTests {
                 prepared,
                 approvalDecision: .notRequested,
                 scope: .unscoped,
-                context: ApprovalContext(safeMode: false)
+                context: ApprovalContext(mode: .normal, appControl: .notApplicable)
             )
             Issue.record("Expected the destructive escalation to stop the run.")
         } catch RiskApprovalError.approvalRequired(let request) {
@@ -751,7 +751,7 @@ struct ConsequenceRuleTests {
             prepared,
             approvalDecision: .approved(answering: answered),
             scope: .unscoped,
-            context: ApprovalContext(safeMode: false)
+            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
         )
 
         #expect(try String(contentsOf: output, encoding: .utf8) != "existing draft")

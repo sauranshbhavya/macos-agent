@@ -26,7 +26,7 @@ struct RiskApprovalTests {
     @Test
     func escalationFreeTiersMapToTheConsequenceRulesDefaults() {
         let policy = RiskApprovalPolicy.default
-        let context = ApprovalContext(safeMode: false)
+        let context = ApprovalContext(mode: .normal, appControl: .notApplicable)
 
         #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier0), context: context) == .autoRun)
         #expect(policy.requirement(for: CapabilityRiskAssessment(defaultTier: .tier1), context: context) == .autoRun)
@@ -43,12 +43,12 @@ struct RiskApprovalTests {
     @Test
     func noMappingPathProducesPreviewOnly() {
         for tier in CapabilityRiskTier.allCases {
-            for safeMode in [false, true] {
+            for mode in [AgentInteractionMode.normal, .safe] {
                 let requirement = RiskApprovalPolicy.default.requirement(
                     for: CapabilityRiskAssessment(defaultTier: tier),
-                    context: ApprovalContext(safeMode: safeMode)
+                    context: ApprovalContext(mode: mode, appControl: .notApplicable)
                 )
-                #expect(requirement != .previewOnly, "tier \(tier), safeMode \(safeMode)")
+                #expect(requirement != .previewOnly, "tier \(tier), mode \(mode)")
             }
         }
     }
@@ -72,7 +72,7 @@ struct RiskApprovalTests {
         #expect(
             RiskApprovalPolicy.default.requirement(
                 for: assessment,
-                context: ApprovalContext(safeMode: false)
+                context: ApprovalContext(mode: .normal, appControl: .notApplicable)
             ) == .explicitApproval
         )
     }
@@ -372,7 +372,7 @@ struct RiskApprovalTests {
             assessment: assessment,
             requirement: requirement ?? RiskApprovalPolicy.default.requirement(
                 for: assessment,
-                context: ApprovalContext(safeMode: false)
+                context: ApprovalContext(mode: .normal, appControl: .notApplicable)
             )
         )
     }

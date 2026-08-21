@@ -311,7 +311,7 @@ struct AgentRunnerTests {
         #expect(assessment.defaultTier == .tier2)
         #expect(assessment.effectiveTier == .tier2)
         #expect(assessment.escalations.isEmpty)
-        #expect(RiskApprovalPolicy.default.requirement(for: assessment, context: ApprovalContext(safeMode: false)) == .autoRun)
+        #expect(RiskApprovalPolicy.default.requirement(for: assessment, context: ApprovalContext(mode: .normal, appControl: .notApplicable)) == .autoRun)
         #expect(assessment.approvalCopy?.involvedResource.contains(output.path) == true)
     }
 
@@ -1442,7 +1442,7 @@ struct AgentRunnerTests {
             prepared,
             approvalDecision: .approved(.tier3),
             scope: .unscoped,
-            context: ApprovalContext(safeMode: false)
+            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
         )
 
         // And the run converts both documents rather than skipping one for a PDF this run made.
@@ -1488,7 +1488,7 @@ struct AgentRunnerTests {
             prepared,
             approvalDecision: .approved(.tier3),
             scope: .unscoped,
-            context: ApprovalContext(safeMode: false)
+            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
         )
 
         // The preferred name, not a rename: nothing was claimed before this routine ran.
@@ -1941,7 +1941,7 @@ struct AgentRunnerTests {
     }
 
     private func approvalContext(for prepared: PreparedAgentRun) -> ApprovalContext {
-        ApprovalContext(safeMode: false)
+        ApprovalContext(mode: .normal, appControl: .notApplicable)
     }
 }
 
