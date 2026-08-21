@@ -339,9 +339,10 @@ struct LocalStorageSecurityTests {
         let result = try service.deleteAllLocalData()
 
         // Ten since row E (SONNY-147): `task-plan-details.json` holds what each finished task
-        // planned. Nine, not eight, was SONNY-154's correction — the vision session journal was the
-        // store this test did not create, so the only place the wipe's behaviour is actually
-        // exercised covered every store except the most sensitive one.
+        // planned. Eleven since row J (SONNY-140): `approved-apps.json` holds which apps the user
+        // let Sonny control. Nine, not eight, was SONNY-154's correction — the vision session
+        // journal was the store this test did not create, so the only place the wipe's behaviour is
+        // actually exercised covered every store except the most sensitive one.
         //
         // **What the count assertion is for, corrected** (PR #83, F7). It is *not* drift protection
         // between the fixture's files and its returned URLs — the two deletion counts below already
@@ -349,18 +350,17 @@ struct LocalStorageSecurityTests {
         // fails. What this adds is a tripwire on the fixture's own size: the count is stated in a
         // third place, so extending the fixture cannot pass by adjusting one number, and whoever
         // changes it has to come here and ask whether `LocalDataDeletionService`'s real list moved
-        // too. That question going unasked is how the journal stayed uncovered. Ten since row E's
-        // plan details; the number is deliberately not spelled in this sentence a second time, since
-        // a sentence that names it is a fourth place to update and this one already went stale once
-        // (PR #89 cycle 2, F3).
-        #expect(fileURLs.count == 10)
-        #expect(result == LocalDataDeletionResult(deletedFileCount: 10, missingFileCount: 0))
+        // too. That question going unasked is how the journal stayed uncovered. The number is
+        // deliberately not spelled in this sentence, since a sentence that names it is a fourth
+        // place to update and this one already went stale once (PR #89 cycle 2, F3).
+        #expect(fileURLs.count == 11)
+        #expect(result == LocalDataDeletionResult(deletedFileCount: 11, missingFileCount: 0))
         for fileURL in fileURLs {
             #expect(!FileManager.default.fileExists(atPath: fileURL.path))
         }
 
         let secondResult = try service.deleteAllLocalData()
-        #expect(secondResult == LocalDataDeletionResult(deletedFileCount: 0, missingFileCount: 10))
+        #expect(secondResult == LocalDataDeletionResult(deletedFileCount: 0, missingFileCount: 11))
     }
 
     @Test(.requiresUnprivilegedProcess)
@@ -402,21 +402,27 @@ struct LocalStorageSecurityTests {
     /// The wipe's reach, pinned by count and by name. Relocated here from the deleted ledger
     /// suite (PR #49 N4): the ninth store's own `urls.count == 9` pin died with it, and without
     /// a successor a store added to the app but forgotten from this list would vanish from the
-    /// wipe silently. Ten stores is the current whole population, since row E's plan details.
+    /// wipe silently. Eleven stores is the current whole population, since row J's approved apps.
     ///
-    /// **The count is contended, and this is the arithmetic to update.** Row J's SONNY-140 adds an
-    /// approved-apps store; whichever of the two lands second raises this number and the one in
-    /// `everyLocalStoreFileIsClassifiedExactlyOnce` again. Row E landed first, at `ebd6c1d`.
+    /// **The count was contended and is now settled.** Row E's plan details landed first, at
+    /// `ebd6c1d`, taking it to ten; row J's approved apps rebased on top of that and took it to
+    /// eleven. A twelfth raises this number and the one in
+    /// `everyLocalStoreFileIsClassifiedExactlyOnce` again.
     @Test
-    func theWipeReachesExactlyTheTenLocalStores() {
+    func theWipeReachesExactlyTheElevenLocalStores() {
         let urls = LocalDataDeletionService.defaultStoreFileURLs()
-        #expect(urls.count == 10)
+        #expect(urls.count == 11)
         let fileNames = Set(urls.map(\.lastPathComponent))
         // Nine since row I: `vision-sessions.json` is the action journal (SONNY-96). A wipe that
         // left a record of every click Sonny made inside the user's apps would be the loudest
         // possible failure of a privacy wipe. Ten since row E: `task-plan-details.json` holds what
         // each finished task planned, and a wipe that left the plan of every task Sonny ever ran
         // fails in exactly the same way.
+        //
+        // Eleven since row J: `approved-apps.json` holds which apps the user let Sonny control
+        // (SONNY-140). It is the one store here that is not a record of what Sonny did — it is what
+        // the user decided — and it is erased with the rest, because "delete my local data" is a
+        // promise about the whole directory rather than about the parts a reader thinks of first.
         #expect(fileNames == [
             "routines.json",
             "workspaces.json",
@@ -427,7 +433,8 @@ struct LocalStorageSecurityTests {
             "shortcuts-run-history.json",
             "task-history.json",
             "vision-sessions.json",
-            "task-plan-details.json"
+            "task-plan-details.json",
+            "approved-apps.json"
         ])
     }
 
@@ -435,9 +442,10 @@ struct LocalStorageSecurityTests {
     /// decision of 2026-08-16 is that its reach is a rule, not a list — so a store that reaches the
     /// wipe without a `LocalStore` case has to fail here rather than default to "recorded".
     ///
-    /// Row E's `task-plan-details.json` is the tenth, and it arrived exactly the way this test was
-    /// built to make it arrive: the new file had no case, so it matched nothing and the suite
-    /// failed until it was classified. Classifying is the fix; deleting the assertion is not.
+    /// Row E's `task-plan-details.json` and row J's `approved-apps.json` are the tenth and
+    /// eleventh, and both arrived exactly the way this test was built to make them arrive: the new
+    /// file had no case, so it matched nothing and the suite failed until it was classified.
+    /// Classifying is the fix; deleting the assertion is not.
     @Test
     func everyLocalStoreFileIsClassifiedExactlyOnce() {
         let wipedURLs = LocalDataDeletionService.defaultStoreFileURLs()
@@ -451,7 +459,7 @@ struct LocalStorageSecurityTests {
         let classifiedURLs = LocalStore.allCases.map { $0.fileURL() }
         #expect(Set(classifiedURLs) == Set(wipedURLs))
         #expect(Set(classifiedURLs).count == LocalStore.allCases.count)
-        #expect(LocalStore.allCases.count == 10)
+        #expect(LocalStore.allCases.count == 11)
     }
 
     /// Pins *which* kind each store is, not merely that it has one. Exhaustiveness alone would let
@@ -472,8 +480,11 @@ struct LocalStorageSecurityTests {
             .taskPlanDetails,
             .visionSessionJournal
         ])
-        // Never suppressed: the thing the user actually asked for.
-        #expect(stores(.artifact) == [.routines, .workspaces, .snippets])
+        // Never suppressed: the thing the user actually asked for. `approvedApps` is here on that
+        // same ground and not on a weaker one (SONNY-140): a grant is the user's own answer to a
+        // question Sonny asked them, so withholding it would discard a consent decision and leave
+        // Sonny asking the identical question on the next run with no way to say why.
+        #expect(stores(.artifact) == [.routines, .workspaces, .snippets, .approvedApps])
         // The one store the founder's own enumeration did not reach: no task writes it.
         #expect(stores(.notWrittenByTasks) == [.clipboardHistorySettings])
 
@@ -519,6 +530,11 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
         fileURL: root.appendingPathComponent("task-plan-details.json"),
         encryption: encryption
     )
+    // The eleventh (row J, SONNY-140), created here for the identical reason.
+    let approvedAppStore = ApprovedAppStore(
+        fileURL: root.appendingPathComponent("approved-apps.json"),
+        encryption: encryption
+    )
 
     try routineStore.save(
         StoredRoutine(
@@ -559,6 +575,11 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
             steps: []
         )
     )
+    try approvedAppStore.approve(
+        bundleIdentifier: "com.apple.Notes",
+        displayName: "Notes",
+        approvedAt: .fixture
+    )
 
     return [
         routineStore.fileURL,
@@ -570,7 +591,8 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
         shortcutRunHistoryStore.fileURL,
         taskHistoryStore.fileURL,
         visionSessionJournalStore.fileURL,
-        taskPlanDetailStore.fileURL
+        taskPlanDetailStore.fileURL,
+        approvedAppStore.fileURL
     ]
 }
 

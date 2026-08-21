@@ -274,6 +274,11 @@ final class AgentViewModel: ObservableObject {
     /// own file rather than the user's.
     let visionSessionJournalStore: VisionSessionJournalStore
     private let clipboardHistorySettingsStore: ClipboardHistorySettingsStore
+    /// Row J's per-app control grants (SONNY-140). Injected like every other store so a test writes
+    /// to its own file rather than the user's. Nothing gates on it yet — SONNY-143 is what reads it
+    /// — so the only thing this view model does with it today is probe it for load failures, which
+    /// is the same wiring the other silently-read stores get.
+    private let approvedAppStore: ApprovedAppStore
     private let clipboardHistoryMonitor: ClipboardHistoryMonitor
     private let localDataDeletionService: LocalDataDeletionService
     private let priorTaskContextStore: PriorTaskContextStore
@@ -404,6 +409,7 @@ final class AgentViewModel: ObservableObject {
         case taskPlanDetails
         case snippets
         case recentArtifacts
+        case approvedApps
 
         var label: String {
             switch self {
@@ -425,6 +431,8 @@ final class AgentViewModel: ObservableObject {
                 return "snippets"
             case .recentArtifacts:
                 return "recent artifacts"
+            case .approvedApps:
+                return "allowed apps"
             }
         }
     }
@@ -486,6 +494,7 @@ final class AgentViewModel: ObservableObject {
         taskPlanDetailStore: TaskPlanDetailStore = TaskPlanDetailStore(),
         visionSessionJournalStore: VisionSessionJournalStore = VisionSessionJournalStore(),
         clipboardHistorySettingsStore: ClipboardHistorySettingsStore = ClipboardHistorySettingsStore(),
+        approvedAppStore: ApprovedAppStore = ApprovedAppStore(),
         clipboardHistoryMonitor: ClipboardHistoryMonitor? = nil,
         localDataDeletionService: LocalDataDeletionService = LocalDataDeletionService(),
         priorTaskContextStore: PriorTaskContextStore = PriorTaskContextStore(),
@@ -527,6 +536,7 @@ final class AgentViewModel: ObservableObject {
         self.taskPlanDetailStore = taskPlanDetailStore
         self.visionSessionJournalStore = visionSessionJournalStore
         self.clipboardHistorySettingsStore = clipboardHistorySettingsStore
+        self.approvedAppStore = approvedAppStore
         self.clipboardHistoryMonitor = clipboardHistoryMonitor
             ?? ClipboardHistoryMonitor(settingsStore: clipboardHistorySettingsStore)
         self.localDataDeletionService = localDataDeletionService
@@ -2000,14 +2010,21 @@ final class AgentViewModel: ObservableObject {
         refreshSilentlyReadStoreHealth()
     }
 
-    /// Snippets, recent artifacts, and clipboard items are otherwise only read through `try?`
-    /// paths (the instant resolver's trigger/artifact lookups and the 1s clipboard poll), so a
-    /// corrupt file there is invisible: the feature just silently stops working. These stores
-    /// have no UI list of their own to surface a load failure, so probe them here.
+    /// Snippets, recent artifacts, clipboard items and row J's allowed apps are otherwise only read
+    /// through `try?` paths, or through no product path at all (the instant resolver's
+    /// trigger/artifact lookups, the 1s clipboard poll), so a corrupt file there is invisible: the
+    /// feature just silently stops working. These stores have no UI list of their own to surface a
+    /// load failure, so probe them here.
     private func refreshSilentlyReadStoreHealth() {
         checkStoreHealth(.snippets) { _ = try snippetStore.loadAll() }
         checkStoreHealth(.recentArtifacts) { _ = try recentArtifactStore.loadAll() }
         checkStoreHealth(.clipboardHistoryItems) { try clipboardHistoryMonitor.verifyHistoryReadable() }
+        // Row J's grants belong here for a sharper version of the same reason: a store nothing can
+        // read is a store whose grants have all silently vanished, and the visible symptom is Sonny
+        // asking about apps the user already allowed — which reads as the feature working badly
+        // rather than as a file that will not open. It has no list of its own to fail in until the
+        // revocation surface lands, so this probe is the only place it can say so.
+        checkStoreHealth(.approvedApps) { _ = try approvedAppStore.loadAll() }
     }
 
     private func checkStoreHealth(
