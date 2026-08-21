@@ -162,6 +162,19 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
         }
     }
 
+    /// How many steps in `steps` carry a pin, counted the same way `strippingResolverPins` clears
+    /// them — recursively, and a step counting once however many of its two pins are set.
+    ///
+    /// Separate from the strip so the read door can say whether it actually removed anything without
+    /// diffing two routine dictionaries, and so the decision behind the log line is a value a test
+    /// can hold rather than a side effect only a log archive can see.
+    static func resolverPinnedStepCount(_ steps: [AgentStep]) -> Int {
+        steps.reduce(0) { total, step in
+            let selfCount = (step.resolvedAppName != nil || step.resolvedBundleIdentifier != nil) ? 1 : 0
+            return total + selfCount + resolverPinnedStepCount(step.routineSteps ?? [])
+        }
+    }
+
     /// The step-safety rule, in the one place both write doors call it.
     ///
     /// Rejects on the first offending step rather than collecting every problem: the caller shows
@@ -486,6 +499,14 @@ public struct RoutineStore: @unchecked Sendable {
         //
         // Before the migration rather than after, so the rewrite a legacy-plaintext file triggers
         // persists the stripped form rather than re-writing the pins it just read.
+        let pinnedStepCount = decoded.value.values
+            .reduce(0) { $0 + StoredRoutine.resolverPinnedStepCount($1.steps) }
+        if pinnedStepCount > 0 {
+            // Founder decision, 2026-08-21: the strip says so once, quietly, and never in the UI.
+            // See `LocalStorageMigrationLog.recordStrippedResolverPins` for why a banner would be
+            // the wrong surface for a fact the user has no action for.
+            LocalStorageMigrationLog.recordStrippedResolverPins(store: "routines", stepCount: pinnedStepCount)
+        }
         let stripped = decoded.map { routines in
             routines.mapValues { routine -> StoredRoutine in
                 var clean = routine

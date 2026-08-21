@@ -189,6 +189,45 @@ struct LocalStorageSecurityTests {
         try assertTaskHistoryMigration(root: root, encryption: encryption)
     }
 
+    /// **The strip runs before the legacy-plaintext rewrite, and that ordering is the point of this
+    /// test** (PR #83, F2). `RoutineStore.loadAll` re-encrypts a plaintext file as it reads it, so a
+    /// strip applied *after* that rewrite would persist the very pins it had just removed: the
+    /// returned value would be clean while the file on disk kept them, and every later load would
+    /// strip them again from bytes nobody ever fixed.
+    ///
+    /// The ordering was a named decision with nothing holding it — the review moved the strip after
+    /// the migration and the entire suite stayed green. What makes this test bite is that it reads
+    /// the **file** afterwards rather than the return value.
+    @Test
+    func aLegacyPlaintextRoutineIsRewrittenWithoutThePinsItArrivedWith() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("routines.json")
+        let encryption = testEncryption()
+
+        var pinned = AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")
+        pinned.resolvedAppName = "Safari"
+        pinned.resolvedBundleIdentifier = "com.attacker.lookalike"
+        // Written as plaintext JSON with no `SONNYENC1` header — the legacy shape every store still
+        // migrates on read.
+        try JSONEncoder.prettySortedForTest
+            .encode([normalized("Legacy"): StoredRoutine(name: "Legacy", steps: [pinned])])
+            .write(to: url, options: .atomic)
+
+        let store = RoutineStore(fileURL: url, encryption: encryption)
+        _ = try store.loadAll()
+
+        // The rewrite happened...
+        #expect(try Data(contentsOf: url).starts(with: LocalStorageEncryption.fileHeader))
+        // ...and what it persisted is the stripped form. A fresh store reading the file again is the
+        // honest way to ask: it decodes the bytes on disk rather than re-checking the value the first
+        // load returned.
+        let reloaded = try RoutineStore(fileURL: url, encryption: encryption).routine(named: "Legacy")
+        #expect(reloaded.steps[0].resolvedAppName == nil)
+        #expect(reloaded.steps[0].resolvedBundleIdentifier == nil)
+        #expect(reloaded.steps[0].appName == "Safari")
+    }
+
     /// A failed re-encryption during legacy migration is not a load failure: the decode already
     /// succeeded and the write is atomic, so the original file is intact and the data is usable.
     /// Letting that write error escape `loadAll()` made callers blank the data and show the
@@ -295,8 +334,15 @@ struct LocalStorageSecurityTests {
 
         // Nine, not eight (SONNY-154): the vision session journal is the ninth store and was the one
         // this test did not create, so the only place the wipe's behaviour is actually exercised
-        // covered every store except the most sensitive one. Asserted against the same count the
-        // fixture returns, so adding a tenth store fails here rather than passing quietly.
+        // covered every store except the most sensitive one.
+        //
+        // **What the count assertion is for, corrected** (PR #83, F7). It is *not* drift protection
+        // between the fixture's files and its returned URLs — the two deletion counts below already
+        // provide that, since a fixture returning a URL it did not create reports a missing file and
+        // fails. What this adds is a tripwire on the fixture's own size: nine is now stated in a
+        // third place, so extending the fixture cannot pass by adjusting one number, and whoever
+        // changes it has to come here and ask whether `LocalDataDeletionService`'s real list moved
+        // too. That question going unasked is how the journal stayed uncovered.
         #expect(fileURLs.count == 9)
         #expect(result == LocalDataDeletionResult(deletedFileCount: 9, missingFileCount: 0))
         for fileURL in fileURLs {

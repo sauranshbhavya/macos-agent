@@ -237,8 +237,12 @@ struct AgentViewModelLocalStorageTests {
         #expect(viewModel.errorMessage == nil)
         #expect(viewModel.clarificationQuestion != nil)
         // The scope genuinely did not bind, which is what makes the notice the only thing standing
-        // between the user and a silent unbinding. `lastAssessedScope` is the post-terminal record;
-        // `activeTaskScope` is reset when a run ends, so it cannot answer this after the fact.
+        // between the user and a silent unbinding. `lastAssessedScope` rather than `activeTaskScope`
+        // because it is the post-terminal record and reads the same on every path — *not* because
+        // `activeTaskScope` was reset here, which it was not: `performStart`'s `defer` clears it only
+        // when `approvalRequest == nil && clarificationQuestion == nil`, and this path pauses on a
+        // clarification. That reset reasoning is true of the completed-run test below and was wrongly
+        // stated here (PR #83, F7).
         #expect(viewModel.lastAssessedScope == .unscoped)
     }
 
@@ -273,6 +277,118 @@ struct AgentViewModelLocalStorageTests {
         #expect(viewModel.localStorageNotice == nil)
         #expect(viewModel.clarificationQuestion != nil)
         #expect(viewModel.lastAssessedScope == .unscoped)
+    }
+
+    /// **A blank workspace name is not a storage fault** (PR #83, F1). `findWorkspace` validates
+    /// before it loads — `normalizedName` throws `.missingName` for a blank or whitespace-only
+    /// string without touching the file — so a catch-all around that call reported "could not load
+    /// encrypted local data" for a store that is perfectly healthy and was never even opened.
+    ///
+    /// Reachable with no tampering: the planner schema requires a `workspaceName` slot on every step
+    /// and `""` is a valid value, nothing normalises blank to `nil`, and `directWorkspaceName` reads
+    /// the field off any operation rather than only the workspace ones.
+    @Test
+    func aBlankWorkspaceNameBindsNothingWithoutClaimingTheStoreIsUnreadable() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let encryption = testEncryption(byte: 0x42)
+        try WorkspaceStore(
+            fileURL: root.appendingPathComponent("workspaces.json"),
+            encryption: encryption
+        ).save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: []))
+        let viewModel = try makeViewModel(root: root, encryption: encryption)
+
+        viewModel.command = "zip the selected folder"
+        // A whitespace-only name, carried on the step the way the planner can emit it.
+        viewModel.start(prebuiltPlan: clarifyingPlan(workspaceName: "   "))
+        while viewModel.isRunning {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(viewModel.localStorageNotice == nil)
+        #expect(viewModel.lastAssessedScope == .unscoped)
+    }
+
+    /// The persisted form of the same thing, and the worse one: `validateStepSafety` checks a step's
+    /// *operation* and not its fields, so a routine can be saved carrying a stray blank
+    /// `workspaceName`, and `nestedRoutineWorkspaceName` then reproduces it on every single run of
+    /// that routine rather than once.
+    @Test
+    func aRoutineCarryingABlankWorkspaceNameDoesNotReportAStoreFailureOnEveryRun() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let encryption = testEncryption(byte: 0x42)
+        try WorkspaceStore(
+            fileURL: root.appendingPathComponent("workspaces.json"),
+            encryption: encryption
+        ).save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: []))
+        try RoutineStore(
+            fileURL: root.appendingPathComponent("routines.json"),
+            encryption: encryption
+        ).save(
+            StoredRoutine(
+                name: "Morning",
+                steps: [
+                    AgentStep(
+                        id: "open",
+                        operation: .openApp,
+                        description: "Open Safari.",
+                        appName: "Safari",
+                        workspaceName: ""
+                    )
+                ]
+            )
+        )
+        let viewModel = try makeViewModel(root: root, encryption: encryption)
+
+        viewModel.command = "run my morning routine"
+        viewModel.start(prebuiltPlan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Morning"))
+        while viewModel.isRunning {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(viewModel.localStorageNotice == nil)
+        #expect(viewModel.lastAssessedScope == .unscoped)
+    }
+
+    /// **The success path clears the failure it recorded** (PR #83, F3). Deleting the
+    /// `clearLocalStorageLoadFailure` call left the whole suite green, because nothing exercised a
+    /// successful scope read against a view model that already had the failure recorded.
+    ///
+    /// The failure is seeded through `refreshSavedItems()` rather than through a first dispatch, and
+    /// that is what makes the assertion belong to `resolveTaskScope`. Only one dispatch follows the
+    /// repair, it takes the clarification path, and `performStart` returns from that path *before* it
+    /// reaches its own `refreshSavedItems()` — so the clear at the end has exactly one possible
+    /// author, the same isolation the corrupt-store test above relies on in the other direction.
+    @Test
+    func aRepairedWorkspaceStoreClearsTheFailureItReported() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspacesURL = root.appendingPathComponent("workspaces.json")
+        let readable = testEncryption(byte: 0x42)
+        // Written with a key the view model cannot read.
+        try WorkspaceStore(fileURL: workspacesURL, encryption: testEncryption(byte: 0x99))
+            .save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: []))
+        let viewModel = try makeViewModel(root: root, encryption: readable)
+
+        viewModel.refreshSavedItems()
+        let recorded = try #require(viewModel.localStorageNotice)
+        #expect(recorded.contains("saved workspaces"))
+
+        // Repair it. Removed first rather than saved over: `save` merges, so it loads before it
+        // writes and would fail on the very bytes being replaced.
+        try FileManager.default.removeItem(at: workspacesURL)
+        try WorkspaceStore(fileURL: workspacesURL, encryption: readable)
+            .save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: []))
+
+        viewModel.command = "zip the selected folder"
+        viewModel.start(workspaceBinding: "Research", prebuiltPlan: clarifyingPlan())
+        while viewModel.isRunning {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(viewModel.localStorageNotice == nil)
+        #expect(viewModel.clarificationQuestion != nil)
     }
 
     /// And a healthy store that *does* contain the workspace binds it, so the fix did not turn every
@@ -484,7 +600,7 @@ struct AgentViewModelLocalStorageTests {
 /// A plan that prepares straight into a clarification, so `performStart` returns before
 /// `refreshSavedItems()` runs. That early return is what isolates `resolveTaskScope`'s own
 /// load-failure reporting from the identical reporting the post-run refresh does (SONNY-78).
-private func clarifyingPlan() -> AgentPlan {
+private func clarifyingPlan(workspaceName: String? = nil) -> AgentPlan {
     AgentPlan(
         summary: "Ask first.",
         requiresConfirmation: false,
@@ -493,7 +609,8 @@ private func clarifyingPlan() -> AgentPlan {
                 id: "clarify",
                 operation: .clarify,
                 description: "Ask which folder.",
-                question: "Which folder should Sonny use?"
+                question: "Which folder should Sonny use?",
+                workspaceName: workspaceName
             )
         ]
     )
