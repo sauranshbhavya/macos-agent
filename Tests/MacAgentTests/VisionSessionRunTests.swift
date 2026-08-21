@@ -1112,6 +1112,86 @@ struct VisionSessionRunTests {
         #expect(try fixture.approvedApps.loadAll().isEmpty)
     }
 
+    /// **F5's pin: leaving Power mid-session withdraws a standing nothing else vouched for.**
+    ///
+    /// The cause the enumerated list missed. `AppControlResolver`'s Power arm returns `.allowed`
+    /// unconditionally — it consults no list at all — so a session started in Power on an app that
+    /// is on neither the starter list nor the user's own list has a standing that exists only while
+    /// the dial says Power. Moving to **Normal** takes it away, which is the case a reader working
+    /// from the Normal → Safe cause alone would not expect, since Normal is the *looser* of the two
+    /// destinations.
+    ///
+    /// VS Code is the app precisely because it is on neither list and is held off the starter list
+    /// permanently by guard (b).
+    @Test
+    func leavingPowerMidSessionWithdrawsAStandingOnlyPowerVouchedFor() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"Extensions","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"never reached."}"#
+            ],
+            mode: .power,
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false
+        )
+        defer { fixture.tearDown() }
+
+        // Power asks about no app, so the session starts and acts with no per-app question at all
+        // and nothing is written to anybody's list.
+        fixture.viewModel.startVisionSession(goal: "open the extensions panel", appName: "VS Code")
+        try await waitUntil("the first synthesized action") { fixture.synthesizer.clickCount == 1 }
+        #expect(fixture.viewModel.approvalRequest == nil)
+        #expect(try fixture.approvedApps.loadAll().isEmpty)
+
+        // Not to Safe — to **Normal**, the looser destination, which is the half the list missed.
+        fixture.viewModel.interactionMode = .normal
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.synthesizer.clickCount == 1, "no action after the dial moved")
+        #expect(fixture.viewModel.approvalRequest == nil, "a withdrawn standing is not re-prompted")
+        let summary = fixture.viewModel.finalSummary + (fixture.viewModel.errorMessage ?? "")
+        #expect(summary.contains("no longer allowed to control VS Code"))
+        #expect(try fixture.approvedApps.loadAll().isEmpty)
+    }
+
+    /// **F8's second guard on §4.3's ordering, from a different angle.**
+    ///
+    /// The founder's whole decision rests on one property — no per-app question before a capture has
+    /// cleared the screen check — and it was held by exactly one test, in a file the rebase touches.
+    /// This holds the same property by a route that shares none of that test's machinery: instead of
+    /// asserting that a shell refuses before the question, it asserts that the question, when it
+    /// *does* come, comes **after** a capture the model has never seen.
+    ///
+    /// The two together are hard to defeat with one edit. Moving the gate above the capture makes
+    /// this one fail on `payloads` — the redaction step would not have run — while the shell test
+    /// fails on the prompt appearing. Removing the shell check leaves this one green and the other
+    /// red.
+    @Test
+    func thePerAppQuestionArrivesOnlyAfterACaptureThatWasRedactedAndNeverSent() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"never reached."}"#],
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "open the extensions panel", appName: "VS Code")
+        try await waitUntil("the per-app control question") { fixture.viewModel.approvalRequest != nil }
+
+        // A capture was taken and redacted — the synthesizer was asked to bring the app forward,
+        // which only happens inside the loop, after `checkIterationStart`.
+        #expect(fixture.synthesizer.events.contains(.activated("com.microsoft.VSCode")))
+        // And it went nowhere: no prompt and no image reached the model while the question is open.
+        #expect(fixture.model.prompts.isEmpty)
+        #expect(fixture.model.payloads.isEmpty)
+        // Nothing was driven, and no grant exists yet.
+        #expect(fixture.synthesizer.clickCount == 0)
+        #expect(try fixture.approvedApps.loadAll().isEmpty)
+
+        fixture.viewModel.cancelCurrentRun()
+        try await waitForIdle(fixture.viewModel)
+    }
+
     /// **A `wait` decision waits and then the session carries on** — the one action kind with no
     /// end-to-end coverage until now (PR #50 cycle-2 residual).
     ///

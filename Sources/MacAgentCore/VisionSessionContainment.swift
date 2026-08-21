@@ -151,15 +151,25 @@ public enum VisionContainmentRefusal: Equatable, Sendable {
     /// the user has just answered this exact question, in the other direction.
     ///
     /// **Every cause, enumerated, because the sentence asserts a fact about permission and has to be
-    /// true of all of them** (PR #88, F3 — the list here named two and there are three):
+    /// true of all of them.** The list has been short twice — it named two when there were three
+    /// (PR #88 fix round, F3), then three when there were four (cycle 2, F5) — which is the reason
+    /// it is now derived from the resolver's own arms rather than remembered:
     ///
     /// 1. The user removed the app in Settings → Security & Access (row J's third branch, SONNY-144).
     /// 2. A local-data wipe erased the grants file with everything else.
-    /// 3. **The user switched to Safe mid-session, for an app only the starter list vouched for.**
-    ///    The starter list contributes nothing in Safe, so an app allowed by it alone stops being
-    ///    allowed the moment the dial moves. This is a genuine withdrawal — the user turned it off
-    ///    themselves, by a different control — which is why it belongs here and not in a case of its
-    ///    own.
+    /// 3. **The user switched Normal → Safe mid-session, for an app only the starter list vouched
+    ///    for.** `AppControlResolver` consults the starter list in Normal and never in Safe, so an
+    ///    app allowed by it alone stops being allowed the moment the dial moves.
+    /// 4. **The user switched out of Power mid-session, for an app nothing else vouched for.** This
+    ///    is the one the list missed. Power's arm returns `.allowed` unconditionally — it consults
+    ///    no list at all — so a session started in Power on an app that is on neither the starter
+    ///    list nor the user's own loses its standing on a move to *either* Normal or Safe, and the
+    ///    move to Normal is the case a reader working from cause 3 alone would not expect.
+    ///
+    /// Causes 3 and 4 are genuine withdrawals rather than a case of their own: the user turned it
+    /// off themselves, with a different control. What makes them reachable at all is that
+    /// `visionAppControlState` re-reads `interactionMode` on every iteration, which is the same
+    /// property that makes a revocation take effect now rather than at the next launch.
     ///
     /// **A grants file that will not open is *not* one of them.** That is `appControlUnreadable`:
     /// nothing was withdrawn, Sonny simply cannot tell, and saying "no longer allowed" to somebody
@@ -190,6 +200,15 @@ public enum VisionContainmentRefusal: Equatable, Sendable {
     /// re-ask about every app the user had already allowed; reading it as a withdrawal would assert
     /// something nobody did.
     case appControlUnreadable(app: String)
+    /// The per-app gate could not get an answer it could act on: the one requirement function
+    /// returned something that raises no question for a standing that says one is outstanding.
+    ///
+    /// **Unreachable by construction, and kept as the fail-closed answer if it ever is not.**
+    /// `.needsApproval` floors the requirement at `.explicitApproval` in every mode at every tier
+    /// that can run, pinned cell by cell by `everyAuthorityCellMatchesTheWrittenTable`. Its own case
+    /// rather than `appControlDeclined`, whose sentence would tell the user they refused something
+    /// nobody asked them (PR #88 cycle 2, F7).
+    case appControlUnresolvable(app: String)
     case targetNotFrontmost(expected: String, actual: String?)
     case attentionLost(SessionAttentionState)
     case actionTypeNotAllowed(String)
@@ -238,6 +257,10 @@ public enum VisionContainmentRefusal: Equatable, Sendable {
             return "Sonny stopped because you did not allow it to control \(app)."
         case .appControlNotRemembered(let app):
             return "Sonny stopped because it could not save that you allowed it to control \(app)."
+        case .appControlUnresolvable(let app):
+            // Names what happened without inventing a cause the user can act on, because there is
+            // none: this is Sonny failing to work out its own answer.
+            return "Sonny stopped because it could not work out whether it is allowed to control \(app)."
         case .appControlUnreadable(let app):
             // Deliberately not "no longer allowed": nothing was withdrawn, and Sonny cannot tell
             // either way. It names the file rather than the permission, because the file is the
@@ -277,6 +300,7 @@ public enum VisionContainmentRefusal: Equatable, Sendable {
         case .appControlDeclined: return "app_control_declined"
         case .appControlNotRemembered: return "app_control_not_remembered"
         case .appControlUnreadable: return "app_control_unreadable"
+        case .appControlUnresolvable: return "app_control_unresolvable"
         case .targetNotFrontmost: return "target_not_frontmost"
         case .attentionLost: return "attention_lost"
         case .actionTypeNotAllowed: return "action_not_allowed"

@@ -340,6 +340,7 @@ struct VisionSessionContainmentTests {
         case appControlDeclined = "app_control_declined"
         case appControlNotRemembered = "app_control_not_remembered"
         case appControlUnreadable = "app_control_unreadable"
+        case appControlUnresolvable = "app_control_unresolvable"
         case targetNotFrontmost = "target_not_frontmost"
         case attentionLost = "attention_lost"
         case actionTypeNotAllowed = "action_not_allowed"
@@ -365,6 +366,7 @@ struct VisionSessionContainmentTests {
         case .appControlDeclined: return .appControlDeclined(app: "Safari")
         case .appControlNotRemembered: return .appControlNotRemembered(app: "Safari")
         case .appControlUnreadable: return .appControlUnreadable(app: "Safari")
+        case .appControlUnresolvable: return .appControlUnresolvable(app: "Safari")
         case .targetNotFrontmost: return .targetNotFrontmost(expected: "Safari", actual: "Notes")
         case .attentionLost: return .attentionLost(.screenLocked)
         case .actionTypeNotAllowed: return .actionTypeNotAllowed("launch_missiles")
@@ -390,6 +392,7 @@ struct VisionSessionContainmentTests {
         case .appControlDeclined: return .appControlDeclined
         case .appControlNotRemembered: return .appControlNotRemembered
         case .appControlUnreadable: return .appControlUnreadable
+        case .appControlUnresolvable: return .appControlUnresolvable
         case .targetNotFrontmost: return .targetNotFrontmost
         case .attentionLost: return .attentionLost
         case .actionTypeNotAllowed: return .actionTypeNotAllowed

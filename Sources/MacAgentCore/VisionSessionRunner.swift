@@ -236,7 +236,7 @@ final class VisionSessionRunner {
             // The first time through it *asks*; every time after that it re-checks, which is what
             // makes a grant withdrawn mid-session take effect at the next iteration rather than at
             // the next launch. See `resolveAppControl` for why those are two behaviours and not one.
-            if let refusal = try await resolveAppControl(iteration: iteration, interaction: interaction) {
+            if let refusal = try await resolveAppControl(interaction: interaction) {
                 return end(with: refusal, iteration: iteration)
             }
             // **The one size, resolved once.** Everything downstream — what the user is shown, what
@@ -435,7 +435,6 @@ final class VisionSessionRunner {
     ///
     /// - Returns: the refusal that ends the session, or `nil` to carry on.
     private func resolveAppControl(
-        iteration: Int,
         interaction: any VisionSessionInteracting
     ) async throws -> VisionContainmentRefusal? {
         let state = interaction.visionAppControlState(targetBundleIdentifier: target.bundleIdentifier)
@@ -470,10 +469,16 @@ final class VisionSessionRunner {
         guard requirement.requiresUserApproval else {
             // Unreachable by construction: `.needsApproval` floors the requirement at
             // `.explicitApproval` in every mode at every tier that can run, pinned cell by cell by
-            // `everyAuthorityCellMatchesTheWrittenTable`. Fail closed rather than pass silently —
-            // a session running on a grant nobody was asked for is the one outcome this gate exists
-            // to prevent.
-            return .appControlDeclined(app: target.displayName)
+            // `everyAuthorityCellMatchesTheWrittenTable`. Fail closed rather than pass silently: a
+            // session running on a grant nobody was asked for is the one outcome this gate exists to
+            // prevent.
+            //
+            // **Its own case, because `appControlDeclined` would be a lie here** (PR #88 cycle 2,
+            // F7). That sentence says "you did not allow it", and in this arm nobody was asked —
+            // the requirement came back as something that raises no question, which is a defect in
+            // the engine rather than an answer from the user. One true sentence per refusal is the
+            // standard F3 set; borrowing a neighbour's is the failure it was set against.
+            return .appControlUnresolvable(app: target.displayName)
         }
         if let refusal = await containment.checkApprovalPresentable() {
             return refusal
