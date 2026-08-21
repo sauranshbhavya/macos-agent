@@ -13,9 +13,25 @@ import { errorBody } from "../errors.js";
 import type { Config } from "../config.js";
 import type pg from "pg";
 
+/**
+ * A connection **checked out for the caller alone**, and returned when the caller is done.
+ *
+ * **The previous shape was `db: () => Promise<pg.Client>` with no release, and it made a guarantee
+ * this code depends on unenforceable** (PR #87 R4). A pool-backed implementation of that signature
+ * leaks a connection per request, so the only implementation that worked was one shared `Client` —
+ * and under a shared client `resolve()`'s "one transaction" is false: its `BEGIN` nests inside
+ * whatever else is open on that connection, and one `COMMIT` commits both. Every test used a shared
+ * client, so the property was never exercised, only assumed.
+ *
+ * `withConnection` makes the contract structural: the callback gets a connection nobody else is
+ * using, and it is released on the way out whether the callback threw or not. A pool implementation
+ * is now the natural one to write, and a shared-client implementation is the awkward one.
+ */
+export type WithConnection = <T>(fn: (client: pg.Client) => Promise<T>) => Promise<T>;
+
 export interface AuthDeps {
   readonly provider: AuthProvider;
-  readonly db: () => Promise<pg.Client>;
+  readonly withConnection: WithConnection;
   readonly now?: () => Date;
 }
 
@@ -52,7 +68,7 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
       );
     }
     const email = normalizeEmail(parsed.data.email);
-    const client = await deps.db();
+    return deps.withConnection(async (client) => {
 
     // Per source first. A caller over their own ceiling is told so: it is their own behaviour, and
     // hiding it would leave them retrying against a wall with no signal.
@@ -80,6 +96,13 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
       // and be refused, with no new mail arriving. Now a failed send leaves the previous code
       // working, which is the safe direction: at worst two codes are briefly live, and the older
       // one is invalidated the moment a send actually succeeds.
+      // **These three steps are not transactional, and the failure modes are bounded on purpose**
+      // (PR #87 R18). The send is a network call and cannot join a database transaction, so a crash
+      // between them leaves either a sent code with no issuance record — which classifies as
+      // `auth.code_invalid` and costs the user one retry — or an invalidated older code with no
+      // newer record, same outcome. Wrapping the two database steps in a transaction would not help:
+      // the send is the one that cannot be rolled back, and it happens first precisely so that a
+      // failed send leaves the user's existing code working.
       await deps.provider.sendEmailCode(email);
       await invalidateLive(client, email, now());
       await recordIssue(client, email, sourceHash(request, salt), now());
@@ -96,6 +119,7 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
       );
     }
     return reply.status(200).send(uniform);
+    });
   });
 
   /**
@@ -112,7 +136,7 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
       );
     }
     const email = normalizeEmail(parsed.data.email);
-    const client = await deps.db();
+    return deps.withConnection(async (client) => {
 
     // Verification is guessing, so it is limited per address being guessed at. Without this the
     // code's own entropy is the only thing between an attacker and an account.
@@ -165,8 +189,12 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
       token_type: "Bearer",
       ...expiryFields(issued, session.expiresIn),
       refresh_token: session.refreshToken,
+      ...(session.refreshExpiresIn !== undefined
+        ? { refresh_expires_at: expiryFields(issued, session.refreshExpiresIn).expires_at }
+        : {}),
       user: { id: resolution.accountId },
       ...(resolution.linkHint ? { link_hint: resolution.linkHint } : {}),
+    });
     });
   });
 
@@ -190,7 +218,7 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
       }
       throw error;
     }
-    const client = await deps.db();
+    return deps.withConnection(async (client) => {
     // Filtered and ordered (PR #87 F8). `supabase_user_id` carries no uniqueness constraint and
     // never can — the whole design allows several identities to name one Supabase user — so a bare
     // `LIMIT 1` returned an arbitrary row, and one of them could belong to a closed account. A
@@ -205,13 +233,30 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
         LIMIT 1`,
       [session.supabaseUserId],
     );
+    // **A refresh for a closed account is a revoked session, not a successful one** (PR #87 R5).
+    // The previous version answered 200 with `user.id: null` and a working token pair, so an
+    // account the user had deleted kept minting sessions and the client had no way to tell.
+    const accountId = account.rows[0]?.account_id;
+    if (!accountId) {
+      return reply.status(401).send(
+        errorBody("auth.token_revoked", "This session no longer belongs to an active account.", request.id),
+      );
+    }
+
     const issued = now();
     return reply.status(200).send({
       access_token: session.accessToken,
       token_type: "Bearer",
       ...expiryFields(issued, session.expiresIn),
       refresh_token: session.refreshToken,
-      user: { id: account.rows[0]?.account_id ?? null },
+      // §3.2 lists `refresh_expires_at` and nothing was sending it (PR #87 R8). The provider owns
+      // the refresh token's life, so it is reported only when the provider tells us; inventing a
+      // value would be a client scheduling against a number the server made up.
+      ...(session.refreshExpiresIn !== undefined
+        ? { refresh_expires_at: expiryFields(issued, session.refreshExpiresIn).expires_at }
+        : {}),
+      user: { id: accountId },
+    });
     });
   });
 
@@ -248,7 +293,7 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
     // server with a made-up bearer token. The token is now resolved to a provider-side user and
     // then to an account through `sonny.identity`, which is precisely what SONNY-128's middleware
     // will do for every authenticated route; when it lands, this block is what it replaces.
-    const client = await deps.db();
+    return deps.withConnection(async (client) => {
     let supabaseUserId: string;
     try {
       supabaseUserId = await deps.provider.userFromAccessToken(header.slice("Bearer ".length));
@@ -277,13 +322,20 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
         errorBody("auth.unauthenticated", "Account could not be attributed to this session.", request.id),
       );
     }
-    // Close the account and **release its identities** in one transaction.
+    // **Read the ids BEFORE the close, and revoke every one of them** (PR #87 R1).
     //
-    // Releasing them is what lets the person sign up again with the same address. Without it the
-    // unique constraint on `(provider, subject)` keeps a closed account's claim on that address
-    // forever, while every read path excludes the account for being deleted — so the address
-    // becomes permanently unusable by anyone, including its owner. The account row itself stays,
-    // because it is the only handle the retained content is addressable by.
+    // The previous version read them after the closing UPDATE and revoked **nobody** — reproduced
+    // as 0 rows. Its comment said the read happened "before the commit that releases them", which
+    // was wrong twice over: the trigger fires at **statement end**, not at commit, so the rows were
+    // already gone by the next statement in the same transaction; and under 0004 nothing releases
+    // them at all any more, they are marked. Reading first is kept regardless, because it does not
+    // depend on which of those is true.
+    const identities = await client.query<{ supabase_user_id: string }>(
+      `SELECT DISTINCT supabase_user_id FROM sonny.identity
+        WHERE account_id = $1 AND supabase_user_id IS NOT NULL`,
+      [accountId],
+    );
+
     await client.query("BEGIN");
     let closed;
     try {
@@ -291,39 +343,30 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
         "UPDATE sonny.account SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL",
         [accountId],
       );
-      // **Every session on the account, not just this one** (PR #87 F5). One account maps to
-      // several Supabase users by design, so revoking only the caller's session leaves the others
-      // live on an account the user just deleted. The identities are read BEFORE the commit that
-      // releases them, because the trigger removes the rows this traversal needs.
-      const identities = await client.query<{ supabase_user_id: string | null }>(
-        "SELECT DISTINCT supabase_user_id FROM sonny.identity WHERE account_id = $1 AND supabase_user_id IS NOT NULL",
-        [accountId],
-      );
-      for (const row of identities.rows) {
-        try {
-          await deps.provider.signOutAllForUser(row.supabase_user_id!);
-        } catch (error) {
-          if (!(error instanceof ProviderRejected)) throw error;
-        }
-      }
-      // Identities are released by the `account_close_releases_identities` trigger (migration 0003),
-      // not here. Doing it in the handler was the first fix and it held only for accounts closed by
-      // this one path; the invariant belongs to the data, because "an identity may not reference a
-      // closed account" is true whichever statement closed it.
+      // Identities are marked closed by the `account_close_marks_identities` trigger (0004), not
+      // deleted and not touched here. Keeping them keeps `link_method` — the audit trail — and the
+      // `supabase_user_id`s that `provider.deleteUser` and SONNY-196 both need, which is the same
+      // reasoning that keeps the account row itself.
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
     }
-    try {
-      await deps.provider.signOut(header.slice("Bearer ".length));
-    } catch (error) {
-      if (!(error instanceof ProviderRejected)) throw error;
+
+    // After the close, so a revocation cannot leave the account open with its sessions gone.
+    for (const row of identities.rows) {
+      try {
+        await deps.provider.signOutAllForUser(row.supabase_user_id);
+      } catch (error) {
+        if (!(error instanceof ProviderRejected)) throw error;
+      }
     }
+
     // 204 whether or not a row changed: deleting an already-deleted account is the state the caller
     // asked for, and answering 404 would tell an unauthenticated prober which ids exist.
     request.log.info({ closed: closed.rowCount }, "account closed");
     return reply.status(204).send();
+    });
   });
 
   /** `POST /v1/auth/signout` — revoke the family server-side, return 204. */

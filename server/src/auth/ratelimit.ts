@@ -35,7 +35,18 @@ export interface Limit {
  */
 export const CODE_REQUEST_PER_ADDRESS: Limit = { max: 3, windowSeconds: 15 * 60 };
 export const CODE_REQUEST_PER_SOURCE: Limit = { max: 10, windowSeconds: 60 * 60 };
-/** Verification is guessing, so it is tighter and keyed to the address being guessed at. */
+/**
+ * Verification is guessing, so it is tighter and keyed to the address being guessed at.
+ *
+ * **This is an attacker-controlled lockout, and that is a deliberate trade rather than an oversight**
+ * (PR #87 R18). Anyone who knows an address can burn its five attempts and lock the real user out
+ * of verifying for the rest of the window — they cannot sign in, though they can still request a
+ * fresh code, and the window is fifteen minutes rather than a day. The alternative is no limit on
+ * guessing, which trades a bounded, self-clearing nuisance for an unbounded attack on the code's
+ * own entropy. Keying the limit to the *source* instead would move the lockout rather than remove
+ * it and would be trivially defeated by rotating source addresses. Recorded so the next person to
+ * meet a support ticket about it knows it was chosen.
+ */
 export const CODE_VERIFY_PER_ADDRESS: Limit = { max: 5, windowSeconds: 15 * 60 };
 
 /**

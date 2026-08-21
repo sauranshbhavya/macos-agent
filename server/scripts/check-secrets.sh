@@ -49,10 +49,18 @@ PATTERNS=(
   # within a week. Anchoring on the variable NAME is narrow, cannot false-positive on a hash, and
   # extends to the next such variable by adding one word here.
   #
-  # `=` only, NOT `:`. A colon separator was tried first and matched TypeScript's type annotations --
-  # `RATE_LIMIT_SALT: nonEmpty.optional()` in config.ts became a finding on the first run. `.env`
-  # files and shell exports use `=`; nothing in this repository declares a secret with a colon.
-  '(RATE_LIMIT_SALT|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_JWT_SECRET|RESEND_API_KEY|SMTP_PASS(WORD)?)[[:space:]]*=[[:space:]]*[A-Za-z0-9_./+-]{12,}'   # name-anchored secret assignment
+  # **Quotes optional, and `:` is back** (PR #87 R9). The first version took `=` with a bare value,
+  # which is the one way almost nobody writes these: `KEY="value"`, `KEY='value'`, YAML's
+  # `KEY: "value"`, `export KEY="value"` and compose's `- KEY=value` all went straight through, six
+  # probes' worth.
+  #
+  # `:` was dropped in an earlier round because it matched TypeScript type annotations --
+  # `RATE_LIMIT_SALT: nonEmpty.optional()` in config.ts became a finding. It is safe again because
+  # **the value class no longer contains a dot**: that annotation's value stops at `nonEmpty`, eight
+  # characters, under the sixteen this needs. A hex salt, a base64 key and a `re_`-prefixed token
+  # contain no dot either, so nothing real is lost. Anything dotted and secret-shaped is a JWT, and
+  # JWTs have their own pattern above.
+  "(RATE_LIMIT_SALT|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_JWT_SECRET|RESEND_API_KEY|SMTP_PASS(WORD)?)[[:space:]]*[=:][[:space:]]*[\"']?[A-Za-z0-9+/=_-]{16,}"   # name-anchored secret assignment
 )
 
 # Placeholders the repository is supposed to contain. Kept narrow on purpose: this list is the
@@ -158,7 +166,7 @@ exit 0
 # ── What this does and does not prevent ──────────────────────────────────────────────────────
 #
 # PREVENTS
-#   - A vendor-issued credential matching one of the ten patterns, on a single line of any tracked
+#   - A vendor-issued credential matching one of the patterns above, on a single line of any tracked
 #     or staged file, reaching a commit.
 #   - A private key written across real newlines, via the separate whole-file pass above.
 #   - Its own findings being printed: the location and the pattern are reported, never the value.

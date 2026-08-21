@@ -123,20 +123,29 @@ export async function resolve(
       `SELECT i.id, i.account_id, i.link_method
          FROM sonny.identity i
          JOIN sonny.account a ON a.id = i.account_id
-        WHERE i.provider = $1 AND i.subject = $2 AND a.deleted_at IS NULL`,
+        WHERE i.provider = $1 AND i.subject = $2
+          AND NOT i.account_closed AND a.deleted_at IS NULL`,
       [assertion.provider, assertion.subject],
     );
     if (existing.rows[0]) {
       // Refresh the hint and the Supabase user, both of which legitimately change over time.
-      await client.query(
+      // **The row count is checked** (PR #87 R6). The predicate repeats `NOT account_closed`, so a
+      // close committed between the SELECT above and this UPDATE matches nothing — and without the
+      // check this function would have gone on to return a closed account as a successful sign-in.
+      const refreshed = await client.query(
         `UPDATE sonny.identity
             SET email_hint = COALESCE($2, email_hint),
                 email_verified = $3,
                 email_is_relay = $4,
                 supabase_user_id = COALESCE($5, supabase_user_id)
-          WHERE id = $1`,
+          WHERE id = $1 AND NOT account_closed`,
         [existing.rows[0].id, email ?? null, assertion.emailVerified, relay, assertion.supabaseUserId ?? null],
       );
+      if (refreshed.rowCount === 0) {
+        await client.query("ROLLBACK");
+        if (attempt >= 1) throw new IdentityConflict("identity closed while resolving");
+        return resolve(client, assertion, attempt + 1);
+      }
       await client.query("COMMIT");
       return {
         accountId: existing.rows[0].account_id,
@@ -170,6 +179,30 @@ export async function resolve(
       }
     }
 
+    // **R3: lock the account before inserting an identity onto it.**
+    //
+    // `FOR SHARE` conflicts with the `FOR NO KEY UPDATE` that a concurrent `UPDATE ... SET
+    // deleted_at` takes, so a resolver racing a close **blocks here and then re-reads** rather than
+    // inserting into the gap between the closer's update and its trigger. Without it the insert
+    // landed after the trigger had already marked everything, leaving an identity live on a closed
+    // account — invisible to sign-in, occupying the address, permanent.
+    //
+    // Rule 3's brand-new account needs no lock: nothing else can hold a reference to a row this
+    // transaction has not inserted yet.
+    if (accountId) {
+      const still = await client.query<{ deleted_at: Date | null }>(
+        "SELECT deleted_at FROM sonny.account WHERE id = $1 FOR SHARE",
+        [accountId],
+      );
+      if (!still.rows[0] || still.rows[0].deleted_at !== null) {
+        // It closed while we were deciding. Start again: rule 2 will no longer match it, and the
+        // assertion will get its own account.
+        await client.query("ROLLBACK");
+        if (attempt >= 1) throw new IdentityConflict("target account closed while resolving");
+        return resolve(client, assertion, attempt + 1);
+      }
+    }
+
     // Rule 3 — a new account.
     let created = false;
     if (!accountId) {
@@ -185,7 +218,7 @@ export async function resolve(
          (account_id, provider, subject, email_hint, email_verified, email_is_relay,
           supabase_user_id, link_method)
        VALUES ($1,$2,$3,$4,$5,$6,$7,$8)
-       ON CONFLICT (provider, subject) DO NOTHING
+       ON CONFLICT (provider, subject) WHERE NOT account_closed DO NOTHING
        RETURNING id`,
       [accountId, assertion.provider, assertion.subject, email ?? null,
        assertion.emailVerified, relay, assertion.supabaseUserId ?? null, linkMethod],
@@ -235,8 +268,10 @@ export class LinkError extends Error {}
 /**
  * Rule 4 — the only path that joins two *existing* accounts.
  *
- * **`authenticatedAccountId` is the account the caller has proved a session on, and it must equal
- * the target.** Without that equality this is a primitive for moving anyone's identity onto anyone's
+ * **Both ends must be proven.** `authenticatedAccountId` is the account the caller has a session on
+ * and must equal the target; `provenIdentityId` is the identity the caller just signed in with and
+ * must equal the one being moved. Authenticating only the target — which is what this did before
+ * PR #87 R2 — says the caller owns the destination and nothing about what is being moved there. Without that equality this is a primitive for moving anyone's identity onto anyone's
  * account. The parameter is required rather than optional so a caller cannot omit it and get the
  * old, unchecked behaviour.
  *
@@ -248,6 +283,7 @@ export async function linkExplicitly(
   identityId: string,
   targetAccountId: string,
   authenticatedAccountId: string,
+  provenIdentityId: string,
 ): Promise<void> {
   // **The check the docstring promises, actually performed** (PR #87 F7). The first version took no
   // session at all and could not have made it, while both this comment and the rule document said
@@ -260,10 +296,24 @@ export async function linkExplicitly(
         "the caller's account is not the link target",
     );
   }
+  // **The source must be freshly proven too** (PR #87 R2). F7 closed the target half and left this
+  // one open: authenticating the target says the caller owns where the identity is going, and
+  // nothing about the identity being moved. Without this, a caller signed in on their own account
+  // could name a stranger's identity and take it. `provenIdentityId` is the identity the caller
+  // just completed a sign-in with, and it must be the one being moved.
+  if (provenIdentityId !== identityId) {
+    throw new LinkError(
+      "rule 4 requires the source identity to have been freshly proven by this caller; " +
+        "the identity being moved is not the one that was proven",
+    );
+  }
   await client.query("BEGIN");
   try {
+    // `FOR SHARE`, for the same reason `resolve` takes it (PR #87 R3): between this check and the
+    // UPDATE below, a concurrent close would otherwise let an identity be moved onto an account
+    // that no longer exists — the identical TOCTOU, one function over.
     const target = await client.query(
-      "SELECT 1 FROM sonny.account WHERE id = $1 AND deleted_at IS NULL",
+      "SELECT 1 FROM sonny.account WHERE id = $1 AND deleted_at IS NULL FOR SHARE",
       [targetAccountId],
     );
     if (target.rowCount === 0) {

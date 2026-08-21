@@ -69,10 +69,10 @@ const schema = z.object({
    *
    * Empty means trust nothing, which is correct with no proxy in front and is the default.
    *
-   * A hop count was the other form the review offered and is deliberately not supported: Fastify's
-   * own types reject a number here, and a count says "believe the last N hops" without saying who
-   * they are — which is the same act of faith the boolean made, one step smaller. Naming the
-   * proxies is the form that actually constrains anything.
+   * **Not a hop count.** An earlier draft offered one and the parser no longer produces it, so the
+   * docstring was advertising a form that would have been parsed as a one-element CIDR list and
+   * silently matched nothing (PR #87 R15). A count also says "believe the last N hops" without
+   * saying who they are, which is the boolean's act of faith one step smaller.
    */
   TRUSTED_PROXIES: z.string().trim().default(""),
   /**
@@ -87,11 +87,17 @@ const schema = z.object({
   /**
    * Mounts `DELETE /v1/account` with **no authentication** (SONNY-127, PR #87 F1).
    *
-   * That route verifies no token and takes its subject from a header, because SONNY-128's
-   * authenticated-request middleware does not exist yet. A proof of concept destroyed another
-   * account with a made-up bearer token and `SONNY_ENV=production`. It is therefore off by default
-   * and **refused outright in production** by `loadConfig` below, so it cannot be enabled by a
-   * misplaced environment variable on the one host where it would matter.
+   * The route now attributes its caller from the access token rather than from a header (PR #87
+   * F1), so the specific hole a proof of concept walked through — destroying another account with a
+   * made-up bearer token under `SONNY_ENV=production` — is closed.
+   *
+   * **It stays gated for a different and larger reason** (PR #87 R7): **nothing verifies a token
+   * at all.** `AuthProvider.userFromAccessToken` is the seam that will, and no adapter implements
+   * it — so what the route trusts today is whatever the configured provider says, and the only
+   * provider that exists is a test fake. Until SONNY-128 supplies real verification, a destructive
+   * route is trusting an unimplemented check. Off by default, and **refused outright in production**
+   * by `loadConfig` below, so it cannot be enabled by a misplaced variable on the one host where it
+   * would matter.
    */
   ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE: z.enum(["true", "false"]).default("false"),
 });
@@ -177,8 +183,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (value.SONNY_ENV === "production" && value.ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE === "true") {
     throw new ConfigError(
       "ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE may never be true when SONNY_ENV=production. " +
-        "That route authenticates nothing and takes its subject from a header; it exists only " +
-        "until SONNY-128 supplies authenticated-request middleware.",
+        "That route attributes its caller from the access token, but NOTHING VERIFIES THAT TOKEN " +
+        "yet — no adapter implements userFromAccessToken — so it trusts an unimplemented check. " +
+        "It exists only until SONNY-128 supplies real verification.",
     );
   }
 
