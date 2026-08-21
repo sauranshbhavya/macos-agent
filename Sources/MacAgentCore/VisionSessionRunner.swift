@@ -482,6 +482,16 @@ final class VisionSessionRunner {
         // this renders on the floating widget *and* on `CommandCenterAttentionPanel`, with no
         // surface taught anything about it. That is §2.3's half of the design, kept intact inside
         // §4.3's ordering.
+        // **The `nil` arm is unreachable today, and is kept for the control that will reach it.**
+        // The only Deny in the product routes through `cancelCurrentRun`, which resumes this
+        // continuation with `nil` *and* cancels the task — and the cancellation check inside
+        // `requestVisionActionApproval` throws before the `nil` is ever returned, so a decline
+        // reaches the loop as `CancellationError` and the session ends with "Stopped." The founder's
+        // standing note on SONNY-80 asks for a labelled "deny this step" control beside the stop,
+        // and that lands as a second entry point resuming `nil` without cancelling — which is
+        // exactly this arm. Same status as `authorize`'s `.approvalDeclined`, which has it for the
+        // same reason. A mutation battery reports this as a survivor and is right to: with no such
+        // control, deleting the arm changes no reachable behaviour (PR #88's fix round, M12).
         guard try await interaction.requestVisionActionApproval(
             RiskApprovalRequest(assessment: assessment, requirement: requirement)
         ) != nil else {

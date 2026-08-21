@@ -610,8 +610,14 @@ struct VisionSessionRunTests {
         #expect(second.viewModel.finalSummary == "second.")
     }
 
-    /// **Denying writes nothing**, and the next run asks again. Denial is not the absence of an
-    /// answer — it is an answer that grants nothing.
+    /// **Denying stops the session, writes nothing, and the next run asks again.**
+    ///
+    /// Denial is not the absence of an answer — it is an answer that grants nothing. All three
+    /// halves are asserted here because a mutation battery showed the first one held by nothing: a
+    /// mutant that let the session run on after a decline survived the whole suite (PR #88's fix
+    /// round, M12). "Nothing was stored" and "it asked again" were both still true of a session that
+    /// had gone ahead and driven the app anyway, which is the outcome the question exists to
+    /// prevent.
     @Test
     func denyingStoresNothingAndTheNextRunAsksAgain() async throws {
         let fixture = try makeFixture(
@@ -623,9 +629,17 @@ struct VisionSessionRunTests {
 
         fixture.viewModel.startVisionSession(goal: "open the extensions panel", appName: "VS Code")
         try await waitUntil("the per-app control question") { fixture.viewModel.approvalRequest != nil }
+        // The first capture has been taken — that is what §4.3's ordering means — but it has not
+        // been sent, and nothing has been driven.
+        #expect(fixture.model.prompts.isEmpty)
         fixture.viewModel.cancelCurrentRun()
         try await waitForIdle(fixture.viewModel)
 
+        // **The session stopped.** Nothing reached the model and nothing touched the machine after
+        // the answer, which is what a declined question has to mean.
+        #expect(fixture.model.prompts.isEmpty)
+        #expect(fixture.model.payloads.isEmpty)
+        #expect(fixture.synthesizer.clickCount == 0)
         #expect(try fixture.approvedApps.loadAll().isEmpty)
 
         fixture.viewModel.startVisionSession(goal: "open the extensions panel", appName: "VS Code")
