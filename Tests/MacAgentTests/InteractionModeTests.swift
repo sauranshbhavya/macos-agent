@@ -55,7 +55,8 @@ struct InteractionModeTests {
 
         // E9 (founder-ratified 2026-08-08; C7 2026-08-12): §11.3's "Data leaves device" line is
         // consciously removed from every non-Safe approval surface — even, and especially, when
-        // the honest answer would be "yes". Power counts as not-Safe: identical to Normal today,
+        // the honest answer would be "yes". Power counts as not-Safe — which is the only thing
+        // this line needs, and is still true now that Power and Normal differ over the per-app gate:
         // and it must not leak the Safe-only label.
         for mode in AgentInteractionMode.allCases {
             let lines = AgentActivityPresentation.approvalDisclosureLines(
@@ -115,7 +116,7 @@ struct InteractionModeTests {
                 for classes in [[CapabilityRiskEscalation.Consequence.destructive], [.affectsOthers], [.advisory, .destructive]] {
                     let requirement = RiskApprovalPolicy.default.requirement(
                         for: modeAssessment(tier: tier, classes: classes),
-                        context: ApprovalContext(safeMode: mode.asksBeforeEveryAction)
+                        context: ApprovalContext(mode: mode, appControl: .notApplicable)
                     )
                     #expect(
                         requirement != .autoRun && requirement != .lightweightConfirmation,
@@ -141,7 +142,7 @@ struct InteractionModeTests {
                 let byMode = Dictionary(uniqueKeysWithValues: AgentInteractionMode.allCases.map { mode in
                     (mode, RiskApprovalPolicy.default.requirement(
                         for: assessment,
-                        context: ApprovalContext(safeMode: mode.asksBeforeEveryAction)
+                        context: ApprovalContext(mode: mode, appControl: .notApplicable)
                     ))
                 })
                 #expect(byMode[.normal] == byMode[.power], "tier \(tier), classes \(classes)")
@@ -153,12 +154,38 @@ struct InteractionModeTests {
         }
     }
 
+    /// **The three mode descriptions, pinned on the strings** (SONNY-143 rewrote all of them).
+    ///
+    /// Each assertion below has a positive half and a negative half, and the negative halves are the
+    /// point: they name the exact sentence that was true before row J's per-app gate shipped and is
+    /// false after it. A test that only checked the new copy would pass against a build that had
+    /// added the new sentence and left the old one beside it.
     @Test
     func everyModeHasDistinctDisplayNameAndOneLineDescription() {
         #expect(AgentInteractionMode.allCases.map(\.displayName) == ["Safe", "Normal", "Power"])
         #expect(Set(AgentInteractionMode.allCases.map(\.settingsDescription)).count == 3)
-        // Power's line must state the identical-today truth, not imply new behavior.
-        #expect(AgentInteractionMode.power.settingsDescription.contains("like Normal today"))
+
+        // Power stopped being Normal-identical on 2026-08-20: it is the one mode that skips the
+        // per-app gate. "Runs exactly like Normal today" is the sentence that became false.
+        let power = AgentInteractionMode.power.settingsDescription
+        #expect(!power.contains("like Normal today"), "Power is no longer Normal-identical")
+        #expect(!power.contains("Reserved for more advanced controls"))
+        #expect(power.contains("never asks which apps"))
+        // And it must not read as "Power asks nothing" — the consequence rule is untouched, and the
+        // copy says so in the same breath for exactly that reason.
+        #expect(power.contains("destructive"))
+
+        // Safe asks about apps too now, not only about actions.
+        let safe = AgentInteractionMode.safe.settingsDescription
+        #expect(safe.contains("before controlling any app"))
+        #expect(safe.contains("before every action"))
+
+        // Normal's "asks *only* when an action is destructive" became false the same day: it also
+        // asks about an app outside the starter list that the user has not allowed.
+        let normal = AgentInteractionMode.normal.settingsDescription
+        #expect(!normal.contains("asks only when"), "Normal asks about unknown apps too")
+        #expect(normal.contains("has not been allowed to control"))
+        #expect(normal.contains("destructive"))
     }
 
     // MARK: - The modes through the real dispatch path
@@ -186,7 +213,10 @@ struct InteractionModeTests {
         #expect(fixture.viewModel.finalSummary.contains("4"))
     }
 
-    /// Power is identical to Normal today — row 18's mode landing as a setting first. The same
+    /// Power and Normal answer the same for a tier-0 instant command, which is what this test is
+    /// about. **It is no longer true that Power is identical to Normal** — row J made it the one
+    /// mode that skips the per-app gate (2026-08-21) — and this command controls no app, so the two
+    /// still agree here. The same
     /// tier-0 command that Safe gates runs straight through under BOTH other modes, so selecting
     /// Power changes nothing. Row I did not change that either: this comment used to end "until row
     /// I's screen-control features gate on it", and screen control ended up gated on no mode at all
@@ -322,6 +352,7 @@ private func makeModeFixture() throws -> ModeFixture {
             clipboardHistorySettingsStore: ClipboardHistorySettingsStore(
                 fileURL: root.appendingPathComponent("clipboard-history-settings.json")
             ),
+            approvedAppStore: ApprovedAppStore(fileURL: root.appendingPathComponent("approved-apps.json")),
             localDataDeletionService: LocalDataDeletionService(fileURLs: []),
             priorTaskContextStore: PriorTaskContextStore(),
             taskUsageRecorder: TaskUsageRecorder(),

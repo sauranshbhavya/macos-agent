@@ -224,6 +224,15 @@ public struct VisionSessionCapabilityAdapter: CapabilityAdapter {
                 // that trace is for. What stays *non*-advisory is every individual action the
                 // session goes on to take: `VisionSessionContainment` classifies each one, and a
                 // destructive or affects-others one asks in every mode.
+                //
+                // **Row J's per-app question is not here, and that is a decision** (founder,
+                // 2026-08-21). It was, briefly: this assessment grew a second escalation saying the
+                // app had not been allowed yet, so that the plan-level prompt could carry it. §4.3
+                // puts that question *after* the session's first capture instead, because only a
+                // capture can reveal a shell in a window whose app no name list refuses — so the
+                // sentence moved with the question, into
+                // `VisionSessionContainment.appControlRequirement(context:)`. Nothing here reads the
+                // standing, and this assessment is byte-identical whatever it is.
                 CapabilityRiskEscalation(
                     fromTier: .tier2,
                     toTier: .tier3,

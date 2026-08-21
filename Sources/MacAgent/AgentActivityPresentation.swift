@@ -164,9 +164,10 @@ enum AgentActivityPresentation {
     /// The disclosure lines an approval surface renders, selected by the mode it renders under
     /// (SONNY-90): Safe mode restores the "Data leaves device: yes/no" line in its §11.3
     /// position; every other mode omits it — E9's founder-ratified deviation, whose test citation
-    /// lives on the copy tests. Normal and Power both count as not-Safe here: Power is row 18's
-    /// mode landing as a setting first, identical to Normal today, and it must not leak the
-    /// Safe-only label. A pure function on `firstRunApprovalExplainerLines`' precedent so the
+    /// lives on the copy tests. Normal and Power both count as not-Safe here, and that is the whole
+    /// of what this function needs from the mode — **not** that the two are alike. Power stopped
+    /// being Normal-identical on 2026-08-21, when row J made it the one mode that skips the per-app
+    /// gate; what is unchanged is that neither is Safe, so neither leaks the Safe-only label. A pure function on `firstRunApprovalExplainerLines`' precedent so the
     /// selection is pinned without a view-inspection harness; both directions have tests.
     static func approvalDisclosureLines(
         for request: RiskApprovalRequest,

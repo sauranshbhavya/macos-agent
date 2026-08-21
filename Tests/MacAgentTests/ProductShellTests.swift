@@ -644,7 +644,8 @@ struct ProductShellTests {
             "shortcutCatalog", "browserOpener", "appOpener", "fileOpener", "mediaOpener",
             "runningAppSwitcher", "shortcutInvoker", "finderContextReader", "documentConverter",
             "zipArchiver", "shortcutRunHistoryStore", "taskHistoryStore", "taskPlanDetailStore",
-            "clipboardHistorySettingsStore", "clipboardHistoryMonitor", "localDataDeletionService",
+            "clipboardHistorySettingsStore", "approvedAppStore", "clipboardHistoryMonitor",
+            "localDataDeletionService",
             "priorTaskContextStore", "taskUsageRecorder", "plannerProviderRegistry",
             "plannerSelection", "userDefaults", "whitelist", "routineScheduleTimer", "wakeObserver",
 
@@ -2888,6 +2889,10 @@ private func makeProductShellFixture(
             encryption: encryption
         ),
         clipboardHistorySettingsStore: clipboardSettingsStore,
+        approvedAppStore: ApprovedAppStore(
+            fileURL: root.appendingPathComponent("approved-apps.json"),
+            encryption: encryption
+        ),
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
             reader: ProductShellPasteboardReader(),
             store: ClipboardHistoryStore(

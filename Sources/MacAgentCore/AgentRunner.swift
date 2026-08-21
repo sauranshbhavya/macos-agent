@@ -161,10 +161,23 @@ public final class AgentRunner {
     ///
     /// `context` is non-defaulted for the identical reason (SONNY-97): `execute` calls this again
     /// internally, so a context threaded here and defaulted there would prompt under one
-    /// requirement and execute under another. And note where it lands — the *requirement*, never
-    /// the assessment. `assessRisk` takes no context and must never grow one: `effectiveTier`
-    /// remains a pure function of the plan, and the requirement is that tier plus the escalations'
-    /// consequence classes plus whatever the context says (Safe mode today).
+    /// requirement and execute under another.
+    ///
+    /// And note where it lands — the *requirement*, never the assessment. **`assessRisk` takes no
+    /// `ApprovalContext` and must never grow one:** `effectiveTier` remains a pure function of the
+    /// plan and the scope, and the requirement is that tier plus the escalations' consequence
+    /// classes plus whatever the context says (the mode, and row J's per-app standing).
+    ///
+    /// **This sentence was briefly untrue and is worth the paragraph** (PR #88's fix round). Row J's
+    /// first implementation forwarded `context.appControl` into `assessRisk` so the vision adapter
+    /// could word an escalation reason with it — the *sentence* saying that allowing an app is
+    /// remembered. The founder then decided (2026-08-21) that the per-app question is asked after
+    /// the session's first capture rather than here, because only a capture can reveal a shell in a
+    /// window whose app no name list refuses. With the question gone from this gate, the sentence
+    /// belongs with it: `VisionSessionContainment.appControlRequirement(context:)` builds that
+    /// request inside the loop, and the standing reaches an assessment nowhere. The forwarding is
+    /// removed rather than left dormant — a field nothing reads is how the next reader concludes it
+    /// is load-bearing.
     public func approvalRequest(
         for preparedRun: PreparedAgentRun,
         logAssessment: Bool = false,

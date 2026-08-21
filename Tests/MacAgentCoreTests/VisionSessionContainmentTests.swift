@@ -336,6 +336,11 @@ struct VisionSessionContainmentTests {
         case cancelled = "user_stopped"
         case targetIneligible = "target_ineligible"
         case screenShowsShell = "screen_shows_shell"
+        case appControlWithdrawn = "app_control_withdrawn"
+        case appControlDeclined = "app_control_declined"
+        case appControlNotRemembered = "app_control_not_remembered"
+        case appControlUnreadable = "app_control_unreadable"
+        case appControlUnresolvable = "app_control_unresolvable"
         case targetNotFrontmost = "target_not_frontmost"
         case attentionLost = "attention_lost"
         case actionTypeNotAllowed = "action_not_allowed"
@@ -357,6 +362,11 @@ struct VisionSessionContainmentTests {
             return .screenShowsShell(
                 ShellSurfaceDetector.verdict(for: "user@host ~ % ls\nzsh: command not found: x")
             )
+        case .appControlWithdrawn: return .appControlWithdrawn(app: "Safari")
+        case .appControlDeclined: return .appControlDeclined(app: "Safari")
+        case .appControlNotRemembered: return .appControlNotRemembered(app: "Safari")
+        case .appControlUnreadable: return .appControlUnreadable(app: "Safari")
+        case .appControlUnresolvable: return .appControlUnresolvable(app: "Safari")
         case .targetNotFrontmost: return .targetNotFrontmost(expected: "Safari", actual: "Notes")
         case .attentionLost: return .attentionLost(.screenLocked)
         case .actionTypeNotAllowed: return .actionTypeNotAllowed("launch_missiles")
@@ -378,6 +388,11 @@ struct VisionSessionContainmentTests {
         case .cancelled: return .cancelled
         case .targetIneligible: return .targetIneligible
         case .screenShowsShell: return .screenShowsShell
+        case .appControlWithdrawn: return .appControlWithdrawn
+        case .appControlDeclined: return .appControlDeclined
+        case .appControlNotRemembered: return .appControlNotRemembered
+        case .appControlUnreadable: return .appControlUnreadable
+        case .appControlUnresolvable: return .appControlUnresolvable
         case .targetNotFrontmost: return .targetNotFrontmost
         case .attentionLost: return .attentionLost
         case .actionTypeNotAllowed: return .actionTypeNotAllowed
@@ -411,7 +426,7 @@ struct VisionSessionContainmentTests {
         for mode in AgentInteractionMode.allCases {
             let (assessment, requirement) = containment.requirement(
                 for: ordinary,
-                context: ApprovalContext(safeMode: mode.asksBeforeEveryAction)
+                context: ApprovalContext(mode: mode, appControl: .notApplicable)
             )
             #expect(assessment.effectiveTier == .tier1, "\(mode)")
             #expect(assessment.escalations.isEmpty, "\(mode)")
@@ -437,7 +452,7 @@ struct VisionSessionContainmentTests {
             for mode in AgentInteractionMode.allCases {
                 let (assessment, requirement) = containment.requirement(
                     for: decision,
-                    context: ApprovalContext(safeMode: mode.asksBeforeEveryAction)
+                    context: ApprovalContext(mode: mode, appControl: .notApplicable)
                 )
                 #expect(assessment.effectiveTier == .tier3, "\(decision.target)/\(mode)")
                 #expect(assessment.escalations.map(\.consequence) == [expectedClass], "\(decision.target)/\(mode)")

@@ -2345,7 +2345,7 @@ struct AgentActionExecutorTests {
             prepared,
             approvalDecision: .approved(.tier2),
             scope: .unscoped,
-            context: ApprovalContext(safeMode: false)
+            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
         )
 
         #expect(browserOpener.openedBrowsers == [MacApp(displayName: "Safari", bundleIdentifier: "com.apple.Safari")])
@@ -4615,7 +4615,7 @@ struct AgentActionExecutorTests {
     }
 
     private var plannerContext: ApprovalContext {
-        ApprovalContext(safeMode: false)
+        ApprovalContext(mode: .normal, appControl: .notApplicable)
     }
 
     private func makeExecutor(

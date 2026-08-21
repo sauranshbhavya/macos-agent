@@ -38,8 +38,9 @@ public enum LocalStoreKind: CaseIterable, Hashable, Sendable {
 ///   somebody decides what it is.
 /// - `LocalStorageSecurityTests.everyLocalStoreFileIsClassifiedExactlyOnce` matches these cases'
 ///   file URLs against `LocalDataDeletionService.defaultStoreFileURLs()`, so a **new store file
-///   fails the suite** until it gets a case here. Row E's `task-plan-details.json` is the tenth,
-///   and it arrived exactly that way: the suite failed until it was classified here.
+///   fails the suite** until it gets a case here. Row E's `task-plan-details.json` and row J's
+///   `approved-apps.json` are the tenth and eleventh, and both arrived exactly that way: the suite
+///   failed until each was classified here. The twelfth will fail the same way.
 ///
 /// `fileURL(fileManager:)` delegates to the store types themselves rather than repeating their
 /// filenames, so the two lists cannot drift apart: a store that moves moves in both.
@@ -54,6 +55,7 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
     case shortcutRunHistory
     case taskHistory
     case taskPlanDetails
+    case approvedApps
 
     /// Deliberately one `case` per store rather than three grouped ones: each line is a separate
     /// classification decision, and a reviewer should be able to disagree with exactly one of them.
@@ -62,7 +64,7 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
         case .visionSessionJournal:
             // Row I's action journal: what the screen-control loop did and what it observed after
             // each action. A record *of* the run, never the point of it — and the most sensitive
-            // trace of the ten.
+            // trace of the eleven.
             return .trace
         case .routines:
             // "Save this as a routine" is the ask itself. Suppressing it would break the task.
@@ -103,6 +105,28 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
             // — and it is suppressed for the same reason and at the same moment, since a suppressed
             // run writes no row for a detail to belong to.
             return .trace
+        case .approvedApps:
+            // Row J's per-app control grants (SONNY-140). An `.artifact`, and the reasoning is the
+            // one place this classification could plausibly have gone the other way, so it is
+            // written out rather than asserted.
+            //
+            // It is not `.notWrittenByTasks`: a task *is* what writes here. The grant is minted
+            // when the user answers a mid-run approval, so the write happens inside the run that
+            // "Don't save this task" is switched on for — which is exactly the situation the third
+            // case says does not arise.
+            //
+            // It is not `.trace` either, and that is the decision. What lands here is not a record
+            // *of* what happened; it is the user's own answer to a question Sonny asked them.
+            // Suppressing it would mean a person allows an app, the switch silently drops the
+            // grant, and Sonny asks the identical question on the next run with no way to say why —
+            // a consent decision quietly discarded, which is a worse failure than the trace the
+            // switch was built to withhold. The founder's ground for the `.artifact` case covers it
+            // exactly: the switch cannot hide a task's effects, and a grant the user gave on
+            // purpose is an effect.
+            //
+            // Row D flagged this store as the first to reach this test and left the call here
+            // rather than making it on row J's behalf (SONNY-140, comment of 2026-08-17).
+            return .artifact
         }
     }
 
@@ -131,6 +155,8 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
             return TaskHistoryStore(fileManager: fileManager).fileURL
         case .taskPlanDetails:
             return TaskPlanDetailStore(fileManager: fileManager).fileURL
+        case .approvedApps:
+            return ApprovedAppStore(fileManager: fileManager).fileURL
         }
     }
 }
