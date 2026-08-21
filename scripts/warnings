@@ -55,8 +55,10 @@
 # Exit codes
 #   0  the build succeeded and no warning came from this repository's own sources
 #   2  the build succeeded and at least one did — a warning is a finding, not an error
-#   1  no measurement was made, or it could not be trusted: a failed build, another run already
-#      holding this checkout, or a build log this script could not account for line by line
+#   3  the build succeeded and a count was printed, but the log carried lines this script could not
+#      classify — the count excludes them, so it is not the whole population and not a clean run
+#   1  no measurement was made, or it could not be trusted: a failed build, or another run — this
+#      script's or a mutation battery's — already holding this checkout
 
 set -euo pipefail
 
@@ -153,8 +155,14 @@ yet is what this is for.
 Exit codes
   0  built cleanly, no warnings from this repository's sources
   2  built cleanly, and found warnings — a finding, not an error
-  1  no trustworthy measurement: build failed, another run holds this checkout, or the build log
-     contained a `warning:` line this script could not account for
+  3  built cleanly and printed a count, but the log carried `warning:` lines this parser could not
+     classify. They are printed above the count, the count excludes them, and 3 rather than 0 or 2
+     is what makes the run unmistakable for a clean one. A linker warning or a positionless driver
+     diagnostic arriving with a toolchain change is the ordinary way to reach this: take the count,
+     quote exit 3 beside it, and file the lines rather than editing classify_log() from inside an
+     unrelated ticket.
+  1  no trustworthy measurement: build failed, or another run holds this checkout — this script's,
+     or a mutation battery's
 
 What this does and does not prevent
 
@@ -174,9 +182,19 @@ What this does and does not prevent
   A warning that does arrive from outside this repository's sources is printed under "elsewhere"
   with its own count, and deliberately does not move the count above or the exit code: it is real,
   it is visible, and it is not this repository's to fix. Nothing is dropped either way — a
-  `warning:` line the parser cannot classify at all suppresses the count and is printed instead,
-  because a parser that quietly discards what it did not expect is one more way to print zero and
-  mean nothing.
+  `warning:` line the parser cannot classify at all is printed in full above the count, excluded
+  from it, and turns the exit code into 3, because a parser that quietly discards what it did not
+  expect is one more way to print zero and mean nothing.
+
+  It cannot tell you whether the tree it compiled is the tree you think it is beyond the SHA and
+  the uncommitted-file count it prints — with one exception, added because that exception is the
+  one way this measurement goes wrong silently. A mutation battery is mid-mutant by construction:
+  it edits a source file, runs the suite, restores it. A run of this script started during one
+  would compile a deliberately mutated tree and report its warnings as the tree's own, stamped with
+  a SHA that never contained that code. So this refuses to start while scripts/mutate holds a live
+  lock in this checkout, and scripts/mutate refuses while this one does, each naming the other.
+  Neither can see a battery running in a *different* checkout, and neither needs to: worktrees have
+  separate working trees and separate build directories.
 
   It does not check any tree but this one, on this machine, with this toolchain. A warning that
   needs a different SDK or a newer compiler is not visible here.
@@ -231,6 +249,58 @@ lock_stale_reason() {
   printf 'pid %s belongs to something else now: %s' "$pid" "$owner_command"
 }
 
+# A live lock held by the OTHER measurement tool in this checkout. The two tools take separate
+# locks — .git/warnings.lock and .git/mutate.lock — and until SONNY-184(c) neither knew the other
+# existed, so a warning count could be taken during a battery: mid-mutant by construction, a
+# deliberately broken tree, reported as the tree's own and stamped with a SHA that never contained
+# that code. Same class of false measurement SONNY-176 closed for two batteries sharing .build/.
+#
+# Reads the owner record both scripts write, and applies the same liveness test as
+# lock_stale_reason, so a lock a killed run left behind blocks nothing: this refuses only for a pid
+# that still exists and whose command line names the other tool. It is deliberately per-checkout —
+# a battery in a different worktree has its own working tree and its own build directory and is no
+# hazard at all.
+foreign_lock_holder() {
+  local dir="$1" pattern="$2" pid owner_command
+  [[ -d "$dir" && -f "$dir/owner" ]] || return 1
+  pid="$(sed -n 's/^pid //p' "$dir/owner" | head -1)"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  owner_command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  [[ -n "$owner_command" ]] || return 1
+  case "$owner_command" in
+    $pattern) printf '%s' "$pid"; return 0 ;;
+  esac
+  return 1
+}
+
+foreign_lock_field() {
+  local dir="$1" key="$2"
+  [[ -f "$dir/owner" ]] || return 0
+  sed -n "s/^$key //p" "$dir/owner" | head -1
+}
+
+refuse_mutation_battery() {
+  local pid="$1" dir="$2"
+  cat >&2 <<EOF
+$SCRIPT_NAME: refusing to run — a mutation battery holds this checkout.
+
+  pid     : $pid
+  started : $(foreign_lock_field "$dir" started)
+  plan    : $(foreign_lock_field "$dir" plan)
+  head    : $(foreign_lock_field "$dir" head)
+  lock    : $dir
+
+A battery is mid-mutant by construction: it edits a source file, runs the suite, restores it. A
+warning count taken during one describes a tree that was deliberately broken, and this script would
+stamp it with the SHA of a commit that never contained that code — a false measurement its own
+report cannot be told apart from a true one, which is the whole failure this script exists to make
+impossible.
+
+Wait for that battery to finish. If it is already gone, \`scripts/mutate unlock\` clears its lock.
+EOF
+  finish 1
+}
+
 refuse_concurrent_run() {
   local pid="$1"
   cat >&2 <<EOF
@@ -257,6 +327,11 @@ acquire_lock() {
   git_dir="$(git rev-parse --absolute-git-dir 2>/dev/null)" \
     || die "not inside a git repository — there is nowhere to hold the run lock"
   LOCK_DIR="$git_dir/warnings.lock"
+
+  local battery_pid
+  if battery_pid="$(foreign_lock_holder "$git_dir/mutate.lock" '*mutate*')"; then
+    refuse_mutation_battery "$battery_pid" "$git_dir/mutate.lock"
+  fi
 
   for attempt in 1 2 3; do
     if mkdir "$LOCK_DIR" 2>/dev/null; then
@@ -337,14 +412,29 @@ compute_scratch_path() {
 # and dependency warnings are suppressed by SwiftPM anyway — keeping them means a run needs no
 # network while still recompiling every line of source this repository owns.
 #
-# The case guard is not decoration. A wipe is the one irreversible thing here, so a bug in the path
+# The one irreversible thing this script does is the wipe below, so the question "is this path
+# ours" is a function of its own rather than an inline `case`: a predicate can be asserted directly
+# by the selftest against the shapes a path-computation bug would actually produce, where the wipe
+# itself can only be tested by pointing it at a decoy and watching the decoy survive. The selftest
+# does both — the predicate, and that `wipe_build_outputs` still consults it.
+#
+# Deliberately basename-only, and deliberately not `[[ $1 == $ROOT/* ]]`: the failure this guards
+# against is a wrong path, so a check that trusts another computed path to bound it is checking the
+# same computation twice.
+is_own_scratch_path() {
+  case "$1" in
+    "") return 1 ;;
+    */"$SCRATCH_BASENAME") return 0 ;;
+    *) return 1 ;;
+  esac
+}
+
+# The guard is not decoration. A wipe is the one irreversible thing here, so a bug in the path
 # computation above must not be able to reach a directory that is not this script's own.
 wipe_build_outputs() {
-  case "$SCRATCH" in
-    "" ) die "internal error: no scratch path computed" ;;
-    */"$SCRATCH_BASENAME") ;;
-    *) die "internal error: refusing to empty $SCRATCH — that is not this script's scratch directory" ;;
-  esac
+  [[ -n "$SCRATCH" ]] || die "internal error: no scratch path computed"
+  is_own_scratch_path "$SCRATCH" \
+    || die "internal error: refusing to empty $SCRATCH — that is not this script's scratch directory"
 
   if [[ ! -d "$SCRATCH" ]]; then
     mkdir -p "$SCRATCH"
@@ -515,17 +605,34 @@ EOF
   printf '%s\n' "-------------------------------------------------------------------------------"
   printf '\n'
 
+  # Lines this parser cannot account for. The count below is still printed, and the run still exits
+  # non-zero — exit 3, which exists for exactly this and nothing else.
+  #
+  # This used to print no count at all and exit 1 (SONNY-169). The refusal was right about the
+  # danger and wrong about the remedy: it told a session its only route forward was to edit
+  # classify_log(), which is a shared tool on a lane it did not claim, with its own ticket blocked
+  # behind that edit. So the property is kept and the block is not: an unclassified line can still
+  # never read as a clean run, because the count never appears without this block above it and a
+  # non-zero exit under it, and the count itself is stated as excluding these lines rather than
+  # covering them. Decided by the founder, 2026-08-21, on SONNY-184(a).
+  local unaccounted_seen=""
   if [[ "$n_unaccounted" -gt 0 ]]; then
+    unaccounted_seen="yes"
     printf '%s: %s line(s) of this build log say "warning:" and this script cannot classify them.\n' \
       "$SCRIPT_NAME" "$n_unaccounted" >&2
     printf '\n' >&2
-    cat "$unaccounted_unique" >&2
+    sed 's/^/  /' "$unaccounted_unique" >&2
     cat >&2 <<'EOF'
 
-No count is printed, because a parser that quietly drops what it did not expect is one more way to
-print zero and mean nothing. Teach classify_log() what these lines are, then re-run.
+The count below EXCLUDES those lines, so it is a count of what this parser understood and not of
+the whole log. This run is therefore NOT a clean run whatever the count says, and exit 3 says so —
+a parser that quietly drops what it did not expect is one more way to print zero and mean nothing.
+
+If they are yours to fix: teach classify_log() what they are, then re-run. If they are not — a
+linker warning, a positionless driver diagnostic, anything arriving with a toolchain change — take
+the count, quote the exit code with it, and file the lines above rather than editing a shared tool
+from inside an unrelated ticket.
 EOF
-    finish 1
   fi
 
   if [[ "$n_elsewhere" -gt 0 ]]; then
@@ -536,6 +643,13 @@ EOF
 
   if [[ "$n_mine" -eq 0 ]]; then
     printf '%s: 0 warnings.\n' "$SCRIPT_NAME"
+    if [[ -n "$unaccounted_seen" ]]; then
+      printf '\nEvery file in Sources/ and Tests/ was compiled during this run — but %s line(s) of\n' \
+        "$n_unaccounted"
+      printf 'the log were not accounted for (above), so this is not the whole population and this\n'
+      printf 'run is not a clean run. Exit 3.\n'
+      finish 3
+    fi
     printf '\nEvery file in Sources/ and Tests/ was compiled during this run, so that is the whole\n'
     printf 'population of this tree — not the population of whatever was edited last.\n'
     finish 0
@@ -545,6 +659,11 @@ EOF
     "$SCRIPT_NAME" "$n_mine" "$n_raw"
   print_warning_list "$mine_unique"
   printf '\n'
+  if [[ -n "$unaccounted_seen" ]]; then
+    printf 'Plus %s unaccounted line(s), reported above and not included in that count. Exit 3.\n' \
+      "$n_unaccounted"
+    finish 3
+  fi
   finish 2
 }
 
@@ -744,6 +863,148 @@ selftest() {
   set -e
   st_eq "unlock clears a stale lock" "$status" "0"
   st_contains "and says so" "$out" "cleared a stale lock"
+
+  printf '\n  a mutation battery holding this checkout is refused by name\n'
+  # A decoy process whose command line names the other tool, so the liveness test this shares with
+  # lock_stale_reason sees a genuinely live owner rather than a record alone.
+  local decoy_dir="$ST_ROOT/decoy-bin"
+  mkdir -p "$decoy_dir"
+  printf '#!/bin/sh\nsleep 60\n' >"$decoy_dir/mutate"
+  chmod +x "$decoy_dir/mutate"
+  "$decoy_dir/mutate" &
+  local battery_pid=$!
+  git_dir="$(git -C "$repo" rev-parse --absolute-git-dir)"
+  mkdir -p "$git_dir/mutate.lock"
+  { printf 'pid %s\n' "$battery_pid"
+    printf 'started 2026-01-01 00:00:00\n'
+    printf 'plan throwaway.plan\n'
+    printf 'head deadbeef\n'; } >"$git_dir/mutate.lock/owner"
+  set +e
+  out="$(cd "$repo" && "$SELF" 2>&1)"; status=$?
+  set -e
+  st_eq "exits 1" "$status" "1"
+  st_contains "names the battery, not a second warnings run" "$out" "a mutation battery holds this checkout"
+  st_contains "and names its lock" "$out" "mutate.lock"
+  st_absent "and does not go on to build anything" "$out" "emptying"
+  # A battery's lock left behind by a killed run must block nothing.
+  kill "$battery_pid" 2>/dev/null || true
+  wait "$battery_pid" 2>/dev/null || true
+  set +e
+  out="$(cd "$repo" && "$SELF" 2>&1)"; status=$?
+  set -e
+  st_absent "a dead battery's leftover lock does not block a run" "$out" "a mutation battery holds"
+  rm -rf -- "$git_dir/mutate.lock"
+
+  printf '\n  an ordinary .build/ survives a run, so this costs no incremental rebuild after it\n'
+  # The claim this script makes about itself in --help, in CLAUDE.md and in the changelog. True by
+  # construction — --scratch-path redirects everything — but nothing pinned it, so a change to how
+  # the scratch path is computed could quietly start eating the directory every other build uses.
+  st_write_package "$repo" clean
+  git -C "$repo" add -A
+  git -C "$repo" -c commit.gpgsign=false commit -q --allow-empty -m "clean tree for the survival check"
+  ( cd "$repo" && swift build >"$ST_ROOT/ordinary-first.log" 2>&1 ) || true
+  if [[ -d "$repo/.build/debug" ]]; then
+    st_pass "an ordinary swift build produced .build/debug"
+  else
+    st_fail "an ordinary swift build produced .build/debug" "no directory at $repo/.build/debug"
+  fi
+  set +e
+  out="$(cd "$repo" && "$SELF" 2>&1)"; status=$?
+  set -e
+  st_eq "the harness ran and found nothing" "$status" "0"
+  if [[ -d "$repo/.build/debug" ]]; then
+    st_pass "and .build/debug is still there afterwards"
+  else
+    st_fail "and .build/debug is still there afterwards" "the run emptied the ordinary build directory"
+  fi
+  ( cd "$repo" && swift build >"$ST_ROOT/ordinary-second.log" 2>&1 ) || true
+  st_absent "the next ordinary build recompiles nothing" \
+            "$(cat "$ST_ROOT/ordinary-second.log")" "Compiling"
+
+  printf '\n  the wipe refuses any directory that is not this script'"'"'s own\n'
+  # The one guard between a path-computation bug and an rm -rf of the wrong directory. Asserted
+  # twice: the decision, against the shapes such a bug produces, and the wipe still consulting it.
+  ROOT="$ST_ROOT"
+  if is_own_scratch_path "/somewhere/$SCRATCH_BASENAME"; then
+    st_pass "accepts a path whose basename is the scratch basename"
+  else
+    st_fail "accepts a path whose basename is the scratch basename" "refused its own path"
+  fi
+  local bad_path
+  for bad_path in "" "/" "$ST_ROOT" "$ST_ROOT/.build" "$ST_ROOT/${SCRATCH_BASENAME}-2" \
+                  "$ST_ROOT/$SCRATCH_BASENAME/debug"; do
+    if is_own_scratch_path "$bad_path"; then
+      st_fail "refuses [${bad_path:-<empty>}]" "the guard accepted a path that is not this script's"
+    else
+      st_pass "refuses [${bad_path:-<empty>}]"
+    fi
+  done
+  # And the wipe itself, pointed at a decoy that must survive. A subshell, because the refusal
+  # exits: bash does not run this script's EXIT trap for one, so the selftest is unaffected.
+  local decoy="$ST_ROOT/decoy-build-dir"
+  mkdir -p "$decoy"
+  printf 'do not delete me\n' >"$decoy/keepme"
+  set +e
+  out="$( SCRATCH="$decoy"; wipe_build_outputs 2>&1 )"; status=$?
+  set -e
+  st_eq "wipe_build_outputs exits 1 rather than emptying it" "$status" "1"
+  st_contains "and says which path it refused" "$out" "$decoy"
+  if [[ -f "$decoy/keepme" ]]; then
+    st_pass "and the decoy's contents are still on disk"
+  else
+    st_fail "and the decoy's contents are still on disk" "the guard did not stop the wipe"
+  fi
+
+  printf '\n  a repository that does not ignore .build/ gets its scratch outside the working tree\n'
+  # compute_scratch_path's fallback branch, which the throwaway repository above can never take
+  # because st_write_package always writes a .gitignore containing .build/.
+  local unignored="$ST_ROOT/unignored"
+  mkdir -p "$unignored"
+  git -C "$unignored" init -q
+  local got_ignored got_unignored
+  got_ignored="$( cd "$repo" && ROOT="$repo" WORKDIR="$ST_ROOT/probe-workdir" \
+                  && compute_scratch_path && printf '%s' "$SCRATCH" )"
+  got_unignored="$( cd "$unignored" && ROOT="$unignored" WORKDIR="$ST_ROOT/probe-workdir" \
+                    && compute_scratch_path && printf '%s' "$SCRATCH" )"
+  st_eq "the primary branch puts it inside .build/" \
+        "$got_ignored" "$repo/.build/$SCRATCH_BASENAME"
+  st_eq "the fallback branch puts it in the run's own temp directory" \
+        "$got_unignored" "$ST_ROOT/probe-workdir/$SCRATCH_BASENAME"
+
+  printf '\n  a log line this parser cannot classify prints the count and exits 3\n'
+  # A real positionless warning rather than a synthetic one: an unhandled file in a target makes
+  # SwiftPM emit `warning: '<pkg>': found 1 file(s) which are unhandled;` with no source position,
+  # which is exactly the shape a linker warning has and exactly what classify_log cannot place.
+  # Until SONNY-184(a) this path printed no count at all and exited 1, telling a session its only
+  # route forward was to edit this script.
+  printf 'stray\n' >"$repo/Sources/Widget/notes.txt"
+  git -C "$repo" add -A
+  git -C "$repo" -c commit.gpgsign=false commit -qm "an unhandled file, so SwiftPM warns without a source position"
+  set +e
+  out="$(cd "$repo" && "$SELF" 2>&1)"; status=$?
+  set -e
+  st_eq "exits 3 — not 0, not 2, and not the old 1" "$status" "3"
+  st_contains "names the line it could not classify" "$out" "which are unhandled"
+  st_contains "says how many it could not classify" "$out" "cannot classify them"
+  st_contains "and prints the count anyway" "$out" "0 warnings."
+  st_contains "and says the count excludes them" "$out" "EXCLUDES"
+  st_contains "and says the run is not a clean one" "$out" "Exit 3"
+  # The same log with a real warning of ours in it: the count is still printed, and it is still 3.
+  st_write_package "$repo" warned
+  printf 'stray\n' >"$repo/Sources/Widget/notes.txt"
+  git -C "$repo" add -A
+  git -C "$repo" -c commit.gpgsign=false commit -qm "an unhandled file and a warning of our own"
+  set +e
+  out="$(cd "$repo" && "$SELF" 2>&1)"; status=$?
+  set -e
+  st_eq "exits 3 rather than 2 when both are present" "$status" "3"
+  st_contains "counts our own warning" "$out" "1 warning(s)"
+  st_contains "names it" "$out" "neverRead"
+  st_contains "and still reports the unaccounted line beside it" "$out" "not included in that count"
+  rm -f "$repo/Sources/Widget/notes.txt"
+  st_write_package "$repo" clean
+  git -C "$repo" add -A
+  git -C "$repo" -c commit.gpgsign=false commit -qm "back to a clean package"
 
   printf '\n  the log parser drops nothing it does not recognise\n'
   ROOT="/repo"
