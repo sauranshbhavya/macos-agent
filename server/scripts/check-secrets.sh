@@ -56,7 +56,7 @@ PATTERNS=(
 #     was NOT enough, and the narrowed form is gone too. The DSN pattern is built from NEGATED
 #     classes -- `[^:[:space:]]+` and `[^@[:space:]]+` -- so `<` and `>` pass straight through
 #     them and land inside the matched substring. That made Supabase's own pooler shape,
-#     `postgresql://postgres.<project-ref>:REALPASSWORD@…pooler.supabase.com`, exempt **with the
+#     `postgresql://postgres.<project-ref>:<the password>@…pooler.supabase.com`, exempt with the
 #     password intact**, while the identical string with an ordinary user part was caught. The
 #     four placeholders it existed for appear only in prose that no pattern matches, so nothing
 #     needed it. (PR #85 cycle 4, R3b.)
