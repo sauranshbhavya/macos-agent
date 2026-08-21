@@ -157,14 +157,23 @@ public struct TaskHistoryStore: @unchecked Sendable {
     ///   app, not in a changelog, not in a PR body. The product never promises search finds
     ///   everything, so there is nothing to walk back.
     ///
-    /// **Which record size that measurement assumes, because it is about to change.** 130 ms is
+    /// **Which record size that measurement assumes, and what row E actually did to it.** 130 ms is
     /// today's eight-field record: 374 bytes encoded, 3.78 MiB at the cap (measured at `36cef9e`).
-    /// Row E's SONNY-147 adds a stored result, a plan summary and the plan's steps, which takes a
-    /// record to roughly 4.1 kB at that ticket's 2,000-character result cap — about **11x**, not the
-    /// "roughly triples" its own note estimated, and 40 MiB at this cap. Re-measured at that size,
-    /// `record(_:)` is **307 ms** median. Worth noting the cost does *not* scale with the bytes:
-    /// eleven times the file for 2.4 times the time, because encryption and I/O throughput dominate
-    /// the per-record JSON work. Both figures argue the same way — keep the cap.
+    /// SONNY-119 then measured the shape row E was approved on — a stored result *plus* the plan
+    /// summary and the plan's steps, all on this record — at roughly 4.1 kB per record, 40 MiB at
+    /// this cap and **307 ms** median for `record(_:)`: about **11x** the bytes, not the "roughly
+    /// triples" that ticket's own note estimated, for 2.4 times the time, because encryption and I/O
+    /// throughput dominate the per-record JSON work at these sizes.
+    ///
+    /// That measurement is why the shape changed. The founder's decision of 2026-08-17 moved the
+    /// plan summary and steps into `TaskPlanDetailStore`, leaving this record one new field —
+    /// `result`, capped at 1,000 characters. Record size is additive in it (SONNY-119's own "+
+    /// result 200 chars, 8 steps" row is exactly 374 + 200 + its 1,729 B of steps), so the worst
+    /// case here is about **1.4 kB** a record and **13 MiB** at this cap, and the typical case is a
+    /// few hundred bytes above today's 374. The 40 MiB and 307 ms figures describe the design that
+    /// was not built; they are kept because they are the reason it was not.
+    ///
+    /// Every figure argues the same way — keep the cap.
     ///
     /// **The shipped number, and the only one any production path uses.** Enumerated at `5bbe380`:
     /// the three places that build a `TaskHistoryStore` outside tests — `AgentViewModel`'s default
