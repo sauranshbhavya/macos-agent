@@ -52,6 +52,12 @@ const schema = z.object({
   /** Postgres connection string. Supabase's, per the 2026-08-21 decision. */
   DATABASE_URL: nonEmpty.optional(),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
+  /**
+   * Whether to believe `X-Forwarded-*`. Defaults to false: those headers are caller-supplied, so
+   * trusting them with nothing in front of the container lets a client choose its own apparent IP.
+   * Set only where a proxy really terminates the connection.
+   */
+  TRUST_PROXY: z.enum(["true", "false"]).default("false"),
 });
 
 export interface Config {
@@ -61,6 +67,7 @@ export interface Config {
   readonly buildId: string;
   readonly databaseUrl: string | undefined;
   readonly logLevel: z.infer<typeof schema>["LOG_LEVEL"];
+  readonly trustProxy: boolean;
   readonly credentials: readonly ProviderCredentials[];
 }
 
@@ -94,12 +101,22 @@ export class ConfigError extends Error {}
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const parsed = schema.safeParse(env);
   if (!parsed.success) {
-    // Names the variables, never the values -- an invalid-config log line that echoed the
-    // environment back would put credentials into whatever collects this server's logs.
+    // **Built from the variable name and the issue CODE, never from `issue.message`.**
+    //
+    // This is narrower than it first looks, and the first version of this file got it wrong.
+    // Zod's message is safe for most issue kinds, but `invalid_enum_value` renders as
+    // `Invalid enum value. Expected 'local' | 'staging' | 'production', received 'sk-abc...'` --
+    // it quotes the value back. So a credential pasted into an enum-typed variable by mistake
+    // would land in whatever collects this server's logs, at startup, in plain text. Since the
+    // set of issue kinds Zod can produce grows with Zod, the rule is that no rendered message is
+    // used at all rather than that the unsafe ones are filtered.
     const problems = parsed.error.issues
-      .map((issue) => `${issue.path.join(".") || "(root)"}: ${issue.message}`)
+      .map((issue) => `${issue.path.join(".") || "(root)"} (${issue.code})`)
       .join("; ");
-    throw new ConfigError(`invalid environment configuration -- ${problems}`);
+    throw new ConfigError(
+      `invalid environment configuration -- ${problems}. ` +
+        `Values are omitted deliberately; see server/.env.example for the expected shape.`,
+    );
   }
   const value = parsed.data;
   return {
@@ -109,6 +126,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     buildId: value.SONNY_BUILD_ID,
     databaseUrl: value.DATABASE_URL,
     logLevel: value.LOG_LEVEL,
+    trustProxy: value.TRUST_PROXY === "true",
     credentials: providerCredentials(env),
   };
 }

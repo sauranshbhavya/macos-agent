@@ -8,13 +8,13 @@
     "node": ">=22"
   },
   "scripts": {
-    "build": "tsc --build",
+    "build": "tsc --build && cp -R src/db/migrations dist/db/",
     "start": "node dist/server.js",
     "dev": "node --watch --experimental-strip-types src/server.ts",
     "test": "vitest run",
     "test:watch": "vitest",
-    "typecheck": "tsc --noEmit",
-    "migrate": "node --experimental-strip-types src/db/migrate.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.typecheck.json",
+    "migrate": "node dist/db/migrate.js",
     "check:secrets": "./scripts/check-secrets.sh",
     "test:db": "DATABASE_URL=${DATABASE_URL:-postgres://postgres:postgres@localhost:55433/postgres} vitest run"
   },

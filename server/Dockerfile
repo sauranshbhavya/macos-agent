@@ -2,12 +2,18 @@
 #
 # **Portability is the whole point of this file** (decision doc §12.2). The gateway's host changes
 # across the product's life: development first tries deploymind, beta runs on Oracle Cloud, v1 on
-# AWS. Nothing below names any of them. What each host receives is an OCI image and a set of
+# AWS. **Nothing below couples to any of them** -- they are named in this comment because a reader
+# should know why portability matters, and nowhere else: no host-specific stage, base image, flag or
+# default appears in this file. What each host receives is an OCI image and a set of
 # environment variables, which every one of them can run, so moving is a redeploy rather than a
 # rewrite.
 
 # ── build ────────────────────────────────────────────────────────────────────
-FROM node:22-bookworm-slim AS build
+# Pinned to a minor rather than floating on `node:22`. Not pinned to a digest: a digest survives
+# only until the base is rebuilt for a CVE, and with no CI to bump it a stale digest would quietly
+# ship known-vulnerable bytes for months. The minor tag is the honest middle -- reproducible enough
+# to reason about, still receiving patch rebuilds. Revisit if CI ever exists (row 20).
+FROM node:22.20-bookworm-slim AS build
 WORKDIR /app
 
 # Dependencies first, so a source-only change does not reinstall them.
@@ -22,7 +28,7 @@ RUN npm run build
 RUN npm ci --omit=dev
 
 # ── runtime ──────────────────────────────────────────────────────────────────
-FROM node:22-bookworm-slim AS runtime
+FROM node:22.20-bookworm-slim AS runtime
 WORKDIR /app
 ENV NODE_ENV=production
 
@@ -33,10 +39,12 @@ ARG SONNY_BUILD_ID=unknown
 ENV SONNY_BUILD_ID=${SONNY_BUILD_ID}
 
 COPY --from=build /app/node_modules ./node_modules
+# `dist` carries the compiled runner AND the .sql files beside it, because `npm run build` copies
+# them -- tsc does not copy non-TypeScript assets. So `npm run migrate` works in this image exactly
+# as it does locally: one invocation, both environments. It did not before. `src/` is absent from
+# this stage while the old `migrate` script pointed at it, so the documented command could not run
+# here at all, and the compiled runner that could had no .sql files beside it.
 COPY --from=build /app/dist ./dist
-# Migrations are read at runtime by `npm run migrate`, so they ship in the image rather than being
-# fetched from a checkout the host may not have.
-COPY --from=build /app/src/db/migrations ./dist/db/migrations
 COPY package.json ./
 
 # Run as a non-root user. `node` exists in this base image already.

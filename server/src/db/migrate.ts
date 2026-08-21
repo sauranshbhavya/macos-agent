@@ -1,6 +1,6 @@
 import { readFile, readdir } from "node:fs/promises";
 import { dirname, join } from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import pg from "pg";
 
 /**
@@ -50,15 +50,31 @@ export async function loadMigrations(dir: string = migrationsDir): Promise<reado
   return migrations;
 }
 
+/**
+ * The ledger's own schema, and it is deliberately neither `public` nor `sonny`.
+ *
+ * **Not `public`:** Postgres defaults an unqualified `CREATE TABLE` there, and on Supabase `public`
+ * is the schema PostgREST exposes over HTTP. A table created there with no row-level security is
+ * readable by anyone holding the anon key -- which is a publishable, client-side key. The ledger is
+ * not secret in the sense a credential is, but it is an inventory of every schema change and its
+ * timing, and it has no reason to be on the internet. 0001's own header already argues against
+ * putting this row's tables in `public`; the ledger was the one table that ignored it.
+ *
+ * **Not `sonny` either:** that schema's rollback is `DROP SCHEMA sonny CASCADE`, so a ledger living
+ * inside it would be destroyed by the very rollback whose completion it has to record. Rolling back
+ * the baseline would take the record of the baseline with it, and the next `up` would replay a
+ * migration it had already partly applied.
+ */
 const LEDGER = `
-  CREATE TABLE IF NOT EXISTS schema_migration (
+  CREATE SCHEMA IF NOT EXISTS sonny_meta;
+  CREATE TABLE IF NOT EXISTS sonny_meta.schema_migration (
     id          text PRIMARY KEY,
     applied_at  timestamptz NOT NULL DEFAULT now()
   )`;
 
 async function applied(client: pg.Client): Promise<Set<string>> {
   await client.query(LEDGER);
-  const { rows } = await client.query<{ id: string }>("SELECT id FROM schema_migration");
+  const { rows } = await client.query<{ id: string }>("SELECT id FROM sonny_meta.schema_migration");
   return new Set(rows.map((row) => row.id));
 }
 
@@ -73,7 +89,7 @@ export async function up(client: pg.Client, dir?: string): Promise<readonly stri
     await client.query("BEGIN");
     try {
       await client.query(migration.up);
-      await client.query("INSERT INTO schema_migration (id) VALUES ($1)", [migration.id]);
+      await client.query("INSERT INTO sonny_meta.schema_migration (id) VALUES ($1)", [migration.id]);
       await client.query("COMMIT");
       ran.push(migration.id);
     } catch (error) {
@@ -93,7 +109,7 @@ export async function down(client: pg.Client, dir?: string): Promise<string | un
   await client.query("BEGIN");
   try {
     await client.query(last.down);
-    await client.query("DELETE FROM schema_migration WHERE id = $1", [last.id]);
+    await client.query("DELETE FROM sonny_meta.schema_migration WHERE id = $1", [last.id]);
     await client.query("COMMIT");
     return last.id;
   } catch (error) {
@@ -133,6 +149,13 @@ async function main(): Promise<void> {
 }
 
 // Only run as a CLI, never on import -- the tests import `up` and `down` directly.
-if (process.argv[1] && import.meta.url === `file://${process.argv[1]}`) {
+//
+// **`pathToFileURL` rather than a template string, and the difference is a silent no-op.**
+// `file://${process.argv[1]}` leaves the path unencoded, while `import.meta.url` percent-encodes
+// it. Any character that differs between the two forms -- a space is the common one, and this
+// repository's own checkouts live under paths containing them -- makes the comparison false, so
+// `npm run migrate` would exit 0 having done nothing at all. A migration tool that reports success
+// without migrating is the worst shape a failure can take here.
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) {
   await main();
 }

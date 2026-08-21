@@ -18,12 +18,12 @@ Run from `server/`.
 | Command | What it does |
 |---|---|
 | `npm install` | Dependencies. |
-| `npm run build` | TypeScript → `dist/`. |
-| `npm test` | Vitest. Database tests skip, loudly, when `DATABASE_URL` is unset. |
+| `npm run build` | TypeScript → `dist/`, **and copies the `.sql` migrations beside the compiled runner** — tsc does not copy non-TS assets, and `npm run migrate` reads them from `dist`. |
+| `npm test` | Vitest. Database tests skip when `DATABASE_URL` is unset, announced by `test/global-setup.ts` before the reporter owns the terminal. |
 | `npm run test:db` | The full suite including migrations, against a throwaway Postgres. |
-| `npm run typecheck` | Types without emitting. |
+| `npm run typecheck` | Types without emitting, over `src/`, `test/` **and** `vitest.config.ts`. The build's own tsconfig has `rootDir: src`, so it checked zero test files. |
 | `npm run dev` | Local server with reload. |
-| `npm run migrate -- up\|down\|status` | Apply, roll back one, or list. Needs `DATABASE_URL`. |
+| `npm run migrate -- up\|down\|status` | Apply, roll back one, or list. Needs `DATABASE_URL` and a prior `npm run build`. **The same command works inside the container image**, which is why it runs the compiled runner rather than the source. |
 | `npm run check:secrets` | Refuse a credential in the repository. Also `check-secrets.sh staged`. |
 | `./scripts/check-secrets-selftest.sh` | Prove the scanner still refuses things. |
 | `./scripts/deploy.sh local` | Build the image, run it, verify `/v1/health` serves that build. |
@@ -45,7 +45,9 @@ failure when absent or unrecognised. Each has its own configuration and its own 
 **Environments are not hosts, and the distinction is load-bearing here.** The gateway's host
 changes across the product's life — development first tries deploymind, beta runs on Oracle Cloud,
 v1 on AWS (`docs/sonny-row-12-host-decision.md` §12.2) — while the three environments stay exactly
-as they are. That is why nothing in this directory names a host: what each one receives is an OCI
+as they are. **Nothing in this directory couples to a host** — the three are named in prose here
+and in the Dockerfile's own header, which is the point of saying which they are; what none of them
+gets is a code path, a build flag or a config default of its own. What each one receives is an OCI
 image and a set of environment variables, so moving between them is a redeploy.
 
 ### Staging is seeded with synthetic data and never holds real user data
@@ -74,8 +76,18 @@ Staging exists precisely for this, so the rule is stated rather than implied:
 4. Only then apply on production.
 
 The runner supports this by construction: every migration file must carry a `-- @rollback` section
-or it is refused at load, each migration runs in its own transaction, and `test/migrate.test.ts`
-pins apply → roll back → re-apply against a real Postgres.
+or it is refused at load, each migration runs in its own transaction, and the suites pin the whole
+lot. They are split on purpose — `test/migrate.load.test.ts` needs no database and so runs on every
+`npm test`, because the rollback-or-refuse rule is the runner's core promise and it was previously
+skipped on every run of the documented command; `test/migrate.db.test.ts` needs one and pins apply →
+roll back → re-apply, a half-failed migration leaving neither schema nor ledger row, and the ledger's
+schema.
+
+**The ledger lives in `sonny_meta`, not `public` and not `sonny`.** Not `public`, because that is
+the schema Supabase exposes over HTTP through PostgREST, and a table there without row-level security
+is readable by anyone holding the publishable anon key — an inventory of every schema change and its
+timing has no reason to be on the internet. Not `sonny` either, because that schema's rollback is
+`DROP SCHEMA sonny CASCADE`, which would destroy the very record of the rollback it is completing.
 
 ## Configuration and secrets
 
@@ -94,8 +106,11 @@ local redaction feature, are exempted by exact match in `scripts/secret-scan-bas
 explains why an exact-string baseline is safer than a path skip or a looser pattern.
 
 `./scripts/check-secrets-selftest.sh` plants credential-shaped strings in a scratch repository and
-proves the scanner refuses each one. It found two real defects in the scanner on its first run, so
-it is not decoration.
+proves the scanner refuses each one. **It found three defects in the scanner** — two on its first
+run (a pattern beginning with a hyphen that `grep` parsed as options, so it silently never ran; and
+`example` in the allowlist matching `db.example.com`) and a third on the next (a fix that would have
+exempted every PEM header in the tree, a real key included). It is not decoration. (This line said
+"two" while the changelog said three; the changelog was right — PR #85 cycle 1, R18.)
 
 ### Rotating a provider credential with no downtime
 

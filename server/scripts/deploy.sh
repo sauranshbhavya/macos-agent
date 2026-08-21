@@ -17,16 +17,39 @@ cd "$(dirname "$0")/.." || exit 2
 
 TARGET="${1:-}"
 IMAGE="sonny-gateway"
-BUILD_ID="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
-DIRTY=""
-[[ -n "$(git status --porcelain 2>/dev/null)" ]] && DIRTY=" (working tree dirty)"
+SHA="$(git rev-parse --short HEAD 2>/dev/null || echo unknown)"
+
+# **A dirty tree must not ship under a clean-looking SHA.** The previous version computed this and
+# then printed it in one log line, so the image, its tag, and the build identifier GET /v1/health
+# reports all claimed to be exactly `$SHA` — while containing uncommitted changes that no commit
+# holds. That makes the health endpoint's version field, which exists to identify a deployment,
+# name a tree nobody can check out. The suffix now travels all the way into the tag and the
+# build-arg, so it is visible in `docker images`, in the health response, and in the deploy log.
+if [[ -n "$(git status --porcelain 2>/dev/null)" ]]; then
+  BUILD_ID="${SHA}-dirty"
+else
+  BUILD_ID="${SHA}"
+fi
+
+# The image the gateway runs on, and the architecture it is built for.
+#
+# `--platform` is set explicitly because this is built on Apple Silicon and the first real remote
+# deploy is very unlikely to be arm64: Oracle Cloud's free tier is Ampere (arm64) but its paid
+# shapes and AWS's defaults are x86_64, so an image built without a platform silently inherits the
+# builder's. Overriding it is a one-word change here rather than a puzzling "exec format error" on
+# a host. Recorded in SONNY-192's direction as the thing to decide when a host is chosen.
+PLATFORM="${DEPLOY_PLATFORM:-linux/arm64}"
 
 usage() { echo "usage: $0 <local|staging|production>" >&2; exit 2; }
 [[ -z "$TARGET" ]] && usage
 
 build() {
-  echo "==> building ${IMAGE}:${BUILD_ID}${DIRTY}"
-  docker build --build-arg SONNY_BUILD_ID="${BUILD_ID}" -t "${IMAGE}:${BUILD_ID}" -t "${IMAGE}:latest" . \
+  echo "==> building ${IMAGE}:${BUILD_ID} for ${PLATFORM}"
+  [[ "$BUILD_ID" == *-dirty ]] && \
+    echo "    WORKING TREE IS DIRTY -- this image contains changes no commit holds," >&2 && \
+    echo "    and it is tagged and reports itself as ${BUILD_ID} so that is visible." >&2
+  docker build --platform "${PLATFORM}" --build-arg SONNY_BUILD_ID="${BUILD_ID}" \
+    -t "${IMAGE}:${BUILD_ID}" -t "${IMAGE}:latest" . \
     || { echo "build failed" >&2; exit 1; }
 }
 
