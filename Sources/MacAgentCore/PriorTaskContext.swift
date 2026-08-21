@@ -242,10 +242,39 @@ public struct PriorTaskStepContext: Codable, Equatable, Sendable {
 public struct PriorTaskOutcome: Codable, Equatable, Sendable {
     public var status: PriorTaskOutcomeStatus
     public var summary: String
+    /// **Who wrote `summary`** (SONNY-197). Carried rather than dropped, because this type is what
+    /// the planner sees and `StoredTaskResult` — the type that holds the same text on disk — has
+    /// always known the answer. Before this field, `AgentViewModel.followUpOnTask` rehydrated a
+    /// stored task into a context and read `record.result?.text` while `record.result?.provenance`
+    /// sat unread on the same expression, so a model-authored paragraph entered the trusted block
+    /// indistinguishable from "Zipped 3 files."
+    ///
+    /// **Nothing reads it yet, and this changes no behaviour.** `plannerContextText` routes all four
+    /// interpolated fields through `escapeForPlanner` regardless of provenance, and the trusted
+    /// block's shape is deliberately unchanged — adding a line to it would be a prompt change, which
+    /// is a different decision from carrying a fact. What this buys is that the first reader who
+    /// *does* want to treat model-authored prior-task text differently — a tighter length budget, an
+    /// untrusted wrapper rather than the trusted one, an audit surface — is handed a value that
+    /// knows, instead of having to re-derive it from a record this type no longer references. Row I's
+    /// lesson in the repository's own words: a structural guarantee is only as wide as the type that
+    /// carries it.
+    ///
+    /// Defaults to `.codeAuthored` so every existing construction site is unchanged, and that
+    /// default is the honest one: the deterministic strings this repository builds are the ordinary
+    /// case, and the one producer of free model text is the screen-control session. The default is
+    /// safe for the synthesized `Codable` too — this type reaches no disk, `PriorTaskContextStore`
+    /// holds one context in memory and nothing persists it across launches — so there is no stored
+    /// shape without the key to decode.
+    public var provenance: StoredTaskResult.Provenance
 
-    public init(status: PriorTaskOutcomeStatus, summary: String) {
+    public init(
+        status: PriorTaskOutcomeStatus,
+        summary: String,
+        provenance: StoredTaskResult.Provenance = .codeAuthored
+    ) {
         self.status = status
         self.summary = summary.trimmingCharacters(in: .whitespacesAndNewlines)
+        self.provenance = provenance
     }
 
     public var plannerText: String {
