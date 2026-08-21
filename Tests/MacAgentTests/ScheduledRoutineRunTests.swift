@@ -1,6 +1,7 @@
 import Combine
 import Foundation
 import Testing
+import MacAgentTestSupport
 @testable import MacAgent
 // `@testable` since SONNY-94: the belt's test needs `RoutineStore.saveBypassingStepValidation`,
 // the module-internal sanctioned door for writing a routine `save` would refuse. Nothing else
