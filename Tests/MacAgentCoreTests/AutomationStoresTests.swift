@@ -128,7 +128,14 @@ struct AutomationStoresTests {
         ]
         /// Resolver-only: written by the executor, never decodable from a planner response, and
         /// therefore stripped by the routine store's read door.
-        let resolverOnly: Set<String> = ["resolvedAppName", "resolvedBundleIdentifier"]
+        let resolverOnly: Set<String> = [
+            "resolvedAppName",
+            "resolvedBundleIdentifier",
+            // SONNY-185. Not an identity like the two above it — one boolean recording whether the
+            // resolve phase actually drove Finder to find this step's folder — but resolver-written
+            // and decode-excluded on exactly the same terms, so the strip must clear it too.
+            "resolvedFromFinderSelection"
+        ]
 
         #expect(
             actual == plannerWritable.union(resolverOnly),

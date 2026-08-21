@@ -1266,7 +1266,7 @@ struct AgentRunnerTests {
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
         try write("contents", to: folder.appendingPathComponent("a.txt"))
 
-        let reader = FakeFinderContextReader(selection: [folder])
+        let reader = CountingFinderContextReader(selection: [folder])
         // The planner is never consulted: `prepare(plan:source:)` is the pre-built entry point.
         let runner = AgentRunner(
             planner: StaticPlanner(plan: selectionDrivenZipPlan()),
@@ -1291,6 +1291,7 @@ struct AgentRunnerTests {
             context: approvalContext(for: prepared)
         )
 
+        #expect(reader.callCount >= 1, "a selection-driven plan must actually read the selection")
         #expect(request.assessment.escalations.map(\.reason) == ["Finder is not part of the Client Alpha workspace."])
         #expect(request.assessment.scopeVerdict == .outOfScope)
     }
@@ -1308,9 +1309,13 @@ struct AgentRunnerTests {
         let decoy = root.appendingPathComponent("Decoy", isDirectory: true)
         try FileManager.default.createDirectory(at: decoy, withIntermediateDirectories: true)
 
+        // A counting reader rather than a plain fake: the decoy makes a read *visible in the
+        // escalations*, which is a real signal but a consequence rather than the fact. The count is
+        // the fact, and this test's whole claim is about it (SONNY-185, PR #79 coverage note 2).
+        let reader = CountingFinderContextReader(selection: [decoy])
         let runner = AgentRunner(
             planner: StaticPlanner(plan: selectionDrivenZipPlan()),
-            executor: makeExecutor(root: root, finderContextReader: FakeFinderContextReader(selection: [decoy]))
+            executor: makeExecutor(root: root, finderContextReader: reader)
         )
         let scope = TaskWorkspaceScope.scoped(
             WorkspaceScope(
@@ -1350,8 +1355,281 @@ struct AgentRunnerTests {
             context: approvalContext(for: prepared)
         )
 
+        #expect(reader.callCount == 0, "Finder was contacted for a plan satisfied from an explicit path")
         #expect(request.assessment.escalations.map(\.reason) == [])
         #expect(request.assessment.scopeVerdict == .inScope)
+    }
+
+    /// **SONNY-185's shape, over the same two-phase dispatch.** A single step carrying both the
+    /// `contextSource` declaration *and* its own folder. `selectedDirectoryPath` returns
+    /// `primary ?? secondary` before it so much as looks at `contextSource`, so the plan is
+    /// satisfied from that folder and the Apple-Events reader is never called — and until this
+    /// ticket the step kept its marker through both passes and `PlanScopedResources` named Finder
+    /// for a run that never touched it. SONNY-73's clearing cannot reach it: that rule is keyed on
+    /// the steps the pin *back-fills*, and this step is back-filled by nothing.
+    ///
+    /// The fix is a second field rather than a cleverer rule, because after the first pass this step
+    /// and a genuine declaring step the pin filled in are byte-identical. Asserted three ways: the
+    /// reader was never called, no Finder escalation survives either resolution, and the resolved
+    /// plan carries no `resolvedFromFinderSelection` on the step that declared it.
+    @Test
+    func aDeclaringStepWithItsOwnFolderReportsNoFinderThroughPrepareThenApproval() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("Client", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write("contents", to: folder.appendingPathComponent("a.txt"))
+        let decoy = root.appendingPathComponent("Decoy", isDirectory: true)
+        try FileManager.default.createDirectory(at: decoy, withIntermediateDirectories: true)
+
+        // A selection is available and is deliberately not the folder the plan names, so a read that
+        // happened would be visible in the escalations as well as in the count.
+        let reader = CountingFinderContextReader(selection: [decoy])
+        let runner = AgentRunner(
+            planner: StaticPlanner(plan: selectionDrivenZipPlan()),
+            executor: makeExecutor(root: root, finderContextReader: reader)
+        )
+        let plan = AgentPlan(
+            summary: "Zip the largest files in the selected folder.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "scan",
+                    operation: .scanSelectLargestFiles,
+                    description: "Scan the selected folder.",
+                    inputPath: folder.path,
+                    count: 1,
+                    contextSource: .finderSelection
+                ),
+                AgentStep(
+                    id: "zip",
+                    operation: .createZip,
+                    description: "Zip it.",
+                    inputPath: folder.path,
+                    outputPath: folder.appendingPathComponent("largest.zip").path
+                )
+            ]
+        )
+
+        let prepared = try runner.prepare(plan: plan, source: .planner)
+        let request = try runner.approvalRequest(
+            for: prepared,
+            scope: Self.clientAlphaScope(root: root, folder: folder),
+            context: approvalContext(for: prepared)
+        )
+
+        #expect(reader.callCount == 0, "Finder was contacted for a plan that named its own folder")
+        #expect(request.assessment.escalations.map(\.reason) == [])
+        #expect(request.assessment.scopeVerdict == .inScope)
+        // The declaration survives — it is the planner's, and nothing here rewrites it. What is
+        // absent is the resolver's fact, which is the half the classifier now requires.
+        let scan = try #require(prepared.plan.steps.first { $0.id == "scan" })
+        #expect(scan.contextSource == .finderSelection)
+        #expect(scan.resolvedFromFinderSelection == nil)
+    }
+
+    /// The genuine selection, asserted on the pin itself rather than only on its consequence — the
+    /// half that would be missing if `resolvedFromFinderSelection` were simply never written and
+    /// everything below it silently passed for the wrong reason.
+    @Test
+    func aGenuineSelectionPinsTheFinderReadOntoEveryStepItBackFills() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("Client", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write("contents", to: folder.appendingPathComponent("a.txt"))
+
+        let reader = CountingFinderContextReader(selection: [folder])
+        let runner = AgentRunner(
+            planner: StaticPlanner(plan: selectionDrivenZipPlan()),
+            executor: makeExecutor(root: root, finderContextReader: reader)
+        )
+
+        let prepared = try runner.prepare(plan: selectionDrivenZipPlan(), source: .planner)
+        let request = try runner.approvalRequest(
+            for: prepared,
+            scope: Self.clientAlphaScope(root: root, folder: folder),
+            context: approvalContext(for: prepared)
+        )
+
+        #expect(reader.callCount >= 1, "a selection-driven plan must actually read the selection")
+        #expect(prepared.plan.steps.allSatisfy { $0.resolvedFromFinderSelection == true })
+        #expect(prepared.plan.steps.allSatisfy { $0.inputPath == folder.path })
+        #expect(request.assessment.escalations.map(\.reason) == ["Finder is not part of the Client Alpha workspace."])
+        #expect(request.assessment.scopeVerdict == .outOfScope)
+    }
+
+    // MARK: - The docx pair, which shares every line of the resolver above
+    //
+    // `DocxConversionCapabilityAdapter.resolveDefaultOutputs` calls the same
+    // `FinderSelectionResolver.pinningSelectedDirectoryInput` with `[.scanDocx, .convertDocxToPDF]`,
+    // and `PlanScopedResources` routes all four operations through the same `finderSelectionApp`.
+    // Every test written for SONNY-73 and every one above uses the zip pair, so a future change to
+    // the pin could only ever be caught on one of its two callers (PR #79 cycle-1 review, coverage
+    // note 1). These three are the docx counterparts, one per shape.
+
+    /// The genuine selection, docx. Word is named because the converter drives it; Finder is named
+    /// because the selection really was read.
+    @Test
+    func aSelectionDrivenDocxConversionStillReportsFinderThroughPrepareThenApproval() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("Client", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write("contents", to: folder.appendingPathComponent("a.docx"))
+
+        let reader = CountingFinderContextReader(selection: [folder])
+        let runner = AgentRunner(
+            planner: StaticPlanner(plan: selectionDrivenDocxPlan()),
+            executor: makeExecutor(root: root, finderContextReader: reader)
+        )
+
+        let prepared = try runner.prepare(plan: selectionDrivenDocxPlan(), source: .planner)
+        let request = try runner.approvalRequest(
+            for: prepared,
+            scope: Self.clientAlphaScope(root: root, folder: folder),
+            context: approvalContext(for: prepared)
+        )
+
+        #expect(reader.callCount >= 1)
+        #expect(prepared.plan.steps.allSatisfy { $0.resolvedFromFinderSelection == true })
+        #expect(request.assessment.escalations.map(\.reason).contains("Finder is not part of the Client Alpha workspace."))
+        #expect(request.assessment.scopeVerdict == .outOfScope)
+    }
+
+    /// The pooled shape SONNY-73 fixed, docx: a scan carrying an explicit folder beside a convert
+    /// carrying only `contextSource`. Finder is never contacted and never reported.
+    @Test
+    func aPooledExplicitPathDocxReportsNoFinderThroughPrepareThenApproval() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("Client", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write("contents", to: folder.appendingPathComponent("a.docx"))
+        let decoy = root.appendingPathComponent("Decoy", isDirectory: true)
+        try FileManager.default.createDirectory(at: decoy, withIntermediateDirectories: true)
+
+        let reader = CountingFinderContextReader(selection: [decoy])
+        let runner = AgentRunner(
+            planner: StaticPlanner(plan: selectionDrivenDocxPlan()),
+            executor: makeExecutor(root: root, finderContextReader: reader)
+        )
+        let plan = AgentPlan(
+            summary: "Convert the documents in that folder.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "scan-docx",
+                    operation: .scanDocx,
+                    description: "Scan the folder.",
+                    inputPath: folder.path
+                ),
+                AgentStep(
+                    id: "convert",
+                    operation: .convertDocxToPDF,
+                    description: "Convert the selected folder's documents.",
+                    contextSource: .finderSelection
+                )
+            ]
+        )
+
+        let prepared = try runner.prepare(plan: plan, source: .planner)
+        let request = try runner.approvalRequest(
+            for: prepared,
+            scope: Self.clientAlphaScope(root: root, folder: folder),
+            context: approvalContext(for: prepared)
+        )
+
+        #expect(reader.callCount == 0)
+        #expect(!request.assessment.escalations.map(\.reason).contains("Finder is not part of the Client Alpha workspace."))
+    }
+
+    /// SONNY-185's shape, docx: one step carrying both the declaration and its own folder.
+    @Test
+    func aDeclaringDocxStepWithItsOwnFolderReportsNoFinderThroughPrepareThenApproval() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let folder = root.appendingPathComponent("Client", isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        try write("contents", to: folder.appendingPathComponent("a.docx"))
+        let decoy = root.appendingPathComponent("Decoy", isDirectory: true)
+        try FileManager.default.createDirectory(at: decoy, withIntermediateDirectories: true)
+
+        let reader = CountingFinderContextReader(selection: [decoy])
+        let runner = AgentRunner(
+            planner: StaticPlanner(plan: selectionDrivenDocxPlan()),
+            executor: makeExecutor(root: root, finderContextReader: reader)
+        )
+        let plan = AgentPlan(
+            summary: "Convert the documents in the selected folder.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "scan-docx",
+                    operation: .scanDocx,
+                    description: "Scan the selected folder.",
+                    inputPath: folder.path,
+                    contextSource: .finderSelection
+                ),
+                AgentStep(
+                    id: "convert",
+                    operation: .convertDocxToPDF,
+                    description: "Convert them.",
+                    inputPath: folder.path
+                )
+            ]
+        )
+
+        let prepared = try runner.prepare(plan: plan, source: .planner)
+        let request = try runner.approvalRequest(
+            for: prepared,
+            scope: Self.clientAlphaScope(root: root, folder: folder),
+            context: approvalContext(for: prepared)
+        )
+
+        #expect(reader.callCount == 0, "Finder was contacted for a plan that named its own folder")
+        #expect(!request.assessment.escalations.map(\.reason).contains("Finder is not part of the Client Alpha workspace."))
+        let scan = try #require(prepared.plan.steps.first { $0.id == "scan-docx" })
+        #expect(scan.contextSource == .finderSelection)
+        #expect(scan.resolvedFromFinderSelection == nil)
+    }
+
+    /// A workspace whose only file location is `folder`, so Finder — an app it does not name — is
+    /// the resource an escalation would be about.
+    private static func clientAlphaScope(root: URL, folder: URL) -> TaskWorkspaceScope {
+        .scoped(
+            WorkspaceScope(
+                workspace: StoredWorkspace(
+                    name: "Client Alpha",
+                    apps: ["Safari"],
+                    urls: [],
+                    fileLocations: [folder.path]
+                ),
+                whitelist: PathWhitelist(roots: [root])
+            )
+        )
+    }
+
+    /// A scan_docx/convert pair carrying no `inputPath` at all — the folder is whatever is selected.
+    private func selectionDrivenDocxPlan() -> AgentPlan {
+        AgentPlan(
+            summary: "Convert the documents in the selected folder.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "scan-docx",
+                    operation: .scanDocx,
+                    description: "Scan the selected folder.",
+                    contextSource: .finderSelection
+                ),
+                AgentStep(
+                    id: "convert",
+                    operation: .convertDocxToPDF,
+                    description: "Convert the selected folder's documents.",
+                    contextSource: .finderSelection
+                )
+            ]
+        )
     }
 
     /// A scan/zip pair carrying no `inputPath` at all — the folder is whatever is selected in Finder.
@@ -2070,6 +2348,40 @@ private struct FakeFinderContextReader: FinderContextReading {
     var selection: [URL]
 
     func selectedItems() throws -> [URL] {
+        guard !selection.isEmpty else {
+            throw FinderContextError.noSelection
+        }
+        return selection
+    }
+}
+
+/// The same fake, counting its calls — so a two-phase test can assert Finder contact *directly*
+/// rather than inferring it from what a decoy folder would have done to the escalations.
+///
+/// The decoy inference is a real signal and the tests below keep it: a read that happened would
+/// resolve to a folder outside the workspace and show up in the escalations. But it is a
+/// consequence, not the fact, and this ticket's whole subject is a classifier that reported Finder
+/// for a run that never touched it — so the count is worth asserting where the claim is made
+/// (SONNY-185, from PR #79's cycle-1 review, coverage note 2).
+private final class CountingFinderContextReader: FinderContextReading, @unchecked Sendable {
+    private let lock = NSLock()
+    private let selection: [URL]
+    private var calls = 0
+
+    init(selection: [URL]) {
+        self.selection = selection
+    }
+
+    var callCount: Int {
+        lock.lock()
+        defer { lock.unlock() }
+        return calls
+    }
+
+    func selectedItems() throws -> [URL] {
+        lock.lock()
+        calls += 1
+        lock.unlock()
         guard !selection.isEmpty else {
             throw FinderContextError.noSelection
         }
