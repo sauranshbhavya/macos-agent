@@ -219,13 +219,19 @@ struct LocalStorageSecurityTests {
 
         // The rewrite happened...
         #expect(try Data(contentsOf: url).starts(with: LocalStorageEncryption.fileHeader))
-        // ...and what it persisted is the stripped form. A fresh store reading the file again is the
-        // honest way to ask: it decodes the bytes on disk rather than re-checking the value the first
-        // load returned.
-        let reloaded = try RoutineStore(fileURL: url, encryption: encryption).routine(named: "Legacy")
-        #expect(reloaded.steps[0].resolvedAppName == nil)
-        #expect(reloaded.steps[0].resolvedBundleIdentifier == nil)
-        #expect(reloaded.steps[0].appName == "Safari")
+
+        // ...and what it persisted is the stripped form. **Decoded straight out of the file, not
+        // re-read through a `RoutineStore`** — a second store would strip on load too, so it answers
+        // "no pins" whichever order the first one used, and a test written that way passes with the
+        // strip moved after the migration. This branch's own battery caught exactly that: the first
+        // version of this test re-read through a store and the mutant survived it.
+        let persisted = try encryption
+            .decode([String: StoredRoutine].self, from: Data(contentsOf: url))
+            .value
+        let step = try #require(persisted[normalized("Legacy")]?.steps.first)
+        #expect(step.resolvedAppName == nil)
+        #expect(step.resolvedBundleIdentifier == nil)
+        #expect(step.appName == "Safari")
     }
 
     /// A failed re-encryption during legacy migration is not a load failure: the decode already
