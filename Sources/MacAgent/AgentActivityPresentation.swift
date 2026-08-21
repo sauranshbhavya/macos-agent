@@ -272,9 +272,12 @@ enum FollowUpPresentation {
 
     /// The most of the original command the chip shows.
     ///
-    /// The composer pill is 472 wide and the chip row has 444 of it; a workspace chip and the
-    /// "Won't be saved" chip can take about 164 between them, so this keeps three chips inside the
-    /// row without relying on `Text` truncation to rescue the layout. Commands longer than this are
+    /// The composer pill is 472 wide and the chip row has 444 of it. A workspace chip and the
+    /// "Won't be saved" chip take roughly 164 between them by estimate — their text at
+    /// `WidgetType.captionSmall` plus 8 points of padding a side — so this keeps three chips inside
+    /// the row without relying on `Text` truncation to rescue the layout. Each chip is
+    /// `lineLimit(1)` with tail truncation anyway, so an unusually long workspace name shortens a
+    /// chip rather than overflowing the row. Commands longer than this are
     /// cut at a word boundary where there is one, because "Zip the largest files in ~/Down…" reads
     /// and "Zip the largest files in ~/Downloa…" does not read any better for the four characters
     /// it bought.
