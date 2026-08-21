@@ -593,20 +593,29 @@ public struct CapabilityRiskAssessment: Codable, Equatable, Sendable {
     }
 }
 
-/// The authority context an approval requirement is derived under: today, whether the user's Safe
-/// mode is engaged, and nothing else.
+/// The authority context an approval requirement is derived under: **the user's mode, and the
+/// per-app control standing for whatever this requirement is being derived about.**
 ///
-/// **Row I was expected to add a per-app control consent field here, and does not.** SONNY-91 was
-/// contracted as a durable per-app grant that would land as an `appControlConsent` field this
-/// function maps. The founder superseded that contract on 2026-08-14: Sonny may control any
-/// installed app without asking, so there is no grant, nothing to revoke, and no consent axis for
-/// this struct to carry. The one control-authority rule that survived — terminals are never
-/// controllable — is not a context field either, because it is not a question anyone is asked:
-/// `ScreenControlPolicy` refuses at the target, and the refusal reaches this function the ordinary
-/// way, as a tier-4 assessment that `.refuse`s in every mode.
+/// **This doc comment described the opposite of the truth for one branch, and it is worth knowing
+/// how** (PR #88, F4). It said Safe mode was the only axis, that row I's per-app consent field had
+/// been superseded and would never be built, and that "there is no grant, nothing to revoke, and no
+/// consent axis for this struct to carry". The founder revived per-app control consent on
+/// **2026-08-16**, superseding his own decision of two days earlier, and row J built every one of
+/// those clauses into existence: `safeMode: Bool` became `mode`, `appControl` is exactly the
+/// "consent axis" the old text said would never arrive, there is a grant (`ApprovedAppStore`), and
+/// the revoke that goes with it is SONNY-144. Four user-facing copy sites were corrected in the same
+/// branch while this one — on the type the whole approval engine is built around — was missed.
+///
+/// The one control-authority rule that is still **not** a context field is the terminal ban, and its
+/// absence is structural rather than an oversight: it is not a question anyone is asked.
+/// `ScreenControlPolicy` refuses at the target, at three doors above any requirement, so a stored
+/// grant for a terminal cannot argue with it and this struct never sees the question.
 ///
 /// This is an input to `RiskApprovalPolicy.requirement(for:context:)` and nothing else — it never
-/// reaches `assessRisk`, so `effectiveTier` remains a pure function of the plan. Threaded
+/// reaches `assessRisk`, so `effectiveTier` remains a pure function of the plan and the scope. Row
+/// J's first implementation briefly forwarded `appControl` into `assessRisk` so an adapter could
+/// word an escalation with it; §4.3's capture-first ordering (founder, 2026-08-21) moved that
+/// sentence into the session, and the forwarding was removed with it. Threaded
 /// non-defaulted into `AgentRunner.approvalRequest` and `AgentRunner.execute` for the same reason
 /// `scope:` is: `execute` re-derives the requirement internally, so a context threaded at one site
 /// and defaulted at the other would prompt under one requirement and execute under another, with

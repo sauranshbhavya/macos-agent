@@ -82,18 +82,3 @@ public enum AppControlResolver {
         }
     }
 }
-
-public extension AgentPlan {
-    /// The app this plan will control by synthesizing input into it, or `nil` when it controls none.
-    ///
-    /// Reads `resolvedBundleIdentifier` — Launch Services' answer, written by
-    /// `VisionSessionCapabilityAdapter.resolveDefaultOutputs` and by nothing else — rather than the
-    /// planner's `appName`. A model-authored name is not an identity, and the whole per-app model
-    /// rests on the identity being the one the terminal ban also judges (SONNY-58's discipline).
-    ///
-    /// `nil` on an unresolved plan is correct and is not a hole: an unresolved vision plan has not
-    /// passed the resolve door, so it is not executable, and nothing downstream can act on it.
-    var appControlTargetBundleIdentifier: String? {
-        steps.first { $0.operation == .visionSession }?.resolvedBundleIdentifier
-    }
-}

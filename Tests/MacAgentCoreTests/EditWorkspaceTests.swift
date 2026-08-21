@@ -95,8 +95,7 @@ struct EditWorkspaceTests {
                 addURLs: ["https://github.com"],
                 addFileLocations: [folder.path]
             ),
-            scope: .unscoped,
-            appControl: .notApplicable
+            scope: .unscoped
         )
 
         #expect(assessment.defaultTier == .tier2)
@@ -155,8 +154,7 @@ struct EditWorkspaceTests {
 
         let assessment = try fixture.executor.assessRisk(
             plan: Fixture.editPlan(removeApps: ["Notes"]),
-            scope: .unscoped,
-            appControl: .notApplicable
+            scope: .unscoped
         )
 
         #expect(assessment.defaultTier == .tier2)
@@ -228,8 +226,7 @@ struct EditWorkspaceTests {
 
         let assessment = try fixture.executor.assessRisk(
             plan: Fixture.editPlan(removeFileLocations: [folder.path]),
-            scope: .unscoped,
-            appControl: .notApplicable
+            scope: .unscoped
         )
 
         #expect(assessment.effectiveTier == .tier3)
@@ -270,13 +267,11 @@ struct EditWorkspaceTests {
 
         let oneOfTwo = try fixture.executor.assessRisk(
             plan: Fixture.editPlan(removeFileLocations: [dropped.path]),
-            scope: .unscoped,
-            appControl: .notApplicable
+            scope: .unscoped
         )
         let bothAtOnce = try fixture.executor.assessRisk(
             plan: Fixture.editPlan(removeFileLocations: [kept.path, dropped.path]),
-            scope: .unscoped,
-            appControl: .notApplicable
+            scope: .unscoped
         )
 
         let expectedOneOfTwo = "Removes \(dropped.path) from workspace Client Alpha's file locations. "
@@ -306,8 +301,7 @@ struct EditWorkspaceTests {
 
         let assessment = try fixture.executor.assessRisk(
             plan: Fixture.editPlan(removeApps: ["Notes"], removeFileLocations: [folder.path]),
-            scope: .unscoped,
-            appControl: .notApplicable
+            scope: .unscoped
         )
 
         #expect(assessment.escalations.map(\.reason) == [
@@ -330,8 +324,7 @@ struct EditWorkspaceTests {
 
         let assessment = try fixture.executor.assessRisk(
             plan: Fixture.editPlan(addFileLocations: [new.path], removeFileLocations: [old.path]),
-            scope: .unscoped,
-            appControl: .notApplicable
+            scope: .unscoped
         )
 
         let expected = "Removes \(old.path) from workspace Client Alpha's file locations. "
@@ -351,8 +344,7 @@ struct EditWorkspaceTests {
 
         let assessment = try fixture.executor.assessRisk(
             plan: Fixture.editPlan(addApps: ["Notes"], removeApps: ["Notes"]),
-            scope: .unscoped,
-            appControl: .notApplicable
+            scope: .unscoped
         )
 
         #expect(assessment.escalations.isEmpty)
@@ -369,7 +361,7 @@ struct EditWorkspaceTests {
         try fixture.store.save(StoredWorkspace(name: "Client Alpha", apps: ["Safari"], urls: []))
 
         let plan = Fixture.editPlan(addApps: ["Notes"], removeApps: ["Mail"])
-        let assessment = try fixture.executor.assessRisk(plan: plan, scope: .unscoped, appControl: .notApplicable)
+        let assessment = try fixture.executor.assessRisk(plan: plan, scope: .unscoped)
         let result = try await fixture.executor.execute(plan: plan) { _, _ in }
 
         #expect(assessment.escalations.isEmpty)
@@ -479,7 +471,7 @@ struct EditWorkspaceTests {
         }
         var thrownFromAssess: Error?
         do {
-            _ = try fixture.executor.assessRisk(plan: Fixture.editPlan(addApps: ["Notes"]), scope: .unscoped, appControl: .notApplicable)
+            _ = try fixture.executor.assessRisk(plan: Fixture.editPlan(addApps: ["Notes"]), scope: .unscoped)
         } catch {
             thrownFromAssess = error
         }
@@ -684,8 +676,7 @@ struct EditWorkspaceTests {
 
         let assessment = try fixture.executor.assessRisk(
             plan: Fixture.editPlan(removeURLs: ["github.com"]),
-            scope: .unscoped,
-            appControl: .notApplicable
+            scope: .unscoped
         )
 
         #expect(assessment.effectiveTier == .tier3)
@@ -728,8 +719,7 @@ struct EditWorkspaceTests {
 
         let assessment = try fixture.executor.assessRisk(
             plan: Fixture.editPlan(removeFileLocations: [inert]),
-            scope: .unscoped,
-            appControl: .notApplicable
+            scope: .unscoped
         )
 
         #expect(assessment.effectiveTier == .tier2)
@@ -763,8 +753,7 @@ struct EditWorkspaceTests {
 
         let assessment = try fixture.executor.assessRisk(
             plan: Fixture.editPlan(removeFileLocations: [dropped.path, inert]),
-            scope: .unscoped,
-            appControl: .notApplicable
+            scope: .unscoped
         )
 
         // `kept` survives, so this is a one-of-several removal, and the inert entry is absent from
@@ -796,8 +785,7 @@ struct EditWorkspaceTests {
 
         let assessment = try fixture.executor.assessRisk(
             plan: Fixture.editPlan(removeURLs: ["github.com"]),
-            scope: .unscoped,
-            appControl: .notApplicable
+            scope: .unscoped
         )
 
         #expect(assessment.effectiveTier == .tier3)
@@ -820,8 +808,7 @@ struct EditWorkspaceTests {
 
         let assessment = try fixture.executor.assessRisk(
             plan: Fixture.editPlan(removeApps: ["Safari"]),
-            scope: .unscoped,
-            appControl: .notApplicable
+            scope: .unscoped
         )
         #expect(assessment.escalations.map(\.reason) == [
             "Workspace Client Alpha will no longer restrict apps at all: "
@@ -866,8 +853,7 @@ struct EditWorkspaceTests {
 
         let assessment = try fixture.executor.assessRisk(
             plan: Fixture.editPlan(removeFileLocations: [working.path]),
-            scope: .unscoped,
-            appControl: .notApplicable
+            scope: .unscoped
         )
 
         #expect(assessment.escalations.map(\.reason) == [Self.fileLocationsNoLongerRestrictedReason])
@@ -991,7 +977,7 @@ struct EditWorkspaceTests {
         )
 
         #expect(throws: expected, "\(shape.name)") {
-            _ = try fixture.executor.assessRisk(plan: plan, scope: .unscoped, appControl: .notApplicable)
+            _ = try fixture.executor.assessRisk(plan: plan, scope: .unscoped)
         }
         await #expect(throws: expected, "\(shape.name)") {
             _ = try await fixture.executor.execute(plan: plan) { _, _ in }
@@ -1023,7 +1009,7 @@ struct EditWorkspaceTests {
 
         // One escalation, from the removal half only — the addition half is correctly silent, which
         // is what "each assessment is correct in isolation" means here.
-        let assessment = try fixture.executor.assessRisk(plan: plan, scope: .unscoped, appControl: .notApplicable)
+        let assessment = try fixture.executor.assessRisk(plan: plan, scope: .unscoped)
         #expect(assessment.effectiveTier == .tier3)
         #expect(assessment.escalations.map(\.reason) == [
             "Removes Slack from workspace Research's apps. "
@@ -1059,7 +1045,7 @@ struct EditWorkspaceTests {
             "A plan may edit workspace client alpha only once. "
                 + "Put every change to one workspace in a single edit_workspace step."
         )) {
-            _ = try fixture.executor.assessRisk(plan: plan, scope: .unscoped, appControl: .notApplicable)
+            _ = try fixture.executor.assessRisk(plan: plan, scope: .unscoped)
         }
     }
 
@@ -1074,8 +1060,7 @@ struct EditWorkspaceTests {
 
         let assessment = try fixture.executor.assessRisk(
             plan: Fixture.editPlan(addApps: ["Notes"]),
-            scope: .unscoped,
-            appControl: .notApplicable
+            scope: .unscoped
         )
 
         #expect(assessment.effectiveTier == .tier2)
@@ -1107,8 +1092,7 @@ struct EditWorkspaceTests {
 
         let assessment = try fixture.executor.assessRisk(
             plan: Fixture.editPlan(addApps: ["Safari"]),
-            scope: .unscoped,
-            appControl: .notApplicable
+            scope: .unscoped
         )
 
         #expect(assessment.effectiveTier == .tier2)
@@ -1139,8 +1123,7 @@ struct EditWorkspaceTests {
 
         let assessment = try fixture.executor.assessRisk(
             plan: Fixture.editPlan(removeFileLocations: [working.path]),
-            scope: .unscoped,
-            appControl: .notApplicable
+            scope: .unscoped
         )
 
         #expect(assessment.effectiveTier == .tier3)
@@ -1161,8 +1144,7 @@ struct EditWorkspaceTests {
 
         let assessment = try fixture.executor.assessRisk(
             plan: Fixture.editPlan(addFileLocations: [rootPath]),
-            scope: .unscoped,
-            appControl: .notApplicable
+            scope: .unscoped
         )
 
         #expect(assessment.effectiveTier == .tier3)
@@ -1196,8 +1178,7 @@ struct EditWorkspaceTests {
 
         let subsuming = try fixture.executor.assessRisk(
             plan: Fixture.editPlan(addFileLocations: [outer.path]),
-            scope: .unscoped,
-            appControl: .notApplicable
+            scope: .unscoped
         )
         #expect(subsuming.effectiveTier == .tier2)
         #expect(subsuming.escalations.isEmpty)
@@ -1212,8 +1193,7 @@ struct EditWorkspaceTests {
         )
         let contained = try fixture.executor.assessRisk(
             plan: Fixture.editPlan(workspaceName: "Client Beta", addFileLocations: [inner.path]),
-            scope: .unscoped,
-            appControl: .notApplicable
+            scope: .unscoped
         )
         #expect(contained.effectiveTier == .tier2)
         #expect(contained.escalations.isEmpty)

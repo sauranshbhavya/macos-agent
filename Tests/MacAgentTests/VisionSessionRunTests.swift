@@ -306,6 +306,16 @@ struct VisionSessionRunTests {
         /// A grants file to share with an earlier fixture, so a "second run" test really re-reads
         /// what the first run wrote rather than a value cached in one view model (SONNY-143).
         approvedAppsFile: URL? = nil,
+        /// Whether the target app already carries a grant when the session starts.
+        ///
+        /// **Defaults to `true` because the per-app gate is now a step of the loop, not a step of
+        /// the plan** (PR #88's fix round, §4.3). Every session on an app the current mode does not
+        /// already allow pauses after its first capture and asks — which in Safe mode is every app
+        /// the user has not approved by hand, including the starter list's. Tests about the capture
+        /// preview, delegation, the iteration cap and the rest are not about that question, and
+        /// leaving them to meet it would make each of them a test of two things. The gate's own
+        /// tests pass `false` and answer it.
+        appControlAlreadyGranted: Bool = true,
         /// The planner a *delegated* instruction reaches. `nil` means the unreachable one, which is
         /// correct for every test whose delegations resolve instantly or do not delegate at all.
         delegationPlanner: (any Planning)? = nil,
@@ -333,6 +343,13 @@ struct VisionSessionRunTests {
         let approvedAppStore = ApprovedAppStore(
             fileURL: approvedAppsFile ?? root.appendingPathComponent("approved-apps.json")
         )
+        if appControlAlreadyGranted, approvedAppsFile == nil {
+            try approvedAppStore.approve(
+                bundleIdentifier: bundleIdentifier,
+                displayName: bundleIdentifier,
+                approvedAt: Date(timeIntervalSince1970: 1_700_000_000)
+            )
+        }
         let viewModel = AgentViewModel(
             routineStore: routineStore,
             workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json")),
@@ -512,7 +529,8 @@ struct VisionSessionRunTests {
     func anAppOutsideTheStarterListAsksInNormalModeThroughTheRealPath() async throws {
         let fixture = try makeFixture(
             replies: [#"{"action":"done","rationale":"done."}"#],
-            bundleIdentifier: "com.microsoft.VSCode"
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false
         )
         defer { fixture.tearDown() }
 
@@ -535,7 +553,10 @@ struct VisionSessionRunTests {
     /// starter-list app runs silently in Normal, through the identical path.
     @Test
     func aStarterListAppNeverRaisesAPerAppQuestionInNormalMode() async throws {
-        let fixture = try makeFixture(replies: [#"{"action":"done","rationale":"done."}"#])
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"done."}"#],
+            appControlAlreadyGranted: false
+        )
         defer { fixture.tearDown() }
 
         fixture.viewModel.startVisionSession(goal: "open my reading list", appName: "Safari")
@@ -555,7 +576,8 @@ struct VisionSessionRunTests {
     func allowingStoresTheAppAndTheNextRunDoesNotAsk() async throws {
         let fixture = try makeFixture(
             replies: [#"{"action":"done","rationale":"first."}"#],
-            bundleIdentifier: "com.microsoft.VSCode"
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false
         )
         defer { fixture.tearDown() }
 
@@ -576,7 +598,8 @@ struct VisionSessionRunTests {
         let second = try makeFixture(
             replies: [#"{"action":"done","rationale":"second."}"#],
             bundleIdentifier: "com.microsoft.VSCode",
-            approvedAppsFile: fixture.approvedApps.fileURL
+            approvedAppsFile: fixture.approvedApps.fileURL,
+            appControlAlreadyGranted: false
         )
         defer { second.tearDown() }
 
@@ -593,7 +616,8 @@ struct VisionSessionRunTests {
     func denyingStoresNothingAndTheNextRunAsksAgain() async throws {
         let fixture = try makeFixture(
             replies: [#"{"action":"done","rationale":"done."}"#],
-            bundleIdentifier: "com.microsoft.VSCode"
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false
         )
         defer { fixture.tearDown() }
 
@@ -624,7 +648,8 @@ struct VisionSessionRunTests {
     func thePromptNamesTheAppAndSaysTheAnswerIsRemembered() async throws {
         let fixture = try makeFixture(
             replies: [#"{"action":"done","rationale":"done."}"#],
-            bundleIdentifier: "com.microsoft.VSCode"
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false
         )
         defer { fixture.tearDown() }
 
@@ -636,8 +661,17 @@ struct VisionSessionRunTests {
         let reasons = request.assessment.escalations.map(\.reason).joined(separator: " ")
         #expect(reasons.contains("Sonny has not been allowed to control VS Code yet."))
         #expect(reasons.contains("Allowing it here keeps it allowed."))
-        // The session envelope's own reason is still there beside it, unedited.
-        #expect(reasons.contains("will send redacted screenshots"))
+        // **This request is the per-app question's own, not the session envelope's.** They were one
+        // assessment while the question was asked at plan time; §4.3 moved the question into the
+        // loop and the sentence moved with it, so the envelope's screenshot disclosure belongs to
+        // the plan gate and is deliberately not repeated here. Asserted rather than left implicit,
+        // because a request carrying both would mean the plan-time assessment had grown a standing
+        // again.
+        #expect(!reasons.contains("will send redacted screenshots"))
+        #expect(request.assessment.escalations.count == 1)
+        // The data-egress fact is on the copy, where Safe mode's own line reads it: allowing is what
+        // makes this capture and every later one leave the device.
+        #expect(request.approvalCopy.dataLeavesDevice)
 
         fixture.viewModel.cancelCurrentRun()
         try await waitForIdle(fixture.viewModel)
@@ -669,7 +703,8 @@ struct VisionSessionRunTests {
         let fixture = try makeFixture(
             replies: [#"{"action":"click","x":10,"y":10,"target":"Delete","consequence":"destructive","rationale":"r"}"#],
             mode: .power,
-            bundleIdentifier: "com.microsoft.VSCode"
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false
         )
         defer { fixture.tearDown() }
 
@@ -704,7 +739,8 @@ struct VisionSessionRunTests {
         let fixture = try makeFixture(
             replies: [#"{"action":"done","rationale":"done."}"#],
             mode: mode,
-            bundleIdentifier: "com.apple.Terminal"
+            bundleIdentifier: "com.apple.Terminal",
+            appControlAlreadyGranted: false
         )
         defer { fixture.tearDown() }
         // Written past `approve`, which would have refused it — the point is that a file containing
@@ -741,7 +777,8 @@ struct VisionSessionRunTests {
                 #"{"action":"click","x":10,"y":10,"target":"General","consequence":"ordinary","rationale":"r"}"#,
                 #"{"action":"done","rationale":"never reached."}"#
             ],
-            bundleIdentifier: "com.microsoft.VSCode"
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false
         )
         defer { fixture.tearDown() }
         try seedRawGrant(
@@ -778,45 +815,63 @@ struct VisionSessionRunTests {
     func switchingToSafeKeepsTheUsersOwnGrantAndDropsTheStarterListsContribution() async throws {
         let fixture = try makeFixture(
             replies: [#"{"action":"done","rationale":"first."}"#],
-            bundleIdentifier: "com.microsoft.VSCode"
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false
         )
         defer { fixture.tearDown() }
 
-        // In Normal, approve VS Code by hand — the founder's one click, once, ever.
+        // In Normal, approve VS Code by hand — the founder's one click, once, ever. The question
+        // arrives after the first capture, which is §4.3's ordering.
         fixture.viewModel.startVisionSession(goal: "open the extensions panel", appName: "VS Code")
         try await waitUntil("the per-app control question") { fixture.viewModel.approvalRequest != nil }
         fixture.viewModel.start()
         try await waitForIdle(fixture.viewModel)
         #expect(try fixture.approvedApps.loadAll().map(\.bundleIdentifier) == ["com.microsoft.VSCode"])
 
-        // Switch to Safe. The user's own grant survives: no *per-app* question is raised, and the
-        // only thing Safe asks about is the session itself, which is its standing floor.
-        fixture.viewModel.interactionMode = .safe
+        // Switch to Safe, over the same grants file. Safe's own floor asks about the session
+        // envelope at the plan gate — that is unchanged and is not this gate — and after allowing
+        // it, the user's own grant means **no per-app question follows**: the loop goes straight on
+        // to Safe's capture review.
         let afterSwitch = try makeFixture(
             replies: [#"{"action":"done","rationale":"second."}"#],
             mode: .safe,
             bundleIdentifier: "com.microsoft.VSCode",
-            approvedAppsFile: fixture.approvedApps.fileURL
+            approvedAppsFile: fixture.approvedApps.fileURL,
+            appControlAlreadyGranted: false
         )
         defer { afterSwitch.tearDown() }
         afterSwitch.viewModel.startVisionSession(goal: "open the extensions panel", appName: "VS Code")
         try await waitUntil("Safe mode's session-envelope question") { afterSwitch.viewModel.approvalRequest != nil }
-        let kept = try #require(afterSwitch.viewModel.approvalRequest)
-        let keptReasons = kept.assessment.escalations.map(\.reason).joined(separator: " ")
-        #expect(!keptReasons.contains("has not been allowed to control VS Code"))
-        afterSwitch.viewModel.cancelCurrentRun()
+        let envelope = try #require(afterSwitch.viewModel.approvalRequest)
+        #expect(envelope.assessment.escalations.map(\.reason).joined(separator: " ")
+            .contains("will send redacted screenshots"))
+        afterSwitch.viewModel.start()
+
+        // The next thing waiting is the capture preview, not another approval — the grant survived
+        // the switch.
+        try await waitUntil("Safe mode's capture review") { afterSwitch.viewModel.visionCapturePreview != nil }
+        #expect(afterSwitch.viewModel.approvalRequest == nil, "the user's own grant survives a switch to Safe")
+        afterSwitch.viewModel.resolveVisionCapturePreview(allowing: false)
         try await waitForIdle(afterSwitch.viewModel)
 
-        // And a starter-list app, which Normal ran silently, is asked about in Safe — the starter
-        // list's contribution really is dropped, and it is the *reason* that says so.
+        // And a starter-list app, which Normal ran silently, **is** asked about in Safe — after its
+        // own first capture, and before its capture review. The starter list's contribution really
+        // is dropped, and it is the reason that says so.
         let starterInSafe = try makeFixture(
             replies: [#"{"action":"done","rationale":"third."}"#],
             mode: .safe,
-            approvedAppsFile: fixture.approvedApps.fileURL
+            approvedAppsFile: fixture.approvedApps.fileURL,
+            appControlAlreadyGranted: false
         )
         defer { starterInSafe.tearDown() }
         starterInSafe.viewModel.startVisionSession(goal: "open my reading list", appName: "Safari")
-        try await waitUntil("Safe mode's question about Safari") { starterInSafe.viewModel.approvalRequest != nil }
+        try await waitUntil("Safe mode's session-envelope question") { starterInSafe.viewModel.approvalRequest != nil }
+        starterInSafe.viewModel.start()
+        try await waitUntil("Safe mode's per-app question about Safari") {
+            starterInSafe.viewModel.approvalRequest?.approvalCopy.involvedResource == "Safari"
+                && starterInSafe.viewModel.approvalRequest?.assessment.escalations
+                    .contains { $0.reason.contains("has not been allowed") } == true
+        }
         let dropped = try #require(starterInSafe.viewModel.approvalRequest)
         let droppedReasons = dropped.assessment.escalations.map(\.reason).joined(separator: " ")
         #expect(droppedReasons.contains("Sonny has not been allowed to control Safari yet."))
@@ -853,7 +908,8 @@ struct VisionSessionRunTests {
         let fixture = try makeFixture(
             replies: [#"{"action":"done","rationale":"ran anyway."}"#],
             bundleIdentifier: "com.microsoft.VSCode",
-            approvedAppsFile: blocked.appendingPathComponent("approved-apps.json")
+            approvedAppsFile: blocked.appendingPathComponent("approved-apps.json"),
+            appControlAlreadyGranted: false
         )
         defer { fixture.tearDown() }
 
@@ -862,23 +918,184 @@ struct VisionSessionRunTests {
         fixture.viewModel.start()
         try await waitForIdle(fixture.viewModel)
 
-        let message = try #require(fixture.viewModel.errorMessage)
+        // The storage banner, in its own words. `recordLocalStorageWriteFailure` rather than the
+        // load banner, whose "could not be decrypted or decoded" describes an existing file that
+        // will not read back — the wrong problem entirely for a save that failed.
+        let notice = try #require(fixture.viewModel.localStorageNotice)
+        #expect(notice.hasPrefix("Sonny could not save that you allowed it to control VS Code:"))
         #expect(
-            message.hasPrefix("Sonny could not remember that you allowed it to control VS Code, so it did not start.")
-        )
-        #expect(
-            !message.contains("could not be decrypted or decoded"),
+            !notice.contains("could not be decrypted or decoded"),
             "a save failure must not borrow the load banner's wording"
         )
-        // Nothing ran, and nothing claims the user revoked anything. `finalSummary` still holds the
-        // "Approval needed" line the pause wrote — the panel's own state, unrelated to this — so
-        // what is asserted is that no session outcome was reported, not that the slot is empty.
-        #expect(fixture.viewModel.finalSummary == "Approval needed before Sonny can act.")
-        #expect(!fixture.viewModel.finalSummary.contains("ran anyway"))
-        #expect(!message.contains("no longer allowed"))
-        #expect(fixture.model.prompts.isEmpty)
+
+        // And the session's own sentence, which is the half this fix round is about: it says the
+        // save failed, and it does **not** say the user withdrew anything.
+        let summary = fixture.viewModel.finalSummary + (fixture.viewModel.errorMessage ?? "")
+        #expect(summary.contains("could not save that you allowed it to control VS Code"))
+        #expect(!summary.contains("no longer allowed"))
+        // Nothing ran past the gate.
         #expect(fixture.synthesizer.clickCount == 0)
         #expect(fixture.viewModel.approvalRequest == nil)
+    }
+
+    // MARK: - PR #88 fix round: the ordering §4.3 requires
+
+    /// **F1's pin: the first capture and the shell check run before the per-app approval.**
+    ///
+    /// Founder decision, recorded 2026-08-21: §4.3's capture-first ordering wins over §2.3's
+    /// reuse-the-ordinary-plan-time-path for this one approval, because only the capture reveals a
+    /// shell in a window whose *app* no name list refuses. An unlisted terminal — one this
+    /// repository has never heard of, which is the gap SONNY-102 is about — must therefore be caught
+    /// by that first capture **before any approval is asked and before any grant is minted**,
+    /// otherwise the accidental-approval trap the decision exists to close is still open: the user
+    /// meets an unknown app as an ordinary per-app question and allows one by mistake.
+    ///
+    /// VS Code stands in for that unlisted app here. It is off the starter list, it is in the test
+    /// process's installed universe, and its window showing a shell is the embedded-shell case
+    /// exactly — the sharpest form of the gap, since no bundle identifier distinguishes "has a
+    /// terminal panel in it".
+    @Test
+    func aFirstCaptureShowingAShellRefusesBeforeAnyPerAppApprovalIsAskedOrGrantMinted() async throws {
+        let fixture = try makeFixture(
+            replies: [#"{"action":"click","x":10,"y":10,"target":"OK","consequence":"ordinary","rationale":"r"}"#],
+            bundleIdentifier: "com.microsoft.VSCode",
+            appControlAlreadyGranted: false,
+            recognizer: ScriptedRecognizer([Self.shellScreen])
+        )
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "run the deploy script", appName: "VS Code")
+        try await waitForIdle(fixture.viewModel)
+
+        // The refusal fired, and it is the shell's — not the per-app gate's.
+        let summary = fixture.viewModel.finalSummary + (fixture.viewModel.errorMessage ?? "")
+        #expect(summary.contains("that window is showing a shell"))
+        // **Nothing was ever asked.** This is the assertion the ordering exists for.
+        #expect(fixture.viewModel.approvalRequest == nil)
+        // **And nothing was minted.** A grant for an app Sonny refuses would outlive the session
+        // that minted it and sit in the revocation list looking like permission.
+        #expect(try fixture.approvedApps.loadAll().isEmpty)
+        // Nothing left the device and nothing touched the machine.
+        #expect(fixture.model.prompts.isEmpty)
+        #expect(fixture.synthesizer.clickCount == 0)
+    }
+
+    /// **F2's pin: a plan-level Allow mints no grant.**
+    ///
+    /// The plan here is mixed — a vision step plus a draft that would overwrite an existing file —
+    /// which is the shape that made this reachable: the destructive step raises the plan-level
+    /// prompt, the vision step names an app, and the branch's first implementation minted a grant
+    /// for that app on any plan-level Allow whose plan happened to carry a vision target. Nothing on
+    /// that panel disclosed it, the app in question is one only *Sonny's* starter list vouched for,
+    /// and the grant then outranked a later switch to Safe — which is precisely founder decision 4
+    /// turned upside down.
+    ///
+    /// Under §4.3's ordering there is no plan-time per-app write at all: the grant is minted inside
+    /// the session, after the first capture clears the screen check, by the person answering the
+    /// per-app question. Safari is allowed here by the starter list, so no such question is asked
+    /// and the store stays empty — which is the whole claim.
+    @Test
+    func aPlanLevelAllowOnAMixedPlanMintsNoAppGrant() async throws {
+        // The planner's output has to sit inside the fixture's own whitelist root, and that root
+        // only exists once the fixture does — hence the box.
+        let planner = MixedVisionAndDraftPlanner()
+        let fixture = try makeFixture(
+            replies: [#"{"action":"done","rationale":"done."}"#],
+            appControlAlreadyGranted: false,
+            delegationPlanner: planner
+        )
+        defer { fixture.tearDown() }
+        let draft = fixture.root.appendingPathComponent("notes.md")
+        planner.output = draft
+        // The file that makes the draft step destructive, and therefore makes the plan ask.
+        try "an existing draft".write(to: draft, atomically: true, encoding: .utf8)
+
+        fixture.viewModel.command = "tidy up my reading list and write the notes"
+        fixture.viewModel.start()
+        try await waitUntil("the plan-level destructive approval") { fixture.viewModel.approvalRequest != nil }
+
+        // The prompt is the overwrite's, and it says nothing about controlling an app.
+        let request = try #require(fixture.viewModel.approvalRequest)
+        let reasons = request.assessment.escalations.map(\.reason).joined(separator: " ")
+        #expect(reasons.contains("already exists"))
+        #expect(!reasons.contains("has not been allowed to control"))
+
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        // Nothing was minted by that Allow, and nothing was minted by the session either — Safari is
+        // on the starter list, so the per-app question never arose.
+        #expect(try fixture.approvedApps.loadAll().isEmpty)
+    }
+
+    /// **F3's pin: a grants file that will not open is not a withdrawal.**
+    ///
+    /// The two are different facts and the user is owed the right one. "Sonny stopped because it is
+    /// no longer allowed to control Safari" told somebody who withdrew nothing that they had — the
+    /// same class of untrue sentence this branch had already removed from the write path, arriving
+    /// again by the read path.
+    ///
+    /// The file is corrupted *after* the session's first action lands, so this is genuinely
+    /// mid-session rather than a refusal at the gate.
+    @Test
+    func aGrantsFileThatWillNotOpenStopsTheSessionWithoutCallingItAWithdrawal() async throws {
+        let fixture = try makeFixture(replies: [
+            #"{"action":"click","x":10,"y":10,"target":"Bookmarks","consequence":"ordinary","rationale":"r"}"#,
+            #"{"action":"done","rationale":"never reached."}"#
+        ])
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "open my reading list", appName: "Safari")
+        try await waitUntil("the first synthesized action") { fixture.synthesizer.clickCount == 1 }
+        try corruptGrantsFile(at: fixture.approvedApps.fileURL)
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.synthesizer.clickCount == 1, "no action after the file stopped opening")
+        #expect(fixture.viewModel.approvalRequest == nil, "an unreadable file is not a question")
+        let summary = fixture.viewModel.finalSummary + (fixture.viewModel.errorMessage ?? "")
+        #expect(summary.contains("could not read which apps you have allowed it to control"))
+        #expect(summary.contains("Safari"))
+        // The sentence this test exists to prevent.
+        #expect(!summary.contains("no longer allowed"))
+        // And the storage banner says which store failed, in the load wording, which is correct here
+        // — this really is an existing file that would not read back.
+        let notice = try #require(fixture.viewModel.localStorageNotice)
+        #expect(notice.contains("allowed apps: A local data file exists but could not be decrypted or decoded."))
+    }
+
+    /// **F3's other half: switching to Safe mid-session for a starter-list-only app really is a
+    /// withdrawal**, and belongs under that case rather than a new one.
+    ///
+    /// Nothing was removed from the user's list — there was never anything on it. What changed is
+    /// the dial the user turned themselves, and in Safe the starter list vouches for nothing. So
+    /// "no longer allowed" is true here, and the case doc now names this as its third cause instead
+    /// of the two it listed.
+    @Test
+    func switchingToSafeMidSessionWithdrawsAStarterListOnlyAppsStanding() async throws {
+        let fixture = try makeFixture(
+            replies: [
+                #"{"action":"click","x":10,"y":10,"target":"Bookmarks","consequence":"ordinary","rationale":"r"}"#,
+                #"{"action":"done","rationale":"never reached."}"#
+            ],
+            appControlAlreadyGranted: false
+        )
+        defer { fixture.tearDown() }
+
+        // Normal, Safari, no user grant: the starter list alone is what allows it, so the session
+        // starts and acts with no per-app question at all.
+        fixture.viewModel.startVisionSession(goal: "open my reading list", appName: "Safari")
+        try await waitUntil("the first synthesized action") { fixture.synthesizer.clickCount == 1 }
+        #expect(fixture.viewModel.approvalRequest == nil)
+        #expect(try fixture.approvedApps.loadAll().isEmpty)
+
+        fixture.viewModel.interactionMode = .safe
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.synthesizer.clickCount == 1, "no action after the dial moved")
+        let summary = fixture.viewModel.finalSummary + (fixture.viewModel.errorMessage ?? "")
+        #expect(summary.contains("no longer allowed to control Safari"))
+        // Nothing was minted on the way out: a mode switch does not fill in the user's own list.
+        #expect(try fixture.approvedApps.loadAll().isEmpty)
     }
 
     /// **A `wait` decision waits and then the session carries on** — the one action kind with no
@@ -2600,4 +2817,51 @@ private func revokeAllGrants(at fileURL: URL) throws {
     try LocalStorageEncryption.shared
         .encode([ApprovedApp](), encoder: encoder)
         .write(to: fileURL, options: .atomic)
+}
+
+/// A plan that controls an app **and** overwrites a file — the mixed shape that made a plan-level
+/// Allow mint an undisclosed app grant (PR #88, F2). The draft step is what raises the prompt; the
+/// vision step is what the old write keyed off.
+private final class MixedVisionAndDraftPlanner: Planning, @unchecked Sendable {
+    /// Set after the fixture exists, because the whitelist root the draft must live under is the
+    /// fixture's own and is created inside it.
+    var output: URL = URL(fileURLWithPath: "/dev/null")
+
+    func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
+        AgentPlan(
+            summary: "Tidy the reading list and write the notes.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "vision-1",
+                    operation: .visionSession,
+                    description: "Control Safari to tidy the reading list",
+                    appName: "Safari",
+                    visionGoal: "tidy the reading list"
+                ),
+                AgentStep(
+                    id: "draft",
+                    operation: .createLocalDraft,
+                    description: "Write the notes.",
+                    outputPath: output.path,
+                    draftTitle: "Notes",
+                    draftContent: "Outline for today."
+                )
+            ]
+        )
+    }
+}
+
+/// Leaves a file at the store's path that carries the encrypted header and will not decrypt — the
+/// shape a real corrupted or wrong-key store has, and the one `LocalStorageEncryption.decode`
+/// reports as `undecodableLocalData` rather than as legacy plaintext (PR #88, F3).
+@MainActor
+private func corruptGrantsFile(at fileURL: URL) throws {
+    var data = LocalStorageEncryption.fileHeader
+    data.append(Data(repeating: 0x7F, count: 96))
+    try FileManager.default.createDirectory(
+        at: fileURL.deletingLastPathComponent(),
+        withIntermediateDirectories: true
+    )
+    try data.write(to: fileURL, options: .atomic)
 }

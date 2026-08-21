@@ -18,6 +18,22 @@ import Testing
 /// against a build that added it and left the old claim sitting beside it.
 @Suite
 struct ScreenControlSettingsCopyTests {
+    /// The file's text with every comment marker and run of whitespace collapsed to single spaces.
+    ///
+    /// **Without this the negative assertions passed for the wrong reason** (PR #88, F7). The
+    /// sentence they forbid really is still in the file — quoted inside the comment that records the
+    /// supersession — and it only failed to match because the quote wraps across two lines with a
+    /// `//` between. A future edit that reflowed the paragraph, or an editor that rewrapped it,
+    /// would have turned a passing guard into a passing guard about nothing. Normalizing first means
+    /// the assertions are about the *words on the page*, which is what they claim to be about.
+    private static func normalized(_ source: String) -> String {
+        source
+            .replacingOccurrences(of: "///", with: " ")
+            .replacingOccurrences(of: "//", with: " ")
+            .split(whereSeparator: \.isWhitespace)
+            .joined(separator: " ")
+    }
+
     private static func commandCenterSource() throws -> String {
         // <package root>/Tests/MacAgentTests/<this file>
         let packageRoot = URL(fileURLWithPath: #filePath)
@@ -38,13 +54,14 @@ struct ScreenControlSettingsCopyTests {
     func theScreenControlSectionNoLongerClaimsSonnyCanControlAnyInstalledApp() throws {
         let source = try Self.commandCenterSource()
 
-        #expect(!source.contains("Sonny can control any app installed on this Mac"))
-        #expect(source.contains("Sonny asks before controlling an app it has not been allowed to control"))
+        let flat = Self.normalized(source)
+        #expect(!flat.contains("Sonny can control any app installed on this Mac"))
+        #expect(flat.contains("Sonny asks before controlling an app it has not been allowed to control"))
         // The mode differences are stated, because "asks before controlling an app" is not the whole
         // truth in either of the two modes that differ from Normal.
-        #expect(source.contains("Safe mode asks about every app; Power mode asks about none."))
+        #expect(flat.contains("Safe mode asks about every app; Power mode asks about none."))
         // The one boundary the section has always stated, unchanged: a terminal is not a choice.
-        #expect(source.contains("Sonny will never control Terminal, iTerm, or any other terminal app."))
+        #expect(flat.contains("Sonny will never control Terminal, iTerm, or any other terminal app."))
     }
 
     /// The comment above the section made the same claim twice more, in the developer-facing half.
@@ -52,11 +69,28 @@ struct ScreenControlSettingsCopyTests {
     @Test
     func theSectionsOwnCommentNoLongerSaysThereAreNoGrantsAndNothingToRevoke() throws {
         let source = try Self.commandCenterSource()
+        let flat = Self.normalized(source)
 
-        #expect(!source.contains("There is no grant list, because there"))
-        #expect(!source.contains("there is no revoke, because there is nothing to revoke"))
+        // **Both sentences are still in the file, and that is correct** — the comment quotes them to
+        // record that they went false. So the guard cannot be "the words are absent"; it has to be
+        // "the words appear once, inside the quotation that supersedes them". Asserted against the
+        // reflowed text, so a line break inside a phrase can neither hide a live claim nor break
+        // this check.
+        for claim in [
+            "there is no grant list, because there are no grants",
+            "there is no revoke, because there is nothing to revoke"
+        ] {
+            let parts = flat.components(separatedBy: claim)
+            #expect(parts.count == 2, "\"\(claim)\" appears \(parts.count - 1) times; exactly one, the quotation, is right")
+            let head = try #require(parts.first)
+            let marker = try #require(head.range(of: "This block used to read", options: .backwards))
+            #expect(
+                head.distance(from: marker.upperBound, to: head.endIndex) < 200,
+                "\"\(claim)\" is not inside the quotation that records it going false"
+            )
+        }
         // And it names where the revoke actually lands, so the next session reads a pointer rather
         // than re-deriving that this page is the home for it.
-        #expect(source.contains("SONNY-144"))
+        #expect(flat.contains("SONNY-144"))
     }
 }

@@ -54,6 +54,36 @@ extension AgentViewModel: VisionSessionInteracting {
         approvalContext(visionTarget: targetBundleIdentifier)
     }
 
+    /// The per-app gate's answer for this session's target, re-asked after every capture.
+    ///
+    /// Reads through the same loader `approvalContext` uses, so the standing on the context and the
+    /// state the loop acts on come from one read of one file and cannot disagree. The difference is
+    /// only what each does with a load failure: a requirement fails closed to an ask, a session
+    /// cannot, and the third case is what carries that distinction (PR #88, F3).
+    func visionAppControlState(targetBundleIdentifier: String) -> VisionAppControlState {
+        let loaded = loadApprovedAppsForGate()
+        if let failure = loaded.failure {
+            return .unreadable(failure)
+        }
+        switch AppControlResolver.standing(
+            mode: interactionMode,
+            targetBundleIdentifier: targetBundleIdentifier,
+            starterList: AppControlStarterList.bundleIdentifiers,
+            approvedApps: loaded.apps
+        ) {
+        case .allowed:
+            return .allowed
+        case .needsApproval:
+            return .needsApproval
+        case .notApplicable:
+            // Unreachable: the resolver only answers `.notApplicable` for a missing or blank
+            // identifier, and a live session's target is neither. Fails closed to the ask rather
+            // than to `.allowed`, so a future caller that does pass a blank one is asked about it
+            // instead of granted it silently.
+            return .needsApproval
+        }
+    }
+
     /// The session's journal id, recorded as soon as it starts so the task-history row this run
     /// produces can link to it — including when the run is stopped, refused, or fails, which are
     /// exactly the runs someone most wants to be able to read afterwards.
@@ -338,11 +368,11 @@ extension AgentViewModel: VisionSessionInteracting {
             }
 
             let scope = activeTaskScope
-            // The *delegated* plan's own target, not the session's. A delegation goes to Sonny's
-            // ordinary planner, so the plan that comes back is an ordinary plan and is gated as
-            // one — `nil` for the overwhelming majority of them, and the delegating session's
-            // pinned app is irrelevant to it either way.
-            let context = approvalContext(visionTarget: prepared.plan.appControlTargetBundleIdentifier)
+            // `nil`, like every other plan gate: a delegated plan is an ordinary plan gated the
+            // ordinary way, and §4.3 puts the per-app question inside a session rather than in front
+            // of one. A delegated plan that itself controls an app gets asked about at *its* own
+            // session's first capture, which is the same rule and the same place.
+            let context = approvalContext(visionTarget: nil)
             let request0 = try runner.approvalRequest(
                 for: prepared,
                 logAssessment: true,

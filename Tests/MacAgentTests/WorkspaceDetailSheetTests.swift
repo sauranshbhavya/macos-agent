@@ -975,8 +975,7 @@ struct WorkspaceDetailSheetTests {
                     )
                 ]
             ),
-            scope: .unscoped,
-            appControl: .notApplicable
+            scope: .unscoped
         )
         #expect(assessment.escalations.isEmpty)
         #expect(assessment.effectiveTier == .tier2)
@@ -997,8 +996,7 @@ struct WorkspaceDetailSheetTests {
                     )
                 ]
             ),
-            scope: .unscoped,
-            appControl: .notApplicable
+            scope: .unscoped
         )
         #expect(liveAssessment.effectiveTier == .tier3)
     }
