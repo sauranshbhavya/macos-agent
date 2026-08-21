@@ -70,6 +70,20 @@ pooler_ord="postgres.abcdefg:${pooler_pw}"
 check "Supabase pooler DSN with a <placeholder> user is refused" 1 "DATABASE_URL=${pooler_scheme}${pooler_ph}${pooler_tail}"
 check "the same pooler DSN with an ordinary user is refused"    1 "DATABASE_URL=${pooler_scheme}${pooler_ord}${pooler_tail}"
 
+# SONNY-127: a secret whose VALUE has no recognisable shape. RATE_LIMIT_SALT is 64 hex characters
+# with no vendor prefix, so it is caught by its variable name or not at all.
+salt_value="$(printf '%s' "$(openssl rand -hex 32 2>/dev/null || printf 'a%.0s' {1..64})")"
+check "a real RATE_LIMIT_SALT is refused"     1 "RATE_LIMIT_SALT=${salt_value}"
+check "a placeholder RATE_LIMIT_SALT passes"  0 'RATE_LIMIT_SALT=replace-me'
+check "a service-role key assignment is refused" 1 "SUPABASE_SERVICE_ROLE_KEY=${salt_value}"
+check "a Resend key assignment is refused"    1 "RESEND_API_KEY=${salt_value}"
+# A lockfile-style hash must NOT be caught: a generic entropy rule would flag every one of them,
+# and this pattern is name-anchored precisely so it does not.
+check "a bare hash is not a secret"           0 "integrity sha512-${salt_value}"
+# A TypeScript type annotation names the same variable and is not an assignment. This was a real
+# false positive on the pattern's first run, against config.ts.
+check "a type annotation is not an assignment" 0 '  RATE_LIMIT_SALT: nonEmpty.optional(),'
+
 # C2: two matches of the SAME pattern on one line, the first allowlisted. `head -1` took only
 # the leading match, so the allowlisted local DSN shadowed a real credential after it.
 check "an allowlisted match does not shadow a later one" 1 'postgres://postgres:postgres@localhost/db then postgres://real:'"$(printf 'S%.0s' {1..12})"'@prod.internal/db'

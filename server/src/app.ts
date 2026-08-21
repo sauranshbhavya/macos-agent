@@ -1,8 +1,9 @@
 import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
-import type { Config } from "./config.js";
+import { requireRateLimitSalt, type Config } from "./config.js";
 import { classify, errorBody, registerErrorHandlers } from "./errors.js";
 import { registerHealth } from "./routes/health.js";
+import { registerAuth, type AuthDeps } from "./routes/auth.js";
 
 /** The API minor version this build serves. `Sonny-Api-Version`, contract §2.3. */
 export const API_VERSION = "1.0";
@@ -22,7 +23,12 @@ export const API_VERSION = "1.0";
  */
 export const DEFAULT_BODY_LIMIT_BYTES = 1024 * 1024;
 
-export function buildApp(config: Config): FastifyInstance {
+/**
+ * `auth` is optional so a deployment that mounts no auth route needs no provider and no rate-limit
+ * salt. When it is supplied the salt is required, and `requireRateLimitSalt` refuses at startup
+ * rather than letting `bucketKey` hash addresses unsalted at request time.
+ */
+export function buildApp(config: Config, auth?: AuthDeps): FastifyInstance {
   const app = Fastify({
     logger: { level: config.logLevel },
 
@@ -91,5 +97,9 @@ export function buildApp(config: Config): FastifyInstance {
   // error envelope rather than the framework's.
   registerErrorHandlers(app);
   registerHealth(app, config);
+  if (auth) {
+    requireRateLimitSalt(config);
+    registerAuth(app, config, auth);
+  }
   return app;
 }
