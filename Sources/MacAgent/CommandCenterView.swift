@@ -4284,17 +4284,23 @@ private struct SettingsSecurityAccessPage: View {
 
             SettingsDivider()
 
-            // Row I (SONNY-92), and it carries more weight than its size suggests: with per-app
-            // control consent deleted by the founder on 2026-08-14, this is the **only** place the
-            // product states how far screen control reaches. There is no grant list, because there
-            // are no grants; there is no revoke, because there is nothing to revoke. What a user
-            // can act on is knowing the reach and knowing the one boundary — so both are stated
-            // plainly, and neither is a toggle pretending to be a choice.
+            // Row I (SONNY-92), rewritten by row J (SONNY-143), and the correction is the point.
+            //
+            // This block used to read: "with per-app control consent deleted by the founder on
+            // 2026-08-14 … there is no grant list, because there are no grants; there is no revoke,
+            // because there is nothing to revoke." **Both halves became false on 2026-08-16**, when
+            // the founder revived per-app control consent, mode-dependent, superseding his own
+            // decision of two days earlier. There are grants now — one user list, per app, forever —
+            // and the revoke that goes with them is roadmap row J's third branch (SONNY-144), which
+            // lands the approved-apps list with a per-row remove **in this very section**.
+            //
+            // What has not changed is why the copy is shaped this way: it states the reach and the
+            // one boundary, plainly, and neither is a toggle pretending to be a choice.
             SettingsSectionBlock(title: "Screen Control") {
                 VStack(alignment: .leading, spacing: 14) {
                     SettingsControlLabel(
                         title: "Which apps Sonny can control",
-                        detail: "Once Screen Recording and Accessibility are granted, Sonny can control any app installed on this Mac — clicking, typing and scrolling in it the way you would. It says which app it is controlling while it does, and you can stop it at any time."
+                        detail: "Sonny asks before controlling an app it has not been allowed to control, and remembers the ones you allow. Safe mode asks about every app; Power mode asks about none. It says which app it is controlling while it does, and you can stop it at any time."
                     )
 
                     SettingsDivider()

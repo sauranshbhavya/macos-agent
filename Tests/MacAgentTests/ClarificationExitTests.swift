@@ -539,6 +539,7 @@ private struct ClarificationExitFixture {
                 fileURL: root.appendingPathComponent("vision-sessions.json")
             ),
             clipboardHistorySettingsStore: clipboardSettingsStore,
+            approvedAppStore: ApprovedAppStore(fileURL: root.appendingPathComponent("approved-apps.json")),
             clipboardHistoryMonitor: ClipboardHistoryMonitor(
                 reader: pasteboard,
                 store: clipboardHistoryStore,

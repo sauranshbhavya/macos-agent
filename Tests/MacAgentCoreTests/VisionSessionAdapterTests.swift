@@ -375,7 +375,7 @@ struct VisionSessionAdapterTests {
         for mode in AgentInteractionMode.allCases {
             let requirement = RiskApprovalPolicy.default.requirement(
                 for: assessment,
-                context: ApprovalContext(safeMode: mode.asksBeforeEveryAction)
+                context: ApprovalContext(mode: mode, appControl: .notApplicable)
             )
             #expect(requirement == (mode == .safe ? .explicitApproval : .autoRun), "\(mode)")
         }

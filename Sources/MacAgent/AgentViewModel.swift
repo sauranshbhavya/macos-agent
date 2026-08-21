@@ -274,6 +274,11 @@ final class AgentViewModel: ObservableObject {
     /// own file rather than the user's.
     let visionSessionJournalStore: VisionSessionJournalStore
     private let clipboardHistorySettingsStore: ClipboardHistorySettingsStore
+    /// Row J's per-app control grants (SONNY-140). Injected like every other store so a test writes
+    /// to its own file rather than the user's. Nothing gates on it yet — SONNY-143 is what reads it
+    /// — so the only thing this view model does with it today is probe it for load failures, which
+    /// is the same wiring the other silently-read stores get.
+    private let approvedAppStore: ApprovedAppStore
     private let clipboardHistoryMonitor: ClipboardHistoryMonitor
     private let localDataDeletionService: LocalDataDeletionService
     private let priorTaskContextStore: PriorTaskContextStore
@@ -404,6 +409,7 @@ final class AgentViewModel: ObservableObject {
         case taskPlanDetails
         case snippets
         case recentArtifacts
+        case approvedApps
 
         var label: String {
             switch self {
@@ -425,6 +431,8 @@ final class AgentViewModel: ObservableObject {
                 return "snippets"
             case .recentArtifacts:
                 return "recent artifacts"
+            case .approvedApps:
+                return "allowed apps"
             }
         }
     }
@@ -486,6 +494,7 @@ final class AgentViewModel: ObservableObject {
         taskPlanDetailStore: TaskPlanDetailStore = TaskPlanDetailStore(),
         visionSessionJournalStore: VisionSessionJournalStore = VisionSessionJournalStore(),
         clipboardHistorySettingsStore: ClipboardHistorySettingsStore = ClipboardHistorySettingsStore(),
+        approvedAppStore: ApprovedAppStore = ApprovedAppStore(),
         clipboardHistoryMonitor: ClipboardHistoryMonitor? = nil,
         localDataDeletionService: LocalDataDeletionService = LocalDataDeletionService(),
         priorTaskContextStore: PriorTaskContextStore = PriorTaskContextStore(),
@@ -527,6 +536,7 @@ final class AgentViewModel: ObservableObject {
         self.taskPlanDetailStore = taskPlanDetailStore
         self.visionSessionJournalStore = visionSessionJournalStore
         self.clipboardHistorySettingsStore = clipboardHistorySettingsStore
+        self.approvedAppStore = approvedAppStore
         self.clipboardHistoryMonitor = clipboardHistoryMonitor
             ?? ClipboardHistoryMonitor(settingsStore: clipboardHistorySettingsStore)
         self.localDataDeletionService = localDataDeletionService
@@ -1248,7 +1258,9 @@ final class AgentViewModel: ObservableObject {
                 for: prepared,
                 logAssessment: true,
                 scope: activeTaskScope,
-                context: approvalContext()
+                // `nil`: no per-app question is asked at plan time. §4.3 puts it after the
+                // session's first capture, so this gate answers only for the plan.
+                context: approvalContext(visionTarget: nil)
             )
             switch request.requirement {
             case .autoRun:
@@ -2000,14 +2012,21 @@ final class AgentViewModel: ObservableObject {
         refreshSilentlyReadStoreHealth()
     }
 
-    /// Snippets, recent artifacts, and clipboard items are otherwise only read through `try?`
-    /// paths (the instant resolver's trigger/artifact lookups and the 1s clipboard poll), so a
-    /// corrupt file there is invisible: the feature just silently stops working. These stores
-    /// have no UI list of their own to surface a load failure, so probe them here.
+    /// Snippets, recent artifacts, clipboard items and row J's allowed apps are otherwise only read
+    /// through `try?` paths, or through no product path at all (the instant resolver's
+    /// trigger/artifact lookups, the 1s clipboard poll), so a corrupt file there is invisible: the
+    /// feature just silently stops working. These stores have no UI list of their own to surface a
+    /// load failure, so probe them here.
     private func refreshSilentlyReadStoreHealth() {
         checkStoreHealth(.snippets) { _ = try snippetStore.loadAll() }
         checkStoreHealth(.recentArtifacts) { _ = try recentArtifactStore.loadAll() }
         checkStoreHealth(.clipboardHistoryItems) { try clipboardHistoryMonitor.verifyHistoryReadable() }
+        // Row J's grants belong here for a sharper version of the same reason: a store nothing can
+        // read is a store whose grants have all silently vanished, and the visible symptom is Sonny
+        // asking about apps the user already allowed — which reads as the feature working badly
+        // rather than as a file that will not open. It has no list of its own to fail in until the
+        // revocation surface lands, so this probe is the only place it can say so.
+        checkStoreHealth(.approvedApps) { _ = try approvedAppStore.loadAll() }
     }
 
     private func checkStoreHealth(
@@ -2034,7 +2053,7 @@ final class AgentViewModel: ObservableObject {
     /// nothing".
     ///
     /// It is a `.trace` store — the sixth, since row E's plan details — and the one
-    /// `LocalStoreClassification` calls the most sensitive of the ten; it had no seam test, no
+    /// `LocalStoreClassification` calls the most sensitive of the eleven; it had no seam test, no
     /// mutation and no entry under Known limits, while the other traces were each closed or
     /// recorded.
     var visionSessionJournalStoreForThisRun: VisionSessionJournalStore? {
@@ -3073,10 +3092,12 @@ final class AgentViewModel: ObservableObject {
     /// The product's one posture dial — Safe | Normal | Power, the founder's segmented control
     /// (SONNY-90 as amended 2026-08-14; wireframe `docs/wireframes/15-SegmentedControl.svg`).
     /// Safe asks before everything attended and is the only place the data-leaves-device label
-    /// renders (E9's ratified §11.3 deviation); Normal is the consequence-rule default; Power is
-    /// identical to Normal today — row 18's mode landing as a setting first, gating nothing (this
-    /// sentence used to say row I's screen-control features gate on it; the founder decided on
-    /// 2026-08-14 that screen control works in all three modes, and only Safe asks about it).
+    /// renders (E9's ratified §11.3 deviation); Normal is the consequence-rule default; **Power is
+    /// the one mode that asks about no app at all** — row J, 2026-08-21. Two supersessions in
+    /// order: this sentence first said row I's screen-control features would gate on Power, which
+    /// the founder replaced on 2026-08-14 with "identical to Normal, gating nothing"; row J then
+    /// gave Power a rule of its own, so the second version is false too. Screen control itself is
+    /// still gated on no mode; what differs is *which apps* each mode drives without asking.
     /// Persisted so the dial survives relaunch — a posture that
     /// silently reset to Normal on restart would quietly un-dial itself. Defaults to Normal, the
     /// ratified product default.
@@ -3086,18 +3107,6 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
-    /// The authority context every dispatch threads into `AgentRunner`: Safe mode, and nothing
-    /// else today (the consequence rule reads no origin — it gates on what an action does).
-    ///
-    /// **`interactionMode` is mapped to the engine here and nowhere else.** A second site
-    /// reading its own value would be a second place that work has to find, and the one it
-    /// misses would run a Safe-mode user's tasks under ordinary rules. The engine's input stays
-    /// row C's boolean seam; Normal and Power both map false, and row I did not change that —
-    /// screen control runs in every mode, so Safe's existing "ask about everything" posture is
-    /// exactly what makes Safe the only mode that asks about a vision action.
-    // Internal rather than `private`: the vision extension lives in another file and
-    // `visionApprovalContext()` forwards to this one function, which is what keeps the
-    // "mapped to the engine here and nowhere else" rule true across the split.
     /// The third real approval-resolution point: a user answering a mid-loop vision approval.
     ///
     /// It is a real resolution by the flag's own definition — "the first time the user resolves
@@ -3107,8 +3116,116 @@ final class AgentViewModel: ObservableObject {
         hasCompletedFirstApproval = true
     }
 
-    func approvalContext() -> ApprovalContext {
-        ApprovalContext(safeMode: interactionMode.asksBeforeEveryAction)
+    /// The authority context every dispatch threads into `AgentRunner` — the user's mode, and the
+    /// per-app control standing for whatever this requirement is being derived about.
+    ///
+    /// **`interactionMode` is mapped to the engine here and nowhere else.** A second site reading
+    /// its own value would be a second place that work has to find, and the one it misses would run
+    /// a Safe-mode user's tasks under ordinary rules.
+    ///
+    /// **The engine's input is no longer a boolean, and this paragraph used to say it was**
+    /// (PR #88 cycle 2, F3). It read "the engine's input stays row C's boolean seam; Normal and
+    /// Power both map false" — the exact claim SONNY-142 deleted when it replaced `safeMode: Bool`
+    /// with the whole `AgentInteractionMode`, precisely because two booleans cannot express three
+    /// modes and row J needs Normal and Power told apart. It was also sitting on
+    /// `markFirstApprovalCompleted`, several functions from the one it describes, which is how it
+    /// survived a ticket that rewrote this seam.
+    ///
+    // Internal rather than `private`: the vision extension lives in another file and
+    // `visionApprovalContext(targetBundleIdentifier:)` forwards to this one function, which is what
+    // keeps the "mapped to the engine here and nowhere else" rule true across the split.
+    /// - Parameter visionTarget: the bundle identifier of the app whose per-app standing this
+    ///   context should carry, or `nil` when there is no per-app question to answer. **Not
+    ///   defaulted, on purpose.** A default is how row I's resolver hook came to exist and never be
+    ///   called: `nil` has to be an answer a caller gives, so that adding a call site is adding a
+    ///   decision rather than inheriting one.
+    ///
+    ///   **Every plan-time caller answers `nil`, and that is the founder's ordering rather than an
+    ///   omission** (2026-08-21, §4.3). The per-app question is asked inside the vision session,
+    ///   after the first capture has cleared the screen check, because only a capture can reveal a
+    ///   shell in a window whose *app* no name list refuses. A plan-time standing would raise the
+    ///   question before that capture exists — which is the accidental-approval trap §4.3 closes —
+    ///   and, since `AgentRunner.execute` re-derives the requirement, would also refuse to run the
+    ///   session the user had just approved. The only non-`nil` caller is
+    ///   `visionApprovalContext(targetBundleIdentifier:)`, inside the loop.
+    func approvalContext(visionTarget: String?) -> ApprovalContext {
+        // The mode travels whole (SONNY-142). It used to be folded through `asksBeforeEveryAction`
+        // into a boolean here, which made Normal and Power indistinguishable to the engine —
+        // correct while the engine distinguished two postures, and wrong the moment row J gave
+        // Power a rule of its own.
+        ApprovalContext(
+            mode: interactionMode,
+            appControl: AppControlResolver.standing(
+                mode: interactionMode,
+                targetBundleIdentifier: visionTarget,
+                starterList: AppControlStarterList.bundleIdentifiers,
+                // Fails closed to "no grants" when the file will not open, which can only *raise* an
+                // ask — the safe direction for a requirement. A session needs the sharper answer and
+                // asks `visionAppControlState` instead; both read through this one loader.
+                approvedApps: loadApprovedAppsForGate().apps
+            )
+        )
+    }
+
+    /// The user's own grants, for the gate — **one read, two callers, so the two cannot disagree.**
+    ///
+    /// The load failure is surfaced rather than swallowed: the visible symptom of a swallowed one is
+    /// Sonny asking about apps the user already allowed, which reads as the feature working badly
+    /// rather than as a file that will not open. It goes through the same banner every other store's
+    /// load failure uses, and clears itself when the file reads again.
+    ///
+    /// The failure is *returned* as well as recorded, because the two callers need different things
+    /// from it. A requirement fails closed to "no grants", which can only raise an ask. A live
+    /// session cannot: ending it as a withdrawal would tell the user they were no longer allowed
+    /// when nothing was withdrawn (PR #88, F3).
+    // Internal rather than `private`: the vision extension lives in another file and derives the
+    // session's own state from this same read, which is what keeps the two answers from drifting.
+    func loadApprovedAppsForGate() -> (apps: [ApprovedApp], failure: String?) {
+        do {
+            let apps = try approvedAppStore.loadAll()
+            clearLocalStorageLoadFailure(.approvedApps)
+            return (apps, nil)
+        } catch {
+            recordLocalStorageLoadFailure(.approvedApps, error: error)
+            return ([], error.localizedDescription)
+        }
+    }
+
+    /// Records that the user has allowed Sonny to control this app, returning whether it was
+    /// stored.
+    ///
+    /// **The only writer, and its only caller is the loop's per-app gate** — a grant is minted by
+    /// the person answering that question and by nothing else. It used to be called from
+    /// `approvePendingRun`, on any plan-level Allow whose plan happened to carry a vision target,
+    /// which minted grants nothing on that panel had disclosed and which no standing was ever
+    /// consulted for (PR #88, F2). Moving the question into the session moved the write with it, and
+    /// the gate is now structural: no question, no write.
+    ///
+    /// `approve` returns `nil` when it refuses — a blank identifier, or an app the terminal deny list
+    /// refuses — and that is reported as a failure here rather than ignored. It is unreachable
+    /// today, because the deny list refuses at three doors above any session, but the reachability
+    /// argument lives in another file and this makes the answer structural instead (PR #88, F5).
+    func rememberAppControlGrant(bundleIdentifier: String, displayName: String) -> Bool {
+        do {
+            guard try approvedAppStore.approve(
+                bundleIdentifier: bundleIdentifier,
+                displayName: displayName
+            ) != nil else {
+                recordLocalStorageWriteFailure(
+                    "Sonny did not save that you allowed it to control \(displayName)."
+                )
+                return false
+            }
+            return true
+        } catch {
+            // A *write* failure, which is a different thing from a load failure and must never
+            // borrow its wording — "could not be decrypted or decoded" describes an existing file
+            // that will not read back, which is the wrong problem entirely.
+            recordLocalStorageWriteFailure(
+                "Sonny could not save that you allowed it to control \(displayName): \(error.localizedDescription)"
+            )
+            return false
+        }
     }
 
     private func executePreparedRun(
@@ -3130,7 +3247,10 @@ final class AgentViewModel: ObservableObject {
             // same reason: one origin at the prompt and another at execution would derive two
             // different requirements from one run.
             scope: activeTaskScope,
-            context: approvalContext()
+            // `nil`, matching the prompt this execution is running under. `execute` re-derives the
+            // requirement, so a standing here and none there would refuse to run the very session
+            // the user had just approved.
+            context: approvalContext(visionTarget: nil)
         )
         markAllSteps(.complete)
         // The task itself succeeded; a bookkeeping failure is a storage notice, not a task error.
@@ -3715,7 +3835,11 @@ final class AgentViewModel: ObservableObject {
                 // reach still asks, and the `.approved(.tier2)` ceiling below still refuses it.
                 // Reachability, not a type-level guarantee; a test named for the hazard pins it.
                 scope: .unscoped,
-                context: approvalContext()
+                // `nil`, and it is an answer rather than an omission: a stored routine can never
+                // contain a `vision_session` step (`StoredRoutine.forbiddenStepOperations`), and
+                // unattended vision is refused by three independent layers anyway. A scheduled run
+                // controls no app, so it has no per-app standing.
+                context: approvalContext(visionTarget: nil)
             )
             recordScheduledRunInHistory(name: name, at: occurrence)
             recordScheduledTaskHistory(

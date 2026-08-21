@@ -135,6 +135,55 @@ struct ConsequenceRuleDispatchTests {
         fixture.viewModel.cancelCurrentRun()
     }
 
+    /// **Power through the real dispatch path, and why this test arrived with a chassis ticket.**
+    ///
+    /// Until SONNY-142 the engine's posture input was a boolean, so Normal and Power were literally
+    /// the same value by the time a requirement was computed — nothing could distinguish them and
+    /// nothing needed to. They are distinct enum cases now, reaching the one requirement function as
+    /// distinct cells of one switch, and this is the file that would notice if widening the chassis
+    /// had quietly changed what Power does.
+    ///
+    /// **The name is scoped, and the scope is the point** (PR #88 cycle 2, F2). This used to be
+    /// called `powerModeBehavesExactlyLikeNormalThroughTheRealDispatchPath`, which stopped being
+    /// true on 2026-08-21: Power is now the one mode that skips the per-app control gate. The
+    /// assertions were right all along — neither plan here controls an app, so for a *non-vision*
+    /// dispatch the two modes really do still answer identically — but the name claimed the general
+    /// case. What the per-app difference looks like through a real path is
+    /// `powerSkipsThePerAppGateAndStillAsksAboutADestructiveAction` in `VisionSessionRunTests`.
+    ///
+    /// Both halves are asserted together on purpose. The auto-run half is what "the two agree on a
+    /// non-vision plan" means; the overwrite half is the standing rule that survives every mode, and
+    /// asserting only the first would let "Power skips a gate" be misread as "Power asks nothing".
+    @Test
+    func powerAndNormalAgreeOnANonVisionDispatchAndBothStillAskAboutAnOverwrite() async throws {
+        let fixture = try makeDispatchFixture()
+        defer { fixture.tearDown() }
+        fixture.viewModel.interactionMode = .power
+
+        // 1. The ordinary tier-2 draft: no prompt, file written, trace left — Normal's answer.
+        fixture.viewModel.command = "Draft notes"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        #expect(fixture.viewModel.approvalRequest == nil)
+        #expect(!fixture.viewModel.isAwaitingApproval)
+        #expect(fixture.viewModel.errorMessage == nil)
+        #expect(FileManager.default.fileExists(atPath: fixture.draftOutput.path))
+        #expect(fixture.viewModel.ranWithoutAskingTrace
+            == "Ran without asking — nothing here is destructive, and it affects no one else.")
+
+        // 2. The overwrite still asks, in Power. The consequence rule is not a mode setting.
+        fixture.viewModel.clearStaleTaskOutcome()
+        fixture.viewModel.command = "Draft notes"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        let request = try #require(fixture.viewModel.approvalRequest)
+        #expect(request.requirement == .explicitApproval)
+        #expect(request.assessment.escalations.map(\.consequence) == [.destructive])
+        fixture.viewModel.cancelCurrentRun()
+    }
+
     // MARK: - The trace's lifetime
 
     /// PR #48, F1 — the trace must not outlive the run it describes into the one deliberately
@@ -253,6 +302,7 @@ private func makeDispatchFixture() throws -> DispatchFixture {
         clipboardHistorySettingsStore: ClipboardHistorySettingsStore(
             fileURL: root.appendingPathComponent("clipboard-history-settings.json")
         ),
+        approvedAppStore: ApprovedAppStore(fileURL: root.appendingPathComponent("approved-apps.json")),
         localDataDeletionService: LocalDataDeletionService(fileURLs: []),
         priorTaskContextStore: PriorTaskContextStore(),
         taskUsageRecorder: TaskUsageRecorder(),

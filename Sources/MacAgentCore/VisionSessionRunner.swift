@@ -69,6 +69,9 @@ final class VisionSessionRunner {
     /// sharper here: within one session a user might approve "click Send" and then be shown "click
     /// Delete" — same tier, same requirement, entirely different question.
     private var carriedConsent: RiskApprovalDecision = .notRequested
+    /// Whether the per-app control question has been settled for this session — asked and allowed,
+    /// or never needed. It flips exactly once, and it is what separates "ask" from "re-check".
+    private var appControlSettled = false
 
     /// What has happened so far, in the model's own terms. Observed content, and wrapped as such.
     private var history: [String] = []
@@ -204,8 +207,15 @@ final class VisionSessionRunner {
             // (SONNY-139). Refusing at the redaction step means a window showing a shell never
             // reaches the vision provider and never produces an action — not the Safe-mode preview
             // below, not the prompt, not the send, not `perform`. It also runs on the *first*
-            // capture, which happens before any control approval, so a user is never asked to
-            // approve an app Sonny would refuse anyway.
+            // capture, which happens before the per-app control approval a few lines down — so a
+            // user is never asked to approve an app Sonny would refuse anyway.
+            //
+            // **That last clause was false for one branch, which is why it is now load-bearing
+            // rather than descriptive.** Row J's first implementation raised the per-app question at
+            // plan time, before any capture existed, and an unlisted terminal therefore arrived as
+            // an ordinary "may Sonny control this app?" — the accidental-approval trap §4.3 exists
+            // to close. The founder restored the ordering on 2026-08-21 and the gate below is where
+            // it now lives.
             //
             // Re-asked every iteration rather than once per session, for the reason the deny-list
             // re-check above is: a screen changes under you, and a once-per-session answer is a
@@ -216,6 +226,18 @@ final class VisionSessionRunner {
             // iteration; this fires only for what a name list cannot reach.
             if payload.shellSurface.showsShell {
                 return end(with: .screenShowsShell(payload.shellSurface), iteration: iteration)
+            }
+            // **The per-app control gate, here, and the position is the founder's decision**
+            // (2026-08-21, §4.3). Below the deny list's per-iteration re-check and below the shell
+            // check, so both refusals have already had their say; above the Safe-mode capture
+            // preview and everything that sends, so nothing leaves the device for a session this
+            // gate is about to end.
+            //
+            // The first time through it *asks*; every time after that it re-checks, which is what
+            // makes a grant withdrawn mid-session take effect at the next iteration rather than at
+            // the next launch. See `resolveAppControl` for why those are two behaviours and not one.
+            if let refusal = try await resolveAppControl(interaction: interaction) {
+                return end(with: refusal, iteration: iteration)
             }
             // **The one size, resolved once.** Everything downstream — what the user is shown, what
             // the model is told, what bounds a returned coordinate, and what that coordinate is
@@ -236,8 +258,8 @@ final class VisionSessionRunner {
                 )
             )
 
-            let context = interaction.visionApprovalContext()
-            if context.safeMode {
+            let context = interaction.visionApprovalContext(targetBundleIdentifier: target.bundleIdentifier)
+            if context.mode.asksBeforeEveryAction {
                 let allowed = try await interaction.confirmVisionCaptureBeforeSending(
                     VisionCapturePreview(
                         appDisplayName: target.displayName,
@@ -333,7 +355,7 @@ final class VisionSessionRunner {
                 // Safe mode asks about the delegation itself; Normal and Power never do (founder,
                 // 2026-08-14). What the delegated plan *does* is gated in every mode by the ordinary
                 // plan-level gate inside `runVisionDelegation`.
-                if interaction.visionApprovalContext().safeMode {
+                if interaction.visionApprovalContext(targetBundleIdentifier: target.bundleIdentifier).mode.asksBeforeEveryAction {
                     let allowed = try await interaction.confirmVisionDelegation(request)
                     guard allowed else {
                         history.append("iteration \(iteration): you declined to let Sonny's own tools do \u{201C}\(request.instructionText)\u{201D}. Continue from the screen instead, or report stuck.")
@@ -393,6 +415,103 @@ final class VisionSessionRunner {
         }
     }
 
+    // MARK: - The engine gate, per app
+
+    /// The per-app control gate, run once per iteration immediately after the shell check.
+    ///
+    /// **Two behaviours, and the difference is which question is open.**
+    ///
+    /// - *Not yet settled* — the first capture has just cleared the screen check, so this is the
+    ///   moment §4.3 names: ask, and mint the grant from the answer. An app that needs no question
+    ///   settles silently.
+    /// - *Already settled* — the user answered, or never had to. From here the standing is only
+    ///   *re-checked*, and a withdrawal ends the session rather than re-prompting, because a
+    ///   containment refusal never re-prompts and the user has just answered this exact question in
+    ///   the other direction.
+    ///
+    /// Collapsing the two would break one or the other: re-asking every iteration would prompt on
+    /// every screenshot, and asking only once would let a revocation sit unnoticed for the rest of
+    /// the session.
+    ///
+    /// - Returns: the refusal that ends the session, or `nil` to carry on.
+    private func resolveAppControl(
+        interaction: any VisionSessionInteracting
+    ) async throws -> VisionContainmentRefusal? {
+        let state = interaction.visionAppControlState(targetBundleIdentifier: target.bundleIdentifier)
+        guard !appControlSettled else {
+            switch state {
+            case .allowed:
+                return nil
+            case .needsApproval:
+                return .appControlWithdrawn(app: target.displayName)
+            case .unreadable(let description):
+                log(.risk, "vision: could not read the allowed-apps list — \(description)")
+                return .appControlUnreadable(app: target.displayName)
+            }
+        }
+
+        switch state {
+        case .allowed:
+            appControlSettled = true
+            return nil
+        case .unreadable(let description):
+            log(.risk, "vision: could not read the allowed-apps list — \(description)")
+            return .appControlUnreadable(app: target.displayName)
+        case .needsApproval:
+            break
+        }
+
+        // **Through the one requirement function**, like every other gate in this loop. The context
+        // carries the standing that produced `.needsApproval`, so the ask is the switch's answer
+        // rather than a rule written here.
+        let context = interaction.visionApprovalContext(targetBundleIdentifier: target.bundleIdentifier)
+        let (assessment, requirement) = containment.appControlRequirement(context: context)
+        guard requirement.requiresUserApproval else {
+            // Unreachable by construction: `.needsApproval` floors the requirement at
+            // `.explicitApproval` in every mode at every tier that can run, pinned cell by cell by
+            // `everyAuthorityCellMatchesTheWrittenTable`. Fail closed rather than pass silently: a
+            // session running on a grant nobody was asked for is the one outcome this gate exists to
+            // prevent.
+            //
+            // **Its own case, because `appControlDeclined` would be a lie here** (PR #88 cycle 2,
+            // F7). That sentence says "you did not allow it", and in this arm nobody was asked —
+            // the requirement came back as something that raises no question, which is a defect in
+            // the engine rather than an answer from the user. One true sentence per refusal is the
+            // standard F3 set; borrowing a neighbour's is the failure it was set against.
+            return .appControlUnresolvable(app: target.displayName)
+        }
+        if let refusal = await containment.checkApprovalPresentable() {
+            return refusal
+        }
+        // The ordinary approval path, and the same method every mid-loop action approval uses — so
+        // this renders on the floating widget *and* on `CommandCenterAttentionPanel`, with no
+        // surface taught anything about it. That is §2.3's half of the design, kept intact inside
+        // §4.3's ordering.
+        // **The `nil` arm is unreachable today, and is kept for the control that will reach it.**
+        // The only Deny in the product routes through `cancelCurrentRun`, which resumes this
+        // continuation with `nil` *and* cancels the task — and the cancellation check inside
+        // `requestVisionActionApproval` throws before the `nil` is ever returned, so a decline
+        // reaches the loop as `CancellationError` and the session ends with "Stopped." The founder's
+        // standing note on SONNY-80 asks for a labelled "deny this step" control beside the stop,
+        // and that lands as a second entry point resuming `nil` without cancelling — which is
+        // exactly this arm. Same status as `authorize`'s `.approvalDeclined`, which has it for the
+        // same reason. A mutation battery reports this as a survivor and is right to: with no such
+        // control, deleting the arm changes no reachable behaviour (PR #88's fix round, M12).
+        guard try await interaction.requestVisionActionApproval(
+            RiskApprovalRequest(assessment: assessment, requirement: requirement)
+        ) != nil else {
+            return .appControlDeclined(app: target.displayName)
+        }
+        guard interaction.rememberAppControlGrant(
+            bundleIdentifier: target.bundleIdentifier,
+            displayName: target.displayName
+        ) else {
+            return .appControlNotRemembered(app: target.displayName)
+        }
+        appControlSettled = true
+        return nil
+    }
+
     // MARK: - The engine gate, per action
 
     private enum Authorization {
@@ -405,7 +524,7 @@ final class VisionSessionRunner {
         _ decision: VisionDecision,
         interaction: any VisionSessionInteracting
     ) async throws -> Authorization {
-        let context = interaction.visionApprovalContext()
+        let context = interaction.visionApprovalContext(targetBundleIdentifier: target.bundleIdentifier)
         let (assessment, requirement) = containment.requirement(for: decision, context: context)
         let request = RiskApprovalRequest(assessment: assessment, requirement: requirement)
 

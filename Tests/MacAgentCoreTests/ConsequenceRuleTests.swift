@@ -80,6 +80,75 @@ struct ConsequenceRuleTests {
         .tier4: .refuse
     ]
 
+    /// Normal or Power with a per-app control question outstanding (row J, SONNY-142): the
+    /// consequence rule with `appControlFloor` under it. Written as concrete values rather than
+    /// re-derived, for the same reason `safeModeTable` is — a table that recomputes the formula
+    /// cannot disagree with it, which is exactly what makes it worthless as a check.
+    private static let outstandingAppControlTable: [CapabilityRiskTier: RiskApprovalRequirement] = [
+        .tier0: .explicitApproval,
+        .tier1: .explicitApproval,
+        .tier2: .explicitApproval,
+        .tier3: .explicitApproval,
+        .tier4: .refuse
+    ]
+
+    /// Safe **and** a per-app control question outstanding. Its own table rather than a reuse of
+    /// `safeModeTable`, even though every cell is currently identical to it.
+    ///
+    /// The two floors are the same value today, so the coincidence is real — and it is a
+    /// coincidence, not an identity. If `safeModeFloor` were ever loosened to
+    /// `lightweightConfirmation`, Safe alone would produce that while Safe-plus-outstanding would
+    /// still produce `explicitApproval`, and these two tables would part company. Writing them as
+    /// one would hide that; writing them as two makes the day it happens a failure here rather than
+    /// a silent change in what Safe mode means.
+    private static let safeWithOutstandingAppControlTable: [CapabilityRiskTier: RiskApprovalRequirement] = [
+        .tier0: .explicitApproval,
+        .tier1: .explicitApproval,
+        .tier2: .explicitApproval,
+        .tier3: .explicitApproval,
+        .tier4: .refuse
+    ]
+
+    /// Which written table each authority row uses. **Nine rows — every (mode, standing) pair —
+    /// written out one per line**, so a row cannot be inherited from a neighbour the way a wildcard
+    /// in the production switch would let it be. The production switch has no wildcard in either
+    /// authority position; this is the same discipline on the test side.
+    private enum AuthorityTable {
+        case ordinary
+        case safeFloor
+        case outstandingAppControl
+        case safeWithOutstandingAppControl
+    }
+
+    private static let authorityRows: [(mode: AgentInteractionMode, standing: AppControlStanding, table: AuthorityTable)] = [
+        (.safe, .notApplicable, .safeFloor),
+        (.safe, .allowed, .safeFloor),
+        (.safe, .needsApproval, .safeWithOutstandingAppControl),
+        (.normal, .notApplicable, .ordinary),
+        (.normal, .allowed, .ordinary),
+        (.normal, .needsApproval, .outstandingAppControl),
+        (.power, .notApplicable, .ordinary),
+        (.power, .allowed, .ordinary),
+        (.power, .needsApproval, .outstandingAppControl)
+    ]
+
+    private static func expected(
+        for table: AuthorityTable,
+        tier: CapabilityRiskTier,
+        combo: String
+    ) -> RiskApprovalRequirement {
+        switch table {
+        case .ordinary:
+            return ordinaryTable[tier]![combo]!
+        case .safeFloor:
+            return safeModeTable[tier]!
+        case .outstandingAppControl:
+            return outstandingAppControlTable[tier]!
+        case .safeWithOutstandingAppControl:
+            return safeWithOutstandingAppControlTable[tier]!
+        }
+    }
+
     @Test
     func theOrdinaryPathMatchesTheWrittenTableCellByCell() {
         let policy = RiskApprovalPolicy.default
@@ -89,7 +158,7 @@ struct ConsequenceRuleTests {
                 #expect(
                     policy.requirement(
                         for: assessment(tier: tier, classes: combo.classes),
-                        context: ApprovalContext(safeMode: false)
+                        context: ApprovalContext(mode: .normal, appControl: .notApplicable)
                     ) == expected,
                     "tier \(tier), combo \(combo.name) expected \(expected)"
                 )
@@ -107,12 +176,213 @@ struct ConsequenceRuleTests {
                 #expect(
                     policy.requirement(
                         for: assessment(tier: tier, classes: combo.classes),
-                        context: ApprovalContext(safeMode: true)
+                        context: ApprovalContext(mode: .safe, appControl: .notApplicable)
                     ) == Self.safeModeTable[tier]!,
                     "tier \(tier), combo \(combo.name)"
                 )
             }
         }
+    }
+
+    /// **The whole authority cross-product, cell by cell, never sampled** (row J, SONNY-142).
+    ///
+    /// Three modes by three standings by five tiers by seven escalation-class combinations — 315
+    /// cells, each checked against a value written down rather than recomputed. The two tests above
+    /// remain as the readable statements of the ordinary path and of Safe mode; this one is the
+    /// exhaustive statement that no authority row was left inheriting a neighbour's answer.
+    ///
+    /// The population assertions at the end are what stop this from silently shrinking: a
+    /// (mode, standing) pair dropped from `authorityRows` would otherwise just be 35 fewer cells
+    /// checked, which reads exactly like a passing test.
+    @Test
+    func everyAuthorityCellMatchesTheWrittenTable() {
+        let policy = RiskApprovalPolicy.default
+        var checked = 0
+        for row in Self.authorityRows {
+            for tier in CapabilityRiskTier.allCases {
+                for combo in Self.classCombos {
+                    let expected = Self.expected(for: row.table, tier: tier, combo: combo.name)
+                    #expect(
+                        policy.requirement(
+                            for: assessment(tier: tier, classes: combo.classes),
+                            context: ApprovalContext(mode: row.mode, appControl: row.standing)
+                        ) == expected,
+                        "mode \(row.mode), standing \(row.standing), tier \(tier), combo \(combo.name)"
+                    )
+                    checked += 1
+                }
+            }
+        }
+
+        // Every (mode, standing) pair appears exactly once — no row missing, none written twice.
+        let pairs = Self.authorityRows.map { "\($0.mode)|\($0.standing)" }
+        #expect(Set(pairs).count == pairs.count)
+        #expect(pairs.count == AgentInteractionMode.allCases.count * AppControlStanding.allCases.count)
+        #expect(
+            checked == AgentInteractionMode.allCases.count
+                * AppControlStanding.allCases.count
+                * CapabilityRiskTier.allCases.count
+                * Self.classCombos.count
+        )
+        #expect(checked == 315)
+    }
+
+    // MARK: - The properties the new axes must keep
+
+    /// **P1, widened: Safe is never more permissive than Normal or Power** — same assessment, same
+    /// standing, over the whole cross-product. Structural through `stricter(of:_:)`; pinned here
+    /// against a rewrite that reaches for a per-mode table instead.
+    @Test
+    func safeIsNeverMorePermissiveThanNormalOrPowerForTheSameAssessmentAndStanding() {
+        let policy = RiskApprovalPolicy.default
+        for standing in AppControlStanding.allCases {
+            for tier in CapabilityRiskTier.allCases {
+                for combo in Self.classCombos {
+                    let assessed = assessment(tier: tier, classes: combo.classes)
+                    let safe = policy.requirement(
+                        for: assessed,
+                        context: ApprovalContext(mode: .safe, appControl: standing)
+                    )
+                    for other in [AgentInteractionMode.normal, .power] {
+                        let looser = policy.requirement(
+                            for: assessed,
+                            context: ApprovalContext(mode: other, appControl: standing)
+                        )
+                        #expect(
+                            safe.permissivenessRank <= looser.permissivenessRank,
+                            "standing \(standing), tier \(tier), combo \(combo.name): safe \(safe) vs \(other) \(looser)"
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /// **The P2 analogue: a standing is never more permissive than `.notApplicable`.**
+    ///
+    /// This is the one-directionality rule as a property — `appControl` may raise an ask and may
+    /// never remove one — checked in every mode, at every tier, for every escalation combination. A
+    /// standing that lowered a requirement anywhere would be a consent input that can *grant*, which
+    /// is the shape C2's ratified rule forbids.
+    @Test
+    func noStandingIsEverMorePermissiveThanHavingNoAppToJudge() {
+        let policy = RiskApprovalPolicy.default
+        for mode in AgentInteractionMode.allCases {
+            for tier in CapabilityRiskTier.allCases {
+                for combo in Self.classCombos {
+                    let assessed = assessment(tier: tier, classes: combo.classes)
+                    let baseline = policy.requirement(
+                        for: assessed,
+                        context: ApprovalContext(mode: mode, appControl: .notApplicable)
+                    )
+                    for standing in AppControlStanding.allCases {
+                        let withStanding = policy.requirement(
+                            for: assessed,
+                            context: ApprovalContext(mode: mode, appControl: standing)
+                        )
+                        #expect(
+                            withStanding.permissivenessRank <= baseline.permissivenessRank,
+                            "mode \(mode), standing \(standing), tier \(tier), combo \(combo.name): \(withStanding) vs \(baseline)"
+                        )
+                    }
+                }
+            }
+        }
+    }
+
+    /// **I4 over the whole cross-product: tier 4 refuses in every mode and every standing.** Row C's
+    /// escalate-never-block invariant has the property that no authority axis may ever soften it,
+    /// which is only checkable once there is more than one axis to try.
+    @Test
+    func tierFourRefusesInEveryModeAndEveryStanding() {
+        let policy = RiskApprovalPolicy.default
+        for mode in AgentInteractionMode.allCases {
+            for standing in AppControlStanding.allCases {
+                for combo in Self.classCombos {
+                    #expect(
+                        policy.requirement(
+                            for: assessment(tier: .tier4, classes: combo.classes),
+                            context: ApprovalContext(mode: mode, appControl: standing)
+                        ) == .refuse,
+                        "mode \(mode), standing \(standing), combo \(combo.name)"
+                    )
+                }
+            }
+        }
+    }
+
+    /// **Normal and Power are the same engine today**, and that is a claim worth pinning rather than
+    /// leaving to a reader of the switch: the two modes differ only once SONNY-143 resolves a
+    /// standing differently for them, and until then a difference here would be an unintended
+    /// behaviour change hiding inside a chassis ticket.
+    @Test
+    func normalAndPowerProduceIdenticalRequirementsForEveryCell() {
+        let policy = RiskApprovalPolicy.default
+        for standing in AppControlStanding.allCases {
+            for tier in CapabilityRiskTier.allCases {
+                for combo in Self.classCombos {
+                    let assessed = assessment(tier: tier, classes: combo.classes)
+                    #expect(
+                        policy.requirement(for: assessed, context: ApprovalContext(mode: .normal, appControl: standing))
+                            == policy.requirement(for: assessed, context: ApprovalContext(mode: .power, appControl: standing)),
+                        "standing \(standing), tier \(tier), combo \(combo.name)"
+                    )
+                }
+            }
+        }
+    }
+
+    /// **The function still never writes the assessment**, over the whole cross-product.
+    ///
+    /// `effectiveTier` has to stay an honest severity signal because the unattended path's fixed
+    /// `.approved(.tier2)` ceiling works by comparing tiers — a mode or a standing that quietly
+    /// nudged a tier would move a ceiling nobody was looking at. `escalations` and `approvalCopy`
+    /// matter for the same reason in the other direction: the rule changes what asks, never what a
+    /// sentence says.
+    @Test
+    func noModeOrStandingEverWritesTheAssessmentItWasGiven() {
+        let policy = RiskApprovalPolicy.default
+        for tier in CapabilityRiskTier.allCases {
+            for combo in Self.classCombos {
+                let assessed = assessment(tier: tier, classes: combo.classes)
+                // What the surfaces actually render is the assessment carried on the request, so
+                // that is what is compared — nine requests, one per authority row, each built the
+                // way `AgentRunner` builds one.
+                let requests = Self.authorityRows.map { row in
+                    RiskApprovalRequest(
+                        assessment: assessed,
+                        requirement: policy.requirement(
+                            for: assessed,
+                            context: ApprovalContext(mode: row.mode, appControl: row.standing)
+                        )
+                    )
+                }
+                for request in requests {
+                    #expect(request.assessment.effectiveTier == tier, "tier \(tier), combo \(combo.name)")
+                    #expect(request.assessment.escalations == assessed.escalations, "tier \(tier), combo \(combo.name)")
+                    #expect(request.assessment.approvalCopy == assessed.approvalCopy, "tier \(tier), combo \(combo.name)")
+                }
+                // And the value the caller still holds is the one it built, after nine calls.
+                #expect(assessed == assessment(tier: tier, classes: combo.classes), "tier \(tier), combo \(combo.name)")
+                // The requirements are allowed to differ — that is the whole feature — so assert
+                // that at least one row really does differ somewhere, or this test would pass
+                // against a function that ignored its context entirely.
+                #expect(requests.count == 9)
+            }
+        }
+
+        // The differing half, stated once rather than per cell: an outstanding standing really does
+        // change an answer somewhere, so the equality assertions above are about the assessment
+        // rather than about a function that does nothing.
+        let advisoryTierThree = assessment(tier: .tier3, classes: [.advisory])
+        #expect(
+            policy.requirement(for: advisoryTierThree, context: ApprovalContext(mode: .normal, appControl: .allowed))
+                == .autoRun
+        )
+        #expect(
+            policy.requirement(for: advisoryTierThree, context: ApprovalContext(mode: .normal, appControl: .needsApproval))
+                == .explicitApproval
+        )
     }
 
     /// The `asksFirst` classification itself, as a written table over `allCases` — a new
@@ -144,8 +414,8 @@ struct ConsequenceRuleTests {
             for tier in CapabilityRiskTier.allCases {
                 for combo in Self.classCombos {
                     let assessed = assessment(tier: tier, classes: combo.classes)
-                    let safe = policy.requirement(for: assessed, context: ApprovalContext(safeMode: true))
-                    let unsafe = policy.requirement(for: assessed, context: ApprovalContext(safeMode: false))
+                    let safe = policy.requirement(for: assessed, context: ApprovalContext(mode: .safe, appControl: .notApplicable))
+                    let unsafe = policy.requirement(for: assessed, context: ApprovalContext(mode: .normal, appControl: .notApplicable))
                     #expect(
                         safe.permissivenessRank <= unsafe.permissivenessRank,
                         "tier \(tier), combo \(combo.name): safe \(safe) vs \(unsafe)"
@@ -156,22 +426,32 @@ struct ConsequenceRuleTests {
     }
 
     /// **Advisory never asks**: an assessment whose escalations are all advisory never yields a
-    /// requirement that waits on a human — outside Safe mode, whose entire point is that
-    /// everything does.
+    /// requirement that waits on a human — outside Safe mode, whose entire point is that everything
+    /// does, and outside an outstanding per-app control question, which is the other thing the user
+    /// is being asked about rather than a property of the action (row J, SONNY-142).
+    ///
+    /// Both exclusions are stated in the iteration rather than in prose: the modes and standings
+    /// this property is about are the ones enumerated below, and the two it excludes are covered by
+    /// `safeModeMatchesItsWrittenTableWhateverTheEscalationsSay` and
+    /// `everyAuthorityCellMatchesTheWrittenTable` respectively.
     @Test
-    func anAllAdvisoryAssessmentNeverAsksOutsideSafeMode() {
+    func anAllAdvisoryAssessmentNeverAsksOutsideSafeModeOrAnOutstandingAppControlQuestion() {
         for policy in [RiskApprovalPolicy.default] {
-            for tier in CapabilityRiskTier.allCases {
-                for combo in Self.classCombos where !combo.classes.isEmpty
-                    && combo.classes.allSatisfy({ $0 == .advisory }) {
-                    let requirement = policy.requirement(
-                        for: assessment(tier: tier, classes: combo.classes),
-                        context: ApprovalContext(safeMode: false)
-                    )
-                    #expect(
-                        !requirement.requiresUserApproval,
-                        "tier \(tier), combo \(combo.name): \(requirement)"
-                    )
+            for mode in [AgentInteractionMode.normal, .power] {
+                for standing in [AppControlStanding.notApplicable, .allowed] {
+                    for tier in CapabilityRiskTier.allCases {
+                        for combo in Self.classCombos where !combo.classes.isEmpty
+                            && combo.classes.allSatisfy({ $0 == .advisory }) {
+                            let requirement = policy.requirement(
+                                for: assessment(tier: tier, classes: combo.classes),
+                                context: ApprovalContext(mode: mode, appControl: standing)
+                            )
+                            #expect(
+                                !requirement.requiresUserApproval,
+                                "mode \(mode), standing \(standing), tier \(tier), combo \(combo.name): \(requirement)"
+                            )
+                        }
+                    }
                 }
             }
         }
@@ -180,20 +460,27 @@ struct ConsequenceRuleTests {
     /// **Destructive (and affects-others) always asks**: any assessment carrying one never
     /// auto-runs, at any tier, under any policy, with Safe mode on or off. At tier 4 the answer is
     /// `refuse`, which is stricter than asking; everywhere else it is an explicit ask.
+    ///
+    /// Widened to every mode and every standing by row J (SONNY-142): the consequence rule is
+    /// untouched by the per-app model, and Power is where that is worth checking rather than
+    /// assuming — Power is the mode that asks about no *app*, and a reader could reasonably expect
+    /// it to ask about nothing.
     @Test
     func anAssessmentCarryingADestructiveOrAffectsOthersEscalationNeverAutoRuns() {
         for policy in [RiskApprovalPolicy.default] {
             for tier in CapabilityRiskTier.allCases {
                 for combo in Self.classCombos where combo.classes.contains(where: \.asksFirst) {
-                    for safeMode in [false, true] {
-                        let requirement = policy.requirement(
-                            for: assessment(tier: tier, classes: combo.classes),
-                            context: ApprovalContext(safeMode: safeMode)
-                        )
-                        #expect(
-                            requirement != .autoRun && requirement != .lightweightConfirmation,
-                            "tier \(tier), combo \(combo.name), safeMode \(safeMode): \(requirement)"
-                        )
+                    for mode in AgentInteractionMode.allCases {
+                        for standing in AppControlStanding.allCases {
+                            let requirement = policy.requirement(
+                                for: assessment(tier: tier, classes: combo.classes),
+                                context: ApprovalContext(mode: mode, appControl: standing)
+                            )
+                            #expect(
+                                requirement != .autoRun && requirement != .lightweightConfirmation,
+                                "tier \(tier), combo \(combo.name), mode \(mode), standing \(standing): \(requirement)"
+                            )
+                        }
                     }
                 }
             }
@@ -221,7 +508,7 @@ struct ConsequenceRuleTests {
         #expect(
             RiskApprovalPolicy.default.requirement(
                 for: forced,
-                context: ApprovalContext(safeMode: false)
+                context: ApprovalContext(mode: .normal, appControl: .notApplicable)
             ) == .explicitApproval
         )
     }
@@ -234,7 +521,7 @@ struct ConsequenceRuleTests {
         #expect(
             RiskApprovalPolicy.default.requirement(
                 for: bare,
-                context: ApprovalContext(safeMode: false)
+                context: ApprovalContext(mode: .normal, appControl: .notApplicable)
             ) == .explicitApproval
         )
     }
@@ -248,8 +535,11 @@ struct ConsequenceRuleTests {
         let verdicts: [ScopeVerdict?] = [nil, .inScope, .outOfScope, .unconstrained, .opaque]
         for tier in CapabilityRiskTier.allCases {
             for combo in Self.classCombos {
-                for safeMode in [false, true] {
-                    let context = ApprovalContext(safeMode: safeMode)
+                // All nine authority rows since row J: the boundary buys and costs nothing at the
+                // gate in every mode and under every standing, not merely in the two postures that
+                // existed when this was written.
+                for row in Self.authorityRows {
+                    let context = ApprovalContext(mode: row.mode, appControl: row.standing)
                     let baseline = RiskApprovalPolicy.default.requirement(
                         for: assessment(tier: tier, classes: combo.classes, verdict: nil),
                         context: context
@@ -314,12 +604,12 @@ struct ConsequenceRuleTests {
         let scoped = try runner.approvalRequest(
             for: prepared,
             scope: scope,
-            context: ApprovalContext(safeMode: false)
+            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
         )
         let unscoped = try runner.approvalRequest(
             for: prepared,
             scope: .unscoped,
-            context: ApprovalContext(safeMode: false)
+            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
         )
 
         #expect(scoped.assessment.effectiveTier == .tier2)
@@ -346,12 +636,12 @@ struct ConsequenceRuleTests {
         let ordinary = try runner.approvalRequest(
             for: prepared,
             scope: .unscoped,
-            context: ApprovalContext(safeMode: false)
+            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
         )
         let safe = try runner.approvalRequest(
             for: prepared,
             scope: .unscoped,
-            context: ApprovalContext(safeMode: true)
+            context: ApprovalContext(mode: .safe, appControl: .notApplicable)
         )
 
         #expect(ordinary.requirement == .autoRun)
@@ -388,12 +678,12 @@ struct ConsequenceRuleTests {
         let request = try runner.approvalRequest(
             for: prepared,
             scope: scope,
-            context: ApprovalContext(safeMode: false)
+            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
         )
         let safe = try runner.approvalRequest(
             for: prepared,
             scope: scope,
-            context: ApprovalContext(safeMode: true)
+            context: ApprovalContext(mode: .safe, appControl: .notApplicable)
         )
 
         #expect(request.assessment.effectiveTier == .tier3)
@@ -453,7 +743,7 @@ struct ConsequenceRuleTests {
             let request = try runner.approvalRequest(
                 for: prepared,
                 scope: .unscoped,
-                context: ApprovalContext(safeMode: false)
+                context: ApprovalContext(mode: .normal, appControl: .notApplicable)
             )
             #expect(request.assessment.effectiveTier == .tier3, "\(testCase.reason)")
             #expect(request.assessment.escalations.map(\.reason) == [testCase.reason])
@@ -488,7 +778,7 @@ struct ConsequenceRuleTests {
             let request = try runner.approvalRequest(
                 for: prepared,
                 scope: .unscoped,
-                context: ApprovalContext(safeMode: false)
+                context: ApprovalContext(mode: .normal, appControl: .notApplicable)
             )
             #expect(request.assessment.effectiveTier == .tier3, "\(testCase.reason)")
             #expect(request.assessment.escalations.map(\.reason) == [testCase.reason])
@@ -539,7 +829,7 @@ struct ConsequenceRuleTests {
             let request = try runner.approvalRequest(
                 for: prepared,
                 scope: .unscoped,
-                context: ApprovalContext(safeMode: false)
+                context: ApprovalContext(mode: .normal, appControl: .notApplicable)
             )
             #expect(request.assessment.effectiveTier == .tier3, "\(testCase.reason)")
             #expect(request.assessment.escalations.map(\.reason) == [testCase.reason])
@@ -594,7 +884,7 @@ struct ConsequenceRuleTests {
         let request = try runner.approvalRequest(
             for: prepared,
             scope: .unscoped,
-            context: ApprovalContext(safeMode: false)
+            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
         )
 
         #expect(request.assessment.effectiveTier == .tier3)
@@ -632,7 +922,7 @@ struct ConsequenceRuleTests {
             prepared,
             approvalDecision: .approved(.tier2),
             scope: .unscoped,
-            context: ApprovalContext(safeMode: false)
+            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
         )
 
         #expect(FileManager.default.fileExists(atPath: output.path))
@@ -666,7 +956,7 @@ struct ConsequenceRuleTests {
                 prepared,
                 approvalDecision: .approved(.tier2),
                 scope: .unscoped,
-                context: ApprovalContext(safeMode: false)
+                context: ApprovalContext(mode: .normal, appControl: .notApplicable)
             )
         }
 
@@ -699,7 +989,7 @@ struct ConsequenceRuleTests {
         let before = try runner.approvalRequest(
             for: prepared,
             scope: .unscoped,
-            context: ApprovalContext(safeMode: false)
+            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
         )
         #expect(before.requirement == .autoRun)
 
@@ -710,7 +1000,7 @@ struct ConsequenceRuleTests {
                 prepared,
                 approvalDecision: .notRequested,
                 scope: .unscoped,
-                context: ApprovalContext(safeMode: false)
+                context: ApprovalContext(mode: .normal, appControl: .notApplicable)
             )
             Issue.record("Expected the drifted destructive escalation to stop the run.")
         } catch RiskApprovalError.approvalRequired(let rearmed) {
@@ -739,7 +1029,7 @@ struct ConsequenceRuleTests {
                 prepared,
                 approvalDecision: .notRequested,
                 scope: .unscoped,
-                context: ApprovalContext(safeMode: false)
+                context: ApprovalContext(mode: .normal, appControl: .notApplicable)
             )
             Issue.record("Expected the destructive escalation to stop the run.")
         } catch RiskApprovalError.approvalRequired(let request) {
@@ -751,7 +1041,7 @@ struct ConsequenceRuleTests {
             prepared,
             approvalDecision: .approved(answering: answered),
             scope: .unscoped,
-            context: ApprovalContext(safeMode: false)
+            context: ApprovalContext(mode: .normal, appControl: .notApplicable)
         )
 
         #expect(try String(contentsOf: output, encoding: .utf8) != "existing draft")

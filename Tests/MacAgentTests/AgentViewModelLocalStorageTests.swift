@@ -155,6 +155,52 @@ struct AgentViewModelLocalStorageTests {
         #expect(notice.contains("recent artifacts"))
     }
 
+    /// **Row J's grants are the sharpest case of the same problem** (SONNY-140). The store has no
+    /// list of its own until the revocation surface lands, and nothing in the product reads it
+    /// through a path that can complain — so an unreadable file would present as Sonny asking about
+    /// apps the user already allowed, which reads as the feature working badly rather than as a
+    /// file that will not open. The probe is the only place it can say so.
+    ///
+    /// Asserted on the literal wording, because the distinction the banner has to keep is a wording
+    /// distinction: this is the *load* sentence, and a save failure must never borrow it.
+    @Test
+    func anUnreadableApprovedAppsStoreSaysSoInsteadOfSilentlyLosingEveryGrant() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try ApprovedAppStore(
+            fileURL: root.appendingPathComponent("approved-apps.json"),
+            encryption: testEncryption(byte: 0x42)
+        ).approve(bundleIdentifier: "com.apple.Notes", displayName: "Notes")
+        let viewModel = try makeViewModel(root: root, encryption: testEncryption(byte: 0x99))
+
+        viewModel.refreshSavedItems()
+
+        let notice = try #require(viewModel.localStorageNotice)
+        #expect(notice.hasPrefix("Sonny could not load encrypted local data."))
+        #expect(notice.contains("allowed apps: A local data file exists but could not be decrypted or decoded."))
+        // A load failure is a storage notice, never the task error — `errorMessage` means "the task
+        // you just ran failed".
+        #expect(viewModel.errorMessage == nil)
+    }
+
+    /// The other half of the pair: a readable store is silent. Without this, the test above would
+    /// pass against a view model that shouted about the grants store unconditionally.
+    @Test
+    func aReadableApprovedAppsStoreProducesNoNotice() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let encryption = testEncryption(byte: 0x42)
+        try ApprovedAppStore(
+            fileURL: root.appendingPathComponent("approved-apps.json"),
+            encryption: encryption
+        ).approve(bundleIdentifier: "com.apple.Notes", displayName: "Notes")
+        let viewModel = try makeViewModel(root: root, encryption: encryption)
+
+        viewModel.refreshSavedItems()
+
+        #expect(viewModel.localStorageNotice == nil)
+    }
+
     /// The pin that was missing when the banner started repeating itself (PR #41 cycle-3, R4).
     ///
     /// Every other assertion on this banner uses `contains`, which passes whether the explanation
@@ -733,6 +779,10 @@ private func makeViewModel(
         ),
         clipboardHistorySettingsStore: ClipboardHistorySettingsStore(
             fileURL: root.appendingPathComponent("clipboard-history-settings.json"),
+            encryption: encryption
+        ),
+        approvedAppStore: ApprovedAppStore(
+            fileURL: root.appendingPathComponent("approved-apps.json"),
             encryption: encryption
         ),
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
