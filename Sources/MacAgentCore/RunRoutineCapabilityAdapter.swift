@@ -95,6 +95,21 @@ public struct RunRoutineCapabilityAdapter: CapabilityAdapter {
             plan: plan,
             previews: [headerPreview(for: routine)] + result.previews,
             summary: "Ran routine \(routine.name). \(result.summary)",
+            // Forwarded, not authored (SONNY-147). This sentence is a template, but a nested run's
+            // whole summary is interpolated into it, so declaring `.codeAuthored` because the
+            // wrapper is code-authored would launder whatever the nested run produced.
+            //
+            // **Defence in depth, not a live path.** No routine can carry a screen-control step
+            // today — `StoredRoutine.forbiddenStepOperations` refuses `.visionSession` at the write
+            // door, deliberately, as the third layer of "unattended vision: never" — so the only
+            // model-authored producer cannot reach this closure and `result.summaryProvenance` is
+            // `.codeAuthored` on every path the product can currently take. Written this way anyway
+            // because the alternative is a hardcoded `.codeAuthored` that becomes wrong silently the
+            // day a second model-authored capability exists, and the enclosing sentence gives no
+            // reader a reason to look here. The reachable join is
+            // `AgentActionExecutor.executeChain`, which is pinned end to end by
+            // `aChainWhoseScreenControlSegmentWrotePartOfTheSummaryStoresItAsModelAuthored`.
+            summaryProvenance: result.summaryProvenance,
             suggestions: result.suggestions
         )
     }

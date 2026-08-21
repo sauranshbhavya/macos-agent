@@ -480,6 +480,7 @@ private struct ClarificationExitFixture {
     let viewModel: AgentViewModel
     let root: URL
     let taskHistoryStore: TaskHistoryStore
+    let taskPlanDetailStore: TaskPlanDetailStore
     let workspaceStore: WorkspaceStore
     let snippetStore: SnippetStore
     let clipboardSettingsStore: ClipboardHistorySettingsStore
@@ -497,6 +498,9 @@ private struct ClarificationExitFixture {
         userDefaults.removePersistentDomain(forName: userDefaultsSuiteName)
 
         taskHistoryStore = TaskHistoryStore(fileURL: root.appendingPathComponent("task-history.json"))
+        taskPlanDetailStore = TaskPlanDetailStore(
+            fileURL: root.appendingPathComponent("task-plan-details.json")
+        )
         workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
         snippetStore = SnippetStore(fileURL: root.appendingPathComponent("snippets.json"))
         clipboardSettingsStore = ClipboardHistorySettingsStore(
@@ -530,6 +534,7 @@ private struct ClarificationExitFixture {
                 fileURL: root.appendingPathComponent("shortcuts-run-history.json")
             ),
             taskHistoryStore: taskHistoryStore,
+            taskPlanDetailStore: taskPlanDetailStore,
             visionSessionJournalStore: VisionSessionJournalStore(
                 fileURL: root.appendingPathComponent("vision-sessions.json")
             ),
