@@ -143,12 +143,19 @@ struct ConsequenceRuleDispatchTests {
     /// distinct cells of one switch, and this is the file that would notice if widening the chassis
     /// had quietly changed what Power does.
     ///
-    /// Both halves are asserted together on purpose. The auto-run half is what "Power behaves
-    /// exactly like Normal today" means; the overwrite half is the standing rule that survives every
-    /// mode, and asserting only the first would let "Power skips a gate" be misread as "Power asks
-    /// nothing".
+    /// **The name is scoped, and the scope is the point** (PR #88 cycle 2, F2). This used to be
+    /// called `powerModeBehavesExactlyLikeNormalThroughTheRealDispatchPath`, which stopped being
+    /// true on 2026-08-21: Power is now the one mode that skips the per-app control gate. The
+    /// assertions were right all along — neither plan here controls an app, so for a *non-vision*
+    /// dispatch the two modes really do still answer identically — but the name claimed the general
+    /// case. What the per-app difference looks like through a real path is
+    /// `powerSkipsThePerAppGateAndStillAsksAboutADestructiveAction` in `VisionSessionRunTests`.
+    ///
+    /// Both halves are asserted together on purpose. The auto-run half is what "the two agree on a
+    /// non-vision plan" means; the overwrite half is the standing rule that survives every mode, and
+    /// asserting only the first would let "Power skips a gate" be misread as "Power asks nothing".
     @Test
-    func powerModeBehavesExactlyLikeNormalThroughTheRealDispatchPath() async throws {
+    func powerAndNormalAgreeOnANonVisionDispatchAndBothStillAskAboutAnOverwrite() async throws {
         let fixture = try makeDispatchFixture()
         defer { fixture.tearDown() }
         fixture.viewModel.interactionMode = .power

@@ -120,7 +120,7 @@ If a prompt is denied, allow the launching host app in System Settings, then rel
 - Tier 0/1 typed and voice commands stay frictionless by design; tier 2+ pauses for a visible approval prompt (lightweight confirmation or explicit approval, depending on tier) on whichever surface started the command.
 - Executors use fixed native adapters only: `/usr/bin/zip`, `/usr/bin/osascript`, `/usr/bin/shortcuts`, `NSWorkspace`, `AVFoundation`, and `URLSession`. Sonny never accepts generated AppleScript, shell, or code from the model.
 - Routines and workspaces are declarative JSON, not executable scripts; a routine cannot nest another routine, a workspace action, or a clarification step.
-- All ten local stores are encrypted at rest (AES-GCM, Keychain-backed key); `OPENAI_API_KEY` remains environment-variable-only.
+- All eleven local stores are encrypted at rest (AES-GCM, Keychain-backed key); `OPENAI_API_KEY` remains environment-variable-only.
 
 ## DOCX Conversion
 
@@ -180,7 +180,7 @@ Coverage spans strict plan decoding, the full capability-adapter registry, risk-
 7. Click `Speak`, say `Open Safari`, click `Stop`, and confirm Sonny transcribes and acts without another manual execute click.
 8. Hold `Control-Option-Space`, say `Open Notes`, release the keys, and confirm Sonny transcribes and acts automatically.
 9. Use generated result buttons such as reveal zip, open Markdown, reveal Markdown, or reveal PDFs.
-10. In Command Center > Insights, confirm the stat cards, weekly chart, and recent-activity list reflect real completed tasks. In Settings > Privacy & Permissions, run "Delete Local Data" and confirm the destructive confirmation dialog and the ten-store deletion.
+10. In Command Center > Insights, confirm the stat cards, weekly chart, and recent-activity list reflect real completed tasks. In Settings > Privacy & Permissions, run "Delete Local Data" and confirm the destructive confirmation dialog and the eleven-store deletion.
 
 ## Architecture
 

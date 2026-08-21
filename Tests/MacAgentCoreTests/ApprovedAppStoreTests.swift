@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import MacAgentCore
 
-/// The tenth local store (SONNY-140). Nothing gates on it yet — SONNY-143 is what reads it — so
+/// The eleventh local store (SONNY-140 — the tenth when it was written; row E landed first). So
 /// everything here is about the store keeping its own promises: encrypted at rest, migrating a
 /// legacy plaintext file, refusing to hold a grant the terminal ban refuses, and comparing
 /// identifiers the way the rest of the codebase does.

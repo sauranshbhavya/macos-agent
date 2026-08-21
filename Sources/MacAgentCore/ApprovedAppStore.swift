@@ -40,7 +40,13 @@ public struct ApprovedApp: Codable, Equatable, Sendable {
     }
 }
 
-/// The apps the user has allowed Sonny to control, encrypted on disk — the tenth local store.
+/// The apps the user has allowed Sonny to control, encrypted on disk — the eleventh local store.
+///
+/// **Tenth when this was written, eleventh when it landed.** Row E's `TaskPlanDetailStore` merged
+/// first and took the count to ten, so this branch rebased onto it. SONNY-140's ticket text, its
+/// commit title and `docs/sonny-row-j-plan.md` §2.4 all say "the tenth store" and are left as the
+/// dated records they are; the arithmetic that has to be right is the wipe's, and that is asserted
+/// rather than described — `theWipeReachesExactlyTheElevenLocalStores`.
 ///
 /// **The shared pattern, not a variant** (`CLAUDE.md`): a defaulted `encryption:` parameter,
 /// AES-GCM behind the `SONNYENC1\n` header, and transparent legacy-plaintext migration on the

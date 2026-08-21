@@ -641,13 +641,20 @@ public struct ApprovalContext: Equatable, Sendable {
     /// answer.
     public var mode: AgentInteractionMode
 
-    /// The resolved per-app control fact for the plan being judged — row J's authority axis, landing
-    /// **here, as a field the one function maps**, which is exactly what the comment this replaces
-    /// said the next such axis would do.
+    /// The resolved per-app control fact this requirement is being derived under — row J's
+    /// authority axis, landing **here, as a field the one function maps**, which is exactly what the
+    /// comment this replaces said the next such axis would do.
     ///
-    /// Deliberately payload-free: the app's identity travels on the assessment, where the copy
-    /// needs it. The policy needs only the answer, and a policy that could read an app's name is a
-    /// policy someone will eventually make decide on one.
+    /// **`.notApplicable` at every plan gate, including a vision plan's** (founder, 2026-08-21,
+    /// §4.3). This said "for the plan being judged" and "resolved once per plan", which described
+    /// row J's first implementation and stopped being true when the per-app question moved into the
+    /// session: it is now resolved **per iteration**, inside the loop, after each capture clears the
+    /// terminal screen check — the only moment a shell in a window whose *app* no name list refuses
+    /// can be seen. A plan-time standing would raise the question before that capture exists.
+    ///
+    /// Deliberately payload-free: the app's identity travels with the request the loop builds, where
+    /// the copy needs it. The policy needs only the answer, and a policy that could read an app's
+    /// name is a policy someone will eventually make decide on one.
     public var appControl: AppControlStanding
 
     // Explicit rather than synthesized: the memberwise initializer of a public struct is internal,
@@ -660,10 +667,12 @@ public struct ApprovalContext: Equatable, Sendable {
     }
 }
 
-/// Whether the plan being judged controls an app the user has allowed Sonny to control.
+/// Whether the run being judged is controlling an app the user has allowed Sonny to control.
 ///
-/// Resolved once per plan by one resolver and carried on ``ApprovalContext``. Payload-free on
-/// purpose — see that field's comment.
+/// Resolved by one resolver — `AppControlResolver.standing` — and carried on ``ApprovalContext``.
+/// **Per iteration of a vision session, not once per plan**, since the founder put the per-app
+/// question after the session's first capture (2026-08-21, §4.3); every plan gate answers
+/// `.notApplicable`. Payload-free on purpose — see that field's comment.
 ///
 /// **A strictness input only.** It may raise an ask and may never remove one, which
 /// ``RiskApprovalPolicy/requirement(for:context:)`` makes structural by composing it as
@@ -671,7 +680,9 @@ public struct ApprovalContext: Equatable, Sendable {
 /// `VisionConsequenceClassifier` obeys for screen-derived signals, and the same shape as C2's
 /// ratified "consent maps to a requirement override, never a tier change".
 public enum AppControlStanding: String, CaseIterable, Equatable, Sendable {
-    /// This plan controls no app, so there is no per-app question to ask. Every non-vision plan.
+    /// There is no per-app question to ask here. Every plan gate answers this — a vision plan's
+    /// included, since §4.3 puts the question inside the session — and so does every iteration of a
+    /// run that controls no app.
     case notApplicable
     /// Allowed under the current mode — by the starter list, by the user's own approval, or because
     /// the mode asks about no app at all.

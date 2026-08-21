@@ -3092,10 +3092,12 @@ final class AgentViewModel: ObservableObject {
     /// The product's one posture dial — Safe | Normal | Power, the founder's segmented control
     /// (SONNY-90 as amended 2026-08-14; wireframe `docs/wireframes/15-SegmentedControl.svg`).
     /// Safe asks before everything attended and is the only place the data-leaves-device label
-    /// renders (E9's ratified §11.3 deviation); Normal is the consequence-rule default; Power is
-    /// identical to Normal today — row 18's mode landing as a setting first, gating nothing (this
-    /// sentence used to say row I's screen-control features gate on it; the founder decided on
-    /// 2026-08-14 that screen control works in all three modes, and only Safe asks about it).
+    /// renders (E9's ratified §11.3 deviation); Normal is the consequence-rule default; **Power is
+    /// the one mode that asks about no app at all** — row J, 2026-08-21. Two supersessions in
+    /// order: this sentence first said row I's screen-control features would gate on Power, which
+    /// the founder replaced on 2026-08-14 with "identical to Normal, gating nothing"; row J then
+    /// gave Power a rule of its own, so the second version is false too. Screen control itself is
+    /// still gated on no mode; what differs is *which apps* each mode drives without asking.
     /// Persisted so the dial survives relaunch — a posture that
     /// silently reset to Normal on restart would quietly un-dial itself. Defaults to Normal, the
     /// ratified product default.
@@ -3105,18 +3107,6 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
-    /// The authority context every dispatch threads into `AgentRunner`: Safe mode, and nothing
-    /// else today (the consequence rule reads no origin — it gates on what an action does).
-    ///
-    /// **`interactionMode` is mapped to the engine here and nowhere else.** A second site
-    /// reading its own value would be a second place that work has to find, and the one it
-    /// misses would run a Safe-mode user's tasks under ordinary rules. The engine's input stays
-    /// row C's boolean seam; Normal and Power both map false, and row I did not change that —
-    /// screen control runs in every mode, so Safe's existing "ask about everything" posture is
-    /// exactly what makes Safe the only mode that asks about a vision action.
-    // Internal rather than `private`: the vision extension lives in another file and
-    // `visionApprovalContext()` forwards to this one function, which is what keeps the
-    // "mapped to the engine here and nowhere else" rule true across the split.
     /// The third real approval-resolution point: a user answering a mid-loop vision approval.
     ///
     /// It is a real resolution by the flag's own definition — "the first time the user resolves
@@ -3126,6 +3116,24 @@ final class AgentViewModel: ObservableObject {
         hasCompletedFirstApproval = true
     }
 
+    /// The authority context every dispatch threads into `AgentRunner` — the user's mode, and the
+    /// per-app control standing for whatever this requirement is being derived about.
+    ///
+    /// **`interactionMode` is mapped to the engine here and nowhere else.** A second site reading
+    /// its own value would be a second place that work has to find, and the one it misses would run
+    /// a Safe-mode user's tasks under ordinary rules.
+    ///
+    /// **The engine's input is no longer a boolean, and this paragraph used to say it was**
+    /// (PR #88 cycle 2, F3). It read "the engine's input stays row C's boolean seam; Normal and
+    /// Power both map false" — the exact claim SONNY-142 deleted when it replaced `safeMode: Bool`
+    /// with the whole `AgentInteractionMode`, precisely because two booleans cannot express three
+    /// modes and row J needs Normal and Power told apart. It was also sitting on
+    /// `markFirstApprovalCompleted`, several functions from the one it describes, which is how it
+    /// survived a ticket that rewrote this seam.
+    ///
+    // Internal rather than `private`: the vision extension lives in another file and
+    // `visionApprovalContext(targetBundleIdentifier:)` forwards to this one function, which is what
+    // keeps the "mapped to the engine here and nowhere else" rule true across the split.
     /// - Parameter visionTarget: the bundle identifier of the app whose per-app standing this
     ///   context should carry, or `nil` when there is no per-app question to answer. **Not
     ///   defaulted, on purpose.** A default is how row I's resolver hook came to exist and never be

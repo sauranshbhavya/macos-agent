@@ -55,7 +55,8 @@ struct InteractionModeTests {
 
         // E9 (founder-ratified 2026-08-08; C7 2026-08-12): §11.3's "Data leaves device" line is
         // consciously removed from every non-Safe approval surface — even, and especially, when
-        // the honest answer would be "yes". Power counts as not-Safe: identical to Normal today,
+        // the honest answer would be "yes". Power counts as not-Safe — which is the only thing
+        // this line needs, and is still true now that Power and Normal differ over the per-app gate:
         // and it must not leak the Safe-only label.
         for mode in AgentInteractionMode.allCases {
             let lines = AgentActivityPresentation.approvalDisclosureLines(
@@ -212,7 +213,10 @@ struct InteractionModeTests {
         #expect(fixture.viewModel.finalSummary.contains("4"))
     }
 
-    /// Power is identical to Normal today — row 18's mode landing as a setting first. The same
+    /// Power and Normal answer the same for a tier-0 instant command, which is what this test is
+    /// about. **It is no longer true that Power is identical to Normal** — row J made it the one
+    /// mode that skips the per-app gate (2026-08-21) — and this command controls no app, so the two
+    /// still agree here. The same
     /// tier-0 command that Safe gates runs straight through under BOTH other modes, so selecting
     /// Power changes nothing. Row I did not change that either: this comment used to end "until row
     /// I's screen-control features gate on it", and screen control ended up gated on no mode at all
