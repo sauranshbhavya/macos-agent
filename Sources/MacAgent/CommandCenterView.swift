@@ -1794,12 +1794,15 @@ private struct TaskLogEntry: Identifiable {
     var id: String { record.taskRowIdentity }
 }
 
-/// A static "receipt" of one completed run — command, outcome, timestamps, workspace — not a live
-/// replay of what happened step by step (2026-07-18 direction: "logs + summary + activity should
-/// just be a flow as to how that thing worked under the hood," deliberately less detailed than the
-/// old inline Plan/Preview/step-log surface). `CompletedTaskRecord` doesn't persist the actual
-/// result/output text today, only the pass/fail signal — see docs/sonny-ui-backend-gaps.md if a
-/// richer "what did it actually produce" narrative is wanted here later.
+/// A static "receipt" of one completed run — command, outcome, timestamps, workspace, what it
+/// produced — not a live replay of what happened step by step (2026-07-18 direction: "logs +
+/// summary + activity should just be a flow as to how that thing worked under the hood,"
+/// deliberately less detailed than the old inline Plan/Preview/step-log surface).
+///
+/// **Since row E the receipt says what the task produced** (SONNY-147/148). What it deliberately
+/// still does not say is *how*: the plan's steps are persisted for a follow-up to correct against
+/// and are never rendered here, because a list of internal step descriptions on a user-facing
+/// receipt is the surface the 2026-07-18 direction rejected.
 private struct TaskLogDetailDialog: View {
     let record: CompletedTaskRecord
     /// Resolved once, before this sheet was presented, for the one row the user clicked — so the
@@ -1863,19 +1866,70 @@ private struct TaskLogDetailDialog: View {
             }
             .padding(.horizontal, 28)
 
+            resultSection
+
             visionSessionSection
 
             Spacer(minLength: 20)
 
             deleteTaskFooter
         }
-        .frame(width: 420, height: TaskDeletePresentation.sheetHeight(for: screenRecord), alignment: .top)
+        .frame(
+            width: 420,
+            height: TaskDetailPresentation.sheetHeight(for: record, screenRecord: screenRecord),
+            alignment: .top
+        )
         .background(SonnyTheme.ink)
         .overlay(
             RoundedRectangle(cornerRadius: SonnyRadius.container)
                 .stroke(SonnyTheme.border, lineWidth: 1)
         )
         .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+    }
+
+    /// What this task produced (row E, SONNY-148) — the answer to "what did this actually do", which
+    /// this dialog has never been able to give.
+    ///
+    /// **Not a `detailRow`.** That helper is a fixed 90pt label column with `.lineLimit(1)` on its
+    /// value: right for a timestamp, wrong for a sentence. This takes the shape the screen-record
+    /// section beside it already uses — a divider, a section label, then content that wraps.
+    ///
+    /// **A record with nothing to show here renders nothing at all** — no header, no empty state.
+    /// The same rule row I chose for the section below and for the same reason, which holds harder
+    /// here: every record written before row E has no stored result, so this is the common path on
+    /// day one rather than an edge, and an empty state would tell every one of those users that
+    /// their task produced nothing. `TaskDetailPresentation.resultText(for:)` is where both
+    /// histories — no result kept, and a result that was empty — become one `nil`, so there is no
+    /// branch here that could drift apart.
+    ///
+    /// The text scrolls rather than clips past the height the sheet reserved for it. See
+    /// `TaskDetailPresentation.resultLineCount(for:)` for why that height is an estimate and why
+    /// both ways of being wrong are mild.
+    @ViewBuilder
+    private var resultSection: some View {
+        if let resultText = TaskDetailPresentation.resultText(for: record) {
+            SettingsDivider()
+                .padding(.horizontal, 28)
+                .padding(.top, 8)
+
+            VStack(alignment: .leading, spacing: 10) {
+                Text(TaskDetailPresentation.resultSectionTitle)
+                    .font(SonnyType.settingsSectionLabel)
+                    .foregroundStyle(SonnyTheme.text)
+
+                ScrollView {
+                    Text(resultText)
+                        .font(SonnyType.body)
+                        .foregroundStyle(SonnyTheme.text)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                        .textSelection(.enabled)
+                }
+                .frame(height: TaskDetailPresentation.resultTextHeight(for: resultText))
+            }
+            .padding(.horizontal, 28)
+            .padding(.top, 14)
+        }
     }
 
     /// The action journal for this task, when it ran a screen-control session (row I, SONNY-96).
