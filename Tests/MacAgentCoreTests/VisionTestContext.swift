@@ -1,4 +1,5 @@
 import Foundation
+import MacAgentTestSupport
 @testable import MacAgentCore
 
 /// A `CapabilityExecutionContext` for the handful of vision tests that must call an adapter method

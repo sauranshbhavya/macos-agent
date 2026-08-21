@@ -14,10 +14,19 @@ import Foundation
 /// also have skipped a same-named file in the *other* target. `relativePath` carries the target, so
 /// an exemption names one file rather than a name.
 ///
-/// One copy, in the core target, because both suites that use it live there — unlike the permission
-/// stub and the privilege trait, this needs no twin.
+/// One copy, in the core target, because both suites that use it live there. The permission stub and
+/// the privilege trait were twinned once and are not any more — they live in `MacAgentTestSupport`,
+/// which both test targets depend on (SONNY-172).
 enum TestSourceTree {
-    static let targets = ["MacAgentCoreTests", "MacAgentTests"]
+    /// **Every directory SwiftPM compiles a test file from, which is what makes the scans complete.**
+    ///
+    /// `MacAgentTestSupport` is here for a specific reason rather than for symmetry: SONNY-172 moved
+    /// `DeterministicPermissions.swift` and `UnprivilegedProcess.swift` into it, and the file whose
+    /// entire job is being the deterministic alternative to a live permission checker would
+    /// otherwise sit outside `LivePermissionCheckerScanTests`' reach. A scan that stops covering the
+    /// files a refactor moved is the silent hole this repository keeps paying for; a target added to
+    /// `Package.swift` and not added here is exactly that.
+    static let targets = ["MacAgentCoreTests", "MacAgentTests", "MacAgentTestSupport"]
 
     /// `Tests/`, from this file's own location.
     static var root: URL {

@@ -30,10 +30,12 @@ import Testing
 /// did before it existed — which is what an unchanged suite count demonstrates, and the only half of
 /// this that a non-root run can demonstrate at all.
 ///
-/// Twinned with `Tests/MacAgentTests/UnprivilegedProcess.swift` because SwiftPM gives a source file to exactly one target. Keep them in
-/// step.
+/// One copy, in `MacAgentTestSupport`, which both test targets depend on (SONNY-172). It was twinned
+/// until then — SwiftPM gives a source file to exactly one target, and SONNY-123 also believed a test
+/// target could not depend on another test target, which turned out to be false. `public` because a
+/// module's public surface is the only part of it the two test targets can see.
 extension Trait where Self == ConditionTrait {
-    static var requiresUnprivilegedProcess: Self {
+    public static var requiresUnprivilegedProcess: Self {
         .enabled(
             if: geteuid() != 0,
             "Forces a filesystem failure with directory permission bits, which root bypasses."

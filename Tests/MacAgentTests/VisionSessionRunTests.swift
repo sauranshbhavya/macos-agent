@@ -2,6 +2,7 @@ import CoreGraphics
 import Foundation
 import ImageIO
 import Testing
+import MacAgentTestSupport
 @testable import MacAgent
 @testable import MacAgentCore
 

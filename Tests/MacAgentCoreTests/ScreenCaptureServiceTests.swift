@@ -1,6 +1,7 @@
 import CoreGraphics
 import Foundation
 import Testing
+import MacAgentTestSupport
 @testable import MacAgentCore
 
 private final class FakeScreenCaptureBackend: ScreenCaptureBackend, @unchecked Sendable {

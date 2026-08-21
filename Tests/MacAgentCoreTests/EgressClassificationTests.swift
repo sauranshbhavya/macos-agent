@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import MacAgentTestSupport
 @testable import MacAgentCore
 
 // These two suites are the surviving half of SONNY-88 — the bidirectional dataLeavesDevice
