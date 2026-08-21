@@ -214,6 +214,132 @@ struct WidgetComposerChipRowTests {
         }
     }
 
+    /// The **horizontal** half, and the founder's second manual pass: "the first chip's left margin
+    /// looks cramped and out of line with the field row below."
+    ///
+    /// **`leadingInset` is not one margin, it is two.** The field row's content sits near the pill's
+    /// vertical middle where the stadium's edge has nearly finished curving; the chip row sits high
+    /// in the leading cap where it has not. The same 14 points from the frame therefore buy the two
+    /// rows different amounts of room from the glass — measured on the shipped layout, 4.75pt at the
+    /// chip's narrowest against 8.88pt for the field row (a scanline sweep over a rendered pill; the
+    /// numbers below are the same quantities derived from the geometry, which is why they do not
+    /// carry the hairline or the icon's own side bearing).
+    ///
+    /// **The narrowest gap is not at the chip's centre line, and that is why the first read of this
+    /// was wrong.** A chip is a capsule inside a capsule, both curving the same way, so the gap
+    /// between them is tightest where the two arcs run parallel — near the chip's top-left, not
+    /// beside it. Measured at the centre line the shipped layout looks 0.9pt off and fine; measured
+    /// where the eye actually reads it, it is short by nearly four points.
+    ///
+    /// `narrowestChipGap` brute-forces that minimum instead of reusing the closed form
+    /// `chipRowLeadingInset` solves, so an error in the derivation shows up as a disagreement rather
+    /// than being reproduced on both sides. The field-row half *is* the same one-line evaluation in
+    /// both places, and is not independent — said plainly rather than implied.
+    @Test
+    func theFirstChipGetsTheSameRoomFromTheGlassAsTheFieldRow() throws {
+        for state in Self.chipStates {
+            let pillHeight = try Self.measuredPillHeight(state.apply)
+            let derived = WidgetComposerGeometry.chipRowLeadingInset(pillHeight: pillHeight)
+            let fieldMargin = Self.fieldRowGlassMargin(pillHeight: pillHeight)
+
+            #expect(
+                derived > WidgetComposerGeometry.leadingInset,
+                """
+                With \(state.name) the derived chip-row inset came back \(derived)pt, which is the \
+                field row's own \(WidgetComposerGeometry.leadingInset)pt. Then the derivation is a \
+                no-op and the chip is back where the founder found it.
+                """
+            )
+
+            // The defect itself, pinned: the field row's inset, borrowed as-is, is materially
+            // tighter for the chip than it is for the field row.
+            let borrowed = Self.narrowestChipGap(
+                pillHeight: pillHeight,
+                chipLeadingInset: WidgetComposerGeometry.leadingInset
+            )
+            #expect(
+                borrowed < fieldMargin - 1,
+                """
+                With \(state.name) the chip at a plain \(WidgetComposerGeometry.leadingInset)pt \
+                clears the glass by \(borrowed)pt against the field row's \(fieldMargin)pt. This \
+                assertion is the cramped layout the founder reported; if the two are ever within a \
+                point of each other the derivation has stopped earning its place.
+                """
+            )
+
+            let achieved = Self.narrowestChipGap(pillHeight: pillHeight, chipLeadingInset: derived)
+            #expect(
+                abs(achieved - fieldMargin) < 0.01,
+                """
+                With \(state.name) the chip at the derived \(derived)pt clears the glass by \
+                \(achieved)pt, against the field row's \(fieldMargin)pt — they must match. Pill \
+                \(pillHeight)pt. A disagreement here means the closed form in \
+                `chipRowLeadingInset` and this brute-force scan have parted company, and the \
+                brute force is the one to trust.
+                """
+            )
+        }
+    }
+
+    /// The founder asked for a derivation that survives the pill changing size, so it is exercised
+    /// over sizes the layout does not currently produce as well as the one it does.
+    ///
+    /// **The clamped cases are the point of it.** On a tall enough pill the field row's own content
+    /// sits deep in the cap with *less* room than the chip already has, and the right answer is then
+    /// the plain `leadingInset` — the shift gives the chip room, it never takes room away by
+    /// dragging it left. So the invariant is three-way, not an equality: match the target, or sit at
+    /// a bound on the side that bound exists to protect. Writing it as a plain equality is what this
+    /// test did first, and it failed on every pill above about 94 points for a reason that was the
+    /// function being right.
+    @Test
+    func theDerivedInsetStaysInsideItsBoundsAtEveryPillHeight() throws {
+        let ceiling = WidgetComposerGeometry.chipRowSpacing + WidgetComposerGeometry.fieldRowHeight / 2
+
+        // Below the field row plus two gaps there is no chip row at all, so there is nothing to
+        // inset and the answer is the inset everything else uses.
+        for tooShort in [CGFloat(0), 40, 56] {
+            #expect(
+                WidgetComposerGeometry.chipRowLeadingInset(pillHeight: tooShort)
+                    == WidgetComposerGeometry.leadingInset,
+                """
+                A \(tooShort)pt pill has no room for a chip row, so the chip-row inset must be the \
+                plain \(WidgetComposerGeometry.leadingInset)pt. This is also the unmeasured case: \
+                the view asks before the first layout pass has reported a height.
+                """
+            )
+        }
+
+        var height = CGFloat(58)
+        while height <= 160 {
+            let derived = WidgetComposerGeometry.chipRowLeadingInset(pillHeight: height)
+            #expect(
+                derived >= WidgetComposerGeometry.leadingInset && derived <= ceiling,
+                """
+                At a \(height)pt pill the derived inset is \(derived)pt, outside \
+                [\(WidgetComposerGeometry.leadingInset), \(ceiling)]. Below the low bound the chip \
+                would sit left of the field row's content; above the high bound it is indented past \
+                the point where moving it buys any more room.
+                """
+            )
+
+            let achieved = Self.narrowestChipGap(pillHeight: height, chipLeadingInset: derived)
+            let target = Self.fieldRowGlassMargin(pillHeight: height)
+            let matched = abs(achieved - target) < 0.01
+            let heldAtTheFloor = derived == WidgetComposerGeometry.leadingInset && achieved >= target
+            let heldAtTheCeiling = derived == ceiling && achieved <= target
+            #expect(
+                matched || heldAtTheFloor || heldAtTheCeiling,
+                """
+                At a \(height)pt pill the chip clears the glass by \(achieved)pt against a target \
+                of \(target)pt at an inset of \(derived)pt. That is none of the three right \
+                answers: hit the target, or sit at \(WidgetComposerGeometry.leadingInset)pt with \
+                room to spare, or sit at \(ceiling)pt still short of it.
+                """
+            )
+            height += 1
+        }
+    }
+
     /// The other side of the contract, and the one row E got right: with no chip armed the pill is
     /// the 40pt bar it has always been. The fix's top inset is conditional for exactly this reason,
     /// and a top inset applied unconditionally would show up here rather than in a manual pass.
@@ -232,6 +358,101 @@ struct WidgetComposerChipRowTests {
                 """
             )
         }
+    }
+
+    /// **The arithmetic above is worth nothing if the view does not use it**, and no measurement in
+    /// this suite can tell a derived inset from a hardcoded one — `measuredPillHeight` reads a
+    /// height, and a leading padding does not change a height. So the wiring is pinned textually,
+    /// the way `MacAgentSourceScan` exists to do, with that file's own caveats: comments are
+    /// stripped, and this is a scan, so it holds where the tokens are rather than what they compute.
+    ///
+    /// Counted rather than merely present, per the same rule: a count sees a *swap* — the chip row
+    /// given the field row's plain inset and vice versa leaves both tokens in the file and only the
+    /// per-site counts move.
+    @Test
+    func theComposerPillActuallyAppliesTheDerivedChipRowInset() throws {
+        let source = try MacAgentSource.read("FloatingWidgetView.swift")
+        let pill = try MacAgentSource.braceBlock(of: source, openedBy: "private var composerPill: some View {")
+
+        #expect(
+            MacAgentSource.count(of: ".padding(.leading, chipRowExtraLeadingInset)", inText: pill) == 1,
+            """
+            The chip row does not carry the derived leading inset. Everything in             `theFirstChipGetsTheSameRoomFromTheGlassAsTheFieldRow` can still pass with the chip             back at the field row's own inset, which is the layout the founder rejected.
+            """
+        )
+        #expect(
+            MacAgentSource.count(of: ".padding(.leading, WidgetComposerGeometry.leadingInset)", inText: pill) == 1,
+            "The pill's own leading inset must stay the plain one — it is what positions the field row."
+        )
+        #expect(
+            MacAgentSource.count(of: ".padding(.leading,", inText: pill) == 2,
+            """
+            `composerPill` applies a leading inset somewhere this suite does not know about. Two             sites are expected: the pill's own, and the chip row's extra.
+            """
+        )
+        #expect(
+            MacAgentSource.count(of: "composerPillHeight = ", inText: pill) == 2,
+            """
+            The pill's height is no longer being read back from the layout, so             `chipRowLeadingInset` is being asked about a height that never updates — it answers             `leadingInset` for that, which is silently the cramped layout again.
+            """
+        )
+
+        let extra = try MacAgentSource.braceBlock(
+            of: source,
+            openedBy: "private var chipRowExtraLeadingInset: CGFloat {"
+        )
+        #expect(
+            MacAgentSource.count(
+                of: "WidgetComposerGeometry.chipRowLeadingInset(pillHeight: composerPillHeight)",
+                inText: extra
+            ) == 1,
+            "The extra inset must come from the derivation, applied to the measured height."
+        )
+        #expect(
+            MacAgentSource.count(of: "WidgetComposerGeometry.leadingInset", inText: extra) == 1,
+            """
+            The extra inset is a difference: the pill already applies `leadingInset` to everything             inside it, so this subtracts it. Without the subtraction the chip row is inset twice.
+            """
+        )
+    }
+
+    /// The narrowest horizontal distance between the first chip and the pill's glass, found by
+    /// walking the chip's own height rather than by solving.
+    ///
+    /// **Deliberately not the closed form the production code uses.** `chipRowLeadingInset` locates
+    /// the minimum analytically, where the two arcs run parallel; this one just looks. Two methods
+    /// that agree are evidence; one method checked against itself is not.
+    private static func narrowestChipGap(pillHeight: CGFloat, chipLeadingInset: CGFloat) -> CGFloat {
+        let capRadius = pillHeight / 2
+        let chipHeight = pillHeight
+            - 2 * WidgetComposerGeometry.chipRowSpacing
+            - WidgetComposerGeometry.fieldRowHeight
+        let chipRadius = chipHeight / 2
+        let chipCentreY = WidgetComposerGeometry.chipRowSpacing + chipRadius
+
+        func edge(_ radius: CGFloat, _ offset: CGFloat) -> CGFloat {
+            radius - max(0, radius * radius - offset * offset).squareRoot()
+        }
+
+        var narrowest = CGFloat.greatestFiniteMagnitude
+        var y = WidgetComposerGeometry.chipRowSpacing
+        let bottom = WidgetComposerGeometry.chipRowSpacing + chipHeight
+        while y <= bottom {
+            let chipEdge = chipLeadingInset + edge(chipRadius, y - chipCentreY)
+            narrowest = min(narrowest, chipEdge - edge(capRadius, y - capRadius))
+            y += 0.001
+        }
+        return narrowest
+    }
+
+    /// The room the field row's content has from the glass, horizontally, at the vertical centre of
+    /// that content. The target the chip row is asked to match, and the one quantity this suite does
+    /// evaluate the same way the production code does.
+    private static func fieldRowGlassMargin(pillHeight: CGFloat) -> CGFloat {
+        let capRadius = pillHeight / 2
+        let offset = capRadius - WidgetComposerGeometry.fieldRowHeight / 2
+        let edge = capRadius - max(0, capRadius * capRadius - offset * offset).squareRoot()
+        return WidgetComposerGeometry.leadingInset - edge
     }
 }
 

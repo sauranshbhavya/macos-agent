@@ -89,6 +89,74 @@ enum WidgetComposerGeometry {
     /// The widget's own outer padding, around everything. Named because a measurement of the whole
     /// widget has to subtract it to reach the pill.
     static let widgetOuterPadding: CGFloat = 16
+
+    /// Where the chip row's leading edge goes, derived from the stadium instead of borrowing the
+    /// field row's number (SONNY-207, the founder's second manual pass).
+    ///
+    /// **`leadingInset` is not one margin, it is two different ones.** The field row's content sits
+    /// near the pill's vertical middle, where the stadium's edge has almost finished curving; the
+    /// chip row sits high in the leading cap, where it has not. So the same 14 points from the frame
+    /// buy the two rows very different amounts of room from the glass, and the chip reads jammed
+    /// into the corner — measured on the shipped layout at a 77pt pill: **4.75pt** at the chip's
+    /// narrowest against **8.88pt** for the field row's content (a scanline sweep over a rendered
+    /// pill; `theFirstChipGetsTheSameRoomFromTheGlassAsTheFieldRow` re-derives both from the
+    /// geometry and is what keeps them equal).
+    ///
+    /// **What this returns is the inset that makes those two numbers equal.** Three pieces:
+    ///
+    /// 1. **The field row's room** — its content starts at `leadingInset`, and the stadium's edge at
+    ///    the vertical centre of its content is `capRadius - sqrt(capRadius² - fieldOffset²)`. The
+    ///    difference is the room the design already reads as comfortable, and it is the target.
+    /// 2. **The chip's narrowest gap.** A chip is a capsule inside a capsule, both curving the same
+    ///    way, so the gap between them is narrowest where the two arcs run **parallel** — not at
+    ///    either one's widest point, which is why measuring at the chip's centre line says the
+    ///    layout is fine when the eye says it is not. That point is `sin θ = -verticalOffset /
+    ///    centreOffset`, and the gap there collapses to `-centreOffset * (1 - cos θ)`, with the
+    ///    chip's own radius cancelling out of both.
+    /// 3. **Shifting the chip is a pure translation**, so every gap moves with the inset point for
+    ///    point and the answer is a subtraction rather than a search.
+    ///
+    /// **Bounded at both ends, and the two bounds are not alike.** The lower one is real and can
+    /// bind: on a tall enough pill the field row's own content sits deep in the cap and has *less*
+    /// room than the chip already has, at which point the chip keeps the plain `leadingInset` rather
+    /// than being dragged left to match a target that has fallen below it — the shift exists to give
+    /// the chip room, never to take room away. That crossover is around a 94pt pill, which needs a
+    /// chip about 38 points tall, so it is a correctness bound rather than a live case today. The
+    /// upper one is a guard that no pill height can reach: it would take a negative distance from
+    /// the pill's edge to the field row's content to push the answer past `centreOffset`. It is here
+    /// so the arithmetic can never indent the chip past the point where its cap sits directly under
+    /// the pill's, not because that is expected.
+    ///
+    /// `pillHeight` is the pill's laid-out height, read back from the layout rather than computed
+    /// here — the pill sizes itself to its chips, which is the other half of SONNY-207, and a second
+    /// opinion about how tall a chip is was the first half of the bug. Zero or too small (no chip
+    /// row) returns `leadingInset` unchanged.
+    static func chipRowLeadingInset(pillHeight: CGFloat) -> CGFloat {
+        let chipHeight = pillHeight - 2 * chipRowSpacing - fieldRowHeight
+        guard chipHeight > 0 else { return leadingInset }
+
+        let capRadius = pillHeight / 2
+        let chipRadius = chipHeight / 2
+        // How far the chip's cap centre sits from the pill's, on each axis. The vertical one is
+        // `fieldRowHeight / 2` however tall the chips are, and the horizontal one likewise reduces
+        // to `chipRowSpacing + fieldRowHeight / 2` — the chip's own height cancels. Written as the
+        // subtraction it is, so the derivation reads rather than asserting the coincidence.
+        let centreOffset = capRadius - chipRadius
+        let verticalOffset = fieldRowHeight / 2
+        guard centreOffset > verticalOffset else { return leadingInset }
+
+        // 1. The room the field row's content has, at the vertical centre of that content.
+        let fieldOffset = capRadius - fieldRowHeight / 2
+        let fieldRowGlassEdge = capRadius - (capRadius * capRadius - fieldOffset * fieldOffset).squareRoot()
+        let target = leadingInset - fieldRowGlassEdge
+
+        // 2. The chip's narrowest gap when its cap sits hard against the frame's leading edge.
+        let cosine = (1 - (verticalOffset * verticalOffset) / (centreOffset * centreOffset)).squareRoot()
+        let narrowestGapAtZeroInset = -centreOffset * (1 - cosine)
+
+        // 3. Translate until the two agree, inside the bounds above.
+        return min(max(target - narrowestGapAtZeroInset, leadingInset), centreOffset)
+    }
 }
 
 struct FloatingWidgetView: View {
@@ -119,6 +187,20 @@ struct FloatingWidgetView: View {
     /// arrives with the hint, from `AgentViewModel.micHoverHintPresentation`, because one of the two
     /// hints this row can show does not count down at all.
     @StateObject private var micHint = MicHoverHintModel()
+
+    /// The composer pill's laid-out height, read back so the chip row's leading inset can be
+    /// derived from the stadium the chips actually have to sit inside (SONNY-207).
+    ///
+    /// **Measured rather than computed, and there is no loop in it.** The pill sizes itself to its
+    /// chips, so nothing here knows how tall a chip is before the layout runs — believing it did was
+    /// the first half of this ticket's bug. The inset this feeds changes the chip row's *leading
+    /// padding* only, which cannot change the pill's height, so reading the height and then shifting
+    /// the chips does not re-trigger the read.
+    ///
+    /// Zero until the first layout pass reports it; `chipRowLeadingInset` answers with the plain
+    /// `leadingInset` for a height it cannot use, which is the pre-SONNY-207 position — never a
+    /// clipped one, because the vertical fix does not depend on this.
+    @State private var composerPillHeight: CGFloat = 0
 
     private static let autoCollapseDelay: Duration = .seconds(6)
 
@@ -624,6 +706,11 @@ struct FloatingWidgetView: View {
             // `WidgetComposerGeometry`. It used to be framed to a hardcoded 18, three points
             // shorter than a chip actually is, and the pill's height was computed from that same
             // 18 rather than from the chips.
+            //
+            // **And it does not borrow the field row's leading inset either.** It sits high in the
+            // stadium's leading cap where the edge is still curving, so the same distance from the
+            // frame is much less room from the glass than the field row gets; the extra below is
+            // what makes the two margins equal. `chipRowLeadingInset` derives it.
             if hasComposerChips {
                 HStack(spacing: 8) {
                     workspaceBindingChip
@@ -631,6 +718,7 @@ struct FloatingWidgetView: View {
                     followUpChip
                     Spacer(minLength: 0)
                 }
+                .padding(.leading, chipRowExtraLeadingInset)
             }
 
             composerFieldRow
@@ -645,7 +733,26 @@ struct FloatingWidgetView: View {
         // height is a second opinion about how tall a chip is, and SONNY-207 was that opinion
         // being wrong.
         .frame(width: WidgetComposerGeometry.pillWidth)
+        // Reads the height the line above produced, for `chipRowExtraLeadingInset`. Behind the
+        // glass rather than in front of it, and `Color.clear`, so it draws nothing and takes no
+        // hits — this measures, it does not render.
+        .background(
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear { composerPillHeight = proxy.size.height }
+                    .onChange(of: proxy.size.height) { _, height in composerPillHeight = height }
+            }
+        )
         .widgetGlassPill()
+    }
+
+    /// What the chip row adds to the leading inset the pill already applies to everything inside it.
+    ///
+    /// A difference rather than the whole inset, because the pill's own `.padding(.leading,)` is
+    /// what positions the field row and there must not be two opinions about where that is.
+    private var chipRowExtraLeadingInset: CGFloat {
+        WidgetComposerGeometry.chipRowLeadingInset(pillHeight: composerPillHeight)
+            - WidgetComposerGeometry.leadingInset
     }
 
     private var composerFieldRow: some View {
