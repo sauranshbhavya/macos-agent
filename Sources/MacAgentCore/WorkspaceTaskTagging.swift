@@ -1,10 +1,17 @@
 import Foundation
 
-/// Narrow task-to-workspace tagging: a task's `CompletedTaskRecord.workspaceName` is set only
-/// when it was explicitly dispatched to a workspace, ran a routine that itself opens/creates a
-/// workspace, or the raw command contains an explicit "in workspace X" phrase naming a real saved
-/// workspace — never on an implicit/ambiguous signal. This is deliberately conservative: no
-/// persistent active-workspace concept, no guessing.
+/// Narrow task-to-workspace resolution: a name is produced only when the plan opens/creates a
+/// workspace, a routine the plan runs does, or the raw command carries an explicit "in workspace X"
+/// phrase naming a real saved workspace — never on an implicit/ambiguous signal. This is
+/// deliberately conservative: no persistent active-workspace concept, no guessing.
+///
+/// **This resolves a *candidate name*; it does not decide what a task-history row says.** It has
+/// exactly one caller, `AgentViewModel.resolveTaskScope`, which prefers an explicit binding over it
+/// and then asks the store whether the name is real. `CompletedTaskRecord.workspaceName` is read
+/// back off that resolved scope, so a row names the workspace that actually bounded the run.
+/// It used to be called a second time, straight into the row, and the two derivations disagreed in
+/// both directions — an explicit binding it cannot see went untagged (SONNY-195), and a name it
+/// read off the plan store-blind tagged runs nothing had bounded (SONNY-191).
 public enum WorkspaceTaskTagging {
     /// An explicit workspace clause found in a command, and what the command says once it is
     /// removed.

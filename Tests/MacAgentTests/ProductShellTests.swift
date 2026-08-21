@@ -2237,6 +2237,61 @@ struct ProductShellTests {
         #expect(!notice.contains("decrypted or decoded"))
     }
 
+    /// **A row write that fails must not turn a successful task into a failed one either**
+    /// (SONNY-201).
+    ///
+    /// The sibling of the plan-write test above, and it was the one neighbour still on the wrong
+    /// channel: after PR #89's F4 moved the plan write onto `recordLocalStorageWriteFailure`, the two
+    /// adjacent failures inside one function disagreed with each other — the plan write a notice, the
+    /// row write a `setError`. So a task that ran and produced its result showed "Could not save task
+    /// history: …" in place of it, which is the exact mode `publishLocalStorageLoadError` was written
+    /// to end.
+    ///
+    /// **The heavier loss of the two, and still not a task failure.** A lost plan leaves the task
+    /// fully visible with its plan missing; a lost row leaves it absent from the Tasks list, from
+    /// search, from Insights and from anything a follow-up could aim at. That is worth saying — just
+    /// not in the slot that means the task itself did not happen. The scheduled path already
+    /// answered it this way; `ScheduledRoutineRunTests.aRowWriteFailureIsAStorageNoticeRatherThanAFailedScheduledRun`
+    /// is the twin, and it is new too: the behaviour was right there and untested.
+    @Test(.requiresUnprivilegedProcess)
+    func aRowWriteFailureLeavesTheTaskLookingSuccessfulAndSaysWhatActuallyFailed() async throws {
+        let historyRoot = FileManager.default.temporaryDirectory
+            .appendingPathComponent("ForegroundRowFailure-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: historyRoot, withIntermediateDirectories: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: historyRoot.path)
+            try? FileManager.default.removeItem(at: historyRoot)
+        }
+        let fixture = try makeProductShellFixture(taskHistoryRoot: historyRoot)
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        // Read-only: every other store, the plan store included, sits under the fixture root and
+        // stays writable, so the row write is the only one that fails.
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: historyRoot.path)
+
+        viewModel.command = "= 12 + 30"
+        viewModel.start()
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        // The task succeeded and still says so — the assertion the old channel broke.
+        #expect(viewModel.errorMessage == nil, "a lost history row is not this task failing")
+        #expect(viewModel.finalSummary.contains("42"))
+
+        // The failure is a quiet, accurate notice on the storage channel, in write wording rather
+        // than the load banner's "could not be decrypted or decoded".
+        let notice = try #require(viewModel.localStorageNotice)
+        #expect(notice.hasPrefix("Sonny could not save this task to task history: "))
+        #expect(!notice.contains("decrypted or decoded"))
+
+        // And the row really did not land, or this test drives some other branch entirely.
+        #expect(try fixture.taskHistoryStore.loadAll().isEmpty)
+        #expect(viewModel.taskHistoryRecords.isEmpty)
+        // The plan store was reachable throughout, so nothing was orphaned by a write that skipped
+        // it: `recordTaskPlanDetail` is never called when the row write throws, which is the
+        // dependents-after-the-row rule that function's own doc comment states.
+        #expect(try fixture.taskPlanDetailStore.loadAll().isEmpty)
+    }
+
     @Test
     func directWorkspaceDispatchTagsTheCompletedTaskRecord() async throws {
         let fixture = try makeProductShellFixture()
@@ -2296,6 +2351,122 @@ struct ProductShellTests {
         // The command text never mentions "Research" — this can only be tagged via the
         // routine-nested resolution reading the routine's own saved steps, not free-text matching.
         #expect(record.workspaceName == "Research")
+    }
+
+    // MARK: - What a history row's workspace means (SONNY-195, SONNY-191)
+    //
+    // The founder's decision of 2026-08-21: a record shows the workspace the run **actually ran in**,
+    // not the one the user meant. Both defects were one root cause pointed in opposite directions —
+    // `recordPriorTaskContext` derived the tag a second time, after the run terminated, from
+    // `WorkspaceTaskTagging.resolvedWorkspaceName`, whose signature cannot see an explicit binding
+    // and never learns whether the store answered. So the row and the boundary disagreed whenever
+    // the two derivations did. See `AgentViewModel.assessedWorkspaceName`.
+    //
+    // Every test below drives a real dispatch and reads the row back off the file, because the two
+    // derivations agree on the easy cases: a unit test of the tagger alone passes identically before
+    // and after this fix. The corrupt-store case is the fourth of these and lives in
+    // `AgentViewModelLocalStorageTests`, which is where a mismatched-key fixture already exists.
+
+    /// **Under-tagging** (SONNY-195): a run bound through the workspace card wrote a row saying it
+    /// ran in no workspace, while the widget's own chip said "In Research" for the whole of it.
+    ///
+    /// Driven through the real route rather than `start(workspaceBinding:)`: `beginTaskInWorkspace`
+    /// arms `pendingWorkspaceBinding` and hands the user an empty composer, and the widget's submit
+    /// is what turns that into `explicitWorkspaceBinding` — which is exactly the arm the old tagger
+    /// could not see. The command is deliberately arithmetic that names nothing, since a command
+    /// mentioning "Research" would have been tagged by free-text matching for a different reason and
+    /// the test would pass with the fix removed.
+    @Test
+    func aCardBoundTaskTagsTheRecordEvenThoughItsCommandNeverNamesTheWorkspace() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let workspace = StoredWorkspace(name: "Research", apps: [], urls: [])
+        try fixture.workspaceStore.save(workspace)
+        viewModel.refreshSavedItems()
+
+        viewModel.beginTaskInWorkspace(workspace)
+        #expect(viewModel.pendingWorkspaceBinding == "Research")
+        let command = "= 1 + 1"
+        #expect(!command.localizedCaseInsensitiveContains("research"), "nothing but the binding can tag this run")
+        viewModel.command = command
+        viewModel.start(origin: .widget, fromComposer: true)
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        // The run really was scoped — the half that always worked, asserted so the row's tag below
+        // is being compared against something rather than merely being non-nil.
+        guard case .scoped(let scope) = viewModel.lastAssessedScope else {
+            Issue.record("expected a scoped run, got \(viewModel.lastAssessedScope)")
+            return
+        }
+        #expect(scope.workspaceName == "Research")
+
+        let record = try #require(try fixture.taskHistoryStore.loadAll().last)
+        #expect(record.outcomeStatus == .completed)
+        #expect(record.workspaceName == "Research")
+        // And the surface that reads the field agrees: the workspace card counts this run.
+        #expect(WorkspaceTaskCount.count(forWorkspaceNamed: "Research", in: viewModel.taskHistoryRecords) == 1)
+    }
+
+    /// **Over-tagging, the deleted-workspace case** (SONNY-191). `directWorkspaceName` reads
+    /// `AgentStep.workspaceName` straight off the plan with no store access, so a plan naming a
+    /// workspace that is gone resolved that name anyway and the row claimed a boundary the run never
+    /// had. The workspace card's count then included it, which is a number no boundary backs.
+    ///
+    /// The step is a `calculate_utility` rather than an `open_workspace`, deliberately: the field is
+    /// read off *any* operation (`steps.compactMap(\.workspaceName).first`), and using an operation
+    /// that succeeds keeps the run `.completed`, which is the only status the card counts. An
+    /// `open_workspace` for a missing workspace would fail and be excluded from the count for a
+    /// second reason, hiding the one under test.
+    @Test
+    func aPlanNamingAWorkspaceThatIsGoneLeavesTheRowUntaggedAndOutOfTheWorkspaceCount() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        // A healthy, readable store that simply does not contain the name the plan carries.
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Writing", apps: [], urls: []))
+        viewModel.refreshSavedItems()
+
+        viewModel.command = "tally the sprint numbers"
+        viewModel.start(prebuiltPlan: planCalculating("1 + 1", workspaceName: "Research"))
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        // Nothing bound, and it is not a storage fault — a workspace deleted between dispatch and
+        // assessment is `resolveTaskScope`'s recorded, legitimate fallback.
+        #expect(viewModel.lastAssessedScope == .unscoped)
+        #expect(viewModel.localStorageNotice == nil)
+
+        let record = try #require(try fixture.taskHistoryStore.loadAll().last)
+        #expect(record.outcomeStatus == .completed, "the run itself succeeded, so the card would have counted it")
+        #expect(record.workspaceName == nil)
+        #expect(WorkspaceTaskCount.count(forWorkspaceNamed: "Research", in: viewModel.taskHistoryRecords) == 0)
+    }
+
+    /// **Over-tagging, the blank-name case** (SONNY-191, folding in PR #83's F1 note). A step
+    /// carrying `workspaceName: ""` is guaranteed to produce an unscoped run — `resolveTaskScope`
+    /// refuses a blank name before it touches the store — while the old tagger recorded the blank
+    /// string verbatim, so the row was tagged with something that can never be a workspace and the
+    /// chip would have rendered an empty one.
+    ///
+    /// Reachable with no tampering: the planner schema requires a `workspaceName` slot on every step
+    /// and `""` is a valid value for it, and `validateStepSafety` checks operations rather than
+    /// fields, so a routine can be *saved* carrying a stray blank and reproduce it on every run.
+    @Test
+    func aPlanCarryingABlankWorkspaceNameLeavesTheRowUntaggedRatherThanTaggingTheBlank() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        viewModel.command = "tally the sprint numbers"
+        viewModel.start(prebuiltPlan: planCalculating("1 + 1", workspaceName: "   "))
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.lastAssessedScope == .unscoped)
+        #expect(viewModel.localStorageNotice == nil, "a blank name is not a storage fault")
+
+        let record = try #require(try fixture.taskHistoryStore.loadAll().last)
+        #expect(record.outcomeStatus == .completed)
+        #expect(record.workspaceName == nil)
     }
 
     // MARK: - Regression coverage for a separate, pre-existing bug surfaced while testing the
@@ -2766,6 +2937,28 @@ private final class ProductShellActivationRecorder: ApplicationActivationApplyin
     }
 }
 
+/// A one-step plan that completes hermetically, with a `workspaceName` on the step.
+///
+/// The workspace field is what the tagging tests need and `calculate_utility` is what makes the run
+/// terminate cleanly — `WorkspaceTaskTagging.directWorkspaceName` reads the field off *any*
+/// operation, which is the documented behaviour those tests are exercising rather than a shortcut
+/// around it.
+private func planCalculating(_ expression: String, workspaceName: String?) -> AgentPlan {
+    AgentPlan(
+        summary: "Calculate \(expression).",
+        requiresConfirmation: false,
+        steps: [
+            AgentStep(
+                id: "calculate",
+                operation: .calculateUtility,
+                description: "Calculate \(expression).",
+                workspaceName: workspaceName,
+                searchQuery: expression
+            )
+        ]
+    )
+}
+
 @MainActor
 private func makeProductShellFixture(
     /// Injected only so a test can drive task-history eviction without ten thousand records — the
@@ -2773,7 +2966,10 @@ private func makeProductShellFixture(
     taskHistoryMaxItems: Int = TaskHistoryStore.defaultMaxItems,
     /// For the one test that has to make the plan store unwritable while every other store stays
     /// writable. Everything else leaves it under the fixture root.
-    planDetailRoot: URL? = nil
+    planDetailRoot: URL? = nil,
+    /// The mirror of `planDetailRoot`, for the test that has to fail the *row* write while every
+    /// other store — the plan store included — stays writable (SONNY-201).
+    taskHistoryRoot: URL? = nil
 ) throws -> (
     viewModel: AgentViewModel,
     root: URL,
@@ -2793,7 +2989,8 @@ private func makeProductShellFixture(
         userDefaults: userDefaults,
         userDefaultsSuiteName: userDefaultsSuiteName,
         taskHistoryMaxItems: taskHistoryMaxItems,
-        planDetailRoot: planDetailRoot
+        planDetailRoot: planDetailRoot,
+        taskHistoryRoot: taskHistoryRoot
     )
 }
 
@@ -2802,7 +2999,8 @@ private func makeProductShellFixture(
     userDefaults: UserDefaults,
     userDefaultsSuiteName: String? = nil,
     taskHistoryMaxItems: Int = TaskHistoryStore.defaultMaxItems,
-    planDetailRoot: URL? = nil
+    planDetailRoot: URL? = nil,
+    taskHistoryRoot: URL? = nil
 ) throws -> (
     viewModel: AgentViewModel,
     root: URL,
@@ -2836,7 +3034,7 @@ private func makeProductShellFixture(
         encryption: encryption
     )
     let taskHistoryStore = TaskHistoryStore(
-        fileURL: root.appendingPathComponent("task-history.json"),
+        fileURL: (taskHistoryRoot ?? root).appendingPathComponent("task-history.json"),
         encryption: encryption,
         maxItems: taskHistoryMaxItems
     )

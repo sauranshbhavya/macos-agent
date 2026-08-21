@@ -259,7 +259,12 @@ struct FloatingWidgetView: View {
         //
         // Deliberately only this channel. `localStorageNotice` and `plannerFallbackNotice` have the
         // same hole and are not this ticket's; SONNY-187 records them rather than widening the
-        // guard past what was decided.
+        // guard past what was decided. That is still where they sit: SONNY-187 has since closed its
+        // *other* half — the storage notice no longer posts a notification carrying a Retry that
+        // runs an unrelated task — and the founder's decision of 2026-08-21 left this half open,
+        // because holding the widget open for two more channels is a behaviour change nobody has
+        // asked for and the two are not symmetrical (a planner fallback is informational and the
+        // task ran; a storage problem is ongoing).
         guard viewModel.scheduledRunNotice == nil else {
             return false
         }

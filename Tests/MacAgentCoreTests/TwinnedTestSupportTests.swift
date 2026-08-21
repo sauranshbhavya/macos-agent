@@ -192,13 +192,18 @@ struct TwinnedTestSupportTests {
             }
         }
 
-        // Six since row E (SONNY-151, PR #89's two fix rounds). Both new ones make the plan store's
+        // Six since row E (SONNY-151, PR #89's two fix rounds). Those two make the plan store's
         // directory read-only while task history stays writable, which is the only way to fail the
         // second of a path's two writes without failing the first — one per path, because the
         // scheduled and foreground writes are separate functions rather than one shared helper:
         // `ScheduledRoutineRunTests.aPlanWriteFailureKeepsTheScheduledRowAndSaysWhatActuallyFailed`
         // and `ProductShellTests.aPlanWriteFailureLeavesTheTaskLookingSuccessfulAndSaysWhatActuallyFailed`.
-        #expect(lockedAndGated == 6, "expected six gated directory-locking tests, found \(lockedAndGated)")
+        //
+        // Eight since SONNY-201, which added each path's mirror image: the *row* write failing while
+        // the plan store stays writable, one directory changed in each of the two above —
+        // `ScheduledRoutineRunTests.aRowWriteFailureIsAStorageNoticeRatherThanAFailedScheduledRun`
+        // and `ProductShellTests.aRowWriteFailureLeavesTheTaskLookingSuccessfulAndSaysWhatActuallyFailed`.
+        #expect(lockedAndGated == 8, "expected eight gated directory-locking tests, found \(lockedAndGated)")
         #expect(
             mismatches.isEmpty,
             """

@@ -355,6 +355,53 @@ struct AgentViewModelLocalStorageTests {
         #expect(viewModel.lastAssessedScope == .unscoped)
     }
 
+    /// **A store that will not load leaves the history row untagged rather than tagging a boundary
+    /// the run never had** (SONNY-191, the unreadable-store case).
+    ///
+    /// The third of the four ways a plan-carried name can fail to bind, and the one this file is the
+    /// right home for — the two above it cover deleted and blank, and `ProductShellTests` covers
+    /// those plus the bound case against a real task-history file. This needs a workspace store
+    /// written under one key and read under another, which is the fixture shape this suite already
+    /// has.
+    ///
+    /// `directWorkspaceName` reads `AgentStep.workspaceName` straight off the plan with no store
+    /// access at all, so the old second derivation resolved "Research" here regardless of the store
+    /// being unreadable, and the row claimed a workspace that had bounded nothing. Reported *and*
+    /// untagged is the honest pair: the storage problem is named on its own channel, and the row
+    /// says what actually happened.
+    ///
+    /// Unlike this suite's clarification-shaped tests, this one has to run to completion — a
+    /// non-terminal status writes no row, and the row is the whole subject. That costs the notice
+    /// assertion its isolation, since `refreshSavedItems()` records the same `.savedWorkspaces`
+    /// source on the way out; the row's tag is what this test pins, and the notice is asserted only
+    /// as the accompanying behaviour SONNY-78 already owns.
+    @Test
+    func aWorkspaceStoreThatWillNotLoadLeavesTheRowUntaggedInsteadOfClaimingABoundaryItNeverHad() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try WorkspaceStore(
+            fileURL: root.appendingPathComponent("workspaces.json"),
+            encryption: testEncryption(byte: 0x42)
+        ).save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: []))
+        let viewModel = try makeViewModel(root: root, encryption: testEncryption(byte: 0x99))
+
+        viewModel.command = "tally the sprint numbers"
+        viewModel.start(prebuiltPlan: calculatingPlan(workspaceName: "Research"))
+        while viewModel.isRunning {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        // Nothing bound, and the storage problem said so rather than being swallowed (SONNY-78).
+        #expect(viewModel.lastAssessedScope == .unscoped)
+        #expect(try #require(viewModel.localStorageNotice).contains("saved workspaces"))
+        #expect(viewModel.errorMessage == nil, "an unreadable store is not this task failing")
+
+        // The row exists, succeeded, and claims no workspace.
+        let record = try #require(viewModel.taskHistoryRecords.last)
+        #expect(record.outcomeStatus == .completed)
+        #expect(record.workspaceName == nil)
+    }
+
     /// The persisted form of the same thing, and the worse one: `validateStepSafety` checks a step's
     /// *operation* and not its fields, so a routine can be saved carrying a stray blank
     /// `workspaceName`, and `nestedRoutineWorkspaceName` then reproduces it on every single run of
@@ -698,6 +745,89 @@ struct AgentViewModelLocalStorageTests {
         )
         return LinkedTaskFixture(history: history, journal: journal, planDetails: planDetails)
     }
+
+    // MARK: - SONNY-187: what the storage notice's own notification offers
+
+    /// **The storage notice no longer posts through the failure category, and no longer carries a
+    /// Retry** (SONNY-187, founder decision 2026-08-21).
+    ///
+    /// It did, and that button is wired to `retryLastCommand()` — so a banner reading "your snippets
+    /// file could not be decrypted" offered to re-dispatch whatever the user had last typed, a task
+    /// with no relationship to the file. Reachable from a bookkeeping write failing during a run
+    /// that otherwise succeeded, which makes it an offer to re-run a task that had just worked.
+    ///
+    /// **Worse on this channel than on the scheduled one SONNY-113 fixed.** `localStorageNotice`
+    /// exists precisely so a storage problem is not confused with a task outcome — its own
+    /// declaration says a corrupt store must never make a successful task read as failed — so moving
+    /// it off `errorMessage` and then posting it in the failure notification category undid the move
+    /// at the last hop.
+    ///
+    /// Asserted by reading the wiring because it cannot be asserted by running it:
+    /// `SonnyNotificationService.init?` returns nil without bundle identity, and
+    /// `UNUserNotificationCenter.current()` aborts the process rather than throwing when there is
+    /// none — so the subscription this pins does not exist in a test run at all. Same shape and same
+    /// reasoning as `ScheduledRoutineRunTests.theScheduledNoticePostsThroughItsOwnActionlessCategory`.
+    ///
+    /// **This is one half of SONNY-187 and the ticket stays open for the other**: both notice strips
+    /// are still invisible while the widget is compact, which the founder left for its own decision.
+    /// `FloatingWidgetView.isCollapsible` carries that pointer.
+    @Test
+    func theStorageNoticePostsThroughItsOwnActionlessCategoryRatherThanTheFailureOne() throws {
+        let delegate = try MacAgentSource.read("AppDelegate.swift")
+        let subscription = try MacAgentSource.region(
+            of: delegate,
+            from: "viewModel.$localStorageNotice",
+            to: ".store(in: &cancellables)"
+        )
+        #expect(subscription.contains("postStorageNoticeNotification"))
+        #expect(!subscription.contains("postErrorNotification"))
+
+        // And the category it posts into offers nothing to press. The two neighbours that do carry
+        // actions are named here too, so this fails if the empty array is ever filled in by copying
+        // one of them.
+        let service = try MacAgentSource.read("SonnyNotificationService.swift")
+        let storageCategory = try MacAgentSource.region(
+            of: service,
+            from: "identifier: SonnyNotificationCategory.storage,",
+            to: ")"
+        )
+        #expect(storageCategory.contains("actions: [],"))
+        #expect(!storageCategory.contains("retryAction"))
+        #expect(!storageCategory.contains("allowAction"))
+
+        // The click opens Command Center: the notice renders there as a row on four pages, and
+        // Settings' local-data controls are the nearest thing to somewhere to act on it. Without its
+        // own case the default arm would front the widget, which offers nothing but Dismiss.
+        #expect(service.contains("case SonnyNotificationCategory.storage:"))
+        #expect(service.contains("self?.onOpenStorageNotice()"))
+        let wiring = try MacAgentSource.region(
+            of: delegate,
+            from: "onOpenStorageNotice: { [weak self] in",
+            to: "}"
+        )
+        #expect(wiring.contains("showCommandCenter()"))
+    }
+}
+
+/// A one-step plan that completes hermetically, carrying a `workspaceName` on the step.
+///
+/// `clarifyingPlan` below is the right shape for the scope-only tests, which need an early return
+/// before `refreshSavedItems()`. A test that reads a task-history *row* back cannot use it: a
+/// `.clarificationNeeded` status is not terminal, so `recordTaskHistoryIfTerminal` writes nothing.
+private func calculatingPlan(workspaceName: String?) -> AgentPlan {
+    AgentPlan(
+        summary: "Calculate 1 + 1.",
+        requiresConfirmation: false,
+        steps: [
+            AgentStep(
+                id: "calculate",
+                operation: .calculateUtility,
+                description: "Calculate 1 + 1.",
+                workspaceName: workspaceName,
+                searchQuery: "1 + 1"
+            )
+        ]
+    )
 }
 
 /// A plan that prepares straight into a clarification, so `performStart` returns before

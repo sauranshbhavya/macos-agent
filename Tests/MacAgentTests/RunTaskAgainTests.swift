@@ -85,13 +85,13 @@ struct RunTaskAgainTests {
         // binding rather than of `WorkspaceTaskTagging`, which would have found the name in the
         // command text on its own and bound the same scope for a different reason.
         #expect(!fixture.planner.commands.contains { $0.localizedCaseInsensitiveContains("research") })
-        // **The new row is not tagged, and that is pre-existing rather than this ticket's doing.**
-        // `recordTaskHistoryIfTerminal` derives the tag from `WorkspaceTaskTagging`, which reads the
-        // command and the plan and never the explicit binding — so any dispatch that binds a
-        // workspace the command does not name writes an untagged row, the workspace card's "New task
-        // in …" flow included. Asserted rather than left silent so a later reader does not read the
-        // absence as something run-again broke. Filed as SONNY-195.
-        #expect(try fixture.taskHistoryStore.loadAll().last?.workspaceName == nil)
+        // **And the new row says so** (SONNY-195). This asserted `nil` until 2026-08-21: the tag
+        // came from a second `WorkspaceTaskTagging` derivation that reads the command and the plan
+        // and never the explicit binding, so every dispatch binding a workspace its command does not
+        // name — this one, and the workspace card's "New task here" — wrote an untagged row while
+        // the widget's chip said otherwise. The row now reads the scope the run was assessed under,
+        // which is the same `.scoped(Research)` asserted three lines up.
+        #expect(try fixture.taskHistoryStore.loadAll().last?.workspaceName == "Research")
     }
 
     /// A record whose workspace has since been deleted runs **unscoped** and does not error —
