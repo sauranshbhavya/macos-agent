@@ -157,6 +157,31 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: chore/stop-hook-session-scope
+Status: complete
+Date: 2026-08-21
+Tickets: SONNY-194 (the stop hook attributes other sessions' Swift edits to the stopping session in a shared checkout — fixed by consulting the session's own transcript)
+Reviewed by: the founder directly — a 16-line hook-script diff, offered for a fresh-session review and waived or granted at his call at merge time
+
+Spec sections covered: none — session tooling only
+Files changed:
+- `.claude/hooks/verify-tests-before-stop.sh` — after the dirty-tree fast path, the hook now reads `transcript_path` from its Stop payload and counts this session's Edit/Write/MultiEdit/NotebookEdit calls ending in `.swift`; zero means exit 0 silently. A missing or unreadable transcript falls through to the old run-the-suite behaviour, so the guard fails closed for the sessions it exists to guard.
+- `docs/sonny-v1-implementation-changelog.md` — this entry.
+Tests: the Swift suite is untouched by construction (no file under `Sources/`, `Tests/` or `Package.swift` in the diff — verified with `git diff --name-only main`). The hook logic was proven directly at `91db7d4`: the jq extraction returns 1 against a synthetic transcript carrying one Swift `Write` and 0 without it; a full dry-run with an untracked `.hookprobe.swift` making the tree dirty (confirmed registering as `??` in the dirty check's own output) and a no-Swift-edits transcript exits 0 without running the suite.
+
+Behavior added:
+- The stop hook runs the required suite only for sessions that themselves edited a Swift file, instead of for any session stopping over a dirty tree.
+Behavior preserved (required, no blanket claims):
+- A clean tree still skips everything at the first check, unchanged.
+- A session that did edit Swift still gets the full flagged-suite gate — the transcript check only ever widens the skip, never the run, and falls through to running when the transcript cannot be read.
+- The `stop_hook_active` never-loop guard is untouched.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true): The trigger was three false firings in one day, all in the coordinating session, culminating in a build race (`input file AgentViewModel.swift was modified during the build`) — the hook compiling a tree that Lane A's implementer, sharing the same checkout, was actively editing. The durable rule that prevents the whole class is recorded on SONNY-194 and applies from 2026-08-21: every implementer kickoff gets its own worktree; the main checkout is coordinator-only. The hook change makes the guard correct even if that rule is ever violated again. A `git status` answer is a property of a tree, never of a session — any future hook keying "did this session do X" on tree state will repeat this bug.
+Known limitations / deferred scope: A Swift edit made through raw Bash (`sed -i`, heredoc) is invisible to the transcript check and would skip the gate; sessions in this repo edit through the harness tools, and the failure direction is the pre-existing one. Recorded, not fixed.
+Open questions (required, write "none" if true): none
+
+Next branch: coordinator returns to coordinating; no successor branch.
+
 ### Branch: fix/store-load-integrity
 Status: complete
 Date: 2026-08-20
