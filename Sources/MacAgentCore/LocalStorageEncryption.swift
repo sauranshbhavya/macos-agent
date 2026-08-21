@@ -150,6 +150,27 @@ public enum LocalStorageMigrationLog {
         )
     }
 
+    /// A store's read door removed state it had no business carrying (SONNY-67, founder decision
+    /// 2026-08-21).
+    ///
+    /// **A quiet warning, never the UI, and that is the decision rather than an omission.** A user
+    /// whose `routines.json` was written by something other than Sonny has a problem this app cannot
+    /// explain to them and cannot fix; a banner would ask them to act on a fact they have no action
+    /// for, which is the class of copy the 2026-08-14 rule already forbids in the product. What it is
+    /// *for* is the case where somebody is looking: a support session, or a developer wondering why a
+    /// routine's pinned app is being re-resolved every run. Silence there was the only thing wrong
+    /// with stripping quietly.
+    ///
+    /// Named counts, no names or paths: the routine names are the user's content and the whole point
+    /// of `privacy: .public` on the rest is that these lines can be read from a log archive.
+    static func recordStrippedResolverPins(store: String, stepCount: Int) {
+        logger.warning(
+            """
+            Stripped executor-resolved app pins from \(stepCount, privacy: .public) step(s) while             loading \(store, privacy: .public). Sonny never writes those fields into a stored             routine, so the file was not written by Sonny. The routines themselves are intact and             the pins are resolved again at run time.
+            """
+        )
+    }
+
     /// The other deferred rewrite a store can owe: giving records written before an id field
     /// existed one. Same failure semantics as the migration above and a separate sentence on
     /// purpose — reusing that one would name the wrong upgrade, and this repository has already

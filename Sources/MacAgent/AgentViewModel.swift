@@ -2850,7 +2850,26 @@ final class AgentViewModel: ObservableObject {
             routineStore: routineStore,
             workspaceStore: workspaceStore
         )
-        guard let resolvedName else {
+        // **A blank name is no name, and it must never reach the store** (PR #83, F1). `findWorkspace`
+        // validates before it loads: `normalizedName` throws `.missingName` for a blank or
+        // whitespace-only string *without touching the file*, so handing it one and reporting the
+        // throw below would put "could not load encrypted local data" in front of a user whose store
+        // is perfectly healthy.
+        //
+        // Reachable with no tampering at all. The planner schema requires a `workspaceName` slot on
+        // every step and `""` is a valid value for it; nothing normalises blank to `nil` on the way
+        // in; and `WorkspaceTaskTagging.directWorkspaceName` is `steps.compactMap(\.workspaceName).first`,
+        // which reads the field off *any* operation rather than only the workspace ones. The
+        // persisted form is worse than the transient one: `validateStepSafety` checks operations and
+        // not fields, so a routine can be saved carrying a stray `""`, and `nestedRoutineWorkspaceName`
+        // then reproduces it on every single run of that routine.
+        //
+        // Guarded here rather than caught below, so the store is never asked a question that has no
+        // answer. It also leaves the `catch` honestly storage-only: `.missingName` is the one
+        // non-storage error `findWorkspace` can raise, and this is what makes it unreachable from
+        // there.
+        guard let resolvedName,
+              !resolvedName.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
             return .unscoped
         }
 

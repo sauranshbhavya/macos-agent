@@ -77,6 +77,33 @@ struct AutomationStoresTests {
         #expect(try store.routine(named: "Morning") == routine)
     }
 
+    /// The decision behind SONNY-67's log line, held as a value (founder decision 2026-08-21, F6).
+    /// The warning itself is an `os.Logger` call, which no test in this repository observes — the two
+    /// existing `LocalStorageMigrationLog` warnings have none either, and reading them back needs
+    /// `OSLogStore`. What *is* cheap to hold is the condition that decides whether it is emitted, so
+    /// that lives in its own function and this pins it.
+    @Test
+    func onlyStepsCarryingAPinAreCountedForTheStripWarning() {
+        var pinnedName = AgentStep(id: "a", operation: .openApp, description: "a", appName: "Safari")
+        pinnedName.resolvedAppName = "Safari"
+        var pinnedIdentifier = AgentStep(id: "b", operation: .openApp, description: "b", appName: "Notes")
+        pinnedIdentifier.resolvedBundleIdentifier = "com.apple.Notes"
+        var pinnedBoth = AgentStep(id: "c", operation: .openApp, description: "c", appName: "Mail")
+        pinnedBoth.resolvedAppName = "Mail"
+        pinnedBoth.resolvedBundleIdentifier = "com.apple.mail"
+        let clean = AgentStep(id: "d", operation: .openApp, description: "d", appName: "Music")
+
+        #expect(StoredRoutine.resolverPinnedStepCount([clean]) == 0)
+        // Either pin counts the step, and a step carrying both counts once — the unit is the step,
+        // matching what the strip clears.
+        #expect(StoredRoutine.resolverPinnedStepCount([pinnedName, pinnedIdentifier, pinnedBoth, clean]) == 3)
+
+        // Recursive, like the strip: a nested step's pin is a pin.
+        var outer = AgentStep(id: "outer", operation: .openApp, description: "outer", appName: "Safari")
+        outer.routineSteps = [pinnedBoth, clean]
+        #expect(StoredRoutine.resolverPinnedStepCount([outer]) == 1)
+    }
+
     /// **The forcing function.** The strip clears two named fields, and a hand-maintained list of
     /// resolver-only fields is exactly the thing that goes stale — the defect this ticket closes
     /// exists because one door knew a rule and another did not.
