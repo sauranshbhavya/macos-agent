@@ -237,7 +237,7 @@ final class VisionSessionRunner {
             )
 
             let context = interaction.visionApprovalContext()
-            if context.safeMode {
+            if context.mode.asksBeforeEveryAction {
                 let allowed = try await interaction.confirmVisionCaptureBeforeSending(
                     VisionCapturePreview(
                         appDisplayName: target.displayName,
@@ -333,7 +333,7 @@ final class VisionSessionRunner {
                 // Safe mode asks about the delegation itself; Normal and Power never do (founder,
                 // 2026-08-14). What the delegated plan *does* is gated in every mode by the ordinary
                 // plan-level gate inside `runVisionDelegation`.
-                if interaction.visionApprovalContext().safeMode {
+                if interaction.visionApprovalContext().mode.asksBeforeEveryAction {
                     let allowed = try await interaction.confirmVisionDelegation(request)
                     guard allowed else {
                         history.append("iteration \(iteration): you declined to let Sonny's own tools do \u{201C}\(request.instructionText)\u{201D}. Continue from the screen instead, or report stuck.")

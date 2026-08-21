@@ -129,6 +129,41 @@ public struct RiskApprovalPolicy: Codable, Equatable, Sendable {
     /// formula — `refuse` is stricter than the floor. SONNY-90 owns revisiting this constant when
     /// the Settings surface lands; it revises the *floor*, never the formula.
     static let safeModeFloor: RiskApprovalRequirement = .explicitApproval
+
+    /// The floor an outstanding per-app control question puts under the requirement (row J).
+    ///
+    /// `explicitApproval` and not `previewOnly` for the same reason Safe mode's floor is: the user
+    /// can always allow (escalate-never-block, I4), they are just asked first. Composed with
+    /// `stricter(of:_:)` so the standing can only ever tighten — a floor cannot loosen anything, and
+    /// tier 4's `refuse` is stricter than it, so a refusal survives a standing untouched.
+    static let appControlFloor: RiskApprovalRequirement = .explicitApproval
+
+    /// The consequence rule's own term: what the tier and the escalations say, before Safe mode's
+    /// floor or a per-app standing is composed with it.
+    ///
+    /// Lifted out of `requirement(for:context:)`'s body when the mode became a switch dimension
+    /// (SONNY-142). Same cells it always had, and the same reasons: any escalation whose class asks
+    /// first asks at *every* tier that can run, because the rule is "asks when destructive", not
+    /// "asks when destructive and the tier arithmetic agrees"; a tier-3 carrying no escalations at
+    /// all fails closed, because with nothing classified there is nothing to run silently on.
+    private func consequenceRuleRequirement(
+        for tier: CapabilityRiskTier,
+        asksFirst: Bool,
+        hasEscalations: Bool
+    ) -> RiskApprovalRequirement {
+        switch tier {
+        case .tier0, .tier1, .tier2:
+            return asksFirst ? .explicitApproval : .autoRun
+        case .tier3:
+            return asksFirst || !hasEscalations ? .explicitApproval : .autoRun
+        case .tier4:
+            // Unreachable through `requirement(for:context:)`, whose own switch answers tier 4 for
+            // all nine mode/standing pairs before reaching here. Written correctly rather than as a
+            // `fatalError` so that a future caller of this helper cannot be the one place tier 4
+            // stops refusing.
+            return .refuse
+        }
+    }
 }
 
 public struct RiskApprovalCopy: Codable, Equatable, Sendable {
@@ -300,7 +335,8 @@ public struct RiskApprovalConsent: Codable, Equatable, Sendable {
     public var coverage: Coverage
     /// The *requirement* the user actually answered — the third axis (SONNY-97), recorded because
     /// the requirement stopped being a pure function of the tier: first through row C's grants
-    /// (since superseded), now through `ApprovalContext` (Safe mode) and the escalations'
+    /// (since superseded), now through `ApprovalContext` (the mode, and row J's per-app standing)
+    /// and the escalations'
     /// consequence classes. A consent given to a lighter ask must never be
     /// spent on a stricter one at equal tier, whatever produced the difference — the axis is
     /// defense-in-depth for every context field that will ever bend the mapping.
@@ -581,24 +617,58 @@ public struct CapabilityRiskAssessment: Codable, Equatable, Sendable {
 /// on a security-relevant context is exactly the dormant policy the pivot was told to remove.
 /// `PreparedPlanSource` itself survives — dispatch, logging and the pending-arm rule still read it.
 public struct ApprovalContext: Equatable, Sendable {
-    /// True exactly when the user's interaction mode is Safe — the only production writer is the
-    /// one named site (`AgentViewModel.approvalContext()` mapping
-    /// `AgentViewModel.interactionMode` via `AgentInteractionMode.asksBeforeEveryAction`; Normal
-    /// and Power both map false, Power being row 18's mode landing as a setting first). When
-    /// true, the requirement is `safeModeRequirement(for:)`'s formula: everything that could run
-    /// asks first, tier 4 still refuses. Safe mode is the cautious user's opt-back-in to being
-    /// asked about everything.
-    public var safeMode: Bool
-    // A future authority axis lands HERE, as a field this function maps — never as a rule applied
-    // to the function's return value, which is the post-hoc clamp I8 forbids. (This comment named
-    // row I's `appControlConsent` as the next such field; see the type's doc comment for why that
-    // field was superseded rather than built.)
+    /// The user's posture dial, whole — **replacing the `safeMode: Bool` this carried until row J**
+    /// (SONNY-142).
+    ///
+    /// Two booleans cannot express three modes, and a boolean plus a mode would leave a derived
+    /// field that can disagree with its source. The only production writer is still the one named
+    /// site, `AgentViewModel.approvalContext()`, which reads `AgentViewModel.interactionMode`
+    /// directly now rather than folding it through `asksBeforeEveryAction` — that fold is what made
+    /// Normal and Power indistinguishable here, and row J needs them distinguished.
+    ///
+    /// Row I's changelog warned a future reader against adding a mode axis to this type. That
+    /// warning was about *shape*, not a prohibition, and this is its case: the mode is an input to
+    /// the one requirement function, matched exhaustively, never a rule applied to that function's
+    /// answer.
+    public var mode: AgentInteractionMode
+
+    /// The resolved per-app control fact for the plan being judged — row J's authority axis, landing
+    /// **here, as a field the one function maps**, which is exactly what the comment this replaces
+    /// said the next such axis would do.
+    ///
+    /// Deliberately payload-free: the app's identity travels on the assessment, where the copy
+    /// needs it. The policy needs only the answer, and a policy that could read an app's name is a
+    /// policy someone will eventually make decide on one.
+    public var appControl: AppControlStanding
 
     // Explicit rather than synthesized: the memberwise initializer of a public struct is internal,
-    // and `MacAgent` is a separate target.
-    public init(safeMode: Bool) {
-        self.safeMode = safeMode
+    // and `MacAgent` is a separate target. Neither parameter is defaulted, so a new construction
+    // site has to answer both — a defaulted `appControl` is precisely how row J's gate would become
+    // a hook nothing calls.
+    public init(mode: AgentInteractionMode, appControl: AppControlStanding) {
+        self.mode = mode
+        self.appControl = appControl
     }
+}
+
+/// Whether the plan being judged controls an app the user has allowed Sonny to control.
+///
+/// Resolved once per plan by one resolver and carried on ``ApprovalContext``. Payload-free on
+/// purpose — see that field's comment.
+///
+/// **A strictness input only.** It may raise an ask and may never remove one, which
+/// ``RiskApprovalPolicy/requirement(for:context:)`` makes structural by composing it as
+/// `stricter(of:_:)` rather than as a replacement. Same one-directionality rule
+/// `VisionConsequenceClassifier` obeys for screen-derived signals, and the same shape as C2's
+/// ratified "consent maps to a requirement override, never a tier change".
+public enum AppControlStanding: String, CaseIterable, Equatable, Sendable {
+    /// This plan controls no app, so there is no per-app question to ask. Every non-vision plan.
+    case notApplicable
+    /// Allowed under the current mode — by the starter list, by the user's own approval, or because
+    /// the mode asks about no app at all.
+    case allowed
+    /// Not yet allowed under the current mode. The one standing that raises an ask.
+    case needsApproval
 }
 
 public extension RiskApprovalPolicy {
@@ -612,10 +682,11 @@ public extension RiskApprovalPolicy {
     /// or *affects someone other than the user* — the two `Consequence` classes whose `asksFirst`
     /// is true. Everything else runs without asking, made legible by the ran-without-asking trace.
     ///
-    /// Body order is the composition rule: Safe mode returns first, so "Safe mode wins — the rule
-    /// never runs inside it" is structural rather than remembered. The switch below is exhaustive
-    /// over the tier with no `default:`, and the ask term reads only the escalations' consequence
-    /// classes:
+    /// **The switch is over the whole authority tuple** — `(mode, appControl, effectiveTier)` — with
+    /// no `default:` and no wildcard in either authority position (SONNY-142). Safe mode used to
+    /// return from an `if` above the tier switch, which made "Safe wins, the rule never runs inside
+    /// it" structural; it is structural for the same reason now, in the arms rather than in the
+    /// body order, and the ask term still reads only the escalations' consequence classes:
     ///
     /// - Any escalation whose class asks first (destructive, affects-others) asks, **at every
     ///   tier that can run**. On tiers 0–2 that term is unreachable through any adapter today —
@@ -640,17 +711,70 @@ public extension RiskApprovalPolicy {
         for assessment: CapabilityRiskAssessment,
         context: ApprovalContext
     ) -> RiskApprovalRequirement {
-        if context.safeMode {
-            return safeModeRequirement(for: assessment.effectiveTier)
-        }
         let asksFirst = assessment.escalations.contains { $0.consequence.asksFirst }
-        switch assessment.effectiveTier {
-        case .tier0, .tier1, .tier2:
-            return asksFirst ? .explicitApproval : .autoRun
-        case .tier3:
-            return asksFirst || assessment.escalations.isEmpty ? .explicitApproval : .autoRun
-        case .tier4:
+        let hasEscalations = !assessment.escalations.isEmpty
+        let tier = assessment.effectiveTier
+
+        // **One switch, and every dimension is spelled out.** No `default:`, no `_` in the mode
+        // position and none in the standing position, so a fourth mode or a fourth standing does not
+        // compile until somebody answers all fifteen of its new cells. Forty-five tuples for
+        // nine behavioural rows is the friction, and it is the design rather than something to route
+        // around: the two axes below are authority axes, and an axis that can be silently inherited
+        // is an axis that will be.
+        switch (context.mode, context.appControl, tier) {
+
+        // Tier 4 refuses, in every mode and every standing — row C's escalate-never-block invariant
+        // (I4). Written first so no arm below can be read as qualifying it.
+        case (.safe, .notApplicable, .tier4), (.safe, .allowed, .tier4), (.safe, .needsApproval, .tier4),
+             (.normal, .notApplicable, .tier4), (.normal, .allowed, .tier4), (.normal, .needsApproval, .tier4),
+             (.power, .notApplicable, .tier4), (.power, .allowed, .tier4), (.power, .needsApproval, .tier4):
             return .refuse
+
+        // Safe, with no per-app question outstanding: the floor formula, unchanged since row C.
+        // Composing terms inside this one function is the ratified shape and is not a post-hoc
+        // clamp — what I8 forbids is a *public* function that takes a requirement and returns a
+        // different one.
+        case (.safe, .notApplicable, .tier0), (.safe, .notApplicable, .tier1),
+             (.safe, .notApplicable, .tier2), (.safe, .notApplicable, .tier3),
+             (.safe, .allowed, .tier0), (.safe, .allowed, .tier1),
+             (.safe, .allowed, .tier2), (.safe, .allowed, .tier3):
+            return safeModeRequirement(for: tier)
+
+        // Safe, and an app the user has not allowed. The two floors compose; they do not compete.
+        // They are the same value today, so this arm changes no answer Safe already gave — written
+        // separately anyway, because a floor that happens to coincide is not a floor that is absent,
+        // and the day either constant moves this cell has to still be right.
+        case (.safe, .needsApproval, .tier0), (.safe, .needsApproval, .tier1),
+             (.safe, .needsApproval, .tier2), (.safe, .needsApproval, .tier3):
+            return .stricter(of: safeModeRequirement(for: tier), Self.appControlFloor)
+
+        // Normal and Power, with no per-app question outstanding: the consequence rule alone.
+        // `.notApplicable` and `.allowed` are the same answer here and are still written out
+        // separately — they mean different things (no app, versus an app that is allowed), and
+        // collapsing them into a wildcard is what would let a fourth standing inherit this cell.
+        case (.normal, .notApplicable, .tier0), (.normal, .notApplicable, .tier1),
+             (.normal, .notApplicable, .tier2), (.normal, .notApplicable, .tier3),
+             (.normal, .allowed, .tier0), (.normal, .allowed, .tier1),
+             (.normal, .allowed, .tier2), (.normal, .allowed, .tier3),
+             (.power, .notApplicable, .tier0), (.power, .notApplicable, .tier1),
+             (.power, .notApplicable, .tier2), (.power, .notApplicable, .tier3),
+             (.power, .allowed, .tier0), (.power, .allowed, .tier1),
+             (.power, .allowed, .tier2), (.power, .allowed, .tier3):
+            return consequenceRuleRequirement(for: tier, asksFirst: asksFirst, hasEscalations: hasEscalations)
+
+        // Normal and Power, and an app the user has not allowed: the consequence rule with the
+        // per-app floor under it. This is the only cell where the standing changes an answer, and
+        // `stricter(of:_:)` is what makes "may raise an ask, may never remove one" structural rather
+        // than remembered — a destructive action that already asks keeps asking, and nothing here
+        // can turn an ask back into an auto-run.
+        case (.normal, .needsApproval, .tier0), (.normal, .needsApproval, .tier1),
+             (.normal, .needsApproval, .tier2), (.normal, .needsApproval, .tier3),
+             (.power, .needsApproval, .tier0), (.power, .needsApproval, .tier1),
+             (.power, .needsApproval, .tier2), (.power, .needsApproval, .tier3):
+            return .stricter(
+                of: consequenceRuleRequirement(for: tier, asksFirst: asksFirst, hasEscalations: hasEscalations),
+                Self.appControlFloor
+            )
         }
     }
 }
