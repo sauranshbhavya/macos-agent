@@ -182,6 +182,29 @@ struct CommandCenterView: View {
         .popover(isPresented: $isAccountMenuPresented, arrowEdge: .top) {
             accountMenuContent
         }
+        // **The Learn-more dwell timer does not outlive the menu that owns it (PR #84 review, F2).**
+        //
+        // `isLearnMoreExpanded` and `learnMoreHoverTask` are `@State` on `CommandCenterView` — the
+        // window root — while the views their hover tracks live inside the popover above, which is
+        // torn down independently of this view. That is structurally the case SONNY-179 fixed on the
+        // mic, and it was reachable: rest the pointer on the Learn-more row, and inside the 100ms
+        // dwell dismiss the menu with Escape. The row goes without AppKit delivering an exit, so
+        // nothing cancels the task, and it then sets the flag with no hover anywhere. Nothing
+        // presents at the time — the row that carries the flyout's `.popover` is gone — but the flag
+        // survives on the root, so the *next* time the user opens the account menu the flyout
+        // springs open unbidden.
+        //
+        // **Keyed on the menu closing, not on a teardown callback.** `isAccountMenuPresented` going
+        // false is the event that means "the row and the flyout are gone"; responding to it is
+        // SONNY-179's shape rather than teaching a flag to notice its own destruction. The flyout
+        // state is not a copy of where the pointer is — it is real UI state — so what is wrong here
+        // is a pending timer writing it after its trigger died, and cancelling that timer is the fix.
+        .onChange(of: isAccountMenuPresented) { _, isPresented in
+            guard !isPresented else { return }
+            learnMoreHoverTask?.cancel()
+            learnMoreHoverTask = nil
+            isLearnMoreExpanded = false
+        }
     }
 
     private var profileAvatar: some View {
@@ -2354,6 +2377,25 @@ struct WorkspaceScopeEntryPresentation: Equatable {
     /// Non-nil when `WorkspaceScope` classified this entry inert: it is stored, it is shown, and it
     /// can never match anything. Carries the evaluator's own reason.
     let inertNote: String?
+    /// The app's icon, for the Apps section only — `nil` on every URL and file-location row
+    /// (SONNY-65).
+    ///
+    /// **Resolved here rather than in the view**, for the reason the dispatch above is: this repo
+    /// has no SwiftUI view-inspection harness, so anything composed inside a `body` is unassertable.
+    /// The section builder knows its own `kind`, so the row does not need to be told which dimension
+    /// it belongs to — which was the other of the two shapes SONNY-111's triage sketched.
+    ///
+    /// **`WorkspaceAppIconPresentation?` and not `NSImage?`, deliberately.** That type's `==`
+    /// excludes icon content from identity, because whether an icon resolves depends on what is
+    /// installed on the machine rendering it; a bare `NSImage?` here would put that back into this
+    /// type's synthesized equality and make it depend on the test machine's `/Applications`.
+    ///
+    /// Two different `nil`s collapse to the same rendering, which is what the ticket's fallback
+    /// constraint asks for: this being `nil` (not an app) and its `.icon` being `nil` (an app the
+    /// catalog cannot resolve) both render name-only. **Never the card's `app.dashed` tile** — that
+    /// is a placeholder implying brokenness, and this sheet's whole job is showing a boundary the
+    /// user can check against a consent prompt.
+    let appIcon: WorkspaceAppIconPresentation?
 }
 
 /// One dimension of a workspace's boundary, as the detail sheet renders it.
@@ -2421,11 +2463,22 @@ struct WorkspaceDetailPresentation: Equatable {
     /// `catalog` and `whitelist` are injectable purely so a test can pin behaviour without depending
     /// on what happens to be installed or on the real home directory. Production always takes the
     /// defaults, which is what makes the sheet's answer and the evaluator's answer the same answer.
+    ///
+    /// `@MainActor` since SONNY-65: resolving an app icon goes through `NSWorkspace`, so
+    /// `WorkspaceAppIconPresentation.init` is main-actor isolated and this inherits it — the same
+    /// annotation `WorkspaceCardPresentation.init` has carried since it started resolving icons.
+    /// Every caller is already on the main actor (a SwiftUI `body`, or a `@MainActor` test suite).
+    @MainActor
     init(
         workspace: StoredWorkspace,
         taskHistoryRecords: [CompletedTaskRecord],
         catalog: MacAppCatalog = .default,
-        whitelist: PathWhitelist = PathWhitelist()
+        whitelist: PathWhitelist = PathWhitelist(),
+        // Defaulted like `catalog` and `whitelist`, and injectable for the same reason: a test can
+        // pin the unresolvable-app fallback without depending on what is installed on the machine
+        // running it. Production always takes the default, which is the resolver the workspace card
+        // behind this sheet already uses — so one app cannot show two different icons.
+        iconResolver: any WorkspaceAppIconResolving = WorkspaceAppIconResolver.shared
     ) {
         name = workspace.name
         avatarInitial = WorkspaceAvatarInitial.from(name: workspace.name)
@@ -2449,7 +2502,8 @@ struct WorkspaceDetailPresentation: Equatable {
             isRestricted: !scope.appKeys.isEmpty,
             notRestrictedText: "Not restricted — this workspace does not limit which apps a task can use.",
             scope: scope,
-            catalog: catalog
+            catalog: catalog,
+            iconResolver: iconResolver
         )
         urls = Self.section(
             title: "URLs",
@@ -2459,7 +2513,8 @@ struct WorkspaceDetailPresentation: Equatable {
             isRestricted: !scope.webDomains.isEmpty,
             notRestrictedText: "Not restricted — this workspace does not limit which sites a task can open.",
             scope: scope,
-            catalog: catalog
+            catalog: catalog,
+            iconResolver: iconResolver
         )
         // `effectiveFileLocations`, never the raw Optional: "no key on disk" and "explicitly
         // emptied" are the same thing to every reader outside `WorkspaceStore.save`, and both mean
@@ -2472,7 +2527,8 @@ struct WorkspaceDetailPresentation: Equatable {
             isRestricted: !scope.fileRoots.isEmpty,
             notRestrictedText: "Not restricted — this workspace does not limit which folders a task can touch.",
             scope: scope,
-            catalog: catalog
+            catalog: catalog,
+            iconResolver: iconResolver
         )
         unrestrictedFootnote = [apps, urls, fileLocations].contains { !$0.isRestricted }
             ? "An unrestricted list means this workspace says nothing about that kind of thing — Sonny neither "
@@ -2486,6 +2542,7 @@ struct WorkspaceDetailPresentation: Equatable {
         "“\(name)” is no longer saved."
     }
 
+    @MainActor
     private static func section(
         title: String,
         kind: ScopedResourceKind,
@@ -2494,7 +2551,8 @@ struct WorkspaceDetailPresentation: Equatable {
         isRestricted: Bool,
         notRestrictedText: String,
         scope: WorkspaceScope,
-        catalog: MacAppCatalog
+        catalog: MacAppCatalog,
+        iconResolver: any WorkspaceAppIconResolving
     ) -> WorkspaceScopeSectionPresentation {
         let inertReasons = Dictionary(
             scope.inertEntries.filter { $0.kind == kind }.map { ($0.value, $0.reason) },
@@ -2527,7 +2585,12 @@ struct WorkspaceDetailPresentation: Equatable {
                     // The evaluator's own words for *why*, never a paraphrase: a second explanation
                     // of inertness is a second thing that can disagree with the classification it
                     // is explaining.
-                    inertNote: inertReasons[value].map { "Not in effect — \($0)" }
+                    inertNote: inertReasons[value].map { "Not in effect — \($0)" },
+                    // Apps only. A URL or a folder has no icon to resolve, and asking the app
+                    // resolver for one would be a lookup guaranteed to miss.
+                    appIcon: kind == .app
+                        ? WorkspaceAppIconPresentation(appName: value, resolver: iconResolver)
+                        : nil
                 )
             },
             isRestricted: isRestricted,
@@ -3259,12 +3322,35 @@ private struct WorkspaceDetailView: View {
     private func entryRow(_ entry: WorkspaceScopeEntryPresentation) -> some View {
         SettingsAdaptiveControlRow {
             VStack(alignment: .leading, spacing: 3) {
-                Text(entry.value)
-                    .font(SonnyType.caption)
-                    .foregroundStyle(SonnyTheme.text)
-                    .fixedSize(horizontal: false, vertical: true)
-                    .textSelection(.enabled)
-                    .frame(maxWidth: .infinity, alignment: .leading)
+                // Icon *beside* the name, never instead of it (SONNY-65, founder ask 2026-08-07).
+                // The verbatim string stays because this sheet's recorded rationale is that a user
+                // can check an entry against the one a consent prompt named, and an icon is not
+                // checkable against a sentence.
+                //
+                // `.top` rather than `.center`: the name wraps (`fixedSize` below keeps it
+                // unbounded vertically), and a centred icon beside a two-line entry floats in the
+                // middle of nowhere. The 1pt nudge is optical — a 16pt square reads high against
+                // 13pt text sitting on its own cap height.
+                HStack(alignment: .top, spacing: 8) {
+                    if let nsImage = entry.appIcon?.icon {
+                        Image(nsImage: nsImage)
+                            .resizable()
+                            .scaledToFit()
+                            .frame(width: 16, height: 16)
+                            .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+                            .padding(.top, 1)
+                            // The name is already the row's accessible content, and the icon adds
+                            // nothing a screen reader can use — same call the card's tiles make.
+                            .accessibilityHidden(true)
+                    }
+
+                    Text(entry.value)
+                        .font(SonnyType.caption)
+                        .foregroundStyle(SonnyTheme.text)
+                        .fixedSize(horizontal: false, vertical: true)
+                        .textSelection(.enabled)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+                }
 
                 if let inertNote = entry.inertNote {
                     Text(inertNote)
