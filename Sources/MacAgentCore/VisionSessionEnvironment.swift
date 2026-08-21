@@ -174,7 +174,13 @@ public protocol VisionSessionInteracting: AnyObject {
     /// through a session gets Safe mode for the rest of it. The reverse also holds and is the reason
     /// this is worth stating: switching *out* of Safe mode mid-session stops the per-action asking,
     /// which is the user exercising their own dial and not a bypass.
-    func visionApprovalContext() -> ApprovalContext
+    ///
+    /// - Parameter targetBundleIdentifier: the session's **pinned** target, carried in the signature
+    ///   rather than resolved on the other side, so the standing is computed for the app this
+    ///   session is actually driving and not for whatever happens to be frontmost. Re-resolving it
+    ///   per call is what makes a grant revoked mid-session take effect at the next iteration rather
+    ///   than at the next launch (SONNY-143).
+    func visionApprovalContext(targetBundleIdentifier: String) -> ApprovalContext
 }
 
 /// Everything a vision session needs from outside `MacAgentCore`'s pure logic, in one field.

@@ -141,6 +141,19 @@ public enum VisionContainmentRefusal: Equatable, Sendable {
     /// Chrome session. **Any change that widens the capture invalidates that and must revisit this
     /// case rather than route around it.**
     case screenShowsShell(ShellSurfaceVerdict)
+    /// The user's permission to control this app went away while the session was running
+    /// (SONNY-143) — removed in Settings, or erased with the rest of their local data.
+    ///
+    /// **Re-asked at the top of every iteration, and it ends the session rather than re-prompting.**
+    /// A grant is durable and a session is long, so the answer that started this one can stop being
+    /// true while it runs; re-reading it per iteration is what makes a revocation take effect now
+    /// rather than at the next launch. It does not re-prompt for the same reason nothing else here
+    /// does — the user has just answered this exact question, in the other direction.
+    ///
+    /// **Not a terminal refusal and not a substitute for one.** The deny list re-checks above this
+    /// every iteration, so a terminal ends the session under `targetIneligible` before this case is
+    /// ever reached, whatever any grant says.
+    case appControlWithdrawn(app: String)
     case targetNotFrontmost(expected: String, actual: String?)
     case attentionLost(SessionAttentionState)
     case actionTypeNotAllowed(String)
@@ -180,6 +193,11 @@ public enum VisionContainmentRefusal: Equatable, Sendable {
             return "Sonny stopped because that window is showing a shell — anything typed into one "
                 + "runs with your full account authority, outside every permission Sonny has. This "
                 + "is not something you can allow."
+        case .appControlWithdrawn(let app):
+            // Names the fact and stops. It does not say how to restore the grant: that is a
+            // how-it-works sentence, and the place a user acts on it is the Settings row they just
+            // used. One string for the panel and for the recorded reason, like every case here.
+            return "Sonny stopped because it is no longer allowed to control \(app)."
         case .targetNotFrontmost(let expected, let actual):
             let actualName = actual.map { "\($0) is" } ?? "something else is"
             return "Sonny stopped because \(expected) is no longer the app in front — \(actualName). "
@@ -210,6 +228,7 @@ public enum VisionContainmentRefusal: Equatable, Sendable {
         case .cancelled: return "user_stopped"
         case .targetIneligible: return "target_ineligible"
         case .screenShowsShell: return "screen_shows_shell"
+        case .appControlWithdrawn: return "app_control_withdrawn"
         case .targetNotFrontmost: return "target_not_frontmost"
         case .attentionLost: return "attention_lost"
         case .actionTypeNotAllowed: return "action_not_allowed"

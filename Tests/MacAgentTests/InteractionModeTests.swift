@@ -153,12 +153,38 @@ struct InteractionModeTests {
         }
     }
 
+    /// **The three mode descriptions, pinned on the strings** (SONNY-143 rewrote all of them).
+    ///
+    /// Each assertion below has a positive half and a negative half, and the negative halves are the
+    /// point: they name the exact sentence that was true before row J's per-app gate shipped and is
+    /// false after it. A test that only checked the new copy would pass against a build that had
+    /// added the new sentence and left the old one beside it.
     @Test
     func everyModeHasDistinctDisplayNameAndOneLineDescription() {
         #expect(AgentInteractionMode.allCases.map(\.displayName) == ["Safe", "Normal", "Power"])
         #expect(Set(AgentInteractionMode.allCases.map(\.settingsDescription)).count == 3)
-        // Power's line must state the identical-today truth, not imply new behavior.
-        #expect(AgentInteractionMode.power.settingsDescription.contains("like Normal today"))
+
+        // Power stopped being Normal-identical on 2026-08-20: it is the one mode that skips the
+        // per-app gate. "Runs exactly like Normal today" is the sentence that became false.
+        let power = AgentInteractionMode.power.settingsDescription
+        #expect(!power.contains("like Normal today"), "Power is no longer Normal-identical")
+        #expect(!power.contains("Reserved for more advanced controls"))
+        #expect(power.contains("never asks which apps"))
+        // And it must not read as "Power asks nothing" — the consequence rule is untouched, and the
+        // copy says so in the same breath for exactly that reason.
+        #expect(power.contains("destructive"))
+
+        // Safe asks about apps too now, not only about actions.
+        let safe = AgentInteractionMode.safe.settingsDescription
+        #expect(safe.contains("before controlling any app"))
+        #expect(safe.contains("before every action"))
+
+        // Normal's "asks *only* when an action is destructive" became false the same day: it also
+        // asks about an app outside the starter list that the user has not allowed.
+        let normal = AgentInteractionMode.normal.settingsDescription
+        #expect(!normal.contains("asks only when"), "Normal asks about unknown apps too")
+        #expect(normal.contains("has not been allowed to control"))
+        #expect(normal.contains("destructive"))
     }
 
     // MARK: - The modes through the real dispatch path
@@ -322,6 +348,7 @@ private func makeModeFixture() throws -> ModeFixture {
             clipboardHistorySettingsStore: ClipboardHistorySettingsStore(
                 fileURL: root.appendingPathComponent("clipboard-history-settings.json")
             ),
+            approvedAppStore: ApprovedAppStore(fileURL: root.appendingPathComponent("approved-apps.json")),
             localDataDeletionService: LocalDataDeletionService(fileURLs: []),
             priorTaskContextStore: PriorTaskContextStore(),
             taskUsageRecorder: TaskUsageRecorder(),

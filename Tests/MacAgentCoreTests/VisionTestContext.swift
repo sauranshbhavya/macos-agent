@@ -14,7 +14,8 @@ import Foundation
 enum VisionTestContext {
     static func make(
         installed: [InstalledApp],
-        vision: VisionSessionEnvironment? = nil
+        vision: VisionSessionEnvironment? = nil,
+        appControlStanding: AppControlStanding = .notApplicable
     ) -> CapabilityExecutionContext {
         CapabilityExecutionContext(
             whitelist: PathWhitelist(),
@@ -45,6 +46,7 @@ enum VisionTestContext {
             shortcutCatalog: ProcessShortcutCatalog(),
             shortcutInvoker: ProcessShortcutInvoker(),
             shortcutRunHistoryStore: ShortcutRunHistoryStore(fileURL: scratchURL("shortcuts.json")),
+            appControlStanding: appControlStanding,
             taskScope: .unscoped,
             assessNestedPlan: { _, _ in CapabilityRiskAssessment(defaultTier: .tier0) },
             previewNestedPlan: { _ in [] },

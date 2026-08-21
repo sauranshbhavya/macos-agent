@@ -430,7 +430,7 @@ struct AgentActionExecutorTests {
             ]
         )
 
-        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped, appControl: .notApplicable)
 
         #expect(assessment.approvalCopy?.dataLeavesDevice == true)
     }
@@ -449,7 +449,7 @@ struct AgentActionExecutorTests {
         try workspaceStore.save(StoredWorkspace(name: "Writing", apps: ["Safari", "Notes"], urls: []))
         let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
 
-        let assessment = try executor.assessRisk(plan: openWorkspacePlan(name: "Writing"), scope: .unscoped)
+        let assessment = try executor.assessRisk(plan: openWorkspacePlan(name: "Writing"), scope: .unscoped, appControl: .notApplicable)
 
         #expect(assessment.approvalCopy?.dataLeavesDevice == false)
         #expect(assessment.effectiveTier == .tier1)
@@ -468,7 +468,7 @@ struct AgentActionExecutorTests {
         )
         let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
 
-        let assessment = try executor.assessRisk(plan: openWorkspacePlan(name: "Research"), scope: .unscoped)
+        let assessment = try executor.assessRisk(plan: openWorkspacePlan(name: "Research"), scope: .unscoped, appControl: .notApplicable)
 
         #expect(assessment.approvalCopy?.dataLeavesDevice == true)
     }
@@ -504,7 +504,7 @@ struct AgentActionExecutorTests {
             ]
         )
 
-        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped, appControl: .notApplicable)
 
         #expect(assessment.effectiveTier == .tier2)
         // Consequence rule (2026-08-13): a tier-2 local save with nothing destructive auto-runs.
@@ -531,7 +531,7 @@ struct AgentActionExecutorTests {
         try write("existing draft", to: second)
         let executor = makeExecutor(root: root)
 
-        let assessment = try executor.assessRisk(plan: draftChainPlan(first: first, second: second), scope: .unscoped)
+        let assessment = try executor.assessRisk(plan: draftChainPlan(first: first, second: second), scope: .unscoped, appControl: .notApplicable)
 
         #expect(assessment.defaultTier == .tier2)
         #expect(assessment.effectiveTier == .tier3)
@@ -560,7 +560,8 @@ struct AgentActionExecutorTests {
                 first: root.appendingPathComponent("a.md"),
                 second: root.appendingPathComponent("b.md")
             ),
-            scope: .unscoped
+            scope: .unscoped,
+            appControl: .notApplicable
         )
 
         #expect(assessment.effectiveTier == .tier2)
@@ -579,7 +580,7 @@ struct AgentActionExecutorTests {
         try write("existing draft", to: shared)
         let executor = makeExecutor(root: root)
 
-        let assessment = try executor.assessRisk(plan: draftChainPlan(first: shared, second: shared), scope: .unscoped)
+        let assessment = try executor.assessRisk(plan: draftChainPlan(first: shared, second: shared), scope: .unscoped, appControl: .notApplicable)
 
         #expect(assessment.effectiveTier == .tier3)
         #expect(assessment.escalations.count == 1)
@@ -617,7 +618,7 @@ struct AgentActionExecutorTests {
             ]
         )
 
-        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped, appControl: .notApplicable)
 
         #expect(assessment.effectiveTier == .tier3)
         #expect(assessment.escalations == [
@@ -648,7 +649,8 @@ struct AgentActionExecutorTests {
                 hackerNewsOutput: hackerNewsOutput.path,
                 webResearchOutput: webResearchOutput.path
             ),
-            scope: .unscoped
+            scope: .unscoped,
+            appControl: .notApplicable
         )
 
         #expect(assessment.effectiveTier == .tier3)
@@ -707,7 +709,7 @@ struct AgentActionExecutorTests {
             ]
         )
 
-        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped, appControl: .notApplicable)
 
         #expect(assessment.effectiveTier == .tier3)
         #expect(assessment.escalations.count == 1)
@@ -747,7 +749,7 @@ struct AgentActionExecutorTests {
             ]
         )
 
-        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped, appControl: .notApplicable)
 
         #expect(assessment.effectiveTier == .tier3)
         #expect(assessment.escalations == [
@@ -796,7 +798,7 @@ struct AgentActionExecutorTests {
             ]
         )
 
-        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped, appControl: .notApplicable)
 
         #expect(assessment.defaultTier == .tier2)
         #expect(assessment.effectiveTier == .tier2)
@@ -852,7 +854,7 @@ struct AgentActionExecutorTests {
             ]
         )
 
-        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped, appControl: .notApplicable)
 
         #expect(assessment.defaultTier == .tier2)
         #expect(assessment.effectiveTier == .tier3)
@@ -936,7 +938,8 @@ struct AgentActionExecutorTests {
 
         let assessment = try executor.assessRisk(
             plan: twoLargestFilesPairsPlan(folderA: folderA, zipA: zipA, folderB: folderB, zipB: zipB),
-            scope: .unscoped
+            scope: .unscoped,
+            appControl: .notApplicable
         )
 
         #expect(assessment.effectiveTier == .tier3)
@@ -1290,7 +1293,7 @@ struct AgentActionExecutorTests {
 
         let previews = try executor.preview(plan: plan)
         let prepared = try executor.prepare(plan: plan)
-        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped, appControl: .notApplicable)
         let result = try await executor.execute(plan: plan) { _, _ in }
 
         #expect(previews.isEmpty)
@@ -1314,7 +1317,7 @@ struct AgentActionExecutorTests {
         let executor = makeExecutor(root: root, routineStore: routineStore)
 
         let plan = RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Empty")
-        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped, appControl: .notApplicable)
         let result = try await executor.execute(plan: plan) { _, _ in }
 
         // Tier 2 is `run_routine`'s own default, unmoved by a nested plan that assesses nothing; the
@@ -1391,7 +1394,8 @@ struct AgentActionExecutorTests {
 
         let assessment = try executor.assessRisk(
             plan: untitledDraftChainPlan(firstTitle: nil, secondTitle: nil),
-            scope: .unscoped
+            scope: .unscoped,
+            appControl: .notApplicable
         )
 
         #expect(assessment.effectiveTier == .tier3)
@@ -1435,7 +1439,7 @@ struct AgentActionExecutorTests {
         )
 
         let prepared = try executor.prepare(plan: plan)
-        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped, appControl: .notApplicable)
 
         #expect(prepared.plan.steps.first?.outputPath == occupied.path)
         #expect(assessment.effectiveTier == .tier3)
@@ -2081,7 +2085,7 @@ struct AgentActionExecutorTests {
 
         var thrown: Error?
         do {
-            _ = try executor.assessRisk(plan: createWorkspacePlan(named: "Research"), scope: .unscoped)
+            _ = try executor.assessRisk(plan: createWorkspacePlan(named: "Research"), scope: .unscoped, appControl: .notApplicable)
         } catch {
             thrown = error
         }
@@ -2100,7 +2104,7 @@ struct AgentActionExecutorTests {
 
         var thrown: Error?
         do {
-            _ = try executor.assessRisk(plan: saveRoutinePlan(named: "Morning Setup"), scope: .unscoped)
+            _ = try executor.assessRisk(plan: saveRoutinePlan(named: "Morning Setup"), scope: .unscoped, appControl: .notApplicable)
         } catch {
             thrown = error
         }
@@ -2126,7 +2130,7 @@ struct AgentActionExecutorTests {
 
         var thrown: Error?
         do {
-            _ = try executor.assessRisk(plan: saveRoutinePlan(named: "Morning Setup"), scope: .unscoped)
+            _ = try executor.assessRisk(plan: saveRoutinePlan(named: "Morning Setup"), scope: .unscoped, appControl: .notApplicable)
         } catch {
             thrown = error
         }
@@ -2166,7 +2170,7 @@ struct AgentActionExecutorTests {
         defer { try? FileManager.default.removeItem(at: root) }
         let executor = makeExecutor(root: root)
 
-        let assessment = try executor.assessRisk(plan: createWorkspacePlan(named: "Research"), scope: .unscoped)
+        let assessment = try executor.assessRisk(plan: createWorkspacePlan(named: "Research"), scope: .unscoped, appControl: .notApplicable)
 
         #expect(assessment.defaultTier == .tier2)
         #expect(assessment.effectiveTier == .tier2)
@@ -2184,7 +2188,7 @@ struct AgentActionExecutorTests {
         try workspaceStore.save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: []))
         let executor = makeExecutor(root: root, workspaceStore: workspaceStore)
 
-        let assessment = try executor.assessRisk(plan: createWorkspacePlan(named: "Research"), scope: .unscoped)
+        let assessment = try executor.assessRisk(plan: createWorkspacePlan(named: "Research"), scope: .unscoped, appControl: .notApplicable)
 
         #expect(assessment.effectiveTier == .tier3)
         #expect(assessment.escalations == [
@@ -2213,8 +2217,8 @@ struct AgentActionExecutorTests {
         )
         let executor = makeExecutor(root: root, routineStore: routineStore)
 
-        let taken = try executor.assessRisk(plan: saveRoutinePlan(named: "Morning Setup"), scope: .unscoped)
-        let free = try executor.assessRisk(plan: saveRoutinePlan(named: "Evening Wind Down"), scope: .unscoped)
+        let taken = try executor.assessRisk(plan: saveRoutinePlan(named: "Morning Setup"), scope: .unscoped, appControl: .notApplicable)
+        let free = try executor.assessRisk(plan: saveRoutinePlan(named: "Evening Wind Down"), scope: .unscoped, appControl: .notApplicable)
 
         #expect(taken.effectiveTier == .tier3)
         #expect(taken.escalations == [
@@ -5206,12 +5210,12 @@ struct AgentActionExecutorTests {
             workspace: StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"])
         )
 
-        var expected = try executor.assessRisk(plan: plan, scope: .unscoped)
+        var expected = try executor.assessRisk(plan: plan, scope: .unscoped, appControl: .notApplicable)
         #expect(expected.scopeVerdict == nil)
         // Everything except the new roll-up must be identical; the roll-up itself is asserted.
         expected.scopeVerdict = .inScope
 
-        #expect(try executor.assessRisk(plan: plan, scope: .scoped(scope)) == expected)
+        #expect(try executor.assessRisk(plan: plan, scope: .scoped(scope), appControl: .notApplicable) == expected)
     }
 
     /// AC2 — the escalation exists, reaches tier 3, and its reason names both the resource and the
@@ -5226,7 +5230,7 @@ struct AgentActionExecutorTests {
             workspace: StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"])
         )
 
-        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope))
+        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope), appControl: .notApplicable)
 
         #expect(assessment.effectiveTier == .tier3)
         #expect(assessment.escalations.count == 1)
@@ -5262,7 +5266,7 @@ struct AgentActionExecutorTests {
             workspace: StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"])
         )
 
-        let assessment = try executor.assessRisk(plan: runRoutinePlan(name: "Leaky"), scope: .scoped(scope))
+        let assessment = try executor.assessRisk(plan: runRoutinePlan(name: "Leaky"), scope: .scoped(scope), appControl: .notApplicable)
 
         #expect(assessment.effectiveTier == .tier3)
         #expect(assessment.escalations.contains {
@@ -5313,7 +5317,7 @@ struct AgentActionExecutorTests {
             workspace: StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"])
         )
 
-        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope))
+        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope), appControl: .notApplicable)
 
         #expect(assessment.scopeVerdict == .outOfScope)
         #expect(assessment.escalations.contains {
@@ -5351,7 +5355,7 @@ struct AgentActionExecutorTests {
             workspace: StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"])
         )
 
-        let unscoped = try executor.assessRisk(plan: plan, scope: .unscoped)
+        let unscoped = try executor.assessRisk(plan: plan, scope: .unscoped, appControl: .notApplicable)
         #expect(unscoped.escalations.isEmpty)
         #expect(unscoped.effectiveTier == .tier2)
 
@@ -5360,7 +5364,7 @@ struct AgentActionExecutorTests {
         // the fold's bottom element. What must *not* appear is an escalation.
         expected.scopeVerdict = .unconstrained
 
-        #expect(try executor.assessRisk(plan: plan, scope: .scoped(scope)) == expected)
+        #expect(try executor.assessRisk(plan: plan, scope: .scoped(scope), appControl: .notApplicable) == expected)
     }
 
     /// The second F1 probe shape: the save sits beside a step that really is scope-relevant. The
@@ -5398,7 +5402,7 @@ struct AgentActionExecutorTests {
             workspace: StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"])
         )
 
-        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope))
+        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope), appControl: .notApplicable)
 
         // Exactly one reason, and it is the sibling's own URL — never the routine's stored step.
         #expect(assessment.escalations.map(\.reason) == [
@@ -5428,7 +5432,8 @@ struct AgentActionExecutorTests {
 
         let assessment = try executor.assessRisk(
             plan: openWorkspacePlan(name: "Broken"),
-            scope: .scoped(WorkspaceScope(workspace: bound))
+            scope: .scoped(WorkspaceScope(workspace: bound)),
+            appControl: .notApplicable
         )
 
         // Slack still escalates; the blank entry contributes nothing at all.
@@ -5473,7 +5478,7 @@ struct AgentActionExecutorTests {
             workspace: StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://github.com"])
         )
 
-        let assessment = try executor.assessRisk(plan: openWorkspacePlan(name: "Social"), scope: .scoped(scope))
+        let assessment = try executor.assessRisk(plan: openWorkspacePlan(name: "Social"), scope: .scoped(scope), appControl: .notApplicable)
 
         #expect(assessment.effectiveTier == .tier3)
         #expect(assessment.escalations.map(\.reason) == [
@@ -5495,7 +5500,8 @@ struct AgentActionExecutorTests {
 
         let assessment = try executor.assessRisk(
             plan: openWorkspacePlan(name: "Research"),
-            scope: .scoped(WorkspaceScope(workspace: record))
+            scope: .scoped(WorkspaceScope(workspace: record)),
+            appControl: .notApplicable
         )
 
         #expect(assessment.escalations.isEmpty)
@@ -5517,7 +5523,8 @@ struct AgentActionExecutorTests {
 
         let assessment = try executor.assessRisk(
             plan: openWorkspacePlan(name: "Nonexistent"),
-            scope: .scoped(WorkspaceScope(workspace: record))
+            scope: .scoped(WorkspaceScope(workspace: record)),
+            appControl: .notApplicable
         )
 
         #expect(assessment.escalations.isEmpty)
@@ -5536,7 +5543,7 @@ struct AgentActionExecutorTests {
         let executor = makeExecutor(root: root)
         let plan = openURLPlan(url: "https://example.com/page")
 
-        let unscoped = try executor.assessRisk(plan: plan, scope: .unscoped)
+        let unscoped = try executor.assessRisk(plan: plan, scope: .unscoped, appControl: .notApplicable)
         #expect(unscoped.escalations.isEmpty)
         #expect(unscoped.scopeVerdict == nil)
 
@@ -5548,7 +5555,7 @@ struct AgentActionExecutorTests {
         var expected = unscoped
         expected.scopeVerdict = .unconstrained
 
-        #expect(try executor.assessRisk(plan: plan, scope: .scoped(appsOnly)) == expected)
+        #expect(try executor.assessRisk(plan: plan, scope: .scoped(appsOnly), appControl: .notApplicable) == expected)
     }
 
     /// AC6 — scope raises and never lowers. A tier-3 fixture that is entirely in scope stays tier 3;
@@ -5577,7 +5584,7 @@ struct AgentActionExecutorTests {
             whitelist: PathWhitelist(roots: [root])
         )
 
-        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope))
+        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope), appControl: .notApplicable)
 
         // Tier 3 from the pre-existing overwrite escalation, not from scope.
         #expect(assessment.effectiveTier == .tier3)
@@ -5607,7 +5614,7 @@ struct AgentActionExecutorTests {
             workspace: StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"])
         )
 
-        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope))
+        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope), appControl: .notApplicable)
 
         #expect(assessment.escalations.map(\.reason) == ["example.com is not part of the Research workspace."])
         #expect(assessment.effectiveTier == .tier3)
@@ -5637,7 +5644,7 @@ struct AgentActionExecutorTests {
             workspace: StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"])
         )
 
-        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope))
+        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope), appControl: .notApplicable)
 
         #expect(assessment.escalations.allSatisfy { !$0.reason.contains("not part of") })
         #expect(assessment.scopeVerdict == .opaque)
@@ -5667,7 +5674,7 @@ struct AgentActionExecutorTests {
             workspace: StoredWorkspace(name: "Research", apps: [], urls: ["https://github.com"])
         )
 
-        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope))
+        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope), appControl: .notApplicable)
 
         // Four distinct hosts across five steps, capped at three: the repeat collapses and the
         // surplus is dropped, in first-seen order.
@@ -5712,7 +5719,7 @@ struct AgentActionExecutorTests {
             whitelist: PathWhitelist(roots: [root])
         )
 
-        let assessment = try executor.assessRisk(plan: selectionDrivenZipPlan(), scope: .scoped(scope))
+        let assessment = try executor.assessRisk(plan: selectionDrivenZipPlan(), scope: .scoped(scope), appControl: .notApplicable)
 
         #expect(reader.callCount == 1)
         #expect(assessment.escalations.map(\.reason) == ["Finder is not part of the Client Alpha workspace."])
@@ -5745,7 +5752,7 @@ struct AgentActionExecutorTests {
             whitelist: PathWhitelist(roots: [root])
         )
 
-        let assessment = try executor.assessRisk(plan: selectionDrivenZipPlan(), scope: .scoped(scope))
+        let assessment = try executor.assessRisk(plan: selectionDrivenZipPlan(), scope: .scoped(scope), appControl: .notApplicable)
 
         #expect(assessment.escalations.isEmpty)
         #expect(assessment.effectiveTier == .tier2)
@@ -5810,7 +5817,7 @@ struct AgentActionExecutorTests {
             ]
         )
 
-        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope))
+        let assessment = try executor.assessRisk(plan: plan, scope: .scoped(scope), appControl: .notApplicable)
 
         #expect(reader.callCount == 0)
         #expect(assessment.escalations.map(\.reason) == [])

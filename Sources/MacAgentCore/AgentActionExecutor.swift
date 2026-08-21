@@ -328,12 +328,23 @@ public final class AgentActionExecutor {
     /// the consequence rule and never writes it — the tier and every escalation sentence leave
     /// here honest and arrive at their surfaces (panel or ran-without-asking trace) unedited. The
     /// `scopeVerdict` roll-up is data for the surfaces and the future vision cage, not a gate.
-    public func assessRisk(plan: AgentPlan, scope: TaskWorkspaceScope) throws -> CapabilityRiskAssessment {
+    ///
+    /// - Parameter appControl: row J's resolved per-app standing, **not defaulted**, forwarded by
+    ///   `AgentRunner.approvalRequest` off the same `ApprovalContext` the requirement is computed
+    ///   from. It reaches exactly one adapter and only to word an escalation reason — see
+    ///   `CapabilityExecutionContext.appControlStanding` for why it is carried rather than resolved
+    ///   again here, and `AgentRunner.approvalRequest`'s comment for what it does and does not
+    ///   change about "the assessment is a pure function of the plan".
+    public func assessRisk(
+        plan: AgentPlan,
+        scope: TaskWorkspaceScope,
+        appControl: AppControlStanding
+    ) throws -> CapabilityRiskAssessment {
         let resolvedPlan = try resolveDefaultOutputs(in: plan)
         // The same scope goes into the nested-plan closure, so a `run_routine` step's stored steps
         // are evaluated under the boundary its caller is bound by. Without it, a routine is a
         // laundering hole: its steps would escape the workspace the task naming it is inside.
-        let context = capabilityContext(scope: scope)
+        let context = capabilityContext(scope: scope, appControl: appControl)
 
         var assessments: [CapabilityRiskAssessment] = []
         var metadata: [CapabilityMetadata] = []
@@ -1418,10 +1429,16 @@ public final class AgentActionExecutor {
         return result
     }
 
+    /// - Parameter appControl: defaulted `.notApplicable`, and the default is *correct* rather than
+    ///   convenient. The only reader is the vision adapter's `assessRisk`, which words an escalation
+    ///   reason with it; the preview and execute paths raise no prompt at all, so there is no
+    ///   sentence for a standing to change on them. `assessRisk`'s own parameter is not defaulted,
+    ///   which is where the answer is actually forced.
     private func capabilityContext(
         preferredBrowser: MacApp? = nil,
         claimedEarlierInThisRun: RunClaims = .none,
-        scope: TaskWorkspaceScope
+        scope: TaskWorkspaceScope,
+        appControl: AppControlStanding = .notApplicable
     ) -> CapabilityExecutionContext {
         CapabilityExecutionContext(
             whitelist: whitelist,
@@ -1456,13 +1473,17 @@ public final class AgentActionExecutor {
             now: now,
             hotKeyReady: hotKeyReady,
             preferredBrowser: preferredBrowser,
+            appControlStanding: appControl,
             claimedEarlierInThisRun: claimedEarlierInThisRun,
             taskScope: scope,
             assessNestedPlan: { [weak self] plan, nestedScope in
                 guard let self else {
                     throw AgentExecutionError.invalidPlan("Executor is unavailable for nested risk assessment.")
                 }
-                return try self.assessRisk(plan: plan, scope: nestedScope)
+                // `.notApplicable`, and it is an answer rather than an omission: a nested plan is a
+                // stored routine's steps, and `StoredRoutine.forbiddenStepOperations` rejects
+                // `vision_session`, so a nested plan controls no app and has no standing to inherit.
+                return try self.assessRisk(plan: plan, scope: nestedScope, appControl: .notApplicable)
             },
             // **The nested plan inherits this context's claims** (SONNY-163). Both closures used to
             // call through with no `RunClaims`, so a routine run as a unit of a chain started from

@@ -50,8 +50,8 @@ extension AgentViewModel: VisionSessionInteracting {
 
     // MARK: - VisionSessionInteracting
 
-    func visionApprovalContext() -> ApprovalContext {
-        approvalContext()
+    func visionApprovalContext(targetBundleIdentifier: String) -> ApprovalContext {
+        approvalContext(visionTarget: targetBundleIdentifier)
     }
 
     /// The session's journal id, recorded as soon as it starts so the task-history row this run
@@ -338,7 +338,11 @@ extension AgentViewModel: VisionSessionInteracting {
             }
 
             let scope = activeTaskScope
-            let context = approvalContext()
+            // The *delegated* plan's own target, not the session's. A delegation goes to Sonny's
+            // ordinary planner, so the plan that comes back is an ordinary plan and is gated as
+            // one — `nil` for the overwhelming majority of them, and the delegating session's
+            // pinned app is irrelevant to it either way.
+            let context = approvalContext(visionTarget: prepared.plan.appControlTargetBundleIdentifier)
             let request0 = try runner.approvalRequest(
                 for: prepared,
                 logAssessment: true,

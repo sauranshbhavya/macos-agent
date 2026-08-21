@@ -225,7 +225,7 @@ struct SolitaryWriteMarkdownTests {
             ]
         )
 
-        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped)
+        let assessment = try executor.assessRisk(plan: plan, scope: .unscoped, appControl: .notApplicable)
 
         let copy = try #require(assessment.approvalCopy)
         #expect(copy.dataLeavesDevice)

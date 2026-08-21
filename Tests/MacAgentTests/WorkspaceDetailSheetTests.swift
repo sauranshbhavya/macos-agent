@@ -975,7 +975,8 @@ struct WorkspaceDetailSheetTests {
                     )
                 ]
             ),
-            scope: .unscoped
+            scope: .unscoped,
+            appControl: .notApplicable
         )
         #expect(assessment.escalations.isEmpty)
         #expect(assessment.effectiveTier == .tier2)
@@ -996,7 +997,8 @@ struct WorkspaceDetailSheetTests {
                     )
                 ]
             ),
-            scope: .unscoped
+            scope: .unscoped,
+            appControl: .notApplicable
         )
         #expect(liveAssessment.effectiveTier == .tier3)
     }
@@ -1363,6 +1365,7 @@ private func makeSheetTestViewModel(root: URL, workspaceStore: WorkspaceStore) t
         clipboardHistorySettingsStore: ClipboardHistorySettingsStore(
             fileURL: root.appendingPathComponent("clipboard-history-settings.json")
         ),
+        approvedAppStore: ApprovedAppStore(fileURL: root.appendingPathComponent("approved-apps.json")),
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
             reader: SheetTestPasteboardReader(),
             store: ClipboardHistoryStore(fileURL: root.appendingPathComponent("clipboard-history.json")),

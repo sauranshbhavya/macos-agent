@@ -356,7 +356,7 @@ struct VisionSessionAdapterTests {
     @Test
     func theSessionEnvelopeIsTierThreeAndAdvisory() throws {
         let assessment = try Self.executor(installed: [Self.safari])
-            .assessRisk(plan: Self.plan(app: "Safari"), scope: .unscoped)
+            .assessRisk(plan: Self.plan(app: "Safari"), scope: .unscoped, appControl: .notApplicable)
 
         #expect(assessment.defaultTier == .tier2)
         #expect(assessment.effectiveTier == .tier3)
@@ -370,7 +370,7 @@ struct VisionSessionAdapterTests {
     @Test
     func theSessionStartsSilentlyInNormalAndPowerAndAsksInSafe() throws {
         let assessment = try Self.executor(installed: [Self.safari])
-            .assessRisk(plan: Self.plan(app: "Safari"), scope: .unscoped)
+            .assessRisk(plan: Self.plan(app: "Safari"), scope: .unscoped, appControl: .notApplicable)
 
         for mode in AgentInteractionMode.allCases {
             let requirement = RiskApprovalPolicy.default.requirement(
@@ -388,7 +388,7 @@ struct VisionSessionAdapterTests {
     @Test
     func aStandingTierTwoGrantCannotAuthorizeAVisionSession() throws {
         let assessment = try Self.executor(installed: [Self.safari])
-            .assessRisk(plan: Self.plan(app: "Safari"), scope: .unscoped)
+            .assessRisk(plan: Self.plan(app: "Safari"), scope: .unscoped, appControl: .notApplicable)
         let request = RiskApprovalRequest(assessment: assessment, requirement: .explicitApproval)
 
         #expect(RiskApprovalDecision.approved(.tier2).authorizes(request) == false)
@@ -543,7 +543,7 @@ struct MixedVisionPlanTests {
     /// step's — not two assessments, and not a second gate.
     @Test
     func aMixedPlanIsAssessedAsOneUnit() throws {
-        let assessment = try Self.executor().assessRisk(plan: Self.mixedPlan(), scope: .unscoped)
+        let assessment = try Self.executor().assessRisk(plan: Self.mixedPlan(), scope: .unscoped, appControl: .notApplicable)
 
         // Tier 3 comes from the vision half; `open_app` alone is tier 1. The union takes the higher.
         #expect(assessment.effectiveTier == .tier3)
@@ -555,7 +555,7 @@ struct MixedVisionPlanTests {
     /// The disclosure names both halves, the app, and the goal.
     @Test
     func theDisclosureNamesBothHalvesTheAppAndTheGoal() throws {
-        let assessment = try Self.executor().assessRisk(plan: Self.mixedPlan(), scope: .unscoped)
+        let assessment = try Self.executor().assessRisk(plan: Self.mixedPlan(), scope: .unscoped, appControl: .notApplicable)
         let description = try #require(assessment.approvalCopy?.actionDescription)
 
         // The planner's own summary survives — the split is appended, never a replacement.

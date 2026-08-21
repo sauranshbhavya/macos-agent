@@ -193,6 +193,24 @@ final class VisionSessionRunner {
                 }
             }
 
+            // **The per-app grant, re-asked every iteration** (SONNY-143). A grant is durable and
+            // a session is long, so the answer that started this session can stop being true while
+            // it runs — the user removes the app in Settings, or wipes their local data. Re-reading
+            // it here is what makes a revocation take effect at the next iteration rather than at
+            // the next launch; the cost is one store read and a set membership check, against a
+            // loop whose other steps are a screenshot, an OCR pass and a model call.
+            //
+            // **It ends the session rather than re-prompting**, matching every other containment
+            // refusal. Withdrawing permission to control an app is not a question a fresh prompt
+            // could helpfully re-ask: the user just answered it. Note the ordering — this sits below
+            // the deny list's per-iteration re-check and above the capture, so a terminal is still
+            // refused by the higher rule and no capture is taken for a session that is about to end.
+            if interaction.visionApprovalContext(
+                targetBundleIdentifier: target.bundleIdentifier
+            ).appControl != .allowed {
+                return end(with: .appControlWithdrawn(app: target.displayName), iteration: iteration)
+            }
+
             let capture = try await environment.captureService.captureFrontmostWindow(
                 ofBundleIdentifier: target.bundleIdentifier
             )
@@ -236,7 +254,7 @@ final class VisionSessionRunner {
                 )
             )
 
-            let context = interaction.visionApprovalContext()
+            let context = interaction.visionApprovalContext(targetBundleIdentifier: target.bundleIdentifier)
             if context.mode.asksBeforeEveryAction {
                 let allowed = try await interaction.confirmVisionCaptureBeforeSending(
                     VisionCapturePreview(
@@ -333,7 +351,7 @@ final class VisionSessionRunner {
                 // Safe mode asks about the delegation itself; Normal and Power never do (founder,
                 // 2026-08-14). What the delegated plan *does* is gated in every mode by the ordinary
                 // plan-level gate inside `runVisionDelegation`.
-                if interaction.visionApprovalContext().mode.asksBeforeEveryAction {
+                if interaction.visionApprovalContext(targetBundleIdentifier: target.bundleIdentifier).mode.asksBeforeEveryAction {
                     let allowed = try await interaction.confirmVisionDelegation(request)
                     guard allowed else {
                         history.append("iteration \(iteration): you declined to let Sonny's own tools do \u{201C}\(request.instructionText)\u{201D}. Continue from the screen instead, or report stuck.")
@@ -405,7 +423,7 @@ final class VisionSessionRunner {
         _ decision: VisionDecision,
         interaction: any VisionSessionInteracting
     ) async throws -> Authorization {
-        let context = interaction.visionApprovalContext()
+        let context = interaction.visionApprovalContext(targetBundleIdentifier: target.bundleIdentifier)
         let (assessment, requirement) = containment.requirement(for: decision, context: context)
         let request = RiskApprovalRequest(assessment: assessment, requirement: requirement)
 
