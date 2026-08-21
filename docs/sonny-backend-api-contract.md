@@ -206,10 +206,14 @@ have. An omitted privacy field must be a loud error, not a quiet guess.
 
 ### 3.1 Two tokens
 
-- **Access token** — short-lived, opaque to the client, sent as `Authorization: Bearer`. The client
-  must not decode or inspect it. Entitlement is a separate, signed, deliberately-parseable claim
-  (section 5); keeping the access token opaque is what stops the client making entitlement decisions
-  from an authentication artifact.
+- **Access token** — short-lived, sent as `Authorization: Bearer`. **A JWT issued by Supabase Auth**
+  (amended 2026-08-21, SONNY-127 — see section 14). **The client must not decode, inspect or make any
+  decision from it.** Entitlement is a separate, signed, deliberately-parseable claim (section 5),
+  and that separation is the property this rule protects: what stops the client making entitlement
+  decisions from an authentication artifact is the rule, not the encoding. The token was specified as
+  opaque because opacity enforced the rule mechanically; under the founder's 2026-08-21 decision to
+  use Supabase Auth it is a JWT, so **the rule is now a contract obligation the client must keep
+  rather than one its encoding keeps for it**, and SONNY-128's review is where that is checked.
 - **Refresh token** — long-lived, opaque, rotated on every use, stored in the Keychain through the
   existing `KeychainSecretStore` (the concrete struct at `KeychainSecretStore.swift:21`, behind the
   `KeychainSecretStoring` protocol at `:4-7`) as a new account on the existing store, following the
@@ -315,7 +319,14 @@ for whoever finds that instead.
 
 Returns the token response of 3.2 on success. On failure it returns one of three distinct codes —
 `auth.code_invalid`, `auth.code_expired`, `auth.code_used` — because SONNY-127 has to rate-limit them
-differently and SONNY-128 has to say three different things to the user. Codes are single-use, so a
+differently and SONNY-128 has to say three different things to the user.
+
+**Where those three come from, since the provider does not supply them** (noted 2026-08-21,
+SONNY-127). Supabase Auth returns a single `otp_expired` reading "Token has expired or is invalid"
+for all three cases. The gateway therefore derives them from its own record of what it issued —
+consumed, aged out, or neither — rather than from the provider's error. What the client receives is
+unchanged; this note exists so nobody later reads the provider's single error as evidence that the
+contract over-specified. Codes are single-use, so a
 replay of this call returns the stored original result — including the original failure — and never
 un-consumes a code. Section 9.3 has the whole retry table.
 
@@ -1222,3 +1233,4 @@ author's own drafting would bury the changes a downstream session actually has t
 | Date | Change | Ticket |
 |---|---|---|
 | 2026-08-17 | Created, at `main` `6f89a5d` | SONNY-124 |
+| 2026-08-21 | **3.1 — the access token is a JWT rather than opaque.** Founder decision of 2026-08-21 to serve auth from Supabase Auth, which issues JWTs. The client's obligation not to decode it or decide anything from it is unchanged and is now carried by this contract rather than by the encoding. Three things this does **not** change, checked against the platform rather than assumed: 3.3's rotation, overlap and reuse detection are exactly what Supabase Auth does (10-second reuse interval; reuse beyond it revokes the whole family), 3.2's response shape is unchanged, and 3.6's three code failures are unchanged — the gateway derives them from its own issuance record because the provider returns one error for all three. | SONNY-127 |

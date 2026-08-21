@@ -10,6 +10,7 @@ const config = (overrides: Partial<Config> = {}): Config => ({
   databaseUrl: undefined,
   logLevel: "fatal",
   trustProxy: false,
+  rateLimitSalt: "test-salt",
   credentials: [],
   ...overrides,
 });

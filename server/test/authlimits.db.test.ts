@@ -1,0 +1,180 @@
+import pg from "pg";
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
+import {
+  CODE_LIFETIME_SECONDS, classifyFailure, consumeLatest, invalidateLive, recordIssue,
+} from "../src/auth/codes.js";
+import {
+  CODE_REQUEST_PER_ADDRESS, CODE_REQUEST_PER_SOURCE, bucketKey, consume, sweep,
+} from "../src/auth/ratelimit.js";
+import { up } from "../src/db/migrate.js";
+
+const url = process.env["DATABASE_URL"];
+const describeDb = url ? describe : describe.skip;
+const SALT = "test-salt-not-a-secret";
+
+describeDb("rate limits and the code lifecycle", () => {
+  let client: pg.Client;
+
+  beforeAll(async () => {
+    client = new pg.Client({ connectionString: url });
+    await client.connect();
+    await up(client);
+  });
+  afterAll(async () => { await client.end(); });
+  beforeEach(async () => {
+    await client.query("TRUNCATE sonny.auth_rate_limit, sonny.sign_in_code_issue");
+  });
+
+  describe("rate limiting", () => {
+    it("allows up to the ceiling and refuses the one after it, with a Retry-After", async () => {
+      const bucket = bucketKey("addr", "a@example.com", SALT);
+      const verdicts = [];
+      for (let i = 0; i < CODE_REQUEST_PER_ADDRESS.max + 1; i += 1) {
+        verdicts.push(await consume(client, bucket, CODE_REQUEST_PER_ADDRESS));
+      }
+      expect(verdicts.slice(0, CODE_REQUEST_PER_ADDRESS.max).every((v) => v.allowed)).toBe(true);
+      const refused = verdicts.at(-1)!;
+      expect(refused.allowed).toBe(false);
+      expect(refused.retryAfterSeconds).toBeGreaterThan(0);
+      expect(refused.retryAfterSeconds).toBeLessThanOrEqual(CODE_REQUEST_PER_ADDRESS.windowSeconds);
+    });
+
+    it("never exceeds the ceiling under concurrency", async () => {
+      // The property the single-statement increment exists for. A read-then-write here lets two
+      // racing callers both see the old count and both write, which is how a limit of three becomes
+      // a limit of "three, usually" — and an auth endpoint is where that would be probed on purpose.
+      const bucket = bucketKey("addr", "race@example.com", SALT);
+      const results = await Promise.all(
+        Array.from({ length: 40 }, () => consume(client, bucket, CODE_REQUEST_PER_ADDRESS)),
+      );
+      expect(results.filter((r) => r.allowed)).toHaveLength(CODE_REQUEST_PER_ADDRESS.max);
+      const { rows } = await client.query<{ count: number }>(
+        "SELECT count FROM sonny.auth_rate_limit WHERE bucket = $1", [bucket],
+      );
+      expect(rows[0]!.count).toBe(CODE_REQUEST_PER_ADDRESS.max);
+    });
+
+    it("keeps address and source buckets independent", async () => {
+      // One office behind one address must not lock out a second person there, and one caller must
+      // not be able to spend another address's budget.
+      const addr = bucketKey("addr", "indep@example.com", SALT);
+      const src = bucketKey("src", "203.0.113.7", SALT);
+      for (let i = 0; i < CODE_REQUEST_PER_ADDRESS.max; i += 1) {
+        await consume(client, addr, CODE_REQUEST_PER_ADDRESS);
+      }
+      expect((await consume(client, addr, CODE_REQUEST_PER_ADDRESS)).allowed).toBe(false);
+      expect((await consume(client, src, CODE_REQUEST_PER_SOURCE)).allowed).toBe(true);
+    });
+
+    it("starts a fresh budget in the next window", async () => {
+      const bucket = bucketKey("addr", "window@example.com", SALT);
+      const now = new Date("2026-08-21T10:00:00Z");
+      for (let i = 0; i < CODE_REQUEST_PER_ADDRESS.max; i += 1) {
+        await consume(client, bucket, CODE_REQUEST_PER_ADDRESS, now);
+      }
+      expect((await consume(client, bucket, CODE_REQUEST_PER_ADDRESS, now)).allowed).toBe(false);
+      const later = new Date(now.getTime() + CODE_REQUEST_PER_ADDRESS.windowSeconds * 1000);
+      expect((await consume(client, bucket, CODE_REQUEST_PER_ADDRESS, later)).allowed).toBe(true);
+    });
+
+    it("stores no raw address or source, only a salted hash", async () => {
+      await consume(client, bucketKey("addr", "private@example.com", SALT), CODE_REQUEST_PER_ADDRESS);
+      const { rows } = await client.query<{ bucket: string }>("SELECT bucket FROM sonny.auth_rate_limit");
+      expect(rows[0]!.bucket).not.toContain("private@example.com");
+      expect(rows[0]!.bucket).toMatch(/^addr:[0-9a-f]{64}$/);
+    });
+
+    it("produces different buckets for the same value under different salts", async () => {
+      // Without a salt an email hash is one rainbow-table lookup from the address.
+      expect(bucketKey("addr", "x@example.com", "salt-a"))
+        .not.toBe(bucketKey("addr", "x@example.com", "salt-b"));
+    });
+
+    it("refuses to build a bucket with no salt configured", () => {
+      expect(() => bucketKey("addr", "x@example.com", "")).toThrow(/salt/);
+    });
+
+    it("sweeps windows that are past", async () => {
+      const bucket = bucketKey("addr", "old@example.com", SALT);
+      await consume(client, bucket, CODE_REQUEST_PER_ADDRESS, new Date("2026-01-01T00:00:00Z"));
+      expect(await sweep(client, new Date("2026-06-01T00:00:00Z"))).toBe(1);
+    });
+  });
+
+  describe("the code lifecycle, and the three failures Supabase collapses into one", () => {
+    const address = "codes@example.com";
+
+    it("classifies a wrong code against a live issuance as invalid", async () => {
+      await recordIssue(client, address, "srchash");
+      expect(await classifyFailure(client, address)).toBe("auth.code_invalid");
+    });
+
+    it("classifies an expired issuance as expired", async () => {
+      const past = new Date(Date.now() - (CODE_LIFETIME_SECONDS + 60) * 1000);
+      await recordIssue(client, address, "srchash", past);
+      expect(await classifyFailure(client, address)).toBe("auth.code_expired");
+    });
+
+    it("classifies a consumed issuance as used", async () => {
+      await recordIssue(client, address, "srchash");
+      expect(await consumeLatest(client, address)).toBe(true);
+      expect(await classifyFailure(client, address)).toBe("auth.code_used");
+    });
+
+    it("classifies an address that was never issued a code as invalid, not used", async () => {
+      // An account-existence oracle would be the bug here: "used" for a known address and
+      // "invalid" for an unknown one tells an attacker which addresses have accounts.
+      expect(await classifyFailure(client, "never-seen@example.com")).toBe("auth.code_invalid");
+    });
+
+    it("prefers used over expired when a consumed code has also aged out", async () => {
+      const past = new Date(Date.now() - (CODE_LIFETIME_SECONDS + 60) * 1000);
+      const { id } = await recordIssue(client, address, "srchash", past);
+      await client.query("UPDATE sonny.sign_in_code_issue SET consumed_at = now() WHERE id = $1", [id]);
+      expect(await classifyFailure(client, address)).toBe("auth.code_used");
+    });
+
+    it("consumes a code exactly once under concurrency", async () => {
+      // Replay, done properly: two verifies of the same code arriving together must mint one
+      // session, not two. The single UPDATE with `consumed_at IS NULL` is the guarantee.
+      await recordIssue(client, address, "srchash");
+      const results = await Promise.all(
+        Array.from({ length: 12 }, () => consumeLatest(client, address)),
+      );
+      expect(results.filter(Boolean)).toHaveLength(1);
+    });
+
+    it("refuses to consume an expired issuance", async () => {
+      const past = new Date(Date.now() - (CODE_LIFETIME_SECONDS + 60) * 1000);
+      await recordIssue(client, address, "srchash", past);
+      expect(await consumeLatest(client, address)).toBe(false);
+    });
+
+    it("makes the newest code the only live one", async () => {
+      // The founder's own manual-test item: request a second code before using the first, and
+      // confirm which one works. The answer is the newest, and it is decided here rather than by
+      // whichever the provider happens to accept.
+      await recordIssue(client, address, "srchash");
+      const invalidated = await invalidateLive(client, address);
+      expect(invalidated).toBe(1);
+      await recordIssue(client, address, "srchash");
+      expect(await consumeLatest(client, address)).toBe(true);
+      // and the older one cannot then be consumed
+      expect(await consumeLatest(client, address)).toBe(false);
+    });
+
+    it("stores no code value anywhere", async () => {
+      // The gateway must never hold the secret it did not issue. Asserted structurally rather than
+      // by inspection: the table has no column that could carry one.
+      await recordIssue(client, address, "srchash");
+      const { rows } = await client.query<{ column_name: string }>(
+        `SELECT column_name FROM information_schema.columns
+          WHERE table_schema = 'sonny' AND table_name = 'sign_in_code_issue'`,
+      );
+      const names = rows.map((r) => r.column_name).sort();
+      expect(names).toEqual(
+        ["consumed_at", "email_norm", "expires_at", "id", "issued_at", "source_hash"],
+      );
+    });
+  });
+});
