@@ -1237,6 +1237,18 @@ struct WorkspaceDetailSheetTests {
         // it under another spelling. A conditional that draws the icon draws only the icon.
         #expect(!iconBranch.contains("entry.value"))
         #expect(MacAgentSource.count(of: "Text(", inText: iconBranch) == 0)
+
+        // **And the name is a *direct child* of the row's stack, inside no conditional at all.**
+        // The two assertions above still do not say that: one counts a token across the whole row,
+        // the other looks inside a single branch. A mutant that keeps `Text(entry.value)` byte for
+        // byte and wraps it in `if entry.appIcon?.icon == nil { … }` passes both — a different
+        // conditional, so the icon-branch check never sees it, and the count is unchanged. That is
+        // the reviewer's mutant I, and this is the line that kills it.
+        let stack = try MacAgentSource.braceBlock(
+            of: row,
+            openedBy: "HStack(alignment: .top, spacing: 8) {"
+        )
+        #expect(MacAgentSource.topLevel(of: stack).contains("Text(entry.value)"))
         // And the icon really is gated on a resolved image rather than on the entry being an app,
         // which is what routes an unresolvable app to the same name-only rendering a URL gets.
         #expect(row.contains("if let nsImage = entry.appIcon?.icon {"))
