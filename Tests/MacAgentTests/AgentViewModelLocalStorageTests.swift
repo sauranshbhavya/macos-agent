@@ -313,6 +313,21 @@ struct AgentViewModelLocalStorageTests {
     /// *operation* and not its fields, so a routine can be saved carrying a stray blank
     /// `workspaceName`, and `nestedRoutineWorkspaceName` then reproduces it on every single run of
     /// that routine rather than once.
+    ///
+    /// **Why this run pauses on an approval instead of completing** (PR #83 cycle 3). The first
+    /// version of this test dispatched a routine that ran to completion, and was vacuous for the
+    /// same reason the branch's other two were: `performStart` ends in `refreshSavedItems()`, which
+    /// *clears* `.savedWorkspaces` against a healthy store, so the notice assertion passed with the
+    /// guard reverted — and `lastAssessedScope` is `.unscoped` either way, because the pre-fix
+    /// `catch` returned that too. Both assertions held on the pre-fix tree.
+    ///
+    /// A `[run_routine, clarify]` plan cannot isolate it — `clarificationQuestion(in:)` asks
+    /// `workflow(in:)` first, which throws "Clarification must be the only planned step" for a mixed
+    /// plan, so `prepare` fails before `resolveTaskScope` ever runs. The approval pause is the other
+    /// early return that sits after the scope resolution and before the refresh: the routine's
+    /// snippet step collides with an existing trigger, which escalates `.destructive`, which asks.
+    /// So the notice here has exactly one possible author, the same isolation the other three tests
+    /// use by a different door.
     @Test
     func aRoutineCarryingABlankWorkspaceNameDoesNotReportAStoreFailureOnEveryRun() async throws {
         let root = try makeDirectory()
@@ -322,6 +337,11 @@ struct AgentViewModelLocalStorageTests {
             fileURL: root.appendingPathComponent("workspaces.json"),
             encryption: encryption
         ).save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: []))
+        // The collision that makes the run stop and ask: same trigger, different expansion.
+        try SnippetStore(
+            fileURL: root.appendingPathComponent("snippets.json"),
+            encryption: encryption
+        ).save(StoredSnippet(trigger: ";sig", expansion: "the old signature", updatedAt: .fixture))
         try RoutineStore(
             fileURL: root.appendingPathComponent("routines.json"),
             encryption: encryption
@@ -330,11 +350,14 @@ struct AgentViewModelLocalStorageTests {
                 name: "Morning",
                 steps: [
                     AgentStep(
-                        id: "open",
-                        operation: .openApp,
-                        description: "Open Safari.",
-                        appName: "Safari",
-                        workspaceName: ""
+                        id: "snippet",
+                        operation: .saveSnippet,
+                        description: "Save the signature snippet.",
+                        // The stray blank the store accepts because step safety checks operations,
+                        // not fields — and the only thing `nestedRoutineWorkspaceName` will find.
+                        workspaceName: "",
+                        searchQuery: ";sig",
+                        draftContent: "the new signature"
                     )
                 ]
             )
@@ -347,6 +370,9 @@ struct AgentViewModelLocalStorageTests {
             try await Task.sleep(nanoseconds: 10_000_000)
         }
 
+        // Paused before `refreshSavedItems()` could clear anything...
+        #expect(viewModel.isAwaitingApproval)
+        // ...and nothing was recorded, because a blank name never reached the store.
         #expect(viewModel.localStorageNotice == nil)
         #expect(viewModel.lastAssessedScope == .unscoped)
     }
