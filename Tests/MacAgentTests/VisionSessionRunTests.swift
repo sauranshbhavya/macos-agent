@@ -1154,37 +1154,50 @@ struct VisionSessionRunTests {
         #expect(try fixture.approvedApps.loadAll().isEmpty)
     }
 
-    /// **F8's second guard on §4.3's ordering, from a different angle.**
+    /// **F8's second guard on §4.3's ordering, from a genuinely different angle.**
     ///
     /// The founder's whole decision rests on one property — no per-app question before a capture has
-    /// cleared the screen check — and it was held by exactly one test, in a file the rebase touches.
-    /// This holds the same property by a route that shares none of that test's machinery: instead of
-    /// asserting that a shell refuses before the question, it asserts that the question, when it
-    /// *does* come, comes **after** a capture the model has never seen.
+    /// been taken and put through the screen check — and it was held by exactly one test, in a file
+    /// the rebase touches.
     ///
-    /// The two together are hard to defeat with one edit. Moving the gate above the capture makes
-    /// this one fail on `payloads` — the redaction step would not have run — while the shell test
-    /// fails on the prompt appearing. Removing the shell check leaves this one green and the other
-    /// red.
+    /// **The first version of this test did not hold it, and a mutation battery is what said so.**
+    /// It asserted that no prompt and no payload had reached the model when the question appeared,
+    /// and that the app had been activated — all of which are equally true with the gate moved
+    /// *above* the capture, because nothing is sent either way and `checkIterationStart` activates
+    /// the target before both orderings. Mutant M15, which reverses the ordering outright, was
+    /// killed by the shell test alone; this one stayed green. The claim that it was a second guard
+    /// was made in a commit message before the battery ran, and was wrong.
+    ///
+    /// What actually distinguishes the two orderings is whether the **OCR pass has run** when the
+    /// question is raised: the capture is redacted before the shell verdict exists, so a recognizer
+    /// that counts its calls is the observable. One call means the capture was taken and scanned
+    /// first; zero means the question came before any of it.
     @Test
-    func thePerAppQuestionArrivesOnlyAfterACaptureThatWasRedactedAndNeverSent() async throws {
+    func thePerAppQuestionArrivesOnlyAfterACaptureThatWasScannedAndNeverSent() async throws {
+        let recognizer = ScriptedRecognizer([Self.ordinaryScreen])
         let fixture = try makeFixture(
             replies: [#"{"action":"done","rationale":"never reached."}"#],
             bundleIdentifier: "com.microsoft.VSCode",
-            appControlAlreadyGranted: false
+            appControlAlreadyGranted: false,
+            recognizer: recognizer
         )
         defer { fixture.tearDown() }
 
         fixture.viewModel.startVisionSession(goal: "open the extensions panel", appName: "VS Code")
         try await waitUntil("the per-app control question") { fixture.viewModel.approvalRequest != nil }
 
-        // A capture was taken and redacted — the synthesizer was asked to bring the app forward,
-        // which only happens inside the loop, after `checkIterationStart`.
-        #expect(fixture.synthesizer.events.contains(.activated("com.microsoft.VSCode")))
+        // **The ordering, as one number.** A capture was taken and put through the redaction pass —
+        // which is where the shell verdict comes from — before the question was raised.
+        #expect(
+            recognizer.calls == 1,
+            "the per-app question must not arrive before a capture has been scanned (§4.3)"
+        )
         // And it went nowhere: no prompt and no image reached the model while the question is open.
+        // These do not distinguish the orderings on their own, which is exactly the mistake this
+        // test's first version made; they are here for what they do say, which is that a capture
+        // taken for the gate's sake never leaves the device.
         #expect(fixture.model.prompts.isEmpty)
         #expect(fixture.model.payloads.isEmpty)
-        // Nothing was driven, and no grant exists yet.
         #expect(fixture.synthesizer.clickCount == 0)
         #expect(try fixture.approvedApps.loadAll().isEmpty)
 
