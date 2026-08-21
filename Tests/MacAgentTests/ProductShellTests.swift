@@ -2298,6 +2298,122 @@ struct ProductShellTests {
         #expect(record.workspaceName == "Research")
     }
 
+    // MARK: - What a history row's workspace means (SONNY-195, SONNY-191)
+    //
+    // The founder's decision of 2026-08-21: a record shows the workspace the run **actually ran in**,
+    // not the one the user meant. Both defects were one root cause pointed in opposite directions —
+    // `recordPriorTaskContext` derived the tag a second time, after the run terminated, from
+    // `WorkspaceTaskTagging.resolvedWorkspaceName`, whose signature cannot see an explicit binding
+    // and never learns whether the store answered. So the row and the boundary disagreed whenever
+    // the two derivations did. See `AgentViewModel.assessedWorkspaceName`.
+    //
+    // Every test below drives a real dispatch and reads the row back off the file, because the two
+    // derivations agree on the easy cases: a unit test of the tagger alone passes identically before
+    // and after this fix. The corrupt-store case is the fourth of these and lives in
+    // `AgentViewModelLocalStorageTests`, which is where a mismatched-key fixture already exists.
+
+    /// **Under-tagging** (SONNY-195): a run bound through the workspace card wrote a row saying it
+    /// ran in no workspace, while the widget's own chip said "In Research" for the whole of it.
+    ///
+    /// Driven through the real route rather than `start(workspaceBinding:)`: `beginTaskInWorkspace`
+    /// arms `pendingWorkspaceBinding` and hands the user an empty composer, and the widget's submit
+    /// is what turns that into `explicitWorkspaceBinding` — which is exactly the arm the old tagger
+    /// could not see. The command is deliberately arithmetic that names nothing, since a command
+    /// mentioning "Research" would have been tagged by free-text matching for a different reason and
+    /// the test would pass with the fix removed.
+    @Test
+    func aCardBoundTaskTagsTheRecordEvenThoughItsCommandNeverNamesTheWorkspace() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        let workspace = StoredWorkspace(name: "Research", apps: [], urls: [])
+        try fixture.workspaceStore.save(workspace)
+        viewModel.refreshSavedItems()
+
+        viewModel.beginTaskInWorkspace(workspace)
+        #expect(viewModel.pendingWorkspaceBinding == "Research")
+        let command = "= 1 + 1"
+        #expect(!command.localizedCaseInsensitiveContains("research"), "nothing but the binding can tag this run")
+        viewModel.command = command
+        viewModel.start(origin: .widget, fromComposer: true)
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        // The run really was scoped — the half that always worked, asserted so the row's tag below
+        // is being compared against something rather than merely being non-nil.
+        guard case .scoped(let scope) = viewModel.lastAssessedScope else {
+            Issue.record("expected a scoped run, got \(viewModel.lastAssessedScope)")
+            return
+        }
+        #expect(scope.workspaceName == "Research")
+
+        let record = try #require(try fixture.taskHistoryStore.loadAll().last)
+        #expect(record.outcomeStatus == .completed)
+        #expect(record.workspaceName == "Research")
+        // And the surface that reads the field agrees: the workspace card counts this run.
+        #expect(WorkspaceTaskCount.count(forWorkspaceNamed: "Research", in: viewModel.taskHistoryRecords) == 1)
+    }
+
+    /// **Over-tagging, the deleted-workspace case** (SONNY-191). `directWorkspaceName` reads
+    /// `AgentStep.workspaceName` straight off the plan with no store access, so a plan naming a
+    /// workspace that is gone resolved that name anyway and the row claimed a boundary the run never
+    /// had. The workspace card's count then included it, which is a number no boundary backs.
+    ///
+    /// The step is a `calculate_utility` rather than an `open_workspace`, deliberately: the field is
+    /// read off *any* operation (`steps.compactMap(\.workspaceName).first`), and using an operation
+    /// that succeeds keeps the run `.completed`, which is the only status the card counts. An
+    /// `open_workspace` for a missing workspace would fail and be excluded from the count for a
+    /// second reason, hiding the one under test.
+    @Test
+    func aPlanNamingAWorkspaceThatIsGoneLeavesTheRowUntaggedAndOutOfTheWorkspaceCount() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+        // A healthy, readable store that simply does not contain the name the plan carries.
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Writing", apps: [], urls: []))
+        viewModel.refreshSavedItems()
+
+        viewModel.command = "tally the sprint numbers"
+        viewModel.start(prebuiltPlan: planCalculating("1 + 1", workspaceName: "Research"))
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        // Nothing bound, and it is not a storage fault — a workspace deleted between dispatch and
+        // assessment is `resolveTaskScope`'s recorded, legitimate fallback.
+        #expect(viewModel.lastAssessedScope == .unscoped)
+        #expect(viewModel.localStorageNotice == nil)
+
+        let record = try #require(try fixture.taskHistoryStore.loadAll().last)
+        #expect(record.outcomeStatus == .completed, "the run itself succeeded, so the card would have counted it")
+        #expect(record.workspaceName == nil)
+        #expect(WorkspaceTaskCount.count(forWorkspaceNamed: "Research", in: viewModel.taskHistoryRecords) == 0)
+    }
+
+    /// **Over-tagging, the blank-name case** (SONNY-191, folding in PR #83's F1 note). A step
+    /// carrying `workspaceName: ""` is guaranteed to produce an unscoped run — `resolveTaskScope`
+    /// refuses a blank name before it touches the store — while the old tagger recorded the blank
+    /// string verbatim, so the row was tagged with something that can never be a workspace and the
+    /// chip would have rendered an empty one.
+    ///
+    /// Reachable with no tampering: the planner schema requires a `workspaceName` slot on every step
+    /// and `""` is a valid value for it, and `validateStepSafety` checks operations rather than
+    /// fields, so a routine can be *saved* carrying a stray blank and reproduce it on every run.
+    @Test
+    func aPlanCarryingABlankWorkspaceNameLeavesTheRowUntaggedRatherThanTaggingTheBlank() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        viewModel.command = "tally the sprint numbers"
+        viewModel.start(prebuiltPlan: planCalculating("1 + 1", workspaceName: "   "))
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.lastAssessedScope == .unscoped)
+        #expect(viewModel.localStorageNotice == nil, "a blank name is not a storage fault")
+
+        let record = try #require(try fixture.taskHistoryStore.loadAll().last)
+        #expect(record.outcomeStatus == .completed)
+        #expect(record.workspaceName == nil)
+    }
+
     // MARK: - Regression coverage for a separate, pre-existing bug surfaced while testing the
     // above (unrelated to task-to-workspace tagging itself): runRoutineWidget/openWorkspaceWidget
     // built commands ending in a trailing period, which defeated InstantCommandResolver's exact
@@ -2764,6 +2880,28 @@ private final class ProductShellActivationRecorder: ApplicationActivationApplyin
     func returnToAccessoryApplication() {
         accessoryActivationCount += 1
     }
+}
+
+/// A one-step plan that completes hermetically, with a `workspaceName` on the step.
+///
+/// The workspace field is what the tagging tests need and `calculate_utility` is what makes the run
+/// terminate cleanly — `WorkspaceTaskTagging.directWorkspaceName` reads the field off *any*
+/// operation, which is the documented behaviour those tests are exercising rather than a shortcut
+/// around it.
+private func planCalculating(_ expression: String, workspaceName: String?) -> AgentPlan {
+    AgentPlan(
+        summary: "Calculate \(expression).",
+        requiresConfirmation: false,
+        steps: [
+            AgentStep(
+                id: "calculate",
+                operation: .calculateUtility,
+                description: "Calculate \(expression).",
+                workspaceName: workspaceName,
+                searchQuery: expression
+            )
+        ]
+    )
 }
 
 @MainActor
