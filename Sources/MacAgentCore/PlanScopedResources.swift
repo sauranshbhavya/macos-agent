@@ -379,21 +379,50 @@ public enum PlanScopedResources {
     /// each pass back-fills, the second pass back-fills nothing and clears nothing, and the rule is
     /// idempotent. SONNY-73 shipped the wrong version first and the whole suite stayed green.
     ///
-    /// **So one form of the over-report survives here, and it is the per-step one.** A step carrying
-    /// `contextSource` together with its own non-empty `inputPath` is back-filled by nothing, keeps
-    /// its marker, and is still reported as driving Finder — including the mixed plan
-    /// `WorkspaceScopeTests.aMixedSelectionDrivenPlanNamesFinderOnceOnTheStepThatDeclaresIt` builds,
-    /// whose resolved form really does still produce a Finder finding. After the first pass such a
-    /// step is indistinguishable from a genuine declaring step the pin filled in, so no rule reading
-    /// these fields can separate them; it needs a resolve-phase provenance pin with this switch keyed
-    /// on that instead. Tracked as SONNY-185, deliberately not done here.
+    /// **The per-step form of the over-report is closed too, and this switch is what moved**
+    /// (SONNY-185). A step carrying `contextSource` together with its own non-empty `inputPath` is
+    /// back-filled by nothing, so the clearing above never reached it: it kept its marker and was
+    /// still reported as driving Finder. After the first pass such a step is indistinguishable from
+    /// a genuine declaring step the pin filled in, so no rule reading `contextSource` and
+    /// `inputPath` could separate them — which is why the answer is a second field rather than a
+    /// cleverer rule. `AgentStep.resolvedFromFinderSelection` is written by
+    /// `pinningSelectedDirectoryInput` on the steps it back-fills, and only on a pass that actually
+    /// drove Finder; this function now requires **both** the planner's declaration and that
+    /// resolver's fact.
+    ///
+    /// **An unresolved plan still names Finder, and that is a decision rather than an accident**
+    /// (founder, 2026-08-21). Keying on the pin *alone* would have been exact everywhere and would
+    /// have been safe today — `classification(of:)` is reached from `WorkspaceScopeEvaluator.evaluate`
+    /// alone, whose only caller in `Sources/` is `AgentActionExecutor.scopeFindings`, whose only
+    /// caller is `assessRisk`, whose first statement is `resolveDefaultOutputs(in: plan)`, which is
+    /// where the pin runs (`git grep -n "PlanScopedResources\." -- Sources/` returns one line
+    /// outside this file, and `git grep -n "WorkspaceScopeEvaluator.evaluate" -- Sources/` returns
+    /// one, both at `d8cd968`). But "safe because nothing calls it that way" is safe until something
+    /// does, and it would have made this the one place the classifier can go *quiet* about a
+    /// resource rather than loud. So the second disjunct stands: before resolution Finder is
+    /// presumed, after resolution it is known. `aSelectionDrivenStepNamesFinderBeforeAnythingHasPinnedItsFolder`
+    /// is unchanged and still pins the first half.
     ///
     /// Reported per step rather than per plan because that is all a step-scoped classifier can see.
     /// The selection is read once for the whole plan, so in a mixed plan the step that declares
     /// itself selection-driven is the one that names Finder. The plan-level roll-up is a maximum, so
     /// the verdict is the same either way.
     private static func finderSelectionApp(in step: AgentStep) -> [ScopedResource] {
-        step.contextSource == .finderSelection ? [.app(finderAppName)] : []
+        guard step.contextSource == .finderSelection else {
+            return []
+        }
+        // Either the resolver confirmed it drove Finder for this step, or nothing has resolved a
+        // path onto it yet and Finder is still the presumptive source. The second disjunct is what
+        // keeps this classifier answering the same question on both sides of the resolve phase; it
+        // can only ever *add* Finder to a plan that has not been resolved, which is the direction
+        // this file takes everywhere. The one shape it excludes is the one SONNY-185 is about: a
+        // step that declares itself selection-driven and arrived carrying its own folder, which the
+        // resolver never had to read a selection to satisfy.
+        let arrivedWithItsOwnFolder = step.inputPath?
+            .trimmingCharacters(in: .whitespacesAndNewlines).isEmpty == false
+        return step.resolvedFromFinderSelection == true || !arrivedWithItsOwnFolder
+            ? [.app(finderAppName)]
+            : []
     }
 
     /// `reveal_in_finder` and `open_generated_artifact` name their target directly, or name nothing
