@@ -3,7 +3,7 @@ import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
 import { classifyFailure, consumeLatest, invalidateLive, recordIssue, CODE_LIFETIME_SECONDS } from "../auth/codes.js";
 import { expiryFields } from "../auth/clock.js";
-import { looksLikeEmail, normalizeEmail, resolve } from "../auth/identity.js";
+import { looksLikeEmail, normalizeEmail, rateLimitEmailKey, resolve } from "../auth/identity.js";
 import { ProviderRejected, ProviderUnavailable, type AuthProvider } from "../auth/provider.js";
 import {
   CODE_REQUEST_PER_ADDRESS, CODE_REQUEST_PER_SOURCE, CODE_VERIFY_PER_ADDRESS,
@@ -70,20 +70,30 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
 
     // Per address second, and its refusal is SILENT. Answering 429 here would tell the caller that
     // this particular address has been asked for recently, which is the oracle in a slower form.
-    const byAddress = await consume(client, bucketKey("addr", email, salt), CODE_REQUEST_PER_ADDRESS, now());
+    const byAddress = await consume(client, bucketKey("addr", rateLimitEmailKey(email), salt), CODE_REQUEST_PER_ADDRESS, now());
     if (!byAddress.allowed) return reply.status(200).send(uniform);
 
     try {
-      // The newest code is the only live one -- the founder's own manual-test item. Invalidating
-      // before sending means a crash after the send leaves no older code usable, which is the safe
-      // direction to fail in.
+      // **Send first, invalidate only on success** (PR #87 F9). Invalidating first meant a provider
+      // failure — which still returns 200, because the response must not reveal anything — killed
+      // the code the user was already holding and told them nothing. They would type a valid code
+      // and be refused, with no new mail arriving. Now a failed send leaves the previous code
+      // working, which is the safe direction: at worst two codes are briefly live, and the older
+      // one is invalidated the moment a send actually succeeds.
+      await deps.provider.sendEmailCode(email);
       await invalidateLive(client, email, now());
       await recordIssue(client, email, sourceHash(request, salt), now());
-      await deps.provider.sendEmailCode(email);
     } catch (error) {
       // Even a provider failure returns the uniform response. The user is told nothing useful
       // either way, and the alternative leaks that this address reached the send path.
-      request.log.error({ err: error }, "sign-in code send failed");
+      // Message and name only, never the error object (PR #87 F11). The real Supabase and Resend
+      // adapters raise errors carrying request URLs — which contain the project ref — and response
+      // bodies. Fastify's `redact` list below covers known keys; this covers the one call site that
+      // was handing it an arbitrary provider object.
+      request.log.error(
+        { err_name: (error as Error)?.name, err_message: (error as Error)?.message },
+        "sign-in code send failed",
+      );
     }
     return reply.status(200).send(uniform);
   });
@@ -106,7 +116,7 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
 
     // Verification is guessing, so it is limited per address being guessed at. Without this the
     // code's own entropy is the only thing between an attacker and an account.
-    const limit = await consume(client, bucketKey("verify", email, salt), CODE_VERIFY_PER_ADDRESS, now());
+    const limit = await consume(client, bucketKey("verify", rateLimitEmailKey(email), salt), CODE_VERIFY_PER_ADDRESS, now());
     if (!limit.allowed) {
       return reply
         .status(429)
@@ -181,8 +191,18 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
       throw error;
     }
     const client = await deps.db();
+    // Filtered and ordered (PR #87 F8). `supabase_user_id` carries no uniqueness constraint and
+    // never can — the whole design allows several identities to name one Supabase user — so a bare
+    // `LIMIT 1` returned an arbitrary row, and one of them could belong to a closed account. A
+    // refresh that resolves to a closed account hands the caller a session for something the user
+    // asked to delete.
     const account = await client.query<{ account_id: string }>(
-      "SELECT account_id FROM sonny.identity WHERE supabase_user_id = $1 LIMIT 1",
+      `SELECT i.account_id
+         FROM sonny.identity i
+         JOIN sonny.account a ON a.id = i.account_id
+        WHERE i.supabase_user_id = $1 AND a.deleted_at IS NULL
+        ORDER BY i.linked_at ASC, i.id ASC
+        LIMIT 1`,
       [session.supabaseUserId],
     );
     const issued = now();
@@ -211,23 +231,52 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
    * claim to have deleted content.** The retention ticket sweeps what hangs off `deleted_at`, and
    * until it lands a closed account's content is retained and unreachable. Recorded on both tickets.
    */
-  app.delete("/v1/account", async (request, reply) => {
+  // Mounted only where the gate is on, and `loadConfig` refuses the gate in production. Until
+  // SONNY-128 supplies authenticated-request middleware this route cannot tell who is asking, and
+  // an unauthenticated destructive primitive that merely happens to be unrouted is a landmine that
+  // arms itself the moment someone routes it.
+  if (config.allowUnauthenticatedAccountDelete) app.delete("/v1/account", async (request, reply) => {
     const header = request.headers.authorization;
     if (!header?.startsWith("Bearer ")) {
       return reply.status(401).send(
         errorBody("auth.unauthenticated", "A bearer token is required.", request.id),
       );
     }
-    const accountId = (request.headers["sonny-account-id"] as string | undefined) ?? undefined;
+    // **Attributed from the token, never from a header** (PR #87 F1). The first version took the
+    // account id from `Sonny-Account-Id` and verified nothing, so any caller who could reach the
+    // port could destroy any account whose id they could guess — reproduced against a running
+    // server with a made-up bearer token. The token is now resolved to a provider-side user and
+    // then to an account through `sonny.identity`, which is precisely what SONNY-128's middleware
+    // will do for every authenticated route; when it lands, this block is what it replaces.
+    const client = await deps.db();
+    let supabaseUserId: string;
+    try {
+      supabaseUserId = await deps.provider.userFromAccessToken(header.slice("Bearer ".length));
+    } catch (error) {
+      if (error instanceof ProviderRejected) {
+        return reply.status(401).send(
+          errorBody("auth.unauthenticated", "Access token is not valid.", request.id),
+        );
+      }
+      throw error;
+    }
+    const owned = await client.query<{ account_id: string }>(
+      `SELECT i.account_id
+         FROM sonny.identity i
+         JOIN sonny.account a ON a.id = i.account_id
+        WHERE i.supabase_user_id = $1 AND a.deleted_at IS NULL
+        ORDER BY i.linked_at ASC, i.id ASC
+        LIMIT 1`,
+      [supabaseUserId],
+    );
+    const accountId = owned.rows[0]?.account_id;
     if (!accountId) {
-      // The account is resolved from the session by SONNY-128's authenticated-request middleware,
-      // which does not exist yet. Until it does this endpoint refuses rather than guessing, because
-      // an account-deletion route that infers its subject is the worst possible place to be wrong.
+      // A valid token that names no live account. 401 rather than 404: the caller is not attributable
+      // to anything this route may act on, and saying which id does or does not exist is a leak.
       return reply.status(401).send(
         errorBody("auth.unauthenticated", "Account could not be attributed to this session.", request.id),
       );
     }
-    const client = await deps.db();
     // Close the account and **release its identities** in one transaction.
     //
     // Releasing them is what lets the person sign up again with the same address. Without it the
@@ -242,7 +291,25 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
         "UPDATE sonny.account SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL",
         [accountId],
       );
-      await client.query("DELETE FROM sonny.identity WHERE account_id = $1", [accountId]);
+      // **Every session on the account, not just this one** (PR #87 F5). One account maps to
+      // several Supabase users by design, so revoking only the caller's session leaves the others
+      // live on an account the user just deleted. The identities are read BEFORE the commit that
+      // releases them, because the trigger removes the rows this traversal needs.
+      const identities = await client.query<{ supabase_user_id: string | null }>(
+        "SELECT DISTINCT supabase_user_id FROM sonny.identity WHERE account_id = $1 AND supabase_user_id IS NOT NULL",
+        [accountId],
+      );
+      for (const row of identities.rows) {
+        try {
+          await deps.provider.signOutAllForUser(row.supabase_user_id!);
+        } catch (error) {
+          if (!(error instanceof ProviderRejected)) throw error;
+        }
+      }
+      // Identities are released by the `account_close_releases_identities` trigger (migration 0003),
+      // not here. Doing it in the handler was the first fix and it held only for accounts closed by
+      // this one path; the invariant belongs to the data, because "an identity may not reference a
+      // closed account" is true whichever statement closed it.
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");

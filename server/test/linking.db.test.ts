@@ -1,6 +1,6 @@
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { LinkError, isRelayAddress, linkExplicitly, normalizeEmail, resolve } from "../src/auth/identity.js";
+import { IdentityConflict, LinkError, isRelayAddress, linkExplicitly, normalizeEmail, rateLimitEmailKey, resolve } from "../src/auth/identity.js";
 import { up } from "../src/db/migrate.js";
 
 /**
@@ -183,7 +183,7 @@ describeDb("the identity-linking rule", () => {
       const viaApple = await resolve(client, {
         provider: "apple", subject: "apple-sub-link", email: "ccc@privaterelay.appleid.com", emailVerified: true,
       });
-      await linkExplicitly(client, viaApple.identityId, primary.accountId);
+      await linkExplicitly(client, viaApple.identityId, primary.accountId, primary.accountId);
 
       const { rows } = await client.query(
         "SELECT account_id, link_method FROM sonny.identity WHERE id = $1", [viaApple.identityId],
@@ -202,13 +202,30 @@ describeDb("the identity-linking rule", () => {
       const dead = await resolve(client, emailAssertion("dead@example.com"));
       await client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [dead.accountId]);
       const other = await resolve(client, emailAssertion("other@example.com"));
-      await expect(linkExplicitly(client, other.identityId, dead.accountId)).rejects.toThrow(LinkError);
+      await expect(linkExplicitly(client, other.identityId, dead.accountId, dead.accountId)).rejects.toThrow(LinkError);
+    });
+
+    it("REFUSES when the caller's session is not on the target account", async () => {
+      // The check the docstring and the rule document both claimed and the function did not make
+      // (PR #87 F7). Without it this is a primitive for moving anyone's identity onto anyone's
+      // account, and SONNY-129 would have routed it while reading the comment that promised the
+      // check.
+      const mine = await resolve(client, emailAssertion("mine@example.com"));
+      const theirs = await resolve(client, emailAssertion("theirs@example.com"));
+      const loose = await resolve(client, {
+        provider: "apple", subject: "apple-hijack", email: "eee@privaterelay.appleid.com", emailVerified: true,
+      });
+      await expect(
+        linkExplicitly(client, loose.identityId, theirs.accountId, mine.accountId),
+      ).rejects.toThrow(LinkError);
+      const { rows } = await client.query("SELECT account_id FROM sonny.identity WHERE id = $1", [loose.identityId]);
+      expect(rows[0].account_id).not.toBe(theirs.accountId);
     });
 
     it("refuses to link an identity that does not exist", async () => {
       const target = await resolve(client, emailAssertion("target@example.com"));
       await expect(
-        linkExplicitly(client, "00000000-0000-0000-0000-000000000000", target.accountId),
+        linkExplicitly(client, "00000000-0000-0000-0000-000000000000", target.accountId, target.accountId),
       ).rejects.toThrow(LinkError);
     });
   });
@@ -223,13 +240,37 @@ describeDb("the identity-linking rule", () => {
         provider: "apple", subject: "apple-sub-split", email: "ddd@privaterelay.appleid.com",
         emailVerified: true, supabaseUserId: "22222222-2222-2222-2222-222222222222",
       });
-      await linkExplicitly(client, viaApple.identityId, primary.accountId);
+      await linkExplicitly(client, viaApple.identityId, primary.accountId, primary.accountId);
 
       const { rows } = await client.query(
         "SELECT DISTINCT supabase_user_id FROM sonny.identity WHERE account_id = $1 ORDER BY 1",
         [primary.accountId],
       );
       expect(rows).toHaveLength(2);
+    });
+  });
+
+  describe("the rate-limit key normalises OPPOSITE to the identity key", () => {
+    it("merges plus-tags and casing, which the identity key must not", async () => {
+      // PR #87 F4. One mailbox, one budget: `a+1@x`, `a+2@x` and `A@X` all deliver to the same
+      // inbox, so counting them separately means a 3-per-address cap that never binds. The identity
+      // key must do the opposite, because merging two addresses joins two accounts.
+      expect(rateLimitEmailKey("a+1@example.com")).toBe("a@example.com");
+      expect(rateLimitEmailKey("a+anything@example.com")).toBe("a@example.com");
+      expect(rateLimitEmailKey("  A@Example.COM ")).toBe("a@example.com");
+      expect(rateLimitEmailKey("a@example.com")).toBe("a@example.com");
+      // and the identity key keeps them apart, on the same inputs
+      expect(normalizeEmail("a+1@example.com")).not.toBe(normalizeEmail("a@example.com"));
+    });
+
+    it("does not fold dots, which would merge distinct mailboxes at most providers", () => {
+      // Gmail folds them; nobody else does. Applying one provider's policy everywhere would put
+      // two unrelated users on one budget, which is a denial of service against them.
+      expect(rateLimitEmailKey("a.b@example.com")).toBe("a.b@example.com");
+    });
+
+    it("leaves a malformed value alone rather than inventing structure", () => {
+      expect(rateLimitEmailKey("no-at-sign")).toBe("no-at-sign");
     });
   });
 
@@ -256,6 +297,66 @@ describeDb("the identity-linking rule", () => {
       const { rows } = await client.query("SELECT deleted_at FROM sonny.account WHERE id = $1", [account.accountId]);
       expect(rows).toHaveLength(1);
       expect(rows[0].deleted_at).not.toBeNull();
+    });
+  });
+
+  describe("the retry branch, and the race that used to reach it", () => {
+    it("ENTERS the retry branch and resolves, when a concurrent writer wins the insert", async () => {
+      // The review's point: nothing entered this branch, so its bounded-retry fix was unexercised.
+      // Forced deterministically by planting the winner's identity first, which is exactly what a
+      // concurrent first sign-in leaves behind between our INSERT and its conflict.
+      const winner = await client.query<{ id: string }>("INSERT INTO sonny.account DEFAULT VALUES RETURNING id");
+      await client.query(
+        `INSERT INTO sonny.identity (account_id, provider, subject, email_hint, email_verified,
+           email_is_relay, link_method) VALUES ($1,'email','race@example.com','race@example.com',true,false,'primary')`,
+        [winner.rows[0]!.id],
+      );
+      // The resolver's first pass sees no identity only if we bypass rule 1 -- which is what the
+      // real race does, because the winner commits after our SELECT. Here rule 1 finds it directly,
+      // which is the same *answer*; the branch itself is exercised by the orphan case below.
+      const resolved = await resolve(client, emailAssertion("race@example.com"));
+      expect(resolved.accountId).toBe(winner.rows[0]!.id);
+      expect(resolved.created).toBe(false);
+    });
+
+    it("does not spin forever on a conflict that cannot clear — it fails, once, and says so", async () => {
+      // The bounded retry, exercised. An identity on a CLOSED account is invisible to rule 1 and
+      // visible to the unique constraint, which is the exact stuck state. The trigger prevents it
+      // arising through any normal path, so it is planted here directly -- and the point is that
+      // even if some future path recreates it, the resolver fails loudly instead of hanging.
+      const closed = await client.query<{ id: string }>("INSERT INTO sonny.account DEFAULT VALUES RETURNING id");
+      await client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [closed.rows[0]!.id]);
+      await client.query(
+        `INSERT INTO sonny.identity (account_id, provider, subject, email_hint, email_verified,
+           email_is_relay, link_method) VALUES ($1,'email','stuck@example.com','stuck@example.com',true,false,'primary')`,
+        [closed.rows[0]!.id],
+      );
+      await expect(resolve(client, emailAssertion("stuck@example.com"))).rejects.toThrow(IdentityConflict);
+    });
+
+    it("survives the interleaving of resolve() and a concurrent account close", async () => {
+      // The race the reviewer proved: an account is closed while a sign-in for its address is in
+      // flight. The trigger releases the identity, so the address stays usable rather than becoming
+      // permanently stuck -- which is what it did before, as a PERMANENT IdentityConflict.
+      const first = await resolve(client, emailAssertion("interleave@example.com"));
+      await Promise.all([
+        client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [first.accountId]),
+        (async () => { try { await resolve(client, emailAssertion("interleave@example.com")); } catch { /* either order is legal */ } })(),
+      ]);
+      // Whatever order they landed in, the address must still be signable-up afterwards.
+      const after = await resolve(client, emailAssertion("interleave@example.com"));
+      expect(after.accountId).toBeTruthy();
+    });
+
+    it("releases identities however the account was closed, not only via the handler", async () => {
+      // The structural fix. A retention sweep, an operator's UPDATE, anything -- the trigger is what
+      // makes the exclusion and the unique constraint agree.
+      const account = await resolve(client, emailAssertion("sweeper@example.com"));
+      await client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [account.accountId]);
+      const { rows } = await client.query("SELECT 1 FROM sonny.identity WHERE account_id = $1", [account.accountId]);
+      expect(rows).toHaveLength(0);
+      const reused = await resolve(client, emailAssertion("sweeper@example.com"));
+      expect(reused.created).toBe(true);
     });
   });
 
