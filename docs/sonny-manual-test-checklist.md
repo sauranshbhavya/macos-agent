@@ -320,17 +320,37 @@ compare directly — don't rely on memory of what it's supposed to look like.
       the old boolean; with the pointer anywhere else, the next hover was a real transition and the
       hint appeared even before this branch.
 - [x] SONNY-179, the risk the fix takes on — **confirmed by the founder 2026-08-20**, ticked by
-      SONNY-178. **What this one established, recorded because nothing in a test process could
-      answer it:** AppKit does **not** manufacture a duplicate `mouseEntered` when a tracking area
-      re-registers under a pointer that is already inside it. That was the open risk of responding
-      to every arrival — the hint row appearing and disappearing resizes the window under the
-      pointer, and had each resize counted as a fresh arrival the hint would have re-shown forever.
-      It does not. Hover the mic and keep the pointer **moving slightly
+      SONNY-178. **What this one observed, and how far it reaches** — scoped, because the first
+      version of this note stated a universal negative from a single observation (PR #84 review, F5).
+      *Measured once*: on Apple Silicon, macOS 26.5.2 (build 25F84), 2026-08-20, hovering the mic and
+      keeping the pointer moving slightly inside the button for about ten seconds while the hint row
+      appeared and disappeared, resizing the window beneath it. **In that run the hint went once and
+      did not come back**, so on that machine, that OS build and that gesture, the re-registering
+      tracking area produced no extra `mouseEntered`. That is the open risk of responding to every
+      arrival, and it did not fire. It is **not** established as a property of AppKit: one
+      observation cannot rule out a different OS version, a different pointing device, or a faster
+      resize cadence. Re-run this row on any macOS upgrade rather than treating it as settled. Hover the mic and keep the pointer **moving slightly
       inside the button** for about ten seconds. The hint must go once at ~3s and must **not** come
       back. Every mouse-entered now re-shows the hint and re-arms the three seconds — that is the
       fix, and it also means the old design's accidental absorbing of a repeat is gone, so this is
       the check that AppKit is not manufacturing extra arrivals when the row appearing and
       disappearing resizes the window under a moving pointer.
+- [ ] **The pointing-hand cursor survives a teardown under the pointer** (SONNY-178, PR #84 review
+      F3). This is the joint the cursor refutation could not verify: `.onDisappear` popping the
+      pushed cursor is read from the code, and nothing in a test process can make SwiftUI tear a view
+      down under a real pointer. Two gestures, both in **Command Center** (this row lives in §3a
+      because that is where the audit's record points, not because the widget is involved):
+      *(a)* open the account menu, rest the pointer on a row so the cursor is the **pointing hand**,
+      and press **Escape**. The arrow must return **immediately** — a hand that persists over the
+      rest of the app is the leak, and it would survive until something else pushed and popped.
+      *(b)* Open a workspace detail sheet, rest the pointer on a control showing the pointing hand,
+      and dismiss the sheet with Escape. Same expectation.
+- [ ] **A dwell timer does not outlive the menu that owns it** (SONNY-178, PR #84 review F2 — the
+      one live defect the audit's second pass found). Open the account menu, rest the pointer on
+      **Learn more**, and within a fraction of a second — before the flyout opens — press
+      **Escape**. Then open the account menu again. The Learn-more flyout must be **closed**: before
+      the fix, the pending dwell fired after the row was gone and left the flyout flag set, so the
+      next opening of the menu showed it already open with no hover.
 - [ ] **The re-arm** (SONNY-178). Hover the mic, let the hint go on its own at ~3s, then move the
       pointer **off** the mic and back **on**. The hint must appear again, with a fresh three-second
       countdown — not stay away because it has "already been shown". This is the property that makes

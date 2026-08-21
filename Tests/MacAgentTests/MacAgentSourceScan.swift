@@ -90,17 +90,68 @@ enum MacAgentSource {
         return files.sorted { $0.path < $1.path }
     }
 
-    enum ScanError: Error {
-        case unreadableSourceDirectory(String)
+    /// A file's path relative to `Sources/MacAgent/`, slash-separated — the key a population scan
+    /// should group by. `lastPathComponent` collides across directories; this cannot.
+    static func relativePath(of url: URL) -> String {
+        let prefix = appSourceDirectory.path + "/"
+        return url.path.hasPrefix(prefix) ? String(url.path.dropFirst(prefix.count)) : url.lastPathComponent
     }
 
-    /// A file under `Sources/MacAgent/`, resolved from this file's own location so the scan works
-    /// from any checkout, with both comment syntaxes dropped.
-    static func read(_ name: String) throws -> String {
-        let source = try String(
-            contentsOf: appSourceDirectory.appendingPathComponent(name),
-            encoding: .utf8
+    /// The body of the brace-delimited block whose opening line contains `anchor`, matched by depth.
+    ///
+    /// **`region(of:from:to:)` cannot express "inside this conditional", and assuming it could is
+    /// how a scan came to hold nothing (PR #84 review, F1).** That function ends the region *at* the
+    /// `to:` anchor, so a test asserting the region excluded its own end anchor passed wherever that
+    /// line sat — including with the guarded content moved inside the conditional, which was the
+    /// mutation it was written to catch. A block has to be delimited by its own braces, not by
+    /// whatever text happens to follow it.
+    ///
+    /// Braces inside string literals would miscount, the same residual `read` already names for
+    /// searches: nothing here parses Swift. No literal in any block scanned today contains one.
+    static func braceBlock(of source: String, openedBy anchor: String) throws -> String {
+        let anchorRange = try #require(source.range(of: anchor), "Anchor not found: \(anchor)")
+        let openIndex = try #require(
+            source[anchorRange].lastIndex(of: "{"),
+            "Anchor has no opening brace: \(anchor)"
         )
+        var depth = 0
+        var index = openIndex
+        while index < source.endIndex {
+            switch source[index] {
+            case "{":
+                depth += 1
+            case "}":
+                depth -= 1
+                if depth == 0 {
+                    return String(source[source.index(after: openIndex)..<index])
+                }
+            default:
+                break
+            }
+            index = source.index(after: index)
+        }
+        throw ScanError.unbalancedBraces(anchor)
+    }
+
+    enum ScanError: Error {
+        case unreadableSourceDirectory(String)
+        case unbalancedBraces(String)
+    }
+
+    /// A file under `Sources/MacAgent/`, by name — for the common case of scanning one known file.
+    ///
+    /// **Only resolves files sitting directly in that directory.** A caller iterating
+    /// `appSourceFiles()` must pass the `URL`, not `lastPathComponent`: flattening a nested path to
+    /// its basename here would either throw (a loud miss) or, worse, silently read a *different*
+    /// top-level file of the same name. That was a real hole in the first version of this type — the
+    /// recursion `appSourceFiles()` advertised could not actually be read (PR #84 review, F4).
+    static func read(_ name: String) throws -> String {
+        try read(appSourceDirectory.appendingPathComponent(name))
+    }
+
+    /// Any source file, by URL, with both comment syntaxes dropped. The form a population scan uses.
+    static func read(_ url: URL) throws -> String {
+        let source = try String(contentsOf: url, encoding: .utf8)
         return strippingBlockComments(source)
             .split(separator: "\n", omittingEmptySubsequences: false)
             .filter { !$0.trimmingCharacters(in: .whitespaces).hasPrefix("//") }

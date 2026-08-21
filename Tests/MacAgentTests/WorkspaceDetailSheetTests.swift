@@ -1209,6 +1209,15 @@ struct WorkspaceDetailSheetTests {
     /// rendered inside the icon's own `if let`. The first alone survives a rewrite that keeps
     /// `Text(entry.value)` and wraps it in the icon's conditional — which is the same bug wearing
     /// different syntax.
+    ///
+    /// **The second assertion held nothing until PR #84's review, and two mutants proved it.** It
+    /// used `region(of:from:to:)` with `Text(entry.value)` as the `to:` anchor, and that function
+    /// ends the region *at* its end anchor — so "the region does not contain `entry.value`" was true
+    /// wherever that line sat, including inside the conditional. Both of the reviewer's mutants
+    /// survived all 1446 tests: one wrapping the name inside the icon's `if let` (nothing renders on
+    /// an icon-less row), one rendering the name only when no icon resolved (icon-only rows, exactly
+    /// what the ticket forbids). The block is now delimited by its own braces, which is the only
+    /// thing that can express "inside this conditional".
     @Test
     func theSheetRowRendersTheNameUnconditionallyBesideAnyIcon() throws {
         let row = try MacAgentSource.region(
@@ -1218,12 +1227,16 @@ struct WorkspaceDetailSheetTests {
         )
         #expect(MacAgentSource.count(of: "Text(entry.value)", inText: row) == 1)
 
-        let iconBranch = try MacAgentSource.region(
+        // The conditional's own body, brace-matched — not "everything up to the name", which is
+        // what made this vacuous.
+        let iconBranch = try MacAgentSource.braceBlock(
             of: row,
-            from: "if let nsImage = entry.appIcon?.icon {",
-            to: "Text(entry.value)"
+            openedBy: "if let nsImage = entry.appIcon?.icon {"
         )
+        // The name is not in here: neither the value itself, nor a second `Text(` that could render
+        // it under another spelling. A conditional that draws the icon draws only the icon.
         #expect(!iconBranch.contains("entry.value"))
+        #expect(MacAgentSource.count(of: "Text(", inText: iconBranch) == 0)
         // And the icon really is gated on a resolved image rather than on the entry being an app,
         // which is what routes an unresolvable app to the same name-only rendering a URL gets.
         #expect(row.contains("if let nsImage = entry.appIcon?.icon {"))
