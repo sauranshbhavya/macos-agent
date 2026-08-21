@@ -30,7 +30,33 @@ export const DEFAULT_BODY_LIMIT_BYTES = 1024 * 1024;
  */
 export function buildApp(config: Config, auth?: AuthDeps): FastifyInstance {
   const app = Fastify({
-    logger: { level: config.logLevel },
+    logger: {
+      level: config.logLevel,
+      /**
+       * Redaction, added before the adapter that would need it exists (PR #87 F11).
+       *
+       * The real Supabase and Resend adapters raise errors carrying request URLs — which contain
+       * the project ref — headers, and response bodies. Fastify logs a request's headers on error
+       * by default, and `Authorization` is one of them. Adding this list after those adapters land
+       * means the first weeks of logs are the ones that leak, so it goes in now while the list is
+       * short enough to reason about.
+       */
+      redact: {
+        paths: [
+          "req.headers.authorization",
+          "req.headers.cookie",
+          'req.headers["sonny-account-id"]',
+          "req.body.code",
+          "req.body.refresh_token",
+          "req.body.email",
+          "err.config.headers.Authorization",
+          "err.config.url",
+          "err.request.url",
+          "err.response.data",
+        ],
+        censor: "[redacted]",
+      },
+    },
 
     /**
      * A real UUID per request, not Fastify's default counter.
@@ -48,11 +74,12 @@ export function buildApp(config: Config, auth?: AuthDeps): FastifyInstance {
     /**
      * Off unless a proxy is actually in front, which is a per-environment fact.
      *
-     * `trustProxy: true` makes `request.ip` and `request.protocol` read from `X-Forwarded-For` and
-     * `X-Forwarded-Proto` — **headers any caller can set**. With nothing in front of the container
-     * that turns the client's own IP into a value the client chooses, which matters the moment
-     * anything rate-limits or logs by address. So it comes from configuration and defaults to
-     * false; a deployment that really does sit behind a load balancer sets `TRUST_PROXY`.
+     * `X-Forwarded-For` is a header any caller can set, so believing it unconditionally lets a
+     * caller choose its own apparent address. Not believing it *at all* behind a load balancer is
+     * equally wrong in the other direction: every request then reports the balancer, and the
+     * per-source rate limit becomes one global bucket. **A boolean has no safe setting**, so this
+     * is a list of trusted proxies (or a hop count) from `TRUSTED_PROXIES`, empty by default —
+     * Fastify walks the forwarded chain and stops at the first hop not on the list.
      */
     trustProxy: config.trustProxy,
 

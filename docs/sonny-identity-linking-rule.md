@@ -27,7 +27,16 @@ A sign-in resolves to an account in this order, and stops at the first match:
 | 4 | user is signed in on account A and completes a sign-in with method B | B joins A | `explicit` |
 
 Rule 4 is the only path that joins two *existing* accounts, and it requires an authenticated session
-on one of them. **Nothing merges two accounts on the strength of an email address alone.**
+**on the target account specifically** — not on "one of them", which is what an earlier version of
+this line said and is a weaker claim than the code now makes. `linkExplicitly` takes the
+authenticated account id and refuses unless it equals the target, so a session on the *source*
+account is not sufficient. **Nothing merges two accounts on the strength of an email address alone.**
+
+**That check did not exist when this document first claimed it** (PR #87 F7). The function took no
+session at all, and this paragraph plus its docstring described a guarantee nothing performed —
+which SONNY-129 would have routed the primitive while reading. It is implemented now, and the
+parameter is required rather than optional so that omitting it is a type error rather than a
+judgment call.
 
 ---
 
@@ -116,5 +125,6 @@ they would encode one provider's policy into our identity key.
   `email_is_relay`, and carries a link hint — the ticket's "does not silently create a second one"
 - Apple twice with a relay address lands on one account, because `sub` is stable (the Hide My Email case)
 - an explicit link joins two accounts and moves the identity (rule 4)
+- an explicit link **refuses when the caller's session is not on the target account**
 - an explicit link **refuses** to join an account that is deleted
 - two identities on one account may carry two different `supabase_user_id`s — the case the separation exists for

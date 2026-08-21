@@ -62,6 +62,33 @@ export function normalizeEmail(email: string): string {
   return email.trim().toLowerCase();
 }
 
+/**
+ * The key a **rate limit** is counted against, which is deliberately NOT `normalizeEmail`.
+ *
+ * **The two normalisations exist for opposite reasons and their safe directions are opposite**
+ * (PR #87 F4). The identity key must not merge — merging two addresses joins two accounts, so where
+ * it is a judgment call it errs toward keeping them apart. A rate-limit key must merge as
+ * aggressively as the *mailbox* does, because the thing being protected is the mailbox: `a+1@x`,
+ * `a+2@x` and `A@X` all deliver to one inbox, so counting them separately means a 3-per-address cap
+ * that never binds — three requests each, forever, from one attacker with a text editor.
+ *
+ * So this strips the plus-tag and lowercases, and `normalizeEmail` does neither. The first version
+ * used one function for both and inherited the wrong direction for this side.
+ *
+ * Gmail's dot-folding is deliberately not applied: it is one provider's policy, and applying it
+ * everywhere would merge distinct mailboxes at other providers into one budget — which is a denial
+ * of service against those users rather than a defence.
+ */
+export function rateLimitEmailKey(email: string): string {
+  const lowered = email.trim().toLowerCase();
+  const at = lowered.lastIndexOf("@");
+  if (at <= 0) return lowered;
+  const local = lowered.slice(0, at);
+  const domain = lowered.slice(at + 1);
+  const plus = local.indexOf("+");
+  return `${plus === -1 ? local : local.slice(0, plus)}@${domain}`;
+}
+
 /** Cheap structural check. Deliverability is the mail provider's answer, not a regex's. */
 export function looksLikeEmail(value: string): boolean {
   const trimmed = value.trim();
@@ -206,15 +233,33 @@ export async function resolve(
 export class LinkError extends Error {}
 
 /**
- * Rule 4 — the only path that joins two *existing* accounts, and it requires an authenticated
- * session on the target. Moves `identity` onto `targetAccountId`; the vacated account is left for
- * the caller to close, because deleting it here would destroy content the retention ticket owns.
+ * Rule 4 — the only path that joins two *existing* accounts.
+ *
+ * **`authenticatedAccountId` is the account the caller has proved a session on, and it must equal
+ * the target.** Without that equality this is a primitive for moving anyone's identity onto anyone's
+ * account. The parameter is required rather than optional so a caller cannot omit it and get the
+ * old, unchecked behaviour.
+ *
+ * Moves `identity` onto `targetAccountId`; the vacated account is left for the caller to close,
+ * because deleting it here would destroy content the retention ticket owns.
  */
 export async function linkExplicitly(
   client: pg.Client,
   identityId: string,
   targetAccountId: string,
+  authenticatedAccountId: string,
 ): Promise<void> {
+  // **The check the docstring promises, actually performed** (PR #87 F7). The first version took no
+  // session at all and could not have made it, while both this comment and the rule document said
+  // rule 4 "requires an authenticated session on one of them" — a claim SONNY-129 would have routed
+  // this primitive while reading. Requiring the caller to name the authenticated account makes the
+  // claim true, and makes calling it without one a type error rather than a judgment call.
+  if (authenticatedAccountId !== targetAccountId) {
+    throw new LinkError(
+      "rule 4 requires an authenticated session on the target account; " +
+        "the caller's account is not the link target",
+    );
+  }
   await client.query("BEGIN");
   try {
     const target = await client.query(
