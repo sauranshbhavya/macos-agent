@@ -68,9 +68,9 @@ fires.
 ```
 cd server
 npm install                 # once, and after any dependency change
-npm run build               # TypeScript -> dist/. This is the server's `swift build`.
+npm run build               # TypeScript -> dist/, plus the .sql migrations beside it. The server's `swift build`.
 npm test                    # Vitest. This is the server's flagged test command.
-npm run typecheck           # types only, no emit
+npm run typecheck           # types only, over src/, test/ AND vitest.config.ts
 npm run check:secrets       # refuse a credential in the repository
 ./scripts/check-secrets-selftest.sh   # prove that scanner still refuses things
 ./scripts/deploy.sh local   # build the image, run it, verify /v1/health serves that build
@@ -86,8 +86,10 @@ cd server && npm run test:db
 docker rm -f sonny-gw-db
 ```
 
-Migrations are `npm run migrate -- up | down | status`, need `DATABASE_URL`, and every migration
-file must carry a `-- @rollback` section or the runner refuses it at load. `server/README.md` has
+Migrations are `npm run migrate -- up | down | status`, need `DATABASE_URL` and a prior
+`npm run build`, and every migration file must carry a `-- @rollback` section or the runner refuses
+it at load. **The same command works inside the container image**, which is why it runs the compiled
+runner: `src/` is not in the runtime stage, so a source-pointing script could not run there at all. `server/README.md` has
 the rule for verifying one on staging before it touches production, the three-deploy credential
 rotation, and why staging is never seeded from production.
 
@@ -98,7 +100,9 @@ v1 on AWS (`docs/sonny-row-12-host-decision.md` §12.2) — and none is reachabl
 verifies that the build it just made is the one answering. **The first real remote deploy is owed
 and recorded on SONNY-126.**
 
-Nothing under `server/` names a host, deliberately. Each one receives an OCI image and a set of
+Nothing under `server/` **couples** to a host, deliberately — the three are named in prose, in
+comments and in this file, because a reader needs to know which they are; none gets a code path, a
+build flag or a configuration default. Each one receives an OCI image and a set of
 environment variables, so moving between them is a redeploy rather than a rewrite.
 
 ### Packaging the app
