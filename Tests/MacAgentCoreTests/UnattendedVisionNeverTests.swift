@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import MacAgentTestSupport
 @testable import MacAgentCore
 
 /// SONNY-94: unattended vision, never — three independent layers, pinned separately.

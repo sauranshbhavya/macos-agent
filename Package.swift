@@ -30,14 +30,26 @@ let package = Package(
                 .process("Resources")
             ]
         ),
+        // Test helpers both test targets need, in one copy (SONNY-172). A `.testTarget` rather than
+        // a `.target` deliberately: these helpers declare a `Testing` `ConditionTrait`, and a plain
+        // target is in the ordinary build graph, where `swift build` passes no `-Xswiftc -F
+        // .../CommandLineTools/Library/Developer/Frameworks` and the file fails with `no such module
+        // 'Testing'`. Measured, not assumed — the probe on this ticket built both shapes. A test
+        // target gets `Testing` and `-enable-testing` for free and stays out of `swift build`.
+        // It carries no tests of its own; SwiftPM raises no diagnostic for that.
+        .testTarget(
+            name: "MacAgentTestSupport",
+            dependencies: ["MacAgentCore"],
+            path: "Tests/MacAgentTestSupport"
+        ),
         .testTarget(
             name: "MacAgentCoreTests",
-            dependencies: ["MacAgentCore"],
+            dependencies: ["MacAgentCore", "MacAgentTestSupport"],
             path: "Tests/MacAgentCoreTests"
         ),
         .testTarget(
             name: "MacAgentTests",
-            dependencies: ["MacAgent", "MacAgentCore"],
+            dependencies: ["MacAgent", "MacAgentCore", "MacAgentTestSupport"],
             path: "Tests/MacAgentTests"
         )
     ]
