@@ -95,6 +95,22 @@ public enum LocalStorageDecoded<Value> {
         }
     }
 
+    /// The decoded value transformed, keeping which door it came through.
+    ///
+    /// Exists so a store can clean what it just decoded *before* `migratingLegacyPlaintext` decides
+    /// whether to re-write it — `RoutineStore.loadAll` strips resolver pins there (SONNY-67), and
+    /// stripping after the migration would re-encrypt the very bytes it is removing. One caller
+    /// today; it is here rather than as a `switch` at that call site because a call site that
+    /// rebuilds this enum's cases by hand is a second place that has to know there are exactly two.
+    public func map<Mapped>(_ transform: (Value) -> Mapped) -> LocalStorageDecoded<Mapped> {
+        switch self {
+        case .encrypted(let value):
+            return .encrypted(transform(value))
+        case .legacy(let value):
+            return .legacy(transform(value))
+        }
+    }
+
     /// Opportunistically re-writes a legacy plaintext file as encrypted, returning the decoded
     /// value either way.
     ///
@@ -130,6 +146,30 @@ public enum LocalStorageMigrationLog {
             Deferred plaintext-to-encrypted migration for \(store, privacy: .public): \
             \(error.localizedDescription, privacy: .public). The existing file is intact and \
             the migration retries on the next load.
+            """
+        )
+    }
+
+    /// A store's read door removed state it had no business carrying (SONNY-67, founder decision
+    /// 2026-08-21).
+    ///
+    /// **A quiet warning, never the UI, and that is the decision rather than an omission.** A user
+    /// whose `routines.json` was written by something other than Sonny has a problem this app cannot
+    /// explain to them and cannot fix; a banner would ask them to act on a fact they have no action
+    /// for, which is the class of copy the 2026-08-14 rule already forbids in the product. What it is
+    /// *for* is the case where somebody is looking: a support session, or a developer wondering why a
+    /// routine's pinned app is being re-resolved every run. Silence there was the only thing wrong
+    /// with stripping quietly.
+    ///
+    /// Named counts, no names or paths: the routine names are the user's content and the whole point
+    /// of `privacy: .public` on the rest is that these lines can be read from a log archive.
+    static func recordStrippedResolverPins(store: String, stepCount: Int) {
+        logger.warning(
+            """
+            Stripped executor-resolved app pins from \(stepCount, privacy: .public) step(s) while \
+            loading \(store, privacy: .public). Sonny never writes those fields into a stored \
+            routine, so the file was not written by Sonny. The routines themselves are intact and \
+            the pins are resolved again at run time.
             """
         )
     }

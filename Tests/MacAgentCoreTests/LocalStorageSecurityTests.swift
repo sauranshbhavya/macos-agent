@@ -189,6 +189,51 @@ struct LocalStorageSecurityTests {
         try assertTaskHistoryMigration(root: root, encryption: encryption)
     }
 
+    /// **The strip runs before the legacy-plaintext rewrite, and that ordering is the point of this
+    /// test** (PR #83, F2). `RoutineStore.loadAll` re-encrypts a plaintext file as it reads it, so a
+    /// strip applied *after* that rewrite would persist the very pins it had just removed: the
+    /// returned value would be clean while the file on disk kept them, and every later load would
+    /// strip them again from bytes nobody ever fixed.
+    ///
+    /// The ordering was a named decision with nothing holding it — the review moved the strip after
+    /// the migration and the entire suite stayed green. What makes this test bite is that it reads
+    /// the **file** afterwards rather than the return value.
+    @Test
+    func aLegacyPlaintextRoutineIsRewrittenWithoutThePinsItArrivedWith() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let url = root.appendingPathComponent("routines.json")
+        let encryption = testEncryption()
+
+        var pinned = AgentStep(id: "open", operation: .openApp, description: "Open Safari.", appName: "Safari")
+        pinned.resolvedAppName = "Safari"
+        pinned.resolvedBundleIdentifier = "com.attacker.lookalike"
+        // Written as plaintext JSON with no `SONNYENC1` header — the legacy shape every store still
+        // migrates on read.
+        try JSONEncoder.prettySortedForTest
+            .encode([normalized("Legacy"): StoredRoutine(name: "Legacy", steps: [pinned])])
+            .write(to: url, options: .atomic)
+
+        let store = RoutineStore(fileURL: url, encryption: encryption)
+        _ = try store.loadAll()
+
+        // The rewrite happened...
+        #expect(try Data(contentsOf: url).starts(with: LocalStorageEncryption.fileHeader))
+
+        // ...and what it persisted is the stripped form. **Decoded straight out of the file, not
+        // re-read through a `RoutineStore`** — a second store would strip on load too, so it answers
+        // "no pins" whichever order the first one used, and a test written that way passes with the
+        // strip moved after the migration. This branch's own battery caught exactly that: the first
+        // version of this test re-read through a store and the mutant survived it.
+        let persisted = try encryption
+            .decode([String: StoredRoutine].self, from: Data(contentsOf: url))
+            .value
+        let step = try #require(persisted[normalized("Legacy")]?.steps.first)
+        #expect(step.resolvedAppName == nil)
+        #expect(step.resolvedBundleIdentifier == nil)
+        #expect(step.appName == "Safari")
+    }
+
     /// A failed re-encryption during legacy migration is not a load failure: the decode already
     /// succeeded and the write is atomic, so the original file is intact and the data is usable.
     /// Letting that write error escape `loadAll()` made callers blank the data and show the
@@ -293,13 +338,25 @@ struct LocalStorageSecurityTests {
 
         let result = try service.deleteAllLocalData()
 
-        #expect(result == LocalDataDeletionResult(deletedFileCount: 8, missingFileCount: 0))
+        // Nine, not eight (SONNY-154): the vision session journal is the ninth store and was the one
+        // this test did not create, so the only place the wipe's behaviour is actually exercised
+        // covered every store except the most sensitive one.
+        //
+        // **What the count assertion is for, corrected** (PR #83, F7). It is *not* drift protection
+        // between the fixture's files and its returned URLs — the two deletion counts below already
+        // provide that, since a fixture returning a URL it did not create reports a missing file and
+        // fails. What this adds is a tripwire on the fixture's own size: nine is now stated in a
+        // third place, so extending the fixture cannot pass by adjusting one number, and whoever
+        // changes it has to come here and ask whether `LocalDataDeletionService`'s real list moved
+        // too. That question going unasked is how the journal stayed uncovered.
+        #expect(fileURLs.count == 9)
+        #expect(result == LocalDataDeletionResult(deletedFileCount: 9, missingFileCount: 0))
         for fileURL in fileURLs {
             #expect(!FileManager.default.fileExists(atPath: fileURL.path))
         }
 
         let secondResult = try service.deleteAllLocalData()
-        #expect(secondResult == LocalDataDeletionResult(deletedFileCount: 0, missingFileCount: 8))
+        #expect(secondResult == LocalDataDeletionResult(deletedFileCount: 0, missingFileCount: 9))
     }
 
     @Test(.requiresUnprivilegedProcess)
@@ -434,6 +491,15 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
         fileURL: root.appendingPathComponent("task-history.json"),
         encryption: encryption
     )
+    // The ninth store, and the one the wipe most has to reach: the journal holds `observationAfter`,
+    // the model's description of what was on the user's screen. It was missing from this helper
+    // (SONNY-154) — it arrived with row I and nobody extended the fixture — so the only test that
+    // actually runs `deleteAllLocalData()` over real files exercised eight of nine, and the journal's
+    // place in the wipe was pinned by the URL list alone.
+    let visionSessionJournalStore = VisionSessionJournalStore(
+        fileURL: root.appendingPathComponent("vision-sessions.json"),
+        encryption: encryption
+    )
 
     try routineStore.save(
         StoredRoutine(
@@ -458,6 +524,14 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
             outcomeStatus: .completed
         )
     )
+    try visionSessionJournalStore.save(
+        VisionSessionRecord(
+            id: "delete-session",
+            goal: "delete vision session",
+            appDisplayName: "Safari",
+            startedAt: .fixture
+        )
+    )
 
     return [
         routineStore.fileURL,
@@ -467,7 +541,8 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
         snippetStore.fileURL,
         recentArtifactStore.fileURL,
         shortcutRunHistoryStore.fileURL,
-        taskHistoryStore.fileURL
+        taskHistoryStore.fileURL,
+        visionSessionJournalStore.fileURL
     ]
 }
 

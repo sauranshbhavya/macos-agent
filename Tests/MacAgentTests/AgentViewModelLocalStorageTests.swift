@@ -189,6 +189,265 @@ struct AgentViewModelLocalStorageTests {
         #expect(notice == "Sonny could not load encrypted local data. saved routines: \(explanation)")
     }
 
+    // MARK: - SONNY-78: a corrupt workspace store is not an unbound task
+
+    /// **The defect.** `resolveTaskScope` read the bound workspace with `try? workspaceStore.workspace(named:)`,
+    /// which throws for absence *and* rethrows a decrypt or decode failure — so an unreadable
+    /// `workspaces.json` was handled identically to a workspace the user had deleted, and the task
+    /// silently ran unscoped. `.unscoped` is not a smaller boundary: `assessRisk` computes scope
+    /// findings only when a workspace scope is present, so every out-of-scope advisory for that run
+    /// disappears, and with it the sentence the ran-without-asking trace would have carried.
+    ///
+    /// **The plan is a bare `clarify` step, and that is what makes this test measure the fix.** A
+    /// completed run ends in `refreshSavedItems()`, which reads the workspace store itself and
+    /// records the *same* `.savedWorkspaces` source — so a test that runs a task to completion sees
+    /// the notice whether or not `resolveTaskScope` reported anything, and passes with the fix
+    /// removed. A mutation battery caught exactly that: the first version of this test survived a
+    /// mutant deleting the `recordLocalStorageLoadFailure` call it was written to pin. A
+    /// clarification returns from `performStart` *before* that refresh, and `resolveTaskScope` runs
+    /// before the clarification is read, so the notice here has exactly one possible author.
+    ///
+    /// The binding comes through `start(workspaceBinding:)` — the workspace-card dispatch path — so
+    /// the name is known without a store read, which is exactly the case where the scope can fail
+    /// while the user has already been told the task belongs somewhere.
+    @Test
+    func aCorruptWorkspaceStoreReportsItselfInsteadOfSilentlyUnbindingTheTask() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        try WorkspaceStore(
+            fileURL: root.appendingPathComponent("workspaces.json"),
+            encryption: testEncryption(byte: 0x42)
+        ).save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://example.com"]))
+        let viewModel = try makeViewModel(root: root, encryption: testEncryption(byte: 0x99))
+
+        // `canSubmit` requires a non-empty command even for a prebuilt plan; the text is never read
+        // by this path beyond history's label for it.
+        viewModel.command = "zip the selected folder"
+        viewModel.start(workspaceBinding: "Research", prebuiltPlan: clarifyingPlan())
+        while viewModel.isRunning {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        // The storage problem is named on its own channel rather than swallowed, and this is the
+        // only path that could have named it.
+        let notice = try #require(viewModel.localStorageNotice)
+        #expect(notice.contains("saved workspaces"))
+        // Nothing was refused: a corrupt store is not this task failing, and blocking the dispatch to
+        // report a storage problem would invert escalate-never-block for no safety gain.
+        #expect(viewModel.errorMessage == nil)
+        #expect(viewModel.clarificationQuestion != nil)
+        // The scope genuinely did not bind, which is what makes the notice the only thing standing
+        // between the user and a silent unbinding. `lastAssessedScope` rather than `activeTaskScope`
+        // because it is the post-terminal record and reads the same on every path — *not* because
+        // `activeTaskScope` was reset here, which it was not: `performStart`'s `defer` clears it only
+        // when `approvalRequest == nil && clarificationQuestion == nil`, and this path pauses on a
+        // clarification. That reset reasoning is true of the completed-run test below and was wrongly
+        // stated here (PR #83, F7).
+        #expect(viewModel.lastAssessedScope == .unscoped)
+    }
+
+    /// The other side of the distinction, and the behaviour that had to survive the fix: a workspace
+    /// that is simply *gone* still binds to nothing, silently. That fallback is legitimate — a
+    /// workspace deleted between dispatch and assessment is not a storage fault — and reporting it
+    /// as one would put a decryption banner in front of a user whose store is perfectly healthy.
+    ///
+    /// Same clarification shape as above, and for the same reason in reverse: a completed run's
+    /// `refreshSavedItems()` would *clear* the source against this healthy store, so a run-to-
+    /// completion test asserts nil no matter what `resolveTaskScope` did.
+    @Test
+    func aWorkspaceThatNoLongerExistsStillUnbindsWithoutReportingAStoreFailure() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let encryption = testEncryption(byte: 0x42)
+        // A healthy, readable store — it just does not contain the bound name.
+        try WorkspaceStore(
+            fileURL: root.appendingPathComponent("workspaces.json"),
+            encryption: encryption
+        ).save(StoredWorkspace(name: "Writing", apps: ["Notes"], urls: []))
+        let viewModel = try makeViewModel(root: root, encryption: encryption)
+
+        // `canSubmit` requires a non-empty command even for a prebuilt plan; the text is never read
+        // by this path beyond history's label for it.
+        viewModel.command = "zip the selected folder"
+        viewModel.start(workspaceBinding: "Research", prebuiltPlan: clarifyingPlan())
+        while viewModel.isRunning {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(viewModel.localStorageNotice == nil)
+        #expect(viewModel.clarificationQuestion != nil)
+        #expect(viewModel.lastAssessedScope == .unscoped)
+    }
+
+    /// **A blank workspace name is not a storage fault** (PR #83, F1). `findWorkspace` validates
+    /// before it loads — `normalizedName` throws `.missingName` for a blank or whitespace-only
+    /// string without touching the file — so a catch-all around that call reported "could not load
+    /// encrypted local data" for a store that is perfectly healthy and was never even opened.
+    ///
+    /// Reachable with no tampering: the planner schema requires a `workspaceName` slot on every step
+    /// and `""` is a valid value, nothing normalises blank to `nil`, and `directWorkspaceName` reads
+    /// the field off any operation rather than only the workspace ones.
+    @Test
+    func aBlankWorkspaceNameBindsNothingWithoutClaimingTheStoreIsUnreadable() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let encryption = testEncryption(byte: 0x42)
+        try WorkspaceStore(
+            fileURL: root.appendingPathComponent("workspaces.json"),
+            encryption: encryption
+        ).save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: []))
+        let viewModel = try makeViewModel(root: root, encryption: encryption)
+
+        viewModel.command = "zip the selected folder"
+        // A whitespace-only name, carried on the step the way the planner can emit it.
+        viewModel.start(prebuiltPlan: clarifyingPlan(workspaceName: "   "))
+        while viewModel.isRunning {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(viewModel.localStorageNotice == nil)
+        #expect(viewModel.lastAssessedScope == .unscoped)
+    }
+
+    /// The persisted form of the same thing, and the worse one: `validateStepSafety` checks a step's
+    /// *operation* and not its fields, so a routine can be saved carrying a stray blank
+    /// `workspaceName`, and `nestedRoutineWorkspaceName` then reproduces it on every single run of
+    /// that routine rather than once.
+    ///
+    /// **Why this run pauses on an approval instead of completing** (PR #83 cycle 3). The first
+    /// version of this test dispatched a routine that ran to completion, and was vacuous for the
+    /// same reason the branch's other two were: `performStart` ends in `refreshSavedItems()`, which
+    /// *clears* `.savedWorkspaces` against a healthy store, so the notice assertion passed with the
+    /// guard reverted — and `lastAssessedScope` is `.unscoped` either way, because the pre-fix
+    /// `catch` returned that too. Both assertions held on the pre-fix tree.
+    ///
+    /// A `[run_routine, clarify]` plan cannot isolate it — `clarificationQuestion(in:)` asks
+    /// `workflow(in:)` first, which throws "Clarification must be the only planned step" for a mixed
+    /// plan, so `prepare` fails before `resolveTaskScope` ever runs. The approval pause is the other
+    /// early return that sits after the scope resolution and before the refresh: the routine's
+    /// snippet step collides with an existing trigger, which escalates `.destructive`, which asks.
+    /// So the notice here has exactly one possible author, the same isolation the other three tests
+    /// use by a different door.
+    @Test
+    func aRoutineCarryingABlankWorkspaceNameDoesNotReportAStoreFailureOnEveryRun() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let encryption = testEncryption(byte: 0x42)
+        try WorkspaceStore(
+            fileURL: root.appendingPathComponent("workspaces.json"),
+            encryption: encryption
+        ).save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: []))
+        // The collision that makes the run stop and ask: same trigger, different expansion.
+        try SnippetStore(
+            fileURL: root.appendingPathComponent("snippets.json"),
+            encryption: encryption
+        ).save(StoredSnippet(trigger: ";sig", expansion: "the old signature", updatedAt: .fixture))
+        try RoutineStore(
+            fileURL: root.appendingPathComponent("routines.json"),
+            encryption: encryption
+        ).save(
+            StoredRoutine(
+                name: "Morning",
+                steps: [
+                    AgentStep(
+                        id: "snippet",
+                        operation: .saveSnippet,
+                        description: "Save the signature snippet.",
+                        // The stray blank the store accepts because step safety checks operations,
+                        // not fields — and the only thing `nestedRoutineWorkspaceName` will find.
+                        workspaceName: "",
+                        searchQuery: ";sig",
+                        draftContent: "the new signature"
+                    )
+                ]
+            )
+        )
+        let viewModel = try makeViewModel(root: root, encryption: encryption)
+
+        viewModel.command = "run my morning routine"
+        viewModel.start(prebuiltPlan: RunRoutineCapabilityAdapter.plan(forRoutineNamed: "Morning"))
+        while viewModel.isRunning {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        // Paused before `refreshSavedItems()` could clear anything...
+        #expect(viewModel.isAwaitingApproval)
+        // ...and nothing was recorded, because a blank name never reached the store.
+        #expect(viewModel.localStorageNotice == nil)
+        #expect(viewModel.lastAssessedScope == .unscoped)
+    }
+
+    /// **The success path clears the failure it recorded** (PR #83, F3). Deleting the
+    /// `clearLocalStorageLoadFailure` call left the whole suite green, because nothing exercised a
+    /// successful scope read against a view model that already had the failure recorded.
+    ///
+    /// The failure is seeded through `refreshSavedItems()` rather than through a first dispatch, and
+    /// that is what makes the assertion belong to `resolveTaskScope`. Only one dispatch follows the
+    /// repair, it takes the clarification path, and `performStart` returns from that path *before* it
+    /// reaches its own `refreshSavedItems()` — so the clear at the end has exactly one possible
+    /// author, the same isolation the corrupt-store test above relies on in the other direction.
+    @Test
+    func aRepairedWorkspaceStoreClearsTheFailureItReported() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let workspacesURL = root.appendingPathComponent("workspaces.json")
+        let readable = testEncryption(byte: 0x42)
+        // Written with a key the view model cannot read.
+        try WorkspaceStore(fileURL: workspacesURL, encryption: testEncryption(byte: 0x99))
+            .save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: []))
+        let viewModel = try makeViewModel(root: root, encryption: readable)
+
+        viewModel.refreshSavedItems()
+        let recorded = try #require(viewModel.localStorageNotice)
+        #expect(recorded.contains("saved workspaces"))
+
+        // Repair it. Removed first rather than saved over: `save` merges, so it loads before it
+        // writes and would fail on the very bytes being replaced.
+        try FileManager.default.removeItem(at: workspacesURL)
+        try WorkspaceStore(fileURL: workspacesURL, encryption: readable)
+            .save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: []))
+
+        viewModel.command = "zip the selected folder"
+        viewModel.start(workspaceBinding: "Research", prebuiltPlan: clarifyingPlan())
+        while viewModel.isRunning {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        #expect(viewModel.localStorageNotice == nil)
+        #expect(viewModel.clarificationQuestion != nil)
+    }
+
+    /// And a healthy store that *does* contain the workspace binds it, so the fix did not turn every
+    /// scope resolution into a failure path. Asserted through `lastAssessedScope`, the post-terminal
+    /// record of what the assessment actually used — `activeTaskScope` and therefore
+    /// `boundWorkspaceName` are reset when a run ends, so neither can answer this afterwards.
+    @Test
+    func aReadableWorkspaceStoreStillBindsTheScope() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let encryption = testEncryption(byte: 0x42)
+        try WorkspaceStore(
+            fileURL: root.appendingPathComponent("workspaces.json"),
+            encryption: encryption
+        ).save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: ["https://example.com"]))
+        let viewModel = try makeViewModel(root: root, encryption: encryption)
+
+        viewModel.command = "= 1 + 1"
+        viewModel.start(workspaceBinding: "Research")
+        while viewModel.isRunning {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        // A completed run is fine here: this asserts that the scope *bound*, which no other path can
+        // produce — unlike the notice, which `refreshSavedItems()` also writes.
+        #expect(viewModel.localStorageNotice == nil)
+        guard case .scoped(let scope) = viewModel.lastAssessedScope else {
+            Issue.record("A readable store holding the bound workspace must produce a scoped assessment.")
+            return
+        }
+        #expect(scope.workspaceName == "Research")
+    }
+
     // MARK: - Per-task deletion (SONNY-116)
 
     @Test
@@ -362,6 +621,25 @@ struct AgentViewModelLocalStorageTests {
         )
         return LinkedTaskFixture(history: history, journal: journal)
     }
+}
+
+/// A plan that prepares straight into a clarification, so `performStart` returns before
+/// `refreshSavedItems()` runs. That early return is what isolates `resolveTaskScope`'s own
+/// load-failure reporting from the identical reporting the post-run refresh does (SONNY-78).
+private func clarifyingPlan(workspaceName: String? = nil) -> AgentPlan {
+    AgentPlan(
+        summary: "Ask first.",
+        requiresConfirmation: false,
+        steps: [
+            AgentStep(
+                id: "clarify",
+                operation: .clarify,
+                description: "Ask which folder.",
+                question: "Which folder should Sonny use?",
+                workspaceName: workspaceName
+            )
+        ]
+    )
 }
 
 @MainActor
