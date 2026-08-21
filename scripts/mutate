@@ -385,6 +385,57 @@ lock_stale_reason() {
   printf 'pid %s belongs to something else now: %s' "$pid" "$owner_command"
 }
 
+# A live lock held by the OTHER measurement tool in this checkout. The two tools take separate
+# locks — .git/warnings.lock and .git/mutate.lock — and until SONNY-184(c) neither knew the other
+# existed, so a warning count could be taken during a battery: mid-mutant by
+# construction, a deliberately broken tree, reported as the tree's own and stamped with a SHA that
+# never contained that code. Same class of false measurement SONNY-176 closed for two batteries
+# sharing .build/.
+#
+# Reads the owner record both scripts write, and applies the same liveness test as
+# lock_stale_reason, so a lock a killed run left behind blocks nothing: this refuses only for a pid
+# that still exists and whose command line names the other tool. It is deliberately per-checkout —
+# a battery in a different worktree has its own working tree and its own build directory and is no
+# hazard at all.
+foreign_lock_holder() {
+  local dir="$1" pattern="$2" pid owner_command
+  [[ -d "$dir" && -f "$dir/owner" ]] || return 1
+  pid="$(sed -n 's/^pid //p' "$dir/owner" | head -1)"
+  [[ "$pid" =~ ^[0-9]+$ ]] || return 1
+  owner_command="$(ps -p "$pid" -o command= 2>/dev/null || true)"
+  [[ -n "$owner_command" ]] || return 1
+  case "$owner_command" in
+    $pattern) printf '%s' "$pid"; return 0 ;;
+  esac
+  return 1
+}
+
+foreign_lock_field() {
+  local dir="$1" key="$2"
+  [[ -f "$dir/owner" ]] || return 0
+  sed -n "s/^$key //p" "$dir/owner" | head -1
+}
+
+refuse_warnings_run() {
+  local pid="$1" dir="$2"
+  cat >&2 <<EOF
+$SCRIPT_NAME: refusing to run — a scripts/warnings run holds this checkout.
+
+  pid     : $pid
+  started : $(foreign_lock_field "$dir" started)
+  head    : $(foreign_lock_field "$dir" head)
+  lock    : $dir
+
+That script compiles this whole tree to count its warnings, and this battery would start editing
+source files underneath that build. Its count would then describe a tree carrying a mutant, stamped
+with a SHA that never contained one — and this battery would be measuring artifacts a second build
+is writing beside it. Neither report could show it.
+
+Wait for that run to finish. If it is already gone, \`scripts/warnings unlock\` clears its lock.
+EOF
+  finish 1
+}
+
 refuse_concurrent_run() {
   local pid="$1"
   cat >&2 <<EOF
@@ -413,6 +464,11 @@ acquire_lock() {
   git_dir="$(git rev-parse --absolute-git-dir 2>/dev/null)" \
     || die "not inside a git repository — there is nowhere to hold the run lock"
   LOCK_DIR="$git_dir/mutate.lock"
+
+  local warnings_pid
+  if warnings_pid="$(foreign_lock_holder "$git_dir/warnings.lock" '*warnings*')"; then
+    refuse_warnings_run "$warnings_pid" "$git_dir/warnings.lock"
+  fi
 
   for attempt in 1 2 3; do
     if mkdir "$LOCK_DIR" 2>/dev/null; then
@@ -1192,6 +1248,35 @@ printf \"X  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n\""
     "$default_cmd" 'CLANG_MODULE_CACHE_PATH="$MUTATE_SCRATCH/'
   st_absent "and no longer writes anything into the shared .build/" \
     "$default_cmd" '$PWD/.build/'
+
+  printf '\n==> A scripts/warnings run holding this checkout is refused by name\n'
+  # The other half of SONNY-184(c). scripts/warnings compiles the whole tree to count its warnings;
+  # a battery starting beside one edits source underneath that build, so its count would describe a
+  # tree carrying a mutant. Neither report could show it, so whichever starts second refuses.
+  local warnings_decoy="$root/decoy-bin/warnings"
+  mkdir -p "$(dirname "$warnings_decoy")"
+  printf '#!/bin/sh\nsleep 60\n' >"$warnings_decoy"
+  chmod +x "$warnings_decoy"
+  "$warnings_decoy" &
+  local warnings_pid=$!
+  mkdir -p .git/warnings.lock
+  printf 'pid %s\nstarted 2026-01-01 00:00:00\nhead deadbeef\n' "$warnings_pid" \
+    >.git/warnings.lock/owner
+  st_run "$kills_the_mutant" "$root/kill.plan"
+  st_eq "the battery is refused" "$ST_EXIT" "1"
+  st_contains "and names the warnings run, not another battery" "$ST_OUT" \
+              "a scripts/warnings run holds this checkout"
+  st_contains "and names its lock" "$ST_OUT" "warnings.lock"
+  if [[ -d .git/mutate.lock ]]; then
+    st_fail "the refused battery took its own lock anyway"
+  else
+    st_pass "and took no lock of its own"
+  fi
+  kill "$warnings_pid" 2>/dev/null || true
+  wait "$warnings_pid" 2>/dev/null || true
+  st_run "$kills_the_mutant" "$root/kill.plan"
+  st_eq "a dead warnings run's leftover lock blocks nothing" "$ST_EXIT" "0"
+  rm -rf .git/warnings.lock "$root/decoy-bin"
 
   printf '\n==> A stale lock does not become a new way to be stuck\n'
   # Three ways a lock goes stale, each recoverable with no hand-edit. A killed run leaves a lock
