@@ -52,13 +52,15 @@ PATTERNS=(
 # is a literal that cannot appear inside a real credential. Two removals worth recording:
 #   - `example` on its own matched `db.example.com`, exempting a password-bearing DSN.
 #   - `<[a-z-]+>` was meant for `<your-key>` placeholders and matched **any HTML tag**, so a `<p>`
-#     anywhere on a line exempted every pattern on it. Replaced with the angle-bracket forms this
-#     repository actually uses for placeholders.
-# The alphanumeric-only terms are anchored to a word boundary on each side. Without that,
-# `placeholder` or `changeme` appearing INSIDE a matched key body -- which is alphanumeric, so it
-# can contain them -- exempted the whole match. Anchoring is the cheap half of that problem; the
-# expensive half is in the "does not prevent" section below.
-ALLOW='\breplace-me\b|\bplaceholder\b|\bchangeme\b|\byour-key-here\b|postgres://postgres:postgres@|<(ref|your-[a-z-]+|project-[a-z-]+)>'
+#     anywhere on a line exempted every pattern on it. Narrowing it to `<(ref|your-…|project-…)>`
+#     was NOT enough, and the narrowed form is gone too. The DSN pattern is built from NEGATED
+#     classes -- `[^:[:space:]]+` and `[^@[:space:]]+` -- so `<` and `>` pass straight through
+#     them and land inside the matched substring. That made Supabase's own pooler shape,
+#     `postgresql://postgres.<project-ref>:REALPASSWORD@…pooler.supabase.com`, exempt **with the
+#     password intact**, while the identical string with an ordinary user part was caught. The
+#     four placeholders it existed for appear only in prose that no pattern matches, so nothing
+#     needed it. (PR #85 cycle 4, R3b.)
+ALLOW='\breplace-me\b|\bplaceholder\b|\bchangeme\b|\byour-key-here\b|postgres://postgres:postgres@'
 
 BASELINE="server/scripts/secret-scan-baseline.txt"
 [[ -f "$BASELINE" ]] || { echo "check-secrets: missing $BASELINE" >&2; exit 2; }

@@ -112,11 +112,13 @@ local redaction feature, are exempted by exact match in `scripts/secret-scan-bas
 explains why an exact-string baseline is safer than a path skip or a looser pattern.
 
 `./scripts/check-secrets-selftest.sh` plants credential-shaped strings in a scratch repository and
-proves the scanner refuses each one — including one regression guard that was measured rather than
-assumed: re-adding the `example` term the allowlist once carried takes the suite to 20/21. The
-angle-bracket term it once carried is **not** guarded and cannot be, because the allowlist now tests
-the matched substring and no credential pattern here matches a `<`; that is belt-and-braces, not a
-check. **It found three defects in the scanner** — two on its first
+proves the scanner refuses each one — including two guards measured rather than assumed. Re-adding
+the `example` term the allowlist once carried makes `a key whose body contains 'example' is refused`
+fail. And re-adding any angle-bracket term breaks the paired pooler checks: **that term was a live
+hole, not the harmless leftover an earlier version of this file called it.** The DSN pattern uses
+negated character classes, so `<` and `>` reach the matched substring — which exempted
+`postgresql://postgres.<project-ref>:PASSWORD@…pooler.supabase.com`, Supabase's own pooler shape,
+with the password intact. **It found three defects in the scanner** — two on its first
 run (a pattern beginning with a hyphen that `grep` parsed as options, so it silently never ran; and
 `example` in the allowlist matching `db.example.com`) and a third on the next (a fix that would have
 exempted every PEM header in the tree, a real key included). It is not decoration. (This line said

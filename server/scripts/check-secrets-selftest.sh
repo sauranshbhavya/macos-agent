@@ -56,7 +56,19 @@ check "ordinary prose passes"              0 'The gateway holds provider credent
 check "allowlisted word beside a key"        1 'OPENAI_API_KEY=sk-'"$(printf 'F%.0s' {1..40})"'  # replace-me later'
 check "an HTML tag does not exempt a key"    1 '<p>token ghp_'"$(printf 'G%.0s' {1..36})"'</p>'
 check "placeholder DSN beside a real key"    1 'postgres://postgres:postgres@localhost/db sk-ant-'"$(printf 'H%.0s' {1..30})"
-check "a <ref> placeholder is still allowed" 0 'deploy probe --project-ref <ref>'
+# R3b. THE hole this term left open, and the reason the term is gone rather than narrowed.
+# The DSN pattern uses negated classes, so `<` and `>` pass through into the matched substring --
+# which made Supabase's own pooler connection string, the literal shape this project's database
+# hands out, exempt with its password intact. The two checks below are a pair: the placeholder
+# form must be refused exactly as the ordinary-user form is, and re-adding any angle-bracket ALLOW
+# term breaks the first one.
+pooler_scheme="postgresql://"
+pooler_pw="$(printf 'R%.0s' {1..14})"
+pooler_tail="@aws-0-eu.pooler.supabase.com:5432/postgres"
+pooler_ph="postgres.<project-ref>:${pooler_pw}"
+pooler_ord="postgres.abcdefg:${pooler_pw}"
+check "Supabase pooler DSN with a <placeholder> user is refused" 1 "DATABASE_URL=${pooler_scheme}${pooler_ph}${pooler_tail}"
+check "the same pooler DSN with an ordinary user is refused"    1 "DATABASE_URL=${pooler_scheme}${pooler_ord}${pooler_tail}"
 
 # C2: two matches of the SAME pattern on one line, the first allowlisted. `head -1` took only
 # the leading match, so the allowlisted local DSN shadowed a real credential after it.
