@@ -53,23 +53,26 @@ enum TaskDetailPresentation {
         resultText(for: record) != nil
     }
 
-    // MARK: - Run again
+    // MARK: - The two things you can do with a task
 
     static let runAgainActionLabel = "Run again"
 
-    /// **The outcome status is deliberately not consulted.** "Run again" is offered for completed,
-    /// failed and cancelled records alike — failed is the case it is most useful for — and every
-    /// record this sheet can open is one of those three, because `recordTaskHistoryIfTerminal`
-    /// writes no row for any other status. Gating on the status would therefore be a filter that
-    /// never filters, and one a later reader would have to check against that write path to
-    /// understand.
+    /// Whether "Run again" and "Follow up" are offered — one predicate, because they are the same
+    /// question: is there a command to act on.
     ///
-    /// What it does check is that there is something to run. A record whose command is empty renders
-    /// as "Untitled task", and dispatching an empty command is refused by `canSubmit` — offering a
-    /// control that cannot work is worse than not offering it, which is the same call
+    /// **The outcome status is deliberately not consulted.** Both are offered for completed, failed
+    /// and cancelled records alike — failed is the case run-again is most useful for — and every
+    /// record this sheet can open is one of those three, because `recordTaskHistoryIfTerminal`
+    /// writes no row for any other status. Gating on the status would be a filter that never
+    /// filters, and one a later reader would have to check against that write path to understand.
+    ///
+    /// **What it does check is that there is something to act on.** A record whose command is empty
+    /// renders as "Untitled task": dispatching it is refused by `canSubmit`, and arming a follow-up
+    /// on it would install a trusted block whose `Previous command:` line is blank. Offering a
+    /// control that cannot work is worse than not offering it, the same call
     /// `TaskDeletePresentation.showsScreenRecordDeleteAction` already makes for an unreadable
     /// journal.
-    static func showsRunAgain(for record: CompletedTaskRecord) -> Bool {
+    static func showsTaskActions(for record: CompletedTaskRecord) -> Bool {
         !record.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 

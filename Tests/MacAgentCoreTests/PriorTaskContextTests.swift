@@ -60,8 +60,14 @@ struct PriorTaskContextTests {
         #expect(context.steps.isEmpty)
         #expect(context.shortDisplayText == "find the 3 largest files in ~/Desktop/SomeFolder")
         #expect(context.plannerContextText.contains("Previous command: find the 3 largest files in ~/Desktop/SomeFolder"))
-        #expect(context.plannerContextText.contains("Previous plan summary: - unavailable; prior task failed before preparation completed"))
-        #expect(context.plannerContextText.contains("- none available; prior task failed before preparation completed"))
+        // **The fact, never a cause** (SONNY-150). These two used to read "prior task failed before
+        // preparation completed", which is true of *this* case and false of the one row E created:
+        // every task recorded before that row has no stored plan, so a follow-up on a *completed*
+        // one would have put that sentence directly above `Previous outcome: completed - …` — a
+        // flat contradiction inside a block the planner's own system prompt calls authoritative.
+        #expect(context.plannerContextText.contains("Previous plan summary: - not recorded"))
+        #expect(context.plannerContextText.contains("Previous plan steps:\n- none recorded"))
+        #expect(!context.plannerContextText.contains("failed before preparation completed"))
         #expect(context.plannerContextText.contains("Previous outcome: failed - Folder does not exist."))
     }
 

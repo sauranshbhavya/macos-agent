@@ -401,6 +401,7 @@ final class AgentViewModel: ObservableObject {
         case clipboardHistorySettings
         case clipboardHistoryItems
         case taskHistory
+        case taskPlanDetails
         case snippets
         case recentArtifacts
 
@@ -416,6 +417,10 @@ final class AgentViewModel: ObservableObject {
                 return "clipboard history"
             case .taskHistory:
                 return "task history"
+            case .taskPlanDetails:
+                // Named for what the user would notice if it will not read: a follow-up on a past
+                // task with less to go on. "Task plan details" is the file's name, not theirs.
+                return "what past tasks planned"
             case .snippets:
                 return "snippets"
             case .recentArtifacts:
@@ -1129,6 +1134,11 @@ final class AgentViewModel: ObservableObject {
 
         let taskHistoryStartedAt = Date()
         let priorContextForPlanner = priorTaskContextStore.currentContext()
+        // Arm, use once, gone (SONNY-150). Spent here, at the read, rather than left to the
+        // `record(...)` that overwrites it at the end of every terminal path — "usually overwritten
+        // later" is a different promise from "spent now", and the gap between them is a follow-up
+        // silently attaching itself to the command after this one. A no-op for an ordinary context.
+        priorTaskContextStore.consumeArmedContext()
         priorTaskContext = priorContextForPlanner
 
         // The decision this run will execute under when the user's standing per-routine trust
@@ -1752,6 +1762,111 @@ final class AgentViewModel: ObservableObject {
             // unscoped rather than erroring or binding to an empty boundary.
             workspaceBinding: record.workspaceName
         )
+    }
+
+    /// Reopens a past task into the widget so the user can say the next thing about it (row E,
+    /// SONNY-150) — "use the other folder instead", "do that again but for March" — without
+    /// restating the whole command.
+    ///
+    /// **What it installs, and why it is built rather than assembled.** A `PriorTaskContext` from
+    /// what that task stored: its command, the plan summary and steps `TaskPlanDetailStore` kept,
+    /// and an outcome built from the row's status and stored result. Built through
+    /// `PriorTaskContext`'s own initialiser, so every field reaches the planner through
+    /// `plannerContextText` and inherits `escapeForPlanner` structurally. **No prompt string is
+    /// assembled from a stored record anywhere, here or elsewhere** — that is the row I lesson this
+    /// row is most exposed to, since persistence removes the ten-minute bound that made the original
+    /// omission survivable.
+    ///
+    /// **A task with no stored plan still works, with less to go on.** Every record written before
+    /// row E is in that case, and it is the common one on day one: the context carries the command
+    /// and the outcome, and `plannerContextText` says the plan was not recorded rather than
+    /// inventing a cause for its absence.
+    ///
+    /// **The arm is a live intention, not a stored one.** It is exempt from the ten-minute expiry
+    /// because the user pointed at this task on purpose, and it is consumed by the next dispatch —
+    /// `performStart` spends it the moment it reads it. Nothing persists it across launches.
+    ///
+    /// The widget comes forward with an **empty** composer, through the same
+    /// `command` + `widgetPresentationRequest` mechanism `composeCommand` uses: the user is about to
+    /// say the new thing, not re-edit the old one.
+    ///
+    /// - Returns: whether the task was armed, so the sheet can close on success and stay open on a
+    ///   refusal.
+    @discardableResult
+    func followUpOnTask(_ record: CompletedTaskRecord) -> Bool {
+        // Refused for the same reason `composeCommand` refuses a prefill during a clarification, and
+        // then some: a partial command left in a live pause corrupts the continuation, and this
+        // leaves a *trusted block* behind as well, which is worse. `isTaskInFlight` is the superset —
+        // running, awaiting approval, or paused on an unanswered clarification.
+        guard !isTaskInFlight else {
+            logStore.append(.observe, "Follow-up ignored while a task is in flight.")
+            return false
+        }
+
+        let detail = storedPlanDetail(for: record)
+        let context = PriorTaskContext(
+            armedFollowUpOn: record.command,
+            planSummary: detail?.planSummary ?? "",
+            steps: detail?.steps ?? [],
+            outcome: PriorTaskOutcome(
+                status: record.outcomeStatus,
+                // The stored result, or nothing. `PriorTaskOutcome.plannerText` already falls back
+                // to the bare status for an empty summary, so a record from before row E reads as
+                // "completed" rather than as "completed - " with a dangling separator.
+                summary: record.result?.text ?? ""
+            ),
+            completedAt: record.completedAt
+        )
+        priorTaskContextStore.replace(with: context)
+        priorTaskContext = context
+
+        // The follow-up runs inside the same workspace the original did, through the plumbing the
+        // workspace card already uses — `start()` consumes this on a composer submit, and
+        // `resolveTaskScope` degrades a name that no longer resolves to `.unscoped` on its own.
+        pendingWorkspaceBinding = record.workspaceName
+
+        // Empty, deliberately. `composeCommand("")` is not called directly because its own
+        // clarification guard would be a second, weaker copy of the one above — this uses the same
+        // two lines it does.
+        command = ""
+        widgetPresentationRequest += 1
+        return true
+    }
+
+    /// Drops an armed follow-up. The chip's dismiss affordance, and nothing else.
+    ///
+    /// Clears the store as well as the published copy: leaving the context installed while the chip
+    /// disappeared would be the invisible trusted block the chip exists to prevent, arrived at from
+    /// the other direction.
+    func clearArmedFollowUp() {
+        guard priorTaskContext?.isArmed == true else {
+            return
+        }
+        priorTaskContextStore.clear()
+        priorTaskContext = nil
+    }
+
+    /// The plan this task ran, or `nil` — for a task recorded before row E, for one whose run never
+    /// reached a plan, and for a store that will not read.
+    ///
+    /// **A load failure is reported and then treated as "no plan".** It goes to the same
+    /// load-failure channel every other unreadable store uses, so the user sees the banner naming
+    /// it; the follow-up still arms, with the command and the outcome. Refusing to arm because a
+    /// side store would not decode would trade a degraded feature for no feature, and the founder's
+    /// objection to a shorter-lived detail store was precisely that follow-ups must not quietly get
+    /// weaker — a visible banner is the opposite of quietly.
+    private func storedPlanDetail(for record: CompletedTaskRecord) -> StoredTaskPlanDetail? {
+        guard let id = record.id else {
+            return nil
+        }
+        do {
+            let detail = try taskPlanDetailStore.detail(forTaskID: id)
+            clearLocalStorageLoadFailure(.taskPlanDetails)
+            return detail
+        } catch {
+            recordLocalStorageLoadFailure(.taskPlanDetails, error: error)
+            return nil
+        }
     }
 
     /// Submits the clarification answer as a **new** run, not a resume: this appends the Q&A to

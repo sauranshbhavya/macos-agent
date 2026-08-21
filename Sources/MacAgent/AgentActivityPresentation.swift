@@ -260,6 +260,55 @@ enum ClarificationPresentation {
 ///
 /// Nothing here explains how it works. There is no tooltip, no help text and no disclosure line, and
 /// `TaskRecordingPresentationTests` refuses copy that reads like one.
+/// The armed-follow-up chip and the action that arms it (row E, SONNY-150).
+///
+/// Copy approved by the founder on 2026-08-21, with the alternatives put beside it: the chip states
+/// what is attached and names it, and the button is a bare verb, matching "Run again" next to it
+/// rather than the verb-plus-object shape the two delete actions need in order to tell each other
+/// apart.
+enum FollowUpPresentation {
+    /// The task-detail sheet's action.
+    static let actionLabel = "Follow up"
+
+    /// The most of the original command the chip shows.
+    ///
+    /// The composer pill is 472 wide and the chip row has 444 of it; a workspace chip and the
+    /// "Won't be saved" chip can take about 164 between them, so this keeps three chips inside the
+    /// row without relying on `Text` truncation to rescue the layout. Commands longer than this are
+    /// cut at a word boundary where there is one, because "Zip the largest files in ~/Down…" reads
+    /// and "Zip the largest files in ~/Downloa…" does not read any better for the four characters
+    /// it bought.
+    static let maximumChipCommandCharacters = 28
+
+    /// What the chip says.
+    static func chipText(command: String) -> String {
+        "Following up: \(truncatedCommand(command))"
+    }
+
+    static func clearAccessibilityLabel(command: String) -> String {
+        "Stop following up on \(truncatedCommand(command))"
+    }
+
+    /// A record with no command of its own still gets a chip, because the arm is real either way and
+    /// an armed state with no chip is the invisible trusted block the chip exists to prevent.
+    static func truncatedCommand(_ command: String) -> String {
+        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmed.isEmpty else {
+            return "an untitled task"
+        }
+        guard trimmed.count > maximumChipCommandCharacters else {
+            return trimmed
+        }
+        let head = trimmed.prefix(maximumChipCommandCharacters)
+        // Cut at the last space inside the budget when there is one that leaves something readable,
+        // rather than mid-word.
+        if let lastSpace = head.lastIndex(of: " "), head.distance(from: head.startIndex, to: lastSpace) >= 12 {
+            return head[head.startIndex..<lastSpace] + "\u{2026}"
+        }
+        return head + "\u{2026}"
+    }
+}
+
 enum TaskRecordingPresentation {
     /// The control's accessibility label and its only name.
     static let controlLabel = "Don't save this task"

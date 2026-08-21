@@ -138,10 +138,21 @@ struct FloatingWidgetView: View {
                     }
                 }
 
-                HStack(alignment: .center, spacing: 12) {
+                // **Bottom-aligned since the pill can carry a chip row** (SONNY-150). With
+                // `.center` the two circular buttons would float against the middle of a 66pt pill
+                // while the text field sat at its foot. Their own 40pt box makes their centres land
+                // exactly on the field row's, and in the no-chip case the whole thing is
+                // pixel-identical to what it was: a 40pt pill beside a 40pt box.
+                //
+                // `micButton` always renders, so the box is never empty and its spacing never opens
+                // a gap where a hidden `dontSaveButton` used to be.
+                HStack(alignment: .bottom, spacing: 12) {
                     composerPill
-                    dontSaveButton
-                    micButton
+                    HStack(spacing: 12) {
+                        dontSaveButton
+                        micButton
+                    }
+                    .frame(height: 40)
                 }
             }
         }
@@ -484,11 +495,99 @@ struct FloatingWidgetView: View {
         }
     }
 
-    private var composerPill: some View {
-        HStack(spacing: 10) {
-            workspaceBindingChip
-            dontSaveChip
+    /// The armed-follow-up chip (row E, SONNY-150).
+    ///
+    /// Same chip shape, same dismiss affordance, same System B tokens as the two beside it, and the
+    /// same only-before-dispatch rule for the clear button. What it adds is a *name*: without one
+    /// the user is typing into a box with invisible state attached, and an invisible trusted block
+    /// reaching the planner is worse than an invisible workspace binding — which is the case the
+    /// slot this sits in already exists to prevent.
+    ///
+    /// Rendered off `viewModel.priorTaskContext` rather than off a second published flag, so the
+    /// chip and the context the planner will actually receive cannot disagree: there is one value,
+    /// and `isArmed` is a field on it.
+    @ViewBuilder
+    private var followUpChip: some View {
+        if let context = viewModel.priorTaskContext, context.isArmed {
+            HStack(spacing: 4) {
+                Text(FollowUpPresentation.chipText(command: context.previousCommand))
+                    .font(WidgetType.captionSmall)
+                    .foregroundStyle(WidgetTheme.textFull)
+                    .lineLimit(1)
+                    .truncationMode(.tail)
 
+                if !isTaskInFlight {
+                    Button {
+                        viewModel.clearArmedFollowUp()
+                    } label: {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 8, weight: .bold))
+                            .foregroundStyle(WidgetTheme.textMuted)
+                    }
+                    .buttonStyle(.plain)
+                    .accessibilityLabel(
+                        FollowUpPresentation.clearAccessibilityLabel(command: context.previousCommand)
+                    )
+                }
+            }
+            .padding(.horizontal, 8)
+            .padding(.vertical, 4)
+            .background(WidgetTheme.neutralButtonFill)
+            .clipShape(Capsule())
+        }
+    }
+
+    /// Whether any chip is on, and therefore whether the pill carries a chip row at all.
+    ///
+    /// Read off the same three conditions the chips themselves render on. Two sources for one
+    /// question would let the pill reserve a row for a chip that is not there, or fail to reserve
+    /// one for a chip that is.
+    private var hasComposerChips: Bool {
+        viewModel.boundWorkspaceName != nil
+            || viewModel.taskRecordingPolicy.suppressesTraces
+            || viewModel.priorTaskContext?.isArmed == true
+    }
+
+    /// The pill's height. 40 with no chip — exactly what it has always been — and taller by one
+    /// chip row plus its spacing when there is one.
+    private var composerPillHeight: CGFloat {
+        hasComposerChips ? 40 + Self.composerChipRowHeight + Self.composerChipRowSpacing : 40
+    }
+
+    private static let composerChipRowHeight: CGFloat = 18
+    private static let composerChipRowSpacing: CGFloat = 8
+
+    private var composerPill: some View {
+        VStack(alignment: .leading, spacing: Self.composerChipRowSpacing) {
+            // **A row of their own, above the field** — the founder's decision of 2026-08-21, taken
+            // against the two alternatives. Three chips inline leave the text field about 57 points
+            // wide, at the exact moment the user is typing a correction into it; a chip that names
+            // no task fits but reintroduces the invisible state the chip exists to prevent.
+            //
+            // **Order: the two that were here first, then the new one.** The ticket's rule is compose
+            // with them, do not displace them — so the workspace binding and "Won't be saved" keep
+            // the reading position they have always had and the follow-up joins after them, rather
+            // than the newest arrival taking the front.
+            if hasComposerChips {
+                HStack(spacing: 8) {
+                    workspaceBindingChip
+                    dontSaveChip
+                    followUpChip
+                    Spacer(minLength: 0)
+                }
+                .frame(height: Self.composerChipRowHeight)
+            }
+
+            composerFieldRow
+        }
+        .padding(.leading, 14)
+        .padding(.trailing, isTaskInFlight ? 14 : 8)
+        .frame(width: 472, height: composerPillHeight)
+        .widgetGlassPill()
+    }
+
+    private var composerFieldRow: some View {
+        HStack(spacing: 10) {
             Image(systemName: "wand.and.stars.inverse")
                 .font(WidgetType.icon)
                 .foregroundStyle(.white.opacity(0.61))
@@ -524,15 +623,17 @@ struct FloatingWidgetView: View {
                 .opacity(viewModel.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty ? 0.5 : 1)
             }
         }
-        .padding(.leading, 14)
-        // 8pt matches the Start button's own vertical inset (24pt tall in a 40pt pill leaves 8pt
-        // above and below); the previous uniform 14pt left it visibly farther from the trailing
-        // edge than from the top and bottom. Conditional because the button is not rendered while
-        // a task is in flight — that state keeps its shipped 14pt rather than pulling the disabled
-        // field 6pt closer to the capsule's curve to fix a complaint about a different state.
-        .padding(.trailing, isTaskInFlight ? 14 : 8)
-        .frame(width: 472, height: 40)
-        .widgetGlassPill()
+        // The field row is always 40 tall, whether or not a chip row sits above it. That is what
+        // keeps the two circular buttons beside the pill level with the field: the composer row
+        // aligns them to the pill's bottom edge and gives them a 40-tall box of their own.
+        //
+        // The trailing inset: 8pt matches the Start button's own vertical inset (24pt tall in a
+        // 40pt row leaves 8pt above and below); a uniform 14pt left it visibly farther from the
+        // trailing edge than from the top and bottom. Applied on the pill rather than here, and
+        // conditional because the button is not rendered while a task is in flight — that state
+        // keeps its shipped 14pt rather than pulling the disabled field 6pt closer to the capsule's
+        // curve to fix a complaint about a different state.
+        .frame(height: 40)
     }
 
     /// "Don't save this task" (SONNY-120).
