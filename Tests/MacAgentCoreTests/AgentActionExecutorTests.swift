@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import MacAgentTestSupport
 @testable import MacAgentCore
 
 @Suite

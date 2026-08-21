@@ -1,6 +1,7 @@
 import Foundation
 import Testing
 import MacAgentCore
+import MacAgentTestSupport
 @testable import MacAgent
 
 private final class FakeRelauncher: AppRelaunching {

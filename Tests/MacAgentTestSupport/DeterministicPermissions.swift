@@ -1,8 +1,8 @@
 import AVFoundation
 import Foundation
-@testable import MacAgentCore
+import MacAgentCore
 
-/// The one permission stub for this target (SONNY-123).
+/// The one permission stub for the whole suite (SONNY-123, consolidated by SONNY-172).
 ///
 /// **Why it exists.** `AgentActionExecutor.init` defaults its `permissionReadinessService` to a live
 /// `PermissionReadinessService`, which defaults its checkers to `SystemScreenCapturePermissionChecker`
@@ -13,35 +13,41 @@ import Foundation
 /// states the rule generally, on the reasoning that a suite whose result changes with the machine
 /// running it cannot be evidence.
 ///
-/// **Why a shared one rather than another private copy.** There were six conforming types across the
-/// two test targets, five of them private to a single file, and a seventh was the path of least
-/// resistance for the next test that needed one — which is exactly what makes a test reach for the
-/// live default instead. A stub that is easy to find is the thing that removes the incentive.
-/// `Tests/MacAgentTests/DeterministicPermissions.swift` is this file's twin: both test targets
-/// declare an explicit `path:`, so a source file belongs to exactly one of them and one shared stub
-/// *per target* is the most consolidation available without a `Package.swift` edit — a build-graph
-/// change this ticket was not scoped to make. That edit is cheaper than this comment first claimed;
-/// the twin's header carries the correction (PR #72 F2). Keep the two in step —
-/// `TwinnedTestSupportTests` enforces it.
+/// **Why one shared stub rather than a private copy per file.** There were six conforming types
+/// across the two test targets, five of them private to a single file, and a seventh was the path of
+/// least resistance for the next test that needed one — which is exactly what makes a test reach for
+/// the live default instead. A stub that is easy to find is the thing that removes the incentive.
+///
+/// **Why this file lives in a target of its own.** SONNY-123 left it twinned — one copy per test
+/// target, kept in step by hand — on the stated reason that a source file belongs to exactly one
+/// target *and* that a test target cannot depend on another test target. The first half is true; the
+/// second was not. SONNY-172 built the probe: a `.testTarget` may name another `.testTarget` in its
+/// `dependencies`, it compiles, the `import` resolves, and it passes. That made a shared target the
+/// cheap option, and `MacAgentTestSupport` is it. `Package.swift` records why that target is a
+/// `.testTarget` rather than a plain one.
+///
+/// Everything here is `public` for that reason and no other: `MacAgentCoreTests` and `MacAgentTests`
+/// are separate modules, and only a module's public surface crosses into them.
 ///
 /// **Grants everything by default, deliberately.** The tests that reach this seam assert on other
 /// items entirely (the voice-hotkey copy, titles and counts), so a granted machine is the state they
 /// were written against and the one that keeps them meaning what they meant. A test about a refusal
 /// says so at its call site.
-final class DeterministicScreenPermissions: ScreenCapturePermissionChecking, @unchecked Sendable {
-    var accessibilityTrusted: Bool
-    var screenRecordingGranted: Bool
+public final class DeterministicScreenPermissions: ScreenCapturePermissionChecking, @unchecked Sendable {
+    public var accessibilityTrusted: Bool
+    public var screenRecordingGranted: Bool
 
     /// When true, `requestAccessibilityTrust()` flips the grant — which is what the live
     /// Accessibility grant does: it takes effect in-process, with no relaunch. There is deliberately
     /// no matching flag for Screen Recording, because that grant never lands in the process that
     /// asked for it, and a stub that let it would let a test pin behaviour the product cannot have.
-    var accessibilityGrantsOnRequest: Bool
+    /// `ScreenAccessOnboardingModel`'s whole relaunch-guidance step exists for that asymmetry.
+    public var accessibilityGrantsOnRequest: Bool
 
-    private(set) var accessibilityRequestCount = 0
-    private(set) var screenRecordingRequestCount = 0
+    public private(set) var accessibilityRequestCount = 0
+    public private(set) var screenRecordingRequestCount = 0
 
-    init(
+    public init(
         accessibilityTrusted: Bool = true,
         screenRecordingGranted: Bool = true,
         accessibilityGrantsOnRequest: Bool = false
@@ -51,18 +57,18 @@ final class DeterministicScreenPermissions: ScreenCapturePermissionChecking, @un
         self.accessibilityGrantsOnRequest = accessibilityGrantsOnRequest
     }
 
-    func hasScreenRecordingPermission() -> Bool { screenRecordingGranted }
+    public func hasScreenRecordingPermission() -> Bool { screenRecordingGranted }
 
     @discardableResult
-    func requestScreenRecordingPermission() -> Bool {
+    public func requestScreenRecordingPermission() -> Bool {
         screenRecordingRequestCount += 1
         return screenRecordingGranted
     }
 
-    func isAccessibilityTrusted() -> Bool { accessibilityTrusted }
+    public func isAccessibilityTrusted() -> Bool { accessibilityTrusted }
 
     @discardableResult
-    func requestAccessibilityTrust() -> Bool {
+    public func requestAccessibilityTrust() -> Bool {
         accessibilityRequestCount += 1
         if accessibilityGrantsOnRequest {
             accessibilityTrusted = true
@@ -72,10 +78,14 @@ final class DeterministicScreenPermissions: ScreenCapturePermissionChecking, @un
 }
 
 /// The microphone half of the same seam, which exists in production only since SONNY-123.
-struct DeterministicMicrophonePermission: MicrophonePermissionChecking {
-    var status: AVAuthorizationStatus = .authorized
+public struct DeterministicMicrophonePermission: MicrophonePermissionChecking {
+    public var status: AVAuthorizationStatus = .authorized
 
-    func microphoneAuthorizationStatus() -> AVAuthorizationStatus { status }
+    public init(status: AVAuthorizationStatus = .authorized) {
+        self.status = status
+    }
+
+    public func microphoneAuthorizationStatus() -> AVAuthorizationStatus { status }
 }
 
 extension PermissionReadinessService {
@@ -85,7 +95,7 @@ extension PermissionReadinessService {
     /// the screen half and said so; `microphoneStatus()` now reads an injectable
     /// `MicrophonePermissionChecking` instead of calling `AVCaptureDevice` directly, so a service
     /// built here makes no live authorization read at all.
-    static func deterministic(
+    public static func deterministic(
         accessibilityTrusted: Bool = true,
         screenRecordingGranted: Bool = true,
         microphoneStatus: AVAuthorizationStatus = .authorized

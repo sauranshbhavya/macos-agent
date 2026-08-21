@@ -2,6 +2,7 @@ import AppKit
 import Foundation
 import SwiftUI
 import Testing
+import MacAgentTestSupport
 @testable import MacAgent
 // `@testable` rather than a plain import so this target can reach
 // `RoutineStore.saveBypassingStepValidation`, the module-internal test-only write path SONNY-52

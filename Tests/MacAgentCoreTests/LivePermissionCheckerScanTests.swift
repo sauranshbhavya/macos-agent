@@ -16,9 +16,10 @@ import Testing
 /// named the seam at all (F1), a partial injection naming only the screen checker (F3), a neutered
 /// matching loop (F6), and an argument spelled `.init()` (C1).
 ///
-/// Scanning both target directories from one file is deliberate: the property is about the whole
+/// Scanning every target directory from one file is deliberate: the property is about the whole
 /// suite, and a per-target copy is a copy that can be deleted from one target and still look
-/// enforced.
+/// enforced. Three directories since SONNY-172 — `MacAgentTestSupport` joined them, and it is the
+/// one holding the deterministic stub itself.
 ///
 /// ## What this cannot do, stated so it is not mistaken for a boundary
 ///
@@ -62,9 +63,26 @@ struct LivePermissionCheckerScanTests {
         "PermissionReadinessService("
     ]
 
-    /// The single file allowed to construct a readiness service directly, target-qualified because
-    /// both targets carry a file of this name and only this one is exempt.
-    private static let constructionSite = "MacAgentCoreTests/DeterministicPermissions.swift"
+    /// The single file allowed to construct a readiness service directly. Target-qualified: it used
+    /// to need that because both test targets carried a file of this name and only one was exempt,
+    /// and it still needs it because `relativePath` is what the exemption is matched on.
+    private static let constructionSite = "MacAgentTestSupport/DeterministicPermissions.swift"
+
+    /// Files that must be found in each target directory, so a scan enumerating the wrong directory —
+    /// or an empty one — fails instead of passing. Named files rather than a count near the real one:
+    /// a `> 20` floor once sat three files above this target's actual 23 and would have tripped on an
+    /// ordinary consolidation (PR #72 F3).
+    ///
+    /// One entry per target since SONNY-172. Before it, the guard asked every target for
+    /// `DeterministicPermissions.swift` and `UnprivilegedProcess.swift`, which worked only because
+    /// those two files were twinned into both. They are now in exactly one target, so a guard written
+    /// that way would fail on the two targets that no longer hold them. A target in
+    /// `TestSourceTree.targets` with no entry here fails at the `#require` rather than being skipped.
+    private static let sentinels: [String: [String]] = [
+        "MacAgentCoreTests": ["LivePermissionCheckerScanTests.swift", "TestSourceTree.swift"],
+        "MacAgentTests": ["MacAgentSourceScan.swift", "ProductShellTests.swift"],
+        "MacAgentTestSupport": ["DeterministicPermissions.swift", "UnprivilegedProcess.swift"]
+    ]
 
     private static let thisFile = "MacAgentCoreTests/LivePermissionCheckerScanTests.swift"
 
@@ -110,11 +128,11 @@ struct LivePermissionCheckerScanTests {
         for target in TestSourceTree.targets {
             let files = try TestSourceTree.swiftFiles(in: target)
             let names = Set(files.map { URL(fileURLWithPath: $0.relativePath).lastPathComponent })
-            // Guards against a silently empty scan, which is a source scan's classic failure. Named
-            // files rather than a count near the real one: a `> 20` floor once sat three files above
-            // this target's actual 23 and would have tripped on an ordinary consolidation (PR #72 F3).
-            #expect(names.contains("DeterministicPermissions.swift"), "\(target) is not the directory this expects")
-            #expect(names.contains("UnprivilegedProcess.swift"), "\(target) is not the directory this expects")
+            // Guards against a silently empty scan, which is a source scan's classic failure.
+            let expected = try #require(Self.sentinels[target], "\(target) has no sentinel files recorded")
+            for sentinel in expected {
+                #expect(names.contains(sentinel), "\(target) is not the directory this expects")
+            }
 
             for file in files where file.relativePath != Self.thisFile && file.relativePath != Self.constructionSite {
                 scannedFileCount += 1
@@ -131,8 +149,8 @@ struct LivePermissionCheckerScanTests {
             """
             A test constructs a live permission checker, so its result depends on what this Mac has \
             granted (SONNY-106 section D). Use PermissionReadinessService.deterministic(...) or \
-            DeterministicScreenPermissions instead, both in this target and its twin. Offenders: \
-            \(offenders.joined(separator: ", "))
+            DeterministicScreenPermissions instead — both come from MacAgentTestSupport, which every \
+            test target depends on. Offenders: \(offenders.joined(separator: ", "))
             """
         )
     }
