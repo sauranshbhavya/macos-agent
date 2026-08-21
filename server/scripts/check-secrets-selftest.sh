@@ -84,6 +84,15 @@ check "a bare hash is not a secret"           0 "integrity sha512-${salt_value}"
 # false positive on the pattern's first run, against config.ts.
 check "a type annotation is not an assignment" 0 '  RATE_LIMIT_SALT: nonEmpty.optional(),'
 
+# PR #87 R9: the QUOTED forms, which are how these are actually written. All six went through the
+# first version of the pattern, which required a bare value after `=`.
+check "a double-quoted salt is refused"      1 "RATE_LIMIT_SALT=\"${salt_value}\""
+check "a single-quoted salt is refused"      1 "RATE_LIMIT_SALT='${salt_value}'"
+check "a YAML quoted secret is refused"      1 "  RESEND_API_KEY: \"${salt_value}\""
+check "a YAML unquoted secret is refused"    1 "  RESEND_API_KEY: ${salt_value}"
+check "an exported shell secret is refused"  1 "export SMTP_PASSWORD=\"${salt_value}\""
+check "a compose list entry is refused"      1 "- RESEND_API_KEY=\"${salt_value}\""
+
 # C2: two matches of the SAME pattern on one line, the first allowlisted. `head -1` took only
 # the leading match, so the allowlisted local DSN shadowed a real credential after it.
 check "an allowlisted match does not shadow a later one" 1 'postgres://postgres:postgres@localhost/db then postgres://real:'"$(printf 'S%.0s' {1..12})"'@prod.internal/db'

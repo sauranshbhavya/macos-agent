@@ -16,9 +16,13 @@
 -- structural answer the review asked for: after it, the exclusion and the constraint agree by
 -- construction.
 --
--- A partial unique index scoped to live accounts was the alternative and is not expressible:
--- Postgres partial indexes cannot reference a joined table, so the predicate "…where the account is
--- not deleted" cannot be written on `sonny.identity` at all.
+-- **Superseded by 0004, and this header contained a false claim.** It said a partial unique index
+-- scoped to live accounts "is not expressible". That is true only of the form joining to
+-- `sonny.account`, which Postgres rejects with "cannot use subquery in index predicate" — and false
+-- of the form 0004 uses, where the state is denormalised onto `sonny.identity` and the predicate is
+-- a plain column. Both forms were tried against a real database before 0004 was written. The
+-- DELETE below also broke two other things: the close handler's own read of `supabase_user_id`
+-- (it revoked nobody) and the audit trail. See 0004.
 
 CREATE OR REPLACE FUNCTION sonny.release_identities_on_close() RETURNS trigger
 LANGUAGE plpgsql AS $$
