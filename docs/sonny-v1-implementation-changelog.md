@@ -161,6 +161,68 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: feature/row-12-accounts-email
+Status: complete, with two acceptance criteria blocked on founder-owned dependencies — see Known limitations
+Date: 2026-08-21
+Tickets: SONNY-127 (accounts, email-code sign-in, sessions, and the identity-linking rule). One session, from `main` at `ebd6c1d`. **One of row 12's three adversarial-security-review tickets.**
+Reviewed by: adversarial security review before merge, plus the founder's own read of the diff — pending at the time this entry was written.
+
+Spec sections covered: §16.3's sign-in, partially — email code only; Google and Apple are `feature/row-12-social-signin`'s, and the model here is built for all three.
+Files changed:
+- `server/src/auth/` — new. `identity.ts` (the linking rule), `codes.ts` (issuance, single-use, the three failures), `ratelimit.ts` (atomic, per address and per source), `clock.ts` (skew tolerance), `provider.ts` (the Supabase Auth seam).
+- `server/src/routes/auth.ts` — new. `email/start`, `email/verify`, `refresh`, `signout`, `DELETE /v1/account`.
+- `server/src/db/migrations/0002_accounts_and_identities.sql` — new.
+- `server/src/config.ts`, `server/src/app.ts`, `server/.env.example` — the rate-limit salt and the optional auth mount.
+- `server/scripts/check-secrets.sh`, `check-secrets-selftest.sh` — an eleventh pattern and six cases, for a secret this branch introduces whose value has no recognisable shape.
+- `server/test/` — `linking.db.test.ts`, `authlimits.db.test.ts`, `auth.db.test.ts`, `clock.test.ts` new; `migrate.db.test.ts` generalised past a single migration; `vitest.config.ts` serialised.
+- `docs/sonny-identity-linking-rule.md` — new. The rule, its reasoning, and what is pinned.
+- `docs/sonny-backend-api-contract.md` — §3.1 amended, a note in §3.6, a row in §14.
+
+Tests: all at `b3e471f`, clean tree. **Server: `npm test` 43 passed, 62 skipped (105); `npm run test:db` 105 passed (105)** against Postgres 17.11. Build and typecheck clean, exit 0. **`check-secrets.sh tracked`: clean — 337 files, 11 patterns, 8 baselined.** **`check-secrets-selftest.sh`: 27 passed, 0 failed**, up from 21. **Swift: 1459 tests in 113 suites, exit 0**, `swift build` clean — unchanged from `main`, and expected to be: no file under `Sources/` or `Tests/` is in this diff. **Migrations proved reversible in both environments** — `up`/`status`/`down`/`down`/`up` locally and `up`/`down`/`up` inside the container image, same `npm run migrate` invocation.
+
+Behavior added:
+- **An account model whose identity key is `(provider, subject)`**, with email as a hint. Two Supabase users can resolve to one account.
+- **Email-code sign-in** whose start response is identical for a known and an unknown address.
+- **Rate limits per address and per source**, consumed atomically.
+- **Three distinct code failures**, derived from our own issuance record.
+- **Refresh, sign-out, and account closure**, with closure releasing the address.
+- **Clock-skew tolerance**, thirty seconds, one-directional.
+
+Behavior preserved (required, no blanket claims):
+- **No file under `Sources/` or `Tests/`** — the client half is `feature/row-12-client-signin`'s, and the Swift suite is unchanged at 1459/113.
+- **`CLAUDE.md` and `.gitignore` untouched**, both on this ticket's never-touch list and owned by the foundation ticket.
+- **`GET /v1/health` is unchanged**, and still returns exactly `{status, version, environment}` — its key-set test still passes.
+- **The auth routes are optional.** `buildApp(config)` with no auth argument mounts nothing new, so a health-only deployment needs no provider and no salt.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**The founder chose Supabase Auth with the contract amended, over the gateway owning auth — and the session that recommended otherwise had one of its four stated incompatibilities wrong.** The claim that Supabase could not give §3.3's rotation-with-overlap-and-reuse-detection was false: it rotates, has a **10-second reuse interval** which *is* the overlap window, and on reuse beyond it *"the whole session is regarded as terminated and all refresh tokens belonging to it are marked as revoked"*. §3.3 needed no amendment at all. The amendment is one clause in §3.1 — the access token is a JWT rather than opaque — and **the property that clause protected is preserved rather than dropped**: the client must still not decide anything from it, which is now a contract obligation it keeps rather than one its encoding keeps for it. Recorded because a recommendation argued from an unverified incompatibility is the shape SONNY-126 spent four review cycles removing, and it recurred here on the first architectural question of the next ticket.
+
+**The identity rule is `(provider, subject)`, and the account is deliberately not the Supabase user.** Supabase links on verified email, which is right for the case it covers and cannot express the one that matters: a relay address matches nothing, so the same person becomes a second `auth.users` row. With an account of our own, two Supabase users resolve to one account. **Supabase's behaviour is therefore accepted rather than overridden** — with the account separated it can no longer produce the wrong answer, at worst an extra row our identity table resolves correctly.
+
+**"Does not silently create a second account" is satisfied by the word silently, and that is the honest reading.** The server cannot know that `abc@privaterelay.appleid.com` is the same human as `real@example.com`, and inventing that link is the account-takeover pattern with extra steps. So the second account is created, the relay is **detected and stored** at write time, and a `link_hint` is returned. Guessing would be worse than the thing it prevents.
+
+**Signing up again with a closed account's address made the resolver recurse forever.** Rule 1 excludes identities on a deleted account; the unique constraint on `(provider, subject)` does not. The insert conflicted, the resolver rolled back and retried, and met the identical conflict — a livelock, reachable from delete-account-then-sign-up-again, found by a test rather than by review. Two fixes, deliberately: closing an account now **releases its identities** so the address is usable again, and the retry is **bounded** — an unbounded retry on a condition nobody enumerated is a hang waiting for a cause.
+
+**Every counter in this branch is incremented and tested in one statement, and the reason is measured rather than believed.** SONNY-125 showed a read-then-write against a cap overshooting it while reporting success. A rate limit and a single-use code have exactly that shape, and an auth endpoint is where the race is probed deliberately. Both are asserted under concurrency: forty callers land exactly on the ceiling, twelve concurrent verifies of one code produce exactly one session.
+
+**The per-address rate limit refuses silently and the per-source one does not.** A 429 on the address is an account-existence oracle in slow motion — it says *this address has been asked for recently*. A 429 on the source is a fact about the caller, and withholding it leaves them retrying against a wall with no signal. Same mechanism, opposite disclosure, for reasons that do not generalise from one to the other.
+
+**The scanner gained a pattern anchored on variable NAMES, because this branch introduced a secret with no recognisable value.** `RATE_LIMIT_SALT` is `openssl rand -hex 32` — 64 hex characters, no vendor prefix, invisible to all ten existing patterns. A generic high-entropy rule was rejected for the reason the scanner's own "does not prevent" section already gives: it would flag every lockfile hash and be switched off within a week. The name-anchored pattern was then wrong twice on its first runs — a trailing comma in the bash array appended a literal `,` to the regex so it matched nothing, and a `:` separator matched TypeScript's type annotations, making `config.ts` a finding. Both are pinned by selftest cases.
+
+**The database test files raced each other.** They share one Postgres and `migrate.db.test.ts` rolls migrations back by design, so in parallel it dropped the schema mid-assertion — 22 failures at once, reading `relation "sonny.identity" does not exist`. Vitest now runs files serially. Isolating by giving each file its own schema was the alternative and was rejected: the migration tests would stop exercising the schema names the migrations actually declare, which is most of what they are for.
+
+Known limitations / deferred scope:
+- **No concrete Supabase Auth adapter is wired.** `AuthProvider` is the seam and every route is tested against a fake, but nothing sends a real code, because the founder's **Resend sending domain (SPF/DKIM/DMARC) does not exist yet** — which the ticket names as founder-owned, blocking, and to be flagged rather than worked around. **Owed:** the adapter, and a real send.
+- **Two acceptance criteria cannot be met on this branch.** "Demonstrated end to end against staging" and the founder's three manual-test items all require staging plus real email. Staging remains stubbed from SONNY-126, and the deploy path still exits 3.
+- **`DELETE /v1/account` takes its subject from a header** because SONNY-128's authenticated-request middleware does not exist. It **refuses** rather than inferring one — an account-deletion route that guesses its subject is the worst place to be wrong — and the header is a seam, not a design.
+- **Supabase's own send ceiling sits above ours.** Custom SMTP raises it from 2/hour to 30/hour project-wide. Our limits are set below it deliberately; if they ever cross, the project limit becomes the real one and returns an error we do not control.
+- **Deleting an account does not reach retained content.** Stated on both tickets: this branch closes the row and releases the address; `feature/row-12-retention` sweeps what hangs off `deleted_at`.
+
+Open questions (required, write "none" if true): **one** — when the Resend domain exists. Nothing else in row 12 is blocked by it; the model, the rule and the endpoints are complete and proven against a fake provider.
+
+Next branch: `feature/row-12-social-signin` (Google, then Apple), which this ticket's rule was designed for and must not have to reshape.
+
 ### Branch: feature/memory-command-center
 Status: complete — SONNY-208 Done; PR #98 open, reviewed three times, three fix rounds landed
 Date: 2026-08-21 (fix rounds and rebases 2026-08-22)
