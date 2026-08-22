@@ -4,7 +4,9 @@ import { z } from "zod";
 import {
   CODE_LIFETIME_SECONDS, callerOriginatedLatestCode, classifyFailure, consumeLatest, issueCode,
 } from "../auth/codes.js";
+import { accountForSupabaseUser } from "../auth/attribution.js";
 import { expiryFields } from "../auth/clock.js";
+import { callerOf } from "../auth/gate.js";
 import { looksLikeEmail, normalizeEmail, rateLimitEmailKey, resolve } from "../auth/identity.js";
 import { ProviderRejected, ProviderUnavailable, type AuthProvider } from "../auth/provider.js";
 import { drainOwedRevocations } from "../auth/revocation.js";
@@ -15,23 +17,15 @@ import {
 } from "../auth/ratelimit.js";
 import { errorBody } from "../errors.js";
 import type { Config } from "../config.js";
-import type pg from "pg";
+import type { WithConnection } from "../db/connection.js";
 
 /**
- * A connection **checked out for the caller alone**, and returned when the caller is done.
- *
- * **The previous shape was `db: () => Promise<pg.Client>` with no release, and it made a guarantee
- * this code depends on unenforceable** (PR #87 R4). A pool-backed implementation of that signature
- * leaks a connection per request, so the only implementation that worked was one shared `Client` —
- * and under a shared client `resolve()`'s "one transaction" is false: its `BEGIN` nests inside
- * whatever else is open on that connection, and one `COMMIT` commits both. Every test used a shared
- * client, so the property was never exercised, only assumed.
- *
- * `withConnection` makes the contract structural: the callback gets a connection nobody else is
- * using, and it is released on the way out whether the callback threw or not. A pool implementation
- * is now the natural one to write, and a shared-client implementation is the awkward one.
+ * `WithConnection` moved to `db/connection.ts` and `accountForSupabaseUser` to
+ * `auth/attribution.ts` (SONNY-203), both unchanged. The authenticated-route gate needs each of
+ * them, and a middleware reaching into a route module for its own dependencies is the wrong
+ * direction for that dependency to point. Re-exported here so an importer of either keeps working.
  */
-export type WithConnection = <T>(fn: (client: pg.Client) => Promise<T>) => Promise<T>;
+export type { WithConnection };
 
 export interface AuthDeps {
   readonly provider: AuthProvider;
@@ -49,41 +43,6 @@ function sourceOf(request: FastifyRequest): string {
 
 function sourceHash(request: FastifyRequest, salt: string): string {
   return createHash("sha256").update(`${salt}:src:${sourceOf(request)}`).digest("hex");
-}
-
-/**
- * Which account a provider-side user belongs to — **or a refusal, never a guess** (PR #87 second
- * round, F6).
- *
- * `supabase_user_id` carries no uniqueness constraint and never can: the whole design lets several
- * identities name one Supabase user, which is what makes two `auth.users` rows resolve to one
- * account. What it does *not* license is two **live accounts** naming one Supabase user. That state
- * is the identity rule having failed somewhere upstream, and the two routes that resolve a caller
- * this way were meeting it with `ORDER BY … LIMIT 1` — picking a winner, deterministically and
- * arbitrarily. On `DELETE /v1/account` that is choosing which of a user's accounts to destroy on the
- * strength of a tiebreak; on refresh it is handing out a session for whichever account sorted first.
- *
- * So the query asks for two and refuses on two. **The `ORDER BY` is gone with the tiebreak it fed**:
- * with no winner to pick there is nothing left for a row order to decide, and leaving one in would
- * suggest this still chooses.
- *
- * `NOT i.account_closed` matches rule 1's exclusion: an identity a closed account left behind
- * attributes nobody, exactly as it signs nobody in.
- */
-async function accountForSupabaseUser(
-  client: pg.Client,
-  supabaseUserId: string,
-): Promise<{ accountId: string } | { ambiguous: boolean }> {
-  const owned = await client.query<{ account_id: string }>(
-    `SELECT DISTINCT i.account_id
-       FROM sonny.identity i
-       JOIN sonny.account a ON a.id = i.account_id
-      WHERE i.supabase_user_id = $1 AND NOT i.account_closed AND a.deleted_at IS NULL
-      LIMIT 2`,
-    [supabaseUserId],
-  );
-  if (owned.rows.length === 1) return { accountId: owned.rows[0]!.account_id };
-  return { ambiguous: owned.rows.length > 1 };
 }
 
 export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDeps): void {
@@ -379,57 +338,24 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
    * claim to have deleted content.** The retention ticket sweeps what hangs off `deleted_at`, and
    * until it lands a closed account's content is retained and unreachable. Recorded on both tickets.
    */
-  // Mounted only where the gate is on, and `loadConfig` refuses the gate in production. Until
-  // SONNY-203 supplies authenticated-request middleware this route cannot tell who is asking, and
-  // an unauthenticated destructive primitive that merely happens to be unrouted is a landmine that
-  // arms itself the moment someone routes it.
-  if (config.allowUnauthenticatedAccountDelete) app.delete("/v1/account", async (request, reply) => {
-    const header = request.headers.authorization;
-    if (!header?.startsWith("Bearer ")) {
-      return reply.status(401).send(
-        errorBody("auth.unauthenticated", "A bearer token is required.", request.id),
-      );
-    }
-    // **Attributed from the token, never from a header** (PR #87 F1). The first version took the
-    // account id from `Sonny-Account-Id` and verified nothing, so any caller who could reach the
-    // port could destroy any account whose id they could guess — reproduced against a running
-    // server with a made-up bearer token. The token is now resolved to a provider-side user and
-    // then to an account through `sonny.identity`, which is precisely what SONNY-203's middleware
-    // will do for every authenticated route; when it lands, this block is what it replaces.
-    // (SONNY-128 until the second review round — that ticket is the client half and may not touch
-    // `server/` at all, which is the planning gap F5 found and SONNY-203 was created to close.)
+  // **Mounted unconditionally, and the flag that used to gate it is gone** (SONNY-203).
+  //
+  // `ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE` existed for one reason: nothing verified a token, so this
+  // route's own attribution rested on `AuthProvider.userFromAccessToken`, a seam with no adapter
+  // behind it. A destructive primitive trusting a check that does not exist is a landmine that arms
+  // itself the moment someone routes it, so the route was kept off by default and refused outright
+  // in production. Verification now exists and the gate applies it before this handler runs, so both
+  // the flag and its production refusal are deleted rather than defaulted off.
+  //
+  // **The caller is the gate's, derived from the verified token — never a header and never a body
+  // field** (PR #87 F1, whose first version took the account id from `Sonny-Account-Id` and verified
+  // nothing: any caller who could reach the port could destroy any account whose id they could
+  // guess, reproduced against a running server with a made-up bearer token). The two refusals this
+  // handler used to make itself — no bearer token, and a token attributable to no single live
+  // account — are the gate's now, answered identically for every protected route.
+  app.delete("/v1/account", async (request, reply) => {
+    const accountId = callerOf(request).accountId;
     return deps.withConnection(async (client) => {
-    let supabaseUserId: string;
-    try {
-      supabaseUserId = await deps.provider.userFromAccessToken(header.slice("Bearer ".length));
-    } catch (error) {
-      if (error instanceof ProviderRejected) {
-        return reply.status(401).send(
-          errorBody("auth.unauthenticated", "Access token is not valid.", request.id),
-        );
-      }
-      throw error;
-    }
-    const owner = await accountForSupabaseUser(client, supabaseUserId);
-    if (!("accountId" in owner)) {
-      // A valid token that names no live account, or — the ambiguous case (PR #87 second round,
-      // F6) — one that names two. 401 rather than 404: the caller is not attributable to anything
-      // this route may act on, and saying which id does or does not exist is a leak. **Two live
-      // accounts is the one case where picking a winner would have destroyed the wrong one**, so
-      // this route refuses rather than tiebreaking; it is not attributable, which is what the code
-      // already says.
-      return reply.status(401).send(
-        errorBody(
-          "auth.unauthenticated",
-          owner.ambiguous
-            ? "This session names more than one account; none was deleted."
-            : "Account could not be attributed to this session.",
-          request.id,
-        ),
-      );
-    }
-    const accountId = owner.accountId;
-
     await client.query("BEGIN");
     let closed;
     try {
@@ -498,16 +424,22 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
     });
   });
 
-  /** `POST /v1/auth/signout` — revoke the family server-side, return 204. */
+  /**
+   * `POST /v1/auth/signout` — revoke the family server-side, return 204.
+   *
+   * **The bearer check here was a check on the header's shape and nothing else** (SONNY-203). It is
+   * the gate's now, so the token reaching the provider is one this gateway has verified, and the
+   * caller is attributable to a live account. What this route does with the token is the one
+   * legitimate use of the raw string: hand it back to the provider that issued it.
+   *
+   * **What signing out does and does not end.** It revokes the refresh-token family, so no new
+   * access token can be minted; the access token in the user's hand stays valid until its own `exp`,
+   * because it is self-contained and this gateway verifies it locally rather than asking the
+   * provider. `auth/gate.ts` states that residual in full.
+   */
   app.post("/v1/auth/signout", async (request, reply) => {
-    const header = request.headers.authorization;
-    if (!header?.startsWith("Bearer ")) {
-      return reply.status(401).send(
-        errorBody("auth.unauthenticated", "A bearer token is required.", request.id),
-      );
-    }
     try {
-      await deps.provider.signOut(header.slice("Bearer ".length));
+      await deps.provider.signOut(callerOf(request).accessToken);
     } catch (error) {
       if (!(error instanceof ProviderRejected)) throw error;
       // An already-invalid token is a signed-out session. Answering 401 would make the client's

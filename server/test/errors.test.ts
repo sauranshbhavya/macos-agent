@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildApp, DEFAULT_BODY_LIMIT_BYTES } from "../src/app.js";
 import type { Config } from "../src/config.js";
+import { TEST_JWT_CONFIG } from "./support/tokens.js";
 
 const config: Config = {
   environment: "local",
@@ -10,7 +11,7 @@ const config: Config = {
   databaseUrl: undefined,
   logLevel: "fatal",
   trustProxy: false,
-  rateLimitSalt: "test-salt", allowUnauthenticatedAccountDelete: false,
+  rateLimitSalt: "test-salt", ...TEST_JWT_CONFIG,
   credentials: [],
 };
 
@@ -98,11 +99,17 @@ describe("error responses use the contract's envelope, not the framework's", () 
   });
 
   it("an unexpected throw becomes server.error and never leaks the thrown message", async () => {
+    // **Mounted at `/v1/meta` rather than at `/v1/boom`, and the reason is the point of SONNY-203's
+    // gate.** This test used to register `/v1/boom`, which is now a protected route by
+    // deny-by-default — the request never reached the handler and the assertion saw a 401. That is
+    // the gate working: a route added without a thought about authentication is refused rather than
+    // served. `/v1/meta` is on the contract's public list, so the throw here is reached and this
+    // test goes back to being about the error envelope.
     const app = buildApp(config);
-    app.get("/v1/boom", async () => {
+    app.get("/v1/meta", async () => {
       throw new Error("connection string postgres://postgres:postgres@localhost:5432/db failed");
     });
-    const response = await app.inject({ method: "GET", url: "/v1/boom" });
+    const response = await app.inject({ method: "GET", url: "/v1/meta" });
     expect(response.statusCode).toBe(500);
     expectContractEnvelope(response.json(), "server.error");
     expect(response.json().error.retryable).toBe(true);

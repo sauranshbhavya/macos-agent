@@ -214,13 +214,20 @@ have. An omitted privacy field must be a loud error, not a quiet guess.
   opaque because opacity enforced the rule mechanically; under the founder's 2026-08-21 decision to
   use Supabase Auth it is a JWT, so **the rule is now a contract obligation the client must keep
   rather than one its encoding keeps for it**, and SONNY-128's review is where that is checked.
-  **Verification of a presented access token — signature and expiry — is SONNY-203's and does not
-  exist yet** (noted 2026-08-21, PR #87 F2; owner corrected from SONNY-128 the same day, PR #87
-  second round F5 — SONNY-128 is the client half and its never-touch list forbids `server/`, so it
-  could never have supplied this). SONNY-127 issues tokens and supplies the skew tolerance that
-  verification will apply; no route on that branch verifies one. SONNY-203 verifies the Supabase
-  token as **HS256 with the algorithm pinned**, checking `iss`, `aud` and `exp`, and trusting `sub`
-  as the user id.
+  **Verification of a presented access token — signature and expiry — exists as of SONNY-203**
+  (built 2026-08-22; the gap was noted 2026-08-21 as PR #87 F2, and its owner corrected from
+  SONNY-128 the same day, PR #87 second round F5 — SONNY-128 is the client half and its never-touch
+  list forbids `server/`, so it could never have supplied this). SONNY-127 issued tokens and supplied
+  the skew tolerance that verification applies; no route on that branch verified one. SONNY-203
+  verifies the Supabase token as **HS256 with the algorithm pinned**, checking `iss`, `aud` and
+  `exp`, and trusting `sub` as the user id — then attributes that `sub` to a live Sonny account, so a
+  cryptographically perfect token naming a closed one is refused. **The gate is deny-by-default**:
+  §4.1's `Auth` column is a list of the routes that are *public*, and everything else is challenged,
+  so a route added without a thought about authentication refuses everyone rather than serving
+  quietly. **What verification cannot do is un-issue a token**: an access token is self-contained, so
+  signing out revokes the refresh family while the access token keeps verifying until its own `exp`
+  (one hour on Supabase's default). A closed account is refused immediately on every request; the
+  remaining window is SONNY-237's.
 - **Refresh token** — long-lived, opaque, rotated on every use, stored in the Keychain through the
   existing `KeychainSecretStore` (the concrete struct at `KeychainSecretStore.swift:21`, behind the
   `KeychainSecretStoring` protocol at `:4-7`) as a new account on the existing store, following the
