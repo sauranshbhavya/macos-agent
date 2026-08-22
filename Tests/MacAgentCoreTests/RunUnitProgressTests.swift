@@ -149,12 +149,18 @@ struct RunUnitProgressTests {
 
     // MARK: - What a resumed run is handed back
 
-    /// **The seed, on the shape a resume actually produces: one step.** "Write a note, then open it",
-    /// interrupted after the note, leaves the one-step plan `[open_generated_artifact]` with no path
-    /// on it — a one-step plan is not a chain, so `executeChain` is never reached and only the seed
-    /// applied in `execute` itself can fill it in.
+    /// **The carry applied to a remainder, on the shape a resume actually produces.** "Write a note,
+    /// then open it", interrupted after the note, leaves the one-step plan
+    /// `[open_generated_artifact]` with no path on it — and the whole run, `prepare` included, has to
+    /// see that path.
+    ///
+    /// **`prepare`, and that ordering is the point.** The first version of this threaded the path as
+    /// an execution parameter, and it failed here: `prepare` previews every step, and previewing a
+    /// bare `open_generated_artifact` throws "needs outputPath or a previous chained artifact" long
+    /// before anything reaches `execute`. Measured, by this test. So the path is written into the
+    /// plan before dispatch, which is what `ChainedArtifactCarry` exists for.
     @Test
-    func aResumedSingleStepPlanOpensTheFileTheEarlierRunProduced() async throws {
+    func aRemainderCarryingTheEarlierRunsFilePreparesAndOpensIt() async throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let draft = root.appendingPathComponent("notes.md")
@@ -162,44 +168,75 @@ struct RunUnitProgressTests {
         let opener = RecordingFileOpener()
         let executor = makeExecutor(root: root, fileOpener: opener)
 
-        _ = try await executor.execute(
-            plan: AgentPlan(
-                summary: "Write a note, then open it.",
-                requiresConfirmation: false,
-                steps: [AgentStep(id: "open", operation: .openGeneratedArtifact, description: "Open it.")]
-            ),
-            resumedArtifactPath: draft.path
-        ) { _, _ in }
+        let remainder = AgentPlan(
+            summary: "Write a note, then open it.",
+            requiresConfirmation: false,
+            steps: [AgentStep(id: "open", operation: .openGeneratedArtifact, description: "Open it.")]
+        )
+        let carried = ChainedArtifactCarry.applying(draft.path, toLeadingStepOf: remainder)
+
+        // The gate that runs first accepts it — the assertion the parameter version failed.
+        _ = try executor.prepare(plan: carried)
+        _ = try await executor.execute(plan: carried) { _, _ in }
 
         #expect(opener.opened == [draft.path])
     }
 
-    /// And the control: the same plan with nothing carried in fails rather than opening something
-    /// else. Without this, the assertion above is equally true of an executor that happened to find
-    /// the file by another route.
+    /// And the control: the same remainder with nothing carried in is refused at `prepare`, before
+    /// anything runs. Without this, the assertion above is equally true of an executor that happened
+    /// to find the file by another route.
     @Test
-    func theSameResumedPlanWithNothingCarriedInHasNoFileToOpen() async throws {
+    func theSameRemainderWithNothingCarriedInIsRefusedBeforeItRuns() async throws {
         let root = try makeDirectory()
         defer { try? FileManager.default.removeItem(at: root) }
         let opener = RecordingFileOpener()
         let executor = makeExecutor(root: root, fileOpener: opener)
 
-        await #expect(throws: Error.self) {
-            _ = try await executor.execute(
-                plan: AgentPlan(
-                    summary: "Open it.",
-                    requiresConfirmation: false,
-                    steps: [AgentStep(id: "open", operation: .openGeneratedArtifact, description: "Open it.")]
-                )
-            ) { _, _ in }
+        let remainder = AgentPlan(
+            summary: "Open it.",
+            requiresConfirmation: false,
+            steps: [AgentStep(id: "open", operation: .openGeneratedArtifact, description: "Open it.")]
+        )
+        #expect(ChainedArtifactCarry.applying(nil, toLeadingStepOf: remainder) == remainder)
+        #expect(throws: Error.self) {
+            _ = try executor.prepare(plan: remainder)
         }
         #expect(opener.opened.isEmpty)
     }
 
-    /// **The other half of the seed: a remainder that is still a chain.** "Write a note, open it,
-    /// then open the page", interrupted after the note, leaves a two-unit plan whose *first* unit is
-    /// the bare consumer — so this goes through `executeChain`'s own seed rather than the one applied
-    /// in `execute`, and the two are separate lines that can each be removed on their own.
+    /// The carry writes onto the leading step and only when that step would take it — a step naming
+    /// its own file is already satisfied and must not have it overwritten.
+    @Test
+    func theCarryLeavesAStepThatNamesItsOwnFileAlone() {
+        let named = AgentPlan(
+            summary: "Open that one.",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(
+                    id: "open",
+                    operation: .openGeneratedArtifact,
+                    description: "Open it.",
+                    outputPath: "/already/named.md"
+                )
+            ]
+        )
+        #expect(ChainedArtifactCarry.applying("/somewhere/else.md", toLeadingStepOf: named) == named)
+        #expect(!ChainedArtifactCarry.consumesPreviousArtifact(named.steps[0]))
+
+        // And a step of an operation that never consumes one.
+        let unrelated = AgentPlan(
+            summary: "Open a page.",
+            requiresConfirmation: false,
+            steps: [openURLStep]
+        )
+        #expect(ChainedArtifactCarry.applying("/somewhere/else.md", toLeadingStepOf: unrelated) == unrelated)
+        #expect(!ChainedArtifactCarry.consumesPreviousArtifact(openURLStep))
+    }
+
+    /// **The other shape a remainder takes: still a chain.** "Write a note, open it, then open the
+    /// page", interrupted after the note, leaves a two-unit plan whose *first* unit is the bare
+    /// consumer — so the carry has to reach the leading step of a multi-step plan too, which is a
+    /// different branch of `ChainedArtifactCarry.applying` from the one-step case above.
     @Test
     func aResumedChainWhoseFirstUnitConsumesTheCarriedFileStillFindsIt() async throws {
         let root = try makeDirectory()
@@ -218,7 +255,9 @@ struct RunUnitProgressTests {
                 openURLStep
             ]
         )
-        _ = try await executor.execute(plan: remainder, resumedArtifactPath: draft.path) { _, _ in }
+        let carried = ChainedArtifactCarry.applying(draft.path, toLeadingStepOf: remainder)
+        _ = try executor.prepare(plan: carried)
+        _ = try await executor.execute(plan: carried) { _, _ in }
 
         #expect(fileOpener.opened == [draft.path])
         #expect(browserOpener.opened == ["https://example.com/page"])
