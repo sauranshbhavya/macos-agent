@@ -326,13 +326,36 @@ public enum UntrustedContentBoundary {
 
     /// The same, for the scalars **following** a completed match — everything above except U+0020.
     ///
-    /// **The two positions are not the same question, and conflating them was the whole cost of closing
-    /// U+0020** (PR #100 review round 2, F1). Inside a delimiter an ordinary space cannot be
-    /// legitimate: nothing puts one in the middle of a thirty-character identifier, so a space there is
-    /// a forgery every time. Immediately *after* one it is the most ordinary character there is —
-    /// `escape("UNTRUSTED_OBSERVED_CONTENT_BEGIN tail")` must keep its space, and that text reaches the
-    /// user through `WebResearchMarkdownCapabilityAdapter`'s `escape(note.summary)`, so swallowing it
-    /// would corrupt a rendered note over a decoration the attacker never made.
+    /// **The two positions are not the same question, and conflating them was the whole cost of
+    /// closing U+0020** (PR #100 review round 2, F1). Inside a delimiter an ordinary space cannot
+    /// be legitimate: nothing puts one in the middle of a thirty-character identifier, so a space
+    /// there is a forgery every time. Immediately *after* one it is the most ordinary character
+    /// there is — `escape("UNTRUSTED_OBSERVED_CONTENT_BEGIN tail")` must keep its space.
+    ///
+    /// **No consumer of this function reaches a surface a person reads, so that cost is
+    /// prospective rather than live — and an earlier version of this note named a path that does
+    /// not exist** (PR #100 records round, finding 1). It said a swallowed space "reaches the
+    /// user through `WebResearchMarkdownCapabilityAdapter`'s `escape(note.summary)`". That
+    /// adapter never calls this type at all: `git grep -n "UntrustedContentBoundary" --
+    /// Sources/MacAgentCore/WebResearchMarkdownCapabilityAdapter.swift` exits 1 with no output at
+    /// `c92600f`, and its own `escape` is a different function on a different type that folds
+    /// newlines in the *model's* note.
+    ///
+    /// Traced properly: every caller of `neutralizingDelimiters` — `escape`, `escapeURLValue`,
+    /// `escapeAttribute`, `trustedInstruction`, `observedContent`, and
+    /// `PriorTaskContext.escapeForPlanner` — produces prompt text, and every one of those strings
+    /// is handed to a model API and to nothing else (`OpenAIPlanner.requestBody`,
+    /// `CerebrasPlanner.requestBody`, `VisionModelClient.decide`,
+    /// `WebResearchSynthesisPrompt.requestBody`). Nothing persists a prompt and nothing renders
+    /// one; the single place a request body travels further is `AIUsageRecord.responses`'
+    /// `estimatedInputText`, which `AIUsageEstimator.estimateTextTokens` turns into a count
+    /// before the record stores anything.
+    ///
+    /// **So the carve-out is precautionary, and a reader deciding whether it can be deleted
+    /// should know that.** It is kept because silently deleting a space out of escaped text is
+    /// the kind of corruption a future consumer inherits without noticing — not because a user
+    /// can see one today. If a rendering path is ever added, this paragraph is the one to re-
+    /// check rather than rewrite.
     ///
     /// Everything else is still consumed here, which is what keeps the escaped form identical however
     /// the delimiter was decorated: the mark or zero-width scalar an attacker hung on the final letter
