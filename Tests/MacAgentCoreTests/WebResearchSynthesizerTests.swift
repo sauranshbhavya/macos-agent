@@ -147,9 +147,13 @@ struct WebResearchSynthesizerTests {
 
         let observed = WebResearchPromptBuilder.observedContentText(page, id: "source-1")
 
-        let lines = observed.components(separatedBy: .newlines)
-        #expect(lines.filter { $0.hasPrefix(WebResearchPromptBuilder.observedEndDelimiter) }.count == 1)
-        #expect(lines.filter { $0.hasPrefix(WebResearchPromptBuilder.observedBeginDelimiter) }.count == 1)
+        // Split and compared over Unicode scalars, never `components(separatedBy:)` + `hasPrefix`
+        // (PR #100 review round 2, F7). Those are the grapheme-blind idiom this whole ticket exists to
+        // retire: a delimiter carrying a combining mark or an invisible space is invisible to them, so
+        // the next red-team entry added here would have been invisible to its own assertion.
+        let lines = scalarLines(of: observed)
+        #expect(lines.filter { hasScalarPrefix($0, WebResearchPromptBuilder.observedEndDelimiter) }.count == 1)
+        #expect(lines.filter { hasScalarPrefix($0, WebResearchPromptBuilder.observedBeginDelimiter) }.count == 1)
         // The delimiter must not survive verbatim anywhere in the URL-bearing lines...
         let urlLines = lines.filter { $0.hasPrefix("- ") || $0.contains("source_url=") }
         #expect(urlLines.allSatisfy { !$0.contains(WebResearchPromptBuilder.observedEndDelimiter) })
@@ -233,9 +237,9 @@ struct WebResearchSynthesizerTests {
         #expect(observed.contains("[escaped delimiter: \(WebResearchPromptBuilder.trustedInstructionBeginDelimiter)]"))
         #expect(observed.contains("[escaped delimiter: \(WebResearchPromptBuilder.trustedInstructionEndDelimiter)]"))
 
-        let observedLines = observed.components(separatedBy: .newlines)
-        #expect(observedLines.filter { $0.hasPrefix(WebResearchPromptBuilder.observedBeginDelimiter) }.count == 1)
-        #expect(observedLines.filter { $0.hasPrefix(WebResearchPromptBuilder.observedEndDelimiter) }.count == 1)
+        let observedLines = scalarLines(of: observed)
+        #expect(observedLines.filter { hasScalarPrefix($0, WebResearchPromptBuilder.observedBeginDelimiter) }.count == 1)
+        #expect(observedLines.filter { hasScalarPrefix($0, WebResearchPromptBuilder.observedEndDelimiter) }.count == 1)
 
         let requestBody = prompt.requestBody(model: "test-model")
         let input = try #require(requestBody["input"] as? [[String: Any]])
