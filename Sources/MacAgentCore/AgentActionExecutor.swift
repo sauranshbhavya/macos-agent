@@ -638,7 +638,7 @@ public final class AgentActionExecutor {
         claimedEarlierInThisRun: RunClaims = .none,
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
-        let resolvedPlan = try resolveDefaultOutputs(in: plan)
+        let resolvedPlan = try resolveDefaultOutputs(in: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
         let workflow = try workflow(in: resolvedPlan)
 
         switch workflow {
@@ -877,11 +877,33 @@ public final class AgentActionExecutor {
     /// Two things stay whole-plan on purpose, both marked below: `edit_workspace`'s plan-shape rule,
     /// which is unenforceable from inside a unit, and a resolver's right to replace the plan with a
     /// clarification.
-    private func resolveDefaultOutputs(in plan: AgentPlan) throws -> AgentPlan {
+    private func resolveDefaultOutputs(
+        in plan: AgentPlan,
+        claimedEarlierInThisRun: RunClaims = .none
+    ) throws -> AgentPlan {
         _ = try workflow(in: plan)
 
         var resolvedSteps: [AgentStep] = []
-        var claimedOutputPaths: Set<String> = []
+        // **Seeded from the run's claims, not empty** (SONNY-190). A nested routine runs its own
+        // `execute`, which resolves its own plan — so before this parameter existed the nested
+        // resolve disambiguated against nothing, and a routine's generated default collided with a
+        // path the outer plan had already produced. Measured rather than reasoned about, on the
+        // real clock: an outer `create_local_draft` followed by a routine containing one produced
+        // **one** file, holding the routine's text, three times out of three. The outer document was
+        // destroyed and the run's own `previews.writes` named the same path twice, so nothing in the
+        // report showed it. That is not the narrow same-second race it was filed as — two file
+        // writes inside one run land in the same second essentially always, and `Timestamp.fileSafe`
+        // is whole-second.
+        //
+        // `RunClaims.destinations` is folded with the same `DestinationKey.folded` this set uses, so
+        // seeding is a union of like with like rather than a translation. The two are deliberately
+        // *not* merged into one type: this set is pre-resolution intent, accumulated from the
+        // `outputPath` each unit resolves to, and `RunClaims` is post-execution fact, accumulated
+        // from the `ActionPreview.writes` each unit produced. Merging them would make the ordering
+        // question — which is filled in when — a property of one type instead of a parameter, and
+        // the parameter is what makes it answerable: at the moment a nested plan resolves, every
+        // outer unit before it has executed and recorded its writes, and none after it has.
+        var claimedOutputPaths: Set<String> = claimedEarlierInThisRun.destinations
 
         for unit in try segmentPlans(in: plan) {
             // Which steps arrived with a destination of their own, captured *before* resolution:

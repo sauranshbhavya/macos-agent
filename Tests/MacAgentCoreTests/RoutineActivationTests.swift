@@ -314,8 +314,10 @@ struct RoutineActivationTests {
     /// survive AES-GCM open *and* decode, not just decode. Adjudicated onto SONNY-46 as fix-round
     /// material rather than left as a residual.
     ///
-    /// The fixture goes through `LocalStorageEncryption.encode` — the same call the eight stores'
-    /// shared pattern uses to write — with a file-private fixed key manager, exactly as
+    /// The fixture goes through `LocalStorageEncryption.encode` — the same call every local store's
+    /// shared pattern uses to write (eleven of them today; this comment said eight, and SONNY-183
+    /// found it stale at nine before finding nine stale too, so it now names the pattern rather than
+    /// a count that keeps moving) — with a file-private fixed key manager, exactly as
     /// `LocalStorageSecurityTests`, `ClipboardHistoryTests`, `AgentViewModelLocalStorageTests` and
     /// `ProductShellTests` each already declare one. No new infrastructure, and hermetic: the key
     /// is a literal, so the real login Keychain is never touched.

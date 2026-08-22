@@ -680,11 +680,17 @@ private struct TasksToolbarRow: View {
 /// Plan/Preview/step-log/Approval surface that used to render inline on Tasks/Routines/
 /// Workspaces, which was explicitly "not at all" wanted there; "logs + summary + activity should
 /// just be a flow as to how that thing worked under the hood," nothing more, and definitely not
-/// an approval UI. No approval/permission controls live here either — the real Approve/Deny
-/// controls now live in the floating widget (`FloatingWidgetView`, §3.3.3), which observes the
-/// same shared `AgentViewModel`, so a pending approval is never actually unreachable, just not
-/// visible on this page. If neither the widget nor Command Center is frontmost when an approval
-/// or error occurs, `SonnyNotificationService` posts a native macOS notification as the fallback.
+/// an approval UI. No approval/permission controls live in *this* view — but they do live on this
+/// page. `CommandCenterAttentionPanel` renders permission/clarification/failure on the four pages
+/// that host this indicator, wiring Deny/Allow to the same `cancelCurrentRun()`/`start()` entry
+/// points the floating widget (`FloatingWidgetView`, §3.3.3) uses; both observe the one shared
+/// `AgentViewModel`. **This comment said "just not visible on this page" until SONNY-183**, which
+/// is how it outlived branch 10 building that panel — and `docs/sonny-ui-backend-roadmap.md` cited
+/// this doc comment as its evidence that the gap was still open, so the stale sentence was load-
+/// bearing for a second stale record. If neither surface is frontmost when an approval or error
+/// occurs, `SonnyNotificationService` posts a native macOS notification as the fallback.
+/// `.claude/rules/macagent-ui-conventions.md`'s "Approval visibility" section is the one source of
+/// truth for which surface shows what.
 private struct CommandCenterRunningIndicator: View {
     @ObservedObject var viewModel: AgentViewModel
 

@@ -372,13 +372,18 @@ struct WorkspaceScopeTests {
 
         for (operation, expected) in selectionDriven {
             // The folder the resolver pinned onto the step, which is the shape every gate really
-            // sees — `inputPath` is populated *because* Finder was read, never instead of it.
+            // sees — `inputPath` is populated *because* Finder was read, never instead of it. Since
+            // SONNY-185 the fixture has to say that in the field rather than only in this comment:
+            // `inputPath` alone can equally mean the planner supplied the folder and Finder was
+            // never touched, which is the whole defect that ticket closed, so
+            // `resolvedFromFinderSelection` is what separates the two and the resolver writes it.
             let pinned = AgentStep(
                 id: "pinned",
                 operation: operation,
                 description: "Work on the selected folder.",
                 inputPath: "~/Documents/Client",
-                contextSource: .finderSelection
+                contextSource: .finderSelection,
+                resolvedFromFinderSelection: true
             )
             #expect(PlanScopedResources.resources(in: pinned) == expected, "\(operation.rawValue)")
             // Naming a folder is still knowable work: the escalation this adds is about Finder, and
@@ -448,54 +453,68 @@ struct WorkspaceScopeTests {
     /// on the step that declares it" half is a decision on the record rather than an accident of
     /// which step happened to be first.
     ///
-    /// **A classifier contract, not a claim about the resolver's output (SONNY-73).** Read the plan
-    /// below before reading anything into this test about what a real run does: its scan step
-    /// carries an explicit `inputPath` *and* `contextSource`, which is the residual shape SONNY-73
-    /// could not reach. `FinderSelectionResolver.pinningSelectedDirectoryInput` resolves it from that
-    /// path without contacting Finder, but it clears `contextSource` only on the steps it back-fills,
-    /// and here it back-fills nothing — both steps arrive with a path. So the **resolved form of this
-    /// exact plan still produces a Finder finding**, measured through `prepare` then
-    /// `approvalRequest` at `6fb86bb`: the scan keeps `contextSource`, the escalation reads "Finder
-    /// is not part of the … workspace.", and the verdict is `.outOfScope`. That residual is tracked
-    /// as SONNY-185 and needs a resolve-phase provenance pin, not a rule over these fields.
+    /// **A classifier contract, not a claim about which plans reach it.** The end-to-end cases live
+    /// elsewhere: `aSelectionDrivenZipEscalatesOnFinderEvenThoughTheResolvePhaseAlreadyPinnedTheFolder`
+    /// for a genuine selection, and `AgentRunnerTests`' two-phase quartet for the shapes SONNY-73 and
+    /// SONNY-185 fixed.
     ///
-    /// What this test pins is therefore the classifier's own contract — Finder named once, on the
-    /// declaring step — and nothing about which plans reach it. The end-to-end cases live elsewhere:
-    /// `aSelectionDrivenZipEscalatesOnFinderEvenThoughTheResolvePhaseAlreadyPinnedTheFolder` for a
-    /// genuine selection, and `AgentRunnerTests`' two-phase pair for the pooled shape SONNY-73 fixed.
+    /// **Both arms, because the difference between them is the whole of SONNY-185.** Until that
+    /// ticket this test had one arm and the wrong answer: its scan carried an explicit `inputPath`
+    /// *and* `contextSource`, `pinningSelectedDirectoryInput` satisfied the plan from that path
+    /// without contacting Finder, and the step was still reported as driving Finder — because the
+    /// clearing SONNY-73 added only reaches steps the pin back-fills, and here it back-fills
+    /// nothing. The two shapes are byte-identical in `contextSource` and `inputPath`, so the second
+    /// arm below differs from the first in exactly one field, `resolvedFromFinderSelection`, which
+    /// only the resolver writes and only on a pass that really read a selection.
     @Test
     func aMixedSelectionDrivenPlanNamesFinderOnceOnTheStepThatDeclaresIt() {
         let scope = makeScope(apps: ["Safari"], urls: [])
-        let plan = AgentPlan(
-            summary: "Zip the largest files in the selected folder.",
-            requiresConfirmation: true,
-            steps: [
-                AgentStep(
-                    id: "scan",
-                    operation: .scanSelectLargestFiles,
-                    description: "Scan the selected folder.",
-                    inputPath: "~/Documents/Client",
-                    contextSource: .finderSelection
-                ),
-                AgentStep(
-                    id: "zip",
-                    operation: .createZip,
-                    description: "Zip it.",
-                    inputPath: "~/Documents/Client",
-                    outputPath: "~/Documents/Client/largest.zip"
-                )
-            ]
-        )
+        func plan(finderWasRead: Bool) -> AgentPlan {
+            AgentPlan(
+                summary: "Zip the largest files in the selected folder.",
+                requiresConfirmation: true,
+                steps: [
+                    AgentStep(
+                        id: "scan",
+                        operation: .scanSelectLargestFiles,
+                        description: "Scan the selected folder.",
+                        inputPath: "~/Documents/Client",
+                        contextSource: .finderSelection,
+                        resolvedFromFinderSelection: finderWasRead ? true : nil
+                    ),
+                    AgentStep(
+                        id: "zip",
+                        operation: .createZip,
+                        description: "Zip it.",
+                        inputPath: "~/Documents/Client",
+                        outputPath: "~/Documents/Client/largest.zip"
+                    )
+                ]
+            )
+        }
 
-        let evaluation = WorkspaceScopeEvaluator.evaluate(plan: plan, scope: scope)
-
-        let finderFindings = evaluation.findings.filter { $0.resource == .app("Finder") }
+        // Arm 1 — the folder came from the selection. Finder is named once, on the declaring step,
+        // and the "once, on the step that declares it" half is a decision on the record rather than
+        // an accident of which step happened to be first.
+        let read = WorkspaceScopeEvaluator.evaluate(plan: plan(finderWasRead: true), scope: scope)
+        let finderFindings = read.findings.filter { $0.resource == .app("Finder") }
         #expect(finderFindings.map(\.stepID) == ["scan"])
         #expect(finderFindings.map(\.verdict) == [.outOfScope])
         #expect(finderFindings.map(\.operation) == [.scanSelectLargestFiles])
         // Nothing became opaque: the folder is still a named, knowable resource.
-        #expect(evaluation.findings.allSatisfy { $0.verdict != .opaque })
-        #expect(evaluation.planVerdict == .outOfScope)
+        #expect(read.findings.allSatisfy { $0.verdict != .opaque })
+        #expect(read.planVerdict == .outOfScope)
+
+        // Arm 2 — the same declaration, the same folder, and Finder never read. No Finder finding at
+        // all, and the plan stops being out-of-scope: the false Finder was the only thing making it
+        // so. `.unconstrained` rather than `.inScope` because this workspace declares apps and no
+        // file locations, so its folder findings are outside any boundary it draws — which is the
+        // roll-up's own rule and is unrelated to this change; the assertion that matters is that the
+        // verdict moved off `.outOfScope`.
+        let notRead = WorkspaceScopeEvaluator.evaluate(plan: plan(finderWasRead: false), scope: scope)
+        #expect(notRead.findings.filter { $0.resource == .app("Finder") }.isEmpty)
+        #expect(notRead.findings.allSatisfy { $0.verdict != .opaque })
+        #expect(notRead.planVerdict == .unconstrained)
     }
 
     @Test
@@ -701,14 +720,20 @@ struct WorkspaceScopeTests {
 
         let input = ScopedResource.fileLocation("~/Documents/Input")
         let output = ScopedResource.fileLocation("~/Documents/Output/out.md")
-        // The probe sets `contextSource: .finderSelection`, so the four operations that resolve
-        // their folder through `FinderSelectionResolver` name Finder here (SONNY-59). Every other
-        // row is unchanged by that field, which is the point of the probe carrying it for all 32.
+        // The probe sets `contextSource: .finderSelection` *and* an `inputPath`, and it leaves every
+        // resolver-written pin nil — the same unpinned arm the `.visionSession` row below takes.
+        // Since SONNY-185 that combination is precisely the shape that names no Finder: a step
+        // declaring itself selection-driven while carrying its own folder was satisfied from that
+        // folder, and Finder was never read. The pinned arm — the one that *does* name Finder — is
+        // `theSelectionDrivenFileOperationsNameFinderAndOnlyWhenTheStepIsSelectionDriven`, and the
+        // not-yet-resolved arm is `aSelectionDrivenStepNamesFinderBeforeAnythingHasPinnedItsFolder`.
+        // Every other row is unchanged by either field, which is the point of the probe carrying
+        // them for all 32.
         let expected: [AgentOperation: [ScopedResource]] = [
-            .scanSelectLargestFiles: [.app("Finder"), input, output],
-            .createZip: [.app("Finder"), input, output],
-            .scanDocx: [.app("Finder"), input, output],
-            .convertDocxToPDF: [.app("Finder"), input, output, .app("Microsoft Word")],
+            .scanSelectLargestFiles: [input, output],
+            .createZip: [input, output],
+            .scanDocx: [input, output],
+            .convertDocxToPDF: [input, output, .app("Microsoft Word")],
             .openHackerNews: [.webDomain("news.ycombinator.com")],
             .fetchHNHeadlines: [.webDomain("news.ycombinator.com")],
             .writeMarkdown: [.webDomain("news.ycombinator.com"), output],

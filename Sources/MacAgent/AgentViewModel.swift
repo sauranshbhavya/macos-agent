@@ -241,6 +241,14 @@ final class AgentViewModel: ObservableObject {
     /// The journal id of the session this task is running, or `nil`. Read once when the task's
     /// history row is written, then cleared with the rest of the per-task state.
     var activeVisionSessionID: String?
+    /// The grants file's contents for the iteration currently running, or `nil` outside one.
+    ///
+    /// Non-`nil` only between `visionIterationWillBegin()` and the run teardown that clears it, so
+    /// the three-to-four gate reads inside one iteration cost one decrypt instead of three or four
+    /// (SONNY-202). Deliberately not a session-long cache: `visionAppControlState`'s contract is
+    /// that a grant revoked mid-session ends the session at the *next* iteration, and a cache that
+    /// outlived an iteration would defer that to the next launch.
+    private var approvedAppsForThisVisionIteration: (apps: [ApprovedApp], failure: String?)?
     private let audioRecorder: AudioCommandRecorder
     private let permissionReadinessService: PermissionReadinessService
     private let routineStore: RoutineStore
@@ -895,16 +903,24 @@ final class AgentViewModel: ObservableObject {
     }
 
     /// Whether the floating widget currently has real content to show — a permission/clarification/
-    /// failure state (the only place either is actionable at all, regardless of which surface
-    /// submitted the task), or a working/result state for a task the widget itself submitted.
-    /// Single source of truth for both `FloatingWidgetView`'s own panel rendering and
-    /// `FloatingWidgetWindowController`'s decision to composite into Command Center — compositing
-    /// whenever Command Center merely has key focus, regardless of this, was the real cause of the
-    /// widget silently vanishing right after launch: Command Center takes key-window focus first,
-    /// the widget composited in immediately while still idle, and an idle+composited render showed
-    /// literally nothing (no compact capsule, no pill), with no way to click back into it. Mirrors
+    /// failure state (shown regardless of which surface submitted the task), or a working/result
+    /// state for a task the widget itself submitted. Single source of truth for both
+    /// `FloatingWidgetView`'s own panel rendering and its `isMicHintSlotFree` gate. Mirrors
     /// `FloatingWidgetView`'s private `state`/`showsPanel` precedence exactly — keep both in sync if
     /// either changes.
+    ///
+    /// **Two stale claims removed here, both on 2026-08-21.** This said the widget was "the only
+    /// place either is actionable at all": `CommandCenterAttentionPanel` has rendered those three
+    /// states on four Command Center pages since branch 10 and wires Deny/Allow to the same
+    /// `cancelCurrentRun()`/`start()` entry points (SONNY-183). And it named the second reader as
+    /// `FloatingWidgetWindowController`'s decision to composite into Command Center; that mode was
+    /// superseded on 2026-07-21 and the controller has one positioning mode now (SONNY-189).
+    ///
+    /// The warning underneath both is kept, because it is the part that is still live: this
+    /// predicate is read in more than one place, and the widget once vanished silently right after
+    /// launch because a second reader disagreed with it — Command Center took key-window focus
+    /// first, the widget composited in while still idle, and an idle+composited render drew
+    /// literally nothing (no compact capsule, no pill), with no way to click back into it.
     var hasVisibleWidgetPanel: Bool {
         // Row I's two Safe-mode questions, first for the same reason the three below them are
         // unconditional: each is a parked continuation waiting on a human, and a session whose
@@ -1122,6 +1138,10 @@ final class AgentViewModel: ObservableObject {
             // The one place a session ends, whatever ended it — so the combination goes back to the
             // user's own apps on every exit, including the ones nobody planned for.
             releaseEmergencyStopHotKey()
+            // And the iteration's cached grants go with it, on the same "whatever ended it"
+            // reasoning: the cache is scoped to an iteration, and outside a session there is no
+            // iteration for it to belong to (SONNY-202).
+            approvedAppsForThisVisionIteration = nil
             visionUserPauseMonitor?.clearPause()
             // Cleared *after* the history row is written by `recordTaskHistoryIfTerminal`, which
             // runs earlier in this same exit path — so the row carries the link and the next task
@@ -1825,7 +1845,11 @@ final class AgentViewModel: ObservableObject {
                 // The stored result, or nothing. `PriorTaskOutcome.plannerText` already falls back
                 // to the bare status for an empty summary, so a record from before row E reads as
                 // "completed" rather than as "completed - " with a dangling separator.
-                summary: record.result?.text ?? ""
+                summary: record.result?.text ?? "",
+                // And who wrote it, which used to be dropped here while sitting on the same
+                // expression (SONNY-197). A record with no stored result has no text either, so
+                // `.codeAuthored` is the only honest answer for the empty case rather than a guess.
+                provenance: record.result?.provenance ?? .codeAuthored
             ),
             completedAt: record.completedAt
         )
@@ -2647,6 +2671,11 @@ final class AgentViewModel: ObservableObject {
         completedRunNotice = nil
         // A pending request to open a task's detail would point at a row the wipe has just erased.
         taskDetailRequest = nil
+        // The grants file is one of the eleven stores the wipe erases, so an in-memory copy of its
+        // contents goes with it (SONNY-202). `deleteLocalData` guards on `!isRunning` and this cache
+        // is cleared at every session exit, so it is already `nil` here — cleared anyway, because
+        // "already nil" is an argument about two other code paths and this is a property of one.
+        approvedAppsForThisVisionIteration = nil
         // And the marker that describes an outcome goes with the outcome. `deleteLocalData` writes
         // its own message into `finalSummary` immediately after this returns, and a stale `true`
         // here would make *that* message un-collapsible for a notification nobody sent.
@@ -3186,6 +3215,29 @@ final class AgentViewModel: ObservableObject {
     // Internal rather than `private`: the vision extension lives in another file and derives the
     // session's own state from this same read, which is what keeps the two answers from drifting.
     func loadApprovedAppsForGate() -> (apps: [ApprovedApp], failure: String?) {
+        if let cached = approvedAppsForThisVisionIteration {
+            return cached
+        }
+        return readApprovedAppsForGate()
+    }
+
+    /// Takes the one read this iteration will answer every gate question from.
+    // Internal rather than `private`: `visionIterationWillBegin()` lives in the vision extension,
+    // in another file, and is the only caller — the same split `loadApprovedAppsForGate` already
+    // carries, and for the same reason.
+    func cacheApprovedAppsForThisVisionIteration() {
+        approvedAppsForThisVisionIteration = readApprovedAppsForGate()
+    }
+
+    /// The read itself, which is a file read plus an AES-GCM open plus a JSON decode.
+    ///
+    /// **The cache above is written only by `visionIterationWillBegin()`, never here**, and that
+    /// asymmetry is what bounds its lifetime to one iteration (SONNY-202). A loader that populated
+    /// its own cache would keep the answer alive after the loop stopped asking, and the next reader
+    /// outside a session — a plan-time `approvalContext(visionTarget:)` — would get it. Today that
+    /// caller passes `nil` and the resolver ignores the grants entirely, so nothing would go wrong;
+    /// that is a fact about one call site rather than a property, and it is not what this rests on.
+    private func readApprovedAppsForGate() -> (apps: [ApprovedApp], failure: String?) {
         do {
             let apps = try approvedAppStore.loadAll()
             clearLocalStorageLoadFailure(.approvedApps)
@@ -3423,7 +3475,7 @@ final class AgentViewModel: ObservableObject {
         priorTaskContextStore.record(
             command: command,
             plan: preparedRun.plan,
-            outcome: PriorTaskOutcome(status: status, summary: summary)
+            outcome: PriorTaskOutcome(status: status, summary: summary, provenance: resultProvenance)
         )
         priorTaskContext = priorTaskContextStore.currentContext()
         return recordTaskHistoryIfTerminal(
@@ -3450,7 +3502,7 @@ final class AgentViewModel: ObservableObject {
     ) -> String? {
         priorTaskContextStore.record(
             command: command,
-            outcome: PriorTaskOutcome(status: status, summary: summary)
+            outcome: PriorTaskOutcome(status: status, summary: summary, provenance: resultProvenance)
         )
         priorTaskContext = priorTaskContextStore.currentContext()
         return recordTaskHistoryIfTerminal(

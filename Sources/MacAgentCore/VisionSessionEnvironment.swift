@@ -159,6 +159,26 @@ public protocol VisionSessionInteracting: AnyObject {
     /// Progress for the HUD.
     func visionSessionDidProgress(_ progress: VisionSessionProgress)
 
+    /// **The top of an iteration, before any refusal check runs** — so a conformer can drop whatever
+    /// it cached for the previous one (SONNY-202).
+    ///
+    /// It exists because the two questions below are asked three or four times per iteration between
+    /// them, and the only conformer answers both by decrypting and decoding the grants file. One
+    /// read per iteration serves all of them; the file cannot change *within* an iteration in any
+    /// way this session should act on, because acting on a mid-iteration revocation is exactly what
+    /// `visionAppControlState`'s contract says happens at the *next* iteration.
+    ///
+    /// **The contract is one iteration and never one session, and that is the whole of it.**
+    /// Re-reading per iteration is what makes a grant revoked mid-session take effect at the next
+    /// iteration rather than at the next launch — a founder-decided behaviour with its own tests. A
+    /// conformer that cached across this call would break it, and must fail
+    /// `revokingTheGrantMidSessionEndsTheSessionAtTheNextIteration` rather than be adjusted around
+    /// it.
+    ///
+    /// Not defaulted to a no-op, for the same reason `approvalContext(visionTarget:)`'s parameter is
+    /// not defaulted: a conformer that caches must be made to say when it stops.
+    func visionIterationWillBegin()
+
     /// The session's journal id, handed over as soon as the session starts, so the task-history row
     /// this run produces can link to it.
     ///
