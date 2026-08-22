@@ -190,8 +190,11 @@ struct MemoryCommandCenterTests {
         #expect(fixture.viewModel.memorySettings.isDisabledByPolicy)
         #expect(!fixture.viewModel.memorySettings.isRecording)
 
-        // The user's own switch is refused rather than written — a stored preference nothing can
-        // honour is a control that springs back.
+        // The user's own switch does not move the effective value. **What this does not check is
+        // whether it was stored** — `isRecording` folds the policy in on the read side, so it
+        // answers false whether the setter refused or wrote and was overridden. That half is
+        // `anAdministratorsPolicyStopsTheSwitchesBeingStoredAtAll` below, and it exists because this
+        // test's own wording used to claim it (PR #98 review, F1).
         fixture.viewModel.setMemoryEnabled(true)
         #expect(!fixture.viewModel.memorySettings.isRecording)
         fixture.viewModel.setMemoryCategoryEnabled(.taskHistory, to: true)
@@ -201,6 +204,66 @@ struct MemoryCommandCenterTests {
         fixture.viewModel.start(prebuiltPlan: planCalculating("2 + 2"))
         try await fixture.waitUntilIdle()
         #expect(try fixture.taskHistoryStore.loadAll().isEmpty)
+    }
+
+    /// **The write guards, checked where a read cannot see them** (PR #98 review, F1).
+    ///
+    /// `setMemoryEnabled` and `setMemoryCategoryEnabled` both open with
+    /// `guard !memorySettings.isDisabledByPolicy else { return }`, and the doc comment above them
+    /// calls that guard load-bearing: a stored value nothing can honour is a switch that springs
+    /// back the moment the policy lifts. **Removing both guards left the whole suite at exit 0.**
+    /// The reason it hid is the shape worth remembering: the read side folds the policy in
+    /// independently (`isRecording == isEnabledByUser && !isDisabledByPolicy`), so a broken write
+    /// guard is masked by a correct read path, and every assertion phrased against the composed
+    /// value passes for a reason unrelated to what it is named for.
+    ///
+    /// The only place the difference is visible is *after the policy lifts*, so this reopens a view
+    /// model over the same `UserDefaults` with an unmanaged provider — the pattern
+    /// `theMemorySwitchesSurviveALocalDataWipe` already establishes — and asks what was stored.
+    @Test
+    func anAdministratorsPolicyStopsTheSwitchesBeingStoredAtAll() throws {
+        let managed = try makeMemoryFixture(
+            policyProvider: StubMemoryPolicyProvider(
+                policy: MemoryEnterprisePolicy(isManaged: true, disablesMemory: true)
+            )
+        )
+        defer { managed.cleanUp() }
+        #expect(managed.viewModel.memorySettings.isDisabledByPolicy)
+
+        // Both setters, in the direction that would leave a visible mark: off. Under the policy they
+        // must write nothing at all.
+        managed.viewModel.setMemoryEnabled(false)
+        managed.viewModel.setMemoryCategoryEnabled(.taskHistory, to: false)
+
+        let unmanaged = try makeMemoryFixture(reusing: managed)
+
+        #expect(
+            unmanaged.viewModel.memorySettings.isRecording,
+            "the master switch was stored under a policy that could not honour it, so it springs back off"
+        )
+        #expect(
+            unmanaged.viewModel.memorySettings.allowsRecording(in: .taskHistory),
+            "a per-type switch was stored under a policy that could not honour it"
+        )
+        #expect(unmanaged.viewModel.memorySettings.categoriesDisabledByUser.isEmpty)
+    }
+
+    /// **The control for the test above, and it is not optional.** "Nothing was stored" is equally
+    /// true of setters that never store anything, which is the failure mode this whole pair exists
+    /// to close. Same reopen, no policy: both setters must leave a mark that outlives the view model
+    /// that made it.
+    @Test
+    func aSwitchTheUserSetsIsStoredAndOutlivesTheViewModelThatSetIt() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+
+        fixture.viewModel.setMemoryEnabled(false)
+        fixture.viewModel.setMemoryCategoryEnabled(.snippets, to: false)
+
+        let reopened = try makeMemoryFixture(reusing: fixture)
+
+        #expect(!reopened.viewModel.memorySettings.isEnabledByUser)
+        #expect(reopened.viewModel.memorySettings.categoriesDisabledByUser == [.snippets])
     }
 
     /// The hook is inert as it ships: the default provider restricts nothing, so a fixture that does
@@ -215,6 +278,71 @@ struct MemoryCommandCenterTests {
         for category in MemoryCategory.allCases {
             #expect(fixture.viewModel.isMemoryCategoryEnabled(category))
         }
+    }
+
+    // MARK: - The two stores withheld by handing over nothing
+
+    /// **Recent artifacts and the vision journal, on the memory half of the conjunction** (PR #98
+    /// review, F2). `ProductShellTests.aSuppressedRunIsHandedNoRecentArtifactStore` and
+    /// `aSuppressedRunIsHandedNoVisionSessionJournal` flip only `taskRecordingPolicy`, so these two
+    /// of the seven types had their memory switch verified by reading the shared
+    /// `allowsRecording(to:)` rather than by exercising it.
+    ///
+    /// **Asserted at the seam rather than by dispatching, and that is the correct instrument here,
+    /// not a shortcut.** `recentArtifactStoreForThisRun`'s own doc records why: no command the
+    /// fixtures can run generates an artifact, so a suppressed run leaves that store untouched
+    /// either way and an end-to-end assertion passes for the wrong reason — a mutation battery
+    /// caught exactly that. The vision journal is worse: `makeVisionEnvironment` returns nil without
+    /// an API key and the vision tests inject their own substrate, so no test in this repository can
+    /// execute the live decision at all. Row I built a `nil` store as "run the session, record
+    /// nothing", which is what makes asserting the handover the same thing as asserting the
+    /// suppression.
+    @Test
+    func theRecentArtifactAndVisionJournalHandoversAreWithheldByTheMemorySwitchesToo() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+
+        // Control: nothing switched off, both stores handed over.
+        #expect(fixture.viewModel.recentArtifactStoreForThisRun != nil)
+        #expect(fixture.viewModel.visionSessionJournalStoreForThisRun != nil)
+
+        // Recent artifacts is its own row, so its switch withholds its store and only its store.
+        fixture.viewModel.setMemoryCategoryEnabled(.recentArtifacts, to: false)
+        #expect(fixture.viewModel.recentArtifactStoreForThisRun == nil)
+        #expect(
+            fixture.viewModel.visionSessionJournalStoreForThisRun != nil,
+            "the vision journal belongs to task history, not to recent artifacts"
+        )
+
+        // The journal is one of task history's four files, so that row's switch is what withholds it.
+        fixture.viewModel.setMemoryCategoryEnabled(.taskHistory, to: false)
+        #expect(fixture.viewModel.visionSessionJournalStoreForThisRun == nil)
+
+        // Both back on, so the master switch below is measured against a live handover rather than
+        // against two already-withheld stores.
+        fixture.viewModel.setMemoryCategoryEnabled(.recentArtifacts, to: true)
+        fixture.viewModel.setMemoryCategoryEnabled(.taskHistory, to: true)
+        #expect(fixture.viewModel.recentArtifactStoreForThisRun != nil)
+        #expect(fixture.viewModel.visionSessionJournalStoreForThisRun != nil)
+
+        fixture.viewModel.setMemoryEnabled(false)
+        #expect(fixture.viewModel.recentArtifactStoreForThisRun == nil)
+        #expect(fixture.viewModel.visionSessionJournalStoreForThisRun == nil)
+    }
+
+    /// The other half of the conjunction still works, unchanged — a suppressed *run* withholds both
+    /// stores with every memory switch on. Without this the test above could pass over a build where
+    /// `allowsRecording(to:)` had quietly dropped the `taskRecordingPolicy` term.
+    @Test
+    func aSuppressedRunStillWithholdsBothStoresWithEveryMemorySwitchOn() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        #expect(fixture.viewModel.memorySettings.isRecording)
+
+        fixture.viewModel.taskRecordingPolicy = .suppressTraces
+
+        #expect(fixture.viewModel.recentArtifactStoreForThisRun == nil)
+        #expect(fixture.viewModel.visionSessionJournalStoreForThisRun == nil)
     }
 
     // MARK: - Clipboard history, the one type whose switch already existed
