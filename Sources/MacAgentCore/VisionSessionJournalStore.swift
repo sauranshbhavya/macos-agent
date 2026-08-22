@@ -128,12 +128,14 @@ public struct VisionSessionRecord: Codable, Equatable, Identifiable, Sendable {
 /// counted the V2 ledger the founder deleted and the consent store that was never built. F8
 /// corrected the changelog and the PR body and missed this copy — the same two-copies failure as
 /// F6. Ninth is still true of *this* store's arrival order and is left as written; the population
-/// is now **eleven** — row E's `TaskPlanDetailStore` took it to ten and row J's `ApprovedAppStore`
-/// to eleven — and `LocalDataDeletionService.defaultStoreFileURLs()` returns that many, with
-/// `theWipeReachesExactlyTheElevenLocalStores` asserting it. **This paragraph has now named three
-/// successive test names and three successive counts, which is the point of not writing either
-/// down again:** it says "that many" rather than a numeral, and the test it names is the one the
-/// compiler will complain about if it moves.)
+/// is now **twelve** — row E's `TaskPlanDetailStore` took it to ten, row J's `ApprovedAppStore` to
+/// eleven and row 13's `OutputLocationStore` to twelve — and
+/// `LocalDataDeletionService.defaultStoreFileURLs()` returns that many, with
+/// `theWipeReachesEveryLocalStore` asserting it. **This paragraph had named three successive test
+/// names and three successive counts, which is the point of not writing either down again:** it says
+/// "that many" rather than a numeral, and the test it names is the one the compiler will complain
+/// about if it moves. SONNY-209 stopped the first half recurring — that test's name no longer
+/// carries a count, so the thirteenth store moves the assertion and leaves this line alone.)
 ///
 /// **A sibling store rather than an extension of an existing one, and the reasoning is recorded here
 /// because SONNY-96 asks for one decision with reasons.** The ticket offered "extend V2's store or

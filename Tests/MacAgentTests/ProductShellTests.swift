@@ -639,6 +639,7 @@ struct ProductShellTests {
             "recentArtifacts",            // ditto
             "clipboardHistoryItems",      // ditto
             "approvedApps",               // ditto
+            "outputLocations",            // ditto (SONNY-209)
             "clipboardHistoryEnabled",    // refreshClipboardHistoryNotice()
             "clipboardHistoryTimer",      // ditto, via start/stopClipboardHistoryMonitoring()
             "localStorageLoadFailures",   // record/clearLocalStorageLoadFailure, inside all four
@@ -656,7 +657,8 @@ struct ProductShellTests {
             "shortcutCatalog", "browserOpener", "appOpener", "fileOpener", "mediaOpener",
             "runningAppSwitcher", "shortcutInvoker", "finderContextReader", "documentConverter",
             "zipArchiver", "shortcutRunHistoryStore", "taskHistoryStore", "taskPlanDetailStore",
-            "clipboardHistorySettingsStore", "approvedAppStore", "clipboardHistoryMonitor",
+            "clipboardHistorySettingsStore", "approvedAppStore", "outputLocationStore",
+            "clipboardHistoryMonitor",
             "localDataDeletionService", "memorySettingsStore", "memoryPolicyProvider",
             "priorTaskContextStore", "taskUsageRecorder", "plannerProviderRegistry",
             "plannerSelection", "userDefaults", "whitelist", "routineScheduleTimer", "wakeObserver",
