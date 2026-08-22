@@ -310,8 +310,10 @@ struct MemoryCommandCenterTests {
         #expect(fixture.viewModel.taskHistoryRecords.isEmpty)
     }
 
+    /// Both halves of the guard, and the approval half is the one that matters: a run paused at its
+    /// approval has `isRunning == false` and is about to write into the very file this deletes.
     @Test
-    func deletingAMemoryTypeIsRefusedWhileARunIsInFlight() throws {
+    func deletingAMemoryTypeIsRefusedWhileATaskIsInFlight() throws {
         let fixture = try makeMemoryFixture()
         defer { fixture.cleanUp() }
         try fixture.snippetStore.save(StoredSnippet(trigger: ";sig", expansion: "signature"))
@@ -320,7 +322,20 @@ struct MemoryCommandCenterTests {
         fixture.viewModel.deleteMemory(in: .snippets)
 
         #expect(try fixture.snippetStore.loadAll().count == 1)
-        #expect(try #require(fixture.viewModel.errorMessage).contains("Stop the current run"))
+        #expect(try #require(fixture.viewModel.errorMessage).contains("Finish or stop the current task"))
+
+        fixture.viewModel.isRunning = false
+        fixture.viewModel.errorMessage = nil
+        fixture.viewModel.approvalRequest = RiskApprovalRequest(
+            assessment: CapabilityRiskAssessment(defaultTier: .tier3),
+            requirement: .explicitApproval
+        )
+        #expect(fixture.viewModel.isAwaitingApproval)
+
+        fixture.viewModel.deleteMemory(in: .snippets)
+
+        #expect(try fixture.snippetStore.loadAll().count == 1)
+        #expect(try #require(fixture.viewModel.errorMessage).contains("Finish or stop the current task"))
     }
 
     @Test
