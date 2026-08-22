@@ -250,15 +250,10 @@ struct MemoryCommandCenterTests {
         #expect(try fixture.clipboardSettingsStore.load().isEnabled, "the user's own choice was rewritten")
     }
 
-    /// **The master switch has to stop the clipboard *timer*, not merely answer a question.**
-    ///
-    /// Every other type is withheld by a guard consulted at write time; clipboard history is a 1s
-    /// poll that records on its own, so a switch that only changed what a row displayed would leave
-    /// it recording. Driven through the real monitor: `refreshClipboardHistoryNotice()` polls once
-    /// immediately when it starts monitoring, so what lands in the store is the honest answer to
-    /// whether monitoring began.
+    /// The control for the test below, and it is not optional: without it, "nothing was recorded"
+    /// is equally true of a fixture whose monitor could never have recorded anything.
     @Test
-    func theMasterSwitchStopsTheClipboardMonitorRatherThanJustTheRowItRenders() throws {
+    func theClipboardMonitorRecordsWhileMemoryIsOn() throws {
         let fixture = try makeMemoryFixture()
         defer { fixture.cleanUp() }
         try fixture.clipboardSettingsStore.save(
@@ -267,22 +262,42 @@ struct MemoryCommandCenterTests {
         fixture.pasteboard.text = "something copied"
         fixture.pasteboard.changeCount = 1
 
-        // Control: with memory on, monitoring starts and the first poll records.
         fixture.viewModel.refreshClipboardHistoryNotice()
+
         #expect(try fixture.clipboardHistoryStore.loadAll().map(\.text) == ["something copied"])
+    }
 
-        // Now with the master switch off, and a genuinely new pasteboard change to record.
-        try fixture.clipboardHistoryStore.delete(
-            id: try #require(try fixture.clipboardHistoryStore.loadAll().first).id
+    /// **The master switch has to stop the clipboard *timer*, not merely answer a question.**
+    ///
+    /// Every other type is withheld by a guard consulted at write time; clipboard history is a 1s
+    /// poll that records on its own, so a switch that only changed what a row displayed would leave
+    /// it recording.
+    ///
+    /// **Memory is switched off before monitoring has ever started, and that ordering is the whole
+    /// test.** `startClipboardHistoryMonitoring` returns early when a timer already exists, so a
+    /// version of this that switched off *after* the control had started one would pass with the
+    /// guard deleted — nothing polls, nothing records, and the assertion holds for the wrong reason.
+    /// Measured: written that way, mutant M5 (the guard removed) survived the whole suite. From a
+    /// stopped start, `setMemoryEnabled(false)`'s own `refreshClipboardHistoryNotice()` reaches a nil
+    /// timer, so without the guard it starts monitoring and its first poll records — and the mutant
+    /// dies.
+    @Test
+    func theMasterSwitchStopsTheClipboardMonitorRatherThanJustTheRowItRenders() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        try fixture.clipboardSettingsStore.save(
+            ClipboardHistorySettings(noticeDismissed: true, isEnabled: true)
         )
-        fixture.viewModel.setMemoryEnabled(false)
         fixture.pasteboard.text = "copied while memory was off"
-        fixture.pasteboard.changeCount = 2
+        fixture.pasteboard.changeCount = 1
 
-        fixture.viewModel.refreshClipboardHistoryNotice()
+        fixture.viewModel.setMemoryEnabled(false)
 
         #expect(try fixture.clipboardHistoryStore.loadAll().isEmpty)
-        // And the user's own clipboard setting was not rewritten to achieve it.
+        // Asked again, from the surface that starts monitoring at every other opportunity.
+        fixture.viewModel.refreshClipboardHistoryNotice()
+        #expect(try fixture.clipboardHistoryStore.loadAll().isEmpty)
+        // And the user's own clipboard setting was not rewritten to achieve any of it.
         #expect(try fixture.clipboardSettingsStore.load().isEnabled)
     }
 
