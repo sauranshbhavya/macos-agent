@@ -74,6 +74,70 @@ DATABASE_URL="postgres://postgres:postgres@localhost:55433/postgres" npm test
 docker rm -f sonny-gw-db
 ```
 
+## Authenticating a request
+
+**Supabase Auth is the login service; this gateway verifies its tokens and never implements a
+sign-in of its own** (founder decision, 2026-08-21). Verification is symmetric — HS256 with the
+project's JWT secret, **with the algorithm pinned** — plus `iss`, `aud` and `exp`, and the `sub`
+claim is trusted as the Supabase user id. `src/auth/token.ts` is the whole of it and
+`src/auth/gate.ts` is where it is applied.
+
+**Every route is protected unless it is on a list.** `PUBLIC_ROUTES` in `src/auth/gate.ts` is that
+list, and it is the contract's §4.1 `Auth: none` column. The direction matters more than the
+mechanism: a route added by a later ticket whose author never thinks about authentication answers
+`401` to everyone including its author, rather than serving quietly. Opt-in authentication fails the
+other way and does it silently.
+
+Three variables, all required wherever an authenticated route is mounted, all refused at startup
+rather than at request time:
+
+| Variable | What it is |
+|---|---|
+| `SUPABASE_JWT_SECRET` | The project's JWT Secret. **Gateway-only** — never in the app, never in this repo. Refused under 32 characters. |
+| `SUPABASE_JWT_ISSUER` | The project's auth URL, compared exactly against each token's `iss`. |
+| `SUPABASE_JWT_AUDIENCE` | Defaults to Supabase's own `authenticated`. |
+
+The secret is a **signing** key as much as a verifying one: anyone holding it can mint a token for
+any user. That is why it lives in exactly one process, and why `npm run check:secrets` carries the
+variable name on its name-anchored list — a project secret has no vendor prefix, so the name is the
+only thing that can catch it.
+
+### What a refused caller is told
+
+| Situation | Status | `code` | Client does |
+|---|---|---|---|
+| No token, a forged one, a wrong `iss`/`aud`/`sub`, a token not yet valid | 401 | `auth.unauthenticated` | opens sign-in |
+| Past `exp` beyond the 30-second tolerance | 401 | `auth.token_expired` | refreshes once, retries once |
+| Verified, but names no single live account | 401 | `auth.token_revoked` | clears the Keychain entry, opens sign-in |
+
+The **reason** a token was refused is logged and never returned. A caller learns that it was refused
+and whether refreshing would help; answering "wrong audience" to one attempt and "bad signature" to
+the next is a tuning signal for the third. `auth.token_revoked` is the same code
+`POST /v1/auth/refresh` already answers for a closed or ambiguous account, so the two surfaces cannot
+disagree about what that state means.
+
+### An access token outlives a sign-out, and this is the bound on it
+
+A Supabase access token is self-contained. That is what lets this gateway verify one without a
+network round trip to the provider on every request — and it is equally why it cannot un-issue one.
+Signing out revokes the **refresh** family at the provider, so no new access token can be minted; the
+one already in the user's hand keeps verifying until its own `exp`, **one hour on Supabase's
+default**.
+
+What *is* closed, on every single request: a token naming a **closed or deleted account** is refused,
+because attribution reads live state rather than remembering a decision. So `DELETE /v1/account`
+takes effect immediately for every token that names it, including tokens minted before the deletion.
+
+Closing the remaining window means a denylist of revoked sessions consulted per request — a table, a
+migration, and a dependency on Supabase's `session_id` claim being present. Filed as **SONNY-237**
+rather than built into SONNY-203, which owns verification and the gate.
+
+**Rotating `SUPABASE_JWT_SECRET` signs everyone out.** One secret is accepted, not an ordered list
+like the provider credentials below, so tokens signed with the previous one stop verifying the moment
+the new value is deployed. That is a deliberate difference: an accepted-but-retired signing secret
+extends the life of a leaked one, and Supabase rotates this rarely. Filed as **SONNY-238** if an
+overlap is ever wanted.
+
 ## The three environments
 
 `local`, `staging`, `production` — set by `SONNY_ENV`, which has no default and is a startup
@@ -133,11 +197,20 @@ no default for any secret, no fallback. `src/config.ts` validates the environmen
 with Zod and fails with `EX_CONFIG` (78) naming the offending variable — never its value, because
 an invalid-config line that echoed the environment would put credentials into the logs.
 
-**`TRUST_PROXY` defaults to `false` and should stay that way unless a proxy really terminates the
-connection in front of the container.** Fastify's `trustProxy` makes `request.ip` and
-`request.protocol` read from `X-Forwarded-For` and `X-Forwarded-Proto`, which any caller can set —
-so with nothing in front, the client chooses its own apparent address. Set it only where a load
-balancer is genuinely there.
+**`TRUSTED_PROXIES` is empty by default — trust nothing — and should stay that way unless a proxy
+really terminates the connection in front of the container.** Fastify's `trustProxy` makes
+`request.ip` and `request.protocol` read from `X-Forwarded-For` and `X-Forwarded-Proto`, which any
+caller can set, so with nothing in front the client chooses its own apparent address. Name the
+proxies where a load balancer is genuinely there: it is a comma-separated list of CIDRs, IPs or
+Fastify's named sets, and `src/config.ts` validates every entry rather than letting a typo throw
+from inside the Fastify constructor. (**This paragraph named `TRUST_PROXY` and called it a boolean**,
+which the variable has not been since PR #87 F4 replaced it — a boolean had no safe setting, and the
+`.env.example` beside it already described the list form. Corrected in passing by SONNY-203, whose
+own section above is the reason anyone was reading this one.)
+
+**`SUPABASE_JWT_SECRET` is the one credential this gateway holds that is also a *signing* key** —
+anyone with it can mint a token for any user, so it is gateway-only and refused at startup under 32
+characters. "Authenticating a request" above has the three variables and what each is checked for.
 
 `.env.example` is committed and carries placeholders only. `server/.env` is gitignored, along with
 every `.env.*` variant, so a file named after staging or production cannot slip in either.

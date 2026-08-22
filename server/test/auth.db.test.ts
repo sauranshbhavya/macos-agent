@@ -9,6 +9,7 @@ import {
 import { ProviderRejected, ProviderUnavailable, type AuthProvider, type VerifiedSession } from "../src/auth/provider.js";
 import { drainOwedRevocations, owedRevocationCount } from "../src/auth/revocation.js";
 import { normalizeEmail } from "../src/auth/identity.js";
+import { TEST_JWT_CONFIG, accessTokenFor } from "./support/tokens.js";
 import { up } from "../src/db/migrate.js";
 
 const url = process.env["DATABASE_URL"];
@@ -34,7 +35,7 @@ const withConnection = async <T,>(fn: (c: pg.Client) => Promise<T>): Promise<T> 
 const config: Config = {
   environment: "local", port: 0, host: "127.0.0.1", buildId: "t",
   databaseUrl: url, logLevel: "fatal", trustProxy: false,
-  rateLimitSalt: "test-salt", allowUnauthenticatedAccountDelete: false, credentials: [],
+  rateLimitSalt: "test-salt", ...TEST_JWT_CONFIG, credentials: [],
 };
 
 /** A provider that records what it was asked and answers however the test needs. */
@@ -90,7 +91,18 @@ class FakeProvider implements AuthProvider {
   failFor = new Set<string>();
   /** Provider-side users the provider says it has never heard of. That is a completed revocation. */
   rejectFor = new Set<string>();
-  async signOut() { if (!this.accept) throw new ProviderRejected("already gone"); }
+  /** Every access token `POST /v1/auth/signout` handed over, in order. */
+  signedOutTokens: string[] = [];
+  /**
+   * **Declared with the interface's parameter even though the body barely uses it** — the same
+   * lesson as `verifyEmailCode` above (PR #87 sixth round, F1): a zero-parameter method type-checks
+   * as narrower, so a test that needed to see the argument could not be written against it without
+   * a `TS2322` nobody would read.
+   */
+  async signOut(accessToken: string) {
+    this.signedOutTokens.push(accessToken);
+    if (!this.accept) throw new ProviderRejected("already gone");
+  }
   async signOutAllForUser(id: string) {
     if (this.failFor.has(id)) throw new ProviderUnavailable("admin API timed out");
     if (this.rejectFor.has(id)) throw new ProviderRejected("no such user");
@@ -121,9 +133,20 @@ describeDb("the auth endpoints", () => {
   });
 
   const build = () => buildApp(config, { provider, withConnection });
-  /** The gate `loadConfig` refuses in production. Only the deletion tests turn it on. */
-  const buildWithDelete = () =>
-    buildApp({ ...config, allowUnauthenticatedAccountDelete: true }, { provider, withConnection });
+
+  /**
+   * A real, correctly signed access token for the Supabase user `FakeProvider` signs everyone in as
+   * (SONNY-203).
+   *
+   * **`Bearer at` used to work here and cannot any more, which is the whole of this ticket.** That
+   * string reached `AuthProvider.userFromAccessToken`, a seam whose only implementation was the fake
+   * two hundred lines above — so every "authenticated" test in this file was authenticated by a test
+   * double agreeing with itself. The gate verifies HS256 against the configured secret now, so a
+   * token has to be one this gateway would really accept. Minted fresh per call, so its `exp` is
+   * always ahead of the clock the gate reads.
+   */
+  const SESSION_USER = "11111111-1111-1111-1111-111111111111";
+  const signedIn = (user: string = SESSION_USER) => ({ authorization: `Bearer ${accessTokenFor(user)}` });
 
   describe("POST /v1/auth/email/start", () => {
     it("answers identically for an address with an account and one without", async () => {
@@ -509,27 +532,35 @@ describeDb("the auth endpoints", () => {
   });
 
   describe("DELETE /v1/account", () => {
-    it("is NOT MOUNTED unless the gate is explicitly on", async () => {
-      // The finding, inverted (PR #87 F1). The previous version of this block asserted that an
-      // unauthenticated caller with a header could destroy an account, and asserted it PASSED —
-      // a green test blessing a destructive primitive that authenticates nothing, which would go
-      // live the moment SONNY-203 mounted middleware around it. A proof of concept destroyed
-      // another account with a made-up bearer token under SONNY_ENV=production.
+    it("is MOUNTED unconditionally now, and refuses a caller it cannot verify", async () => {
+      // **This test asserted 404 — "not mounted" — and the flag that produced it is gone**
+      // (SONNY-203). `ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE` kept the route off by default because
+      // nothing verified a token: what it attributed a caller from was a seam with no adapter
+      // behind it, which is a destructive route trusting a check that did not exist. Verification
+      // exists now, so the route is mounted everywhere and the refusal comes from the gate rather
+      // than from the routing table. (The finding underneath, PR #87 F1: an earlier version
+      // asserted that an unauthenticated caller with a header could destroy an account and asserted
+      // it PASSED. A proof of concept destroyed another account with a made-up bearer token under
+      // SONNY_ENV=production.)
       const app = build();
       const response = await app.inject({
         method: "DELETE", url: "/v1/account",
         headers: { authorization: "Bearer anything", "sonny-account-id": "11111111-1111-1111-1111-111111111111" },
       });
-      expect(response.statusCode).toBe(404);
-      expect(response.json().error.code).toBe("resource.not_found");
+      expect(response.statusCode).toBe(401);
+      expect(response.json().error.code).toBe("auth.unauthenticated");
+      // Mounted, not missing: the same request with no token is refused the same way rather than
+      // answering 404, and a 404 here would mean the route had quietly stopped existing.
+      const bare = await app.inject({ method: "DELETE", url: "/v1/account" });
+      expect(bare.statusCode).toBe(401);
       await app.close();
     });
 
-    it("REFUSES cross-account deletion — the route cannot attribute a caller", async () => {
-      // With the gate on, the route still must not become a way to delete someone else's account
-      // on the strength of a header. It cannot tell who is asking, so what it must not do is act
-      // as though it can.
-      const app = buildWithDelete();
+    it("REFUSES cross-account deletion — the caller is the token's, never a header's", async () => {
+      // The route must not become a way to delete someone else's account on the strength of a
+      // header. It never reads one: `Sonny-Account-Id` below is ignored entirely, and the made-up
+      // bearer token fails the signature check before the handler is reached.
+      const app = build();
       await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "victim@example.com" } });
       const victim = (await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "victim@example.com", code: "1" } })).json().user.id;
 
@@ -544,7 +575,7 @@ describeDb("the auth endpoints", () => {
     });
 
     it("refuses without a bearer token", async () => {
-      const app = buildWithDelete();
+      const app = build();
       const response = await app.inject({ method: "DELETE", url: "/v1/account" });
       expect(response.statusCode).toBe(401);
       expect(response.json().error.code).toBe("auth.unauthenticated");
@@ -554,7 +585,7 @@ describeDb("the auth endpoints", () => {
     it("SUCCEEDS for the account the token belongs to, and revokes every session on it", async () => {
       // **There was no successful-delete test at all** (PR #87 R11), which is why R1 shipped green:
       // every case asserted a refusal, so nothing ever reached the revocation path.
-      const app = buildWithDelete();
+      const app = build();
       await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "gone@example.com" } });
       const accountId = (await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "gone@example.com", code: "1" } })).json().user.id;
 
@@ -569,7 +600,7 @@ describeDb("the auth endpoints", () => {
       provider.revokedUsers = [];
 
       const response = await app.inject({
-        method: "DELETE", url: "/v1/account", headers: { authorization: "Bearer at" },
+        method: "DELETE", url: "/v1/account", headers: signedIn(),
       });
       expect(response.statusCode).toBe(204);
 
@@ -602,7 +633,7 @@ describeDb("the auth endpoints", () => {
       // two live accounts got one of them destroyed on the strength of a tiebreak — and the caller
       // would be told 204, which is the answer for the deletion they asked for, about the account
       // they did not name. On a destructive route the only safe answer to "which one?" is to refuse.
-      const app = buildWithDelete();
+      const app = build();
       await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "amb@example.com" } });
       const first = (await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "amb@example.com", code: "1" } })).json().user.id;
 
@@ -616,10 +647,16 @@ describeDb("the auth endpoints", () => {
       provider.revokedUsers = [];
 
       const response = await app.inject({
-        method: "DELETE", url: "/v1/account", headers: { authorization: "Bearer at" },
+        method: "DELETE", url: "/v1/account", headers: signedIn(),
       });
       expect(response.statusCode).toBe(401);
-      expect(response.json().error.code).toBe("auth.unauthenticated");
+      // **`auth.token_revoked`, where this route used to answer `auth.unauthenticated`**
+      // (SONNY-203). The refusal moved from the handler to the gate, which answers the same code
+      // `POST /v1/auth/refresh` already answers for this same state — a session naming two live
+      // accounts — so the two surfaces cannot disagree about what it means. §7.2 makes that code
+      // "clears the Keychain entry, opens sign-in", which is the right recovery: refreshing would
+      // be refused identically.
+      expect(response.json().error.code).toBe("auth.token_revoked");
 
       const { rows } = await client.query(
         "SELECT deleted_at FROM sonny.account WHERE id = ANY($1::uuid[]) ORDER BY id",
@@ -640,7 +677,7 @@ describeDb("the auth endpoints", () => {
       // end — account closed and committed, 500 to the caller, the third identity never revoked,
       // and the retry answering 401, because a closed account can no longer be attributed to its
       // caller. There was no retry path at all; the stranded session was permanent.
-      const app = buildWithDelete();
+      const app = build();
       await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "flaky@example.com" } });
       const accountId = (await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "flaky@example.com", code: "1" } })).json().user.id;
 
@@ -659,7 +696,7 @@ describeDb("the auth endpoints", () => {
       provider.failFor.add(FAILING);
 
       const response = await app.inject({
-        method: "DELETE", url: "/v1/account", headers: { authorization: "Bearer at" },
+        method: "DELETE", url: "/v1/account", headers: signedIn(),
       });
       // The account really is closed, so the caller is told the thing they asked for happened.
       expect(response.statusCode).toBe(204);
@@ -702,13 +739,13 @@ describeDb("the auth endpoints", () => {
       // as owed would mean re-calling forever for a user that does not exist; treating a TIMEOUT the
       // same way would record an event that did not happen. The two are the same `catch` and they
       // must not be the same outcome.
-      const app = buildWithDelete();
+      const app = build();
       await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "gonealready@example.com" } });
       await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "gonealready@example.com", code: "1" } });
       provider.rejectFor.add("11111111-1111-1111-1111-111111111111");
 
       expect((await app.inject({
-        method: "DELETE", url: "/v1/account", headers: { authorization: "Bearer at" },
+        method: "DELETE", url: "/v1/account", headers: signedIn(),
       })).statusCode).toBe(204);
       expect(await owedRevocationCount(client)).toBe(0);
       await app.close();
@@ -724,11 +761,11 @@ describeDb("the auth endpoints", () => {
       //
       // **A hard delete of the account row is exactly the statement `feature/row-12-retention`
       // exists to write**, so left alone that ticket inherits this on its first day.
-      const app = buildWithDelete();
+      const app = build();
       await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "cascade@example.com" } });
       const accountId = (await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "cascade@example.com", code: "1" } })).json().user.id;
       provider.failFor.add("11111111-1111-1111-1111-111111111111");
-      expect((await app.inject({ method: "DELETE", url: "/v1/account", headers: { authorization: "Bearer at" } })).statusCode).toBe(204);
+      expect((await app.inject({ method: "DELETE", url: "/v1/account", headers: signedIn() })).statusCode).toBe(204);
       expect(await owedRevocationCount(client)).toBe(1);
 
       const refusal = await client.query("DELETE FROM sonny.account WHERE id = $1", [accountId])
@@ -779,10 +816,10 @@ describeDb("the auth endpoints", () => {
     it("lets a CLOSED and drained account be deleted, so the guard is not a blanket refusal", async () => {
       // The other mirror case. A guard that refused every delete would pass the owed test above and
       // be useless, and these two together are what separate it from one.
-      const app = buildWithDelete();
+      const app = build();
       await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "clean@example.com" } });
       const accountId = (await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "clean@example.com", code: "1" } })).json().user.id;
-      expect((await app.inject({ method: "DELETE", url: "/v1/account", headers: { authorization: "Bearer at" } })).statusCode).toBe(204);
+      expect((await app.inject({ method: "DELETE", url: "/v1/account", headers: signedIn() })).statusCode).toBe(204);
       expect(await owedRevocationCount(client)).toBe(0);
 
       await client.query("DELETE FROM sonny.account WHERE id = $1", [accountId]);
@@ -796,11 +833,11 @@ describeDb("the auth endpoints", () => {
       // rather than the work it claimed. Reproduced with a 300ms provider: two drains started 100ms
       // apart called `signOutAllForUser` twice for the same user. Two started *simultaneously*
       // divided correctly — which is why an ad-hoc test would have found nothing.
-      const app = buildWithDelete();
+      const app = build();
       await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "twice@example.com" } });
       await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "twice@example.com", code: "1" } });
       provider.failFor.add("11111111-1111-1111-1111-111111111111");
-      await app.inject({ method: "DELETE", url: "/v1/account", headers: { authorization: "Bearer at" } });
+      await app.inject({ method: "DELETE", url: "/v1/account", headers: signedIn() });
       provider.failFor.clear();
       expect(await owedRevocationCount(client)).toBe(1);
 
@@ -865,14 +902,13 @@ describeDb("the auth endpoints", () => {
         }
       };
 
-      const app = buildApp({ ...config, allowUnauthenticatedAccountDelete: true },
-        { provider, withConnection: interposing });
+      const app = buildApp(config, { provider, withConnection: interposing });
       await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "late@example.com" } });
       const accountId = (await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "late@example.com", code: "1" } })).json().user.id;
       provider.revokedUsers = [];
 
       const response = await app.inject({
-        method: "DELETE", url: "/v1/account", headers: { authorization: "Bearer at" },
+        method: "DELETE", url: "/v1/account", headers: signedIn(),
       });
       expect(response.statusCode).toBe(204);
       expect(planted).toBe(true);        // the interleaving really happened
@@ -991,18 +1027,45 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("requires a bearer token to sign out, and is idempotent once signed out", async () => {
+    it("requires a VERIFIED bearer token to sign out, and is idempotent once signed out", async () => {
+      // **The account has to exist now, which it did not before** (SONNY-203). This test used to
+      // sign out without signing in: the route checked that the header started with `Bearer ` and
+      // handed whatever followed to the provider. The gate verifies the token and attributes it to
+      // a live account, so a sign-out is now a thing a signed-in user does.
       const app = build();
+      await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "out@example.com" } });
+      await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "out@example.com", code: "1" } });
+
       expect((await app.inject({ method: "POST", url: "/v1/auth/signout" })).statusCode).toBe(401);
+      // A token this gateway did not sign is refused before the provider is asked anything.
       expect((await app.inject({
         method: "POST", url: "/v1/auth/signout", headers: { authorization: "Bearer at" },
+      })).statusCode).toBe(401);
+
+      expect((await app.inject({
+        method: "POST", url: "/v1/auth/signout", headers: signedIn(),
       })).statusCode).toBe(204);
       provider.accept = false;
       // An already-invalid token is a signed-out session; answering 401 would make the client's
       // retry loop the user's problem for a state they already wanted.
       expect((await app.inject({
-        method: "POST", url: "/v1/auth/signout", headers: { authorization: "Bearer at" },
+        method: "POST", url: "/v1/auth/signout", headers: signedIn(),
       })).statusCode).toBe(204);
+      await app.close();
+    });
+
+    it("hands the provider the token the caller presented, not a rewritten one", async () => {
+      // The one legitimate use of the raw access token: giving it back to the provider that issued
+      // it. `callerOf(request).accessToken` is the presented string, and this pins that it arrives
+      // intact — a route that signed out some other session would be silent about it.
+      const app = build();
+      await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "raw@example.com" } });
+      await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "raw@example.com", code: "1" } });
+      const presented = accessTokenFor(SESSION_USER);
+      expect((await app.inject({
+        method: "POST", url: "/v1/auth/signout", headers: { authorization: `Bearer ${presented}` },
+      })).statusCode).toBe(204);
+      expect(provider.signedOutTokens).toEqual([presented]);
       await app.close();
     });
   });

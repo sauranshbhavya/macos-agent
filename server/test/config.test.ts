@@ -1,14 +1,22 @@
 import { describe, expect, it } from "vitest";
 import {
   ConfigError,
+  MIN_JWT_SECRET_LENGTH,
   acceptedKeys,
   activeKey,
   loadConfig,
   parseTrustedProxies,
   providerCredentials,
+  requireSupabaseJwtPolicy,
 } from "../src/config.js";
 
 const base = { SONNY_ENV: "local" } as NodeJS.ProcessEnv;
+
+// Bound to names rather than written inline at each call site, so that no line in this file spells a
+// known-secret variable followed by a long literal -- which is the shape `npm run check:secrets`
+// refuses, correctly, wherever it appears.
+const secret = "a-signing-key-long-enough-to-clear-the-floor";
+const issuer = "https://project-ref.supabase.co/auth/v1";
 
 describe("configuration", () => {
   it("refuses to start on an unknown environment rather than guessing one", () => {
@@ -100,46 +108,102 @@ describe("provider credentials — two live keys per provider", () => {
     expect(acceptedKeys(loadConfig({ ...base }), "vision")).toEqual([]);
   });
 
-  describe("ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE — the production gate", () => {
-    // **PR #87 fifth round, F4: this control had no test at all.** `grep -rn` across `test/` returned
-    // nothing, and replacing the refusal's condition with `false` left the suite green at 145/145.
-    // It is the control that keeps an unauthenticated destructive route off the one host where it
-    // would matter, and it is the fix for this branch's original CRITICAL.
-    //
-    // The gate does work — a reviewer drove eleven env-value variants and a real compiled-process
-    // launch at it. **That is exactly the shape the founder made this round fix for the race
-    // battery** (F7 of the third round): headline safety evidence living only as a number in a
-    // ticket comment with no command left to run. Same shape, different artifact.
+  describe("the Supabase JWT policy", () => {
+    // **What replaced `ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE`** (SONNY-203). That flag, its production
+    // refusal and the four tests that pinned them are gone with the reason they existed: nothing
+    // verified a token, so a destructive route had to be kept off by default. Verification exists
+    // now, and these are the variables it needs. The flag's tests are not ported — there is no flag
+    // to keep off, which is the outcome that ticket was for.
 
-    it("REFUSES to start when the flag is on in production", () => {
-      expect(() => loadConfig({ SONNY_ENV: "production", ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE: "true" }))
-        .toThrow(ConfigError);
-      // Refused rather than silently forced off: a deployment believing a route is mounted that is
-      // not is its own confusion. The message has to name the variable, or the operator is guessing.
-      expect(() => loadConfig({ SONNY_ENV: "production", ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE: "true" }))
-        .toThrow(/ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE/);
+    it("carries the three values through, defaulting the audience to Supabase's own", () => {
+      const config = loadConfig({ ...base, SUPABASE_JWT_SECRET: secret, SUPABASE_JWT_ISSUER: issuer });
+      expect(config.supabaseJwtSecret).toBe(secret);
+      expect(config.supabaseJwtIssuer).toBe(issuer);
+      expect(config.supabaseJwtAudience).toBe("authenticated");
+      expect(requireSupabaseJwtPolicy(config))
+        .toEqual({ secret, issuer, audience: "authenticated" });
     });
 
-    it("allows it outside production, which is what makes it a gate and not a ban", () => {
-      for (const environment of ["local", "staging"]) {
-        const config = loadConfig({ SONNY_ENV: environment, ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE: "true" });
-        expect(config.allowUnauthenticatedAccountDelete).toBe(true);
+    it("takes a non-default audience when the project uses one", () => {
+      const config = loadConfig({
+        ...base, SUPABASE_JWT_SECRET: secret, SUPABASE_JWT_ISSUER: issuer,
+        SUPABASE_JWT_AUDIENCE: "sonny-users",
+      });
+      expect(requireSupabaseJwtPolicy(config).audience).toBe("sonny-users");
+    });
+
+    it("LOADS without them, because a deployment mounting no authenticated route needs neither", () => {
+      // Same split as RATE_LIMIT_SALT: absent is fine at load, and refused at the point of use.
+      const config = loadConfig({ ...base });
+      expect(config.supabaseJwtSecret).toBeUndefined();
+      expect(() => requireSupabaseJwtPolicy(config)).toThrow(ConfigError);
+    });
+
+    it("names EVERY missing variable, not the first one", () => {
+      // An operator who fixes the named one and restarts to find a second failure has spent a deploy
+      // learning something one message could have said.
+      try {
+        requireSupabaseJwtPolicy(loadConfig({ ...base }));
+        expect.unreachable("should have thrown");
+      } catch (error) {
+        expect((error as Error).message).toContain("SUPABASE_JWT_SECRET");
+        expect((error as Error).message).toContain("SUPABASE_JWT_ISSUER");
       }
-      expect(loadConfig({ SONNY_ENV: "production" }).allowUnauthenticatedAccountDelete).toBe(false);
+      expect(() => requireSupabaseJwtPolicy(loadConfig({ ...base, SUPABASE_JWT_ISSUER: issuer })))
+        .toThrow(/SUPABASE_JWT_SECRET/);
     });
 
-    it("defaults to off when the variable is absent", () => {
-      // The safe direction has to be the default, because the dangerous one is a deployment away.
-      expect(loadConfig({ SONNY_ENV: "local" }).allowUnauthenticatedAccountDelete).toBe(false);
+    it("refuses a secret short enough to guess, and reports the length without the value", () => {
+      // Anyone holding this secret can MINT a token for any user, so a guessable one is a forgery
+      // key rather than a weak password. Supabase's own is far longer than the floor.
+      const short = "0123456789abcdef";
+      try {
+        requireSupabaseJwtPolicy(
+          loadConfig({ ...base, SUPABASE_JWT_SECRET: short, SUPABASE_JWT_ISSUER: issuer }),
+        );
+        expect.unreachable("should have thrown");
+      } catch (error) {
+        const message = (error as Error).message;
+        expect(message).toContain(String(MIN_JWT_SECRET_LENGTH));
+        expect(message).toContain("16 characters");
+        expect(message).not.toContain(short);
+      }
+      // One character under the floor is refused; the floor itself is not.
+      const floor = "x".repeat(MIN_JWT_SECRET_LENGTH);
+      expect(() => requireSupabaseJwtPolicy(
+        loadConfig({ ...base, SUPABASE_JWT_SECRET: floor.slice(1), SUPABASE_JWT_ISSUER: issuer }),
+      )).toThrow(ConfigError);
+      expect(requireSupabaseJwtPolicy(
+        loadConfig({ ...base, SUPABASE_JWT_SECRET: floor, SUPABASE_JWT_ISSUER: issuer }),
+      ).secret).toBe(floor);
     });
 
-    it("refuses every near-miss spelling of true rather than guessing at it", () => {
-      // A gate that accepted `TRUE` in production while refusing `true` would be worse than no gate:
-      // it would be a gate somebody had tested. The enum is what makes the refusal total.
-      for (const value of ["TRUE", "True", " true", "1", "yes", "on", ""]) {
-        expect(() => loadConfig({ SONNY_ENV: "production", ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE: value }))
+    it("refuses an issuer that is not a URL, and says so with the value", () => {
+      // The issuer is a public URL naming the project, not a secret — and a mismatch is otherwise
+      // invisible, since every token verifies against the secret and is then refused. That reads as
+      // "all my users are signed out" rather than as a typo in one variable.
+      for (const bad of ["project-ref", "project-ref.supabase.co", "/auth/v1", "ftp://x/auth"]) {
+        expect(() => requireSupabaseJwtPolicy(
+          loadConfig({ ...base, SUPABASE_JWT_SECRET: secret, SUPABASE_JWT_ISSUER: bad }),
+        )).toThrow(ConfigError);
+      }
+      expect(() => requireSupabaseJwtPolicy(
+        loadConfig({ ...base, SUPABASE_JWT_SECRET: secret, SUPABASE_JWT_ISSUER: "project-ref" }),
+      )).toThrow(/project-ref/);
+    });
+
+    it("accepts the local Supabase's http issuer, so development is not forced onto https", () => {
+      const local = "http://127.0.0.1:54321/auth/v1";
+      expect(requireSupabaseJwtPolicy(
+        loadConfig({ ...base, SUPABASE_JWT_SECRET: secret, SUPABASE_JWT_ISSUER: local }),
+      ).issuer).toBe(local);
+    });
+
+    it("refuses an empty or whitespace-only value rather than treating it as absent", () => {
+      for (const blank of ["", "   "]) {
+        expect(() => loadConfig({ ...base, SUPABASE_JWT_SECRET: blank, SUPABASE_JWT_ISSUER: issuer }))
           .toThrow(ConfigError);
-        expect(() => loadConfig({ SONNY_ENV: "local", ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE: value }))
+        expect(() => loadConfig({ ...base, SUPABASE_JWT_SECRET: secret, SUPABASE_JWT_AUDIENCE: blank }))
           .toThrow(ConfigError);
       }
     });
