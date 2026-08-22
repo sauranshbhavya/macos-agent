@@ -94,25 +94,58 @@ public enum UntrustedContentBoundary {
     /// tree; the tests for this live in `UntrustedContentBoundaryScalarMatchingTests` and assert over
     /// scalars and UTF-8 bytes throughout.
     ///
-    /// **Ignorable scalars are stepped over rather than ending the match, and that is the line this
-    /// draws.** `options: .literal` would have closed the reported case — a trailing mark — and left
-    /// `UNTRUSTED_OBSERVED_CONTENT_ÉND` and `UNTRUSTED_OBSERVED_CONTENT_EN<U+200B>D` wide open, which
-    /// is the same attack moved one letter. What is skipped is exactly the scalars that add no base
-    /// character: combining marks, which attach to the letter before them, and the invisible
-    /// formatting scalars (zero-width space, ZWJ/ZWNJ, soft hyphen, byte order mark, the bidi
-    /// controls, variation selectors, and U+034F COMBINING GRAPHEME JOINER, whose published purpose
-    /// is to defeat exactly this kind of segmentation). Every one of those leaves a rendered line
-    /// that still reads as the delimiter.
+    /// **Ignorable scalars are stepped over rather than ending the match.** `options: .literal` would
+    /// have closed the reported case — a trailing mark — and left `UNTRUSTED_OBSERVED_CONTENT_E` +
+    /// U+0301 + `ND` and `UNTRUSTED_OBSERVED_CONTENT_EN` + U+200B + `D` wide open, which is the same
+    /// attack moved one letter.
     ///
-    /// **What it deliberately does not close, stated so nobody reads more into it.** Base characters
-    /// must match exactly, so a *visibly different* string is not a delimiter here: a Cyrillic
-    /// `Е`, a fullwidth `Ｅ`, a lowercase `end`. That is a boundary rather than an oversight — the
-    /// homoglyph tail is unbounded and matching cannot win it, and unlike an invisible insertion each
-    /// of those changes what the line looks like. Normalising (NFC/NFD/NFKD) is not the answer either
-    /// and was considered: NFKD would fold the fullwidth forms and nothing else on that list, buying
-    /// an arbitrary slice of an infinite problem while making the escaped output depend on a Unicode
-    /// table version. The system prompts naming the observed segment as data are the backstop for
-    /// what matching cannot reach, and they are unchanged.
+    /// **The test is legitimate occurrence, not visibility — and that is a correction, not a
+    /// restatement** (PR #100 review, F1). The first version of this predicate justified itself by
+    /// what a reader sees, and that argument does not survive contact with U+200A HAIR SPACE: a
+    /// one-pixel gap is *less* visible than the U+0301 accent this function exists to close, and
+    /// U+200B (category Cf, stepped over) and U+200A (category Zs, not) are adjacent code points that
+    /// were landing on opposite sides of the predicate. Visibility was the wrong question. The right
+    /// one is **where the scalar can legitimately be**: a scalar is stepped over when it cannot occur
+    /// *inside* a token drawn from `[A-Z_]`.
+    ///
+    /// By that test the combining marks and the invisible formatting scalars are in, as before — they
+    /// attach to or hide between letters. So now are the Unicode **space separators and control
+    /// characters**: a hair space, a narrow no-break space, an ideographic space or a tab may all
+    /// separate *words* in real text, but none of them ever sits *inside* an ASCII identifier, so a
+    /// delimiter carrying one is a forgery every time. Leaving them out is what let
+    /// `UNTRUSTED_OBSERVED_CONTENT_E` + U+200A + `ND` reproduce the ticket's original failure shape
+    /// verbatim, and it also put the two halves of this one boundary in disagreement, since
+    /// `escapeAttribute` has folded exactly that set out of attributes since SONNY-219.
+    ///
+    /// **Two exclusions, neither of them about how a character looks.** U+0020 SPACE stays out because
+    /// this repository has already decided what a space-separated near-miss means: `escapeAttribute`
+    /// folds separators to `_` *before* escaping precisely because `UNTRUSTED_OBSERVED CONTENT_END`
+    /// carries no delimiter until the fold builds one. Stepping over U+0020 here would contradict that
+    /// recorded decision and would bracket ordinary prose containing the four words. And the line
+    /// breakers — CR, LF, VT, FF, NEL, U+2028, U+2029 — stay out because a delimiter split by one of
+    /// them is genuinely on two lines, and two lines cannot forge the single boundary line this
+    /// wrapper is read by.
+    ///
+    /// **Canonically equivalent spellings match, which is not a homoglyph concession** (PR #100 review,
+    /// F2). `UNTRUSTED_OBSERVED_CONTENT_` + U+00C9 + `ND` and the same string written `E` + U+0301 are
+    /// *the same text* by Unicode's own definition — Swift's `==` reports them equal — so closing one
+    /// spelling and leaving the other open was incoherent rather than a bounded decision, and it was
+    /// the precomposed spelling, the one a reader is most likely to type, that stayed open. A content
+    /// scalar therefore matches an expected one when it *canonically decomposes* to it followed only by
+    /// marks. That is canonical equivalence, a fixed Unicode relation, and it reaches nothing else.
+    ///
+    /// **What it still deliberately does not close.** A *different character* that merely looks similar:
+    /// a Cyrillic `Е` (U+0415), a fullwidth `Ｅ` (U+FF25), a lowercase `end`. None is canonically
+    /// equivalent to `E`; each is its own character. That tail is unbounded and matching cannot win it.
+    /// Compatibility normalisation (NFKD) would fold the fullwidth forms and nothing else on that list,
+    /// buying an arbitrary slice of an infinite problem while making the escaped output depend on a
+    /// Unicode table version. The system prompts naming the observed segment as data are the backstop
+    /// for what matching cannot reach, and they are unchanged.
+    ///
+    /// **The output is never normalised.** Only a matched run is replaced; every other scalar is
+    /// emitted exactly as it arrived, so `escape` does not silently rewrite `café` into either
+    /// spelling. `ordinaryTextIsUntouched` compares scalar arrays rather than `==` for that reason —
+    /// `==` is itself canonical-equivalence-based and could not tell the difference.
     ///
     /// **Not a loop of four passes any more, which also removes a latent hazard.** The old shape
     /// re-scanned its own output on each pass — safe only because no delimiter appears inside another
@@ -136,6 +169,10 @@ public enum UntrustedContentBoundary {
         }
 
         let scalars = Array(value.unicodeScalars)
+        // One canonical base per scalar, computed once for the whole input rather than per delimiter
+        // per position — four targets are tried at most positions, and decomposing inside that loop
+        // would pay for the same scalar four times.
+        let bases = scalars.map(canonicalBase(of:))
         var output = String.UnicodeScalarView()
         var index = 0
         while index < scalars.count {
@@ -144,7 +181,7 @@ public enum UntrustedContentBoundary {
             // would vanish from text that had nothing to do with the forgery.
             if !isIgnorableForDelimiterMatching(scalars[index]),
                let match = targets.lazy.compactMap({ target -> (text: String, end: Int)? in
-                   guard let end = matchEnd(of: target.scalars, at: index, in: scalars) else {
+                   guard let end = matchEnd(of: target.scalars, at: index, in: scalars, bases: bases) else {
                        return nil
                    }
                    return (target.text, end)
@@ -159,6 +196,31 @@ public enum UntrustedContentBoundary {
         return String(output)
     }
 
+    /// The scalar a delimiter's letter has to be compared against: `scalar` itself, unless it
+    /// canonically decomposes to a single base followed only by marks, in which case that base.
+    ///
+    /// **Guarded on `uppercaseLetter`, and that guard is a measured fact rather than a hopeful range.**
+    /// Decomposing every non-ASCII scalar costs 283ms on a 500KB CJK page (`readableText` is
+    /// uncapped — it is a whole attacker-served article body), which is a cost worth removing on an
+    /// input an attacker chooses the size of. Across the entire scalar range, **exactly 244 scalars
+    /// canonically decompose to an ASCII `[A-Z_]` base followed only by marks, and all 244 are
+    /// category `uppercaseLetter`**, spanning U+00C0 to U+212B — U+212A KELVIN SIGN and U+212B
+    /// ANGSTROM SIGN included, which is why the range runs past the Latin blocks. Measured by
+    /// `scripts/`-free scratch census over `0...0x10FFFF`; `theCanonicalBaseGuardCoversEveryScalarThatDecomposesToAnASCIIBase`
+    /// re-derives it over U+0080–U+212B on every run. Unicode's normalisation stability policy is why
+    /// that census does not go stale: canonical decompositions of existing characters cannot change.
+    private static func canonicalBase(of scalar: Unicode.Scalar) -> Unicode.Scalar {
+        guard scalar.value >= 0x80, scalar.properties.generalCategory == .uppercaseLetter else {
+            return scalar
+        }
+        let decomposed = Array(String(scalar).decomposedStringWithCanonicalMapping.unicodeScalars)
+        guard let base = decomposed.first, base.value < 0x80,
+              decomposed.dropFirst().allSatisfy(isMark) else {
+            return scalar
+        }
+        return base
+    }
+
     /// Where a match of `needle` starting at `start` ends, or `nil` if there is none.
     ///
     /// Ignorable scalars are skipped before each expected scalar and again after the last one. The
@@ -168,14 +230,15 @@ public enum UntrustedContentBoundary {
     private static func matchEnd(
         of needle: [Unicode.Scalar],
         at start: Int,
-        in scalars: [Unicode.Scalar]
+        in scalars: [Unicode.Scalar],
+        bases: [Unicode.Scalar]
     ) -> Int? {
         var cursor = start
         for expected in needle {
             while cursor < scalars.count, isIgnorableForDelimiterMatching(scalars[cursor]) {
                 cursor += 1
             }
-            guard cursor < scalars.count, scalars[cursor] == expected else {
+            guard cursor < scalars.count, bases[cursor] == expected else {
                 return nil
             }
             cursor += 1
@@ -186,19 +249,42 @@ public enum UntrustedContentBoundary {
         return cursor
     }
 
-    /// Whether `scalar` contributes no base character of its own, and so can be hidden inside a
-    /// delimiter without changing what the delimiter reads as.
+    /// Whether `scalar` cannot legitimately occur *inside* a token drawn from `[A-Z_]`, and so can be
+    /// hidden inside a delimiter by a forger. See `neutralizingDelimiters` for why the test is
+    /// legitimate occurrence rather than visibility.
     ///
-    /// The three mark categories are listed as well as `isDefaultIgnorableCodePoint` because they are
-    /// not the same set and neither contains the other: U+0301 is a nonspacing mark and is **not**
-    /// default-ignorable (it renders), while U+200B is default-ignorable and is a format character
-    /// rather than a mark. Both have to be skipped, so both tests are here.
+    /// **Each of the four branches is held by a corpus entry, because a branch no test holds is a
+    /// comment** — this function shipped once with a fourth clause nothing exercised (PR #100 review,
+    /// F3, and the branch's own M6 lesson arriving in the same function it was written for):
+    ///
+    /// - the three **mark** categories — U+0301, and U+20DD which is `Me` rather than `Mn`;
+    /// - **`.format`** — held by U+0600 ARABIC NUMBER SIGN, which is `Cf` and is **not**
+    ///   default-ignorable. The old justification for this clause named U+200B, which *is*
+    ///   default-ignorable and therefore establishes nothing about it;
+    /// - **`isDefaultIgnorableCodePoint`** — held by U+3164 HANGUL FILLER, category `Lo`, caught by
+    ///   no other branch;
+    /// - **space separators and controls** — held by U+200A HAIR SPACE and by U+0009 TAB.
+    ///
+    /// The two exclusions are `U+0020` and `CharacterSet.newlines`; `neutralizingDelimiters` gives the
+    /// reason for each, and neither is about how the character renders.
     private static func isIgnorableForDelimiterMatching(_ scalar: Unicode.Scalar) -> Bool {
+        guard scalar != " ", !CharacterSet.newlines.contains(scalar) else {
+            return false
+        }
         switch scalar.properties.generalCategory {
-        case .nonspacingMark, .spacingMark, .enclosingMark, .format:
+        case .nonspacingMark, .spacingMark, .enclosingMark, .format, .spaceSeparator, .control:
             return true
         default:
             return scalar.properties.isDefaultIgnorableCodePoint
+        }
+    }
+
+    private static func isMark(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.properties.generalCategory {
+        case .nonspacingMark, .spacingMark, .enclosingMark:
+            return true
+        default:
+            return false
         }
     }
 
