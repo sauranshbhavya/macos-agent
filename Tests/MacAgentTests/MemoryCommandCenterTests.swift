@@ -118,6 +118,158 @@ struct MemoryCommandCenterTests {
         #expect(records.first?.command == "add three and three")
     }
 
+    // MARK: - The scheduled path, which is where the switches were being bypassed
+
+    /// The control for the four tests below: with memory on, a scheduled routine really does write
+    /// a row and a plan detail. Without it, "nothing was recorded" is equally true of a fixture
+    /// whose scheduler never fired.
+    @Test
+    func aScheduledRoutineRecordsARowAndAPlanDetailWithMemoryOn() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        try fixture.saveScheduledRoutine()
+
+        fixture.viewModel.checkScheduledRoutines(now: MemoryFixture.tenAM)
+        try await fixture.waitUntilIdle()
+
+        #expect(try fixture.taskHistoryStore.loadAll().count == 1)
+        #expect(try fixture.taskHistoryStore.loadAll().first?.effectiveTrigger == .scheduled)
+        #expect(FileManager.default.fileExists(atPath: fixture.taskPlanDetailStore.fileURL.path))
+    }
+
+    /// **The defect PR #98's review reproduced** (F1). `recordScheduledTaskHistory` guarded neither
+    /// of its two writes, so a user who switched memory off and let a morning routine fire got new
+    /// rows written into the encrypted store while the switch on screen read off. Driven through the
+    /// real scheduler door, `checkScheduledRoutines(now:)`, not through the seam — the seam is
+    /// exactly what this path routed around.
+    @Test
+    func aScheduledRoutineWritesNoRowAndNoPlanDetailWithTheMasterSwitchOff() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        try fixture.saveScheduledRoutine()
+        fixture.viewModel.setMemoryEnabled(false)
+
+        fixture.viewModel.checkScheduledRoutines(now: MemoryFixture.tenAM)
+        try await fixture.waitUntilIdle()
+
+        #expect(try fixture.taskHistoryStore.loadAll().isEmpty)
+        #expect(
+            !FileManager.default.fileExists(atPath: fixture.taskPlanDetailStore.fileURL.path),
+            "the scheduled run wrote what it planned with memory off"
+        )
+        // The run itself still happened — this withholds the record, it does not cancel the routine.
+        #expect(fixture.viewModel.scheduledRunNotice != nil)
+    }
+
+    @Test
+    func aScheduledRoutineWritesNoRowWithTheTaskHistorySwitchOff() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        try fixture.saveScheduledRoutine()
+        fixture.viewModel.setMemoryCategoryEnabled(.taskHistory, to: false)
+
+        fixture.viewModel.checkScheduledRoutines(now: MemoryFixture.tenAM)
+        try await fixture.waitUntilIdle()
+
+        #expect(try fixture.taskHistoryStore.loadAll().isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: fixture.taskPlanDetailStore.fileURL.path))
+        // Per type, not wholesale: a different row's switch does not withhold this one.
+        #expect(fixture.viewModel.isMemoryCategoryEnabled(.snippets))
+    }
+
+    /// **A per-type switch for a different row must not withhold task history**, or the test above
+    /// would pass over a scheduled guard that consulted the master switch alone.
+    @Test
+    func aScheduledRoutineStillRecordsWhenSomeOtherTypesSwitchIsOff() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        try fixture.saveScheduledRoutine()
+        fixture.viewModel.setMemoryCategoryEnabled(.snippets, to: false)
+
+        fixture.viewModel.checkScheduledRoutines(now: MemoryFixture.tenAM)
+        try await fixture.waitUntilIdle()
+
+        #expect(try fixture.taskHistoryStore.loadAll().count == 1)
+    }
+
+    /// **The composer switch must stay out of the scheduled path** (PR #67's F2, which the fix for
+    /// F1 could have undone by copying the foreground guard verbatim).
+    ///
+    /// A foreground run paused at a clarification leaves `isRunning` false with
+    /// `taskRecordingPolicy == .suppressTraces`, and `checkScheduledRoutines` only guards on
+    /// `isRunning` and `isAwaitingApproval` — so a routine firing in that window must still record.
+    /// Had the fix used `allowsRecording(to:)` rather than `allowsScheduledRecording(to:)`, this
+    /// would be red.
+    @Test
+    func aScheduledRoutineStillRecordsWhileAForegroundRunHasSuppressionLeftOn() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        try fixture.saveScheduledRoutine()
+        fixture.viewModel.taskRecordingPolicy = .suppressTraces
+
+        fixture.viewModel.checkScheduledRoutines(now: MemoryFixture.tenAM)
+        try await fixture.waitUntilIdle()
+
+        #expect(try fixture.taskHistoryStore.loadAll().count == 1)
+    }
+
+    /// **F2: the same path handed `AgentRunner` the raw recent-artifacts store**, so a scheduled
+    /// routine that wrote a file recorded a note naming its full path with memory off. Asserted at
+    /// the scheduled seam for the reason `recentArtifactStoreForThisRun`'s doc gives — no command the
+    /// fixtures can run generates an artifact — and paired with a scan below proving the scheduled
+    /// runner actually reads this property rather than the raw store it used to.
+    @Test
+    func theScheduledRecentArtifactHandoverIsWithheldByTheMemorySwitchesAndNotByTheComposerSwitch() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+
+        #expect(fixture.viewModel.recentArtifactStoreForScheduledRun != nil)
+
+        fixture.viewModel.setMemoryCategoryEnabled(.recentArtifacts, to: false)
+        #expect(fixture.viewModel.recentArtifactStoreForScheduledRun == nil)
+
+        fixture.viewModel.setMemoryCategoryEnabled(.recentArtifacts, to: true)
+        fixture.viewModel.setMemoryEnabled(false)
+        #expect(fixture.viewModel.recentArtifactStoreForScheduledRun == nil)
+
+        // And the composer switch is deliberately *not* read here, unlike the foreground seam —
+        // PR #67's F2 again, from the other side.
+        fixture.viewModel.setMemoryEnabled(true)
+        fixture.viewModel.taskRecordingPolicy = .suppressTraces
+        #expect(fixture.viewModel.recentArtifactStoreForScheduledRun != nil)
+        #expect(
+            fixture.viewModel.recentArtifactStoreForThisRun == nil,
+            "the foreground seam must still read the composer switch"
+        )
+    }
+
+    /// The scheduled runner reads the scheduled seam, which no runtime assertion in this repository
+    /// can reach: `AgentRunner` stores the handed-over store privately and a scheduled run that
+    /// generates an artifact would write a real file into a whitelisted directory. So the wiring is
+    /// scanned, in the shape `MacAgentSource` exists for.
+    @Test
+    func theScheduledRunnerIsHandedTheScheduledRecentArtifactSeam() throws {
+        let source = try MacAgentSource.read("AgentViewModel.swift")
+        let scheduledRun = try MacAgentSource.braceBlock(
+            of: source,
+            openedBy: "private func performScheduledRun(_ routine: StoredRoutine, occurrence: Date) async {"
+        )
+
+        #expect(scheduledRun.contains("recentArtifactStore: recentArtifactStoreForScheduledRun"))
+
+        // **Not a second `contains` for the wrong store, because the right string contains the wrong
+        // one as a prefix** — `recentArtifactStore: recentArtifactStore` is a substring of the line
+        // above, so asserting its absence fails on correct code. Removing the one sanctioned
+        // handover first and asserting the token appears nowhere in what remains says what was
+        // meant: no other store reaches this runner. Comment-immune, because `MacAgentSource.read`
+        // strips both comment syntaxes before this sees the text.
+        let withoutTheSanctionedHandover = scheduledRun.replacingOccurrences(
+            of: "recentArtifactStore: recentArtifactStoreForScheduledRun",
+            with: ""
+        )
+        #expect(!withoutTheSanctionedHandover.contains("recentArtifactStore"))
+    }
+
     // MARK: - The master switch
 
     @Test
@@ -625,29 +777,128 @@ struct MemoryCommandCenterTests {
         #expect(!presentation.isRecording)
     }
 
-    /// **The row switch is dead while the master switch is off, and live otherwise.** Without this
-    /// the per-type toggles stayed movable with memory off: a user flips one, the effective value
-    /// cannot change, and it snaps back. Policy-disabled is the same answer by a different route,
-    /// and both are asserted because they are separate causes.
+    /// **The row switch is dead while the master switch is off, and live otherwise** — asserted on
+    /// the row's own presentation, which is the answer the control reads.
+    ///
+    /// **This test used to assert `memorySettings.isRecording` instead** and was therefore green
+    /// against a `canChangeRecording` hardwired to `true` (PR #98 review, F3): a plain value-type
+    /// property already covered by `MemorySettingsTests`, so it passed for a reason unrelated to its
+    /// name. `MemoryRowPresentation.row(for:viewModel:)` is where the expression under test lives,
+    /// and it needs no SwiftUI harness to call.
     @Test
     func aRowsSwitchCannotBeMovedWhileTheMasterSwitchOrAPolicyHasMemoryOff() throws {
         let fixture = try makeMemoryFixture()
         defer { fixture.cleanUp() }
-        #expect(fixture.viewModel.memorySettings.isRecording)
+
+        // Live to begin with, for every row — the control without which "cannot be moved" is
+        // equally true of a build where it never could.
+        for category in MemoryCategory.allCases {
+            let row = MemoryRowPresentation.row(for: category, viewModel: fixture.viewModel)
+            #expect(row.canChangeRecording, "\(category.title) started locked")
+        }
 
         fixture.viewModel.setMemoryEnabled(false)
-        #expect(!fixture.viewModel.memorySettings.isRecording)
+        for category in MemoryCategory.allCases {
+            let row = MemoryRowPresentation.row(for: category, viewModel: fixture.viewModel)
+            #expect(!row.canChangeRecording, "\(category.title) stayed movable with memory off")
+            // And it reads off, so the control never shows "on" beside something recording nothing.
+            #expect(!row.isRecording, "\(category.title)")
+        }
 
         fixture.viewModel.setMemoryEnabled(true)
-        #expect(fixture.viewModel.memorySettings.isRecording)
+        #expect(MemoryRowPresentation.row(for: .snippets, viewModel: fixture.viewModel).canChangeRecording)
 
+        // A policy is the second, separate cause of the same lock.
         let managed = try makeMemoryFixture(
             policyProvider: StubMemoryPolicyProvider(
                 policy: MemoryEnterprisePolicy(isManaged: true, disablesMemory: true)
             )
         )
         defer { managed.cleanUp() }
-        #expect(!managed.viewModel.memorySettings.isRecording)
+        for category in MemoryCategory.allCases {
+            #expect(!MemoryRowPresentation.row(for: category, viewModel: managed.viewModel).canChangeRecording)
+        }
+    }
+
+    /// A single per-type switch must not lock the *row* — only the master switch and the policy do.
+    /// Without this, `canChangeRecording` could be wired to `isMemoryCategoryEnabled` and every
+    /// assertion above would still hold, while every row locked itself the moment it was turned off.
+    @Test
+    func turningOneTypeOffLeavesItsOwnSwitchStillMovable() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+
+        fixture.viewModel.setMemoryCategoryEnabled(.snippets, to: false)
+
+        let row = MemoryRowPresentation.row(for: .snippets, viewModel: fixture.viewModel)
+        #expect(!row.isRecording)
+        #expect(row.canChangeRecording, "a type switched off could never be switched back on")
+    }
+
+    /// **Where "View" leads, for all seven rows** (PR #98 review, F4). Rewiring Task history to open
+    /// Insights left the whole suite green, and "each memory type is viewable" is the first clause of
+    /// the ticket's acceptance criteria.
+    @Test
+    func viewLeadsSomewhereSpecificForEveryMemoryType() {
+        #expect(MemoryRowDestination.of(.routines) == .page(.routines))
+        #expect(MemoryRowDestination.of(.workspaces) == .page(.workspaces))
+        #expect(MemoryRowDestination.of(.taskHistory) == .page(.tasks))
+        #expect(MemoryRowDestination.of(.recentArtifacts) == .entriesSheet)
+        #expect(MemoryRowDestination.of(.clipboardHistory) == .entriesSheet)
+        #expect(MemoryRowDestination.of(.snippets) == .entriesSheet)
+        #expect(MemoryRowDestination.of(.approvedApps) == .entriesSheet)
+
+        // Every row leads somewhere, and the three page destinations are distinct — a mapping that
+        // sent two rows to one page would satisfy a looser check.
+        let destinations = MemoryCategory.allCases.map(MemoryRowDestination.of)
+        #expect(destinations.count == 7)
+        let pages = destinations.compactMap { destination -> CommandCenterDestination? in
+            guard case .page(let page) = destination else { return nil }
+            return page
+        }
+        #expect(Set(pages).count == pages.count)
+        #expect(!pages.contains(.memory), "a row must not send the user back to the page they are on")
+
+        // Exactly the four types the sheet renders entries for open the sheet, so the two mappings
+        // cannot drift apart.
+        let sheetTypes = MemoryCategory.allCases.filter { MemoryRowDestination.of($0) == .entriesSheet }
+        #expect(Set(sheetTypes) == [.recentArtifacts, .clipboardHistory, .snippets, .approvedApps])
+    }
+
+    /// The three wirings no runtime assertion in this repository can reach, scanned in the shape
+    /// `MacAgentSource` exists for — a SwiftUI modifier, a construction site, and a call ordering.
+    ///
+    /// Each corresponds to a mutant that survived the whole suite at `51e345f`: the row switch never
+    /// disabled at all (F3/M2), the presentation built inline so the factory above holds nothing
+    /// (F3/M1's escape hatch), and the clipboard delete no longer stopping the poll timer first
+    /// (F5/M8). `MacAgentSource.read` strips both comment syntaxes, so none of these can be
+    /// satisfied by a comment.
+    @Test
+    func theMemoryPagesUnrenderableWiringIsPinnedWhereNoAssertionCanReach() throws {
+        let view = try MacAgentSource.read("CommandCenterView.swift")
+
+        let row = try MacAgentSource.braceBlock(of: view, openedBy: "private struct MemoryRow: View {")
+        #expect(row.contains(".disabled(!presentation.canChangeRecording)"))
+
+        // The page builds its rows through the factory, so the factory's own test is a test of what
+        // ships rather than of a function nothing calls.
+        let page = try MacAgentSource.braceBlock(of: view, openedBy: "private struct MemoryView: View {")
+        #expect(page.contains("MemoryRowPresentation.row(for: category, viewModel: viewModel)"))
+        #expect(!page.contains("MemoryRowPresentation("), "the page constructs a presentation directly")
+        #expect(page.contains("MemoryRowDestination.of(category)"))
+
+        // F5: the clipboard delete stops the 1s poll before deleting, so the timer cannot write a new
+        // entry between the delete and the refresh. Only reachable in a real one-second window, which
+        // is exactly why the suite cannot assert it by running it.
+        let deleteMemory = try MacAgentSource.braceBlock(
+            of: try MacAgentSource.read("AgentViewModel.swift"),
+            openedBy: "func deleteMemory(in category: MemoryCategory) {"
+        )
+        let clipboardBranch = try MacAgentSource.braceBlock(
+            of: deleteMemory,
+            openedBy: "if category == .clipboardHistory {"
+        )
+        #expect(clipboardBranch.contains("stopClipboardHistoryMonitoring()"))
     }
 
     /// The two groups the collection renders, and that between them they cover every row exactly
@@ -895,6 +1146,45 @@ private struct MemoryFixture {
         if removesRoot {
             try? FileManager.default.removeItem(at: root)
         }
+    }
+
+    /// 9am on a fixed day in a fixed zone, and the hour after it — the same shape
+    /// `ScheduledRoutineRunTests` uses, so a scheduled run here fires for the same reason it does
+    /// there rather than for one this file invented.
+    static let nineAM: Date = {
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = TimeZone(identifier: "America/New_York") ?? .gmt
+        return calendar.date(from: DateComponents(year: 2026, month: 7, day: 15, hour: 9, minute: 0))
+            ?? Date(timeIntervalSince1970: 1_700_000_000)
+    }()
+
+    static var tenAM: Date { nineAM.addingTimeInterval(3_600) }
+
+    /// A daily 9am routine, enabled a day earlier so `checkScheduledRoutines(now: tenAM)` finds an
+    /// occurrence to run, and unattended-trusted so the run is not paused for approval.
+    func saveScheduledRoutine() throws {
+        var schedule = RoutineSchedule(
+            cadence: .daily,
+            hour: 9,
+            minute: 0,
+            unattendedTrusted: true
+        )
+        schedule.setEnabled(true, now: Self.nineAM.addingTimeInterval(-24 * 60 * 60))
+        try routineStore.save(
+            StoredRoutine(
+                name: "Morning",
+                steps: [
+                    AgentStep(
+                        id: "calc",
+                        operation: .calculateUtility,
+                        description: "Calculate 1 + 1.",
+                        searchQuery: "1 + 1"
+                    )
+                ],
+                schedule: schedule
+            )
+        )
+        viewModel.refreshSavedItems()
     }
 
     /// The same 30-second deadlock backstop the other dispatch suites use — a bound on a hang, not a

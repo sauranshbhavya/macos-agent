@@ -3860,6 +3860,33 @@ struct MemoryRowPresentation: Equatable {
         self.detailText = "\(counted) · newest \(newest)"
     }
 
+    /// Builds a row's presentation from the live view model.
+    ///
+    /// **A factory rather than an expression inside `MemoryView`, so the answers are assertable**
+    /// (PR #98 review, F3). `canChangeRecording` had no coverage anywhere in `Tests/` — hardwiring
+    /// it to `true` here left the whole suite green, restoring exactly the defect the fidelity round
+    /// fixed: with memory off wholesale a per-type switch stays movable, the user flips it, the
+    /// effective value cannot change, and the control snaps back. Nothing about that needs a SwiftUI
+    /// harness; it needed the expression to live somewhere a test could call. Same shape as
+    /// `MemoryEntryPresentation.entries(for:viewModel:now:)` directly below.
+    @MainActor
+    static func row(
+        for category: MemoryCategory,
+        viewModel: AgentViewModel,
+        now: Date = Date()
+    ) -> MemoryRowPresentation {
+        MemoryRowPresentation(
+            category: category,
+            count: viewModel.memoryEntryCount(for: category),
+            isRecording: viewModel.isMemoryCategoryEnabled(category),
+            // The master switch and the policy, folded — not the per-type answer, which is what
+            // `isRecording` above already carries.
+            canChangeRecording: viewModel.memorySettings.isRecording,
+            newestEntryDate: viewModel.newestMemoryEntryDate(for: category),
+            now: now
+        )
+    }
+
     private static func systemImage(for category: MemoryCategory) -> String {
         switch category {
         case .routines:
@@ -4072,34 +4099,50 @@ private struct MemoryView: View {
         .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
     }
 
-    /// Where "View" goes, and the split is the reuse rule: a type whose entries already have a page
-    /// goes to that page, and only the four that never had one open a sheet.
+    /// Where "View" goes, resolved through `MemoryRowDestination` so the answer is a value a test
+    /// can assert rather than a `select` call buried in a view (PR #98 review, F4).
     private func open(_ category: MemoryCategory) {
-        switch category {
-        case .routines:
-            select(.routines)
-        case .workspaces:
-            select(.workspaces)
-        case .taskHistory:
-            select(.tasks)
-        case .recentArtifacts, .clipboardHistory, .snippets, .approvedApps:
+        switch MemoryRowDestination.of(category) {
+        case .page(let destination):
+            select(destination)
+        case .entriesSheet:
             entriesCategory = category
         }
     }
 
     private func presentation(for category: MemoryCategory) -> MemoryRowPresentation {
-        MemoryRowPresentation(
-            category: category,
-            count: viewModel.memoryEntryCount(for: category),
-            isRecording: viewModel.isMemoryCategoryEnabled(category),
-            canChangeRecording: viewModel.memorySettings.isRecording,
-            newestEntryDate: viewModel.newestMemoryEntryDate(for: category),
-            now: Date()
-        )
+        MemoryRowPresentation.row(for: category, viewModel: viewModel)
     }
 
     private var memorySections: [MemorySection] {
         MemorySection.all
+    }
+}
+
+/// Where a Memory row's "View" leads.
+///
+/// **A value rather than a `select` call inside the view, because nothing could see the old one**
+/// (PR #98 review, F4). Rewiring Task history to open Insights left the whole suite green — and
+/// "each memory type is viewable" is the first clause of the ticket's acceptance criteria, so it was
+/// the one control of the four with no test behind it.
+///
+/// The split is the reuse rule: a type whose entries already have a page goes to that page, and only
+/// the four that never had one open the sheet.
+enum MemoryRowDestination: Equatable {
+    case page(CommandCenterDestination)
+    case entriesSheet
+
+    static func of(_ category: MemoryCategory) -> MemoryRowDestination {
+        switch category {
+        case .routines:
+            return .page(.routines)
+        case .workspaces:
+            return .page(.workspaces)
+        case .taskHistory:
+            return .page(.tasks)
+        case .recentArtifacts, .clipboardHistory, .snippets, .approvedApps:
+            return .entriesSheet
+        }
     }
 }
 
