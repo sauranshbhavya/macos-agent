@@ -355,13 +355,29 @@ say three different things to. A caller who cannot be seen to have asked for the
 `auth.code_invalid`, which is true of what they are holding. **The client contract is unchanged**: a
 client in the flow sees exactly what it saw before, so nothing on SONNY-128 changes.
 
-**What it does not close, stated rather than implied.** The source match is only as good as
-`request.ip`, so a deployment behind a proxy with `TRUSTED_PROXIES` unset collapses every caller to
-one source and the match becomes vacuous — the same misconfiguration the per-source rate limit
-degrades under. The recency bound and the per-source ceiling still apply there. Closing it
-unconditionally would mean `email/start` returning an opaque flow token that `email/verify` echoes
-back, which is a change to two request/response shapes and lands on SONNY-128; it is not built, and
-it is the lever if this is ever judged insufficient.
+**What it does not close, stated rather than implied, and widened 2026-08-22 after measurement.**
+The match is on a salted hash of `request.ip` — unforgeable over the wire, and still a statement
+about *where* a request came from rather than *who* sent it. Two sizes:
+
+- **Even with `TRUSTED_PROXIES` set correctly**, everyone behind one public address shares a source.
+  A co-tenant on a victim's NAT who knows the victim's address learns, within the disclosure window,
+  whether that mailbox consumed its code. Household and office are the small version; a carrier's
+  CGNAT egress or a shared VPN exit is the large one. Narrower than the oracle this closed, and real.
+- **With `TRUSTED_PROXIES` unset behind a proxy**, every caller collapses to one source and the match
+  is vacuous deployment-wide — the same misconfiguration the per-source rate limit degrades under.
+
+The recency bound applies in both. **The unconditional fix is a flow token**: `email/start` returning
+an opaque value that `email/verify` echoes back, which ties disclosure to *this exchange* rather than
+to a network location. Two request/response shapes, landing on SONNY-128; not built, and the lever if
+the residual above is ever judged too wide.
+
+**The per-address rate-limit refusal is gated the same way** (added 2026-08-22). Answering `429` to
+every caller made the attempt *count* readable — probe a mailbox and see how many tries you get
+before the wall — which is recent activity at an address the prober neither caused nor could
+otherwise observe. A caller who asked for the code still gets `429` with `Retry-After`; everyone else
+gets the `400` a wrong code produces. The body and status now match; the *timing* does not, because
+the refused path skips the provider call, and that residual is the same one `email/start`'s silent
+per-address refusal already carries.
 
 **Where those three come from, since the provider does not supply them** (noted 2026-08-21,
 SONNY-127). Supabase Auth returns a single `otp_expired` reading "Token has expired or is invalid"
