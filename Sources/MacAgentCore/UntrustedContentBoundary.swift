@@ -214,6 +214,14 @@ public enum UntrustedContentBoundary {
             return scalar
         }
         let decomposed = Array(String(scalar).decomposedStringWithCanonicalMapping.unicodeScalars)
+        // **The all-marks tail check is unreachable, and that is measured rather than assumed.** A
+        // canonical decomposition is a singleton mapping or a base followed by combining marks, never
+        // a base followed by anything else, so across `0...0x10FFFF` there are **zero** scalars that
+        // would take this branch — which is why the mutant deleting it survives every battery and no
+        // test can kill it. It is kept because deleting it trades one line for a silent over-match if
+        // that invariant is ever wrong, and the invariant itself is asserted by
+        // `theCanonicalBaseGuardCoversEveryScalarThatDecomposesToAnASCIIBase` so the guard's
+        // precondition fails loudly rather than the guard sitting there unexamined.
         guard let base = decomposed.first, base.value < 0x80,
               decomposed.dropFirst().allSatisfy(isMark) else {
             return scalar
