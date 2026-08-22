@@ -2107,6 +2107,32 @@ final class AgentViewModel: ObservableObject {
         taskRecordingPolicy.allowsWriting(to: store) && memorySettings.allowsRecording(to: store)
     }
 
+    /// Whether a **scheduled** run may write new memory into `store` — the standing switches only.
+    ///
+    /// **Not `allowsRecording(to:)`, and the difference is a bug in each direction** (PR #98 review,
+    /// F1/F2). The two switches have different scopes and a scheduled run is where that stops being
+    /// academic:
+    ///
+    /// - `TaskRecordingPolicy` is a *per-task composer* control. A scheduled run passes through no
+    ///   composer, so there is nothing for it to answer — and it is not merely absent, it is
+    ///   actively wrong to read: a foreground run paused at a clarification leaves `isRunning` false
+    ///   with the policy still `.suppressTraces`, and `checkScheduledRoutines` only guards on
+    ///   `isRunning` and `isAwaitingApproval`, so a routine firing in that window would silently lose
+    ///   its traces. That is the reachable defect PR #67's F2 fixed by passing `.record` explicitly,
+    ///   and calling `allowsRecording(to:)` here would reintroduce it.
+    /// - `MemoryRecordingSettings` is a *standing preference*. It applies to a scheduled run exactly
+    ///   as it does to a typed one — `makeExecutor` has said so in a comment since this branch
+    ///   started, and everything routed through the executor honours it. The three writes the view
+    ///   model performs itself did not, which is what this exists to fix.
+    ///
+    /// So the rule is: the scheduled path opts out of the composer switch and never out of the
+    /// memory switches. Same shape as the foreground guards at `recordTaskHistoryIfTerminal` and
+    /// `recordTaskPlanDetail`, with the one term that cannot apply removed rather than the whole
+    /// conjunction copied.
+    func allowsScheduledRecording(to store: LocalStore) -> Bool {
+        memorySettings.allowsRecording(to: store)
+    }
+
     /// The vision journal this run may write to, or `nil` when it may not.
     ///
     /// Internal and separated from its one call site for the same reason
@@ -2139,6 +2165,17 @@ final class AgentViewModel: ObservableObject {
     /// the acceptance test passes for the wrong reason. A mutation battery caught exactly that.
     var recentArtifactStoreForThisRun: RecentArtifactStore? {
         allowsRecording(to: .recentArtifacts) ? recentArtifactStore : nil
+    }
+
+    /// The recent-artifacts store a **scheduled** run may write to, or `nil` when it may not.
+    ///
+    /// The same withhold-the-store seam as above — `AgentRunner` treats a `nil` store as "record
+    /// nothing" — reading `allowsScheduledRecording(to:)` instead, for the reason written there.
+    /// Internal, and asserted directly by the suite, for the reason `recentArtifactStoreForThisRun`
+    /// gives: no command the fixtures can run generates an artifact, so an end-to-end assertion
+    /// would pass whether or not the switch were consulted.
+    var recentArtifactStoreForScheduledRun: RecentArtifactStore? {
+        allowsScheduledRecording(to: .recentArtifacts) ? recentArtifactStore : nil
     }
 
     /// Puts "Don't save this task" back to off and lets clipboard history resume — but only once the
@@ -4237,11 +4274,13 @@ final class AgentViewModel: ObservableObject {
                 planner: InstantOnlyFallbackPlanner(),
                 executor: executor,
                 logStore: logStore,
-                // The real store, deliberately, not `recentArtifactStoreForThisRun`. Scheduled runs
-                // are never suppressed — the switch is a per-task control on the widget's composer
-                // and a scheduled run passes through no composer. Written out rather than left to
-                // the policy happening to be `.record` here.
-                recentArtifactStore: recentArtifactStore
+                // **`recentArtifactStoreForScheduledRun`, which is neither of the two obvious
+                // choices** (PR #98 review, F2). This line used to pass the raw store, on reasoning
+                // that was right about the composer switch and silent about the memory switches —
+                // so a scheduled routine that wrote a file recorded a note naming its full path with
+                // Memory switched off. `recentArtifactStoreForThisRun` is not the fix either: it
+                // folds in `taskRecordingPolicy`, which is exactly what must not be read here.
+                recentArtifactStore: recentArtifactStoreForScheduledRun
             )
             self.runner = runner
             // The same plan a typed "run my X routine" produces — built directly rather than
@@ -4398,6 +4437,15 @@ final class AgentViewModel: ObservableObject {
         guard let command = scheduledRunDisplayCommand else {
             return
         }
+        // **The memory switches apply to a scheduled run exactly as to a typed one** (PR #98 review,
+        // F1). The foreground twin guards the identical write at `recordTaskHistoryIfTerminal`; this
+        // one guarded nothing, so a routine firing at 9am wrote a row into the encrypted store while
+        // the switch on screen read off — reproduced through `checkScheduledRoutines(now:)`. The
+        // term dropped relative to the foreground guard is `taskRecordingPolicy`, deliberately; see
+        // `allowsScheduledRecording(to:)` for why reading it here would be its own defect.
+        guard allowsScheduledRecording(to: .taskHistory) else {
+            return
+        }
         let record = CompletedTaskRecord(
             command: command,
             startedAt: startedAt,
@@ -4424,13 +4472,29 @@ final class AgentViewModel: ObservableObject {
             return
         }
 
+        // Classified `.trace`, and withheld by the same switch that withheld the row — asked
+        // explicitly rather than inferred from having got past the row's guard, exactly as the
+        // foreground `recordTaskPlanDetail` does and for the same reason: the reach of a suppression
+        // is a rule read off `LocalStore.kind`, and a store relying on a sibling's guard is the one
+        // store the rule does not actually cover.
+        //
+        // **The `taskRecordingPolicy` half stays absent, and that was always right** — a scheduled
+        // run passes through no composer, so there is no "Don't save this task" switch to have been
+        // left on, the same reasoning written beside `makeExecutor(recordingPolicy: .record)`.
+        // `recordTaskPlanDetail` is still not reused here for exactly that reason. What the earlier
+        // wording missed is that "no policy check" and "no check at all" are different sentences,
+        // and only the first one was true of the intent.
+        //
+        // **Unreachable today, and kept anyway**, stated so a mutation survivor here is read
+        // correctly: plan details and history rows share the `.taskHistory` memory row, so this
+        // guard can only fire in a world where the row's guard already returned. It becomes live the
+        // day `LocalStore.memoryCategory` gives plan details a row of their own, which is exactly
+        // the change that would otherwise slip past.
+        guard allowsScheduledRecording(to: .taskPlanDetails) else {
+            return
+        }
+
         do {
-            // No `taskRecordingPolicy` check on either write, and deliberately: a scheduled run
-            // passes through no composer, so there is no "Don't save this task" switch to have been
-            // left on — the same reasoning already written above beside `makeExecutor(recordingPolicy:
-            // .record)` and `recentArtifactStore`. `recordTaskPlanDetail` is not reused here for
-            // exactly that reason; it asks the policy, which is right for a foreground run and wrong
-            // for this one.
             if let plan, let taskID = record.id {
                 try taskPlanDetailStore.save(
                     StoredTaskPlanDetail(taskID: taskID, completedAt: record.completedAt, plan: plan),
