@@ -133,7 +133,11 @@ public struct InvokeShortcutCapabilityAdapter: CapabilityAdapter {
         // next run may ask where it otherwise would not. That is the right direction for a switch
         // whose whole promise is leaving no record — suppression may cost the user an extra
         // confirmation later; it must never buy them a quieter approval.
-        guard context.recordingPolicy.allowsWriting(to: .shortcutRunHistory) else {
+        //
+        // Task-history memory being switched off (SONNY-208) withholds it for the same reason and
+        // at the same cost — `allowsRecording(to:)` is the conjunction of both switches, so this
+        // guard did not have to learn about the second one.
+        guard context.allowsRecording(to: .shortcutRunHistory) else {
             return
         }
         do {

@@ -64,6 +64,10 @@ public final class AgentActionExecutor {
     /// from one task into the next, which shared mutable state here would have allowed.
     private let recordingPolicy: TaskRecordingPolicy
 
+    /// The standing memory switches (SONNY-208). A `let` for the same reason as the line above: a
+    /// fresh executor per run means a switch flipped mid-run cannot half-apply to it.
+    private let memoryRecording: MemoryRecordingSettings
+
     /// Read-only, for the suite: which policy this executor was built with. The policy itself stays
     /// private — nothing may change it after construction, which is what makes a fresh executor per
     /// run safe (PR #67 review, F2).
@@ -107,6 +111,10 @@ public final class AgentActionExecutor {
 
     public init(
         recordingPolicy: TaskRecordingPolicy = .record,
+        // Defaulted for the same reason `recordingPolicy` is: every existing construction site and
+        // every test keeps recording exactly as before, and an adapter that never asks behaves as it
+        // always did.
+        memoryRecording: MemoryRecordingSettings = .recordEverything,
         whitelist: PathWhitelist = PathWhitelist(),
         inventory: FileInventory = FileInventory(),
         zipArchiver: ZipArchiving = ProcessZipArchiver(),
@@ -147,6 +155,7 @@ public final class AgentActionExecutor {
         visionSession: VisionSessionEnvironment? = nil
     ) {
         self.recordingPolicy = recordingPolicy
+        self.memoryRecording = memoryRecording
         self.whitelist = whitelist
         self.inventory = inventory
         self.zipArchiver = zipArchiver
@@ -1666,7 +1675,8 @@ public final class AgentActionExecutor {
                 )
             },
             visionSession: visionSession,
-            recordingPolicy: recordingPolicy
+            recordingPolicy: recordingPolicy,
+            memoryRecording: memoryRecording
         )
     }
 

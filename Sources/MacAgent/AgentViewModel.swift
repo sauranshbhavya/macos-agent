@@ -51,6 +51,24 @@ final class AgentViewModel: ObservableObject {
     /// the start of every task, and untouched by the scheduled path, which never writes it.
     @Published private(set) var ranWithoutAskingTrace: String?
     @Published var clipboardHistoryEnabled: Bool = true
+    /// The Memory section's switches, composed from the user's own choices and the enterprise
+    /// policy (SONNY-208). `private(set)` because every write goes through `setMemoryEnabled(_:)`
+    /// or `setMemoryCategoryEnabled(_:to:)`, which persist first and then republish — a settable
+    /// property would let a surface show a switch the store never recorded.
+    @Published private(set) var memorySettings: MemoryRecordingSettings = .recordEverything
+    /// Snippets, recent artifacts, clipboard items and allowed apps as the Memory section lists
+    /// them. Loaded by `refreshMemoryEntries()`; empty until it runs, and emptied rather than left
+    /// stale when a store will not read — the same choice `refreshTaskHistory` makes, so a list can
+    /// never show entries the notice beside it says are unreadable.
+    @Published private(set) var savedSnippets: [StoredSnippet] = []
+    @Published private(set) var recentArtifacts: [RecentArtifact] = []
+    @Published private(set) var clipboardHistoryItems: [ClipboardHistoryItem] = []
+    @Published private(set) var approvedApps: [ApprovedApp] = []
+    /// Outcome of the Memory section's per-type Delete, rendered by the same
+    /// `LocalDataDeletionStatusMessage` view Settings' whole-wipe uses. Separate from
+    /// `localDataDeletionStatusMessage` so a per-type delete does not post its result onto the
+    /// Settings page, and vice versa.
+    @Published var memoryDeletionStatusMessage: String?
     @Published var priorTaskContext: PriorTaskContext?
     @Published var taskUsageSummary: TaskUsageSummary = .empty
     @Published var taskHistoryRecords: [CompletedTaskRecord] = []
@@ -289,6 +307,11 @@ final class AgentViewModel: ObservableObject {
     private let approvedAppStore: ApprovedAppStore
     private let clipboardHistoryMonitor: ClipboardHistoryMonitor
     private let localDataDeletionService: LocalDataDeletionService
+    private let memorySettingsStore: MemorySettingsStore
+    /// Row 19's seam. `UnmanagedMemoryPolicyProvider` is the only implementation that ships, so this
+    /// answers `.unmanaged` in every shipping path — the hook is present and inert, exactly as
+    /// SONNY-17's ratification asked.
+    private let memoryPolicyProvider: any MemoryPolicyProviding
     private let priorTaskContextStore: PriorTaskContextStore
     private let taskUsageRecorder: TaskUsageRecorder
     private let plannerProviderRegistry: PlannerProviderRegistry
@@ -505,6 +528,7 @@ final class AgentViewModel: ObservableObject {
         approvedAppStore: ApprovedAppStore = ApprovedAppStore(),
         clipboardHistoryMonitor: ClipboardHistoryMonitor? = nil,
         localDataDeletionService: LocalDataDeletionService = LocalDataDeletionService(),
+        memoryPolicyProvider: any MemoryPolicyProviding = UnmanagedMemoryPolicyProvider(),
         priorTaskContextStore: PriorTaskContextStore = PriorTaskContextStore(),
         taskUsageRecorder: TaskUsageRecorder = TaskUsageRecorder(),
         plannerProviderRegistry: PlannerProviderRegistry = .default,
@@ -548,11 +572,17 @@ final class AgentViewModel: ObservableObject {
         self.clipboardHistoryMonitor = clipboardHistoryMonitor
             ?? ClipboardHistoryMonitor(settingsStore: clipboardHistorySettingsStore)
         self.localDataDeletionService = localDataDeletionService
+        self.memoryPolicyProvider = memoryPolicyProvider
+        self.memorySettingsStore = MemorySettingsStore(userDefaults: userDefaults)
         self.priorTaskContextStore = priorTaskContextStore
         self.taskUsageRecorder = taskUsageRecorder
         self.plannerProviderRegistry = plannerProviderRegistry
         self.plannerSelection = plannerSelection
         self.whitelist = whitelist
+        // Loaded here rather than on the Memory page's `onAppear`, because the switches gate
+        // *recording*, not a view: an executor built before anything opened Command Center would
+        // otherwise run with the defaults instead of with what the user chose.
+        memorySettings = memorySettingsStore.load(policy: memoryPolicyProvider.currentPolicy())
     }
 
     var hasAPIKey: Bool {
@@ -2065,6 +2095,18 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
+    /// Whether this run may write new memory into `store` — both switches, one question.
+    ///
+    /// **The conjunction is written once, here, and once in `CapabilityExecutionContext`** (SONNY-208).
+    /// `TaskRecordingPolicy` answers "does this one run leave traces"; `MemoryRecordingSettings`
+    /// answers "may Sonny remember this kind of thing at all". Every writing site on this view model
+    /// asks through this, so a site that consulted only one of the two would be a site that ignored
+    /// a switch the user had flipped — which is precisely how the per-store guard this replaces
+    /// would have gone quietly wrong.
+    func allowsRecording(to store: LocalStore) -> Bool {
+        taskRecordingPolicy.allowsWriting(to: store) && memorySettings.allowsRecording(to: store)
+    }
+
     /// The vision journal this run may write to, or `nil` when it may not.
     ///
     /// Internal and separated from its one call site for the same reason
@@ -2081,7 +2123,7 @@ final class AgentViewModel: ObservableObject {
     /// mutation and no entry under Known limits, while the other traces were each closed or
     /// recorded.
     var visionSessionJournalStoreForThisRun: VisionSessionJournalStore? {
-        taskRecordingPolicy.allowsWriting(to: .visionSessionJournal) ? visionSessionJournalStore : nil
+        allowsRecording(to: .visionSessionJournal) ? visionSessionJournalStore : nil
     }
 
     /// The recent-artifacts store this run may write to, or `nil` when it may not.
@@ -2096,7 +2138,7 @@ final class AgentViewModel: ObservableObject {
     /// that generates an artifact, so a suppressed run leaves this store untouched either way and
     /// the acceptance test passes for the wrong reason. A mutation battery caught exactly that.
     var recentArtifactStoreForThisRun: RecentArtifactStore? {
-        taskRecordingPolicy.allowsWriting(to: .recentArtifacts) ? recentArtifactStore : nil
+        allowsRecording(to: .recentArtifacts) ? recentArtifactStore : nil
     }
 
     /// Puts "Don't save this task" back to off and lets clipboard history resume — but only once the
@@ -2301,6 +2343,305 @@ final class AgentViewModel: ObservableObject {
             localDataDeletionStatusMessage = message
             setError(message)
         }
+    }
+
+    // MARK: - Memory (SONNY-208)
+
+    /// Reloads the four memory types that have no list of their own anywhere else in the app.
+    ///
+    /// Routines, workspaces and task history are deliberately absent: they are already published by
+    /// `refreshSavedItems()` and `refreshTaskHistory()`, and a second loader for the same file is a
+    /// second answer that can disagree with the first.
+    func refreshMemoryEntries() {
+        savedSnippets = loadMemoryEntries(.snippets) {
+            try snippetStore.loadAll().values
+                .sorted { $0.trigger.localizedCaseInsensitiveCompare($1.trigger) == .orderedAscending }
+        }
+        recentArtifacts = loadMemoryEntries(.recentArtifacts) {
+            try recentArtifactStore.loadAll()
+        }
+        clipboardHistoryItems = loadMemoryEntries(.clipboardHistoryItems) {
+            try clipboardHistoryMonitor.historyStore.loadAll()
+        }
+        approvedApps = loadMemoryEntries(.approvedApps) {
+            try approvedAppStore.loadAll()
+        }
+    }
+
+    /// Empties the list on failure rather than leaving it stale, the same choice
+    /// `refreshTaskHistory` makes: a list still showing entries beside a notice saying the file will
+    /// not decrypt is the surface contradicting itself.
+    private func loadMemoryEntries<Entry>(
+        _ source: LocalStorageLoadFailureSource,
+        load: () throws -> [Entry]
+    ) -> [Entry] {
+        do {
+            let entries = try load()
+            clearLocalStorageLoadFailure(source)
+            return entries
+        } catch {
+            recordLocalStorageLoadFailure(source, error: error)
+            return []
+        }
+    }
+
+    /// Re-reads the enterprise policy and the user's switches. Called whenever the Memory section
+    /// appears, so a policy that changed under a running app is picked up without a relaunch.
+    func refreshMemorySettings() {
+        memorySettings = memorySettingsStore.load(policy: memoryPolicyProvider.currentPolicy())
+    }
+
+    /// How many things Sonny currently remembers of this kind.
+    ///
+    /// Reads the same published arrays the rest of the app renders, so a count and the list it
+    /// describes cannot disagree. Task history counts rows, not the plan details and screen records
+    /// hanging off them — those are parts of a row rather than things of their own.
+    func memoryEntryCount(for category: MemoryCategory) -> Int {
+        switch category {
+        case .routines:
+            return savedRoutines.count
+        case .workspaces:
+            return savedWorkspaces.count
+        case .taskHistory:
+            return taskHistoryRecords.count
+        case .recentArtifacts:
+            return recentArtifacts.count
+        case .clipboardHistory:
+            return clipboardHistoryItems.count
+        case .snippets:
+            return savedSnippets.count
+        case .approvedApps:
+            return approvedApps.count
+        }
+    }
+
+    /// Whether new entries of this kind are being recorded right now — the *effective* answer, with
+    /// the master switch and the enterprise policy already folded in.
+    ///
+    /// Effective rather than "what the user chose for this row", deliberately: with memory off
+    /// wholesale, a per-type switch reading "on" beside a type that records nothing is the surface
+    /// telling the user something untrue. Their per-type choices are not lost — they stay in
+    /// `MemorySettingsStore` and come back the moment the master switch does.
+    func isMemoryCategoryEnabled(_ category: MemoryCategory) -> Bool {
+        guard memorySettings.allowsRecording(in: category) else {
+            return false
+        }
+        // Clipboard history's own switch, which predates the Memory section and stays the one
+        // source of truth for it.
+        return category == .clipboardHistory ? clipboardHistoryEnabled : true
+    }
+
+    /// The master switch.
+    ///
+    /// Refuses while an administrator has taken it away, rather than writing a preference the policy
+    /// would override on the next read — a stored value nothing can honour is a switch that springs
+    /// back, which reads as a broken control.
+    func setMemoryEnabled(_ isEnabled: Bool) {
+        guard !memorySettings.isDisabledByPolicy else {
+            return
+        }
+        memorySettingsStore.setMemoryEnabled(isEnabled)
+        refreshMemorySettings()
+        // Clipboard recording is a *timer*, not a guard consulted at write time, so turning memory
+        // off has to actually stop it — and turning memory back on has to restore it from the
+        // clipboard's own setting rather than start it unconditionally.
+        refreshClipboardHistoryNotice()
+    }
+
+    /// One type's switch. The only writer of a per-type memory preference.
+    ///
+    /// Clipboard history routes to the setting it already had, for the reason on
+    /// `MemoryCategory.clipboardHistory`: a second flag over the same behaviour is how a surface
+    /// ends up saying "on" while nothing is recording. The side effect that carries — the first-run
+    /// notice counts as answered — is correct rather than incidental: choosing here *is* answering
+    /// it.
+    func setMemoryCategoryEnabled(_ category: MemoryCategory, to isEnabled: Bool) {
+        guard !memorySettings.isDisabledByPolicy else {
+            return
+        }
+        guard category != .clipboardHistory else {
+            clipboardHistoryEnabled = isEnabled
+            applyClipboardHistoryNoticeChoice()
+            return
+        }
+        memorySettingsStore.setCategoryEnabled(isEnabled, for: category)
+        refreshMemorySettings()
+    }
+
+    /// Forgets everything of one kind, leaving every other kind untouched.
+    ///
+    /// **`LocalDataDeletionService` again, with a narrower list** — the same service Settings' whole
+    /// wipe uses, constructed over this category's files instead of all eleven. That buys the
+    /// attempt-every-file-and-report-what-survived behaviour a privacy delete needs, rather than a
+    /// second deletion routine that stops at the first error.
+    ///
+    /// **The URLs come from the injected stores**, not from `LocalStore.fileURL(fileManager:)`, which
+    /// resolves the *default* location — a test fixture pointing its stores at a temporary directory
+    /// would otherwise delete the developer's real files.
+    func deleteMemory(in category: MemoryCategory) {
+        guard !isRunning else {
+            setError("Stop the current run before deleting memory.")
+            return
+        }
+
+        if category == .clipboardHistory {
+            // The poll timer holds no file handle, but it can write a new entry between the delete
+            // and the refresh — which would leave the list non-empty right after a delete reported
+            // success.
+            stopClipboardHistoryMonitoring()
+        }
+
+        let service = LocalDataDeletionService(fileURLs: memoryStoreFileURLs(for: category))
+        do {
+            let result = try service.deleteAllLocalData()
+            let noun = result.deletedFileCount == 1 ? "file" : "files"
+            memoryDeletionStatusMessage = "Deleted \(category.title.lowercased()) — \(result.deletedFileCount) \(noun)."
+            errorMessage = nil
+        } catch {
+            memoryDeletionStatusMessage = "Could not delete \(category.title.lowercased()): \(error.localizedDescription)"
+        }
+
+        refreshMemorySurfaces()
+    }
+
+    /// Every file this category's contents live in, resolved through the stores this view model was
+    /// actually constructed with.
+    ///
+    /// The inner switch is exhaustive over `LocalStore` with no `default`, so a twelfth store cannot
+    /// be added without someone deciding which injected instance answers for it here.
+    private func memoryStoreFileURLs(for category: MemoryCategory) -> [URL] {
+        category.stores.map { store in
+            switch store {
+            case .routines:
+                return routineStore.fileURL
+            case .workspaces:
+                return workspaceStore.fileURL
+            case .taskHistory:
+                return taskHistoryStore.fileURL
+            case .taskPlanDetails:
+                return taskPlanDetailStore.fileURL
+            case .visionSessionJournal:
+                return visionSessionJournalStore.fileURL
+            case .shortcutRunHistory:
+                return shortcutRunHistoryStore.fileURL
+            case .recentArtifacts:
+                return recentArtifactStore.fileURL
+            case .clipboardHistory:
+                return clipboardHistoryMonitor.historyStore.fileURL
+            case .snippets:
+                return snippetStore.fileURL
+            case .approvedApps:
+                return approvedAppStore.fileURL
+            case .clipboardHistorySettings:
+                return clipboardHistorySettingsStore.fileURL
+            }
+        }
+    }
+
+    /// Every list the Memory section renders, reloaded together.
+    ///
+    /// One function rather than four calls at each site: a delete that refreshed three of them left
+    /// the fourth showing entries that no longer exist, and which three a given delete touches is
+    /// exactly the kind of thing a caller gets wrong.
+    private func refreshMemorySurfaces() {
+        refreshSavedItems()
+        refreshTaskHistory()
+        refreshMemoryEntries()
+        refreshClipboardHistoryNotice()
+    }
+
+    /// Forgets one snippet.
+    func deleteSnippet(_ snippet: StoredSnippet) {
+        performMemoryEntryDelete(named: "snippet") {
+            try snippetStore.delete(trigger: snippet.trigger)
+        }
+    }
+
+    /// Forgets one recorded file. The file itself is untouched — this store only ever held a note.
+    func deleteRecentArtifact(_ artifact: RecentArtifact) {
+        performMemoryEntryDelete(named: "recent artifact") {
+            try recentArtifactStore.delete(id: artifact.id)
+        }
+    }
+
+    /// Forgets one copied item.
+    func deleteClipboardHistoryItem(_ item: ClipboardHistoryItem) {
+        performMemoryEntryDelete(named: "clipboard item") {
+            try clipboardHistoryMonitor.historyStore.delete(id: item.id)
+        }
+    }
+
+    /// Revokes one app's control grant. Sonny asks about that app again the next time it needs it.
+    func forgetApprovedApp(_ app: ApprovedApp) {
+        performMemoryEntryDelete(named: "allowed app") {
+            try approvedAppStore.forget(bundleIdentifier: app.bundleIdentifier)
+        }
+    }
+
+    /// The newest thing Sonny remembers of this kind, or `nil` when the type carries no timestamp.
+    ///
+    /// Routines and workspaces answer `nil` on purpose rather than reaching for a run date: neither
+    /// record carries a created-at field, and `recentRunDates` would make the row's "newest" line
+    /// mean something different from every other row's.
+    func newestMemoryEntryDate(for category: MemoryCategory) -> Date? {
+        switch category {
+        case .routines, .workspaces:
+            return nil
+        case .taskHistory:
+            return taskHistoryRecords.map(\.completedAt).max()
+        case .recentArtifacts:
+            return recentArtifacts.map(\.recordedAt).max()
+        case .clipboardHistory:
+            return clipboardHistoryItems.map(\.copiedAt).max()
+        case .snippets:
+            return savedSnippets.map(\.updatedAt).max()
+        case .approvedApps:
+            return approvedApps.map(\.approvedAt).max()
+        }
+    }
+
+    /// Deletes the entry at `index` of the list the Memory sheet rendered for `category`.
+    ///
+    /// **By position into the same published array the sheet enumerated**, so the row and the record
+    /// it removes cannot come apart — the alternative, passing an identifier back, would let a
+    /// refresh between render and tap resolve to a different record with the same id. Out-of-range
+    /// is a no-op rather than a crash: the array can shrink under a sheet that is still on screen.
+    ///
+    /// The three categories with pages of their own are not handled here and never reach it — the
+    /// sheet only opens for the other four, and their own deletes (`deleteRoutine`,
+    /// `deleteWorkspace`, `deleteTask`) already exist on those pages.
+    func deleteMemoryEntry(in category: MemoryCategory, at index: Int) {
+        switch category {
+        case .snippets:
+            guard savedSnippets.indices.contains(index) else { return }
+            deleteSnippet(savedSnippets[index])
+        case .recentArtifacts:
+            guard recentArtifacts.indices.contains(index) else { return }
+            deleteRecentArtifact(recentArtifacts[index])
+        case .clipboardHistory:
+            guard clipboardHistoryItems.indices.contains(index) else { return }
+            deleteClipboardHistoryItem(clipboardHistoryItems[index])
+        case .approvedApps:
+            guard approvedApps.indices.contains(index) else { return }
+            forgetApprovedApp(approvedApps[index])
+        case .routines, .workspaces, .taskHistory:
+            return
+        }
+    }
+
+    /// The four per-entry deletes' shared body.
+    ///
+    /// `errorMessage`, not `localStorageNotice`, and the distinction is the one CLAUDE.md's
+    /// write-failure gotcha draws: the user pressed a control, and the thing they asked for did not
+    /// happen. A *task's* bookkeeping write failing is the other case and goes to the notice.
+    private func performMemoryEntryDelete(named noun: String, delete: () throws -> Void) {
+        do {
+            try delete()
+        } catch {
+            setError("Could not delete this \(noun): \(error.localizedDescription)")
+            return
+        }
+        refreshMemoryEntries()
     }
 
     /// Creates, replaces, or removes a routine's schedule. Passing nil unschedules it.
@@ -2698,15 +3039,33 @@ final class AgentViewModel: ObservableObject {
         pendingCommandForPriorTaskContext = nil
         pendingTaskHistoryStartedAt = nil
         preserveUsageForNextStart = false
+        // The Memory section's own per-type delete message describes an action the whole-data wipe
+        // has just superseded — "Deleted snippets — 1 file." beside a page where everything is now
+        // gone. `deleteLocalData` writes its own message into `localDataDeletionStatusMessage`
+        // straight after this returns, so the two never contradict each other.
+        memoryDeletionStatusMessage = nil
         priorTaskContextStore.clear()
         taskUsageRecorder.reset()
         logStore.reset()
         refreshSavedItems()
         refreshTaskHistory()
+        // The four lists the Memory section renders. Without this the wipe empties their files and
+        // leaves the page showing every entry it just erased — the same staleness the three calls
+        // around it exist to prevent, on the surface that shows the most of it.
+        refreshMemoryEntries()
         refreshClipboardHistoryNotice()
     }
 
     private func startClipboardHistoryMonitoring() {
+        // The master switch and the enterprise policy, asked at the one place monitoring can begin
+        // — `refreshClipboardHistoryNotice`, `applyClipboardHistoryNoticeChoice` and
+        // `finishRecordingPolicyIfSettled` all start it through here, so one guard covers three
+        // callers and a fourth cannot forget it. The clipboard's *own* switch is checked by the
+        // two callers that read settings, and again inside `poll()`, which fails closed.
+        guard memorySettings.allowsRecording(in: .clipboardHistory) else {
+            stopClipboardHistoryMonitoring()
+            return
+        }
         guard clipboardHistoryTimer == nil else {
             return
         }
@@ -2867,6 +3226,11 @@ final class AgentViewModel: ObservableObject {
         AgentActionExecutor(
             // A fresh executor per run, so this cannot leak into the next task.
             recordingPolicy: recordingPolicy ?? taskRecordingPolicy,
+            // Never overridable by the caller, unlike `recordingPolicy` directly above: the
+            // scheduled path deliberately passes `.record` because an unattended run cannot have
+            // had "Don't save this task" pressed for it, but the memory switches are the user's
+            // standing answer and apply to a scheduled run exactly as they do to a typed one.
+            memoryRecording: memorySettings,
             whitelist: whitelist,
             zipArchiver: zipArchiver,
             documentConverter: documentConverter,
@@ -3263,6 +3627,21 @@ final class AgentViewModel: ObservableObject {
     /// today, because the deny list refuses at three doors above any session, but the reachability
     /// argument lives in another file and this makes the answer structural instead (PR #88, F5).
     func rememberAppControlGrant(bundleIdentifier: String, displayName: String) -> Bool {
+        // **Allowed-apps memory switched off refuses the grant, and the session stops** (SONNY-208).
+        //
+        // `false` here means the caller ends the session — `VisionSessionRunner.resolveAppControl`
+        // returns `.appControlNotRemembered`, whose sentence ("Sonny stopped because it could not
+        // save that you allowed it to control X") is literally what has happened. Nothing weaker was
+        // available without changing what `false` means to that gate, and its contract is the
+        // fail-closed one: never run on a grant that does not exist.
+        //
+        // **This affects new apps only, which is exactly the switch's promise.** An app already on
+        // the list settles at `.allowed` and returns before this method is reached, so existing
+        // grants keep working until the user deletes them. Turning the type off stops Sonny keeping
+        // *new* ones, and screen control on a not-yet-allowed app is what that costs.
+        guard allowsRecording(to: .approvedApps) else {
+            return false
+        }
         do {
             guard try approvedAppStore.approve(
                 bundleIdentifier: bundleIdentifier,
@@ -3573,7 +3952,7 @@ final class AgentViewModel: ObservableObject {
         // Task history is a `.trace` store, so a suppressed run writes no row at all. Note the
         // consequence for a screen-control run: with no row written there is nothing for a deleted
         // journal to dangle from, so suppression creates no dangling link.
-        guard taskRecordingPolicy.allowsWriting(to: .taskHistory) else {
+        guard allowsRecording(to: .taskHistory) else {
             return nil
         }
 
@@ -3671,7 +4050,7 @@ final class AgentViewModel: ObservableObject {
         // explicitly rather than inferred from having got past the row's own guard: the reach of
         // "Don't save this task" is a rule read off `LocalStore.kind`, and a store that relied on a
         // sibling's guard would be the one store the rule did not actually cover.
-        guard taskRecordingPolicy.allowsWriting(to: .taskPlanDetails) else {
+        guard allowsRecording(to: .taskPlanDetails) else {
             return
         }
 
