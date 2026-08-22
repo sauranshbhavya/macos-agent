@@ -8,6 +8,7 @@ import { ProviderRejected, ProviderUnavailable, type AuthProvider } from "../aut
 import { drainOwedRevocations } from "../auth/revocation.js";
 import {
   CODE_REQUEST_PER_ADDRESS, CODE_REQUEST_PER_SOURCE, CODE_VERIFY_PER_ADDRESS,
+  CODE_VERIFY_PER_SOURCE,
   bucketKey, consume,
 } from "../auth/ratelimit.js";
 import { errorBody } from "../errors.js";
@@ -195,6 +196,22 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
     const mailbox = rateLimitEmailKey(email);
     return deps.withConnection(async (client) => {
 
+    // **Per source FIRST, and this route had no source limit at all** (PR #87 fifth round, F1).
+    // The per-address limit below is keyed on the address being probed, so it never binds when every
+    // probe names a new one: 200 distinct addresses from one source, 0 refused, against
+    // `email/start`'s 192 of 200 in the same run. Disclosed with a 429 for the same reason
+    // `email/start`'s is — it is a fact about the caller's own behaviour, not about any address.
+    const bySource = await consume(
+      client, bucketKey("verifysrc", sourceOf(request), salt), CODE_VERIFY_PER_SOURCE, now());
+    if (!bySource.allowed) {
+      return reply
+        .status(429)
+        .header("Retry-After", String(bySource.retryAfterSeconds))
+        .send(errorBody("limit.rate", "Too many sign-in attempts from this source.", request.id, {
+          retryable: true, retryAfterSeconds: bySource.retryAfterSeconds,
+        }));
+    }
+
     // Verification is guessing, so it is limited per address being guessed at. Without this the
     // code's own entropy is the only thing between an attacker and an account.
     const limit = await consume(client, bucketKey("verify", mailbox, salt), CODE_VERIFY_PER_ADDRESS, now());
@@ -212,7 +229,9 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
       session = await deps.provider.verifyEmailCode(email, parsed.data.code);
     } catch (error) {
       if (error instanceof ProviderRejected) {
-        const code = await classifyFailure(client, mailbox, now());
+        // The caller's own source hash decides whether the distinct codes are disclosed at all
+        // (PR #87 fifth round, F1) — same function, same salt, as the one written at issuance.
+        const code = await classifyFailure(client, mailbox, now(), sourceHash(request, salt));
         return reply.status(400).send(errorBody(code, "Sign-in code was not accepted.", request.id));
       }
       if (error instanceof ProviderUnavailable) {
@@ -422,7 +441,13 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
     //
     // `drainOwedRevocations` catches and continues, and — the part that actually fixes it — leaves
     // `provider_session_revoked_at` NULL on whatever it could not do, so the work outlives this
-    // request. `npm run revoke-pending` and the drain at the top of this handler are what finish it.
+    // request. `npm run revocations` is what surfaces the residual afterwards.
+    //
+    // **Two corrections to what this comment used to say** (PR #87 fifth round, F8). It named
+    // `npm run revoke-pending`, which has never existed. And it said "the drain at the top of this
+    // handler", which is not where this call is and not what it does: it runs after the close, and
+    // it is scoped to `{ accountId }` — this account, never a backlog. Nothing drains anything
+    // else, and the command reports rather than revokes, because no adapter exists to call.
     const outcome = await drainOwedRevocations(client, deps.provider, { accountId });
 
     // 204 whether or not a row changed: deleting an already-deleted account is the state the caller
