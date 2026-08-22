@@ -3967,11 +3967,7 @@ final class AgentViewModel: ObservableObject {
             // cannot be resurrected by an executor still unwinding.
             onUnitCompleted: { [weak self] unit in
                 self?.recordResumableTaskUnit(unit)
-            },
-            // What an *earlier* attempt at this plan already produced. `nil` for every ordinary
-            // run; for a resumed one it is the file the last finished unit wrote, which the
-            // remaining steps name nowhere and which the executor's own carry rule then applies.
-            resumedArtifactPath: activeResumableTask?.chainedArtifactPath
+            }
         )
         markAllSteps(.complete)
         // The task itself succeeded; a bookkeeping failure is a storage notice, not a task error.
@@ -4449,10 +4445,21 @@ final class AgentViewModel: ObservableObject {
     /// Asked through `allowsRecording(to:)` again rather than inferred from a checkpoint existing.
     /// The reach of a suppression is a rule read off `LocalStore.kind`, and this repository's
     /// standing habit — `recordTaskPlanDetail` and `recordScheduledTaskPlanDetail` both do it — is
-    /// that a store relying on a sibling's guard is the one store the rule does not cover. It is
-    /// live rather than defensive here: "Don't save this task" is a pre-dispatch toggle, but the
-    /// Memory switches are standing preferences the user can turn off from Command Center *while a
-    /// run is in flight*.
+    /// that a store relying on a sibling's guard is the one store the rule does not cover.
+    ///
+    /// **Only one of the two terms can change mid-run, and the other is kept anyway.** The Memory
+    /// switches are standing preferences the user can turn off from Command Center while a run is in
+    /// flight, so that term is live. `taskRecordingPolicy` is not: "Don't save this task" is a
+    /// pre-dispatch toggle (`dontSaveButton` renders only when `!isTaskInFlight`), and a suppressed
+    /// run has no checkpoint for this function to append to in the first place — the guard's own
+    /// first term returns.
+    ///
+    /// So a mutant swapping this for `allowsScheduledRecording(to:)` — the memory switches alone —
+    /// **survives the suite, and it is an equivalent mutant rather than a coverage gap** (SONNY-210's
+    /// battery, M3 at `e0d4c78`). It is recorded rather than closed with a test that drives this
+    /// function directly: such a test would assert a state the app cannot reach, and the conjunction
+    /// is kept because it fails closed and because a per-site subtraction of a term is exactly the
+    /// shape `allowsRecording(to:)` exists to stop anyone writing.
     private func recordResumableTaskUnit(_ unit: CompletedRunUnit) {
         guard var task = activeResumableTask, allowsRecording(to: .resumableTasks) else {
             return
@@ -4579,7 +4586,17 @@ final class AgentViewModel: ObservableObject {
             // (`.claude/rules/macagent-ui-conventions.md`: a new task-submitting entry point passes
             // its own real origin).
             origin: .widget,
-            prebuiltPlan: task.remainingPlan(),
+            // **The file the earlier attempt wrote, written into the plan before it is
+            // dispatched** — not handed to the executor at run time, which was tried and is wrong:
+            // `AgentRunner.prepare` previews every step and rejects a bare `open_generated_artifact`
+            // long before execution, so a value supplied later cannot be seen by the gate that runs
+            // first. Baking it also keeps the assessment honest, since the file being opened is part
+            // of what gets assessed. A no-op for every remainder that does not begin with such a
+            // step, and `ChainedArtifactCarry` is the one place that rule lives.
+            prebuiltPlan: ChainedArtifactCarry.applying(
+                task.chainedArtifactPath,
+                toLeadingStepOf: task.remainingPlan()
+            ),
             prebuiltPlanSource: .resumedTask
         )
         guard started else {
