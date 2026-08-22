@@ -125,15 +125,25 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
     /// Every step with the executor's resolve-phase app pins cleared, recursively (SONNY-67).
     ///
     /// **A read-door rule, and the counterpart to `validateStepSafety`'s write-door one.**
-    /// `resolvedAppName` and `resolvedBundleIdentifier` are written by the executor when it resolves
-    /// a plan, and by nothing else: they are absent from `AgentPlanDecoder.stepKeys` and from the
-    /// planner schema, so a model cannot emit one, and the two adapters that *do* write them
-    /// (`RunningAppSwitchCapabilityAdapter`, `VisionSessionCapabilityAdapter`) write onto a
-    /// top-level plan's steps for operations `forbiddenStepOperations` refuses inside a routine.
-    /// Enumerated rather than assumed: those are the only two writers in `Sources/`.
+    /// `resolvedAppName`, `resolvedBundleIdentifier` and `resolvedFromFinderSelection` are written
+    /// by the executor when it resolves a plan, and by nothing else: all three are absent from
+    /// `AgentPlanDecoder.stepKeys` and from the planner schema, so a model cannot emit one.
+    /// Enumerated rather than assumed — the three writers in `Sources/` are
+    /// `RunningAppSwitchCapabilityAdapter`, `VisionSessionCapabilityAdapter` and
+    /// `FinderSelectionResolver.pinningSelectedDirectoryInput`.
     ///
-    /// So **no legitimately saved routine can carry a pin**, and stripping is behaviour-preserving
-    /// for every store Sonny itself wrote. What it closes is the one door that admits one: a
+    /// So **no legitimately saved routine can carry a pin** — but the reason differs between the
+    /// two identity pins and the Finder one, and this used to state only the first (SONNY-185's
+    /// field was added without it, and PR #94's review caught the enumeration going stale on a
+    /// security door). The identity pins are written for operations `forbiddenStepOperations`
+    /// refuses inside a routine, so they cannot reach nested steps at all. The Finder pin's
+    /// operations are *not* forbidden in a routine, so a routine's steps really do get pinned while
+    /// they run — but only in memory: the write door is `SaveRoutineCapabilityAdapter`, which stores
+    /// the planner's own nested `routineSteps`, and `pinningSelectedDirectoryInput` filters
+    /// `plan.steps` by operation and never recurses into `routineSteps` at any phase. So the pinned
+    /// copy is the one being executed and never the one being saved.
+    ///
+    /// Stripping is behaviour-preserving for every store Sonny itself wrote. What it closes is the one door that admits one: a
     /// `routines.json` written by something that is not Sonny. `RoutineStore.loadAll` validates
     /// nothing and `LocalStorageEncryption.decode` accepts unauthenticated plaintext when the header
     /// is absent, so a hand-written file reaches the executor intact — and once there, the pin-once
@@ -142,6 +152,15 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
     /// The sharpest traced consequence: a step whose `resolvedAppName` matches a workspace entry and
     /// whose `resolvedBundleIdentifier` names a different app earns `.inScope`, renders the trusted
     /// display name on the approval line, and activates the foreign app by exact bundle-id lookup.
+    ///
+    /// A forged `resolvedFromFinderSelection` is milder than that in both directions, and it is
+    /// cleared anyway because a door should do uniformly what its comment claims. Forged `true`
+    /// makes `PlanScopedResources` report Finder for a step the resolver never read a selection for
+    /// — an over-report, which escalates. Forged absent cannot under-report either: the classifier's
+    /// second disjunct still names Finder while no path has been resolved onto the step, and the
+    /// resolve phase writes the real answer over whatever arrived. The value the strip removes is
+    /// therefore not load-bearing on its own; what would be load-bearing is a *next* pin added to
+    /// this type whose enumeration here was inherited rather than re-derived.
     ///
     /// **Strip rather than reject**, following the SONNY-52 store-door precedent: rejecting would
     /// turn a tampered file into a store that will not load at all, which costs a user their real
@@ -155,6 +174,7 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
             var stripped = step
             stripped.resolvedAppName = nil
             stripped.resolvedBundleIdentifier = nil
+            stripped.resolvedFromFinderSelection = nil
             if let nested = step.routineSteps {
                 stripped.routineSteps = strippingResolverPins(nested)
             }
@@ -163,14 +183,17 @@ public struct StoredRoutine: Codable, Equatable, Sendable, Identifiable {
     }
 
     /// How many steps in `steps` carry a pin, counted the same way `strippingResolverPins` clears
-    /// them — recursively, and a step counting once however many of its two pins are set.
+    /// them — recursively, and a step counting once however many of its three pins are set.
     ///
     /// Separate from the strip so the read door can say whether it actually removed anything without
     /// diffing two routine dictionaries, and so the decision behind the log line is a value a test
     /// can hold rather than a side effect only a log archive can see.
     static func resolverPinnedStepCount(_ steps: [AgentStep]) -> Int {
         steps.reduce(0) { total, step in
-            let selfCount = (step.resolvedAppName != nil || step.resolvedBundleIdentifier != nil) ? 1 : 0
+            let carriesAPin = step.resolvedAppName != nil
+                || step.resolvedBundleIdentifier != nil
+                || step.resolvedFromFinderSelection != nil
+            let selfCount = carriesAPin ? 1 : 0
             return total + selfCount + resolverPinnedStepCount(step.routineSteps ?? [])
         }
     }
