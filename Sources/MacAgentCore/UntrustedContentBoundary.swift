@@ -49,29 +49,157 @@ public enum UntrustedContentBoundary {
     /// Neutralize any delimiter appearing *inside* content, so observed text cannot forge a boundary
     /// and escape its own wrapper.
     ///
-    /// This is the attack the wrapper exists to stop and it is not hypothetical for screen content:
-    /// OCR reads whatever is rendered, and rendering the literal string
-    /// `UNTRUSTED_OBSERVED_CONTENT_END` in a window is something any webpage can do with no
-    /// privileges at all.
+    /// This is the attack the wrapper exists to stop and it is not hypothetical for either source.
+    ///
+    /// **Fetched web pages are the reliably reachable one.** `ReadableWebPage.readableText` is raw
+    /// extracted DOM text under complete attacker control — a page author writes the codepoint
+    /// sequence, or an HTML numeric character reference, straight into their page. No rendering step,
+    /// nothing that could normalise it on the way in.
+    ///
+    /// **For screen content the channel is the window title and the observed history, not OCR** —
+    /// this line used to say OCR and that was wrong (SONNY-222 established it). Recognized text never
+    /// becomes prompt text: `LocalRedactionService.redactCapture` returns `maskedText: nil` and uses
+    /// its observations only to decide which pixels to paint. What the vision model reads as text is
+    /// `VisionSessionPromptBuilder.observedBlock` — `capture.windowTitle`, which an app names for
+    /// itself and a webpage sets with `document.title`, plus history lines quoting control labels the
+    /// model read off the window. Both are plain UTF-8 strings that reach here untouched, so the
+    /// forgery works on that path with exactly the reliability it has on the web one. The screenshot's
+    /// own pixels are a separate matter that no escaping can reach, which is why the vision system
+    /// rules name the image as data in so many words.
     public static func escape(_ value: String) -> String {
-        var escaped = value
-        for delimiter in allDelimiters {
-            escaped = escaped.replacingOccurrences(
-                of: delimiter,
-                with: "[escaped delimiter: \(delimiter)]"
-            )
-        }
-        return escaped
+        neutralizingDelimiters(in: value, delimiters: allDelimiters) { "[escaped delimiter: \($0)]" }
     }
 
     /// Percent-encode delimiters inside a URL, where the escaped form still has to parse as a URL.
     public static func escapeURLValue(_ value: String) -> String {
-        var escaped = value
-        for delimiter in allDelimiters {
-            let encoded = delimiter.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? delimiter
-            escaped = escaped.replacingOccurrences(of: delimiter, with: encoded)
+        neutralizingDelimiters(in: value, delimiters: allDelimiters) {
+            $0.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? $0
         }
-        return escaped
+    }
+
+    // MARK: - Matching delimiters over Unicode scalars (SONNY-222)
+
+    /// Replace every occurrence of a `delimiters` entry in `value` with `replacement(delimiter)`,
+    /// matching over **Unicode scalars** and stepping over scalars that carry no base character of
+    /// their own.
+    ///
+    /// **This exists because `String.replacingOccurrences(of:with:)` could not see the attack the
+    /// escaping is for.** Swift compares strings by extended grapheme cluster. Append U+0301
+    /// COMBINING ACUTE ACCENT to a delimiter's final letter and that letter becomes a different
+    /// `Character` — `D` with an accent on it, one cluster, not equal to `D` — so the substring
+    /// search silently finds nothing and the near-verbatim delimiter passes through **completely
+    /// unescaped**, landing as its own well-formed line inside what is supposed to be pure data.
+    /// `hasPrefix`, `==`, `range(of:)` and `components(separatedBy: String)` share the identical
+    /// blind spot, which is why a regression test written in that idiom passes against the unfixed
+    /// tree; the tests for this live in `UntrustedContentBoundaryScalarMatchingTests` and assert over
+    /// scalars and UTF-8 bytes throughout.
+    ///
+    /// **Ignorable scalars are stepped over rather than ending the match, and that is the line this
+    /// draws.** `options: .literal` would have closed the reported case — a trailing mark — and left
+    /// `UNTRUSTED_OBSERVED_CONTENT_ÉND` and `UNTRUSTED_OBSERVED_CONTENT_EN<U+200B>D` wide open, which
+    /// is the same attack moved one letter. What is skipped is exactly the scalars that add no base
+    /// character: combining marks, which attach to the letter before them, and the invisible
+    /// formatting scalars (zero-width space, ZWJ/ZWNJ, soft hyphen, byte order mark, the bidi
+    /// controls, variation selectors, and U+034F COMBINING GRAPHEME JOINER, whose published purpose
+    /// is to defeat exactly this kind of segmentation). Every one of those leaves a rendered line
+    /// that still reads as the delimiter.
+    ///
+    /// **What it deliberately does not close, stated so nobody reads more into it.** Base characters
+    /// must match exactly, so a *visibly different* string is not a delimiter here: a Cyrillic
+    /// `Е`, a fullwidth `Ｅ`, a lowercase `end`. That is a boundary rather than an oversight — the
+    /// homoglyph tail is unbounded and matching cannot win it, and unlike an invisible insertion each
+    /// of those changes what the line looks like. Normalising (NFC/NFD/NFKD) is not the answer either
+    /// and was considered: NFKD would fold the fullwidth forms and nothing else on that list, buying
+    /// an arbitrary slice of an infinite problem while making the escaped output depend on a Unicode
+    /// table version. The system prompts naming the observed segment as data are the backstop for
+    /// what matching cannot reach, and they are unchanged.
+    ///
+    /// **Not a loop of four passes any more, which also removes a latent hazard.** The old shape
+    /// re-scanned its own output on each pass — safe only because no delimiter appears inside another
+    /// delimiter's `[escaped delimiter: …]` replacement, a property nothing checked and a fifth
+    /// delimiter could have broken. One left-to-right pass never reads what it has written.
+    ///
+    /// - Parameter delimiters: matched longest-first, so a delimiter that is a prefix of another
+    ///   cannot silently win by being earlier in the list. No pair today has that shape; the sort
+    ///   costs one line and removes the footgun from whoever adds the next one.
+    static func neutralizingDelimiters(
+        in value: String,
+        delimiters: [String],
+        replacement: (String) -> String
+    ) -> String {
+        let targets = delimiters
+            .map { (text: $0, scalars: Array($0.unicodeScalars)) }
+            .filter { !$0.scalars.isEmpty }
+            .sorted { $0.scalars.count > $1.scalars.count }
+        guard !targets.isEmpty else {
+            return value
+        }
+
+        let scalars = Array(value.unicodeScalars)
+        var output = String.UnicodeScalarView()
+        var index = 0
+        while index < scalars.count {
+            // A match may never *begin* on an ignorable scalar. Without this, a combining acute in
+            // "cafe\u{0301}UNTRUSTED_…" would be swallowed into the replaced range and the accent
+            // would vanish from text that had nothing to do with the forgery.
+            if !isIgnorableForDelimiterMatching(scalars[index]),
+               let match = targets.lazy.compactMap({ target -> (text: String, end: Int)? in
+                   guard let end = matchEnd(of: target.scalars, at: index, in: scalars) else {
+                       return nil
+                   }
+                   return (target.text, end)
+               }).first {
+                output.append(contentsOf: replacement(match.text).unicodeScalars)
+                index = match.end
+            } else {
+                output.append(scalars[index])
+                index += 1
+            }
+        }
+        return String(output)
+    }
+
+    /// Where a match of `needle` starting at `start` ends, or `nil` if there is none.
+    ///
+    /// Ignorable scalars are skipped before each expected scalar and again after the last one. The
+    /// trailing skip is what makes the escaped form **identical however the delimiter was
+    /// decorated**: the mark an attacker hung on the final letter is theirs, not the content's, and
+    /// leaving it behind would simply re-attach it to the `]` of the replacement.
+    private static func matchEnd(
+        of needle: [Unicode.Scalar],
+        at start: Int,
+        in scalars: [Unicode.Scalar]
+    ) -> Int? {
+        var cursor = start
+        for expected in needle {
+            while cursor < scalars.count, isIgnorableForDelimiterMatching(scalars[cursor]) {
+                cursor += 1
+            }
+            guard cursor < scalars.count, scalars[cursor] == expected else {
+                return nil
+            }
+            cursor += 1
+        }
+        while cursor < scalars.count, isIgnorableForDelimiterMatching(scalars[cursor]) {
+            cursor += 1
+        }
+        return cursor
+    }
+
+    /// Whether `scalar` contributes no base character of its own, and so can be hidden inside a
+    /// delimiter without changing what the delimiter reads as.
+    ///
+    /// The three mark categories are listed as well as `isDefaultIgnorableCodePoint` because they are
+    /// not the same set and neither contains the other: U+0301 is a nonspacing mark and is **not**
+    /// default-ignorable (it renders), while U+200B is default-ignorable and is a format character
+    /// rather than a mark. Both have to be skipped, so both tests are here.
+    private static func isIgnorableForDelimiterMatching(_ scalar: Unicode.Scalar) -> Bool {
+        switch scalar.properties.generalCategory {
+        case .nonspacingMark, .spacingMark, .enclosingMark, .format:
+            return true
+        default:
+            return scalar.properties.isDefaultIgnorableCodePoint
+        }
     }
 
     /// Reduce an attribute value — the `id=` and `source=` tokens on the wrapper's opening line — to
