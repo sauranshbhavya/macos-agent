@@ -419,6 +419,7 @@ struct MemoryCommandCenterTests {
             category: .snippets,
             count: fixture.viewModel.memoryEntryCount(for: .snippets),
             isRecording: fixture.viewModel.isMemoryCategoryEnabled(.snippets),
+            canChangeRecording: fixture.viewModel.memorySettings.isRecording,
             newestEntryDate: fixture.viewModel.newestMemoryEntryDate(for: .snippets),
             now: now
         )
@@ -436,12 +437,80 @@ struct MemoryCommandCenterTests {
             category: .workspaces,
             count: 0,
             isRecording: false,
+            canChangeRecording: true,
             newestEntryDate: nil,
             now: Date(timeIntervalSince1970: 1_700_000_000)
         )
 
         #expect(presentation.detailText == "0 saved")
         #expect(!presentation.isRecording)
+    }
+
+    /// **The row switch is dead while the master switch is off, and live otherwise.** Without this
+    /// the per-type toggles stayed movable with memory off: a user flips one, the effective value
+    /// cannot change, and it snaps back. Policy-disabled is the same answer by a different route,
+    /// and both are asserted because they are separate causes.
+    @Test
+    func aRowsSwitchCannotBeMovedWhileTheMasterSwitchOrAPolicyHasMemoryOff() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        #expect(fixture.viewModel.memorySettings.isRecording)
+
+        fixture.viewModel.setMemoryEnabled(false)
+        #expect(!fixture.viewModel.memorySettings.isRecording)
+
+        fixture.viewModel.setMemoryEnabled(true)
+        #expect(fixture.viewModel.memorySettings.isRecording)
+
+        let managed = try makeMemoryFixture(
+            policyProvider: StubMemoryPolicyProvider(
+                policy: MemoryEnterprisePolicy(isManaged: true, disablesMemory: true)
+            )
+        )
+        defer { managed.cleanUp() }
+        #expect(!managed.viewModel.memorySettings.isRecording)
+    }
+
+    /// The two groups the collection renders, and that between them they cover every row exactly
+    /// once — a category added later must land in a group rather than vanish from the page.
+    @Test
+    func theCollectionsTwoGroupsCoverEveryMemoryTypeExactlyOnce() {
+        let grouped = MemorySection.all.flatMap(\.categories)
+
+        #expect(Set(grouped) == Set(MemoryCategory.allCases))
+        #expect(grouped.count == MemoryCategory.allCases.count, "a type appeared in both groups")
+        #expect(MemorySection.all.map(\.title) == ["Saved by you", "Recorded as Sonny works"])
+        #expect(MemorySection.all.allSatisfy { !$0.categories.isEmpty })
+        // The split is the store classification, not a reading invented for the page.
+        for section in MemorySection.all {
+            #expect(section.categories.allSatisfy { $0.storeKind == section.kind }, "\(section.title)")
+        }
+    }
+
+    /// Every destructive confirmation on this page says what it takes, the way the app's other four
+    /// do. An empty message is the failure this catches — it renders as a dialog that asks a
+    /// question and answers nothing.
+    @Test
+    func everyDestructiveConfirmationAndEmptyStateHasRealWords() {
+        for category in MemoryCategory.allCases {
+            #expect(!MemoryDeletionCopy.message(for: category).isEmpty, "\(category.title)")
+        }
+
+        // The sheet's copy exists for the four types it opens for, and deliberately not for the
+        // three deleted from their own pages.
+        for category in [MemoryCategory.recentArtifacts, .clipboardHistory, .snippets, .approvedApps] {
+            #expect(!MemoryDeletionCopy.entryMessage(for: category).isEmpty, "\(category.title)")
+            #expect(!MemoryDeletionCopy.emptyMessage(for: category).isEmpty, "\(category.title)")
+            #expect(MemoryDeletionCopy.emptyTitle(for: category).hasPrefix("No "), "\(category.title)")
+        }
+        for category in [MemoryCategory.routines, .workspaces, .taskHistory] {
+            #expect(MemoryDeletionCopy.entryMessage(for: category).isEmpty, "\(category.title)")
+        }
+
+        // The two that promise something is *kept* are the two where a reader would most reasonably
+        // fear otherwise, so the promise is pinned rather than left to the wording surviving an edit.
+        #expect(MemoryDeletionCopy.message(for: .recentArtifacts).contains("files themselves are not deleted"))
+        #expect(MemoryDeletionCopy.message(for: .taskHistory).contains("Files those tasks created are not deleted"))
     }
 
     @Test
