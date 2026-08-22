@@ -2479,8 +2479,13 @@ final class AgentViewModel: ObservableObject {
     /// resolves the *default* location — a test fixture pointing its stores at a temporary directory
     /// would otherwise delete the developer's real files.
     func deleteMemory(in category: MemoryCategory) {
-        guard !isRunning else {
-            setError("Stop the current run before deleting memory.")
+        // `!isAwaitingApproval` as well as `!isRunning`, matching `deleteRoutine` rather than
+        // `deleteLocalData`: a run paused at its approval is a run about to write, and this deletes
+        // the file it is about to write into. `deleteLocalData`'s narrower guard is not the
+        // precedent to copy here — it is the whole-wipe path, which the user reaches from Settings
+        // rather than from beside a live task.
+        guard !isRunning, !isAwaitingApproval else {
+            setError("Finish or stop the current task before deleting memory.")
             return
         }
 

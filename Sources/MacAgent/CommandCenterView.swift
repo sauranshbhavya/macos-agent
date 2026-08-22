@@ -4005,7 +4005,7 @@ private struct MemoryView: View {
 
     private var collectionPanel: some View {
         VStack(spacing: 0) {
-            CollectionHeader(title: "What Sonny remembers")
+            CollectionHeader(title: "All memory")
 
             Rectangle()
                 .fill(SonnyTheme.border)
