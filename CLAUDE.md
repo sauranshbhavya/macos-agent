@@ -63,7 +63,7 @@ directory reports a contaminated result its own output cannot be told apart from
 (SONNY-176); `scripts/mutate unlock` clears a lock a killed run left behind. **The two tools also
 refuse each other** (SONNY-184): a battery is mid-mutant by construction, so a `scripts/warnings`
 run started during one counts the warnings of a deliberately broken tree and stamps them with a SHA
-that never contained that code — whichever starts second refuses, naming the other's lock.
+that never contained that code — whichever starts second refuses, naming the other's lock, **provided the other's lock is already in place**. Two starting within a few milliseconds of each other can both check and both proceed; the check and the `mkdir` are not one step, and closing that needs a lock the two tools share rather than two they read across, which was not worth the redesign (PR #94 review, F5). The refusal covers the reachable case, which is a founder starting one beside a session's run already under way.
 `scripts/mutate --help` has the plan format, and a "What this does and does not prevent" section
 stating what is left over; `scripts/mutate selftest` re-proves every one of those refusals still
 fires.

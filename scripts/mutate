@@ -1252,7 +1252,10 @@ printf \"X  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n\""
   printf '\n==> A scripts/warnings run holding this checkout is refused by name\n'
   # The other half of SONNY-184(c). scripts/warnings compiles the whole tree to count its warnings;
   # a battery starting beside one edits source underneath that build, so its count would describe a
-  # tree carrying a mutant. Neither report could show it, so whichever starts second refuses.
+  # tree carrying a mutant. Neither report could show it, so whichever starts second refuses —
+  # provided the other's lock is already there. Two starting within milliseconds of each other can
+  # both check and both proceed, since the check and the mkdir are not one step; the refusal covers
+  # the reachable case, which is one being started beside a run already under way.
   local warnings_decoy="$root/decoy-bin/warnings"
   mkdir -p "$(dirname "$warnings_decoy")"
   printf '#!/bin/sh\nsleep 60\n' >"$warnings_decoy"

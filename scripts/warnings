@@ -192,9 +192,13 @@ What this does and does not prevent
   it edits a source file, runs the suite, restores it. A run of this script started during one
   would compile a deliberately mutated tree and report its warnings as the tree's own, stamped with
   a SHA that never contained that code. So this refuses to start while scripts/mutate holds a live
-  lock in this checkout, and scripts/mutate refuses while this one does, each naming the other.
-  Neither can see a battery running in a *different* checkout, and neither needs to: worktrees have
-  separate working trees and separate build directories.
+  lock in this checkout, and scripts/mutate refuses while this one does, each naming the other —
+  provided the other's lock is already in place. Two started within milliseconds of each other can
+  both check and both proceed, because the check and the mkdir are not one step; closing that would
+  need a lock the two tools share rather than two they read across. What the refusal does cover is
+  the reachable case: one started beside a run already under way. Neither can see a battery running
+  in a *different* checkout, and neither needs to: worktrees have separate working trees and
+  separate build directories.
 
   It does not check any tree but this one, on this machine, with this toolchain. A warning that
   needs a different SDK or a newer compiler is not visible here.

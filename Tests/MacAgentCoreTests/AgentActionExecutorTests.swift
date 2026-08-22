@@ -1598,8 +1598,15 @@ struct AgentActionExecutorTests {
         // Two units really ran and their summaries really were joined — otherwise this would be
         // asserting the default on a single-unit run, where the accumulator is never raised or
         // lowered by anything and the assertion would hold against a broken join.
-        #expect(result.previews.flatMap(\.writes).count == 2)
-        #expect(result.summary.contains(" "))
+        //
+        // Asserted as *two* of the adapter's own sentence, and as both written paths appearing in
+        // the joined string. This line read `result.summary.contains(" ")` until PR #94's review,
+        // which cannot fail: a single unit's summary has a space in it too, so the check said
+        // nothing about joining at all.
+        let written = result.previews.flatMap(\.writes)
+        #expect(written.count == 2)
+        #expect(result.summary.components(separatedBy: "Created local draft at ").count - 1 == 2)
+        #expect(written.allSatisfy { result.summary.contains($0) })
         #expect(result.summaryProvenance == .codeAuthored)
     }
 
