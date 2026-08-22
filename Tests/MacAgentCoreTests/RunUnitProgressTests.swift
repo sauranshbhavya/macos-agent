@@ -1,0 +1,297 @@
+import Foundation
+import Testing
+@testable import MacAgentCore
+
+/// The progress the executor reports as a run goes (row 13, SONNY-210) — the half of resuming that
+/// decides *where* a resumed run starts.
+///
+/// Every assertion here is about the real `execute` path with a real plan, never about a seam: the
+/// thing being pinned is that a boundary the executor genuinely crossed is the boundary reported,
+/// and a test that called a reporter directly would pin nothing about that.
+@Suite
+@MainActor
+struct RunUnitProgressTests {
+    // MARK: - What gets reported
+
+    /// A two-unit chain reports the first unit and stays silent about the last.
+    ///
+    /// Both halves matter. The report is what makes a resume start after the calculation instead of
+    /// re-running it; the silence is the semantics — a boundary with nothing behind it changes no
+    /// resume, and reporting it would let a listener see a state ("every step done") that a
+    /// resumable record must never hold.
+    @Test
+    func aChainReportsEveryUnitButItsLast() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root)
+
+        var reported: [CompletedRunUnit] = []
+        _ = try await executor.execute(
+            plan: calculateThenOpenURL,
+            onUnitCompleted: { reported.append($0) }
+        ) { _, _ in }
+
+        #expect(reported.map(\.stepIDs) == [["calc"]])
+    }
+
+    /// A plan of one unit reports nothing at all — there is no boundary inside it to report.
+    @Test
+    func aSingleUnitPlanReportsNothing() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root)
+
+        var reported: [CompletedRunUnit] = []
+        _ = try await executor.execute(
+            plan: AgentPlan(
+                summary: "Open a page.",
+                requiresConfirmation: false,
+                steps: [openURLStep]
+            ),
+            onUnitCompleted: { reported.append($0) }
+        ) { _, _ in }
+
+        #expect(reported.isEmpty)
+    }
+
+    /// A run with no listener still runs. The control for every assertion above: without it, "nothing
+    /// was reported" would be equally true of an executor that had stopped executing.
+    @Test
+    func aRunWithNoListenerStillExecutesEveryUnit() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let opener = RecordingBrowserOpener()
+        let executor = makeExecutor(root: root, browserOpener: opener)
+
+        _ = try await executor.execute(plan: calculateThenOpenURL) { _, _ in }
+
+        #expect(opener.opened == ["https://example.com/page"])
+    }
+
+    /// **A nested plan's units are not this run's units.** A routine runs as one unit of the plan
+    /// that invoked it, and its own steps carry ids the outer plan does not contain — a resume
+    /// rebuilt from them would subtract nothing and claim progress the outer plan cannot express.
+    @Test
+    func aRoutinesOwnUnitsAreNotReportedToTheRunThatInvokedIt() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        // Two workflows inside the routine, so the nested plan really is a chain and really does
+        // reach `executeChain` a second time — the path the union comment in `executeChain` records.
+        try routineStore.save(
+            StoredRoutine(
+                name: "Morning",
+                steps: [
+                    AgentStep(id: "inner-calc", operation: .calculateUtility, description: "Add up.", searchQuery: "2 + 2"),
+                    AgentStep(
+                        id: "inner-url",
+                        operation: .openURL,
+                        description: "Open.",
+                        targetURL: "https://example.com/inner"
+                    )
+                ]
+            )
+        )
+        let executor = makeExecutor(root: root, routineStore: routineStore)
+
+        var reported: [CompletedRunUnit] = []
+        _ = try await executor.execute(
+            plan: AgentPlan(
+                summary: "Run the routine, then open a page.",
+                requiresConfirmation: false,
+                steps: [
+                    AgentStep(id: "run", operation: .runRoutine, description: "Run it.", routineName: "Morning"),
+                    openURLStep
+                ]
+            ),
+            onUnitCompleted: { reported.append($0) }
+        ) { _, _ in }
+
+        // The outer run's own first unit, and nothing from inside it.
+        #expect(reported.map(\.stepIDs) == [["run"]])
+        let everyReportedID = Set(reported.flatMap(\.stepIDs))
+        #expect(!everyReportedID.contains("inner-calc"))
+        #expect(!everyReportedID.contains("inner-url"))
+    }
+
+    /// The carried artifact path travels with the unit that produced it, because the steps that are
+    /// left name it nowhere.
+    @Test
+    func aReportedUnitCarriesTheFileTheChainWouldHandTheNextOne() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let draft = root.appendingPathComponent("notes.md")
+        let executor = makeExecutor(root: root)
+
+        var reported: [CompletedRunUnit] = []
+        _ = try await executor.execute(
+            plan: AgentPlan(
+                summary: "Write a note, then open it.",
+                requiresConfirmation: false,
+                steps: [
+                    AgentStep(
+                        id: "draft",
+                        operation: .createLocalDraft,
+                        description: "Write it.",
+                        outputPath: draft.path,
+                        draftTitle: "Notes",
+                        draftContent: "Body."
+                    ),
+                    AgentStep(id: "open", operation: .openGeneratedArtifact, description: "Open it.")
+                ]
+            ),
+            onUnitCompleted: { reported.append($0) }
+        ) { _, _ in }
+
+        #expect(reported.map(\.stepIDs) == [["draft"]])
+        #expect(reported.first?.chainedArtifactPath == draft.path)
+    }
+
+    // MARK: - What a resumed run is handed back
+
+    /// **The seed, on the shape a resume actually produces: one step.** "Write a note, then open it",
+    /// interrupted after the note, leaves the one-step plan `[open_generated_artifact]` with no path
+    /// on it — a one-step plan is not a chain, so `executeChain` is never reached and only the seed
+    /// applied in `execute` itself can fill it in.
+    @Test
+    func aResumedSingleStepPlanOpensTheFileTheEarlierRunProduced() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let draft = root.appendingPathComponent("notes.md")
+        try Data("Body.".utf8).write(to: draft, options: .atomic)
+        let opener = RecordingFileOpener()
+        let executor = makeExecutor(root: root, fileOpener: opener)
+
+        _ = try await executor.execute(
+            plan: AgentPlan(
+                summary: "Write a note, then open it.",
+                requiresConfirmation: false,
+                steps: [AgentStep(id: "open", operation: .openGeneratedArtifact, description: "Open it.")]
+            ),
+            resumedArtifactPath: draft.path
+        ) { _, _ in }
+
+        #expect(opener.opened == [draft.path])
+    }
+
+    /// And the control: the same plan with nothing carried in fails rather than opening something
+    /// else. Without this, the assertion above is equally true of an executor that happened to find
+    /// the file by another route.
+    @Test
+    func theSameResumedPlanWithNothingCarriedInHasNoFileToOpen() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let opener = RecordingFileOpener()
+        let executor = makeExecutor(root: root, fileOpener: opener)
+
+        await #expect(throws: Error.self) {
+            _ = try await executor.execute(
+                plan: AgentPlan(
+                    summary: "Open it.",
+                    requiresConfirmation: false,
+                    steps: [AgentStep(id: "open", operation: .openGeneratedArtifact, description: "Open it.")]
+                )
+            ) { _, _ in }
+        }
+        #expect(opener.opened.isEmpty)
+    }
+
+    /// The invariant the whole partial-resume idea rests on: only whole units are ever recorded as
+    /// finished, so what is left always begins at a unit boundary and re-segments into exactly the
+    /// units that had not run.
+    @Test
+    func theRemainderOfAPlanSegmentsIntoTheUnitsThatHadNotRun() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let executor = makeExecutor(root: root)
+
+        var reported: [CompletedRunUnit] = []
+        _ = try await executor.execute(
+            plan: calculateThenOpenURL,
+            onUnitCompleted: { reported.append($0) }
+        ) { _, _ in }
+
+        let record = ResumableTask(
+            command: "Work it out, then open the page",
+            plan: calculateThenOpenURL,
+            completedStepIDs: reported.flatMap(\.stepIDs),
+            startedAt: Date(timeIntervalSince1970: 1_700_000_000),
+            updatedAt: Date(timeIntervalSince1970: 1_700_000_000)
+        )
+
+        // The remainder is the second unit, whole, with no fragment of the first left in it.
+        #expect(record.remainingPlan().steps.map(\.id) == ["url"])
+        // And it really runs on its own: a remainder that had cut a unit in half would fail here,
+        // which is what makes this an assertion about segmentation rather than about arithmetic.
+        let opener = RecordingBrowserOpener()
+        let resumingExecutor = makeExecutor(root: root, browserOpener: opener)
+        _ = try await resumingExecutor.execute(plan: record.remainingPlan()) { _, _ in }
+        #expect(opener.opened == ["https://example.com/page"])
+    }
+
+    // MARK: - Fixtures
+
+    private var openURLStep: AgentStep {
+        AgentStep(
+            id: "url",
+            operation: .openURL,
+            description: "Open the page.",
+            targetURL: "https://example.com/page"
+        )
+    }
+
+    private var calculateThenOpenURL: AgentPlan {
+        AgentPlan(
+            summary: "Work out a number, then open a page.",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(id: "calc", operation: .calculateUtility, description: "What is 2 plus 2?", searchQuery: "2 + 2"),
+                openURLStep
+            ]
+        )
+    }
+
+    private func makeExecutor(
+        root: URL,
+        browserOpener: BrowserOpening = RecordingBrowserOpener(),
+        fileOpener: FileOpening = RecordingFileOpener(),
+        routineStore: RoutineStore? = nil
+    ) -> AgentActionExecutor {
+        AgentActionExecutor(
+            whitelist: PathWhitelist(roots: [root]),
+            browserOpener: browserOpener,
+            fileOpener: fileOpener,
+            routineStore: routineStore ?? RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
+            workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json")),
+            clipboardHistoryStore: ClipboardHistoryStore(fileURL: root.appendingPathComponent("clipboard.json")),
+            snippetStore: SnippetStore(fileURL: root.appendingPathComponent("snippets.json")),
+            recentArtifactStore: RecentArtifactStore(fileURL: root.appendingPathComponent("artifacts.json")),
+            shortcutCatalog: NoShortcutsForProgressTests(),
+            shortcutRunHistoryStore: ShortcutRunHistoryStore(
+                fileURL: root.appendingPathComponent("shortcuts-history.json")
+            )
+        )
+    }
+}
+
+@MainActor
+private final class RecordingBrowserOpener: BrowserOpening {
+    private(set) var opened: [String] = []
+
+    func open(_ url: URL, using browser: MacApp?) async throws {
+        opened.append(url.absoluteString)
+    }
+}
+
+@MainActor
+private final class RecordingFileOpener: FileOpening {
+    private(set) var opened: [String] = []
+
+    func openFile(_ url: URL) async throws {
+        opened.append(url.path)
+    }
+}
+
+private struct NoShortcutsForProgressTests: ShortcutCatalogProviding {
+    func shortcutNames() throws -> [String] { [] }
+}

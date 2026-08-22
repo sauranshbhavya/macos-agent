@@ -63,14 +63,18 @@ public struct ResumableTask: Codable, Equatable, Sendable, Identifiable {
     /// The ids of steps belonging to units that finished. A subset of `plan.steps`' ids, in plan
     /// order.
     public var completedStepIDs: [String]
-    /// The file the last finished unit produced, if any — the value
-    /// `AgentActionExecutor.chainedArtifactPath(after:)` carries from one unit of a chain to the
-    /// next.
+    /// The file the last finished unit produced, if any — the value `executeChain` carries from one
+    /// unit of a chain to the next and reports on `CompletedRunUnit`.
     ///
     /// Recorded because a resumed run starts in the middle of that carry. A chain's bare "reveal it
     /// in Finder" step has no path of its own and is filled in from whatever the previous unit
-    /// wrote; dropping this would resume that step pointing at nothing. `remainingPlan()` applies it
-    /// through the executor's own rule rather than a second copy of it.
+    /// wrote; dropping this would resume that step pointing at nothing.
+    ///
+    /// **Nothing here applies it, deliberately.** `remainingPlan()` returns the steps and no more;
+    /// the caller hands this value to `AgentActionExecutor.execute(resumedArtifactPath:)`, which
+    /// seeds its own carry with it and then applies its own rule. A second copy of that rule living
+    /// here is the shape this repository consolidates away — the rule would then have two homes and
+    /// only one of them would get changed.
     public var chainedArtifactPath: String?
     public var startedAt: Date
     /// The idle clock. Written on creation and on every unit boundary, and read by
@@ -308,11 +312,16 @@ public struct ResumableTaskStore: @unchecked Sendable {
     /// store has: every run that finishes cleanly settles a record that a suppressed or
     /// memory-disabled run never wrote, and re-encrypting the file to change nothing on each of
     /// those would be a write per task for no effect.
-    public func delete(id: String) throws {
+    /// `now` is explicit here for the same reason it is on `save` and `loadAll`, and it is not
+    /// decorative: this reads through `loadAll`, so the idle period decides what it can see. A record
+    /// already past that period is invisible to this call and is therefore *not* rewritten out — it
+    /// is already gone as far as every reader is concerned, and it leaves the file on the next write
+    /// that touches it, which is the same expire-on-read, drop-on-write rule the store states above.
+    public func delete(id: String, now: Date = Date()) throws {
         guard fileManager.fileExists(atPath: fileURL.path) else {
             return
         }
-        let tasks = try loadAll()
+        let tasks = try loadAll(now: now)
         let remaining = tasks.filter { $0.id != id }
         guard remaining.count != tasks.count else {
             return
