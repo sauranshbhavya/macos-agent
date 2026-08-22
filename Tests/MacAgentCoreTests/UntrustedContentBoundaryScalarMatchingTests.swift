@@ -401,7 +401,9 @@ struct UntrustedContentBoundaryScalarMatchingTests {
             "A perfectly ordinary sentence.",
             "café, naïve, Zoë — and a decomposed cafe\u{0301}",
             // The near-miss the space fold in `escapeAttribute` depends on: a space-separated
-            // delimiter is *not* a delimiter here, which is why U+0020 is excluded from the skip.
+            // delimiter is *not* a delimiter here — not because U+0020 is excluded from the skip (it
+            // is not, since round 3), but because `_` is an expected scalar that no skipped scalar can
+            // supply, so the match fails on the missing underscore rather than on the space.
             "UNTRUSTED OBSERVED CONTENT END",
             "UNTRUSTED_OBSERVED CONTENT_END",
             // Canonical matching must not become canonical *rewriting* of ordinary text.
@@ -592,8 +594,12 @@ struct UntrustedContentBoundaryScalarMatchingTests {
     /// U+0020, which the carve-out's own comment never named (PR #100 review round 2, F1).
     ///
     /// The trailing skip canonicalises away an attacker's decoration; it must not canonicalise away a
-    /// word break. That text is user-facing: it reaches a rendered note through
-    /// `WebResearchMarkdownCapabilityAdapter`'s `escape(note.summary)`.
+    /// word break. **The cost is prospective, not live, and this comment used to claim otherwise:** it
+    /// said the text "reaches a rendered note through `WebResearchMarkdownCapabilityAdapter`'s
+    /// `escape(note.summary)`", and that adapter never calls the boundary at all. Every consumer of
+    /// the matcher is prompt text on the wire — see `isIgnorableAfterADelimiter` for the traced call
+    /// graph. The property is pinned anyway, because a silent deletion inside escaped text is what a
+    /// future rendering consumer would inherit without noticing.
     @Test
     func aSpaceFollowingAnEscapedDelimiterIsNotSwallowed() {
         for delimiter in UntrustedContentBoundary.allDelimiters {
@@ -642,9 +648,11 @@ struct UntrustedContentBoundaryScalarMatchingTests {
     /// **The `uppercaseLetter` guard on canonical decomposition is re-derived, not trusted.**
     ///
     /// `canonicalBase(of:)` skips decomposition for any scalar that is not `uppercaseLetter`, which is
-    /// what keeps a 500KB CJK page from paying 283ms for a property none of its scalars have. That
-    /// guard is only safe if every scalar which canonically decomposes to an ASCII `[A-Z_]` base is
-    /// `uppercaseLetter`. Scanned over U+0080–U+212B, which is where all of them live: the offline
+    /// what keeps a large CJK page from paying for a property none of its scalars have — measured at
+    /// 17.0 ms guarded against 99.7 ms unguarded over a 173 334-scalar page, not the "283ms" three
+    /// records carried for two rounds (see `canonicalBase`'s own comment for why that figure was a
+    /// scalar count reported as a byte size). That guard is only safe if every scalar which
+    /// canonically decomposes to an ASCII `[A-Z_]` base is `uppercaseLetter`. Scanned over U+0080–U+212B, which is where all of them live: the offline
     /// census over the whole `0...0x10FFFF` range found 244, the lowest U+00C0 and the highest U+212B
     /// ANGSTROM SIGN.
     @Test
