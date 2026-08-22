@@ -115,10 +115,20 @@ public struct OutputLocation: Codable, Equatable, Identifiable, Sendable {
 /// ## What it deliberately does not see
 ///
 /// A capability that writes a file without reporting it in `ActionPreview.writes` is invisible here.
-/// `InvokeShortcutCapabilityAdapter` is the live example: it resolves an `outputPath` but publishes
-/// no `writes`, so a Shortcut's own output folder is never recorded. Stated rather than fixed —
-/// making it visible is a change to that adapter's preview contract, which this store has no
-/// business making.
+/// `InvokeShortcutCapabilityAdapter` is the live example, and it is a *stronger* blind spot than an
+/// unpublished write: **Sonny never resolves a destination for a Shortcut at all.** That adapter sets
+/// no `outputPath` — `git grep -n "outputPath" -- Sources/MacAgentCore/InvokeShortcutCapabilityAdapter.swift`
+/// prints nothing at `b74984d` — publishes no `writes`, and its `ShortcutSpec` holds a name and an
+/// input and nothing else. A Shortcut that writes a file writes it wherever the Shortcut itself
+/// decides, and Sonny never learns the path.
+///
+/// **So the remedy is not what an earlier version of this paragraph said** (PR #101 review, F5). It
+/// claimed the adapter "resolves an `outputPath` but publishes no `writes`", which made the fix look
+/// like a change to that adapter's preview contract. There is no resolved path to publish: making a
+/// Shortcut's output visible means making the adapter resolve a destination first, which is a
+/// materially larger change carrying its own whitelist and approval questions. A reader who took the
+/// old sentence at face value would scope that work wrongly, which is the half that costs someone
+/// later.
 ///
 /// A run that throws before `execute` returns records nothing, even if it had already written a
 /// file. That is the conservative direction and it matches `RecentArtifactStore`, whose bookkeeping
