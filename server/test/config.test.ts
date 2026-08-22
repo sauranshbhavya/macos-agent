@@ -4,6 +4,7 @@ import {
   acceptedKeys,
   activeKey,
   loadConfig,
+  parseTrustedProxies,
   providerCredentials,
 } from "../src/config.js";
 
@@ -97,5 +98,151 @@ describe("provider credentials — two live keys per provider", () => {
   it("returns undefined rather than throwing for a provider with no credential", () => {
     expect(activeKey(loadConfig({ ...base }), "vision")).toBeUndefined();
     expect(acceptedKeys(loadConfig({ ...base }), "vision")).toEqual([]);
+  });
+
+  describe("ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE — the production gate", () => {
+    // **PR #87 fifth round, F4: this control had no test at all.** `grep -rn` across `test/` returned
+    // nothing, and replacing the refusal's condition with `false` left the suite green at 145/145.
+    // It is the control that keeps an unauthenticated destructive route off the one host where it
+    // would matter, and it is the fix for this branch's original CRITICAL.
+    //
+    // The gate does work — a reviewer drove eleven env-value variants and a real compiled-process
+    // launch at it. **That is exactly the shape the founder made this round fix for the race
+    // battery** (F7 of the third round): headline safety evidence living only as a number in a
+    // ticket comment with no command left to run. Same shape, different artifact.
+
+    it("REFUSES to start when the flag is on in production", () => {
+      expect(() => loadConfig({ SONNY_ENV: "production", ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE: "true" }))
+        .toThrow(ConfigError);
+      // Refused rather than silently forced off: a deployment believing a route is mounted that is
+      // not is its own confusion. The message has to name the variable, or the operator is guessing.
+      expect(() => loadConfig({ SONNY_ENV: "production", ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE: "true" }))
+        .toThrow(/ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE/);
+    });
+
+    it("allows it outside production, which is what makes it a gate and not a ban", () => {
+      for (const environment of ["local", "staging"]) {
+        const config = loadConfig({ SONNY_ENV: environment, ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE: "true" });
+        expect(config.allowUnauthenticatedAccountDelete).toBe(true);
+      }
+      expect(loadConfig({ SONNY_ENV: "production" }).allowUnauthenticatedAccountDelete).toBe(false);
+    });
+
+    it("defaults to off when the variable is absent", () => {
+      // The safe direction has to be the default, because the dangerous one is a deployment away.
+      expect(loadConfig({ SONNY_ENV: "local" }).allowUnauthenticatedAccountDelete).toBe(false);
+    });
+
+    it("refuses every near-miss spelling of true rather than guessing at it", () => {
+      // A gate that accepted `TRUE` in production while refusing `true` would be worse than no gate:
+      // it would be a gate somebody had tested. The enum is what makes the refusal total.
+      for (const value of ["TRUE", "True", " true", "1", "yes", "on", ""]) {
+        expect(() => loadConfig({ SONNY_ENV: "production", ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE: value }))
+          .toThrow(ConfigError);
+        expect(() => loadConfig({ SONNY_ENV: "local", ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE: value }))
+          .toThrow(ConfigError);
+      }
+    });
+  });
+
+  describe("TRUSTED_PROXIES", () => {
+    // **PR #87 third round, F5.** Nothing validated these entries, so a typo reached
+    // `@fastify/proxy-addr`'s `compile()` and threw a raw third-party `TypeError` **inside the
+    // `Fastify(...)` constructor** — before `app.ready()`, before this server's logger exists, and
+    // naming library internals rather than the variable that is wrong. The gateway would not start
+    // and the log did not say why, which is the exact opposite of what this file exists to
+    // guarantee: a bad environment is a named `ConfigError` identifying the variable.
+
+    it("accepts addresses, CIDR ranges and Fastify's named sets", () => {
+      expect(parseTrustedProxies("10.0.0.0/8, 172.16.0.0/12")).toEqual(["10.0.0.0/8", "172.16.0.0/12"]);
+      expect(parseTrustedProxies("192.168.1.1")).toEqual(["192.168.1.1"]);
+      expect(parseTrustedProxies("::1")).toEqual(["::1"]);
+      expect(parseTrustedProxies("2001:db8::/32")).toEqual(["2001:db8::/32"]);
+      // Named sets are `proxy-addr`'s own documented shorthand; refusing them would make this
+      // validation narrower than the thing it validates for.
+      expect(parseTrustedProxies("loopback,uniquelocal")).toEqual(["loopback", "uniquelocal"]);
+    });
+
+    it("still means trust-nothing when empty, as `false` rather than an empty array", () => {
+      expect(parseTrustedProxies("")).toBe(false);
+      expect(parseTrustedProxies("   ")).toBe(false);
+      expect(loadConfig({ ...base }).trustProxy).toBe(false);
+    });
+
+    it("refuses a malformed entry with a ConfigError that NAMES it", () => {
+      // Naming the entry is the point: there is no fixing a list without knowing which element is
+      // bad, and a proxy address — unlike every other value this file refuses to echo — is not a
+      // secret.
+      expect(() => parseTrustedProxies("10.0.0.0/8,not-an-ip")).toThrow(ConfigError);
+      expect(() => parseTrustedProxies("10.0.0.0/8,not-an-ip")).toThrow(/not-an-ip/);
+      expect(() => parseTrustedProxies("10.0.0.0/8,not-an-ip")).toThrow(/TRUSTED_PROXIES/);
+    });
+
+    it("refuses a /0 prefix, which is how someone writes trust-everything", () => {
+      // **PR #87 sixth round.** `@fastify/proxy-addr` refuses a full-range prefix, so `/0` passed
+      // this validator and then threw `TypeError: invalid range on address: 0.0.0.0/0` inside the
+      // `Fastify(...)` constructor — the exact failure this validator exists to prevent, reached
+      // through the validator itself. And it is not an exotic typo: `/0` is what an operator writes
+      // when they are looking for the old boolean `true`.
+      for (const entry of ["0.0.0.0/0", "10.0.0.0/0", "1.2.3.4/0", "::/0", "::1/0", "fe80::/0", "0.0.0.0/00"]) {
+        expect(() => parseTrustedProxies(entry), entry).toThrow(ConfigError);
+      }
+      // The message has to say why, or the operator retries the same idea in another spelling.
+      expect(() => parseTrustedProxies("0.0.0.0/0")).toThrow(/trust every proxy/);
+      // Everything adjacent still compiles — this is a refusal of /0, not of small prefixes.
+      expect(parseTrustedProxies("0.0.0.0/1")).toEqual(["0.0.0.0/1"]);
+      expect(parseTrustedProxies("::/1")).toEqual(["::/1"]);
+      expect(parseTrustedProxies("10.0.0.0/008")).toEqual(["10.0.0.0/008"]);
+    });
+
+    it("accepts NOTHING that Fastify itself cannot compile", async () => {
+      // **The assertion that catches this class without knowing which entry is the problem.** The
+      // `/0` test above pins the case we now know about; this one pins the *property* — whatever
+      // this validator lets through, `proxy-addr`'s `compile()` must accept, and that runs inside
+      // the `Fastify(...)` constructor where a throw is unreachable by any error handler.
+      //
+      // Written as "for each candidate: if the validator accepts it, the app must build" rather
+      // than as a list of known-good values. That is the difference between a test that confirms
+      // what we already fixed and one that would have found it: relaxing the validator makes a
+      // candidate below start passing, and then the build throws and this fails.
+      const { buildApp } = await import("../src/app.js");
+      const candidates = [
+        "10.0.0.0/8,172.16.0.0/12", "192.168.1.1", "::1", "2001:db8::/32", "loopback,uniquelocal",
+        "0.0.0.0/1", "10.0.0.0/008",
+        // The shapes a looser validator would start admitting. Each is currently refused; if any
+        // stops being refused, it has to be one Fastify can compile.
+        "0.0.0.0/0", "10.0.0.0/0", "::/0", "fe80::/0", "0.0.0.0/00",
+        "10.0.0.0/64", "10.0.0.0/abc", "not-an-ip", "10.0.0.0/",
+      ];
+      let accepted = 0;
+      for (const raw of candidates) {
+        let parsed;
+        try {
+          parsed = loadConfig({ SONNY_ENV: "local", TRUSTED_PROXIES: raw });
+        } catch {
+          continue;                       // refused by the validator, which is a fine outcome
+        }
+        accepted += 1;
+        expect(() => buildApp(parsed), raw).not.toThrow();
+      }
+      // And the loop is not vacuous: some of them really do get through.
+      expect(accepted).toBe(7);
+    });
+
+    it("refuses a prefix that is not a prefix for that address family", () => {
+      // `10.0.0.0/64` is not a v4 network, and `proxy-addr` would say so at a moment nobody is
+      // watching. Both families are checked against their own width rather than one shared bound.
+      expect(() => parseTrustedProxies("10.0.0.0/64")).toThrow(ConfigError);
+      expect(() => parseTrustedProxies("10.0.0.0/abc")).toThrow(ConfigError);
+      expect(() => parseTrustedProxies("10.0.0.0/")).toThrow(ConfigError);
+      expect(parseTrustedProxies("2001:db8::/64")).toEqual(["2001:db8::/64"]);
+    });
+
+    it("fails at loadConfig, so a bad value is a startup refusal rather than a crash later", () => {
+      expect(() => loadConfig({ ...base, TRUSTED_PROXIES: "10.0.0.0/8,garbage" })).toThrow(ConfigError);
+      // The whole hazard was the failure arriving from somewhere else entirely. This asserts the
+      // error is ours, by type and by the variable it names.
+      expect(() => loadConfig({ ...base, TRUSTED_PROXIES: "garbage" })).toThrow(/TRUSTED_PROXIES/);
+    });
   });
 });
