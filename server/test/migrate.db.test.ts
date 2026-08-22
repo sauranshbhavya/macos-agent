@@ -52,6 +52,46 @@ describeDb("migrations against a real Postgres", () => {
     expect(ran).toEqual([]);
   });
 
+  /**
+   * Everything the `sonny` schema is made of, as one comparable string.
+   *
+   * **Naming one migration's observable is what kept going stale** (PR #87 second round). R17 was
+   * right that asserting only on the ledger is vacuous — that row disappears whether or not the
+   * rollback SQL ran — and fixed it by naming 0004's trigger, which then broke the moment 0005
+   * landed and became the newest. A fingerprint asserts the same property without knowing which
+   * migration is last: roll back the newest and the schema must *differ*. Triggers, columns and
+   * function bodies are all in it, so a migration whose only effect is a `CREATE OR REPLACE
+   * FUNCTION` still registers.
+   */
+  const schemaFingerprint = async (): Promise<string> => {
+    const { rows } = await client.query<{ line: string }>(
+      `SELECT line FROM (
+         SELECT 'trigger:' || c.relname || '.' || t.tgname AS line
+           FROM pg_trigger t JOIN pg_class c ON c.oid = t.tgrelid
+           JOIN pg_namespace n ON n.oid = c.relnamespace
+          WHERE n.nspname = 'sonny' AND NOT t.tgisinternal
+         UNION ALL
+         SELECT 'column:' || table_name || '.' || column_name || ':' || data_type
+           FROM information_schema.columns WHERE table_schema = 'sonny'
+         UNION ALL
+         SELECT 'index:' || indexname || ':' || indexdef
+           FROM pg_indexes WHERE schemaname = 'sonny'
+         UNION ALL
+         SELECT 'function:' || p.proname || ':' || md5(p.prosrc)
+           FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+          WHERE n.nspname = 'sonny'
+       ) parts ORDER BY line`,
+    );
+    return rows.map((r) => r.line).join("\n");
+  };
+
+  /**
+   * The whole-schema fingerprint taken before this file's rollback, so the re-apply test two below
+   * can assert the schema came back to **exactly** where it was rather than merely to something
+   * that still has a `sonny` schema in it.
+   */
+  let beforeRollback = "";
+
   it("rolls the last migration back, undoing its schema change and its ledger row", async () => {
     // Rolls back whatever is newest rather than naming a migration: this test outlives every
     // migration added after it, and hardcoding one made it fail the moment 0002 landed.
@@ -59,21 +99,18 @@ describeDb("migrations against a real Postgres", () => {
       "SELECT id FROM sonny_meta.schema_migration ORDER BY id DESC LIMIT 1",
     );
     const newest = applied.rows[0]!.id;
+    const before = await schemaFingerprint();
+    beforeRollback = before;
     const rolled = await down(client);
     expect(rolled).toBe(newest);
-    // **Assert the schema actually changed, not only the ledger** (PR #87 R17). Generalising this
-    // test past a single migration dropped its schema assertion, leaving it checking that a row
-    // disappeared from a table the runner itself writes -- which happens whether or not the
-    // rollback SQL ran at all. 0004's trigger is the observable thing its rollback removes.
-    const { rows: triggers } = await client.query(
-      "SELECT tgname FROM pg_trigger WHERE tgname = 'account_close_marks_identities' AND NOT tgisinternal",
-    );
-    expect(triggers).toHaveLength(0);
+    // **Assert the schema actually changed, not only the ledger** (PR #87 R17).
+    expect(await schemaFingerprint()).not.toBe(before);
     const { rows: ledger } = await client.query(
       "SELECT id FROM sonny_meta.schema_migration WHERE id = $1", [newest],
     );
     expect(ledger).toHaveLength(0);
   });
+
 
   it("re-applies cleanly after a rollback, which is what makes staging a rehearsal", async () => {
     // The whole reason staging exists per the ticket: a migration is verified there before it
@@ -87,6 +124,12 @@ describeDb("migrations against a real Postgres", () => {
       "SELECT schema_name FROM information_schema.schemata WHERE schema_name = 'sonny'",
     );
     expect(rows).toHaveLength(1);
+    // **"Lands in the same place" asserted as an equality** (PR #87 second round). The sentence
+    // above is the reason this test exists and "the schema still exists" was all it checked -- a
+    // rollback that dropped a trigger and an `up` that forgot to recreate it would both pass. The
+    // fingerprint compares every trigger, column, index and function body against the state before
+    // the rollback.
+    expect(await schemaFingerprint()).toBe(beforeRollback);
   });
 
   it("reports nothing to roll back once the ledger is empty", async () => {

@@ -159,6 +159,14 @@ export async function resolve(
     // Rule 2 — a verified, non-relay address matching an existing verified, non-relay identity.
     // Every clause is load-bearing: an unverified assertion is an attacker's claim, and a relay
     // address matches nothing real, so both fall through to rule 3 rather than linking.
+    //
+    // **`NOT i.account_closed` is here so rules 1 and 2 answer the same question** (PR #87 second
+    // round, F1c). Rule 1 excludes both a closed account and a closed identity; this one used to
+    // exclude only the account, and the two are not the same set — an identity can carry
+    // `account_closed` while sitting on a live account, which is exactly the state F1's missing
+    // trigger produced. Where they disagreed, rule 1 would refuse an identity and rule 2 would then
+    // link a *different* sign-in onto the account holding it, so the two halves of one rule
+    // contradicted each other about the same row.
     let accountId: string | undefined;
     let linkMethod: LinkMethod = "primary";
     if (email && assertion.emailVerified && !relay) {
@@ -169,6 +177,7 @@ export async function resolve(
           WHERE lower(i.email_hint) = $1
             AND i.email_verified
             AND NOT i.email_is_relay
+            AND NOT i.account_closed
             AND a.deleted_at IS NULL
           LIMIT 1`,
         [email],
@@ -277,6 +286,9 @@ export class LinkError extends Error {}
  *
  * Moves `identity` onto `targetAccountId`; the vacated account is left for the caller to close,
  * because deleting it here would destroy content the retention ticket owns.
+ *
+ * **Both ends must also be live.** The target is checked and locked below; the source identity must
+ * not be one a closed account left behind, which is the check the second review round added.
  */
 export async function linkExplicitly(
   client: pg.Client,
@@ -321,13 +333,41 @@ export async function linkExplicitly(
       // to remove, and do it through a path that looks like a sign-in.
       throw new LinkError("target account does not exist or is deleted");
     }
+    // **The SOURCE must be live too** (PR #87 second round, F1b). Moving an identity off a closed
+    // account onto a live one resurrects, through a path that looks like a link, exactly what
+    // closing the account took away — and it was the statement that produced the corrupt row F1 is
+    // about: no trigger recomputed `account_closed`, so the moved identity landed on a live account
+    // still flagged closed, invisible to rule 1, and the owner's next sign-in made them a second
+    // account. 0005 makes the flag follow the account; this makes the move refuse in the first
+    // place, because a closed identity has nothing legitimate to say — rule 1 will not let anyone
+    // sign in with it, so `provenIdentityId` can never honestly name one.
+    //
+    // **Checked inside the UPDATE rather than by a SELECT first**, so there is no window between
+    // the check and the move. A separate read would have to lock the source account to be safe, and
+    // taking an account lock *after* the identity is the deadlock direction 0004's header forbids.
     const moved = await client.query(
-      `UPDATE sonny.identity
+      `UPDATE sonny.identity i
           SET account_id = $2, link_method = 'explicit', linked_at = now()
-        WHERE id = $1`,
+        WHERE i.id = $1
+          AND NOT i.account_closed
+          AND EXISTS (SELECT 1 FROM sonny.account a
+                       WHERE a.id = i.account_id AND a.deleted_at IS NULL)`,
       [identityId, targetAccountId],
     );
-    if (moved.rowCount === 0) throw new LinkError("identity does not exist");
+    if (moved.rowCount === 0) {
+      // Nothing moved. Distinguishing the two reasons costs one read on a path that is already
+      // failing, and "identity does not exist" reported for an identity that plainly does exist is
+      // the kind of message that sends the next reader looking in the wrong place.
+      const present = await client.query(
+        "SELECT 1 FROM sonny.identity WHERE id = $1",
+        [identityId],
+      );
+      throw new LinkError(
+        present.rowCount === 0
+          ? "identity does not exist"
+          : "the identity being moved belongs to a closed account",
+      );
+    }
     await client.query("COMMIT");
   } catch (error) {
     await client.query("ROLLBACK");

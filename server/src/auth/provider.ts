@@ -50,7 +50,7 @@ export interface AuthProvider {
   /**
    * The provider-side user this access token belongs to, or `ProviderRejected`.
    *
-   * **This is the verification SONNY-128's middleware will do for every authenticated route.** It
+   * **This is the verification SONNY-203's middleware will do for every authenticated route.** It
    * exists here because `DELETE /v1/account` cannot be allowed to attribute its caller from a
    * header — a proof of concept destroyed another account with a made-up bearer token — and a
    * destructive route must either verify or not exist.

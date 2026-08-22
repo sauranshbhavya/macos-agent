@@ -40,14 +40,35 @@ class FakeProvider implements AuthProvider {
     supabaseUserId: "11111111-1111-1111-1111-111111111111",
     email: "u@example.com", emailVerified: true,
     accessToken: "at", refreshToken: "rt", expiresIn: 3600,
+    // §3.2's `refresh_expires_at`, which the route emits only when the provider reports one — so a
+    // fake that never reports one leaves that branch, and the field, entirely unexercised
+    // (PR #87 second round, F7). Ninety days.
+    refreshExpiresIn: 90 * 24 * 3600,
   };
+  /**
+   * **Rotation modelled, not assumed** (PR #87 second round, F7/F13). §3.3 makes the *provider*
+   * responsible for retiring a rotated refresh token, and a fake that accepts any string could not
+   * tell a route that handles the retirement correctly from one that does not — which is why "the
+   * old one stops working" went unasserted through two review rounds. This is the platform's
+   * documented behaviour standing in for it: the token most recently issued is the only one
+   * accepted, and presenting an older one is `ProviderRejected`, which §3.3 says is the theft case.
+   *
+   * What the *route* owns, and what the test therefore pins, is the mapping of that refusal onto
+   * `401 auth.token_revoked`.
+   */
+  liveRefreshToken = "rt";
   async sendEmailCode(email: string) { this.sent.push(email); return { providerRequestId: "p1" }; }
   async verifyEmailCode(): Promise<VerifiedSession> {
     if (!this.accept) throw new ProviderRejected("Token has expired or is invalid");
+    this.liveRefreshToken = this.session.refreshToken;
     return this.session;
   }
-  async refresh(): Promise<VerifiedSession> {
+  async refresh(presented: string): Promise<VerifiedSession> {
     if (!this.accept) throw new ProviderRejected("refresh rejected");
+    if (presented !== this.liveRefreshToken) {
+      throw new ProviderRejected("refresh token was already rotated away");
+    }
+    this.liveRefreshToken = this.session.refreshToken;
     return this.session;
   }
   revokedUsers: string[] = [];
@@ -136,6 +157,42 @@ describeDb("the auth endpoints", () => {
       const response = await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "not-an-email" } });
       expect(response.statusCode).toBe(400);
       expect(response.json().error.code).toBe("request.invalid");
+      await app.close();
+    });
+
+    it("leaves ONE live code behind when three requests arrive together", async () => {
+      // PR #87 second round, F11. Invalidate-then-record as two statements is fine one request at a
+      // time and wrong under concurrency: three simultaneous starts each invalidated what they could
+      // see and each inserted afterwards, and none could see the other two's uncommitted inserts —
+      // so the address ended with **three** live issuances where the design promises one. The
+      // per-address ceiling is three, which is exactly how many an attacker can arrange.
+      //
+      // Serial requests never showed it, which is why every existing test passed over it. This one
+      // fires them together, on separate pooled connections, which is what a real deployment does.
+      const app = build();
+      const results = await Promise.all(
+        Array.from({ length: CODE_REQUEST_PER_ADDRESS.max }, () =>
+          app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "swarm@example.com" } })),
+      );
+      expect(results.map((r) => r.statusCode)).toEqual([200, 200, 200]);
+      expect(provider.sent.filter((e) => e === "swarm@example.com")).toHaveLength(3);
+
+      const { rows } = await client.query<{ live: number; total: number }>(
+        `SELECT count(*) FILTER (WHERE consumed_at IS NULL)::int AS live,
+                count(*)::int AS total
+           FROM sonny.sign_in_code_issue WHERE email_norm = 'swarm@example.com'`,
+      );
+      // Three sends really happened — the send is a network call and cannot be made transactional —
+      // and exactly one of the three records is live. Which one is the newest, which is the
+      // founder's own manual-test item: "request a second code before using the first, and confirm
+      // which one works."
+      expect(rows[0]!.total).toBe(3);
+      expect(rows[0]!.live).toBe(1);
+      const newest = await client.query<{ consumed_at: Date | null }>(
+        `SELECT consumed_at FROM sonny.sign_in_code_issue
+          WHERE email_norm = 'swarm@example.com' ORDER BY issued_at DESC, id DESC LIMIT 1`,
+      );
+      expect(newest.rows[0]!.consumed_at).toBeNull();
       await app.close();
     });
   });
@@ -230,7 +287,7 @@ describeDb("the auth endpoints", () => {
       // The finding, inverted (PR #87 F1). The previous version of this block asserted that an
       // unauthenticated caller with a header could destroy an account, and asserted it PASSED —
       // a green test blessing a destructive primitive that authenticates nothing, which would go
-      // live the moment SONNY-128 mounted middleware around it. A proof of concept destroyed
+      // live the moment SONNY-203 mounted middleware around it. A proof of concept destroyed
       // another account with a made-up bearer token under SONNY_ENV=production.
       const app = build();
       const response = await app.inject({
@@ -313,12 +370,116 @@ describeDb("the auth endpoints", () => {
       expect(again.json().user.id).not.toBe(accountId);
       await app.close();
     });
+
+    it("REFUSES when the token names two live accounts, and deletes NEITHER", async () => {
+      // PR #87 second round, F6. The lookup ended in `ORDER BY … LIMIT 1`, so a token that named
+      // two live accounts got one of them destroyed on the strength of a tiebreak — and the caller
+      // would be told 204, which is the answer for the deletion they asked for, about the account
+      // they did not name. On a destructive route the only safe answer to "which one?" is to refuse.
+      const app = buildWithDelete();
+      await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "amb@example.com" } });
+      const first = (await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "amb@example.com", code: "1" } })).json().user.id;
+
+      const second = await client.query<{ id: string }>("INSERT INTO sonny.account DEFAULT VALUES RETURNING id");
+      await client.query(
+        `INSERT INTO sonny.identity (account_id, provider, subject, email_hint, email_verified,
+           email_is_relay, supabase_user_id, link_method)
+         VALUES ($1,'google','g-amb','amb@example.com',true,false,$2,'primary')`,
+        [second.rows[0]!.id, "11111111-1111-1111-1111-111111111111"],
+      );
+      provider.revokedUsers = [];
+
+      const response = await app.inject({
+        method: "DELETE", url: "/v1/account", headers: { authorization: "Bearer at" },
+      });
+      expect(response.statusCode).toBe(401);
+      expect(response.json().error.code).toBe("auth.unauthenticated");
+
+      const { rows } = await client.query(
+        "SELECT deleted_at FROM sonny.account WHERE id = ANY($1::uuid[]) ORDER BY id",
+        [[first, second.rows[0]!.id]],
+      );
+      expect(rows).toHaveLength(2);
+      expect(rows.every((r: { deleted_at: Date | null }) => r.deleted_at === null)).toBe(true);
+      // and nothing was revoked either — a refusal that still signed the user out would be worse
+      // than useless, because it would look like the deletion had partly happened.
+      expect(provider.revokedUsers).toEqual([]);
+      await app.close();
+    });
+
+    it("revokes an identity that joins the account BETWEEN attribution and the close", async () => {
+      // **PR #87 second round, F2 — and this is the test that tells the two orderings apart.**
+      //
+      // R1's fix moved the `supabase_user_id` read to before `BEGIN`, which was right against 0003
+      // (that migration DELETEd the rows at statement end, so reading afterwards read an empty
+      // table and revoked nobody). Under 0004 the rows survive the close, and reading first became
+      // the wrong half of the trade: an identity that joined the account after the read was never
+      // revoked, so a session the user had just added outlived the account they had just deleted.
+      //
+      // The window is between the handler's own statements and cannot be reached from outside, so
+      // it is reached from inside: `withConnection` is wrapped for this one test, and the moment the
+      // handler issues its closing `UPDATE … SET deleted_at` the wrapper commits a second identity
+      // onto the account from another connection first. That lands exactly in the gap. A handler
+      // that read before `BEGIN` revokes one user; a handler that reads after the close revokes two.
+      let planted = false;
+      const interposing = async <T,>(fn: (c: pg.Client) => Promise<T>): Promise<T> => {
+        const conn = await pool.connect();
+        const real = conn.query.bind(conn);
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        (conn as unknown as { query: (...args: any[]) => any }).query = async (...args: any[]) => {
+          const sql = typeof args[0] === "string" ? args[0] : String(args[0]?.text ?? "");
+          if (!planted && sql.includes("SET deleted_at")) {
+            planted = true;
+            await client.query(
+              `INSERT INTO sonny.identity (account_id, provider, subject, email_hint,
+                 email_verified, email_is_relay, supabase_user_id, link_method)
+               SELECT i.account_id,'google','g-late','late@example.com',true,false,$1,'explicit'
+                 FROM sonny.identity i WHERE i.subject = 'late@example.com'`,
+              ["77777777-7777-7777-7777-777777777777"],
+            );
+          }
+          return real(...(args as Parameters<typeof real>));
+        };
+        try {
+          return await fn(conn as unknown as pg.Client);
+        } finally {
+          conn.release();
+        }
+      };
+
+      const app = buildApp({ ...config, allowUnauthenticatedAccountDelete: true },
+        { provider, withConnection: interposing });
+      await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "late@example.com" } });
+      const accountId = (await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "late@example.com", code: "1" } })).json().user.id;
+      provider.revokedUsers = [];
+
+      const response = await app.inject({
+        method: "DELETE", url: "/v1/account", headers: { authorization: "Bearer at" },
+      });
+      expect(response.statusCode).toBe(204);
+      expect(planted).toBe(true);        // the interleaving really happened
+
+      expect(provider.revokedUsers.sort()).toEqual(
+        ["11111111-1111-1111-1111-111111111111", "77777777-7777-7777-7777-777777777777"].sort(),
+      );
+      // and the late arrival is marked closed with the rest, by the same trigger
+      const { rows } = await client.query(
+        "SELECT account_closed FROM sonny.identity WHERE account_id = $1", [accountId],
+      );
+      expect(rows).toHaveLength(2);
+      expect(rows.every((r: { account_closed: boolean }) => r.account_closed)).toBe(true);
+      await app.close();
+    });
   });
 
   describe("POST /v1/auth/refresh and /signout", () => {
-    it("returns a ROTATED token pair — a different refresh token than the one presented", async () => {
+    it("returns a ROTATED token pair, and the OLD refresh token then stops working", async () => {
       // PR #87 R12: this AC claimed rotation was asserted and the test asserted the opposite, that
       // the response echoed the token it was given. Rotation means the new one differs.
+      //
+      // **And the second half of the criterion — "the old one stops working" — was still not
+      // asserted after that fix** (PR #87 second round, F7). Half a criterion covered reads exactly
+      // like a whole one in a green run.
       const app = build();
       await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "rot@example.com" } });
       await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "rot@example.com", code: "1" } });
@@ -329,6 +490,63 @@ describeDb("the auth endpoints", () => {
       expect(response.json().refresh_token).toBe("rt2");
       expect(response.json().refresh_token).not.toBe("rt");
       expect(response.json().user.id).toMatch(/^[0-9a-f-]{36}$/);
+
+      // Replaying the token that was just rotated away. §3.3 makes this the theft case past the
+      // 10-second overlap; the provider refuses it and the route must answer `auth.token_revoked`,
+      // which is what tells the client to clear the Keychain rather than retry.
+      const replay = await app.inject({ method: "POST", url: "/v1/auth/refresh", payload: { refresh_token: "rt" } });
+      expect(replay.statusCode).toBe(401);
+      expect(replay.json().error.code).toBe("auth.token_revoked");
+      await app.close();
+    });
+
+    it("emits refresh_expires_at when the provider reports one, and omits it when it does not", async () => {
+      // PR #87 second round, F7. R8 added the field and nothing ever looked at it, so a change that
+      // dropped it, mistyped it, or derived it from the wrong instant would have gone through every
+      // green run since. §3.2 lists it, and the branch is real: the value is the provider's, so
+      // when the provider does not report one the field must be **absent** rather than invented.
+      const app = build();
+      await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "exp2@example.com" } });
+      const verified = await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "exp2@example.com", code: "1" } });
+      expect(verified.json().refresh_expires_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+      // Ninety days out from the same instant the access token's own expiry was derived from.
+      const access = Date.parse(verified.json().expires_at) - 3600 * 1000;
+      expect(Date.parse(verified.json().refresh_expires_at)).toBe(access + 90 * 24 * 3600 * 1000);
+
+      const refreshed = await app.inject({ method: "POST", url: "/v1/auth/refresh", payload: { refresh_token: "rt" } });
+      expect(refreshed.json().refresh_expires_at).toMatch(/^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}Z$/);
+
+      // A provider that does not report one. `undefined` rather than null, and the key absent.
+      provider.session = { ...provider.session, refreshExpiresIn: undefined };
+      const silent = await app.inject({ method: "POST", url: "/v1/auth/refresh", payload: { refresh_token: "rt" } });
+      expect(silent.statusCode).toBe(200);
+      expect(Object.keys(silent.json())).not.toContain("refresh_expires_at");
+      await app.close();
+    });
+
+    it("REFUSES a refresh when the token names two live accounts, rather than picking one", async () => {
+      // PR #87 second round, F6. `supabase_user_id` carries no uniqueness constraint, so the lookup
+      // ended in `ORDER BY … LIMIT 1` — a tiebreak. A refresh that tiebreaks hands the client a
+      // session for whichever account sorted first, and everything downstream (entitlements,
+      // metering, the retained content the user is looking at) is then keyed to it.
+      const app = build();
+      await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "two@example.com" } });
+      await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "two@example.com", code: "1" } });
+
+      // A second LIVE account naming the same Supabase user. The design allows several identities
+      // per Supabase user; it does not allow them to straddle two live accounts.
+      const other = await client.query<{ id: string }>("INSERT INTO sonny.account DEFAULT VALUES RETURNING id");
+      await client.query(
+        `INSERT INTO sonny.identity (account_id, provider, subject, email_hint, email_verified,
+           email_is_relay, supabase_user_id, link_method)
+         VALUES ($1,'google','g-two','two@example.com',true,false,$2,'primary')`,
+        [other.rows[0]!.id, "11111111-1111-1111-1111-111111111111"],
+      );
+
+      const response = await app.inject({ method: "POST", url: "/v1/auth/refresh", payload: { refresh_token: "rt" } });
+      expect(response.statusCode).toBe(401);
+      expect(response.json().error.code).toBe("auth.token_revoked");
+      expect(response.json().error.message).toMatch(/single account/);
       await app.close();
     });
 

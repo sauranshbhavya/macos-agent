@@ -93,6 +93,21 @@ check "a YAML unquoted secret is refused"    1 "  RESEND_API_KEY: ${salt_value}"
 check "an exported shell secret is refused"  1 "export SMTP_PASSWORD=\"${salt_value}\""
 check "a compose list entry is refused"      1 "- RESEND_API_KEY=\"${salt_value}\""
 
+# PR #87 second round, F9. R9 made the VALUE's quotes optional and left the NAME bare, so every
+# serialised-environment form went through: a Kubernetes secret, a Terraform tfvars file and a
+# `docker inspect` dump all write the name in quotes. Verified missed before the fix.
+check "a JSON-quoted salt name is refused"    1 "  \"RATE_LIMIT_SALT\": \"${salt_value}\","
+check "a JSON-quoted key with no space is refused" 1 "{\"RESEND_API_KEY\":\"${salt_value}\"}"
+check "a quoted name with no value stays clean"    0 '  "RATE_LIMIT_SALT": null,'
+
+# F9's other half: RESEND_API_KEY had no VENDOR pattern, so a key not sitting beside its own name
+# had zero coverage. `re_` plus the two-segment body an issued key carries.
+resend_key="re_$(printf 'a%.0s' {1..10})_$(printf 'b%.0s' {1..24})"
+check "a bare Resend key is refused"          1 "curl -H 'Authorization: Bearer ${resend_key}'"
+# ...and the narrowness that keeps it usable: an ordinary snake_case identifier beginning `re_` is
+# not a credential. This repository contains four of them.
+check "a re_-prefixed identifier is not a key" 0 'local re_isolated_test_command="$1"'
+
 # C2: two matches of the SAME pattern on one line, the first allowlisted. `head -1` took only
 # the leading match, so the allowlisted local DSN shadowed a real credential after it.
 check "an allowlisted match does not shadow a later one" 1 'postgres://postgres:postgres@localhost/db then postgres://real:'"$(printf 'S%.0s' {1..12})"'@prod.internal/db'

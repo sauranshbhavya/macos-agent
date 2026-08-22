@@ -78,13 +78,24 @@ CREATE TRIGGER identity_insert_derives_closed
 -- **Lock order, recorded because it is about to matter to someone else.** The close trigger updates
 -- `sonny.account` and then `sonny.identity`, in that order, inside one transaction. Any code taking
 -- them in the opposite order — updating an identity and then the account row — can deadlock against
--- a concurrent close. The reviewer reproduced exactly that shape, and it is the shape SONNY-128's
--- training-consent write path will have if written naively.
+-- a concurrent close. The reviewer reproduced exactly that shape, and it is the shape a
+-- training-consent write path will have if written naively — **SONNY-203's**, since that is the
+-- ticket that owns the gateway auth middleware such an endpoint sits behind (this line said
+-- SONNY-128, which may not touch `server/` at all; PR #87 second round, F5).
 --
 --   **The rule: take `sonny.account` before `sonny.identity`, always.**
 --
+-- **And the transaction Postgres aborts is the CLOSE, not the offending writer** — measured 8 times
+-- out of 8 against this schema. The wrong-order writer takes the identity lock first, so the close
+-- is the one already waiting when the cycle forms, its `deadlock_timeout` expires first, and it is
+-- the process that detects the deadlock and rolls itself back. So the cost of getting this wrong
+-- lands on account deletion, which is the operation with a user waiting on it and the one nobody
+-- would think to look at.
+--
 -- Stated here rather than in a comment on one function because it binds every future writer of
--- these two tables, and the trigger is what makes it non-negotiable.
+-- these two tables, and the trigger is what makes it non-negotiable. The changelog carries the same
+-- rule (PR #87 second round, F4): a rule that binds a future ticket must not live only in a
+-- migration file nobody re-reads.
 
 -- @rollback
 DROP TRIGGER IF EXISTS identity_insert_derives_closed ON sonny.identity;
