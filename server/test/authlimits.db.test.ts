@@ -1,7 +1,8 @@
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import {
-  CODE_LIFETIME_SECONDS, classifyFailure, consumeLatest, invalidateLive, recordIssue,
+  CODE_LIFETIME_SECONDS, FAILURE_DISCLOSURE_SECONDS, classifyFailure, consumeLatest,
+  invalidateLive, recordIssue,
 } from "../src/auth/codes.js";
 import {
   CODE_REQUEST_PER_ADDRESS, CODE_REQUEST_PER_SOURCE, bucketKey, consume, sweep,
@@ -103,35 +104,106 @@ describeDb("rate limits and the code lifecycle", () => {
 
   describe("the code lifecycle, and the three failures Supabase collapses into one", () => {
     const address = "codes@example.com";
+    /** The source that asked for the code. Every "legitimate caller" case below presents it. */
+    const OURS = "srchash";
+    const THEIRS = "a-different-caller";
 
     it("classifies a wrong code against a live issuance as invalid", async () => {
-      await recordIssue(client, address, "srchash");
-      expect(await classifyFailure(client, address)).toBe("auth.code_invalid");
+      await recordIssue(client, address, OURS);
+      expect(await classifyFailure(client, address, new Date(), OURS)).toBe("auth.code_invalid");
     });
 
     it("classifies an expired issuance as expired", async () => {
       const past = new Date(Date.now() - (CODE_LIFETIME_SECONDS + 60) * 1000);
-      await recordIssue(client, address, "srchash", past);
-      expect(await classifyFailure(client, address)).toBe("auth.code_expired");
+      await recordIssue(client, address, OURS, past);
+      expect(await classifyFailure(client, address, new Date(), OURS)).toBe("auth.code_expired");
     });
 
     it("classifies a consumed issuance as used", async () => {
-      await recordIssue(client, address, "srchash");
+      await recordIssue(client, address, OURS);
       expect(await consumeLatest(client, address)).toBe(true);
-      expect(await classifyFailure(client, address)).toBe("auth.code_used");
+      expect(await classifyFailure(client, address, new Date(), OURS)).toBe("auth.code_used");
     });
 
     it("classifies an address that was never issued a code as invalid, not used", async () => {
       // An account-existence oracle would be the bug here: "used" for a known address and
       // "invalid" for an unknown one tells an attacker which addresses have accounts.
-      expect(await classifyFailure(client, "never-seen@example.com")).toBe("auth.code_invalid");
+      expect(await classifyFailure(client, "never-seen@example.com", new Date(), OURS))
+        .toBe("auth.code_invalid");
     });
 
     it("prefers used over expired when a consumed code has also aged out", async () => {
       const past = new Date(Date.now() - (CODE_LIFETIME_SECONDS + 60) * 1000);
-      const { id } = await recordIssue(client, address, "srchash", past);
+      const { id } = await recordIssue(client, address, OURS, past);
       await client.query("UPDATE sonny.sign_in_code_issue SET consumed_at = now() WHERE id = $1", [id]);
-      expect(await classifyFailure(client, address)).toBe("auth.code_used");
+      expect(await classifyFailure(client, address, new Date(), OURS)).toBe("auth.code_used");
+    });
+
+    describe("the disclosure gate — the three codes are an account-existence oracle", () => {
+      // **PR #87 fifth round, F1.** Reproduced before the fix: one unauthenticated request per
+      // address carrying a code known to be wrong, never calling `email/start`, returned
+      // `auth.code_used` for a mailbox whose owner had signed in, `auth.code_expired` for one that
+      // had asked and never used, and `auth.code_invalid` for addresses with nothing. Everything
+      // below is that attack, at the level of the function that answered it.
+
+      it("tells a caller who did NOT originate the code nothing but code_invalid", async () => {
+        // The used case, which is the one that names an account.
+        await recordIssue(client, address, OURS);
+        await consumeLatest(client, address);
+        expect(await classifyFailure(client, address, new Date(), OURS)).toBe("auth.code_used");
+        expect(await classifyFailure(client, address, new Date(), THEIRS)).toBe("auth.code_invalid");
+      });
+
+      it("tells the same to a caller offering no source at all", async () => {
+        // Absent rather than wrong. `undefined === row.source_hash` must never be true, and the
+        // parameter is optional so an omission is the safe answer rather than a type error.
+        await recordIssue(client, address, OURS);
+        await consumeLatest(client, address);
+        expect(await classifyFailure(client, address, new Date())).toBe("auth.code_invalid");
+      });
+
+      it("makes an unknown address and a known one INDISTINGUISHABLE to a stranger", async () => {
+        // The oracle stated as the property rather than as three separate cases: whatever the
+        // mailbox's history, a caller who did not ask for the code gets the same answer.
+        await recordIssue(client, "has-account@example.com", OURS);
+        await consumeLatest(client, "has-account@example.com");
+        const expired = new Date(Date.now() - (CODE_LIFETIME_SECONDS + 60) * 1000);
+        await recordIssue(client, "asked-never-used@example.com", OURS, expired);
+
+        const answers = await Promise.all(
+          ["has-account@example.com", "asked-never-used@example.com", "nobody@example.com"]
+            .map((mailbox) => classifyFailure(client, mailbox, new Date(), THEIRS)),
+        );
+        expect(answers).toEqual(["auth.code_invalid", "auth.code_invalid", "auth.code_invalid"]);
+      });
+
+      it("stops disclosing once the issuance is old, even to the caller who made it", async () => {
+        // The signal has to decay: before this, an address that signed in once answered
+        // `auth.code_used` 400 simulated days later, so having an account was a permanent fact
+        // anyone could read. `FAILURE_DISCLOSURE_SECONDS` is one code lifetime past expiry.
+        const ancient = new Date(Date.now() - (FAILURE_DISCLOSURE_SECONDS + 60) * 1000);
+        const { id } = await recordIssue(client, address, OURS, ancient);
+        await client.query("UPDATE sonny.sign_in_code_issue SET consumed_at = now() WHERE id = $1", [id]);
+        expect(await classifyFailure(client, address, new Date(), OURS)).toBe("auth.code_invalid");
+
+        // ...and just inside the window it still does, so the bound is a bound and not an off switch.
+        const recent = new Date(Date.now() - (FAILURE_DISCLOSURE_SECONDS - 60) * 1000);
+        await client.query(
+          "UPDATE sonny.sign_in_code_issue SET issued_at = $2 WHERE id = $1", [id, recent]);
+        expect(await classifyFailure(client, address, new Date(), OURS)).toBe("auth.code_used");
+      });
+
+      it("gives an attacker who calls email/start first nothing either", async () => {
+        // The obvious way around a source check: ask for a code yourself so the row carries YOUR
+        // source. It does not work, and the reason is the invalidate-then-record in `issueCode` —
+        // the attacker's own request becomes the latest row, live and unconsumed, which classifies
+        // `auth.code_invalid` whoever the mailbox belongs to.
+        await recordIssue(client, address, OURS);
+        await consumeLatest(client, address);                    // the victim signed in
+        await invalidateLive(client, address);
+        await recordIssue(client, address, THEIRS);              // the attacker asks for a code
+        expect(await classifyFailure(client, address, new Date(), THEIRS)).toBe("auth.code_invalid");
+      });
     });
 
     it("consumes a code exactly once under concurrency", async () => {

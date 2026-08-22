@@ -2,7 +2,10 @@ import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { Config } from "../src/config.js";
-import { CODE_REQUEST_PER_ADDRESS, CODE_REQUEST_PER_SOURCE, CODE_VERIFY_PER_ADDRESS } from "../src/auth/ratelimit.js";
+import {
+  CODE_REQUEST_PER_ADDRESS, CODE_REQUEST_PER_SOURCE, CODE_VERIFY_PER_ADDRESS,
+  CODE_VERIFY_PER_SOURCE,
+} from "../src/auth/ratelimit.js";
 import { ProviderRejected, ProviderUnavailable, type AuthProvider, type VerifiedSession } from "../src/auth/provider.js";
 import { drainOwedRevocations, owedRevocationCount } from "../src/auth/revocation.js";
 import { normalizeEmail } from "../src/auth/identity.js";
@@ -320,6 +323,119 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
+    describe("the account-existence oracle this route WAS", () => {
+      // **PR #87 fifth round, F1 — the HIGH, reproduced at the HTTP boundary.** One unauthenticated
+      // request per address, carrying a code known to be wrong, never calling `email/start`, told
+      // you whether that mailbox had an account. Four review rounds established the no-oracle
+      // property on `email/start` and stated it for the system; nobody looked at the sibling route
+      // that answers the same question through an error code.
+      //
+      // The fake here models Supabase's per-address OTP — it accepts only the code it "sent" — which
+      // the shared `FakeProvider` cannot do, because its `verifyEmailCode` takes no arguments.
+      const perAddressOtp = () => {
+        const sent = new Map<string, string>();
+        provider.sendEmailCode = async (email: string) => {
+          sent.set(email, "123456"); provider.sent.push(email); return { providerRequestId: "p" };
+        };
+        provider.verifyEmailCode = async (email: string, code: string) => {
+          if (sent.get(email) !== code) throw new ProviderRejected("Token has expired or is invalid");
+          return provider.session;
+        };
+      };
+      const VICTIM = "203.0.113.9";
+      const ATTACKER = "198.51.100.4";
+      const probe = async (app: ReturnType<typeof build>, email: string, remoteAddress: string) =>
+        (await app.inject({
+          method: "POST", url: "/v1/auth/email/verify", remoteAddress,
+          payload: { email, code: "000000" },
+        })).json().error.code;
+
+      it("answers IDENTICALLY for a mailbox with an account and one without", async () => {
+        perAddressOtp();
+        const app = build();
+        // The victim signs in normally, from their own source. The attacker causes none of this.
+        await app.inject({ method: "POST", url: "/v1/auth/email/start", remoteAddress: VICTIM, payload: { email: "has@example.com" } });
+        await app.inject({ method: "POST", url: "/v1/auth/email/verify", remoteAddress: VICTIM, payload: { email: "has@example.com", code: "123456" } });
+        // A second mailbox asked for a code and never used it — the third state that used to leak.
+        await app.inject({ method: "POST", url: "/v1/auth/email/start", remoteAddress: VICTIM, payload: { email: "asked@example.com" } });
+        await client.query("UPDATE sonny.sign_in_code_issue SET expires_at = now() - interval '1 minute' WHERE mailbox_key = 'asked@example.com'");
+
+        const answers = [
+          await probe(app, "has@example.com", ATTACKER),
+          await probe(app, "asked@example.com", ATTACKER),
+          await probe(app, "nobody@example.com", ATTACKER),
+        ];
+        // Before the fix these were auth.code_used / auth.code_expired / auth.code_invalid.
+        expect(answers).toEqual(["auth.code_invalid", "auth.code_invalid", "auth.code_invalid"]);
+        await app.close();
+      });
+
+      it("still gives the CALLER who asked for the code all three distinct errors", async () => {
+        // The other half, and the reason the fix is a disclosure gate rather than a collapse: the
+        // contract requires three codes because SONNY-128 has to say three different things, and
+        // the person entitled to hear them is the one who just asked. That person is unaffected.
+        perAddressOtp();
+        const app = build();
+        const start = (email: string) => app.inject({
+          method: "POST", url: "/v1/auth/email/start", remoteAddress: VICTIM, payload: { email } });
+
+        await start("used@example.com");
+        await app.inject({ method: "POST", url: "/v1/auth/email/verify", remoteAddress: VICTIM, payload: { email: "used@example.com", code: "123456" } });
+        expect(await probe(app, "used@example.com", VICTIM)).toBe("auth.code_used");
+
+        await start("gone@example.com");
+        await client.query("UPDATE sonny.sign_in_code_issue SET expires_at = now() - interval '1 minute' WHERE mailbox_key = 'gone@example.com'");
+        expect(await probe(app, "gone@example.com", VICTIM)).toBe("auth.code_expired");
+
+        await start("wrong@example.com");
+        expect(await probe(app, "wrong@example.com", VICTIM)).toBe("auth.code_invalid");
+        await app.close();
+      });
+
+      it("BINDS enumeration from one source, which nothing on this route did", async () => {
+        // The per-address limit is keyed on the address being probed, so it never binds when every
+        // probe names a new one. Measured before the fix: 200 distinct addresses from one source, 0
+        // refused — while `email/start` refused 192 of 200 in the same run from the same source.
+        perAddressOtp();
+        const app = build();
+        let refused = 0;
+        for (let i = 0; i < CODE_VERIFY_PER_SOURCE.max + 5; i += 1) {
+          const response = await app.inject({
+            method: "POST", url: "/v1/auth/email/verify", remoteAddress: ATTACKER,
+            payload: { email: `enum${i}@example.com`, code: "000000" },
+          });
+          if (response.statusCode === 429) refused += 1;
+        }
+        expect(refused).toBe(5);
+
+        // A DIFFERENT source is unaffected — the limit is per caller, not global, or one attacker
+        // would lock every real user out of signing in.
+        const other = await app.inject({
+          method: "POST", url: "/v1/auth/email/verify", remoteAddress: "192.0.2.77",
+          payload: { email: "elsewhere@example.com", code: "000000" },
+        });
+        expect(other.statusCode).toBe(400);
+        await app.close();
+      });
+
+      it("discloses the per-source refusal, because it is a fact about the caller", async () => {
+        // Same asymmetry `email/start` already makes: a 429 about an ADDRESS is the oracle in slow
+        // motion and is silent there; a 429 about the CALLER is their own behaviour, and hiding it
+        // leaves them retrying against a wall.
+        perAddressOtp();
+        const app = build();
+        for (let i = 0; i < CODE_VERIFY_PER_SOURCE.max; i += 1) {
+          await app.inject({ method: "POST", url: "/v1/auth/email/verify", remoteAddress: ATTACKER, payload: { email: `d${i}@example.com`, code: "0" } });
+        }
+        const over = await app.inject({ method: "POST", url: "/v1/auth/email/verify", remoteAddress: ATTACKER, payload: { email: "d99@example.com", code: "0" } });
+        expect(over.statusCode).toBe(429);
+        expect(over.json().error.code).toBe("limit.rate");
+        expect(over.json().error.retryable).toBe(true);
+        expect(Number(over.headers["retry-after"])).toBeGreaterThan(0);
+        await app.close();
+      });
+    });
+
     it("lands two sign-ins for one address on one account", async () => {
       const app = build();
       await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "same@example.com" } });
@@ -533,6 +649,89 @@ describeDb("the auth endpoints", () => {
       expect((await app.inject({
         method: "DELETE", url: "/v1/account", headers: { authorization: "Bearer at" },
       })).statusCode).toBe(204);
+      expect(await owedRevocationCount(client)).toBe(0);
+      await app.close();
+    });
+
+    it("REFUSES to hard-delete an account while a provider-side revocation is owed", async () => {
+      // **PR #87 fifth round, F2.** 0006's whole premise is that the residual is a durable,
+      // queryable fact — and it was durable only as long as the identity row, which cascades away
+      // with its account. Reproduced: two owed identities, one
+      // `DELETE FROM sonny.account WHERE deleted_at IS NOT NULL`, and `owedRevocationCount` went
+      // from 2 to 0 with no rows left, while `npm run revocations` reported a clean sweep and the
+      // provider-side sessions were still live.
+      //
+      // **A hard delete of the account row is exactly the statement `feature/row-12-retention`
+      // exists to write**, so left alone that ticket inherits this on its first day.
+      const app = buildWithDelete();
+      await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "cascade@example.com" } });
+      const accountId = (await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "cascade@example.com", code: "1" } })).json().user.id;
+      provider.failFor.add("11111111-1111-1111-1111-111111111111");
+      expect((await app.inject({ method: "DELETE", url: "/v1/account", headers: { authorization: "Bearer at" } })).statusCode).toBe(204);
+      expect(await owedRevocationCount(client)).toBe(1);
+
+      const refusal = await client.query("DELETE FROM sonny.account WHERE id = $1", [accountId])
+        .then(() => undefined, (error: { code?: string; message?: string }) => error);
+      expect(refusal?.code).toBe("23503");
+      // The message has to name the way out, or an operator meeting it at 2am has a wall.
+      expect(refusal?.message).toMatch(/npm run revocations/);
+      expect(await owedRevocationCount(client)).toBe(1);
+
+      // **And once the debt is paid the delete goes through**, which is what makes this an ordering
+      // rather than a prohibition: retention drains, then deletes.
+      provider.failFor.clear();
+      await drainOwedRevocations(client, provider);
+      expect(await owedRevocationCount(client)).toBe(0);
+      await client.query("DELETE FROM sonny.account WHERE id = $1", [accountId]);
+      expect((await client.query("SELECT count(*)::int AS n FROM sonny.account WHERE id = $1", [accountId])).rows[0].n).toBe(0);
+      await app.close();
+    });
+
+    it("lets an account with NOTHING owed be deleted, so the guard is not a blanket refusal", async () => {
+      // The mirror case. A guard that refused every delete would pass the test above and be useless,
+      // and this is the assertion that separates the two.
+      const app = buildWithDelete();
+      await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "clean@example.com" } });
+      const accountId = (await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "clean@example.com", code: "1" } })).json().user.id;
+      expect((await app.inject({ method: "DELETE", url: "/v1/account", headers: { authorization: "Bearer at" } })).statusCode).toBe(204);
+      expect(await owedRevocationCount(client)).toBe(0);
+
+      await client.query("DELETE FROM sonny.account WHERE id = $1", [accountId]);
+      expect((await client.query("SELECT count(*)::int AS n FROM sonny.account WHERE id = $1", [accountId])).rows[0].n).toBe(0);
+      await app.close();
+    });
+
+    it("does not call the provider TWICE when two drains overlap on one owed row", async () => {
+      // **PR #87 fifth round, F3.** The claim was `BEGIN; SELECT … FOR UPDATE SKIP LOCKED; COMMIT`
+      // and the COMMIT released the lock *before* the provider call, so the lock covered one SELECT
+      // rather than the work it claimed. Reproduced with a 300ms provider: two drains started 100ms
+      // apart called `signOutAllForUser` twice for the same user. Two started *simultaneously*
+      // divided correctly — which is why an ad-hoc test would have found nothing.
+      const app = buildWithDelete();
+      await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "twice@example.com" } });
+      await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "twice@example.com", code: "1" } });
+      provider.failFor.add("11111111-1111-1111-1111-111111111111");
+      await app.inject({ method: "DELETE", url: "/v1/account", headers: { authorization: "Bearer at" } });
+      provider.failFor.clear();
+      expect(await owedRevocationCount(client)).toBe(1);
+
+      const calls: string[] = [];
+      provider.signOutAllForUser = async (id: string) => {
+        calls.push(id);
+        await new Promise((r) => setTimeout(r, 300));
+      };
+      const first = await pool.connect();
+      const second = await pool.connect();
+      try {
+        const a = drainOwedRevocations(first as unknown as pg.Client, provider);
+        await new Promise((r) => setTimeout(r, 100));   // inside the old unguarded window
+        const b = drainOwedRevocations(second as unknown as pg.Client, provider);
+        await Promise.all([a, b]);
+      } finally {
+        first.release();
+        second.release();
+      }
+      expect(calls).toHaveLength(1);
       expect(await owedRevocationCount(client)).toBe(0);
       await app.close();
     });

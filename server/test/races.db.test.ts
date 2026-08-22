@@ -1,6 +1,6 @@
 import pg from "pg";
 import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
-import { linkExplicitly, normalizeEmail, resolve } from "../src/auth/identity.js";
+import { LinkError, linkExplicitly, normalizeEmail, resolve } from "../src/auth/identity.js";
 import { up } from "../src/db/migrate.js";
 
 /**
@@ -188,6 +188,55 @@ describeDb("concurrency invariants, under forced interleavings", () => {
     });
   });
 
+  describe("linkExplicitly's own account lock, called as a function", () => {
+    it("BLOCKS on a concurrent close rather than moving onto a closing account", async () => {
+      // **PR #87 fifth round, F5.** Deleting `resolve()`'s `FOR SHARE` was justified — and proved
+      // correct by instrumentation — on the grounds that "the same lock, for the same reason, is
+      // still taken by `linkExplicitly`". That concentrated the guarantee into one call site, and
+      // removing `FOR SHARE` from that site left the suite green: the round's own justification was
+      // unguarded against a one-word edit.
+      //
+      // **"Forced ordering B" below is the test people assume covers this, and it does not** — it
+      // hand-rolls the same SQL on a raw connection and never calls the function, so it tests
+      // Postgres' lock behaviour, which is not the thing that can regress. This one calls
+      // `linkExplicitly` itself.
+      const home = await resolve(client, emailAssertion("f5-home@example.com"));
+      const moving = await resolve(client, emailAssertion("f5-moving@example.com"));
+
+      const closer = await connect();
+      const linker = await connect();
+      try {
+        await closer.query("BEGIN");
+        // Takes FOR NO KEY UPDATE on the target account and holds it.
+        await closer.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [home.accountId]);
+
+        let settled = false;
+        const linking = linkExplicitly(
+          linker, moving.identityId, home.accountId, home.accountId, moving.identityId,
+        ).then(() => { settled = true; }, (error: unknown) => { settled = true; return error; });
+
+        await new Promise((r) => setTimeout(r, 200));
+        // **The assertion the guarantee rests on.** Without the `FOR SHARE`, `linkExplicitly`'s
+        // existence check reads the pre-close snapshot, sees a live account, and proceeds straight
+        // to the move — it does not wait, and it lands an identity on an account that is closing.
+        expect(settled).toBe(false);
+
+        await closer.query("COMMIT");
+        const outcome = await linking;
+
+        // It woke, re-read, and refused: a deleted account must never gain identities.
+        expect(outcome).toBeInstanceOf(LinkError);
+        const { rows } = await client.query(
+          "SELECT account_id FROM sonny.identity WHERE id = $1", [moving.identityId]);
+        expect(rows[0].account_id).toBe(moving.accountId);   // did not move
+      } finally {
+        await closer.end();
+        await linker.end();
+      }
+      await assertInvariants();
+    });
+  });
+
   describe("forced ordering C — an identity moves OFF a closed account", () => {
     it("recomputes the flag, which the ad-hoc battery never once reached", async () => {
       // **This is the state the previous round's battery could not produce.** Every path it drove
@@ -275,16 +324,15 @@ describeDb("concurrency invariants, under forced interleavings", () => {
     });
   });
 
-  describe("the vacuity check itself", () => {
-    it("is documented, and was run against a deliberately broken tree", () => {
-      // Not executable here: proving these tests can fail means reintroducing a defect into the
-      // migrations, which cannot be done from inside the suite that runs them. It was done by hand
-      // and the result belongs in the record rather than in a comment nobody reads —
-      // `docs/sonny-v1-implementation-changelog.md` carries which mutant killed which test.
-      //
-      // This test is a marker so that the claim has a location, and so anyone editing this file sees
-      // that "it passes" is not the bar it has to clear.
-      expect(true).toBe(true);
-    });
-  });
+  // **A marker test used to sit here and it asserted `expect(true).toBe(true)`** (PR #87 fifth
+  // round, F10). It was honestly labelled as documentation, and it was still a passing test counted
+  // in this suite's total — in a file whose entire subject is that a green result can mean nothing.
+  // The note it carried belongs in prose, so here it is, and the count is one smaller:
+  //
+  // **Proving these tests can fail is not executable from inside them.** The forced-ordering cases
+  // are killed by mutating the migrations, which cannot be done by the suite that applies them —
+  // and doing it by hand needs a *fresh* database, because `up()` skips a migration already in the
+  // ledger, so a mutant left in the file never runs and the suite passes for the wrong reason. That
+  // is a real trap and it caught this round once. `docs/sonny-v1-implementation-changelog.md`
+  // carries which mutant killed which test, at the SHA it was run.
 });

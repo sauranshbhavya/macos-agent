@@ -12,8 +12,15 @@
 -- `victim@x`, `victim+1@x` and `victim+2@x` share a single rate-limit bucket, so all three are
 -- allowed, and then each writes its own issuance row and invalidates only its own. **Three live,
 -- independently guessable codes arrive in one inbox**, against a guarantee this branch states in
--- three places as "the newest code is the only one that works" — a 3× guessing surface, reachable by
--- anyone who knows the address and can type a plus sign.
+-- three places as a single-live-code guarantee, reachable by anyone who knows the address and can
+-- type a plus sign.
+--
+-- **Two corrections to how this was first written** (PR #87 fifth round, F7). It said "3× guessing
+-- surface": the per-mailbox verify ceiling bounds an attacker to five trials per fifteen minutes
+-- whether one code is live or three, so the trials are the ceiling and the codes are not. And the
+-- guarantee this restores is "at most one code can be REDEEMED", not "only the newest works" — the
+-- send still uses the identity address, so Supabase keys an OTP per literal spelling and three real
+-- codes still arrive in one inbox. What the fold fixes is that only one of them can complete.
 --
 -- **The column is renamed rather than just re-populated**, because the name is what made the defect
 -- read as correct. `email_norm` beside a function called `normalizeEmail` looks like the two belong

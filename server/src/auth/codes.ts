@@ -12,7 +12,7 @@ import type pg from "pg";
  * Keyed the identity way, three simultaneous `email/start` calls for those three spellings shared
  * one rate-limit bucket — which folds — and each wrote and invalidated its own issuance row — which
  * did not. **Three live, independently guessable codes in one inbox**, against the guarantee this
- * branch states in three places that the newest code is the only one that works. Reproduced against
+ * branch states in three places as a single-live-code guarantee. Reproduced against
  * a real database before it was fixed. The parameter is named `mailboxKey` rather than `email`
  * throughout so that passing the wrong one has to be done deliberately.
  *
@@ -75,7 +75,25 @@ export async function consumeLatest(
 }
 
 /**
- * Which of the three failures this was, from issuance state.
+ * How long after issuance the distinct failure codes stay disclosable.
+ *
+ * **The signal has to decay, and this is where it decays to nothing** (PR #87 fifth round, F1). The
+ * first version had no time bound at all: an address that completed a sign-in once still answered
+ * `auth.code_used` **400 simulated days later**, so the fact of having an account was permanent and
+ * free to read.
+ *
+ * One code lifetime *past expiry*, rather than a number chosen for feeling about right. It has to
+ * exceed `CODE_LIFETIME_SECONDS` or `auth.code_expired` could never be returned at all — the code is
+ * not expired until then. One more lifetime after that covers the real case it exists for: a user
+ * who watched their code run out and typed it anyway. Past that, "ask for a new code" is the answer
+ * to every one of the three, so the distinction has stopped being worth anything to the person
+ * entitled to it while still being worth something to a stranger.
+ */
+export const FAILURE_DISCLOSURE_SECONDS = CODE_LIFETIME_SECONDS * 2;
+
+/**
+ * Which of the three failures this was — **disclosed only to a caller who can be seen to be in the
+ * flow, and otherwise reduced to `auth.code_invalid`.**
  *
  * Called only after Supabase has already rejected the code, so the question is never "is this
  * right?" — it is "why was it wrong?", and the ordering below is the answer's precedence.
@@ -84,20 +102,68 @@ export async function consumeLatest(
  * expired is `auth.code_used`, because that is the fact the user needs: asking for a new one is the
  * fix either way, but "you already used that" and "that ran out" are different sentences and only
  * one of them is true about what they did.
+ *
+ * ---
+ *
+ * **The three distinct codes ARE an account-existence oracle, and that had to be resolved rather
+ * than traded away** (PR #87 fifth round, F1). Reproduced: one unauthenticated request per address
+ * carrying a code known to be wrong, never calling `email/start`, returned `auth.code_used` for a
+ * mailbox whose owner had signed in — something the attacker did not cause and could not otherwise
+ * observe — `auth.code_expired` for one that had asked and never used, and `auth.code_invalid` for
+ * addresses with nothing. That is a working enumeration primitive, and it sat on the one route four
+ * review rounds never examined, because every round established the no-oracle property on
+ * `email/start` and stated it for the system.
+ *
+ * **The resolution is not to collapse the codes.** The contract requires three because SONNY-128 has
+ * to say three different things, and the person entitled to hear them is the one who just asked for
+ * a code at that address and is typing it. That person is distinguishable from a stranger, and the
+ * table already stores what distinguishes them:
+ *
+ * 1. **`source_hash` must match the caller's.** It is written at issuance and it is a salted hash of
+ *    the requesting source, so a caller who did not originate the code cannot match it and is told
+ *    `auth.code_invalid` — which is true of what they hold. An attacker who first calls `email/start`
+ *    to get a matching row learns nothing either: their own request replaces the row, and a live
+ *    unconsumed issuance classifies `auth.code_invalid` regardless of who the mailbox belongs to.
+ * 2. **The issuance must be recent**, per `FAILURE_DISCLOSURE_SECONDS` above.
+ *
+ * **Both, not either**, and the second exists because the first has a deployment-shaped hole: with
+ * `TRUSTED_PROXIES` unset behind a load balancer every request reports the balancer's address, so
+ * every source hash collapses to one value and the match becomes vacuous. That is the same
+ * misconfiguration the per-source rate limit degrades under, it is documented in `config.ts`, and it
+ * is not a reason to have only one of these two.
+ *
+ * **What this narrows, stated because it is a contract change and not a silent one.** SONNY-127's
+ * acceptance criterion says "an expired code, a reused code, and a wrong code each fail with the
+ * contract's distinct errors" without qualification. For the caller the criterion was written about
+ * — the one completing a sign-in — it still holds exactly. For a caller who cannot be seen to have
+ * asked for the code, it does not, and that caller is the attacker. Recorded in
+ * `docs/sonny-backend-api-contract.md` §3.6 and in the changelog, the way the rule-2 supersession
+ * was.
  */
 export async function classifyFailure(
   client: pg.Client,
   mailboxKey: string,
   now: Date = new Date(),
+  callerSourceHash?: string,
 ): Promise<VerifyFailure> {
-  const latest = await client.query<{ consumed_at: Date | null; expires_at: Date }>(
-    `SELECT consumed_at, expires_at FROM sonny.sign_in_code_issue
+  const latest = await client.query<{
+    consumed_at: Date | null; expires_at: Date; issued_at: Date; source_hash: string;
+  }>(
+    `SELECT consumed_at, expires_at, issued_at, source_hash FROM sonny.sign_in_code_issue
       WHERE mailbox_key = $1 ORDER BY issued_at DESC LIMIT 1`,
     [mailboxKey],
   );
   const row = latest.rows[0];
   // Nothing was ever issued to this address. Someone is guessing at an address, not at a code.
   if (!row) return "auth.code_invalid";
+
+  // **The disclosure gate.** Everything past here says something about the mailbox rather than about
+  // the code, so it is said only to a caller entitled to hear it. `callerSourceHash` is optional so
+  // that a caller with no source to offer gets the safe answer rather than a type error.
+  const originated = callerSourceHash !== undefined && callerSourceHash === row.source_hash;
+  const recent = now.getTime() - row.issued_at.getTime() < FAILURE_DISCLOSURE_SECONDS * 1000;
+  if (!originated || !recent) return "auth.code_invalid";
+
   if (row.consumed_at !== null) return "auth.code_used";
   if (row.expires_at.getTime() <= now.getTime()) return "auth.code_expired";
   // Live, unconsumed issuance, and the provider still refused it: the digits were wrong.
@@ -105,12 +171,23 @@ export async function classifyFailure(
 }
 
 /**
- * Invalidate every live code for an address.
+ * Invalidate every live issuance for a mailbox.
  *
- * Called when a new code is issued, so that **the newest code is the only one that works** — which
- * is the founder's own manual-test item ("request a second code before using the first, and confirm
- * which one works"). Leaving both live would widen the guessing surface for no benefit, and leaving
- * the *older* one live would be indefensible.
+ * Called when a new code is issued, so that **at most one code can be redeemed** — the founder's own
+ * manual-test item ("request a second code before using the first, and confirm which one works").
+ *
+ * **The precise claim is "at most one can be REDEEMED", not "only the newest works"** (PR #87 fifth
+ * round, F7). Three places on this branch said the stronger thing and it is not true for plus-tag
+ * spellings: the send at `routes/auth.ts` passes the *identity* address, so `victim@x`, `victim+1@x`
+ * and `victim+2@x` are three distinct addresses at Supabase, which keys an OTP per literal address —
+ * three provider-side codes reach one inbox and the provider will still accept any of them. What
+ * this function controls is our own record, and `consumeLatest` reads a single folded `mailbox_key`,
+ * so the second genuinely-valid code comes back `auth.code_used`. The user-visible effect is the
+ * same; the sentence describing it was wider than the mechanism.
+ *
+ * Not reproducible against this suite, and the reason is worth knowing before someone tries: the
+ * test fake's `verifyEmailCode` returns the same session for any input, so no test here can
+ * distinguish per-address OTPs at all. Traced rather than measured, and stated as traced.
  */
 export async function invalidateLive(
   client: pg.Client,
@@ -134,8 +211,8 @@ export async function invalidateLive(
  * invalidated what they could see and each inserted afterwards, and none of them could see the other
  * two's inserts — so the address ended with **three** live issuances where the design promises one.
  * The per-address ceiling is three, so three is exactly the number an attacker can arrange, and
- * "the newest code is the only one that works" — which is the founder's own manual-test item —
- * quietly stopped being true.
+ * the single-live-code guarantee — which the founder's own manual-test item checks — quietly stopped
+ * holding even in our own record.
  *
  * **A transaction alone does not fix it**, which is why there is a lock. Under READ COMMITTED each
  * transaction's `UPDATE` still cannot see a row another transaction has inserted but not committed,

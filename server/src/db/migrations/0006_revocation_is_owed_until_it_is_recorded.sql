@@ -18,7 +18,8 @@
 -- **The durable record is the fix, not the retry.** A loop that catches and continues stops one
 -- failure hiding the others, and it still leaves the failures nowhere. With a column, "what is still
 -- owed" becomes a query any process can run — the deletion route drains it on the way in, and
--- `npm run revoke-pending` drains it from outside without needing a caller who can still authenticate.
+-- `npm run revocations` reports it from outside, needing no caller who can still authenticate.
+-- (This line named `npm run revoke-pending`, a command that has never existed — PR #87 fifth round, F8.)
 
 ALTER TABLE sonny.identity
   ADD COLUMN provider_session_revoked_at timestamptz;
