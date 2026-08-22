@@ -41,10 +41,15 @@ struct ResumableTaskRunTests {
         #expect(fixture.viewModel.errorMessage != nil)
         let afterFailure = try fixture.resumableTaskStore.loadAll()
         #expect(afterFailure.count == 1)
-        #expect(afterFailure[0].command == "Write notes and open the page")
-        #expect(afterFailure[0].completedStepIDs == ["draft"])
-        #expect(afterFailure[0].remainingSteps.map(\.id) == ["url"])
-        #expect(afterFailure[0].stopReason == .failed)
+        // `#require`, not a subscript: an `#expect` on the count records an issue and carries on, so
+        // indexing an empty array below would crash the test process instead of failing the test —
+        // and a crashed process emits no "Test … failed" line for a mutation battery to attribute.
+        // Measured: it turned a killed mutant into an aborted run.
+        let failed = try #require(afterFailure.first)
+        #expect(failed.command == "Write notes and open the page")
+        #expect(failed.completedStepIDs == ["draft"])
+        #expect(failed.remainingSteps.map(\.id) == ["url"])
+        #expect(failed.stopReason == .failed)
     }
 
     /// **The flagship: an error at the second unit of two, picked up from the second rather than
@@ -185,8 +190,9 @@ struct ResumableTaskRunTests {
         #expect(fixture.viewModel.clarificationQuestion != nil)
         let records = try fixture.resumableTaskStore.loadAll()
         #expect(records.count == 1)
-        #expect(records[0].completedStepIDs.isEmpty)
-        #expect(records[0].stopReason == .interrupted)
+        let paused = try #require(records.first)
+        #expect(paused.completedStepIDs.isEmpty)
+        #expect(paused.stopReason == .interrupted)
         // And it is not offered while the question is still on screen — that task is live.
         #expect(fixture.viewModel.resumeOffer == nil)
     }
@@ -403,8 +409,9 @@ struct ResumableTaskRunTests {
 
         let entries = MemoryEntryPresentation.entries(for: .resumableTasks, viewModel: fixture.viewModel)
         #expect(entries.count == 1)
-        #expect(entries[0].title == "Write notes and open the page")
-        #expect(entries[0].detail.hasPrefix("Stopped by an error · 1 of 2 steps left · "))
+        let entry = try #require(entries.first)
+        #expect(entry.title == "Write notes and open the page")
+        #expect(entry.detail.hasPrefix("Stopped by an error · 1 of 2 steps left · "))
     }
 
     @Test
