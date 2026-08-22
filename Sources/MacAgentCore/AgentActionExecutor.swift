@@ -1012,8 +1012,8 @@ public final class AgentActionExecutor {
         // suite under a mutant is a statement about the suite, not about the code.**
         //
         // The two halves still answer different questions and overlap rather than nest. Of the eight
-        // adapters that produce `ActionPreview.writes` — `git grep -l "writes:" --
-        // 'Sources/MacAgentCore/*CapabilityAdapter.swift'` at `24fa0ba` — **three** write exactly the
+        // adapters that produce `ActionPreview.writes` — `git grep -l 'writes:' Sources/MacAgentCore |
+        // grep CapabilityAdapter` at `24fa0ba`, which prints 8 — **three** write exactly the
         // `outputPath` their own `resolveDefaultOutputs` pinned, so `namedByEnclosingPlan` holds
         // those paths too: `CreateLocalDraftCapabilityAdapter`, `LargestFilesZipCapabilityAdapter`,
         // `WebResearchMarkdownCapabilityAdapter`. The other **five** write somewhere no step's
