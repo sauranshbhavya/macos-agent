@@ -4,6 +4,7 @@ import {
   acceptedKeys,
   activeKey,
   loadConfig,
+  parseTrustedProxies,
   providerCredentials,
 } from "../src/config.js";
 
@@ -97,5 +98,55 @@ describe("provider credentials — two live keys per provider", () => {
   it("returns undefined rather than throwing for a provider with no credential", () => {
     expect(activeKey(loadConfig({ ...base }), "vision")).toBeUndefined();
     expect(acceptedKeys(loadConfig({ ...base }), "vision")).toEqual([]);
+  });
+
+  describe("TRUSTED_PROXIES", () => {
+    // **PR #87 third round, F5.** Nothing validated these entries, so a typo reached
+    // `@fastify/proxy-addr`'s `compile()` and threw a raw third-party `TypeError` **inside the
+    // `Fastify(...)` constructor** — before `app.ready()`, before this server's logger exists, and
+    // naming library internals rather than the variable that is wrong. The gateway would not start
+    // and the log did not say why, which is the exact opposite of what this file exists to
+    // guarantee: a bad environment is a named `ConfigError` identifying the variable.
+
+    it("accepts addresses, CIDR ranges and Fastify's named sets", () => {
+      expect(parseTrustedProxies("10.0.0.0/8, 172.16.0.0/12")).toEqual(["10.0.0.0/8", "172.16.0.0/12"]);
+      expect(parseTrustedProxies("192.168.1.1")).toEqual(["192.168.1.1"]);
+      expect(parseTrustedProxies("::1")).toEqual(["::1"]);
+      expect(parseTrustedProxies("2001:db8::/32")).toEqual(["2001:db8::/32"]);
+      // Named sets are `proxy-addr`'s own documented shorthand; refusing them would make this
+      // validation narrower than the thing it validates for.
+      expect(parseTrustedProxies("loopback,uniquelocal")).toEqual(["loopback", "uniquelocal"]);
+    });
+
+    it("still means trust-nothing when empty, as `false` rather than an empty array", () => {
+      expect(parseTrustedProxies("")).toBe(false);
+      expect(parseTrustedProxies("   ")).toBe(false);
+      expect(loadConfig({ ...base }).trustProxy).toBe(false);
+    });
+
+    it("refuses a malformed entry with a ConfigError that NAMES it", () => {
+      // Naming the entry is the point: there is no fixing a list without knowing which element is
+      // bad, and a proxy address — unlike every other value this file refuses to echo — is not a
+      // secret.
+      expect(() => parseTrustedProxies("10.0.0.0/8,not-an-ip")).toThrow(ConfigError);
+      expect(() => parseTrustedProxies("10.0.0.0/8,not-an-ip")).toThrow(/not-an-ip/);
+      expect(() => parseTrustedProxies("10.0.0.0/8,not-an-ip")).toThrow(/TRUSTED_PROXIES/);
+    });
+
+    it("refuses a prefix that is not a prefix for that address family", () => {
+      // `10.0.0.0/64` is not a v4 network, and `proxy-addr` would say so at a moment nobody is
+      // watching. Both families are checked against their own width rather than one shared bound.
+      expect(() => parseTrustedProxies("10.0.0.0/64")).toThrow(ConfigError);
+      expect(() => parseTrustedProxies("10.0.0.0/abc")).toThrow(ConfigError);
+      expect(() => parseTrustedProxies("10.0.0.0/")).toThrow(ConfigError);
+      expect(parseTrustedProxies("2001:db8::/64")).toEqual(["2001:db8::/64"]);
+    });
+
+    it("fails at loadConfig, so a bad value is a startup refusal rather than a crash later", () => {
+      expect(() => loadConfig({ ...base, TRUSTED_PROXIES: "10.0.0.0/8,garbage" })).toThrow(ConfigError);
+      // The whole hazard was the failure arriving from somewhere else entirely. This asserts the
+      // error is ours, by type and by the variable it names.
+      expect(() => loadConfig({ ...base, TRUSTED_PROXIES: "garbage" })).toThrow(/TRUSTED_PROXIES/);
+    });
   });
 });

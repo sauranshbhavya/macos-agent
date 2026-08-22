@@ -108,6 +108,19 @@ check "a bare Resend key is refused"          1 "curl -H 'Authorization: Bearer 
 # not a credential. This repository contains four of them.
 check "a re_-prefixed identifier is not a key" 0 'local re_isolated_test_command="$1"'
 
+# PR #87 third round, F6. The name-anchored pattern was case-SENSITIVE, so the lowercase and
+# snake_case spellings -- the natural YAML, Helm, compose and Terraform shapes -- were invisible.
+# It matters most for exactly these three: they have no vendor-prefix fallback, so the variable name
+# is the only thing that can catch them at all. Each of the four below was verified to pass (exit 0,
+# i.e. NOT caught) before the case-insensitive split.
+check "a lowercase salt assignment is refused"     1 "rate_limit_salt=${salt_value}"
+check "a lowercase YAML jwt secret is refused"     1 "  supabase_jwt_secret: \"${salt_value}\""
+check "a mixed-case service-role key is refused"   1 "Supabase_Service_Role_Key=${salt_value}"
+check "a lowercase Helm-style value is refused"    1 "  rate_limit_salt: ${salt_value}"
+# ...and the vendor-prefix patterns stay case-SENSITIVE, which is the other half of the split. An
+# uppercased prefix is not a shape any vendor issues, and loosening it buys nothing.
+check "an uppercased vendor prefix is not a key"   0 'const k = "SK-ANT-'"$(printf 'B%.0s' {1..30})"'";'
+
 # C2: two matches of the SAME pattern on one line, the first allowlisted. `head -1` took only
 # the leading match, so the allowlisted local DSN shadowed a real credential after it.
 check "an allowlisted match does not shadow a later one" 1 'postgres://postgres:postgres@localhost/db then postgres://real:'"$(printf 'S%.0s' {1..12})"'@prod.internal/db'

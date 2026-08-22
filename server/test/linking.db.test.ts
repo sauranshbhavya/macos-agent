@@ -69,18 +69,68 @@ describeDb("the identity-linking rule", () => {
     });
   });
 
-  describe("rule 2 — verified, non-relay email match", () => {
-    it("lands the same verified address by two methods on ONE account", async () => {
-      // The ticket's first named criterion.
+  describe("rule 2 — a verified, non-relay email match FLAGS rather than links", () => {
+    it("does NOT merge the same verified address reached by two methods — it flags", async () => {
+      // **This test asserted the opposite until the founder's decision of 2026-08-22** (PR #87
+      // third round, F2), and it was the ticket's own first named acceptance criterion: "same email
+      // by two methods lands on one account". That criterion is superseded, deliberately and on the
+      // record, by the case the third review round reproduced — see the recycled-mailbox test below.
       const byEmail = await resolve(client, emailAssertion("dual@example.com"));
       const byGoogle = await resolve(client, {
         provider: "google", subject: "google-sub-1", email: "dual@example.com", emailVerified: true,
       });
-      expect(byGoogle.accountId).toBe(byEmail.accountId);
-      expect(byGoogle.linkMethod).toBe("verified_email_match");
-      expect(byGoogle.created).toBe(false);
+      expect(byGoogle.accountId).not.toBe(byEmail.accountId);
+      expect(byGoogle.created).toBe(true);
+      expect(byGoogle.linkMethod).toBe("primary");
+      // Not silent: the hint is what makes this a refusal to guess rather than a failure to notice.
+      expect(byGoogle.linkHint).toBe("verified_email_matches_existing_account");
       const { rows } = await client.query("SELECT count(*)::int AS n FROM sonny.account");
+      expect(rows[0].n).toBe(2);
+    });
+
+    it("does not merge two DIFFERENT humans when a mailbox is recycled", async () => {
+      // **The case that forced the decision, reproduced by the third review round.** Human A signs
+      // in with Google and account X is created. The address is later reassigned — a departing
+      // employee's mailbox reissued, a free provider recycling a handle — and Human B, who now
+      // legitimately owns it, signs in by email code. Under the old rule they landed *inside*
+      // account X, with `created: false` and no flag: somebody else's tasks, somebody else's
+      // subscription.
+      //
+      // The mistake underneath is that `email_verified` records who controlled an address when some
+      // OTHER identity was written, not who controls it now — and there is no timestamp on it that
+      // could bound that.
+      const humanA = await resolve(client, {
+        provider: "google", subject: "google-sub-recycled", email: "shared@example.com", emailVerified: true,
+      });
+      // ... the mailbox changes hands ...
+      const humanB = await resolve(client, emailAssertion("shared@example.com"));
+
+      expect(humanB.accountId).not.toBe(humanA.accountId);
+      expect(humanB.created).toBe(true);
+      expect(humanB.linkHint).toBe("verified_email_matches_existing_account");
+      // Human A's account is untouched — the identity did not move, and nothing was added to it.
+      const { rows } = await client.query(
+        "SELECT count(*)::int AS n FROM sonny.identity WHERE account_id = $1", [humanA.accountId],
+      );
       expect(rows[0].n).toBe(1);
+    });
+
+    it("flags only when there is something to flag", async () => {
+      // The hint has to be absent for an address nobody has seen, or it means nothing when present.
+      const alone = await resolve(client, emailAssertion("nobody-else@example.com"));
+      expect(alone.linkHint).toBeUndefined();
+      expect(alone.created).toBe(true);
+    });
+
+    it("does not flag on an UNVERIFIED assertion either", async () => {
+      // An unverified address is an attacker's claim. Flagging it would hand the attacker a signal
+      // that the address is in use — the account-existence oracle this branch spends real effort
+      // avoiding on `email/start`, reintroduced through the sign-in response.
+      await resolve(client, emailAssertion("quiet@example.com"));
+      const guess = await resolve(client, {
+        provider: "google", subject: "g-quiet", email: "quiet@example.com", emailVerified: false,
+      });
+      expect(guess.linkHint).toBeUndefined();
     });
 
     it("REFUSES to link an unverified assertion, and makes its own account", async () => {
@@ -103,14 +153,21 @@ describeDb("the identity-linking rule", () => {
       });
       expect(fresh.accountId).not.toBe(gone.accountId);
       expect(fresh.created).toBe(true);
+      // And no hint either: a hint pointing at an account nobody can sign into is worse than none,
+      // because SONNY-128 would offer the user a link they cannot complete.
+      expect(fresh.linkHint).toBeUndefined();
     });
 
-    it("normalises case and whitespace when matching", async () => {
+    it("normalises case and whitespace when deciding whether to flag", async () => {
+      // The matching itself still normalises — it decides whether a hint is issued rather than
+      // whether accounts merge, and a hint that missed `Case@Example.com` vs `case@example.com`
+      // would be silent in exactly the case it exists for.
       const a = await resolve(client, emailAssertion("Case@Example.com"));
       const b = await resolve(client, {
         provider: "google", subject: "g-case", email: "  case@example.COM  ", emailVerified: true,
       });
-      expect(b.accountId).toBe(a.accountId);
+      expect(b.accountId).not.toBe(a.accountId);
+      expect(b.linkHint).toBe("verified_email_matches_existing_account");
     });
 
     it("keeps plus-tags distinct, because merging is the failure being prevented", async () => {
@@ -239,6 +296,40 @@ describeDb("the identity-linking rule", () => {
         "SELECT account_id FROM sonny.identity WHERE id = $1", [strangerIdentity.identityId],
       );
       expect(rows[0].account_id).not.toBe(mine.accountId);
+    });
+
+    it("PINS that provenIdentityId is a consistency check and NOT proof of ownership", async () => {
+      // **A characterization test: it asserts the unsafe behaviour on purpose** (PR #87 third
+      // round, F3). The existing tests cover only the MISMATCHED case — caller names identity A and
+      // moves identity B — which passes whether the check is proof or a tautology. The exploitable
+      // case is the matched-but-unowned one, and nothing exercised it.
+      //
+      // `provenIdentityId !== identityId` compares two caller-supplied arguments to each other. Pass
+      // a stranger's identity id as BOTH and the check is satisfied completely. This test exists so
+      // that (a) the property is written down where the next implementer will meet it, and (b) if
+      // anyone ever makes this a real check, THIS test fails and forces them to read why it was here.
+      //
+      // **Not reachable over HTTP**: no route calls `linkExplicitly`. The structural fix is a
+      // constraint on the future call site, recorded on SONNY-128, SONNY-129 and SONNY-203 —
+      // `provenIdentityId` must be derived server-side from a just-completed sign-in and never read
+      // off the request. It is deliberately NOT fixed inside this function, which has no session
+      // store to consult and would only move the trust boundary one layer down.
+      const attacker = await resolve(client, emailAssertion("attacker-tautology@example.com"));
+      const stranger = await resolve(client, emailAssertion("stranger-tautology@example.com"));
+
+      await linkExplicitly(
+        client,
+        stranger.identityId,      // the identity being moved — the attacker does not own it
+        attacker.accountId,       // the target — the attacker does own this
+        attacker.accountId,       // authenticatedAccountId, equal to the target, so check 1 passes
+        stranger.identityId,      // "proven" — the same value as the first argument, so check 2 passes
+      );
+
+      const { rows } = await client.query(
+        "SELECT account_id FROM sonny.identity WHERE id = $1", [stranger.identityId],
+      );
+      // It moved. That is the point being pinned, not a behaviour being endorsed.
+      expect(rows[0].account_id).toBe(attacker.accountId);
     });
 
     it("refuses to link an identity that does not exist", async () => {
@@ -578,8 +669,17 @@ describeDb("the identity-linking rule", () => {
         await closer.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [victim.accountId]);
 
         // Starts while the closer still holds the row lock, so it must block rather than proceed.
-        const racing = resolve(racer, emailAssertion("realrace@example.com"));
+        let settled = false;
+        const racing = resolve(racer, emailAssertion("realrace@example.com"))
+          .then((value) => { settled = true; return value; });
         await new Promise((r) => setTimeout(r, 150));
+        // **The assertion this test was missing** (PR #87 third round, F9). Without it, the test
+        // says only what the FINAL state is, and a future regression that stopped blocking here
+        // could reach the same final state by a different route and pass — the ON-CONFLICT test
+        // next door already carries this line, and this file's own comments record a race test that
+        // silently stopped racing once before. Asserting the promise is still pending is what makes
+        // "it blocked on the closer" a measured fact rather than the test's title.
+        expect(settled).toBe(false);
         await closer.query("COMMIT");
 
         const result = await racing;

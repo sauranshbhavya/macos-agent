@@ -340,6 +340,22 @@ contract over-specified. Codes are single-use, so a
 replay of this call returns the stored original result — including the original failure — and never
 un-consumes a code. Section 9.3 has the whole retry table.
 
+**`link_hint`, an optional field on the token response** (added 2026-08-21, extended 2026-08-22,
+SONNY-127). Present when the server can see a reason to suspect this sign-in belongs with an existing
+account and cannot prove one. It is advisory: it names no account and carries no identifier, because
+naming one would answer "does this address have an account?" to anyone who can reach the endpoint.
+Two values:
+
+| `link_hint` | Means |
+|---|---|
+| `relay_address_may_belong_to_existing_account` | An Apple Hide My Email relay address, which matches nothing by design |
+| `verified_email_matches_existing_account` | A verified, non-relay address that **does** match an existing identity — and which no longer merges on that alone (founder decision, 2026-08-22; `docs/sonny-identity-linking-rule.md` §2.1) |
+
+A client that ignores the field is correct and gets two accounts; there is no failure mode in
+ignoring it, only a worse experience. **Surfacing it — the prompt that offers to join the two — is
+SONNY-128's and SONNY-129's**, and neither the field nor the prompt merges anything: rule 4 is the
+only path that joins two existing accounts.
+
 `POST /v1/auth/oauth/google` and `POST /v1/auth/oauth/apple` — the body is whatever the provider's
 flow yields and is SONNY-129's to fix, once that ticket has established which Sign in with Apple
 mechanism actually works for a Developer-ID-signed, non-App-Store Mac app. Both return the same token

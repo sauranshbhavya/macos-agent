@@ -173,7 +173,7 @@ describeDb("rate limits and the code lifecycle", () => {
       );
       const names = rows.map((r) => r.column_name).sort();
       expect(names).toEqual(
-        ["consumed_at", "email_norm", "expires_at", "id", "issued_at", "source_hash"],
+        ["consumed_at", "expires_at", "id", "issued_at", "mailbox_key", "source_hash"],
       );
     });
   });
