@@ -250,6 +250,42 @@ struct MemoryCommandCenterTests {
         #expect(try fixture.clipboardSettingsStore.load().isEnabled, "the user's own choice was rewritten")
     }
 
+    /// **The master switch has to stop the clipboard *timer*, not merely answer a question.**
+    ///
+    /// Every other type is withheld by a guard consulted at write time; clipboard history is a 1s
+    /// poll that records on its own, so a switch that only changed what a row displayed would leave
+    /// it recording. Driven through the real monitor: `refreshClipboardHistoryNotice()` polls once
+    /// immediately when it starts monitoring, so what lands in the store is the honest answer to
+    /// whether monitoring began.
+    @Test
+    func theMasterSwitchStopsTheClipboardMonitorRatherThanJustTheRowItRenders() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        try fixture.clipboardSettingsStore.save(
+            ClipboardHistorySettings(noticeDismissed: true, isEnabled: true)
+        )
+        fixture.pasteboard.text = "something copied"
+        fixture.pasteboard.changeCount = 1
+
+        // Control: with memory on, monitoring starts and the first poll records.
+        fixture.viewModel.refreshClipboardHistoryNotice()
+        #expect(try fixture.clipboardHistoryStore.loadAll().map(\.text) == ["something copied"])
+
+        // Now with the master switch off, and a genuinely new pasteboard change to record.
+        try fixture.clipboardHistoryStore.delete(
+            id: try #require(try fixture.clipboardHistoryStore.loadAll().first).id
+        )
+        fixture.viewModel.setMemoryEnabled(false)
+        fixture.pasteboard.text = "copied while memory was off"
+        fixture.pasteboard.changeCount = 2
+
+        fixture.viewModel.refreshClipboardHistoryNotice()
+
+        #expect(try fixture.clipboardHistoryStore.loadAll().isEmpty)
+        // And the user's own clipboard setting was not rewritten to achieve it.
+        #expect(try fixture.clipboardSettingsStore.load().isEnabled)
+    }
+
     // MARK: - Allowed apps
 
     @Test
@@ -701,11 +737,17 @@ private struct MemoryFixture {
     let taskPlanDetailStore: TaskPlanDetailStore
     let approvedAppStore: ApprovedAppStore
     let clipboardSettingsStore: ClipboardHistorySettingsStore
+    let clipboardHistoryStore: ClipboardHistoryStore
+    let pasteboard: MemoryFixturePasteboardReader
     let userDefaults: UserDefaults
     let userDefaultsSuiteName: String
     let removesRoot: Bool
 
     func cleanUp() {
+        // Stops the 1s clipboard timer if a test started one — it is the only thing in this fixture
+        // that outlives the test, and a live timer polling a torn-down directory is a leak into
+        // whichever suite runs next.
+        viewModel.setMemoryEnabled(false)
         userDefaults.removePersistentDomain(forName: userDefaultsSuiteName)
         if removesRoot {
             try? FileManager.default.removeItem(at: root)
@@ -803,6 +845,7 @@ private func makeMemoryFixture(
         fileURL: root.appendingPathComponent("clipboard-history.json"),
         encryption: encryption
     )
+    let pasteboard = MemoryFixturePasteboardReader()
     let approvedAppStore = ApprovedAppStore(
         fileURL: root.appendingPathComponent("approved-apps.json"),
         encryption: encryption
@@ -850,7 +893,7 @@ private func makeMemoryFixture(
         clipboardHistorySettingsStore: clipboardSettingsStore,
         approvedAppStore: approvedAppStore,
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
-            reader: MemoryFixturePasteboardReader(),
+            reader: pasteboard,
             store: clipboardHistoryStore,
             settingsStore: clipboardSettingsStore
         ),
@@ -872,6 +915,8 @@ private func makeMemoryFixture(
         taskPlanDetailStore: taskPlanDetailStore,
         approvedAppStore: approvedAppStore,
         clipboardSettingsStore: clipboardSettingsStore,
+        clipboardHistoryStore: clipboardHistoryStore,
+        pasteboard: pasteboard,
         userDefaults: userDefaults,
         userDefaultsSuiteName: userDefaultsSuiteName,
         removesRoot: removesRoot
@@ -888,11 +933,15 @@ private struct MemoryFixtureShortcutCatalog: ShortcutCatalogProviding {
     func shortcutNames() throws -> [String] { [] }
 }
 
+/// Returns nothing by default, so no test records a clipboard entry by accident. The one test that
+/// needs the monitor to actually record sets `text` and bumps `changeCount`, which is what `poll()`
+/// reads to decide the pasteboard changed.
 @MainActor
 private final class MemoryFixturePasteboardReader: PasteboardReading {
     var changeCount = 0
+    var text: String?
 
     func typeIdentifiers() -> [String] { [] }
 
-    func stringValue() -> String? { nil }
+    func stringValue() -> String? { text }
 }
