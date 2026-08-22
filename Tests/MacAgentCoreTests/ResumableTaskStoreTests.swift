@@ -22,8 +22,12 @@ struct ResumableTaskStoreTests {
 
         let loaded = try store.loadAll(now: .fixture)
         #expect(loaded.count == 1)
-        #expect(loaded[0].command == "Zip my three largest files")
-        #expect(loaded[0].plan.steps.map(\.id) == ["calc", "url"])
+        // `#require` rather than a subscript, here and below: an `#expect` on a count records its
+        // issue and carries on, so indexing an empty array crashes the process — which under a
+        // mutation battery reads as an aborted run rather than as a killed mutant.
+        let record = try #require(loaded.first)
+        #expect(record.command == "Zip my three largest files")
+        #expect(record.plan.steps.map(\.id) == ["calc", "url"])
         try expectEncryptedFile(store.fileURL, hiding: "Zip my three largest files")
     }
 
@@ -115,8 +119,9 @@ struct ResumableTaskStoreTests {
 
         let loaded = try store.loadAll(now: .fixture)
         #expect(loaded.count == 1)
-        #expect(loaded[0].completedStepIDs == ["calc"])
-        #expect(loaded[0].stopReason == .failed)
+        let record = try #require(loaded.first)
+        #expect(record.completedStepIDs == ["calc"])
+        #expect(record.stopReason == .failed)
     }
 
     /// Deleting something already gone must not rewrite the file. This is the hot path: every run
