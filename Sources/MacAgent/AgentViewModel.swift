@@ -4586,9 +4586,13 @@ final class AgentViewModel: ObservableObject {
             resumingTask = nil
             return false
         }
-        // The offer has been answered, so it does not come back if this run pauses for an approval:
-        // the record is still on disk and still the same id, and the run that owns it is now live.
-        dismissedResumeOfferIDs.insert(task.id)
+        // **Continuing does not dismiss, and that is deliberate.** The obvious extra line here would
+        // mark the offer answered so it cannot reappear — and it would be wrong for the case that
+        // matters: a resumed run that fails *again* would then have no offer for the rest of the
+        // session, even though the task is still unfinished and the record is still on disk. Nothing
+        // needs it, either. While the run is live `resumeOffer` is silent on `!isTaskInFlight`; if it
+        // succeeds the record is deleted; if it fails, the widget shows the failure, which outranks
+        // the offer until the user has read it.
         return true
     }
 

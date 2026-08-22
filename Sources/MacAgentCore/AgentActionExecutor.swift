@@ -758,10 +758,23 @@ public final class AgentActionExecutor {
         resumedArtifactPath: String?,
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
-        let resolvedPlan = try resolveDefaultOutputs(
-            in: plan,
-            claimedEarlierInThisRun: claimedEarlierInThisRun,
-            namedByEnclosingPlan: namedByEnclosingPlan
+        // **The carry is applied here as well as inside `executeChain`, and both are live**
+        // (SONNY-210). A resumed run executes what is *left* of a plan, and that remainder is often a
+        // single unit — "zip my largest files and reveal it in Finder", resumed after the zip, is the
+        // one-step plan `[reveal_in_finder]`. A one-step plan is not a chain, so it never reaches
+        // `executeChain` at all, and a seed applied only there would do nothing in exactly the case
+        // it exists for. This line covers that case; `executeChain`'s own seed covers a remainder
+        // whose *first* segment is a bare consumer with more units behind it.
+        //
+        // A no-op for every ordinary run, twice over: `resumedArtifactPath` is `nil`, and the rule
+        // itself refuses any plan of more than one step.
+        let resolvedPlan = resolvePreviousArtifactPathIfNeeded(
+            in: try resolveDefaultOutputs(
+                in: plan,
+                claimedEarlierInThisRun: claimedEarlierInThisRun,
+                namedByEnclosingPlan: namedByEnclosingPlan
+            ),
+            previousArtifactPath: resumedArtifactPath
         )
         let workflow = try workflow(in: resolvedPlan)
 
