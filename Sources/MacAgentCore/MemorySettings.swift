@@ -58,6 +58,22 @@ public enum MemoryCategory: String, CaseIterable, Identifiable, Sendable {
     public var stores: [LocalStore] {
         LocalStore.allCases.filter { $0.memoryCategory == self }
     }
+
+    /// Whether this row holds things the user asked Sonny to save, or records of what happened.
+    ///
+    /// **`LocalStoreKind`, not a second taxonomy.** The Memory section groups its rows, and the
+    /// grouping had to come from something real rather than from a reading invented for the page —
+    /// this is the classification SONNY-115 already built, the same one "Don't save this task"
+    /// decides suppression by. Every category's stores happen to share one kind, which is a fact
+    /// about the mapping rather than a guarantee of it, so
+    /// `MemorySettingsTests.everyMemoryRowsStoresShareOneKindSoTheRowCanBeGroupedByIt` asserts it
+    /// and `.notWrittenByTasks` is unreachable here (its one store is excluded from every row).
+    ///
+    /// Returns `.trace` for an empty `stores`, which cannot happen — `everyMemoryRowCoversAtLeastOneStore`
+    /// pins that — and is the conservative answer if it ever did.
+    public var storeKind: LocalStoreKind {
+        stores.first?.kind ?? .trace
+    }
 }
 
 extension LocalStore {

@@ -3824,6 +3824,15 @@ struct MemoryRowPresentation: Equatable {
     let systemImage: String
     let count: Int
     let isRecording: Bool
+    /// Whether the row's switch can be moved at all.
+    ///
+    /// False for two different reasons that look the same to the control and different to the
+    /// reader: an administrator has taken memory away, or the master switch is off. The second is
+    /// the one a live control would get wrong — with memory off wholesale, a per-type switch that
+    /// still moved would write a preference whose effective value cannot change, so the user flips
+    /// it and watches it snap back. Their per-type choices are not lost either way; they stay in
+    /// `MemorySettingsStore` and come back when the master switch does.
+    let canChangeRecording: Bool
     /// "12 saved · newest 3:04 PM", or the empty-state half on its own.
     let detailText: String
 
@@ -3831,6 +3840,7 @@ struct MemoryRowPresentation: Equatable {
         category: MemoryCategory,
         count: Int,
         isRecording: Bool,
+        canChangeRecording: Bool,
         newestEntryDate: Date?,
         now: Date
     ) {
@@ -3839,6 +3849,7 @@ struct MemoryRowPresentation: Equatable {
         self.systemImage = Self.systemImage(for: category)
         self.count = count
         self.isRecording = isRecording
+        self.canChangeRecording = canChangeRecording
 
         let counted = count == 1 ? "1 saved" : "\(count) saved"
         guard let newestEntryDate else {
@@ -3952,6 +3963,13 @@ private struct MemoryView: View {
                 }
             }
             Button("Cancel", role: .cancel) {}
+        } message: {
+            // Every other destructive confirmation in the app names what goes and what stays — the
+            // Settings wipe, the workspace delete, both task deletes. This one deletes the most per
+            // press of any of them, so it says so rather than being the one that does not.
+            if let deletionCategory {
+                Text(MemoryDeletionCopy.message(for: deletionCategory))
+            }
         }
     }
 
@@ -3986,7 +4004,7 @@ private struct MemoryView: View {
             SettingsAdaptiveControlRow {
                 SettingsControlLabel(
                     title: "Preferences",
-                    detail: "Display, theme, notifications, security and data."
+                    detail: "Preferences, notifications, usage, security and data."
                 )
             } trailing: {
                 Button("Open settings", action: openSettings)
@@ -4013,15 +4031,23 @@ private struct MemoryView: View {
 
             ScrollView {
                 LazyVStack(spacing: 0) {
-                    ForEach(Array(MemoryCategory.allCases.enumerated()), id: \.element) { index, category in
-                        MemoryRow(
-                            presentation: presentation(for: category),
-                            isLast: index == MemoryCategory.allCases.count - 1,
-                            isLocked: viewModel.memorySettings.isDisabledByPolicy,
-                            view: { open(category) },
-                            delete: { deletionCategory = category },
-                            setEnabled: { isOn in viewModel.setMemoryCategoryEnabled(category, to: isOn) }
-                        )
+                    // Grouped, like `RoutinesView`'s cadence sections and the Tasks list's status
+                    // groups — a flat stack of seven rows adopts the row idiom without the
+                    // sectioning that comes with it everywhere else. The split is `LocalStoreKind`,
+                    // the classification "Don't save this task" already decides suppression by, so
+                    // it is the product's own reading rather than a taxonomy invented for this page.
+                    ForEach(memorySections) { section in
+                        CommandCenterGroupHeader(title: section.title, count: section.categories.count)
+
+                        ForEach(Array(section.categories.enumerated()), id: \.element) { index, category in
+                            MemoryRow(
+                                presentation: presentation(for: category),
+                                isLast: index == section.categories.count - 1,
+                                view: { open(category) },
+                                delete: { deletionCategory = category },
+                                setEnabled: { isOn in viewModel.setMemoryCategoryEnabled(category, to: isOn) }
+                            )
+                        }
                     }
                 }
             }
@@ -4066,19 +4092,42 @@ private struct MemoryView: View {
             category: category,
             count: viewModel.memoryEntryCount(for: category),
             isRecording: viewModel.isMemoryCategoryEnabled(category),
+            canChangeRecording: viewModel.memorySettings.isRecording,
             newestEntryDate: viewModel.newestMemoryEntryDate(for: category),
             now: Date()
         )
+    }
+
+    private var memorySections: [MemorySection] {
+        MemorySection.all
+    }
+}
+
+/// The Memory collection's two groups, keyed by `LocalStoreKind`.
+///
+/// A value rather than an inline `switch` in the view so the grouping is assertable — the same
+/// reason `RoutineCadenceSection` exists for the Routines page.
+struct MemorySection: Identifiable, Equatable {
+    static let all: [MemorySection] = [
+        MemorySection(kind: .artifact, title: "Saved by you"),
+        MemorySection(kind: .trace, title: "Recorded as Sonny works")
+    ]
+
+    let kind: LocalStoreKind
+    let title: String
+
+    var id: String { title }
+
+    /// In `MemoryCategory.allCases` order, so a category added later lands in its group without a
+    /// second ordering to maintain.
+    var categories: [MemoryCategory] {
+        MemoryCategory.allCases.filter { $0.storeKind == kind }
     }
 }
 
 private struct MemoryRow: View {
     let presentation: MemoryRowPresentation
     let isLast: Bool
-    /// An administrator's policy takes every control on the row, not only the switch: a delete this
-    /// page offered while memory is centrally disabled would be the page overriding the policy in
-    /// the one direction that destroys data.
-    let isLocked: Bool
     let view: () -> Void
     let delete: () -> Void
     let setEnabled: (Bool) -> Void
@@ -4112,20 +4161,31 @@ private struct MemoryRow: View {
                     .buttonStyle(CommandCenterRowActionStyle())
                     .accessibilityLabel("View \(presentation.title)")
 
+                // Deliberately *not* disabled while memory is off, by policy or by the master
+                // switch. Deleting what is already stored is the next thing someone who turned
+                // recording off wants, and an administrator's disable-memory policy is furthered by
+                // a delete rather than contradicted by one. Only an empty row has nothing to do.
                 Button("Delete", action: delete)
                     .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
-                    .disabled(isLocked || presentation.count == 0)
+                    .disabled(presentation.count == 0)
                     .accessibilityLabel("Delete \(presentation.title)")
 
-                Toggle("", isOn: Binding(
+                // **`SonnySettingsToggle`, not the native `.switch` `RoutineRow` uses.** Two
+                // reasons, and the second is the one that settles it. First, this page shows a
+                // toggle in both of its panels, forty points apart; the master switch is a Settings
+                // row where `SonnySettingsToggle` is the established control, and a native
+                // system-rendered switch beside it reads as two design languages on one screen.
+                // Second, `SonnySettingsToggle` *is* System A's toggle —
+                // `docs/sonny-design-system-reference.md` §2.6 specifies it down to the knob shadow
+                // and calls that "the one shadow exception in System A, confined to this one
+                // control", which reusing the control honours and reimplementing it would not. A
+                // native switch is macOS chrome rather than a Sonny token, so the difference from
+                // `RoutineRow` is a difference from the deviation, not from the rule.
+                SonnySettingsToggle(isOn: Binding(
                     get: { presentation.isRecording },
                     set: { isOn in setEnabled(isOn) }
                 ))
-                    .labelsHidden()
-                    .toggleStyle(.switch)
-                    .controlSize(.mini)
-                    .tint(SonnyTheme.accent)
-                    .disabled(isLocked)
+                    .disabled(!presentation.canChangeRecording)
                     .accessibilityLabel("Remember \(presentation.title)")
             }
             .padding(.horizontal, 18)
@@ -4136,6 +4196,75 @@ private struct MemoryRow: View {
                     .fill(SonnyTheme.border)
                     .frame(height: 1)
             }
+        }
+    }
+}
+
+/// The words the Memory section uses for destructive confirmations and empty lists.
+///
+/// A value rather than literals in the views because both sets are per category and both are the
+/// kind of copy a reader checks: a confirmation that names the wrong thing is worse than one that
+/// says nothing, and this repository has an empty-state convention (`RoutinesView`, `WorkspacesView`)
+/// that pairs the condition with the command that ends it.
+enum MemoryDeletionCopy {
+    /// What a per-type delete takes, and what it leaves. Same shape as every other destructive
+    /// confirmation in the app.
+    static func message(for category: MemoryCategory) -> String {
+        switch category {
+        case .routines:
+            return "This deletes every saved routine and its schedule. Task history is not deleted."
+        case .workspaces:
+            return "This deletes every saved workspace and the apps, URLs and folders it lists. Task history is not deleted."
+        case .taskHistory:
+            return "This deletes every task Sonny has recorded, what each one planned, and the records of what Sonny did on screen. Files those tasks created are not deleted."
+        case .recentArtifacts:
+            return "This deletes Sonny's list of files it recently worked with. The files themselves are not deleted."
+        case .clipboardHistory:
+            return "This deletes every copied item Sonny has recorded. Your clipboard itself is not affected."
+        case .snippets:
+            return "This deletes every saved snippet and its trigger."
+        case .approvedApps:
+            return "This deletes every app you have allowed Sonny to control. Sonny asks again the next time it needs one of them."
+        }
+    }
+
+    /// What removing one entry takes. Shorter than the per-type message because the row beside it
+    /// already names the entry.
+    static func entryMessage(for category: MemoryCategory) -> String {
+        switch category {
+        case .recentArtifacts:
+            return "This removes Sonny's note about the file. The file itself is not deleted."
+        case .clipboardHistory:
+            return "This removes the copied item from Sonny's history."
+        case .snippets:
+            return "This deletes the snippet and its trigger."
+        case .approvedApps:
+            return "Sonny asks again the next time it needs to control this app."
+        case .routines, .workspaces, .taskHistory:
+            // Unreachable: the sheet opens for the four types above only, and the other three are
+            // deleted from their own pages.
+            return ""
+        }
+    }
+
+    static func emptyTitle(for category: MemoryCategory) -> String {
+        "No \(category.title.lowercased()) yet"
+    }
+
+    /// Paired with the command that ends the empty state, the way `RoutinesView`'s and
+    /// `WorkspacesView`'s empty states are.
+    static func emptyMessage(for category: MemoryCategory) -> String {
+        switch category {
+        case .recentArtifacts:
+            return "Ask Sonny to create or convert a file, then it will appear here."
+        case .clipboardHistory:
+            return "Copy something while clipboard history is on, and it will appear here."
+        case .snippets:
+            return "Ask Sonny to save a snippet, then it will appear here."
+        case .approvedApps:
+            return "Allow Sonny to control an app during a screen task, and it will appear here."
+        case .routines, .workspaces, .taskHistory:
+            return ""
         }
     }
 }
@@ -4220,6 +4349,16 @@ private struct MemoryEntriesSheet: View {
     @ObservedObject var viewModel: AgentViewModel
     let category: MemoryCategory
     @Binding var isPresented: Bool
+    @State private var pendingDeletion: PendingEntryDeletion?
+
+    /// The row a confirmation is open for. Carries the position it was rendered at, because that is
+    /// what `AgentViewModel.deleteMemoryEntry(in:at:)` takes — and carries the title so the dialog
+    /// can name what it is about to remove.
+    private struct PendingEntryDeletion: Identifiable {
+        let id: String
+        let index: Int
+        let title: String
+    }
 
     var body: some View {
         VStack(spacing: 0) {
@@ -4254,8 +4393,8 @@ private struct MemoryEntriesSheet: View {
             if entries.isEmpty {
                 CollectionEmptyState(
                     systemImage: "tray",
-                    title: "Nothing here",
-                    message: "Sonny has not saved anything of this kind yet."
+                    title: MemoryDeletionCopy.emptyTitle(for: category),
+                    message: MemoryDeletionCopy.emptyMessage(for: category)
                 )
                 .frame(maxHeight: .infinity)
             } else {
@@ -4265,12 +4404,38 @@ private struct MemoryEntriesSheet: View {
                             MemoryEntryRow(
                                 entry: entry,
                                 isLast: index == entries.count - 1,
-                                delete: { delete(at: index) }
+                                delete: {
+                                    pendingDeletion = PendingEntryDeletion(
+                                        id: entry.id,
+                                        index: index,
+                                        title: entry.title
+                                    )
+                                }
                             )
                         }
                     }
                 }
             }
+        }
+        // Confirmed, like every other per-row delete in Command Center (the workspace card, both
+        // task rows). A misclick here is unrecoverable — a revoked app grant, a snippet, a copied
+        // item — and nothing else in the app deletes a row on one press.
+        .confirmationDialog(
+            pendingDeletion.map { "Delete \($0.title)?" } ?? "",
+            isPresented: Binding(
+                get: { pendingDeletion != nil },
+                set: { if !$0 { pendingDeletion = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let pendingDeletion {
+                Button("Delete", role: .destructive) {
+                    delete(at: pendingDeletion.index)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(MemoryDeletionCopy.entryMessage(for: category))
         }
         .frame(width: 560, height: 460)
         .background(SonnyTheme.ink)
