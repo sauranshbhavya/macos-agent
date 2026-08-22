@@ -161,6 +161,58 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: feature/memory-output-locations
+Status: complete — SONNY-209 Done; PR open
+Date: 2026-08-22
+Tickets: **SONNY-209** (common output locations: a new encrypted local store recording which folders the user's outputs land in, with recency and frequency, surfaced as its own Memory row). Row 13's memory half, second of three; the third is SONNY-210 (long-running task state). Cut from `main` at `9bf36d1`, immediately after SONNY-208's Memory section merged. Decision frame: SONNY-17's ratification comment of 2026-08-21.
+Reviewed by: (to be filled by the fresh-session review, per WORKFLOW.md step 7)
+
+Spec sections covered: §6.10's "common output locations" memory type, in full. §6.10's other two missing types are elsewhere: preferences are the existing Settings surfaced under Memory (founder, 2026-08-21 — no store, no row here), and long-running task state is SONNY-210.
+Files changed:
+- New: `Sources/MacAgentCore/OutputLocationStore.swift` (`OutputLocation`, `OutputLocationStore`), `Tests/MacAgentCoreTests/OutputLocationStoreTests.swift`
+- `Sources/MacAgentCore/`: `LocalStoreClassification.swift` (`.outputLocations`, classified `.trace`), `LocalDataDeletionService.swift` (its URL), `MemorySettings.swift` (`MemoryCategory.outputLocations` and the mapping), `AgentRunner.swift` (the optional store on both initializers, `recordOutputLocations`, `lastOutputLocationFailure`)
+- `Sources/MacAgent/`: `AgentViewModel.swift` (the injected store, the published list, the two seams, the load-failure source, and the Memory count/newest/delete/refresh wiring), `AgentViewModel+VisionSession.swift` (the failure handover on the delegated path), `CommandCenterView.swift` (the row's icon, destination, copy and entries, plus "common output locations" in Settings' Delete-Local-Data list)
+- Records: `CLAUDE.md` and `.claude/rules/macagentcore-conventions.md` (eleven stores to twelve), `docs/sonny-row-12-plan.md` (the same count and the renamed test)
+- Tests: `LocalStorageSecurityTests`, `MemorySettingsTests`, `TaskRecordingPolicyTests`, `MemoryCommandCenterTests`, `ProductShellTests`
+Tests: the flagged command from `CLAUDE.md` -> **1743 in 127 suites, passing** (`scripts/mutate`'s own baseline at `d2ed2de`). `scripts/warnings` -> **0 warnings**, every file in `Sources/` and `Tests/` recompiled, 106s (`scripts/warnings` at the SHA its own report stamps). `scripts/mutate` -> **15 mutants, 15 killed, 0 survived** (`scripts/mutate <plan>` at `d2ed2de`). The fifteen cover both seams, both dispatch paths, the whitelist rule, the once-per-run fold, the eviction rule, the ranking's two halves, the trace classification, the Memory mapping and both write-failure channels.
+
+Behavior added:
+- Sonny remembers which folders its output files land in — the folder, how many runs have written there, and when the first and last did — encrypted at rest on the shared pattern, and offered back through `suggestedDestinations(limit:now:)`.
+- The Memory section gains an eighth row, "Output locations", with the same four controls as every other: view (the entries sheet), delete one, delete all, and a per-type recording switch.
+
+Behavior preserved (required, no blanket claims):
+- **Recent artifacts** still records the same files it always did, from the same `AgentRunResult`, under its own switch. The two stores are separate rows with separate switches; turning either off leaves the other recording (`theOutputLocationsSwitchAndTheRecentArtifactsSwitchAreIndependent`, `theOutputLocationHandoversAreWithheldByTheMemorySwitchesOnBothPaths`).
+- **"Don't save this task"** still withholds every trace and nothing else, over the whole classification. The new store joins the traces, so the switch withholds it on the foreground path and — deliberately — does not read on the scheduled one.
+- **Delete Local Data** still deletes every store and reports what it could not, with the count and the filename set moved and the behavioural fixture actually exercising the new file.
+- **Scheduled routines** still run, still write their history row, plan detail and run date, and still pause and notify on approval exactly as before; the only change on that path is one more handover and one more failure channel.
+- **The vision session's delegated-instruction path** still builds its runner through `makeDelegationRunner()` and now carries the same seam the ordinary foreground path does.
+
+Architectural decisions / pitfalls discovered:
+
+**What counts as an output location is decided by the path whitelist, not by a plan-operation allowlist — and that is the load-bearing decision in this branch.** Eight capability adapters publish `ActionPreview.writes` (`git grep -l "writes:" Sources/MacAgentCore | grep CapabilityAdapter | wc -l` prints 8 at `9bf36d1`) and they split evenly: four write the user's outputs through `PathWhitelist` (`CreateLocalDraft`, `DocxConversion`, `LargestFilesZip`, `WebResearchMarkdown`), and four write Sonny's own store JSON under Application Support (`CreateWorkspace`, `EditWorkspace`, `SaveRoutine`, `SnippetSave`). Application Support is never a whitelist root, so one rule separates them. `RecentArtifactStore` answers the same question with an allowlist of plan operations, and that shape has two holes this one does not: a ninth adapter falls outside the list silently, and the gate is plan-shaped rather than path-shaped, so a plan that both drafts a file *and* saves a routine hands it both paths. Naively taking `previews.flatMap(\.writes)` without any rule would have put `~/Library/Application Support/Sonny` into the user's Memory page as a folder their work goes into.
+
+**A run is one use of a folder, however many files it wrote.** `recordOutputs` folds a run's paths to distinct folders before counting. Without it, a batch converting thirty documents into one folder gives that folder thirty times the weight of a folder somebody deliberately chose thirty separate times, and the ranking stops describing habit.
+
+**Eviction is least-recently-used; ranking is recency-decayed frequency. The two differ on purpose.** Score-based eviction reads as the tidier rule — keep what you would suggest — and its failure mode is much worse: with the store full of heavy hitters, every brand-new folder scores 1.0, below theirs, so a person starting a new project watches Sonny keep offering last quarter's folders and never learn the new one. Recency cannot fail that way. What it costs instead is that a folder used constantly for a year and then abandoned eventually falls off the end, which is a suggestion getting worse slowly rather than a store that stops learning.
+
+**A new store is four things, not three, and both of the remaining two found this store unaided.** SONNY-209's own description named three — the wipe URL, the `LocalStore` case, the behavioural fixture — and SONNY-208 added the `MemoryCategory` mapping after that text was written. In practice six guards failed until each was answered: those four, plus `TaskRecordingPolicyTests`' named trace/artifact split and `ProductShellTests.everyAgentViewModelStoredPropertyIsClassifiedAgainstTheLocalDataWipe`, which caught both the injected store and the published list. Worth recording for the thirteenth store's session: the population is six, and the two nobody writes down are the two that arrive as a surprise.
+
+**The wipe test's name no longer carries a count.** It had moved three times — nine, ten, eleven — and each rename left doc comments elsewhere naming a symbol that no longer existed. `theWipeReachesExactlyTheElevenLocalStores` is now `theWipeReachesEveryLocalStore`, and the number lives only in its assertion, where the compiler is what complains. Its four live references were found with `grep -rn "theWipeReachesExactlyTheElevenLocalStores" Sources/ Tests/ docs/ .claude/`, which printed five: the test, `VisionSessionJournalStore.swift:133`, `ApprovedAppStore.swift:49`, `docs/sonny-row-12-plan.md:601`, and one **dated changelog record** at `docs/sonny-v1-implementation-changelog.md:395` which is left verbatim under this repository's existing-records rule. Two of those live references sit in files on SONNY-209's never-touch list; the founder ratified the comment-only edit and chose the count-free name specifically so the thirteenth store's session does not have to ask again. `VisionSessionJournalStore`'s paragraph also carried "the population is now eleven", which moved with the name — the ordinal and the symbol were two stale things in one paragraph, not one.
+
+**A capability that writes a file without publishing it in `ActionPreview.writes` is invisible to this store, and `InvokeShortcutCapabilityAdapter` is the live example.** It resolves an `outputPath` and publishes no `writes`, so a Shortcut's own output folder is never recorded. Recorded rather than fixed: making it visible is a change to that adapter's preview contract.
+
+**A run that throws before `execute` returns records nothing, even if it had already written a file.** Conservative, and it matches `RecentArtifactStore`, whose bookkeeping hangs off the same returned result.
+
+**The foreground draft plan auto-runs, and that is the consequence rule rather than a test shortcut.** `create_local_draft` is tier 2, but since 2026-08-13 the requirement comes from what an action does: the adapter escalates only when its destination already exists, so a fresh draft carries no escalation, `asksFirst` is false, and `consequenceRuleRequirement` answers `.autoRun`. A first attempt at the foreground test wrote an approve-on-the-way helper and asserted it had approved; the assertion failed, which is how the rule was found rather than assumed. `planDrafting` is also, as far as this branch could tell, the first fixture-runnable plan in the suite that produces a real user-facing file — which makes it a tool the next store's tests can reuse.
+
+Known limitations / deferred scope:
+- Nothing *consumes* `suggestedDestinations` yet. SONNY-209's scope is the store, its wipe reach and its Memory surface; wiring a suggestion into the composer or into output-path resolution is a separate change with its own product questions (when to offer, how to say it, whether it pre-fills or proposes). Named here rather than left implied.
+- Two defects found and filed rather than fixed, both outside this ticket's scope: **SONNY-232** (a scheduled run's recent-artifacts write failure reaches no surface — an `AgentRunner` failure the scheduled call site never reads, predating this branch and belonging to a store on its never-touch list) and **SONNY-233** (Settings' Delete-Local-Data copy names nine of the twelve stores it deletes; the two omissions predate this branch).
+
+Open questions: none. The two SONNY-223 questions this ticket was told not to answer — what disabling a memory switch should mean, and where "Allowed apps" belongs — remain there, untouched.
+
+Next branch: feature/<name> for SONNY-210 (long-running task state), row 13's third memory ticket.
+
 ### Branch: fix/delimiter-matching-unicode-scalars
 Status: complete — SONNY-222 Done; SONNY-226, SONNY-231 and SONNY-234 filed to Backlog; PR #100 open, **two** security review rounds complete (both BLOCK, all findings addressed), a third adversarial pass owed before merge
 Date: 2026-08-22
