@@ -36,6 +36,28 @@ struct MemorySettingsTests {
         #expect(coveredByRows.count == placed.count, "a store was counted under two rows")
     }
 
+    /// The grouping the Memory section renders rests on this: each row's stores share one
+    /// `LocalStoreKind`, so a row can be filed under "saved by you" or "recorded as Sonny works"
+    /// without the page inventing a taxonomy of its own. It is a fact about the mapping rather than
+    /// something the types guarantee, so it is asserted rather than assumed.
+    @Test
+    func everyMemoryRowsStoresShareOneKindSoTheRowCanBeGroupedByIt() {
+        for category in MemoryCategory.allCases {
+            let kinds = Set(category.stores.map(\.kind))
+            #expect(kinds.count == 1, "\(category.title) spans \(kinds.count) store kinds")
+            #expect(kinds.first == category.storeKind)
+            // `.notWrittenByTasks` is unreachable here — its one store is the clipboard switch,
+            // which no row covers. A row that reached it would be a row offering to stop recording
+            // something no task records.
+            #expect(category.storeKind != .notWrittenByTasks, "\(category.title)")
+        }
+
+        // Both groups are non-empty, which is what makes the two-section rendering honest rather
+        // than one section and an empty header.
+        #expect(MemoryCategory.allCases.contains { $0.storeKind == .artifact })
+        #expect(MemoryCategory.allCases.contains { $0.storeKind == .trace })
+    }
+
     @Test
     func everyMemoryRowCoversAtLeastOneStore() {
         for category in MemoryCategory.allCases {
