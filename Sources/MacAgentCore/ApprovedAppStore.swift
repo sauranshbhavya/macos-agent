@@ -151,6 +151,31 @@ public struct ApprovedAppStore: @unchecked Sendable {
         return approved
     }
 
+    /// Revokes one grant — "Removal is the user's, through the revocation surface", which is
+    /// Command Center's Memory section (SONNY-208).
+    ///
+    /// The type doc above says this store is deliberately uncapped because evicting a grant would
+    /// revoke consent silently. This is the loud counterpart, and the only removal path short of
+    /// deleting the whole file: the user asks, by name, for one app to be forgotten. Sonny then asks
+    /// about that app again the next time it needs it, which is the correct consequence rather than
+    /// a regression.
+    ///
+    /// Matching goes through `ApprovedApp.matches(bundleIdentifier:)`, the same comparison the gate
+    /// reads a grant with, so an app that can be matched can be forgotten. An identifier nothing
+    /// holds is a no-op, not an error.
+    public func forget(bundleIdentifier rawBundleIdentifier: String) throws {
+        let bundleIdentifier = rawBundleIdentifier.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !bundleIdentifier.isEmpty else {
+            return
+        }
+        let apps = try loadAll()
+        let remaining = apps.filter { !$0.matches(bundleIdentifier: bundleIdentifier) }
+        guard remaining.count != apps.count else {
+            return
+        }
+        try write(sorted(remaining))
+    }
+
     private func sorted(_ apps: [ApprovedApp]) -> [ApprovedApp] {
         apps.sorted {
             if $0.approvedAt != $1.approvedAt {

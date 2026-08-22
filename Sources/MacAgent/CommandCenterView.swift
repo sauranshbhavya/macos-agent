@@ -8,6 +8,7 @@ enum CommandCenterDestination: String, CaseIterable, Identifiable {
     case insights
     case routines
     case workspaces
+    case memory
 
     var id: Self { self }
 
@@ -25,6 +26,8 @@ enum CommandCenterDestination: String, CaseIterable, Identifiable {
             return "repeat"
         case .workspaces:
             return "rectangle.3.group"
+        case .memory:
+            return "brain"
         }
     }
 }
@@ -408,6 +411,16 @@ struct CommandCenterView: View {
             RoutinesView(viewModel: viewModel)
         case .workspaces:
             WorkspacesView(viewModel: viewModel)
+        case .memory:
+            // `select` and `isSettingsPresented` are handed down rather than duplicated: `select` is
+            // this view's only writer of `selection` (see its doc comment), and Settings is a sheet
+            // this view owns. A Memory page holding its own copy of either would be a second
+            // navigation path that could drift from the sidebar's.
+            MemoryView(
+                viewModel: viewModel,
+                select: select,
+                openSettings: { isSettingsPresented = true }
+            )
         }
     }
 }
@@ -3799,10 +3812,531 @@ private struct WorkspaceAppIconStack: View {
     }
 }
 
+/// One Memory row's rendered content, derived rather than read off the view.
+///
+/// A value type for the same reason `RoutineRowPresentation` and `WorkspaceCardPresentation` are:
+/// this repository has no way to drive SwiftUI, so the only thing a test can hold is the value the
+/// view renders. Everything a reader of the row sees — its count line, its newest-entry line,
+/// whether its switch reads on — is decided here and asserted directly.
+struct MemoryRowPresentation: Equatable {
+    let category: MemoryCategory
+    let title: String
+    let systemImage: String
+    let count: Int
+    let isRecording: Bool
+    /// "12 saved · newest 3:04 PM", or the empty-state half on its own.
+    let detailText: String
+
+    init(
+        category: MemoryCategory,
+        count: Int,
+        isRecording: Bool,
+        newestEntryDate: Date?,
+        now: Date
+    ) {
+        self.category = category
+        self.title = category.title
+        self.systemImage = Self.systemImage(for: category)
+        self.count = count
+        self.isRecording = isRecording
+
+        let counted = count == 1 ? "1 saved" : "\(count) saved"
+        guard let newestEntryDate else {
+            self.detailText = counted
+            return
+        }
+        let newest = TaskHistoryDateFormatter.relativeTimestamp(for: newestEntryDate, now: now)
+        self.detailText = "\(counted) · newest \(newest)"
+    }
+
+    private static func systemImage(for category: MemoryCategory) -> String {
+        switch category {
+        case .routines:
+            return "repeat"
+        case .workspaces:
+            return "rectangle.3.group"
+        case .taskHistory:
+            return "checklist"
+        case .recentArtifacts:
+            return "doc"
+        case .clipboardHistory:
+            return "doc.on.clipboard"
+        case .snippets:
+            return "text.quote"
+        case .approvedApps:
+            return "app.badge.checkmark"
+        }
+    }
+}
+
+/// Command Center's Memory section (SONNY-208) — §6.10's scoped, user-visible memory.
+///
+/// **A view over the stores Sonny already had, not a memory engine.** Every row here is one of the
+/// local stores that has existed for branches; what this page adds is one place to see them and the
+/// four controls §6.10 requires over each — view, edit, delete, disable — plus a master switch and
+/// the enterprise-policy hook row 19 will supply a provider for.
+///
+/// **Where "edit" lives, per type, because it is deliberately not built here.** The ticket's rule is
+/// to reuse each store's existing management rather than reinvent it: Routines, Workspaces and Task
+/// history open the pages that already own their editors (the routine detail sheet, the workspace
+/// detail sheet, the task detail dialog), and the four types that never had a surface of their own
+/// open `MemoryEntriesSheet`, where editing a list of remembered items means removing entries from
+/// it. Nothing here duplicates an editor that exists.
+///
+/// **The three shared Command Center surfaces are present because a page without them shows nothing
+/// for a run started from it** — `.claude/rules/macagent-ui-conventions.md`'s Approval visibility
+/// section, and CLAUDE.md's SONNY-180 gotcha. `CommandCenterAttentionPanel` and
+/// `CommandCenterStorageNotice` are rendered unconditionally and self-gate; the running indicator is
+/// gated by its caller, exactly as the other four pages do it.
+///
+/// **No Data-Sent-To-AI history here, deliberately.** §6.3A was cancelled on SONNY-88 and stays
+/// cancelled; a memory surface is precisely where it would otherwise creep back in.
+private struct MemoryView: View {
+    @ObservedObject var viewModel: AgentViewModel
+    let select: (CommandCenterDestination) -> Void
+    let openSettings: () -> Void
+
+    @State private var entriesCategory: MemoryCategory?
+    @State private var deletionCategory: MemoryCategory?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            CommandCenterPageHeader(title: "Memory")
+
+            masterPanel
+
+            collectionPanel
+
+            CommandCenterAttentionPanel(viewModel: viewModel)
+
+            // Self-gating, and outside any running check — same placement and same reason as the
+            // other four pages.
+            CommandCenterStorageNotice(viewModel: viewModel)
+
+            if viewModel.isRunning || viewModel.isAwaitingApproval {
+                CommandCenterRunningIndicator(viewModel: viewModel)
+            }
+        }
+        .padding(.horizontal, 28)
+        .padding(.top, 24)
+        .padding(.bottom, 18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(SonnyTheme.ink)
+        .onAppear {
+            // The policy is re-read here rather than only at launch, so an administrator's change
+            // lands without a relaunch once row 19 supplies a real provider.
+            viewModel.refreshMemorySettings()
+            viewModel.refreshMemoryEntries()
+        }
+        .sheet(item: $entriesCategory) { category in
+            MemoryEntriesSheet(
+                viewModel: viewModel,
+                category: category,
+                isPresented: Binding(
+                    get: { entriesCategory != nil },
+                    set: { if !$0 { entriesCategory = nil } }
+                )
+            )
+        }
+        .confirmationDialog(
+            deletionCategory.map { "Delete \($0.title.lowercased())?" } ?? "",
+            isPresented: Binding(
+                get: { deletionCategory != nil },
+                set: { if !$0 { deletionCategory = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let deletionCategory {
+                Button("Delete", role: .destructive) {
+                    viewModel.deleteMemory(in: deletionCategory)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        }
+    }
+
+    private var masterPanel: some View {
+        VStack(spacing: 0) {
+            SettingsAdaptiveControlRow {
+                SettingsControlLabel(
+                    title: "Memory",
+                    detail: viewModel.memorySettings.isDisabledByPolicy
+                        ? "Turned off by your organization."
+                        : "Record new entries in the memory types below."
+                )
+            } trailing: {
+                SonnySettingsToggle(
+                    isOn: Binding(
+                        get: { viewModel.memorySettings.isRecording },
+                        set: { viewModel.setMemoryEnabled($0) }
+                    )
+                )
+                .accessibilityLabel("Memory")
+                .disabled(viewModel.memorySettings.isDisabledByPolicy)
+            }
+            .padding(.horizontal, 18)
+
+            Rectangle()
+                .fill(SonnyTheme.border)
+                .frame(height: 1)
+
+            // §6.10 lists user preferences as a memory type; the founder's answer is that they are
+            // the existing Settings surfaced here rather than a new store, so this row opens the
+            // dialog that already edits them instead of restating any of it.
+            SettingsAdaptiveControlRow {
+                SettingsControlLabel(
+                    title: "Preferences",
+                    detail: "Display, theme, notifications, security and data."
+                )
+            } trailing: {
+                Button("Open settings", action: openSettings)
+                    .buttonStyle(CommandCenterRowActionStyle())
+            }
+            .padding(.horizontal, 18)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(CommandCenterPalette.collectionSurface)
+        .overlay(
+            RoundedRectangle(cornerRadius: SonnyRadius.container)
+                .stroke(SonnyTheme.border, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+    }
+
+    private var collectionPanel: some View {
+        VStack(spacing: 0) {
+            CollectionHeader(title: "What Sonny remembers")
+
+            Rectangle()
+                .fill(SonnyTheme.border)
+                .frame(height: 1)
+
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    ForEach(Array(MemoryCategory.allCases.enumerated()), id: \.element) { index, category in
+                        MemoryRow(
+                            presentation: presentation(for: category),
+                            isLast: index == MemoryCategory.allCases.count - 1,
+                            isLocked: viewModel.memorySettings.isDisabledByPolicy,
+                            view: { open(category) },
+                            delete: { deletionCategory = category },
+                            setEnabled: { isOn in viewModel.setMemoryCategoryEnabled(category, to: isOn) }
+                        )
+                    }
+                }
+            }
+
+            if viewModel.memoryDeletionStatusMessage != nil {
+                Rectangle()
+                    .fill(SonnyTheme.border)
+                    .frame(height: 1)
+
+                LocalDataDeletionStatusMessage(message: viewModel.memoryDeletionStatusMessage)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 12)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(CommandCenterPalette.collectionSurface)
+        .overlay(
+            RoundedRectangle(cornerRadius: SonnyRadius.container)
+                .stroke(SonnyTheme.border, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+    }
+
+    /// Where "View" goes, and the split is the reuse rule: a type whose entries already have a page
+    /// goes to that page, and only the four that never had one open a sheet.
+    private func open(_ category: MemoryCategory) {
+        switch category {
+        case .routines:
+            select(.routines)
+        case .workspaces:
+            select(.workspaces)
+        case .taskHistory:
+            select(.tasks)
+        case .recentArtifacts, .clipboardHistory, .snippets, .approvedApps:
+            entriesCategory = category
+        }
+    }
+
+    private func presentation(for category: MemoryCategory) -> MemoryRowPresentation {
+        MemoryRowPresentation(
+            category: category,
+            count: viewModel.memoryEntryCount(for: category),
+            isRecording: viewModel.isMemoryCategoryEnabled(category),
+            newestEntryDate: viewModel.newestMemoryEntryDate(for: category),
+            now: Date()
+        )
+    }
+}
+
+private struct MemoryRow: View {
+    let presentation: MemoryRowPresentation
+    let isLast: Bool
+    /// An administrator's policy takes every control on the row, not only the switch: a delete this
+    /// page offered while memory is centrally disabled would be the page overriding the policy in
+    /// the one direction that destroys data.
+    let isLocked: Bool
+    let view: () -> Void
+    let delete: () -> Void
+    let setEnabled: (Bool) -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: SonnyRadius.routineIcon)
+                        .fill(CommandCenterPalette.routineIconBackground)
+                    Image(systemName: presentation.systemImage)
+                        .font(SonnyType.icon(13, weight: .medium))
+                        .foregroundStyle(CommandCenterPalette.routineIconForeground)
+                }
+                .frame(width: 30, height: 30)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(presentation.title)
+                        .font(SonnyType.bodyEmphasis)
+                        .foregroundStyle(SonnyTheme.text)
+                        .lineLimit(1)
+                    Text(presentation.detailText)
+                        .font(SonnyType.micro)
+                        .foregroundStyle(SonnyTheme.muted)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 14)
+
+                Button("View", action: view)
+                    .buttonStyle(CommandCenterRowActionStyle())
+                    .accessibilityLabel("View \(presentation.title)")
+
+                Button("Delete", action: delete)
+                    .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
+                    .disabled(isLocked || presentation.count == 0)
+                    .accessibilityLabel("Delete \(presentation.title)")
+
+                Toggle("", isOn: Binding(
+                    get: { presentation.isRecording },
+                    set: { isOn in setEnabled(isOn) }
+                ))
+                    .labelsHidden()
+                    .toggleStyle(.switch)
+                    .controlSize(.mini)
+                    .tint(SonnyTheme.accent)
+                    .disabled(isLocked)
+                    .accessibilityLabel("Remember \(presentation.title)")
+            }
+            .padding(.horizontal, 18)
+            .frame(height: 56)
+
+            if !isLast {
+                Rectangle()
+                    .fill(SonnyTheme.border)
+                    .frame(height: 1)
+            }
+        }
+    }
+}
+
+/// One remembered item, as the entries sheet lists it.
+struct MemoryEntryPresentation: Identifiable, Equatable {
+    let id: String
+    let title: String
+    let detail: String
+
+    /// The four list-backed types, rendered from the arrays `AgentViewModel` publishes.
+    ///
+    /// Built here rather than on the view model because it is presentation — the date formatter and
+    /// the one-line squeeze applied to a clipboard entry belong beside the rows that use them, the
+    /// same split `RoutineRowPresentation` and `WorkspaceCardPresentation` already follow. The three
+    /// types with pages of their own answer `[]`; nothing opens this sheet for them.
+    @MainActor
+    static func entries(
+        for category: MemoryCategory,
+        viewModel: AgentViewModel,
+        now: Date = Date()
+    ) -> [MemoryEntryPresentation] {
+        switch category {
+        case .snippets:
+            return viewModel.savedSnippets.map { snippet in
+                MemoryEntryPresentation(
+                    id: snippet.id.uuidString,
+                    title: snippet.trigger,
+                    detail: singleLine(snippet.expansion)
+                )
+            }
+        case .recentArtifacts:
+            return viewModel.recentArtifacts.map { artifact in
+                MemoryEntryPresentation(
+                    id: artifact.id.uuidString,
+                    title: artifact.title,
+                    detail: "\(TaskHistoryDateFormatter.relativeTimestamp(for: artifact.recordedAt, now: now)) · \(artifact.path)"
+                )
+            }
+        case .clipboardHistory:
+            return viewModel.clipboardHistoryItems.map { item in
+                MemoryEntryPresentation(
+                    id: item.id.uuidString,
+                    title: singleLine(item.text),
+                    detail: TaskHistoryDateFormatter.relativeTimestamp(for: item.copiedAt, now: now)
+                )
+            }
+        case .approvedApps:
+            return viewModel.approvedApps.map { app in
+                MemoryEntryPresentation(
+                    // The identifier, not a UUID: a grant is keyed by the app it names, and the
+                    // record carries no id of its own.
+                    id: app.bundleIdentifier,
+                    title: app.displayName.isEmpty ? app.bundleIdentifier : app.displayName,
+                    detail: "\(app.bundleIdentifier) · allowed \(TaskHistoryDateFormatter.relativeTimestamp(for: app.approvedAt, now: now))"
+                )
+            }
+        case .routines, .workspaces, .taskHistory:
+            return []
+        }
+    }
+
+    /// Collapses newlines so a multi-line clipboard entry or snippet expansion occupies one row
+    /// instead of silently claiming the height of whatever was copied.
+    private static func singleLine(_ text: String) -> String {
+        text
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .truncatedForRowDisplay(maxLength: 90)
+    }
+}
+
+/// The view-and-edit surface for the four memory types that never had one.
+///
+/// Routines, workspaces and task history are deliberately absent — they open their own pages, whose
+/// editors this sheet would otherwise be a worse copy of. What "edit" means here is removing an
+/// entry: these four hold records rather than documents, and nothing in the product has ever
+/// offered to rewrite one.
+private struct MemoryEntriesSheet: View {
+    @ObservedObject var viewModel: AgentViewModel
+    let category: MemoryCategory
+    @Binding var isPresented: Bool
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(category.title)
+                    .font(SonnyType.settingsContentTitle)
+                    .foregroundStyle(SonnyTheme.text)
+
+                Spacer()
+
+                Button {
+                    isPresented = false
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(SonnyType.icon(11, weight: .semibold))
+                        .foregroundStyle(SonnyTheme.muted)
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .sonnyPointerCursor()
+                .sonnyHoverHighlight(cornerRadius: 12)
+                .accessibilityLabel("Close \(category.title)")
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 18)
+            .padding(.bottom, 14)
+
+            Rectangle()
+                .fill(SonnyTheme.border)
+                .frame(height: 1)
+
+            if entries.isEmpty {
+                CollectionEmptyState(
+                    systemImage: "tray",
+                    title: "Nothing here",
+                    message: "Sonny has not saved anything of this kind yet."
+                )
+                .frame(maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                            MemoryEntryRow(
+                                entry: entry,
+                                isLast: index == entries.count - 1,
+                                delete: { delete(at: index) }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        .frame(width: 560, height: 460)
+        .background(SonnyTheme.ink)
+        .foregroundStyle(SonnyTheme.text)
+        .overlay(
+            RoundedRectangle(cornerRadius: SonnyRadius.container)
+                .stroke(SonnyTheme.border, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+    }
+
+    private var entries: [MemoryEntryPresentation] {
+        MemoryEntryPresentation.entries(for: category, viewModel: viewModel)
+    }
+
+    /// Deleted by position in the same list the row was rendered from, so the row and the record it
+    /// removes cannot come apart — the view model re-derives both from one published array.
+    private func delete(at index: Int) {
+        viewModel.deleteMemoryEntry(in: category, at: index)
+    }
+}
+
+private struct MemoryEntryRow: View {
+    let entry: MemoryEntryPresentation
+    let isLast: Bool
+    let delete: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 14) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(entry.title)
+                        .font(SonnyType.bodyEmphasis)
+                        .foregroundStyle(SonnyTheme.text)
+                        .lineLimit(1)
+                    Text(entry.detail)
+                        .font(SonnyType.micro)
+                        .foregroundStyle(SonnyTheme.muted)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 14)
+
+                Button("Delete", action: delete)
+                    .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
+                    .accessibilityLabel("Delete \(entry.title)")
+            }
+            .padding(.horizontal, 20)
+            .frame(height: 52)
+
+            if !isLast {
+                Rectangle()
+                    .fill(SonnyTheme.border)
+                    .frame(height: 1)
+            }
+        }
+    }
+}
+
 private struct CollectionHeader: View {
     let title: String
-    let actionTitle: String
-    let action: () -> Void
+    /// Optional because the Memory page's collections have nothing to add — every row is a memory
+    /// type that already exists, so a "+" there would offer to create a kind of memory. Defaulted so
+    /// the Routines and Workspaces call sites are unchanged.
+    var actionTitle: String? = nil
+    var action: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 12) {
@@ -3810,10 +4344,12 @@ private struct CollectionHeader: View {
                 .font(SonnyType.bodyEmphasis)
                 .foregroundStyle(SonnyTheme.text)
             Spacer()
-            Button(action: action) {
-                Label(actionTitle, systemImage: "plus")
+            if let actionTitle, let action {
+                Button(action: action) {
+                    Label(actionTitle, systemImage: "plus")
+                }
+                .buttonStyle(CommandCenterHeaderActionStyle())
             }
-            .buttonStyle(CommandCenterHeaderActionStyle())
         }
         .padding(.leading, 30)
         .padding(.trailing, 24)
