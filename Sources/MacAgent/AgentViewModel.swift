@@ -2237,12 +2237,14 @@ final class AgentViewModel: ObservableObject {
     /// "record nothing", so one definition covers every runner this view model builds and a new
     /// construction site cannot forget the check by omitting it.
     ///
-    /// Internal rather than private so the suite can assert the decision directly, which here is
-    /// **necessary and not merely convenient**: recording an output location requires a run that
-    /// really wrote a file into a whitelisted folder, and the deterministic fixtures cannot plan one.
-    /// An end-to-end "with the switch off, nothing was recorded" assertion would therefore pass
-    /// whether or not the switch were ever consulted — the identical trap
-    /// `recentArtifactStoreForThisRun` documents, which a mutation battery caught there.
+    /// Internal rather than private so the suite can assert the decision directly — but that is the
+    /// *belt* here, not the coverage. **This seam is also driven end to end**, which the two above it
+    /// are not: `MemoryCommandCenterTests` runs a real `create_local_draft` plan that writes a real
+    /// file into a real whitelisted folder, on both the foreground and the scheduled path, with a
+    /// recording control beside every "nothing was recorded" assertion. That is worth saying plainly
+    /// rather than inheriting `recentArtifactStoreForThisRun`'s reasoning, whose premise — that no
+    /// command the fixtures can run generates an artifact — is about a different fixture and is not
+    /// a claim this store's tests rest on.
     var outputLocationStoreForThisRun: OutputLocationStore? {
         allowsRecording(to: .outputLocations) ? outputLocationStore : nil
     }
