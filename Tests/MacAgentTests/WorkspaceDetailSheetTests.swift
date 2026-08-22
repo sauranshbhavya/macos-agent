@@ -1364,6 +1364,9 @@ private func makeSheetTestViewModel(root: URL, workspaceStore: WorkspaceStore) t
             fileURL: root.appendingPathComponent("clipboard-history-settings.json")
         ),
         approvedAppStore: ApprovedAppStore(fileURL: root.appendingPathComponent("approved-apps.json")),
+        outputLocationStore: OutputLocationStore(
+            fileURL: root.appendingPathComponent("output-locations.json")
+        ),
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
             reader: SheetTestPasteboardReader(),
             store: ClipboardHistoryStore(fileURL: root.appendingPathComponent("clipboard-history.json")),
