@@ -109,6 +109,12 @@ public struct CreateWorkspaceCapabilityAdapter: CapabilityAdapter {
         if let note = WorkspaceScopeOnlyApps.scopeOnlyNote(for: spec.scopeOnlyApps) {
             log(.observe, note)
         }
+        // Workspace memory switched off refuses out loud — see
+        // `SaveRoutineCapabilityAdapter.execute` for why the refusal lands here and not in the
+        // assessment (SONNY-208).
+        guard context.allowsRecording(to: .workspaces) else {
+            throw MemoryDisabledError(category: .workspaces)
+        }
         log(.act, "Saving workspace \(workspace.name)")
         try context.workspaceStore.save(workspace)
         log(.summarize, "Saved workspace")
