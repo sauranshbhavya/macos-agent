@@ -372,29 +372,59 @@ struct WidgetComposerChipRowTests {
     @Test
     func theComposerPillActuallyAppliesTheDerivedChipRowInset() throws {
         let source = try MacAgentSource.read("FloatingWidgetView.swift")
-        let pill = try MacAgentSource.braceBlock(of: source, openedBy: "private var composerPill: some View {")
+        let pill = try MacAgentSource.braceBlock(
+            of: source,
+            openedBy: "private var composerPill: some View {"
+        )
 
         #expect(
             MacAgentSource.count(of: ".padding(.leading, chipRowExtraLeadingInset)", inText: pill) == 1,
             """
-            The chip row does not carry the derived leading inset. Everything in             `theFirstChipGetsTheSameRoomFromTheGlassAsTheFieldRow` can still pass with the chip             back at the field row's own inset, which is the layout the founder rejected.
+            The chip row does not carry the derived leading inset. Everything in \
+            `theFirstChipGetsTheSameRoomFromTheGlassAsTheFieldRow` can still pass with the chip \
+            back at the field row's own inset, which is the layout the founder rejected.
             """
         )
         #expect(
             MacAgentSource.count(of: ".padding(.leading, WidgetComposerGeometry.leadingInset)", inText: pill) == 1,
-            "The pill's own leading inset must stay the plain one — it is what positions the field row."
+            """
+            The pill's own leading inset must stay the plain one — it is what positions the field \
+            row, and the chip row's extra is measured against it.
+            """
         )
         #expect(
             MacAgentSource.count(of: ".padding(.leading,", inText: pill) == 2,
             """
-            `composerPill` applies a leading inset somewhere this suite does not know about. Two             sites are expected: the pill's own, and the chip row's extra.
+            `composerPill` applies a leading inset somewhere this suite does not know about. Two \
+            sites are expected: the pill's own, and the chip row's extra.
+            """
+        )
+
+        // Both writers of the measured height, by what they write and not only that they write.
+        // Counting the assignments alone let a mutant that wrote a constant zero through both of
+        // them survive the entire suite: the height stops being read, `chipRowLeadingInset` answers
+        // `leadingInset` for a zero height, and the cramped layout is back with nothing red.
+        // Nothing measurable in this process can see that — the inset it feeds moves a leading
+        // padding, and a leading padding changes no size this suite can read — so the source text
+        // is where it has to be held.
+        #expect(
+            MacAgentSource.count(of: "composerPillHeight = proxy.size.height", inText: pill) == 1,
+            """
+            The pill's height is no longer read off the layout when the composer appears, so \
+            `chipRowLeadingInset` is asked about a height that never arrives. It answers \
+            `leadingInset` for that, which is silently the cramped layout again.
+            """
+        )
+        #expect(
+            MacAgentSource.count(of: "composerPillHeight = height", inText: pill) == 1,
+            """
+            The pill's height is no longer tracked when it changes, so the chip row keeps whatever \
+            inset the first layout produced — wrong the moment a chip is added or dropped.
             """
         )
         #expect(
             MacAgentSource.count(of: "composerPillHeight = ", inText: pill) == 2,
-            """
-            The pill's height is no longer being read back from the layout, so             `chipRowLeadingInset` is being asked about a height that never updates — it answers             `leadingInset` for that, which is silently the cramped layout again.
-            """
+            "Two writers, both above. A third is someone else's opinion about the pill's height."
         )
 
         let extra = try MacAgentSource.braceBlock(
@@ -411,7 +441,8 @@ struct WidgetComposerChipRowTests {
         #expect(
             MacAgentSource.count(of: "WidgetComposerGeometry.leadingInset", inText: extra) == 1,
             """
-            The extra inset is a difference: the pill already applies `leadingInset` to everything             inside it, so this subtracts it. Without the subtraction the chip row is inset twice.
+            The extra inset is a difference: the pill already applies `leadingInset` to everything \
+            inside it, so this subtracts it. Without the subtraction the chip row is inset twice.
             """
         )
     }
