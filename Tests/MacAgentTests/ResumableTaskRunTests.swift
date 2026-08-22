@@ -176,6 +176,69 @@ struct ResumableTaskRunTests {
         #expect(try fixture.resumableTaskStore.loadAll().isEmpty)
     }
 
+    /// **The carried file, end to end.** A resumed run's remaining steps name the file an earlier
+    /// unit produced nowhere at all — a bare "open it" step has no path of its own and is filled in
+    /// from whatever the previous unit wrote. So the record has to carry it, and the resume has to
+    /// hand it back to the executor.
+    ///
+    /// The executor's own half of this is pinned in `RunUnitProgressTests`; what this adds is the
+    /// path through the view model, which is where the value is stored and read back.
+    @Test
+    func aResumeOpensTheFileTheInterruptedRunHadAlreadyWritten() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        fixture.fileOpener.failure = BrowserOutage()
+        try await fixture.run("Write notes and open them", plan: fixture.draftThenOpenTheDraftPlan)
+
+        let record = try #require(try fixture.resumableTaskStore.loadAll().first)
+        #expect(record.completedStepIDs == ["draft"])
+        #expect(record.chainedArtifactPath == fixture.draftOutput.path)
+
+        fixture.fileOpener.failure = nil
+        let offer = try #require(fixture.viewModel.resumeOffer)
+        #expect(fixture.viewModel.continueResumableTask(offer))
+        try await fixture.waitForIdle()
+
+        // The remaining step is a bare "open it" with no path, and it opened the right file — which
+        // it can only have got from the record.
+        #expect(fixture.viewModel.errorMessage == nil)
+        #expect(fixture.fileOpener.opened.last == fixture.draftOutput.path)
+        #expect(try fixture.resumableTaskStore.loadAll().isEmpty)
+    }
+
+    /// **The settle runs above task history's own guards, not below them.**
+    ///
+    /// Reachable with one switch: task-history memory off and unfinished-tasks memory on.
+    /// `recordTaskHistoryIfTerminal` then returns before writing a row — and if the settle sat under
+    /// that guard, a completed task's record would survive and Sonny would offer to continue
+    /// something that had already finished.
+    @Test
+    func aFinishedRunClearsItsRecordEvenWhenTaskHistoryMemoryIsOff() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.setMemoryCategoryEnabled(.taskHistory, to: false)
+
+        // The premise, guarded: with that switch off, this store is still live and a failed run
+        // still records. Otherwise "the record is gone" below says nothing.
+        fixture.browserOpener.failure = BrowserOutage()
+        try await fixture.run("Write notes and open the page")
+        #expect(try fixture.resumableTaskStore.loadAll().count == 1)
+        #expect(fixture.viewModel.taskHistoryRecords.isEmpty, "task-history memory really is off")
+
+        // Continuing it to completion clears the record — through the same terminal that writes no
+        // history row at all.
+        fixture.browserOpener.failure = nil
+        let offer = try #require(fixture.viewModel.resumeOffer)
+        #expect(fixture.viewModel.continueResumableTask(offer))
+        try await fixture.waitForIdle()
+
+        #expect(fixture.viewModel.errorMessage == nil)
+        #expect(fixture.viewModel.taskHistoryRecords.isEmpty)
+        #expect(try fixture.resumableTaskStore.loadAll().isEmpty)
+    }
+
     // MARK: - The pauses
 
     /// The founder's first shape includes "asks something": a question the user walks away from.
@@ -392,6 +455,35 @@ struct ResumableTaskRunTests {
         #expect(fixture.viewModel.resumeOffer?.command == "Something from yesterday")
     }
 
+    /// **Deleting a record must not be undone by the run it belonged to.**
+    ///
+    /// The reachable shape: a run pauses at an approval, so its record is on disk and its in-memory
+    /// checkpoint is still live; the user deletes it from Memory (that delete is not gated on a
+    /// paused run, and should not be — the task is not running); they then approve, and the run goes
+    /// on to fail. The failure settle writes the checkpoint back — unless the delete cleared it.
+    @Test
+    func deletingARecordWhileItsRunIsPausedIsNotUndoneByTheRunFinishing() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        fixture.browserOpener.failure = BrowserOutage()
+        try await fixture.run("Overwrite the notes and open the page", plan: fixture.approvalThenFailingPlan)
+        #expect(fixture.viewModel.isAwaitingApproval)
+        #expect(try fixture.resumableTaskStore.loadAll().count == 1)
+
+        fixture.viewModel.deleteMemoryEntry(in: .resumableTasks, at: 0)
+        #expect(try fixture.resumableTaskStore.loadAll().isEmpty)
+
+        // Approve. The run does its first unit and fails at the second, which is the settle that
+        // would otherwise write the deleted record back.
+        fixture.viewModel.start()
+        try await fixture.waitForIdle()
+
+        #expect(fixture.viewModel.errorMessage != nil, "the approved run really did fail")
+        #expect(try fixture.resumableTaskStore.loadAll().isEmpty)
+        #expect(fixture.viewModel.resumeOffer == nil)
+    }
+
     // MARK: - The Memory row
 
     @Test
@@ -492,6 +584,19 @@ private struct BrowserOutage: Error, LocalizedError {
 }
 
 @MainActor
+private final class FailableFileOpener: FileOpening {
+    var failure: (any Error)?
+    private(set) var opened: [String] = []
+
+    func openFile(_ url: URL) async throws {
+        opened.append(url.path)
+        if let failure {
+            throw failure
+        }
+    }
+}
+
+@MainActor
 private final class FailableBrowserOpener: BrowserOpening {
     var failure: (any Error)?
     private(set) var opened: [String] = []
@@ -528,6 +633,7 @@ private final class ResumableFixture {
     let routineStore: RoutineStore
     let planner: ResumableFixturePlanner
     let browserOpener: FailableBrowserOpener
+    let fileOpener: FailableFileOpener
     let userDefaults: UserDefaults
     let suiteName: String
     /// Where the next draft unit writes. Reassigned between runs in a test that runs the same plan
@@ -541,6 +647,7 @@ private final class ResumableFixture {
         routineStore: RoutineStore,
         planner: ResumableFixturePlanner,
         browserOpener: FailableBrowserOpener,
+        fileOpener: FailableFileOpener,
         userDefaults: UserDefaults,
         suiteName: String,
         draftOutput: URL
@@ -551,6 +658,7 @@ private final class ResumableFixture {
         self.routineStore = routineStore
         self.planner = planner
         self.browserOpener = browserOpener
+        self.fileOpener = fileOpener
         self.userDefaults = userDefaults
         self.suiteName = suiteName
         self.draftOutput = draftOutput
@@ -570,6 +678,55 @@ private final class ResumableFixture {
                     outputPath: draftOutput.path,
                     draftTitle: "Notes",
                     draftContent: "Body."
+                ),
+                AgentStep(
+                    id: "url",
+                    operation: .openURL,
+                    description: "Open the page.",
+                    targetURL: "https://example.com/page"
+                )
+            ]
+        )
+    }
+
+    /// Two units where the second *consumes* what the first wrote: the draft, then opening it with
+    /// no path of its own. The chain fills that path in from the previous unit — which is the one
+    /// thing a resumed run cannot re-derive from the steps it has left.
+    var draftThenOpenTheDraftPlan: AgentPlan {
+        AgentPlan(
+            summary: "Write notes, then open them.",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(
+                    id: "draft",
+                    operation: .createLocalDraft,
+                    description: "Write the notes.",
+                    outputPath: draftOutput.path,
+                    draftTitle: "Notes",
+                    draftContent: "Body."
+                ),
+                AgentStep(id: "open", operation: .openGeneratedArtifact, description: "Open them.")
+            ]
+        )
+    }
+
+    /// An overwrite of a file that already exists — tier 3, so it pauses at an approval — followed by
+    /// a second unit the browser can be made to fail. Approving it therefore runs one unit and stops
+    /// at the next.
+    var approvalThenFailingPlan: AgentPlan {
+        let occupied = root.appendingPathComponent("already-there.md")
+        try? Data("existing".utf8).write(to: occupied, options: .atomic)
+        return AgentPlan(
+            summary: "Overwrite the notes, then open the page.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "draft",
+                    operation: .createLocalDraft,
+                    description: "Overwrite them.",
+                    outputPath: occupied.path,
+                    draftTitle: "Notes",
+                    draftContent: "Replacement."
                 ),
                 AgentStep(
                     id: "url",
@@ -681,6 +838,7 @@ private func makeFixture() throws -> ResumableFixture {
 
     let planner = ResumableFixturePlanner()
     let browserOpener = FailableBrowserOpener()
+    let fileOpener = FailableFileOpener()
     let resumableTaskStore = ResumableTaskStore(
         fileURL: root.appendingPathComponent("resumable-tasks.json")
     )
@@ -696,7 +854,7 @@ private func makeFixture() throws -> ResumableFixture {
         // which is this suite's own failure switch.
         browserOpener: browserOpener,
         appOpener: HermeticAppOpener(),
-        fileOpener: HermeticFileOpener(),
+        fileOpener: fileOpener,
         mediaOpener: HermeticMediaOpener(),
         runningAppSwitcher: HermeticRunningAppSwitcher(),
         shortcutInvoker: HermeticShortcutInvoker(),
@@ -736,6 +894,7 @@ private func makeFixture() throws -> ResumableFixture {
         routineStore: routineStore,
         planner: planner,
         browserOpener: browserOpener,
+        fileOpener: fileOpener,
         userDefaults: userDefaults,
         suiteName: suiteName,
         draftOutput: root.appendingPathComponent("notes.md")
