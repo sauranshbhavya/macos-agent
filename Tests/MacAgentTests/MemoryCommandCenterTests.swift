@@ -192,6 +192,127 @@ struct MemoryCommandCenterTests {
         #expect(try fixture.taskHistoryStore.loadAll().count == 1)
     }
 
+    /// **The fourth write, and the last one the enumeration of the scheduled path found**
+    /// (PR #98 round-4 pass, F1; founder decision 2026-08-22). A routine firing on its schedule
+    /// appended a dated entry to `routines.json` — the file the Routines memory row governs, and the
+    /// dates the streak badge is computed from — with every switch off and nothing able to stop it.
+    ///
+    /// Driven through the real door and read back off the store, not off the published array: the
+    /// defect was a write, so the file is what has to be checked.
+    @Test
+    func aScheduledRoutineRecordsNoRunDateWithTheMasterSwitchOff() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        try fixture.saveScheduledRoutine()
+        fixture.viewModel.setMemoryEnabled(false)
+
+        fixture.viewModel.checkScheduledRoutines(now: MemoryFixture.tenAM)
+        try await fixture.waitUntilIdle()
+
+        let routine = try #require(try fixture.routineStore.findRoutine(named: "Morning"))
+        #expect(
+            routine.effectiveRecentRunDates.isEmpty,
+            "the scheduled run logged a date with memory off — the badge would show a streak"
+        )
+    }
+
+    @Test
+    func aScheduledRoutineRecordsNoRunDateWithTheRoutinesSwitchOff() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        try fixture.saveScheduledRoutine()
+        fixture.viewModel.setMemoryCategoryEnabled(.routines, to: false)
+
+        fixture.viewModel.checkScheduledRoutines(now: MemoryFixture.tenAM)
+        try await fixture.waitUntilIdle()
+
+        let routine = try #require(try fixture.routineStore.findRoutine(named: "Morning"))
+        #expect(routine.effectiveRecentRunDates.isEmpty)
+    }
+
+    /// The control, and it carries the operational half of the founder's decision too: guarding the
+    /// run date costs nothing, because nothing in the scheduling path reads `recentRunDates` — the
+    /// due-check runs off the schedule and the clock. So with memory **on** the date lands, and in
+    /// both tests above the run still happened and the schedule still advanced.
+    @Test
+    func aScheduledRoutineRecordsItsRunDateWithMemoryOnAndRunsEitherWay() async throws {
+        let recording = try makeMemoryFixture()
+        defer { recording.cleanUp() }
+        try recording.saveScheduledRoutine()
+
+        recording.viewModel.checkScheduledRoutines(now: MemoryFixture.tenAM)
+        try await recording.waitUntilIdle()
+
+        let recorded = try #require(try recording.routineStore.findRoutine(named: "Morning"))
+        #expect(recorded.effectiveRecentRunDates.count == 1)
+
+        // Memory off: no date, but the routine still ran and its schedule still moved on, so the
+        // guard withholds a record rather than cancelling the automation.
+        let silent = try makeMemoryFixture()
+        defer { silent.cleanUp() }
+        try silent.saveScheduledRoutine()
+        silent.viewModel.setMemoryEnabled(false)
+
+        silent.viewModel.checkScheduledRoutines(now: MemoryFixture.tenAM)
+        try await silent.waitUntilIdle()
+
+        #expect(silent.viewModel.scheduledRunNotice != nil, "the routine did not run at all")
+        let quiet = try #require(try silent.routineStore.findRoutine(named: "Morning"))
+        #expect(quiet.effectiveRecentRunDates.isEmpty)
+        #expect(
+            quiet.schedule?.isEnabled == true,
+            "the schedule was disturbed by withholding a run date"
+        )
+        #expect(
+            quiet.schedule?.lastRunAt != nil,
+            "the schedule's own baseline did not advance, so the occurrence would fire again"
+        )
+    }
+
+    /// **The plan-detail guard must not take `refreshTaskHistory()` with it** (PR #98 round-4 pass,
+    /// F3). Unreachable while both stores share the `.taskHistory` row, so this asserts the shape
+    /// rather than the behaviour: the guard lives in its own function, exactly as the foreground
+    /// twin's does, so its `return` is local. Written as a scan because there is no way to reach the
+    /// branch at runtime — and because the day it becomes reachable is the day nobody is looking.
+    @Test
+    func theScheduledPlanDetailGuardCannotSkipTheHistoryRefresh() throws {
+        let source = try MacAgentSource.read("AgentViewModel.swift")
+        // The whole signature is the anchor, because `braceBlock` looks for the opening brace
+        // *inside* the anchor text and these signatures wrap across lines.
+        let writer = try MacAgentSource.braceBlock(
+            of: source,
+            openedBy: """
+            private func recordScheduledTaskHistory(
+                    status: PriorTaskOutcomeStatus,
+                    startedAt: Date,
+                    result: StoredTaskResult,
+                    plan: AgentPlan?
+                ) {
+            """
+        )
+
+        // The refresh is in the function that writes the row, and the plan guard is not.
+        #expect(writer.contains("refreshTaskHistory()"))
+        #expect(!writer.contains("allowsScheduledRecording(to: .taskPlanDetails)"))
+        #expect(writer.contains("recordScheduledTaskPlanDetail("))
+
+        let planWriter = try MacAgentSource.braceBlock(
+            of: source,
+            openedBy: """
+            private func recordScheduledTaskPlanDetail(
+                    for record: CompletedTaskRecord,
+                    plan: AgentPlan?,
+                    evictedTaskIDs: [String]
+                ) {
+            """
+        )
+        #expect(planWriter.contains("allowsScheduledRecording(to: .taskPlanDetails)"))
+        #expect(
+            !planWriter.contains("refreshTaskHistory()"),
+            "the refresh moved into the function whose guard can skip it"
+        )
+    }
+
     /// **The composer switch must stay out of the scheduled path** (PR #67's F2, which the fix for
     /// F1 could have undone by copying the foreground guard verbatim).
     ///
