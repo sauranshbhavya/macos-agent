@@ -60,6 +60,16 @@ interface Owed {
  * the work only when two drains collided in the same instant (PR #87 fifth round, F3).
  * `signOutAllForUser` is idempotent at the provider, but a drain that depends on that is a drain
  * resting on someone else's implementation detail.
+ *
+ * **And past the lease window it rests on it again, which the sentence above does not say** (PR #87
+ * sixth round, a record correction rather than a defect). A lease bounds the duplicate-call window;
+ * it does not remove it. Measured: a drain still inside `signOutAllForUser` with its lease aged past
+ * `sonny.revocation_lease_seconds()` is re-claimed by a second drain, and the provider is called
+ * twice for that user. That is inherent to a lease and it is the right trade — the alternative is
+ * holding a transaction and a row lock across a network call of unbounded duration — but the honest
+ * statement of what F3 bought is **"any provider call longer than 300 seconds"** rather than "the
+ * entire provider call", and there is no timeout on `signOutAllForUser` to bound it further. A real
+ * adapter should set one; whichever ticket lands it owns that.
  */
 export async function drainOwedRevocations(
   client: pg.Client,

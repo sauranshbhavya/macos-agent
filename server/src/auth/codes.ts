@@ -126,11 +126,31 @@ export const FAILURE_DISCLOSURE_SECONDS = CODE_LIFETIME_SECONDS * 2;
  *    unconsumed issuance classifies `auth.code_invalid` regardless of who the mailbox belongs to.
  * 2. **The issuance must be recent**, per `FAILURE_DISCLOSURE_SECONDS` above.
  *
- * **Both, not either**, and the second exists because the first has a deployment-shaped hole: with
- * `TRUSTED_PROXIES` unset behind a load balancer every request reports the balancer's address, so
- * every source hash collapses to one value and the match becomes vacuous. That is the same
- * misconfiguration the per-source rate limit degrades under, it is documented in `config.ts`, and it
- * is not a reason to have only one of these two.
+ * **Both, not either**, and the second exists because the first is weaker than its name suggests.
+ * `sourceHash` is a salted hash of `request.ip`. It is not forgeable over the wire — never
+ * transmitted, and the salt has no default — but it says *where a request came from*, not *who sent
+ * it*, and that gap has two sizes:
+ *
+ * - **The configured case, which is the one worth reading twice.** Even with `TRUSTED_PROXIES` set
+ *   correctly, everyone behind one public address shares a source hash. So this distinguishes "the
+ *   person who asked for this code" from "somebody at a different egress" — and **not** from a
+ *   co-tenant on the same NAT. Measured (PR #87 sixth round): with `trustProxy: ['10.0.0.1']`, a
+ *   co-tenant on the victim's public address gets `auth.code_used` where a caller elsewhere gets
+ *   `auth.code_invalid`. A household or an office is the small version; a mobile carrier's CGNAT
+ *   egress or a shared VPN exit is the large one. What such a caller learns is bounded — whether a
+ *   *known* address consumed its code, inside `FAILURE_DISCLOSURE_SECONDS` of an issuance — and it
+ *   is narrower than the oracle this gate closed, and it is real.
+ * - **The misconfigured case**: with `TRUSTED_PROXIES` unset behind a load balancer every request
+ *   reports the balancer's address, so every source hash collapses to one value and the match is
+ *   vacuous for the whole deployment. Same misconfiguration the per-source rate limit degrades
+ *   under, documented in `config.ts`.
+ *
+ * The recency bound applies in both, which is why there are two conditions rather than one.
+ *
+ * **The unconditional fix is a flow token** — `email/start` returning an opaque value that
+ * `email/verify` echoes back, tying disclosure to *this exchange* rather than to a network location.
+ * That is a change to two request/response shapes and lands on SONNY-128; it is not built, and it is
+ * the lever if the residual above is ever judged too wide.
  *
  * **What this narrows, stated because it is a contract change and not a silent one.** SONNY-127's
  * acceptance criterion says "an expired code, a reused code, and a wrong code each fail with the
@@ -140,26 +160,62 @@ export const FAILURE_DISCLOSURE_SECONDS = CODE_LIFETIME_SECONDS * 2;
  * `docs/sonny-backend-api-contract.md` §3.6 and in the changelog, the way the rule-2 supersession
  * was.
  */
+interface Issuance {
+  readonly consumed_at: Date | null;
+  readonly expires_at: Date;
+  readonly issued_at: Date;
+  readonly source_hash: string;
+}
+
+async function latestIssuance(client: pg.Client, mailboxKey: string): Promise<Issuance | undefined> {
+  const latest = await client.query<Issuance>(
+    `SELECT consumed_at, expires_at, issued_at, source_hash FROM sonny.sign_in_code_issue
+      WHERE mailbox_key = $1 ORDER BY issued_at DESC LIMIT 1`,
+    [mailboxKey],
+  );
+  return latest.rows[0];
+}
+
+/**
+ * Did this caller ask for the code that is currently outstanding at this mailbox?
+ *
+ * **The single question everything about a mailbox is disclosed on**, extracted so that the two
+ * places that ask it cannot drift apart: `classifyFailure` below, and the per-address rate-limit
+ * refusal in `routes/auth.ts`. Two conditions, and the second exists because the first has a
+ * deployment-shaped hole — see `classifyFailure`'s note, which is the long form of this.
+ *
+ * **What it is not.** `sourceHash` is a salted hash of `request.ip`. It is not forgeable over the
+ * wire — it is never transmitted, and the salt has no default — but it is **identical for everyone
+ * behind one public address**, so this distinguishes "somebody at the caller's egress asked for this
+ * code" from "somebody elsewhere did". That is a weaker statement than the function's name suggests
+ * and it is the honest one.
+ */
+export async function callerOriginatedLatestCode(
+  client: pg.Client,
+  mailboxKey: string,
+  now: Date,
+  callerSourceHash?: string,
+): Promise<boolean> {
+  const row = await latestIssuance(client, mailboxKey);
+  if (!row) return false;
+  // `callerSourceHash` is optional so that a caller with no source to offer gets the safe answer
+  // rather than a type error, and `undefined === row.source_hash` is never true.
+  if (callerSourceHash === undefined || callerSourceHash !== row.source_hash) return false;
+  return now.getTime() - row.issued_at.getTime() < FAILURE_DISCLOSURE_SECONDS * 1000;
+}
+
 export async function classifyFailure(
   client: pg.Client,
   mailboxKey: string,
   now: Date = new Date(),
   callerSourceHash?: string,
 ): Promise<VerifyFailure> {
-  const latest = await client.query<{
-    consumed_at: Date | null; expires_at: Date; issued_at: Date; source_hash: string;
-  }>(
-    `SELECT consumed_at, expires_at, issued_at, source_hash FROM sonny.sign_in_code_issue
-      WHERE mailbox_key = $1 ORDER BY issued_at DESC LIMIT 1`,
-    [mailboxKey],
-  );
-  const row = latest.rows[0];
+  const row = await latestIssuance(client, mailboxKey);
   // Nothing was ever issued to this address. Someone is guessing at an address, not at a code.
   if (!row) return "auth.code_invalid";
 
   // **The disclosure gate.** Everything past here says something about the mailbox rather than about
-  // the code, so it is said only to a caller entitled to hear it. `callerSourceHash` is optional so
-  // that a caller with no source to offer gets the safe answer rather than a type error.
+  // the code, so it is said only to a caller entitled to hear it.
   const originated = callerSourceHash !== undefined && callerSourceHash === row.source_hash;
   const recent = now.getTime() - row.issued_at.getTime() < FAILURE_DISCLOSURE_SECONDS * 1000;
   if (!originated || !recent) return "auth.code_invalid";

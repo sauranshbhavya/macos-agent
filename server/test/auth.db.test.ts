@@ -63,7 +63,16 @@ class FakeProvider implements AuthProvider {
    */
   liveRefreshToken = "rt";
   async sendEmailCode(email: string) { this.sent.push(email); return { providerRequestId: "p1" }; }
-  async verifyEmailCode(): Promise<VerifiedSession> {
+  /**
+   * **Declared with the interface's parameters even though this body ignores them** (PR #87 sixth
+   * round, F1). It was `verifyEmailCode()` with none, which type-checks as a *narrower* function and
+   * is assignable to the interface — but the reverse is not true, so a test that swapped in a
+   * two-argument implementation was a `TS2322` that `npm run typecheck` reported and nobody read.
+   * Vitest strips types, so the suite stayed green and the defect was invisible to every command
+   * except the one that exists to catch it.
+   */
+  // eslint-disable-next-line @typescript-eslint/no-unused-vars
+  async verifyEmailCode(_email: string, _code: string): Promise<VerifiedSession> {
     if (!this.accept) throw new ProviderRejected("Token has expired or is invalid");
     this.liveRefreshToken = this.session.refreshToken;
     return this.session;
@@ -313,13 +322,53 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("rate-limits guessing per address", async () => {
+    it("rate-limits guessing per address, and TELLS the caller who asked for the code", async () => {
+      // The limit still binds; what changed is who is told (PR #87 sixth round). This caller asked
+      // for the code from this source, so the 429 is about their own behaviour and withholding it
+      // would leave them retrying against a wall.
       const app = build();
+      await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "brute@example.com" } });
       provider.accept = false;
       for (let i = 0; i < CODE_VERIFY_PER_ADDRESS.max; i += 1) await verify(app, "000000", "brute@example.com");
       const over = await verify(app, "000000", "brute@example.com");
       expect(over.statusCode).toBe(429);
       expect(over.json().error.code).toBe("limit.rate");
+      expect(Number(over.headers["retry-after"])).toBeGreaterThan(0);
+      await app.close();
+    });
+
+    it("HIDES the per-address refusal from a caller who did not ask for the code", async () => {
+      // **PR #87 sixth round.** Answering 429 to everyone made the attempt *count* readable: probe a
+      // mailbox and see how many tries you get before the wall — 4 where the victim had verified
+      // once, 5 for an untouched address. The attacker neither caused the victim's attempt nor could
+      // otherwise observe it. Same channel class as the previous round's oracle, same route, one
+      // layer down — and `email/start` has always made this asymmetry the other way for exactly
+      // this reason.
+      //
+      // The assertion is the one that matters: a probed mailbox and an untouched one must be
+      // indistinguishable in status AND body, both before and after the wall.
+      const app = build();
+      const STRANGER = "198.51.100.9";
+      const probe = (email: string) => app.inject({
+        method: "POST", url: "/v1/auth/email/verify", remoteAddress: STRANGER,
+        payload: { email, code: "000000" },
+      });
+
+      // Someone used up this mailbox's budget. From another source, so the stranger did not do it.
+      await app.inject({ method: "POST", url: "/v1/auth/email/start", remoteAddress: "203.0.113.9", payload: { email: "probed@example.com" } });
+      provider.accept = false;
+      for (let i = 0; i < CODE_VERIFY_PER_ADDRESS.max; i += 1) {
+        await app.inject({ method: "POST", url: "/v1/auth/email/verify", remoteAddress: "203.0.113.9", payload: { email: "probed@example.com", code: "000000" } });
+      }
+
+      const exhausted = await probe("probed@example.com");
+      const untouched = await probe("untouched@example.com");
+      expect(exhausted.statusCode).toBe(untouched.statusCode);
+      expect(exhausted.statusCode).toBe(400);
+      expect(exhausted.json().error.code).toBe(untouched.json().error.code);
+      expect(exhausted.json().error.code).toBe("auth.code_invalid");
+      // Retry-After would give the count away on its own.
+      expect(exhausted.headers["retry-after"]).toBeUndefined();
       await app.close();
     });
 
@@ -331,7 +380,7 @@ describeDb("the auth endpoints", () => {
       // that answers the same question through an error code.
       //
       // The fake here models Supabase's per-address OTP — it accepts only the code it "sent" — which
-      // the shared `FakeProvider` cannot do, because its `verifyEmailCode` takes no arguments.
+      // the shared `FakeProvider`'s own body ignores.
       const perAddressOtp = () => {
         const sent = new Map<string, string>();
         provider.sendEmailCode = async (email: string) => {
@@ -392,7 +441,19 @@ describeDb("the auth endpoints", () => {
         await app.close();
       });
 
-      it("BINDS enumeration from one source, which nothing on this route did", async () => {
+      // **An explicit timeout on the two highest-request tests on this branch** (PR #87 sixth round).
+      // They issue 35 and 31 sequential `app.inject` calls — each a real HTTP round trip through the
+      // pool — against vitest's 5000ms default, where the previous worst on this branch was 11.
+      // Measured: 0 failures across ~30 idle runs, then 1 of 3 unforced while a cold Swift build ran
+      // alongside, and 3 of 8 under deliberate CPU load. So "zero flakes" was true of an idle
+      // machine and false as a property, and **a loaded machine is what CI is**.
+      //
+      // A timeout rather than fewer injects: the request count is not incidental here, it is derived
+      // from `CODE_VERIFY_PER_SOURCE.max` and it is the thing being measured. `races.db.test.ts`'s
+      // randomized pass already carries one for the same reason.
+      const LONG = { timeout: 60_000 };
+
+      it("BINDS enumeration from one source, which nothing on this route did", LONG, async () => {
         // The per-address limit is keyed on the address being probed, so it never binds when every
         // probe names a new one. Measured before the fix: 200 distinct addresses from one source, 0
         // refused — while `email/start` refused 192 of 200 in the same run from the same source.
@@ -418,7 +479,7 @@ describeDb("the auth endpoints", () => {
         await app.close();
       });
 
-      it("discloses the per-source refusal, because it is a fact about the caller", async () => {
+      it("discloses the per-source refusal, because it is a fact about the caller", LONG, async () => {
         // Same asymmetry `email/start` already makes: a 429 about an ADDRESS is the oracle in slow
         // motion and is silent there; a 429 about the CALLER is their own behaviour, and hiding it
         // leaves them retrying against a wall.
@@ -687,9 +748,37 @@ describeDb("the auth endpoints", () => {
       await app.close();
     });
 
-    it("lets an account with NOTHING owed be deleted, so the guard is not a blanket refusal", async () => {
-      // The mirror case. A guard that refused every delete would pass the test above and be useless,
-      // and this is the assertion that separates the two.
+    it("lets a LIVE account be hard-deleted, because it has never owed a revocation", async () => {
+      // **PR #87 sixth round.** 0008's trigger omitted `account_closed`, so it counted every
+      // never-revoked identity — which is the ordinary state of every live account, since a live
+      // account has never been closed and so has never owed anything. Every live account was
+      // therefore un-deletable, and the refusal named `npm run revocations` as the remedy, which
+      // reports nothing for a live account because the drain only sees closed ones. The operator
+      // runs the named fix, is told there is no work, and is stuck.
+      //
+      // The test below covers a closed-and-drained account, so the live case went untested. This is
+      // it, and it is the one that separates "guards the debt" from "refuses everything".
+      const app = build();
+      await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "alive@example.com" } });
+      const accountId = (await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "alive@example.com", code: "1" } })).json().user.id;
+      // Never closed, never revoked, and `provider_session_revoked_at` is NULL — which is exactly
+      // what the missing clause was counting.
+      const { rows } = await client.query(
+        "SELECT deleted_at, account_closed, provider_session_revoked_at FROM sonny.identity i JOIN sonny.account a ON a.id = i.account_id WHERE a.id = $1",
+        [accountId]);
+      expect(rows[0].deleted_at).toBeNull();
+      expect(rows[0].account_closed).toBe(false);
+      expect(rows[0].provider_session_revoked_at).toBeNull();
+      expect(await owedRevocationCount(client)).toBe(0);
+
+      await client.query("DELETE FROM sonny.account WHERE id = $1", [accountId]);
+      expect((await client.query("SELECT count(*)::int AS n FROM sonny.account WHERE id = $1", [accountId])).rows[0].n).toBe(0);
+      await app.close();
+    });
+
+    it("lets a CLOSED and drained account be deleted, so the guard is not a blanket refusal", async () => {
+      // The other mirror case. A guard that refused every delete would pass the owed test above and
+      // be useless, and these two together are what separate it from one.
       const app = buildWithDelete();
       await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "clean@example.com" } });
       const accountId = (await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "clean@example.com", code: "1" } })).json().user.id;

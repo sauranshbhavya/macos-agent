@@ -185,7 +185,17 @@ export function isTrustedProxyEntry(entry: string): boolean {
   if (family === 0) return false;
   if (!/^\d{1,3}$/.test(prefix)) return false;
   const bits = Number(prefix);
-  return bits >= 0 && bits <= (family === 4 ? 32 : 128);
+  // **`/0` is rejected, and it is not an off-by-one** (PR #87 sixth round). `@fastify/proxy-addr`
+  // refuses a full-range prefix — `TypeError: invalid range on address: 0.0.0.0/0` — so accepting it
+  // here produced exactly the failure this validator was written to prevent: a raw third-party throw
+  // inside the `Fastify(...)` constructor, before `app.ready()`, naming library internals instead of
+  // the variable. Confirmed for `0.0.0.0/0`, `10.0.0.0/0`, `1.2.3.4/0`, `::/0`, `::1/0`, `fe80::/0`
+  // and `0.0.0.0/00`; everything else compiles, including `10.0.0.0/008`.
+  //
+  // **And `/0` is the shape an operator reaches for on purpose**, not a typo: it is how you write
+  // "trust everything", which is what someone wants when they are looking for the old boolean
+  // `true`. That is why the message below says what it is rather than only that it is invalid.
+  return bits > 0 && bits <= (family === 4 ? 32 : 128);
 }
 
 /**
@@ -213,9 +223,11 @@ export function parseTrustedProxies(raw: string): boolean | string[] {
       `TRUSTED_PROXIES contains ${bad.length} entry/entries that are not an IP address, a CIDR ` +
         `range or a named set: ${bad.map((entry) => JSON.stringify(entry)).join(", ")}. ` +
         `Expected a comma-separated list like 10.0.0.0/8,172.16.0.0/12, or one of ` +
-        `${[...NAMED_PROXY_SETS].join(", ")}. Left unchecked this reaches Fastify's proxy-address ` +
-        `parser, which throws inside the server constructor and names its own internals instead ` +
-        `of this variable.`,
+        `${[...NAMED_PROXY_SETS].join(", ")}. A /0 prefix is refused specifically: there is no way ` +
+        `to say "trust every proxy" here, because trusting every hop means any caller can choose ` +
+        `its own apparent address, which is the setting this variable replaced. Left unchecked ` +
+        `these reach Fastify's proxy-address parser, which throws inside the server constructor ` +
+        `and names its own internals instead of this variable.`,
     );
   }
   return entries;

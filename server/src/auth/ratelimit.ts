@@ -66,6 +66,15 @@ export const CODE_VERIFY_PER_ADDRESS: Limit = { max: 5, windowSeconds: 15 * 60 }
  *
  * **Its own bucket kind**, not shared with `email/start`'s source bucket: two limits with different
  * ceilings counted against one counter is one limit, and it would be whichever is smaller.
+ *
+ * **What "far above a household" does not cover, added after it was pointed out** (PR #87 sixth
+ * round). A public address is not a household. Behind a mobile carrier's CGNAT or a shared VPN exit,
+ * 30 verifies an hour is a ceiling for *every Sonny user on that egress at once*, and they cannot
+ * see each other to know why. And under the `TRUSTED_PROXIES`-unset misconfiguration this constant
+ * adds a **second** deployment-wide cap that did not exist before — 30 verifies an hour for
+ * everybody — beside `CODE_REQUEST_PER_SOURCE`'s 10. Neither is a reason to drop the limit: without
+ * it the route was a working enumeration primitive. Both are reasons to configure the proxy list,
+ * and to revisit these numbers when there is real traffic to size them against rather than a guess.
  */
 export const CODE_VERIFY_PER_SOURCE: Limit = { max: 30, windowSeconds: 60 * 60 };
 

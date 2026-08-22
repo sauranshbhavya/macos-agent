@@ -178,6 +178,57 @@ describe("provider credentials — two live keys per provider", () => {
       expect(() => parseTrustedProxies("10.0.0.0/8,not-an-ip")).toThrow(/TRUSTED_PROXIES/);
     });
 
+    it("refuses a /0 prefix, which is how someone writes trust-everything", () => {
+      // **PR #87 sixth round.** `@fastify/proxy-addr` refuses a full-range prefix, so `/0` passed
+      // this validator and then threw `TypeError: invalid range on address: 0.0.0.0/0` inside the
+      // `Fastify(...)` constructor — the exact failure this validator exists to prevent, reached
+      // through the validator itself. And it is not an exotic typo: `/0` is what an operator writes
+      // when they are looking for the old boolean `true`.
+      for (const entry of ["0.0.0.0/0", "10.0.0.0/0", "1.2.3.4/0", "::/0", "::1/0", "fe80::/0", "0.0.0.0/00"]) {
+        expect(() => parseTrustedProxies(entry), entry).toThrow(ConfigError);
+      }
+      // The message has to say why, or the operator retries the same idea in another spelling.
+      expect(() => parseTrustedProxies("0.0.0.0/0")).toThrow(/trust every proxy/);
+      // Everything adjacent still compiles — this is a refusal of /0, not of small prefixes.
+      expect(parseTrustedProxies("0.0.0.0/1")).toEqual(["0.0.0.0/1"]);
+      expect(parseTrustedProxies("::/1")).toEqual(["::/1"]);
+      expect(parseTrustedProxies("10.0.0.0/008")).toEqual(["10.0.0.0/008"]);
+    });
+
+    it("accepts NOTHING that Fastify itself cannot compile", async () => {
+      // **The assertion that catches this class without knowing which entry is the problem.** The
+      // `/0` test above pins the case we now know about; this one pins the *property* — whatever
+      // this validator lets through, `proxy-addr`'s `compile()` must accept, and that runs inside
+      // the `Fastify(...)` constructor where a throw is unreachable by any error handler.
+      //
+      // Written as "for each candidate: if the validator accepts it, the app must build" rather
+      // than as a list of known-good values. That is the difference between a test that confirms
+      // what we already fixed and one that would have found it: relaxing the validator makes a
+      // candidate below start passing, and then the build throws and this fails.
+      const { buildApp } = await import("../src/app.js");
+      const candidates = [
+        "10.0.0.0/8,172.16.0.0/12", "192.168.1.1", "::1", "2001:db8::/32", "loopback,uniquelocal",
+        "0.0.0.0/1", "10.0.0.0/008",
+        // The shapes a looser validator would start admitting. Each is currently refused; if any
+        // stops being refused, it has to be one Fastify can compile.
+        "0.0.0.0/0", "10.0.0.0/0", "::/0", "fe80::/0", "0.0.0.0/00",
+        "10.0.0.0/64", "10.0.0.0/abc", "not-an-ip", "10.0.0.0/",
+      ];
+      let accepted = 0;
+      for (const raw of candidates) {
+        let parsed;
+        try {
+          parsed = loadConfig({ SONNY_ENV: "local", TRUSTED_PROXIES: raw });
+        } catch {
+          continue;                       // refused by the validator, which is a fine outcome
+        }
+        accepted += 1;
+        expect(() => buildApp(parsed), raw).not.toThrow();
+      }
+      // And the loop is not vacuous: some of them really do get through.
+      expect(accepted).toBe(7);
+    });
+
     it("refuses a prefix that is not a prefix for that address family", () => {
       // `10.0.0.0/64` is not a v4 network, and `proxy-addr` would say so at a moment nobody is
       // watching. Both families are checked against their own width rather than one shared bound.
