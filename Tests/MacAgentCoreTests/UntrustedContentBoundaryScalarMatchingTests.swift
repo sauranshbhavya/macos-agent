@@ -539,6 +539,30 @@ struct UntrustedContentBoundaryScalarMatchingTests {
         )
     }
 
+    /// **Longest-first, pinned on a delimiter pair this repository does not have yet.**
+    ///
+    /// None of today's four delimiters is a prefix of another, so nothing in the product can tell
+    /// the two sort orders apart — a mutation battery reversing the comparator at `e59bb75` left the
+    /// whole suite green. That makes it defence-in-depth for whoever adds the fifth delimiter, and
+    /// defence-in-depth that no test holds is a comment rather than a property. Calling the matcher
+    /// directly is what lets this be asserted: the shortest-first order would neutralise `ABC` and
+    /// leave `DEF` behind as bare text.
+    @Test
+    func aDelimiterThatIsAPrefixOfAnotherLosesToTheLongerMatch() {
+        let escaped = UntrustedContentBoundary.neutralizingDelimiters(
+            in: "before ABCDEF after",
+            delimiters: ["ABC", "ABCDEF"]
+        ) { "<\($0)>" }
+        #expect(escaped == "before <ABCDEF> after")
+
+        // And the shorter one still matches where the longer one cannot.
+        let shorter = UntrustedContentBoundary.neutralizingDelimiters(
+            in: "before ABCx after",
+            delimiters: ["ABC", "ABCDEF"]
+        ) { "<\($0)>" }
+        #expect(shorter == "before <ABC>x after")
+    }
+
     // MARK: - No second copy of the defeated idiom
 
     /// **The defect was one call, and it was in two files** — `UntrustedContentBoundary.escape` and
