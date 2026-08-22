@@ -1,7 +1,7 @@
 import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { classifyFailure, consumeLatest, invalidateLive, recordIssue, CODE_LIFETIME_SECONDS } from "../auth/codes.js";
+import { classifyFailure, consumeLatest, issueCode, CODE_LIFETIME_SECONDS } from "../auth/codes.js";
 import { expiryFields } from "../auth/clock.js";
 import { looksLikeEmail, normalizeEmail, rateLimitEmailKey, resolve } from "../auth/identity.js";
 import { ProviderRejected, ProviderUnavailable, type AuthProvider } from "../auth/provider.js";
@@ -45,6 +45,41 @@ function sourceOf(request: FastifyRequest): string {
 
 function sourceHash(request: FastifyRequest, salt: string): string {
   return createHash("sha256").update(`${salt}:src:${sourceOf(request)}`).digest("hex");
+}
+
+/**
+ * Which account a provider-side user belongs to — **or a refusal, never a guess** (PR #87 second
+ * round, F6).
+ *
+ * `supabase_user_id` carries no uniqueness constraint and never can: the whole design lets several
+ * identities name one Supabase user, which is what makes two `auth.users` rows resolve to one
+ * account. What it does *not* license is two **live accounts** naming one Supabase user. That state
+ * is the identity rule having failed somewhere upstream, and the two routes that resolve a caller
+ * this way were meeting it with `ORDER BY … LIMIT 1` — picking a winner, deterministically and
+ * arbitrarily. On `DELETE /v1/account` that is choosing which of a user's accounts to destroy on the
+ * strength of a tiebreak; on refresh it is handing out a session for whichever account sorted first.
+ *
+ * So the query asks for two and refuses on two. **The `ORDER BY` is gone with the tiebreak it fed**:
+ * with no winner to pick there is nothing left for a row order to decide, and leaving one in would
+ * suggest this still chooses.
+ *
+ * `NOT i.account_closed` matches rule 1's exclusion: an identity a closed account left behind
+ * attributes nobody, exactly as it signs nobody in.
+ */
+async function accountForSupabaseUser(
+  client: pg.Client,
+  supabaseUserId: string,
+): Promise<{ accountId: string } | { ambiguous: boolean }> {
+  const owned = await client.query<{ account_id: string }>(
+    `SELECT DISTINCT i.account_id
+       FROM sonny.identity i
+       JOIN sonny.account a ON a.id = i.account_id
+      WHERE i.supabase_user_id = $1 AND NOT i.account_closed AND a.deleted_at IS NULL
+      LIMIT 2`,
+    [supabaseUserId],
+  );
+  if (owned.rows.length === 1) return { accountId: owned.rows[0]!.account_id };
+  return { ambiguous: owned.rows.length > 1 };
 }
 
 export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDeps): void {
@@ -96,16 +131,23 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
       // and be refused, with no new mail arriving. Now a failed send leaves the previous code
       // working, which is the safe direction: at worst two codes are briefly live, and the older
       // one is invalidated the moment a send actually succeeds.
-      // **These three steps are not transactional, and the failure modes are bounded on purpose**
-      // (PR #87 R18). The send is a network call and cannot join a database transaction, so a crash
-      // between them leaves either a sent code with no issuance record — which classifies as
-      // `auth.code_invalid` and costs the user one retry — or an invalidated older code with no
-      // newer record, same outcome. Wrapping the two database steps in a transaction would not help:
-      // the send is the one that cannot be rolled back, and it happens first precisely so that a
-      // failed send leaves the user's existing code working.
+      // **The SEND is not transactional, and that failure mode is bounded on purpose** (PR #87
+      // R18). It is a network call and cannot join a database transaction, so a crash after it
+      // leaves a sent code with no issuance record — which classifies as `auth.code_invalid` and
+      // costs the user one retry. It happens first precisely so that a failed send leaves the
+      // user's existing code working.
+      //
+      // **The two database steps ARE transactional**, and this comment used to say wrapping them
+      // would not help (PR #87 second round, F11). That was true of the crash it was reasoning
+      // about and false of the race it was not: separately, three concurrent starts for one address
+      // left three live codes. `issueCode` takes them together under a per-address lock. The half-
+      // written state the old wording described — an invalidated older code with no newer record —
+      // is gone with it.
+      // `issueCode` is the invalidate-and-record pair as one locked transaction (PR #87 second
+      // round, F11): as two statements, concurrent starts for one address each invalidated nothing
+      // of each other's and left up to three live codes behind.
       await deps.provider.sendEmailCode(email);
-      await invalidateLive(client, email, now());
-      await recordIssue(client, email, sourceHash(request, salt), now());
+      await issueCode(client, email, sourceHash(request, salt), now());
     } catch (error) {
       // Even a provider failure returns the uniform response. The user is told nothing useful
       // either way, and the alternative leaks that this address reached the send path.
@@ -219,29 +261,31 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
       throw error;
     }
     return deps.withConnection(async (client) => {
-    // Filtered and ordered (PR #87 F8). `supabase_user_id` carries no uniqueness constraint and
-    // never can — the whole design allows several identities to name one Supabase user — so a bare
-    // `LIMIT 1` returned an arbitrary row, and one of them could belong to a closed account. A
-    // refresh that resolves to a closed account hands the caller a session for something the user
-    // asked to delete.
-    const account = await client.query<{ account_id: string }>(
-      `SELECT i.account_id
-         FROM sonny.identity i
-         JOIN sonny.account a ON a.id = i.account_id
-        WHERE i.supabase_user_id = $1 AND a.deleted_at IS NULL
-        ORDER BY i.linked_at ASC, i.id ASC
-        LIMIT 1`,
-      [session.supabaseUserId],
-    );
+    // Filtered (PR #87 F8): a token whose account has been closed must not refresh. `LIMIT 1` over
+    // an unfiltered `supabase_user_id` could hand back a session for something the user deleted.
+    const owner = await accountForSupabaseUser(client, session.supabaseUserId);
     // **A refresh for a closed account is a revoked session, not a successful one** (PR #87 R5).
     // The previous version answered 200 with `user.id: null` and a working token pair, so an
     // account the user had deleted kept minting sessions and the client had no way to tell.
-    const accountId = account.rows[0]?.account_id;
-    if (!accountId) {
+    //
+    // **An ambiguous one is refused the same way** (PR #87 second round, F6), rather than served
+    // whichever account sorted first. `auth.token_revoked` is the right code for both: §7's table
+    // makes it "clears the Keychain entry, opens sign-in", and signing in again is exactly the
+    // recovery — `resolve()` keys on `(provider, subject)`, so it lands on one account without a
+    // tiebreak. Refusing costs the user a sign-in; guessing spends their session on an account that
+    // may not be the one they are looking at.
+    if (!("accountId" in owner)) {
       return reply.status(401).send(
-        errorBody("auth.token_revoked", "This session no longer belongs to an active account.", request.id),
+        errorBody(
+          "auth.token_revoked",
+          owner.ambiguous
+            ? "This session cannot be attributed to a single account."
+            : "This session no longer belongs to an active account.",
+          request.id,
+        ),
       );
     }
+    const accountId = owner.accountId;
 
     const issued = now();
     return reply.status(200).send({
@@ -277,7 +321,7 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
    * until it lands a closed account's content is retained and unreachable. Recorded on both tickets.
    */
   // Mounted only where the gate is on, and `loadConfig` refuses the gate in production. Until
-  // SONNY-128 supplies authenticated-request middleware this route cannot tell who is asking, and
+  // SONNY-203 supplies authenticated-request middleware this route cannot tell who is asking, and
   // an unauthenticated destructive primitive that merely happens to be unrouted is a landmine that
   // arms itself the moment someone routes it.
   if (config.allowUnauthenticatedAccountDelete) app.delete("/v1/account", async (request, reply) => {
@@ -291,8 +335,10 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
     // account id from `Sonny-Account-Id` and verified nothing, so any caller who could reach the
     // port could destroy any account whose id they could guess — reproduced against a running
     // server with a made-up bearer token. The token is now resolved to a provider-side user and
-    // then to an account through `sonny.identity`, which is precisely what SONNY-128's middleware
+    // then to an account through `sonny.identity`, which is precisely what SONNY-203's middleware
     // will do for every authenticated route; when it lands, this block is what it replaces.
+    // (SONNY-128 until the second review round — that ticket is the client half and may not touch
+    // `server/` at all, which is the planning gap F5 found and SONNY-203 was created to close.)
     return deps.withConnection(async (client) => {
     let supabaseUserId: string;
     try {
@@ -305,39 +351,29 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
       }
       throw error;
     }
-    const owned = await client.query<{ account_id: string }>(
-      `SELECT i.account_id
-         FROM sonny.identity i
-         JOIN sonny.account a ON a.id = i.account_id
-        WHERE i.supabase_user_id = $1 AND a.deleted_at IS NULL
-        ORDER BY i.linked_at ASC, i.id ASC
-        LIMIT 1`,
-      [supabaseUserId],
-    );
-    const accountId = owned.rows[0]?.account_id;
-    if (!accountId) {
-      // A valid token that names no live account. 401 rather than 404: the caller is not attributable
-      // to anything this route may act on, and saying which id does or does not exist is a leak.
+    const owner = await accountForSupabaseUser(client, supabaseUserId);
+    if (!("accountId" in owner)) {
+      // A valid token that names no live account, or — the ambiguous case (PR #87 second round,
+      // F6) — one that names two. 401 rather than 404: the caller is not attributable to anything
+      // this route may act on, and saying which id does or does not exist is a leak. **Two live
+      // accounts is the one case where picking a winner would have destroyed the wrong one**, so
+      // this route refuses rather than tiebreaking; it is not attributable, which is what the code
+      // already says.
       return reply.status(401).send(
-        errorBody("auth.unauthenticated", "Account could not be attributed to this session.", request.id),
+        errorBody(
+          "auth.unauthenticated",
+          owner.ambiguous
+            ? "This session names more than one account; none was deleted."
+            : "Account could not be attributed to this session.",
+          request.id,
+        ),
       );
     }
-    // **Read the ids BEFORE the close, and revoke every one of them** (PR #87 R1).
-    //
-    // The previous version read them after the closing UPDATE and revoked **nobody** — reproduced
-    // as 0 rows. Its comment said the read happened "before the commit that releases them", which
-    // was wrong twice over: the trigger fires at **statement end**, not at commit, so the rows were
-    // already gone by the next statement in the same transaction; and under 0004 nothing releases
-    // them at all any more, they are marked. Reading first is kept regardless, because it does not
-    // depend on which of those is true.
-    const identities = await client.query<{ supabase_user_id: string }>(
-      `SELECT DISTINCT supabase_user_id FROM sonny.identity
-        WHERE account_id = $1 AND supabase_user_id IS NOT NULL`,
-      [accountId],
-    );
+    const accountId = owner.accountId;
 
     await client.query("BEGIN");
     let closed;
+    let identities;
     try {
       closed = await client.query(
         "UPDATE sonny.account SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL",
@@ -347,6 +383,36 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
       // deleted and not touched here. Keeping them keeps `link_method` — the audit trail — and the
       // `supabase_user_id`s that `provider.deleteUser` and SONNY-196 both need, which is the same
       // reasoning that keeps the account row itself.
+      //
+      // **Read INSIDE the transaction, AFTER the close** (PR #87 second round, F2). R1's fix moved
+      // this read before `BEGIN`, which was right against 0003 — that migration DELETEd the rows at
+      // statement end, so reading afterwards read an empty table and revoked nobody. Under 0004 the
+      // rows survive, and reading first became the wrong half of the trade: an identity that joined
+      // this account between the read and the close was never revoked, so a session the user had
+      // just added outlived the account.
+      //
+      // Reading here is race-free rather than merely luckier, and the enumeration is worth spelling
+      // out because a claim like that is only as good as the list it rests on. Three ways a row
+      // this read must see could appear or change, and what stops each:
+      //
+      //   1. **An identity attaching to this account.** Both paths in this codebase that do it —
+      //      `resolve()`'s rule 2 and `linkExplicitly` — take `SELECT … FOR SHARE` on the account
+      //      row first, which conflicts with the `FOR NO KEY UPDATE` the `UPDATE` above holds. So
+      //      either they committed before the close and this read sees them, or they block and find
+      //      the account closed when they wake.
+      //   2. **An existing identity's `supabase_user_id` changing** under `resolve()`'s rule 1,
+      //      which takes no account lock. It is serialised anyway: the close trigger updates every
+      //      identity row on this account at the end of the statement above, so a rule-1 update of
+      //      one of those rows blocks on it and then re-evaluates its own `NOT account_closed` and
+      //      matches nothing.
+      //   3. **Raw SQL from outside this file** — a retention sweep, an operator's `INSERT`. That
+      //      takes no `FOR SHARE` and is NOT covered. It is out of reach of any lock this handler
+      //      can take, and is named here rather than papered over.
+      identities = await client.query<{ supabase_user_id: string }>(
+        `SELECT DISTINCT supabase_user_id FROM sonny.identity
+          WHERE account_id = $1 AND supabase_user_id IS NOT NULL`,
+        [accountId],
+      );
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");

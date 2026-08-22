@@ -247,6 +247,144 @@ describeDb("the identity-linking rule", () => {
         linkExplicitly(client, "00000000-0000-0000-0000-000000000000", target.accountId, target.accountId, "00000000-0000-0000-0000-000000000000"),
       ).rejects.toThrow(LinkError);
     });
+
+    it("REFUSES to move an identity that a CLOSED account left behind", async () => {
+      // PR #87 second round, F1b. This was the statement that produced the corrupt row: moving a
+      // closed account's identity onto a live one resurrected, through a path that looks like a
+      // link, exactly what closing the account took away. It is refused outright now — rule 1 will
+      // not sign anyone in with a closed identity, so `provenIdentityId` can never honestly name
+      // one, and a link that could only ever be called with a lie is not a link.
+      const live = await resolve(client, emailAssertion("keeper@example.com"));
+      const doomed = await resolve(client, {
+        provider: "apple", subject: "apple-closed-src", email: "hhh@privaterelay.appleid.com", emailVerified: true,
+      });
+      await client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [doomed.accountId]);
+
+      await expect(
+        linkExplicitly(client, doomed.identityId, live.accountId, live.accountId, doomed.identityId),
+      ).rejects.toThrow(/closed account/);
+
+      const { rows } = await client.query(
+        "SELECT account_id, account_closed FROM sonny.identity WHERE id = $1", [doomed.identityId],
+      );
+      expect(rows[0].account_id).toBe(doomed.accountId);   // did not move
+      expect(rows[0].account_closed).toBe(true);
+    });
+
+    it("refuses even when the flag disagrees with the account, because it checks BOTH", async () => {
+      // The guard is `NOT account_closed` **and** an EXISTS on a live account, and this is what the
+      // second half is for. `account_closed` is denormalised, so a database that has ever been in a
+      // state 0005 repairs — or a future statement nobody has written yet — can carry a false flag
+      // over a genuinely deleted account. The flag is cleared here by hand to prove the account
+      // itself is still consulted rather than merely trusted.
+      const live = await resolve(client, emailAssertion("keeper2@example.com"));
+      const doomed = await resolve(client, emailAssertion("lied@example.com"));
+      await client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [doomed.accountId]);
+      await client.query("UPDATE sonny.identity SET account_closed = false WHERE id = $1", [doomed.identityId]);
+
+      await expect(
+        linkExplicitly(client, doomed.identityId, live.accountId, live.accountId, doomed.identityId),
+      ).rejects.toThrow(LinkError);
+      const { rows } = await client.query("SELECT account_id FROM sonny.identity WHERE id = $1", [doomed.identityId]);
+      expect(rows[0].account_id).toBe(doomed.accountId);
+    });
+  });
+
+  describe("the flag follows the account, on every statement that can move either", () => {
+    it("RECOMPUTES account_closed when an identity moves to another account", async () => {
+      // **PR #87 second round, F1a — the defect this migration exists for.** 0004 derived the flag
+      // on INSERT and set it on close, and left the third way it can change: the identity moving.
+      // Reproduced against a real database before the fix — the row below landed on a LIVE account
+      // still carrying `account_closed = true`.
+      //
+      // Moved with raw SQL rather than through `linkExplicitly`, which now refuses this outright:
+      // the two fixes are independent and this one is the trigger's, so it is exercised on its own.
+      const live = await resolve(client, emailAssertion("home@example.com"));
+      const orphan = await resolve(client, {
+        provider: "apple", subject: "apple-moves", email: "iii@privaterelay.appleid.com", emailVerified: true,
+      });
+      await client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [orphan.accountId]);
+      expect((await client.query(
+        "SELECT account_closed FROM sonny.identity WHERE id = $1", [orphan.identityId],
+      )).rows[0].account_closed).toBe(true);
+
+      await client.query("UPDATE sonny.identity SET account_id = $2 WHERE id = $1",
+        [orphan.identityId, live.accountId]);
+
+      const { rows } = await client.query(
+        "SELECT account_id, account_closed FROM sonny.identity WHERE id = $1", [orphan.identityId],
+      );
+      expect(rows[0].account_id).toBe(live.accountId);
+      expect(rows[0].account_closed).toBe(false);
+
+      // **And the consequence, which is the whole reason it matters.** With a stale flag, rule 1
+      // could not see this identity, so the next sign-in with the same `(provider, subject)` made
+      // the person a SECOND account — the failure this entire ticket exists to prevent, reached
+      // from the one path that is supposed to prevent it.
+      const again = await resolve(client, {
+        provider: "apple", subject: "apple-moves", email: "iii@privaterelay.appleid.com", emailVerified: true,
+      });
+      expect(again.accountId).toBe(live.accountId);
+      expect(again.created).toBe(false);
+      const live_accounts = await client.query(
+        "SELECT count(*)::int AS n FROM sonny.account WHERE deleted_at IS NULL",
+      );
+      expect(live_accounts.rows[0].n).toBe(1);
+    });
+
+    it("CLEARS account_closed when an account is reopened", async () => {
+      // PR #87 second round, F10. The close trigger only ever set the flag, so undoing a mistaken
+      // closure — `deleted_at = NULL`, the only way an account is ever reopened — left every
+      // identity on it flagged closed. Rule 1 excludes those, so the reopened account's owner would
+      // sign in and be handed a *new* account: the same two-accounts failure, from the other side.
+      const account = await resolve(client, emailAssertion("undo@example.com"));
+      await client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [account.accountId]);
+      expect((await client.query(
+        "SELECT account_closed FROM sonny.identity WHERE account_id = $1", [account.accountId],
+      )).rows[0].account_closed).toBe(true);
+
+      await client.query("UPDATE sonny.account SET deleted_at = NULL WHERE id = $1", [account.accountId]);
+      expect((await client.query(
+        "SELECT account_closed FROM sonny.identity WHERE account_id = $1", [account.accountId],
+      )).rows[0].account_closed).toBe(false);
+
+      const back = await resolve(client, emailAssertion("undo@example.com"));
+      expect(back.accountId).toBe(account.accountId);
+      expect(back.created).toBe(false);
+    });
+
+    it("reports a missing account as a FOREIGN KEY violation, not a NOT NULL one", async () => {
+      // PR #87 second round, F12. `SELECT … INTO` assigns NULL when nothing matches, so the derive
+      // trigger turned "there is no such account" into `23502 not_null_violation` against a column
+      // the caller never wrote — an error that sends the reader to the wrong table entirely. The
+      // trigger now leaves the flag alone and lets the foreign key say what is actually wrong.
+      const failure = await client.query(
+        `INSERT INTO sonny.identity (account_id, provider, subject, email_hint, email_verified,
+           email_is_relay, link_method)
+         VALUES ('00000000-0000-0000-0000-000000000000','email','ghost@example.com',
+                 'ghost@example.com',true,false,'primary')`,
+      ).then(() => undefined, (error: { code?: string }) => error);
+      expect(failure?.code).toBe("23503");
+    });
+
+    it("keeps rule 2 in step with rule 1 about a closed identity", async () => {
+      // PR #87 second round, F1c. Rule 1 excludes a closed identity AND a closed account; rule 2
+      // excluded only the account. Where they disagreed about the same row — which is precisely the
+      // state F1's missing trigger produced — rule 1 would refuse to sign that identity in while
+      // rule 2 would happily attach a *different* sign-in to the account holding it, on the strength
+      // of the email hint the closed row still carries.
+      const account = await resolve(client, emailAssertion("split-rule@example.com"));
+      await client.query(
+        "UPDATE sonny.identity SET account_closed = true WHERE id = $1", [account.identityId],
+      );
+
+      const viaGoogle = await resolve(client, {
+        provider: "google", subject: "g-split-rule", email: "split-rule@example.com", emailVerified: true,
+      });
+      expect(viaGoogle.accountId).not.toBe(account.accountId);
+      expect(viaGoogle.linkMethod).toBe("primary");
+      expect(viaGoogle.created).toBe(true);
+    });
   });
 
   describe("the separation the whole design exists for", () => {
@@ -293,26 +431,35 @@ describeDb("the identity-linking rule", () => {
     });
   });
 
-  describe("a closed account releases its address", () => {
+  describe("a closed account frees its address without giving up its identities", () => {
     it("lets the same address sign up again, on a NEW account", async () => {
       // Regression, and it was a livelock rather than a wrong answer. Rule 1 excludes identities on
-      // a deleted account; the unique constraint on (provider, subject) does not. So the insert
+      // a deleted account; the unique constraint on (provider, subject) did not. So the insert
       // conflicted, the resolver rolled back and retried, and hit the identical conflict forever.
-      // Releasing the identities on close is what makes the case not arise; the resolver's bounded
-      // retry is what stops any *other* unclearing conflict becoming a hang.
+      //
+      // **Nothing is deleted here any more, and the describe name used to say it was** (PR #87
+      // second round, F8-adjacent). 0003 released the rows and 0004 replaced that with marking: the
+      // partial unique index covers only `NOT account_closed`, so a marked row stops occupying the
+      // address while staying readable. These two tests planted the release by hand with a `DELETE`
+      // and so were still describing the migration that had been superseded — they close the
+      // account and let the trigger do what it really does now.
       const first = await resolve(client, emailAssertion("recycle@example.com"));
       await client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [first.accountId]);
-      await client.query("DELETE FROM sonny.identity WHERE account_id = $1", [first.accountId]);
 
       const second = await resolve(client, emailAssertion("recycle@example.com"));
       expect(second.accountId).not.toBe(first.accountId);
       expect(second.created).toBe(true);
+      // and the first identity is still there, marked — the audit trail 0004 keeps.
+      const { rows } = await client.query(
+        "SELECT account_closed FROM sonny.identity WHERE account_id = $1", [first.accountId],
+      );
+      expect(rows).toHaveLength(1);
+      expect(rows[0].account_closed).toBe(true);
     });
 
     it("keeps the closed account row, because it is the handle retained content hangs off", async () => {
       const account = await resolve(client, emailAssertion("handle@example.com"));
       await client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [account.accountId]);
-      await client.query("DELETE FROM sonny.identity WHERE account_id = $1", [account.accountId]);
       const { rows } = await client.query("SELECT deleted_at FROM sonny.account WHERE id = $1", [account.accountId]);
       expect(rows).toHaveLength(1);
       expect(rows[0].deleted_at).not.toBeNull();
@@ -320,22 +467,71 @@ describeDb("the identity-linking rule", () => {
   });
 
   describe("the retry branch, and the race that used to reach it", () => {
-    it("ENTERS the retry branch and resolves, when a concurrent writer wins the insert", async () => {
-      // The review's point: nothing entered this branch, so its bounded-retry fix was unexercised.
-      // Forced deterministically by planting the winner's identity first, which is exactly what a
-      // concurrent first sign-in leaves behind between our INSERT and its conflict.
+    it("finds a planted identity through rule 1, without needing the retry branch at all", async () => {
+      // **This test's name used to claim it ENTERED the retry branch, and its own body said it did
+      // not** (PR #87 second round, F8). Planting the winner's row first means rule 1 finds it on
+      // the first pass, so the `ON CONFLICT` is never reached — the same *answer* by a different
+      // route, which is worth keeping and is not what the old name said. The real thing is the test
+      // below, which forces the conflict with two connections.
       const winner = await client.query<{ id: string }>("INSERT INTO sonny.account DEFAULT VALUES RETURNING id");
       await client.query(
         `INSERT INTO sonny.identity (account_id, provider, subject, email_hint, email_verified,
            email_is_relay, link_method) VALUES ($1,'email','race@example.com','race@example.com',true,false,'primary')`,
         [winner.rows[0]!.id],
       );
-      // The resolver's first pass sees no identity only if we bypass rule 1 -- which is what the
-      // real race does, because the winner commits after our SELECT. Here rule 1 finds it directly,
-      // which is the same *answer*; the branch itself is exercised by the orphan case below.
       const resolved = await resolve(client, emailAssertion("race@example.com"));
       expect(resolved.accountId).toBe(winner.rows[0]!.id);
       expect(resolved.created).toBe(false);
+    });
+
+    it("REALLY enters the ON CONFLICT retry, and the second pass resolves", async () => {
+      // PR #87 second round, F8. The branch is reachable and nothing reached it, so its bounded
+      // retry was code nobody had executed. This forces it deterministically rather than hopefully:
+      //
+      //   1. the winner opens a transaction and inserts the identity, WITHOUT committing;
+      //   2. the resolver starts on its own connection. Rule 1's SELECT sees nothing — the winner's
+      //      row is uncommitted — and rule 2 matches nothing, so it creates an account and inserts;
+      //   3. that INSERT meets the winner's uncommitted row and **blocks on it**, which is how
+      //      Postgres handles `ON CONFLICT` against a transaction still in flight;
+      //   4. the winner commits, the insert resolves to DO NOTHING, `identity.rows[0]` is undefined,
+      //      and the retry branch runs.
+      //
+      // Step 3 is what makes this a proof rather than an assumption: the resolver's promise is
+      // asserted to be still pending while the winner holds its transaction open, and a resolver
+      // that took rule 1's path would have settled long before.
+      const winner = new pg.Client({ connectionString: url });
+      const racer = new pg.Client({ connectionString: url });
+      await winner.connect();
+      await racer.connect();
+      try {
+        const account = await client.query<{ id: string }>("INSERT INTO sonny.account DEFAULT VALUES RETURNING id");
+        await winner.query("BEGIN");
+        await winner.query(
+          `INSERT INTO sonny.identity (account_id, provider, subject, email_hint, email_verified,
+             email_is_relay, link_method)
+           VALUES ($1,'email','conflict@example.com','conflict@example.com',true,false,'primary')`,
+          [account.rows[0]!.id],
+        );
+
+        let settled = false;
+        const racing = resolve(racer, emailAssertion("conflict@example.com"))
+          .then((value) => { settled = true; return value; });
+        await new Promise((r) => setTimeout(r, 200));
+        expect(settled).toBe(false);        // blocked on the winner's uncommitted row
+
+        await winner.query("COMMIT");
+        const result = await racing;
+
+        expect(result.accountId).toBe(account.rows[0]!.id);   // the winner's account, not its own
+        expect(result.created).toBe(false);
+        // The account the losing pass speculatively created was rolled back with it, which is why
+        // the INSERT and the account creation share one transaction.
+        const accounts = await client.query("SELECT count(*)::int AS n FROM sonny.account");
+        expect(accounts.rows[0].n).toBe(1);
+      } finally {
+        await winner.end();
+        await racer.end();
+      }
     });
 
     it("an identity inserted onto an ALREADY-closed account cannot occupy the address", async () => {

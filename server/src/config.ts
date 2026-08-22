@@ -53,11 +53,6 @@ const schema = z.object({
   DATABASE_URL: nonEmpty.optional(),
   LOG_LEVEL: z.enum(["fatal", "error", "warn", "info", "debug", "trace"]).default("info"),
   /**
-   * Whether to believe `X-Forwarded-*`. Defaults to false: those headers are caller-supplied, so
-   * trusting them with nothing in front of the container lets a client choose its own apparent IP.
-   * Set only where a proxy really terminates the connection.
-   */
-  /**
    * Which proxies to believe about the client address, as a comma-separated list of CIDRs or IPs.
    *
    * **A boolean had no safe setting** (PR #87 F4). `false` behind a load balancer makes every
@@ -94,10 +89,17 @@ const schema = z.object({
    * **It stays gated for a different and larger reason** (PR #87 R7): **nothing verifies a token
    * at all.** `AuthProvider.userFromAccessToken` is the seam that will, and no adapter implements
    * it — so what the route trusts today is whatever the configured provider says, and the only
-   * provider that exists is a test fake. Until SONNY-128 supplies real verification, a destructive
-   * route is trusting an unimplemented check. Off by default, and **refused outright in production**
-   * by `loadConfig` below, so it cannot be enabled by a misplaced variable on the one host where it
-   * would matter.
+   * provider that exists is a test fake. Until **SONNY-203** supplies real verification, a
+   * destructive route is trusting an unimplemented check. Off by default, and **refused outright in
+   * production** by `loadConfig` below, so it cannot be enabled by a misplaced variable on the one
+   * host where it would matter.
+   *
+   * **The gate named SONNY-128 until the second review round, and SONNY-128 could never have
+   * lifted it** (PR #87 F5). That ticket is the *client* sign-in work and its never-touch list
+   * forbids `server/` entirely, so this flag was gated on a condition no ticket owned — the
+   * planning gap the review found. SONNY-203 was created for it: it owns the gateway auth
+   * middleware, the HS256 verification of the Supabase token, and removing this flag once that
+   * exists. Building any of it here is explicitly not SONNY-127's.
    */
   ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE: z.enum(["true", "false"]).default("false"),
 });
@@ -143,7 +145,15 @@ export function providerCredentials(env: NodeJS.ProcessEnv): readonly ProviderCr
 export class ConfigError extends Error {}
 
 /**
- * `""` -> false (trust nothing), a bare number -> that many hops, otherwise the CIDR/IP list.
+ * `""` -> false (trust nothing), anything else -> the comma-separated CIDR/IP list.
+ *
+ * **This docstring said "a bare number -> that many hops" and the function has never done that**
+ * (PR #87 R15, then the second round's F3). R15 removed the hop-count form from the schema
+ * docstring twelve lines above and left this one advertising it, so the file contradicted itself
+ * about its own parser — and a reader who believed this line would set `TRUSTED_PROXIES=1`, which
+ * parses as a one-element list containing the string "1" and matches no proxy that has ever
+ * existed. Fixing one of a pair and missing its neighbour is the recurring shape here, which is why
+ * the whole file was swept rather than the cited line edited.
  *
  * Returning `false` rather than an empty array matters: Fastify treats `[]` as a list that matches
  * nothing, which is the same behaviour, but `false` is the value its documentation describes for
@@ -185,7 +195,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
       "ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE may never be true when SONNY_ENV=production. " +
         "That route attributes its caller from the access token, but NOTHING VERIFIES THAT TOKEN " +
         "yet — no adapter implements userFromAccessToken — so it trusts an unimplemented check. " +
-        "It exists only until SONNY-128 supplies real verification.",
+        "It exists only until SONNY-203 supplies real verification.",
     );
   }
 

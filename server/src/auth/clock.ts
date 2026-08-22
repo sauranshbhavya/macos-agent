@@ -3,7 +3,7 @@
  *
  * **Nothing calls `isExpiryAcceptable` in a request path today, and the record has been corrected
  * to say so** (PR #87 F2). Token verification — checking a presented access token's signature and
- * expiry — is SONNY-128's scope, and this file is the tolerance that verification will apply. The
+ * expiry — is SONNY-203's scope, and this file is the tolerance that verification will apply. The
  * closing comment and the changelog claimed clock skew was "implemented and tested"; it is
  * implemented and tested as a function, and it is not yet reached by any route. `expiryFields` IS
  * used, by the token responses in `routes/auth.ts`.

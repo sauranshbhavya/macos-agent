@@ -111,3 +111,48 @@ export async function invalidateLive(
   );
   return result.rowCount ?? 0;
 }
+
+/**
+ * Invalidate every live code for an address and record the new one, **as one indivisible step**
+ * (PR #87 second round, F11).
+ *
+ * `invalidateLive` then `recordIssue` as two statements is not the same thing, and concurrency is
+ * where the difference shows. Three simultaneous `email/start` calls for one address each
+ * invalidated what they could see and each inserted afterwards, and none of them could see the other
+ * two's inserts — so the address ended with **three** live issuances where the design promises one.
+ * The per-address ceiling is three, so three is exactly the number an attacker can arrange, and
+ * "the newest code is the only one that works" — which is the founder's own manual-test item —
+ * quietly stopped being true.
+ *
+ * **A transaction alone does not fix it**, which is why there is a lock. Under READ COMMITTED each
+ * transaction's `UPDATE` still cannot see a row another transaction has inserted but not committed,
+ * so all three would still invalidate nothing of each other's and all three would still insert. The
+ * writers have to be serialised, and there is no existing row to lock for the first code ever issued
+ * at an address — so the lock is taken on the address itself.
+ *
+ * `pg_advisory_xact_lock` is released by the transaction end, including a rollback, so no path
+ * leaves it held. `hashtext` folds into 32 bits: two unrelated addresses can collide and briefly
+ * serialise, which costs one of them a few milliseconds and is the only consequence.
+ *
+ * **What this deliberately does not make transactional is the send**, which happens before the call
+ * and cannot be rolled back. Two racing callers still cause two mails; what they can no longer do is
+ * leave our record claiming two codes are live.
+ */
+export async function issueCode(
+  client: pg.Client,
+  emailNorm: string,
+  sourceHash: string,
+  now: Date = new Date(),
+): Promise<{ id: string; expiresAt: Date; invalidated: number }> {
+  await client.query("BEGIN");
+  try {
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`sonny.code:${emailNorm}`]);
+    const invalidated = await invalidateLive(client, emailNorm, now);
+    const issued = await recordIssue(client, emailNorm, sourceHash, now);
+    await client.query("COMMIT");
+    return { ...issued, invalidated };
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  }
+}

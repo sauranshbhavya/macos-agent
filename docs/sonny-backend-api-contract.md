@@ -214,9 +214,13 @@ have. An omitted privacy field must be a loud error, not a quiet guess.
   opaque because opacity enforced the rule mechanically; under the founder's 2026-08-21 decision to
   use Supabase Auth it is a JWT, so **the rule is now a contract obligation the client must keep
   rather than one its encoding keeps for it**, and SONNY-128's review is where that is checked.
-  **Verification of a presented access token — signature and expiry — is SONNY-128's and does not
-  exist yet** (noted 2026-08-21, PR #87 F2). SONNY-127 issues tokens and supplies the skew tolerance
-  that verification will apply; no route on that branch verifies one.
+  **Verification of a presented access token — signature and expiry — is SONNY-203's and does not
+  exist yet** (noted 2026-08-21, PR #87 F2; owner corrected from SONNY-128 the same day, PR #87
+  second round F5 — SONNY-128 is the client half and its never-touch list forbids `server/`, so it
+  could never have supplied this). SONNY-127 issues tokens and supplies the skew tolerance that
+  verification will apply; no route on that branch verifies one. SONNY-203 verifies the Supabase
+  token as **HS256 with the algorithm pinned**, checking `iss`, `aud` and `exp`, and trusting `sub`
+  as the user id.
 - **Refresh token** — long-lived, opaque, rotated on every use, stored in the Keychain through the
   existing `KeychainSecretStore` (the concrete struct at `KeychainSecretStore.swift:21`, behind the
   `KeychainSecretStoring` protocol at `:4-7`) as a new account on the existing store, following the
