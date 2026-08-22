@@ -28,11 +28,22 @@ export interface Resolution {
   readonly linkMethod: LinkMethod;
   readonly created: boolean;
   /**
-   * Set when an account was created for an assertion whose address could not be matched *because it
-   * is a relay*. The ticket forbids silently creating a second account for that person; this is what
-   * makes it not silent. Surfacing it is SONNY-128's and SONNY-129's.
+   * Why this resolution might belong with an existing account that it deliberately did not join.
+   *
+   * **Two cases, and they are the same shape on purpose.** The server can see a reason to suspect a
+   * link and cannot prove one, so it creates the account, says so, and leaves the joining to
+   * something explicit. Surfacing either is SONNY-128's and SONNY-129's.
+   *
+   * - `relay_address_may_belong_to_existing_account` — an Apple relay address matched nothing,
+   *   because a relay address matches nothing by design. The ticket forbids *silently* creating a
+   *   second account for that person; this is what makes it not silent.
+   * - `verified_email_matches_existing_account` — a verified, non-relay address **did** match an
+   *   existing identity, and this no longer links on that alone (founder decision, 2026-08-22).
    */
-  readonly linkHint: "relay_address_may_belong_to_existing_account" | undefined;
+  readonly linkHint:
+    | "relay_address_may_belong_to_existing_account"
+    | "verified_email_matches_existing_account"
+    | undefined;
 }
 
 /**
@@ -157,18 +168,36 @@ export async function resolve(
     }
 
     // Rule 2 — a verified, non-relay address matching an existing verified, non-relay identity.
-    // Every clause is load-bearing: an unverified assertion is an attacker's claim, and a relay
-    // address matches nothing real, so both fall through to rule 3 rather than linking.
+    //
+    // **It FLAGS. It does not link.** (Founder decision, 2026-08-22, on PR #87's third review round,
+    // F2.) Until that decision this attached the new identity to the matched account, silently, on
+    // the strength of a `email_verified` flag — and the case that killed it is a mailbox changing
+    // hands. Reproduced: Human A signs in with Google and account X is created; the address is later
+    // reassigned, which is ordinary at a company and ordinary at a free provider; Human B, a
+    // different person who now legitimately owns it, signs in by email code and lands **inside
+    // account X**, with `created: false` and no flag of any kind. Somebody else's tasks, somebody
+    // else's history, somebody else's subscription.
+    //
+    // The mistake underneath is worth naming because it is easy to make again: **a provider's
+    // "verified" flag records who controlled an address when some other identity was written, not
+    // who controls it now.** There is no staleness bound on it and there cannot be one that means
+    // anything — `email_verified` carries no timestamp of its own, and the identity's `linked_at`
+    // says when we wrote the row, not when the provider last checked.
+    //
+    // Two alternatives were on the record and both were rejected. Bounding the match by recency
+    // needs a number with no data behind it, and a wrong guess there fails *silently* in both
+    // directions. Accepting and documenting it is what several providers do, and it costs little to
+    // refuse here because **the flagging pattern already exists in this file for relay addresses** —
+    // so this reuses a shape the system already speaks rather than inventing one. The principle:
+    // keep one person on one account in the ordinary case, refuse to guess in the ambiguous one.
     //
     // **`NOT i.account_closed` is here so rules 1 and 2 answer the same question** (PR #87 second
     // round, F1c). Rule 1 excludes both a closed account and a closed identity; this one used to
     // exclude only the account, and the two are not the same set — an identity can carry
     // `account_closed` while sitting on a live account, which is exactly the state F1's missing
-    // trigger produced. Where they disagreed, rule 1 would refuse an identity and rule 2 would then
-    // link a *different* sign-in onto the account holding it, so the two halves of one rule
-    // contradicted each other about the same row.
-    let accountId: string | undefined;
-    let linkMethod: LinkMethod = "primary";
+    // trigger produced. It still matters: the match below decides whether a *hint* is issued, and a
+    // hint pointing at an account nobody can sign into would be worse than no hint.
+    let emailMatchesExisting = false;
     if (email && assertion.emailVerified && !relay) {
       const match = await client.query<{ account_id: string }>(
         `SELECT i.account_id
@@ -182,45 +211,43 @@ export async function resolve(
           LIMIT 1`,
         [email],
       );
-      if (match.rows[0]) {
-        accountId = match.rows[0].account_id;
-        linkMethod = "verified_email_match";
-      }
+      emailMatchesExisting = match.rows.length > 0;
     }
 
-    // **R3: lock the account before inserting an identity onto it.**
-    //
-    // `FOR SHARE` conflicts with the `FOR NO KEY UPDATE` that a concurrent `UPDATE ... SET
-    // deleted_at` takes, so a resolver racing a close **blocks here and then re-reads** rather than
-    // inserting into the gap between the closer's update and its trigger. Without it the insert
-    // landed after the trigger had already marked everything, leaving an identity live on a closed
-    // account — invisible to sign-in, occupying the address, permanent.
-    //
-    // Rule 3's brand-new account needs no lock: nothing else can hold a reference to a row this
-    // transaction has not inserted yet.
-    if (accountId) {
-      const still = await client.query<{ deleted_at: Date | null }>(
-        "SELECT deleted_at FROM sonny.account WHERE id = $1 FOR SHARE",
-        [accountId],
-      );
-      if (!still.rows[0] || still.rows[0].deleted_at !== null) {
-        // It closed while we were deciding. Start again: rule 2 will no longer match it, and the
-        // assertion will get its own account.
-        await client.query("ROLLBACK");
-        if (attempt >= 1) throw new IdentityConflict("target account closed while resolving");
-        return resolve(client, assertion, attempt + 1);
-      }
-    }
+    // **`verified_email_match` is kept as a `link_method` value and is no longer produced.** Rows
+    // written before this decision carry it and are the audit trail for exactly the merges that are
+    // no longer performed; removing the value would erase the record of which accounts were joined
+    // that way, which is the first thing anyone investigating a mis-merge would ask for.
+    let accountId: string | undefined;
+    const linkMethod: LinkMethod = "primary";
 
-    // Rule 3 — a new account.
-    let created = false;
-    if (!accountId) {
-      const account = await client.query<{ id: string }>(
-        "INSERT INTO sonny.account DEFAULT VALUES RETURNING id",
-      );
-      accountId = account.rows[0]!.id;
-      created = true;
-    }
+    // **R3's account lock lived here and is gone with the branch that needed it.**
+    //
+    // `resolve()` used to take `SELECT … FOR SHARE` on an account rule 2 had matched, so a resolver
+    // racing a close blocked and re-read rather than inserting into the gap between the closer's
+    // update and its trigger. That guard was correct and it is now unreachable: **rule 2 no longer
+    // produces an account id at all** (founder decision, 2026-08-22), so this function only ever
+    // inserts onto an account it created in this same transaction, and nothing else can hold a
+    // reference to a row that does not exist yet.
+    //
+    // Deleted rather than left in place, because a guard that cannot run is not defence in depth —
+    // it is a claim about a race nobody is having, and the next reader would reason from it. **The
+    // same lock, for the same reason, is still taken by `linkExplicitly`**, which is now the only
+    // path in this codebase that attaches an identity to an account it did not create. If rule 2
+    // ever links again, this comes back with it.
+    //
+    // What still protects the rule-1 path is not a lock but the row count: the refresh below repeats
+    // `NOT account_closed`, so a close committing underneath it matches nothing and the resolution
+    // restarts. That is exercised by "survives a REAL two-connection race between resolve() and a
+    // close", which reaches rule 1 rather than rule 2 and always did.
+
+    // Rule 3 — a new account. Now the only outcome other than rule 1, since rule 2 flags rather
+    // than links, which is why `created` is no longer conditional on anything.
+    const account = await client.query<{ id: string }>(
+      "INSERT INTO sonny.account DEFAULT VALUES RETURNING id",
+    );
+    accountId = account.rows[0]!.id;
+    const created = true;
 
     const identity = await client.query<{ id: string }>(
       `INSERT INTO sonny.identity
@@ -262,9 +289,17 @@ export async function resolve(
       identityId: identity.rows[0].id,
       linkMethod,
       created,
-      // Flagged, not guessed: a relay address that produced a brand-new account is exactly the
-      // "does not silently create a second one" case.
-      linkHint: created && relay ? "relay_address_may_belong_to_existing_account" : undefined,
+      // **Flagged, not guessed** — both cases, and the relay one is the older of the two.
+      //
+      // Relay first, because it is the more specific fact: an address that matches nothing because
+      // it is a relay is a different thing to say than an address that matched something. A relay
+      // assertion cannot reach the second branch anyway — rule 2 skips relay addresses — so the
+      // ordering is for the reader rather than for the logic.
+      linkHint: relay
+        ? "relay_address_may_belong_to_existing_account"
+        : emailMatchesExisting
+          ? "verified_email_matches_existing_account"
+          : undefined,
     };
   } catch (error) {
     await client.query("ROLLBACK");
@@ -277,18 +312,35 @@ export class LinkError extends Error {}
 /**
  * Rule 4 — the only path that joins two *existing* accounts.
  *
- * **Both ends must be proven.** `authenticatedAccountId` is the account the caller has a session on
- * and must equal the target; `provenIdentityId` is the identity the caller just signed in with and
- * must equal the one being moved. Authenticating only the target — which is what this did before
- * PR #87 R2 — says the caller owns the destination and nothing about what is being moved there. Without that equality this is a primitive for moving anyone's identity onto anyone's
- * account. The parameter is required rather than optional so a caller cannot omit it and get the
- * old, unchecked behaviour.
+ * **Read this before wiring a route to it. Two of its three checks are real; one is a consistency
+ * check that this function calls "proof" and cannot perform** (PR #87 third round, F3 — wording).
+ *
+ * What it actually verifies, stated exactly:
+ *
+ * 1. `authenticatedAccountId === targetAccountId` — an equality between an argument and an argument.
+ *    It is meaningful **only because the caller is expected to derive `authenticatedAccountId` from
+ *    a verified session**, and this function cannot check that it did.
+ * 2. `provenIdentityId === identityId` — **an equality between two arguments and nothing more.** It
+ *    consults no session store, no sign-in record and no independent evidence. A caller that passes
+ *    a stranger's identity id as *both* arguments satisfies it completely, and the stranger's
+ *    identity moves onto the caller's account. The earlier wording here and in
+ *    `docs/sonny-identity-linking-rule.md` called this "the identity the caller just signed in
+ *    with", which describes a property of the caller's *intent* rather than anything checked here —
+ *    and that wording is what would lead the next implementer to accept the value as a request field.
+ * 3. The source identity is live and its account is not closed — a real check, against the database.
+ *
+ * **The constraint this places on every future call site**, recorded on SONNY-128, SONNY-129 and
+ * SONNY-203: `provenIdentityId` must be **derived server-side** from a sign-in this process just
+ * completed — a session record, a one-time token minted at verify time — and must **never** be
+ * accepted as a field on the request. Wired naively it is an identity-hijack primitive.
+ *
+ * Not reachable over HTTP today: no route calls this, only `linking.db.test.ts` does. **The
+ * structural fix belongs at that future call site, not here** — this function cannot invent a
+ * session store it has no access to, and adding a fake one would move the same trust boundary one
+ * layer down while looking like it had closed it.
  *
  * Moves `identity` onto `targetAccountId`; the vacated account is left for the caller to close,
  * because deleting it here would destroy content the retention ticket owns.
- *
- * **Both ends must also be live.** The target is checked and locked below; the source identity must
- * not be one a closed account left behind, which is the check the second review round added.
  */
 export async function linkExplicitly(
   client: pg.Client,
@@ -297,26 +349,35 @@ export async function linkExplicitly(
   authenticatedAccountId: string,
   provenIdentityId: string,
 ): Promise<void> {
-  // **The check the docstring promises, actually performed** (PR #87 F7). The first version took no
-  // session at all and could not have made it, while both this comment and the rule document said
-  // rule 4 "requires an authenticated session on one of them" — a claim SONNY-129 would have routed
-  // this primitive while reading. Requiring the caller to name the authenticated account makes the
-  // claim true, and makes calling it without one a type error rather than a judgment call.
+  // **The caller must NAME the account it is authenticated on, and this compares that name to the
+  // target** (PR #87 F7). The first version took no session argument at all, so it could not have
+  // made even this comparison while its docstring said rule 4 "requires an authenticated session".
+  // Requiring the argument makes omitting it a type error rather than a judgment call.
+  //
+  // **What this cannot do is verify that the caller really holds that session** (PR #87 third
+  // round, F3). It is an equality between two arguments; the guarantee lives entirely in the call
+  // site deriving `authenticatedAccountId` from a verified session rather than from the request.
   if (authenticatedAccountId !== targetAccountId) {
     throw new LinkError(
       "rule 4 requires an authenticated session on the target account; " +
         "the caller's account is not the link target",
     );
   }
-  // **The source must be freshly proven too** (PR #87 R2). F7 closed the target half and left this
-  // one open: authenticating the target says the caller owns where the identity is going, and
-  // nothing about the identity being moved. Without this, a caller signed in on their own account
-  // could name a stranger's identity and take it. `provenIdentityId` is the identity the caller
-  // just completed a sign-in with, and it must be the one being moved.
+  // **A consistency check between two arguments — NOT proof of anything** (PR #87 third round,
+  // F3, correcting R2's wording). R2 added it to close the half F7 left open: authenticating the
+  // target says the caller owns where the identity is going and nothing about the identity being
+  // moved. It does make a caller state which identity it believes it proved, which is worth having.
+  //
+  // **It does not verify that they proved it.** Passing a stranger's identity id as BOTH arguments
+  // satisfies this line completely — reproduced against the built output, the victim's identity row
+  // moved to the attacker's account. The check is unfalsifiable from inside this function, which has
+  // no session store to consult. `provenIdentityId` must therefore be derived server-side from a
+  // sign-in the process just completed and NEVER read off the request: the constraint is recorded
+  // on SONNY-128, SONNY-129 and SONNY-203, and the docstring above states it in full.
   if (provenIdentityId !== identityId) {
     throw new LinkError(
-      "rule 4 requires the source identity to have been freshly proven by this caller; " +
-        "the identity being moved is not the one that was proven",
+      "rule 4 requires the caller to name the same identity twice; " +
+        "the identity being moved is not the one the caller named as proven",
     );
   }
   await client.query("BEGIN");

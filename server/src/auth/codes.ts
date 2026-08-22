@@ -3,6 +3,19 @@ import type pg from "pg";
 /**
  * The gateway's record of every sign-in code it asked Supabase to send.
  *
+ * **Every function here is keyed on the MAILBOX — `rateLimitEmailKey(email)` — and never on
+ * `normalizeEmail(email)`** (PR #87 third round, F4). The two exist for opposite reasons and this
+ * file needs the folding one. `normalizeEmail` is the *identity* key and keeps plus-tags apart,
+ * because merging two addresses merges two accounts. A code does not live in an identity; it lives
+ * in an inbox, and `a@x`, `a+1@x` and `a+2@x` are one inbox.
+ *
+ * Keyed the identity way, three simultaneous `email/start` calls for those three spellings shared
+ * one rate-limit bucket — which folds — and each wrote and invalidated its own issuance row — which
+ * did not. **Three live, independently guessable codes in one inbox**, against the guarantee this
+ * branch states in three places that the newest code is the only one that works. Reproduced against
+ * a real database before it was fixed. The parameter is named `mailboxKey` rather than `email`
+ * throughout so that passing the wrong one has to be done deliberately.
+ *
  * **It never stores the code.** Supabase Auth issues and verifies it. This exists for the one thing
  * Supabase cannot give us: the contract's three distinct failures.
  *
@@ -21,15 +34,15 @@ export const CODE_LIFETIME_SECONDS = 600;
 
 export async function recordIssue(
   client: pg.Client,
-  emailNorm: string,
+  mailboxKey: string,
   sourceHash: string,
   now: Date = new Date(),
 ): Promise<{ id: string; expiresAt: Date }> {
   const expiresAt = new Date(now.getTime() + CODE_LIFETIME_SECONDS * 1000);
   const result = await client.query<{ id: string }>(
-    `INSERT INTO sonny.sign_in_code_issue (email_norm, issued_at, expires_at, source_hash)
+    `INSERT INTO sonny.sign_in_code_issue (mailbox_key, issued_at, expires_at, source_hash)
      VALUES ($1, $2, $3, $4) RETURNING id`,
-    [emailNorm, now, expiresAt, sourceHash],
+    [mailboxKey, now, expiresAt, sourceHash],
   );
   return { id: result.rows[0]!.id, expiresAt };
 }
@@ -44,7 +57,7 @@ export async function recordIssue(
  */
 export async function consumeLatest(
   client: pg.Client,
-  emailNorm: string,
+  mailboxKey: string,
   now: Date = new Date(),
 ): Promise<boolean> {
   const result = await client.query(
@@ -52,11 +65,11 @@ export async function consumeLatest(
         SET consumed_at = $2
       WHERE id = (
         SELECT id FROM sonny.sign_in_code_issue
-         WHERE email_norm = $1 AND consumed_at IS NULL AND expires_at > $2
+         WHERE mailbox_key = $1 AND consumed_at IS NULL AND expires_at > $2
          ORDER BY issued_at DESC LIMIT 1
         FOR UPDATE SKIP LOCKED
       )`,
-    [emailNorm, now],
+    [mailboxKey, now],
   );
   return (result.rowCount ?? 0) > 0;
 }
@@ -74,13 +87,13 @@ export async function consumeLatest(
  */
 export async function classifyFailure(
   client: pg.Client,
-  emailNorm: string,
+  mailboxKey: string,
   now: Date = new Date(),
 ): Promise<VerifyFailure> {
   const latest = await client.query<{ consumed_at: Date | null; expires_at: Date }>(
     `SELECT consumed_at, expires_at FROM sonny.sign_in_code_issue
-      WHERE email_norm = $1 ORDER BY issued_at DESC LIMIT 1`,
-    [emailNorm],
+      WHERE mailbox_key = $1 ORDER BY issued_at DESC LIMIT 1`,
+    [mailboxKey],
   );
   const row = latest.rows[0];
   // Nothing was ever issued to this address. Someone is guessing at an address, not at a code.
@@ -101,13 +114,13 @@ export async function classifyFailure(
  */
 export async function invalidateLive(
   client: pg.Client,
-  emailNorm: string,
+  mailboxKey: string,
   now: Date = new Date(),
 ): Promise<number> {
   const result = await client.query(
     `UPDATE sonny.sign_in_code_issue SET consumed_at = $2
-      WHERE email_norm = $1 AND consumed_at IS NULL AND expires_at > $2`,
-    [emailNorm, now],
+      WHERE mailbox_key = $1 AND consumed_at IS NULL AND expires_at > $2`,
+    [mailboxKey, now],
   );
   return result.rowCount ?? 0;
 }
@@ -140,15 +153,15 @@ export async function invalidateLive(
  */
 export async function issueCode(
   client: pg.Client,
-  emailNorm: string,
+  mailboxKey: string,
   sourceHash: string,
   now: Date = new Date(),
 ): Promise<{ id: string; expiresAt: Date; invalidated: number }> {
   await client.query("BEGIN");
   try {
-    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`sonny.code:${emailNorm}`]);
-    const invalidated = await invalidateLive(client, emailNorm, now);
-    const issued = await recordIssue(client, emailNorm, sourceHash, now);
+    await client.query("SELECT pg_advisory_xact_lock(hashtext($1))", [`sonny.code:${mailboxKey}`]);
+    const invalidated = await invalidateLive(client, mailboxKey, now);
+    const issued = await recordIssue(client, mailboxKey, sourceHash, now);
     await client.query("COMMIT");
     return { ...issued, invalidated };
   } catch (error) {
