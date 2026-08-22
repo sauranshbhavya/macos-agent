@@ -74,9 +74,48 @@ public enum UntrustedContentBoundary {
         return escaped
     }
 
+    /// Reduce an attribute value — the `id=` and `source=` tokens on the wrapper's opening line — to
+    /// something that can neither start a line nor end the token it sits in.
+    ///
+    /// **Both properties come from the wrapper's shape.** The opening line is
+    /// `DELIMITER id=<attr> source=<attr>`, on one line, and the closing line is
+    /// `DELIMITER id=<attr>`. Anything in an attribute that renders as a line break begins a new
+    /// line *inside* the wrapper; anything that renders as horizontal whitespace ends the token
+    /// early and leaves the remainder reading as a further attribute. One fold over
+    /// `CharacterSet.whitespacesAndNewlines` closes both.
+    ///
+    /// **The set is deliberately wider than the two literals it replaces (SONNY-219).** It was
+    /// `"\n"` and `" "`, which left six other ways to begin a line — CR, VT, FF, NEL (U+0085) and
+    /// the Unicode line and paragraph separators (U+2028, U+2029) — and every non-space horizontal
+    /// separator, tab and the non-breaking space among them, free to split the token. A prompt is
+    /// JSON-serialised UTF-8, so each of those survives the wire intact and renders where it lands.
+    /// `PriorTaskContext.foldingLineBreaks` closed the same narrowing over the prior-task block one
+    /// ticket earlier; this is the observed-content boundary's copy of it.
+    ///
+    /// **`_` rather than `PriorTaskContext`'s `\n` marker, and that is not an inconsistency.** That
+    /// fold marks a paragraph break inside a field *value*, where a reader gains from knowing a
+    /// break was there. This one has to leave a single token behind, so the replacement has to read
+    /// as part of it. Runs are not collapsed here for the same reason they are collapsed there: `_`
+    /// is one character replacing one, so no payload grows by being folded and there is nothing to
+    /// bound.
+    ///
+    /// **Folded on both sides of `escape`, which is not belt-and-braces.** Escaping first and
+    /// folding afterwards — what this did before — lets the fold *rebuild* a delimiter that `escape`
+    /// never had a chance to see: the delimiters are `[A-Z_]` only, so `UNTRUSTED_OBSERVED
+    /// CONTENT_END` contains no delimiter to escape, and the space fold then makes it one. Folding
+    /// only first is no better, because `escape`'s own `[escaped delimiter: …]` replacement contains
+    /// spaces, which would break the one-token property this whole function is about. So: fold, so
+    /// every rebuild is visible to `escape`; escape; fold again, which removes only the whitespace
+    /// `escape` itself introduced and cannot rebuild a delimiter across its brackets, because `[`,
+    /// `]` and `:` are not delimiter characters.
     static func escapeAttribute(_ value: String) -> String {
-        escape(value)
-            .replacingOccurrences(of: "\n", with: "_")
-            .replacingOccurrences(of: " ", with: "_")
+        foldingSeparators(in: escape(foldingSeparators(in: value)))
+    }
+
+    /// Every whitespace or line-break character replaced by `_`, one for one.
+    private static func foldingSeparators(in value: String) -> String {
+        value
+            .components(separatedBy: .whitespacesAndNewlines)
+            .joined(separator: "_")
     }
 }

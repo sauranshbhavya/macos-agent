@@ -177,6 +177,15 @@ public enum WebResearchPromptBuilder {
     // Forwarded to `UntrustedContentBoundary` by row I, which promoted these out of this type when
     // screen content became the second untrusted source. Kept as names on this type so every
     // existing caller and test reads unchanged — the values are the same values, from one place.
+    //
+    // The attribute escaping went the same way, one ticket late (SONNY-219). Row I promoted the four
+    // constants and left this type's own `escapeAttribute` behind, so the boundary had two
+    // independently maintained folds in the same module — the exact shape
+    // `.claude/rules/macagentcore-conventions.md` forbids, written the same day as the rule. There
+    // is no forwarding alias for it because it was `private`: nothing outside this file could name
+    // it, so the call sites below say where it lives instead. Consolidating also *widened* this
+    // path — `UntrustedContentBoundary.escapeAttribute` neutralises delimiters as well as
+    // separators, which the copy here never did.
     public static let observedBeginDelimiter = UntrustedContentBoundary.observedBeginDelimiter
     public static let observedEndDelimiter = UntrustedContentBoundary.observedEndDelimiter
     public static let trustedInstructionBeginDelimiter = UntrustedContentBoundary.trustedInstructionBeginDelimiter
@@ -239,9 +248,9 @@ public enum WebResearchPromptBuilder {
         ].filter { !$0.isEmpty }
 
         return """
-        \(observedBeginDelimiter) id=\(escapeAttribute(id)) source_url=\(escapeObservedURL(page.sourceURL)) retrieved_at=\(formatter.string(from: page.retrievedAt))
+        \(observedBeginDelimiter) id=\(UntrustedContentBoundary.escapeAttribute(id)) source_url=\(escapeObservedURL(page.sourceURL)) retrieved_at=\(formatter.string(from: page.retrievedAt))
         \(metadataLines.joined(separator: "\n"))
-        \(observedEndDelimiter) id=\(escapeAttribute(id))
+        \(observedEndDelimiter) id=\(UntrustedContentBoundary.escapeAttribute(id))
         """
     }
 
@@ -280,12 +289,6 @@ public enum WebResearchPromptBuilder {
                 of: trustedInstructionEndDelimiter,
                 with: "[escaped trusted delimiter: \(trustedInstructionEndDelimiter)]"
             )
-    }
-
-    private static func escapeAttribute(_ value: String) -> String {
-        value
-            .replacingOccurrences(of: "\n", with: "_")
-            .replacingOccurrences(of: " ", with: "_")
     }
 }
 
