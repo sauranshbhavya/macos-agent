@@ -1903,6 +1903,87 @@ struct AgentActionExecutorTests {
         }
     }
 
+    /// **Two sibling routines, and the shape that makes the *claims* half of the resolver seed
+    /// load-bearing** (SONNY-220, PR #96 review F1).
+    ///
+    /// This branch's own fix seeds `resolveDefaultOutputs` from two places: what the run's plan
+    /// already *names* (`PlannedDestinations`) and what earlier units have already *written*
+    /// (`RunClaims`). A mutation battery dropped the second and the whole suite still passed, and
+    /// this branch first recorded that as the claims half covering "a population that today is
+    /// empty". **That was false, and this test is the counter-example the review built.**
+    ///
+    /// A plan of two `run_routine` steps naming two different saved routines is ordinary and
+    /// nothing blocks it: `segmentPlans(in:)`' repeat rule cuts the second one into its own unit,
+    /// `workflow(in:)` therefore classifies the plan `.chain`, and
+    /// `StoredRoutine.forbiddenStepOperations` forbids a `run_routine` *inside* a saved routine
+    /// rather than two of them at the outer level. A `run_routine` step carries no `outputPath`, so
+    /// the plan-intent half is **empty** here with respect to anything the nested routines generate
+    /// — the only thing standing between the second routine's draft and the first routine's file is
+    /// the claims half, filled in by `executeChain`'s `claimed.recordWrite(written)` after the first
+    /// segment really runs.
+    ///
+    /// Measured both ways rather than argued: on the shipped tree this passes, and against the
+    /// mutant that removes the claims half it fails with real data loss — one file survives holding
+    /// only the second routine's text, `written.count` still reports 2, and `Set(written).count`
+    /// collapses to 1. That is the silent-overwrite signature SONNY-190 and SONNY-220 both exist to
+    /// close, reached through a third door.
+    ///
+    /// A frozen clock so both defaults resolve to the same name, and the assertions are on the
+    /// documents' contents: a fix that bumped the name and wrote the same text into both files
+    /// satisfies every count.
+    @Test
+    func twoSiblingRoutinesThatEachDraftKeepBothDocuments() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        for (name, body) in [("Morning", "From the first routine."), ("Evening", "From the second routine.")] {
+            try routineStore.save(
+                StoredRoutine(
+                    name: name,
+                    steps: [
+                        AgentStep(
+                            id: "nested-draft",
+                            operation: .createLocalDraft,
+                            description: "Create note",
+                            // The same title in both, so both generate the identical default name.
+                            draftTitle: "Note",
+                            draftContent: body
+                        )
+                    ]
+                )
+            )
+        }
+        let stamp = Date(timeIntervalSince1970: 1_800_000_000)
+        let executor = makeExecutor(root: root, routineStore: routineStore, now: { stamp })
+        let plan = AgentPlan(
+            summary: "Run the Morning routine and then the Evening routine.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "run-first", operation: .runRoutine, description: "Run routine", routineName: "Morning"),
+                AgentStep(id: "run-second", operation: .runRoutine, description: "Run routine", routineName: "Evening")
+            ]
+        )
+
+        let prepared = try executor.prepare(plan: plan)
+        // The plan really is a chain of two units — otherwise the second routine would never run and
+        // this would assert nothing about the collision it exists for.
+        #expect(prepared.plan.steps.count == 2)
+        let result = try await executor.execute(plan: prepared.plan) { _, _ in }
+
+        let texts = try FileManager.default.contentsOfDirectory(atPath: root.path)
+            .filter { $0.hasPrefix("draft-") }
+            .sorted()
+            .map { try String(contentsOf: root.appendingPathComponent($0), encoding: .utf8) }
+        #expect(texts.count == 2, "one routine's document was overwritten by the other's")
+        #expect(texts.contains { $0.contains("From the first routine.") }, "the first routine's draft is gone")
+        #expect(texts.contains { $0.contains("From the second routine.") }, "the second routine's draft is gone")
+
+        let written = result.previews.flatMap(\.writes)
+        #expect(written.count == 2)
+        #expect(Set(written).count == 2, "the run reported the same path twice")
+        #expect(written.allSatisfy { FileManager.default.fileExists(atPath: $0) })
+    }
+
     // MARK: - SONNY-28: two documents never convert onto one PDF
     //
     // `FileInventory.docxFiles` derives each destination from the document's *basename* and
