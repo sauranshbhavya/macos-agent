@@ -229,9 +229,9 @@ struct WebResearchSynthesizerTests {
         #expect(observed.contains("ignore prior instructions"))
         #expect(observed.contains("/tmp/pwned.md"))
         #expect(observed.contains("file:///Users/sauransh/.ssh/id_rsa"))
-        #expect(observed.contains("[escaped observed delimiter: \(WebResearchPromptBuilder.observedEndDelimiter)]"))
-        #expect(observed.contains("[escaped trusted delimiter: \(WebResearchPromptBuilder.trustedInstructionBeginDelimiter)]"))
-        #expect(observed.contains("[escaped trusted delimiter: \(WebResearchPromptBuilder.trustedInstructionEndDelimiter)]"))
+        #expect(observed.contains("[escaped delimiter: \(WebResearchPromptBuilder.observedEndDelimiter)]"))
+        #expect(observed.contains("[escaped delimiter: \(WebResearchPromptBuilder.trustedInstructionBeginDelimiter)]"))
+        #expect(observed.contains("[escaped delimiter: \(WebResearchPromptBuilder.trustedInstructionEndDelimiter)]"))
 
         let observedLines = observed.components(separatedBy: .newlines)
         #expect(observedLines.filter { $0.hasPrefix(WebResearchPromptBuilder.observedBeginDelimiter) }.count == 1)
