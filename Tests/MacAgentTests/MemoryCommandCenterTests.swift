@@ -565,6 +565,57 @@ struct MemoryCommandCenterTests {
         #expect(!withoutTheSanctionedHandover.contains("outputLocationStore"))
     }
 
+    /// **A bookkeeping write failure is a storage notice, never a task error** — CLAUDE.md's
+    /// write-failure channel rule, on the path that has to get it right without anybody watching.
+    /// `errorMessage` means "the task you asked for did not happen", and the widget picks `.failure`
+    /// ahead of `.result`; a lost note about a folder must not turn a routine that ran and wrote its
+    /// file into one the user is told failed.
+    ///
+    /// The failure is induced by leaving unreadable bytes in the store's own file rather than by
+    /// locking a directory, so this needs no `.requiresUnprivilegedProcess` gate: `recordOutputs`
+    /// reads before it writes, and a file that will not decode makes the write throw.
+    @Test
+    func aScheduledRunsOutputLocationWriteFailureIsANoticeRatherThanAFailedRun() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        let reports = try fixture.saveScheduledDraftRoutine()
+        try Data("not a store".utf8).write(to: fixture.outputLocationStore.fileURL, options: .atomic)
+
+        fixture.viewModel.checkScheduledRoutines(now: MemoryFixture.tenAM)
+        try await fixture.waitUntilIdle()
+
+        let notice = try #require(fixture.viewModel.localStorageNotice)
+        #expect(
+            notice.hasPrefix("Sonny could not update its list of output locations"),
+            "the notice must name this write, not the load banner and not another store: \(notice)"
+        )
+        #expect(fixture.viewModel.errorMessage == nil)
+        // The routine really ran and the user really has their file — only the note was lost.
+        #expect(FileManager.default.fileExists(atPath: reports.appendingPathComponent("morning.md").path))
+        #expect(fixture.viewModel.scheduledRunNotice != nil)
+    }
+
+    /// The foreground twin, which is a different handover in a different function.
+    @Test
+    func aForegroundRunsOutputLocationWriteFailureIsANoticeRatherThanAFailedRun() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        let reports = try fixture.makeOutputFolder("Reports")
+        try Data("not a store".utf8).write(to: fixture.outputLocationStore.fileURL, options: .atomic)
+
+        fixture.viewModel.command = "draft the morning note"
+        fixture.viewModel.start(prebuiltPlan: planDrafting(into: reports))
+        try await fixture.waitUntilIdle()
+
+        let notice = try #require(fixture.viewModel.localStorageNotice)
+        #expect(
+            notice.hasPrefix("Sonny could not update its list of output locations"),
+            "the notice must name this write, not the load banner and not another store: \(notice)"
+        )
+        #expect(fixture.viewModel.errorMessage == nil)
+        #expect(FileManager.default.fileExists(atPath: reports.appendingPathComponent("morning.md").path))
+    }
+
     /// The row's count and its "newest" line come from the real store, and "newest" means the most
     /// recent *use* — every other row's newest line means the most recent thing recorded, and
     /// `firstUsedAt` would make this one mean something different from all of them.
@@ -575,12 +626,21 @@ struct MemoryCommandCenterTests {
         let now = Date(timeIntervalSince1970: 1_700_000_000)
         let reports = try fixture.makeOutputFolder("Reports")
         let invoices = try fixture.makeOutputFolder("Invoices")
-        try fixture.outputLocationStore.recordOutputs(
-            atPaths: [reports.appendingPathComponent("a.md").path],
-            recordedAt: now.addingTimeInterval(-86_400)
-        )
+        // Two uses each, with the windows deliberately interleaved: Reports was used *first* but
+        // Invoices was used *last*. So `max(firstUsedAt)` and `max(lastUsedAt)` are different dates,
+        // and a row that reached for the wrong one cannot pass by coincidence.
+        for offset in [-2.0, -1.0] {
+            try fixture.outputLocationStore.recordOutputs(
+                atPaths: [reports.appendingPathComponent("a.md").path],
+                recordedAt: now.addingTimeInterval(offset * 86_400)
+            )
+        }
         try fixture.outputLocationStore.recordOutputs(
             atPaths: [invoices.appendingPathComponent("b.md").path],
+            recordedAt: now.addingTimeInterval(-3 * 86_400)
+        )
+        try fixture.outputLocationStore.recordOutputs(
+            atPaths: [invoices.appendingPathComponent("c.md").path],
             recordedAt: now
         )
         fixture.viewModel.refreshMemoryEntries()
