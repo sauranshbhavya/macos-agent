@@ -196,6 +196,34 @@ struct RunUnitProgressTests {
         #expect(opener.opened.isEmpty)
     }
 
+    /// **The other half of the seed: a remainder that is still a chain.** "Write a note, open it,
+    /// then open the page", interrupted after the note, leaves a two-unit plan whose *first* unit is
+    /// the bare consumer — so this goes through `executeChain`'s own seed rather than the one applied
+    /// in `execute`, and the two are separate lines that can each be removed on their own.
+    @Test
+    func aResumedChainWhoseFirstUnitConsumesTheCarriedFileStillFindsIt() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let draft = root.appendingPathComponent("notes.md")
+        try Data("Body.".utf8).write(to: draft, options: .atomic)
+        let fileOpener = RecordingFileOpener()
+        let browserOpener = RecordingBrowserOpener()
+        let executor = makeExecutor(root: root, browserOpener: browserOpener, fileOpener: fileOpener)
+
+        let remainder = AgentPlan(
+            summary: "Write a note, open it, then open the page.",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(id: "open", operation: .openGeneratedArtifact, description: "Open it."),
+                openURLStep
+            ]
+        )
+        _ = try await executor.execute(plan: remainder, resumedArtifactPath: draft.path) { _, _ in }
+
+        #expect(fileOpener.opened == [draft.path])
+        #expect(browserOpener.opened == ["https://example.com/page"])
+    }
+
     /// The invariant the whole partial-resume idea rests on: only whole units are ever recorded as
     /// finished, so what is left always begins at a unit boundary and re-segments into exactly the
     /// units that had not run.
