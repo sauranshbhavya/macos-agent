@@ -272,6 +272,22 @@ public struct CapabilityExecutionContext {
     /// that forgets.
     public var recordingPolicy: TaskRecordingPolicy = .record
 
+    /// The standing memory switches — Command Center's Memory section (SONNY-208).
+    ///
+    /// Defaulted on the same reasoning as `recordingPolicy` directly above. The two are asked
+    /// together through `allowsRecording(to:)` and never separately: a run may write a store only if
+    /// *this* task is recording traces **and** the user has not switched that kind of memory off.
+    public var memoryRecording: MemoryRecordingSettings = .recordEverything
+
+    /// Whether this run may write new memory into `store` — both switches, one question.
+    ///
+    /// The single place the conjunction is written for capabilities, so an adapter cannot ask half
+    /// of it. `AgentViewModel.allowsRecording(to:)` is the same conjunction on the view model's own
+    /// writing sites, which live outside any capability.
+    public func allowsRecording(to store: LocalStore) -> Bool {
+        recordingPolicy.allowsWriting(to: store) && memoryRecording.allowsRecording(to: store)
+    }
+
     public init(
         whitelist: PathWhitelist,
         inventory: FileInventory,
@@ -317,9 +333,11 @@ public struct CapabilityExecutionContext {
         previewNestedPlan: @escaping PreviewNestedPlan,
         executeNestedPlan: @escaping ExecuteNestedPlan,
         visionSession: VisionSessionEnvironment? = nil,
-        recordingPolicy: TaskRecordingPolicy = .record
+        recordingPolicy: TaskRecordingPolicy = .record,
+        memoryRecording: MemoryRecordingSettings = .recordEverything
     ) {
         self.recordingPolicy = recordingPolicy
+        self.memoryRecording = memoryRecording
         self.whitelist = whitelist
         self.inventory = inventory
         self.zipArchiver = zipArchiver

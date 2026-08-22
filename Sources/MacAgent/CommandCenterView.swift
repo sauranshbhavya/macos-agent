@@ -8,6 +8,7 @@ enum CommandCenterDestination: String, CaseIterable, Identifiable {
     case insights
     case routines
     case workspaces
+    case memory
 
     var id: Self { self }
 
@@ -25,6 +26,8 @@ enum CommandCenterDestination: String, CaseIterable, Identifiable {
             return "repeat"
         case .workspaces:
             return "rectangle.3.group"
+        case .memory:
+            return "brain"
         }
     }
 }
@@ -408,6 +411,16 @@ struct CommandCenterView: View {
             RoutinesView(viewModel: viewModel)
         case .workspaces:
             WorkspacesView(viewModel: viewModel)
+        case .memory:
+            // `select` and `isSettingsPresented` are handed down rather than duplicated: `select` is
+            // this view's only writer of `selection` (see its doc comment), and Settings is a sheet
+            // this view owns. A Memory page holding its own copy of either would be a second
+            // navigation path that could drift from the sidebar's.
+            MemoryView(
+                viewModel: viewModel,
+                select: select,
+                openSettings: { isSettingsPresented = true }
+            )
         }
     }
 }
@@ -3799,10 +3812,739 @@ private struct WorkspaceAppIconStack: View {
     }
 }
 
+/// One Memory row's rendered content, derived rather than read off the view.
+///
+/// A value type for the same reason `RoutineRowPresentation` and `WorkspaceCardPresentation` are:
+/// this repository has no way to drive SwiftUI, so the only thing a test can hold is the value the
+/// view renders. Everything a reader of the row sees — its count line, its newest-entry line,
+/// whether its switch reads on — is decided here and asserted directly.
+struct MemoryRowPresentation: Equatable {
+    let category: MemoryCategory
+    let title: String
+    let systemImage: String
+    let count: Int
+    let isRecording: Bool
+    /// Whether the row's switch can be moved at all.
+    ///
+    /// False for two different reasons that look the same to the control and different to the
+    /// reader: an administrator has taken memory away, or the master switch is off. The second is
+    /// the one a live control would get wrong — with memory off wholesale, a per-type switch that
+    /// still moved would write a preference whose effective value cannot change, so the user flips
+    /// it and watches it snap back. Their per-type choices are not lost either way; they stay in
+    /// `MemorySettingsStore` and come back when the master switch does.
+    let canChangeRecording: Bool
+    /// "12 saved · newest 3:04 PM", or the empty-state half on its own.
+    let detailText: String
+
+    init(
+        category: MemoryCategory,
+        count: Int,
+        isRecording: Bool,
+        canChangeRecording: Bool,
+        newestEntryDate: Date?,
+        now: Date
+    ) {
+        self.category = category
+        self.title = category.title
+        self.systemImage = Self.systemImage(for: category)
+        self.count = count
+        self.isRecording = isRecording
+        self.canChangeRecording = canChangeRecording
+
+        let counted = count == 1 ? "1 saved" : "\(count) saved"
+        guard let newestEntryDate else {
+            self.detailText = counted
+            return
+        }
+        let newest = TaskHistoryDateFormatter.relativeTimestamp(for: newestEntryDate, now: now)
+        self.detailText = "\(counted) · newest \(newest)"
+    }
+
+    /// Builds a row's presentation from the live view model.
+    ///
+    /// **A factory rather than an expression inside `MemoryView`, so the answers are assertable**
+    /// (PR #98 review, F3). `canChangeRecording` had no coverage anywhere in `Tests/` — hardwiring
+    /// it to `true` here left the whole suite green, restoring exactly the defect the fidelity round
+    /// fixed: with memory off wholesale a per-type switch stays movable, the user flips it, the
+    /// effective value cannot change, and the control snaps back. Nothing about that needs a SwiftUI
+    /// harness; it needed the expression to live somewhere a test could call. Same shape as
+    /// `MemoryEntryPresentation.entries(for:viewModel:now:)` directly below.
+    @MainActor
+    static func row(
+        for category: MemoryCategory,
+        viewModel: AgentViewModel,
+        now: Date = Date()
+    ) -> MemoryRowPresentation {
+        MemoryRowPresentation(
+            category: category,
+            count: viewModel.memoryEntryCount(for: category),
+            isRecording: viewModel.isMemoryCategoryEnabled(category),
+            // The master switch and the policy, folded — not the per-type answer, which is what
+            // `isRecording` above already carries.
+            canChangeRecording: viewModel.memorySettings.isRecording,
+            newestEntryDate: viewModel.newestMemoryEntryDate(for: category),
+            now: now
+        )
+    }
+
+    private static func systemImage(for category: MemoryCategory) -> String {
+        switch category {
+        case .routines:
+            return "repeat"
+        case .workspaces:
+            return "rectangle.3.group"
+        case .taskHistory:
+            return "checklist"
+        case .recentArtifacts:
+            return "doc"
+        case .clipboardHistory:
+            return "doc.on.clipboard"
+        case .snippets:
+            return "text.quote"
+        case .approvedApps:
+            return "app.badge.checkmark"
+        }
+    }
+}
+
+/// Command Center's Memory section (SONNY-208) — §6.10's scoped, user-visible memory.
+///
+/// **A view over the stores Sonny already had, not a memory engine.** Every row here is one of the
+/// local stores that has existed for branches; what this page adds is one place to see them and the
+/// four controls §6.10 requires over each — view, edit, delete, disable — plus a master switch and
+/// the enterprise-policy hook row 19 will supply a provider for.
+///
+/// **Where "edit" lives, per type, because it is deliberately not built here.** The ticket's rule is
+/// to reuse each store's existing management rather than reinvent it: Routines, Workspaces and Task
+/// history open the pages that already own their editors (the routine detail sheet, the workspace
+/// detail sheet, the task detail dialog), and the four types that never had a surface of their own
+/// open `MemoryEntriesSheet`, where editing a list of remembered items means removing entries from
+/// it. Nothing here duplicates an editor that exists.
+///
+/// **The three shared Command Center surfaces are present because a page without them shows nothing
+/// for a run started from it** — `.claude/rules/macagent-ui-conventions.md`'s Approval visibility
+/// section, and CLAUDE.md's SONNY-180 gotcha. `CommandCenterAttentionPanel` and
+/// `CommandCenterStorageNotice` are rendered unconditionally and self-gate; the running indicator is
+/// gated by its caller, exactly as the other four pages do it.
+///
+/// **No Data-Sent-To-AI history here, deliberately.** §6.3A was cancelled on SONNY-88 and stays
+/// cancelled; a memory surface is precisely where it would otherwise creep back in.
+private struct MemoryView: View {
+    @ObservedObject var viewModel: AgentViewModel
+    let select: (CommandCenterDestination) -> Void
+    let openSettings: () -> Void
+
+    @State private var entriesCategory: MemoryCategory?
+    @State private var deletionCategory: MemoryCategory?
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            CommandCenterPageHeader(title: "Memory")
+
+            masterPanel
+
+            collectionPanel
+
+            CommandCenterAttentionPanel(viewModel: viewModel)
+
+            // Self-gating, and outside any running check — same placement and same reason as the
+            // other four pages.
+            CommandCenterStorageNotice(viewModel: viewModel)
+
+            if viewModel.isRunning || viewModel.isAwaitingApproval {
+                CommandCenterRunningIndicator(viewModel: viewModel)
+            }
+        }
+        .padding(.horizontal, 28)
+        .padding(.top, 24)
+        .padding(.bottom, 18)
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .topLeading)
+        .background(SonnyTheme.ink)
+        .onAppear {
+            // The policy is re-read here rather than only at launch, so an administrator's change
+            // lands without a relaunch once row 19 supplies a real provider.
+            viewModel.refreshMemorySettings()
+            viewModel.refreshMemoryEntries()
+        }
+        .sheet(item: $entriesCategory) { category in
+            MemoryEntriesSheet(
+                viewModel: viewModel,
+                category: category,
+                isPresented: Binding(
+                    get: { entriesCategory != nil },
+                    set: { if !$0 { entriesCategory = nil } }
+                )
+            )
+        }
+        .confirmationDialog(
+            deletionCategory.map { "Delete \($0.title.lowercased())?" } ?? "",
+            isPresented: Binding(
+                get: { deletionCategory != nil },
+                set: { if !$0 { deletionCategory = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let deletionCategory {
+                Button("Delete", role: .destructive) {
+                    viewModel.deleteMemory(in: deletionCategory)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            // Every other destructive confirmation in the app names what goes and what stays — the
+            // Settings wipe, the workspace delete, both task deletes. This one deletes the most per
+            // press of any of them, so it says so rather than being the one that does not.
+            if let deletionCategory {
+                Text(MemoryDeletionCopy.message(for: deletionCategory))
+            }
+        }
+    }
+
+    private var masterPanel: some View {
+        VStack(spacing: 0) {
+            SettingsAdaptiveControlRow {
+                SettingsControlLabel(
+                    title: "Memory",
+                    detail: viewModel.memorySettings.isDisabledByPolicy
+                        ? "Turned off by your organization."
+                        : "Record new entries in the memory types below."
+                )
+            } trailing: {
+                SonnySettingsToggle(
+                    isOn: Binding(
+                        get: { viewModel.memorySettings.isRecording },
+                        set: { viewModel.setMemoryEnabled($0) }
+                    )
+                )
+                .accessibilityLabel("Memory")
+                .disabled(viewModel.memorySettings.isDisabledByPolicy)
+            }
+            .padding(.horizontal, 18)
+
+            Rectangle()
+                .fill(SonnyTheme.border)
+                .frame(height: 1)
+
+            // §6.10 lists user preferences as a memory type; the founder's answer is that they are
+            // the existing Settings surfaced here rather than a new store, so this row opens the
+            // dialog that already edits them instead of restating any of it.
+            SettingsAdaptiveControlRow {
+                SettingsControlLabel(
+                    title: "Preferences",
+                    detail: "Preferences, notifications, usage, security and data."
+                )
+            } trailing: {
+                Button("Open settings", action: openSettings)
+                    .buttonStyle(CommandCenterRowActionStyle())
+            }
+            .padding(.horizontal, 18)
+        }
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(CommandCenterPalette.collectionSurface)
+        .overlay(
+            RoundedRectangle(cornerRadius: SonnyRadius.container)
+                .stroke(SonnyTheme.border, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+    }
+
+    private var collectionPanel: some View {
+        VStack(spacing: 0) {
+            CollectionHeader(title: "All memory")
+
+            Rectangle()
+                .fill(SonnyTheme.border)
+                .frame(height: 1)
+
+            ScrollView {
+                LazyVStack(spacing: 0) {
+                    // Grouped, like `RoutinesView`'s cadence sections and the Tasks list's status
+                    // groups — a flat stack of seven rows adopts the row idiom without the
+                    // sectioning that comes with it everywhere else. The split is `LocalStoreKind`,
+                    // the classification "Don't save this task" already decides suppression by, so
+                    // it is the product's own reading rather than a taxonomy invented for this page.
+                    ForEach(memorySections) { section in
+                        CommandCenterGroupHeader(title: section.title, count: section.categories.count)
+
+                        ForEach(Array(section.categories.enumerated()), id: \.element) { index, category in
+                            MemoryRow(
+                                presentation: presentation(for: category),
+                                isLast: index == section.categories.count - 1,
+                                view: { open(category) },
+                                delete: { deletionCategory = category },
+                                setEnabled: { isOn in viewModel.setMemoryCategoryEnabled(category, to: isOn) }
+                            )
+                        }
+                    }
+                }
+            }
+
+            if viewModel.memoryDeletionStatusMessage != nil {
+                Rectangle()
+                    .fill(SonnyTheme.border)
+                    .frame(height: 1)
+
+                LocalDataDeletionStatusMessage(message: viewModel.memoryDeletionStatusMessage)
+                    .frame(maxWidth: .infinity, alignment: .leading)
+                    .padding(.horizontal, 18)
+                    .padding(.vertical, 12)
+            }
+        }
+        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+        .background(CommandCenterPalette.collectionSurface)
+        .overlay(
+            RoundedRectangle(cornerRadius: SonnyRadius.container)
+                .stroke(SonnyTheme.border, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+    }
+
+    /// Where "View" goes, resolved through `MemoryRowDestination` so the answer is a value a test
+    /// can assert rather than a `select` call buried in a view (PR #98 review, F4).
+    private func open(_ category: MemoryCategory) {
+        switch MemoryRowDestination.of(category) {
+        case .page(let destination):
+            select(destination)
+        case .entriesSheet:
+            entriesCategory = category
+        }
+    }
+
+    private func presentation(for category: MemoryCategory) -> MemoryRowPresentation {
+        MemoryRowPresentation.row(for: category, viewModel: viewModel)
+    }
+
+    private var memorySections: [MemorySection] {
+        MemorySection.all
+    }
+}
+
+/// Where a Memory row's "View" leads.
+///
+/// **A value rather than a `select` call inside the view, because nothing could see the old one**
+/// (PR #98 review, F4). Rewiring Task history to open Insights left the whole suite green — and
+/// "each memory type is viewable" is the first clause of the ticket's acceptance criteria, so it was
+/// the one control of the four with no test behind it.
+///
+/// The split is the reuse rule: a type whose entries already have a page goes to that page, and only
+/// the four that never had one open the sheet.
+enum MemoryRowDestination: Equatable {
+    case page(CommandCenterDestination)
+    case entriesSheet
+
+    static func of(_ category: MemoryCategory) -> MemoryRowDestination {
+        switch category {
+        case .routines:
+            return .page(.routines)
+        case .workspaces:
+            return .page(.workspaces)
+        case .taskHistory:
+            return .page(.tasks)
+        case .recentArtifacts, .clipboardHistory, .snippets, .approvedApps:
+            return .entriesSheet
+        }
+    }
+}
+
+/// The Memory collection's two groups, keyed by `LocalStoreKind`.
+///
+/// A value rather than an inline `switch` in the view so the grouping is assertable — the same
+/// reason `RoutineCadenceSection` exists for the Routines page.
+struct MemorySection: Identifiable, Equatable {
+    static let all: [MemorySection] = [
+        MemorySection(kind: .artifact, title: "Saved by you"),
+        MemorySection(kind: .trace, title: "Recorded as Sonny works")
+    ]
+
+    let kind: LocalStoreKind
+    let title: String
+
+    var id: String { title }
+
+    /// In `MemoryCategory.allCases` order, so a category added later lands in its group without a
+    /// second ordering to maintain.
+    var categories: [MemoryCategory] {
+        MemoryCategory.allCases.filter { $0.storeKind == kind }
+    }
+}
+
+private struct MemoryRow: View {
+    let presentation: MemoryRowPresentation
+    let isLast: Bool
+    let view: () -> Void
+    let delete: () -> Void
+    let setEnabled: (Bool) -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 14) {
+                ZStack {
+                    RoundedRectangle(cornerRadius: SonnyRadius.routineIcon)
+                        .fill(CommandCenterPalette.routineIconBackground)
+                    Image(systemName: presentation.systemImage)
+                        .font(SonnyType.icon(13, weight: .medium))
+                        .foregroundStyle(CommandCenterPalette.routineIconForeground)
+                }
+                .frame(width: 30, height: 30)
+
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(presentation.title)
+                        .font(SonnyType.bodyEmphasis)
+                        .foregroundStyle(SonnyTheme.text)
+                        .lineLimit(1)
+                    Text(presentation.detailText)
+                        .font(SonnyType.micro)
+                        .foregroundStyle(SonnyTheme.muted)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 14)
+
+                Button("View", action: view)
+                    .buttonStyle(CommandCenterRowActionStyle())
+                    .accessibilityLabel("View \(presentation.title)")
+
+                // Deliberately *not* disabled while memory is off, by policy or by the master
+                // switch. Deleting what is already stored is the next thing someone who turned
+                // recording off wants, and an administrator's disable-memory policy is furthered by
+                // a delete rather than contradicted by one. Only an empty row has nothing to do.
+                Button("Delete", action: delete)
+                    .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
+                    .disabled(presentation.count == 0)
+                    .accessibilityLabel("Delete \(presentation.title)")
+
+                // **`SonnySettingsToggle`, not the native `.switch` `RoutineRow` uses.** Two
+                // reasons, and the second is the one that settles it. First, this page shows a
+                // toggle in both of its panels, forty points apart; the master switch is a Settings
+                // row where `SonnySettingsToggle` is the established control, and a native
+                // system-rendered switch beside it reads as two design languages on one screen.
+                // Second, `SonnySettingsToggle` *is* System A's toggle —
+                // `docs/sonny-design-system-reference.md` §2.6 specifies it down to the knob shadow
+                // and calls that "the one shadow exception in System A, confined to this one
+                // control", which reusing the control honours and reimplementing it would not. A
+                // native switch is macOS chrome rather than a Sonny token, so the difference from
+                // `RoutineRow` is a difference from the deviation, not from the rule.
+                SonnySettingsToggle(isOn: Binding(
+                    get: { presentation.isRecording },
+                    set: { isOn in setEnabled(isOn) }
+                ))
+                    .disabled(!presentation.canChangeRecording)
+                    .accessibilityLabel("Remember \(presentation.title)")
+            }
+            .padding(.horizontal, 18)
+            .frame(height: 56)
+
+            if !isLast {
+                Rectangle()
+                    .fill(SonnyTheme.border)
+                    .frame(height: 1)
+            }
+        }
+    }
+}
+
+/// The words the Memory section uses for destructive confirmations and empty lists.
+///
+/// A value rather than literals in the views because both sets are per category and both are the
+/// kind of copy a reader checks: a confirmation that names the wrong thing is worse than one that
+/// says nothing, and this repository has an empty-state convention (`RoutinesView`, `WorkspacesView`)
+/// that pairs the condition with the command that ends it.
+enum MemoryDeletionCopy {
+    /// What a per-type delete takes, and what it leaves. Same shape as every other destructive
+    /// confirmation in the app.
+    static func message(for category: MemoryCategory) -> String {
+        switch category {
+        case .routines:
+            return "This deletes every saved routine and its schedule. Task history is not deleted."
+        case .workspaces:
+            return "This deletes every saved workspace and the apps, URLs and folders it lists. Task history is not deleted."
+        case .taskHistory:
+            return "This deletes every task Sonny has recorded, what each one planned, and the records of what Sonny did on screen. Files those tasks created are not deleted."
+        case .recentArtifacts:
+            return "This deletes Sonny's list of files it recently worked with. The files themselves are not deleted."
+        case .clipboardHistory:
+            return "This deletes every copied item Sonny has recorded. Your clipboard itself is not affected."
+        case .snippets:
+            return "This deletes every saved snippet and its trigger."
+        case .approvedApps:
+            return "This deletes every app you have allowed Sonny to control. Sonny asks again the next time it needs one of them."
+        }
+    }
+
+    /// What removing one entry takes. Shorter than the per-type message because the row beside it
+    /// already names the entry.
+    static func entryMessage(for category: MemoryCategory) -> String {
+        switch category {
+        case .recentArtifacts:
+            return "This removes Sonny's note about the file. The file itself is not deleted."
+        case .clipboardHistory:
+            return "This removes the copied item from Sonny's history."
+        case .snippets:
+            return "This deletes the snippet and its trigger."
+        case .approvedApps:
+            return "Sonny asks again the next time it needs to control this app."
+        case .routines, .workspaces, .taskHistory:
+            // Unreachable: the sheet opens for the four types above only, and the other three are
+            // deleted from their own pages.
+            return ""
+        }
+    }
+
+    static func emptyTitle(for category: MemoryCategory) -> String {
+        "No \(category.title.lowercased()) yet"
+    }
+
+    /// Paired with the command that ends the empty state, the way `RoutinesView`'s and
+    /// `WorkspacesView`'s empty states are.
+    static func emptyMessage(for category: MemoryCategory) -> String {
+        switch category {
+        case .recentArtifacts:
+            return "Ask Sonny to create or convert a file, then it will appear here."
+        case .clipboardHistory:
+            return "Copy something while clipboard history is on, and it will appear here."
+        case .snippets:
+            return "Ask Sonny to save a snippet, then it will appear here."
+        case .approvedApps:
+            return "Allow Sonny to control an app during a screen task, and it will appear here."
+        case .routines, .workspaces, .taskHistory:
+            return ""
+        }
+    }
+}
+
+/// One remembered item, as the entries sheet lists it.
+struct MemoryEntryPresentation: Identifiable, Equatable {
+    let id: String
+    let title: String
+    let detail: String
+
+    /// The four list-backed types, rendered from the arrays `AgentViewModel` publishes.
+    ///
+    /// Built here rather than on the view model because it is presentation — the date formatter and
+    /// the one-line squeeze applied to a clipboard entry belong beside the rows that use them, the
+    /// same split `RoutineRowPresentation` and `WorkspaceCardPresentation` already follow. The three
+    /// types with pages of their own answer `[]`; nothing opens this sheet for them.
+    @MainActor
+    static func entries(
+        for category: MemoryCategory,
+        viewModel: AgentViewModel,
+        now: Date = Date()
+    ) -> [MemoryEntryPresentation] {
+        switch category {
+        case .snippets:
+            return viewModel.savedSnippets.map { snippet in
+                MemoryEntryPresentation(
+                    id: snippet.id.uuidString,
+                    title: snippet.trigger,
+                    detail: singleLine(snippet.expansion)
+                )
+            }
+        case .recentArtifacts:
+            return viewModel.recentArtifacts.map { artifact in
+                MemoryEntryPresentation(
+                    id: artifact.id.uuidString,
+                    title: artifact.title,
+                    detail: "\(TaskHistoryDateFormatter.relativeTimestamp(for: artifact.recordedAt, now: now)) · \(artifact.path)"
+                )
+            }
+        case .clipboardHistory:
+            return viewModel.clipboardHistoryItems.map { item in
+                MemoryEntryPresentation(
+                    id: item.id.uuidString,
+                    title: singleLine(item.text),
+                    detail: TaskHistoryDateFormatter.relativeTimestamp(for: item.copiedAt, now: now)
+                )
+            }
+        case .approvedApps:
+            return viewModel.approvedApps.map { app in
+                MemoryEntryPresentation(
+                    // The identifier, not a UUID: a grant is keyed by the app it names, and the
+                    // record carries no id of its own.
+                    id: app.bundleIdentifier,
+                    title: app.displayName.isEmpty ? app.bundleIdentifier : app.displayName,
+                    detail: "\(app.bundleIdentifier) · allowed \(TaskHistoryDateFormatter.relativeTimestamp(for: app.approvedAt, now: now))"
+                )
+            }
+        case .routines, .workspaces, .taskHistory:
+            return []
+        }
+    }
+
+    /// Collapses newlines so a multi-line clipboard entry or snippet expansion occupies one row
+    /// instead of silently claiming the height of whatever was copied.
+    private static func singleLine(_ text: String) -> String {
+        text
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+            .truncatedForRowDisplay(maxLength: 90)
+    }
+}
+
+/// The view-and-edit surface for the four memory types that never had one.
+///
+/// Routines, workspaces and task history are deliberately absent — they open their own pages, whose
+/// editors this sheet would otherwise be a worse copy of. What "edit" means here is removing an
+/// entry: these four hold records rather than documents, and nothing in the product has ever
+/// offered to rewrite one.
+private struct MemoryEntriesSheet: View {
+    @ObservedObject var viewModel: AgentViewModel
+    let category: MemoryCategory
+    @Binding var isPresented: Bool
+    @State private var pendingDeletion: PendingEntryDeletion?
+
+    /// The row a confirmation is open for. Carries the position it was rendered at, because that is
+    /// what `AgentViewModel.deleteMemoryEntry(in:at:)` takes — and carries the title so the dialog
+    /// can name what it is about to remove.
+    private struct PendingEntryDeletion: Identifiable {
+        let id: String
+        let index: Int
+        let title: String
+    }
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack {
+                Text(category.title)
+                    .font(SonnyType.settingsContentTitle)
+                    .foregroundStyle(SonnyTheme.text)
+
+                Spacer()
+
+                Button {
+                    isPresented = false
+                } label: {
+                    Image(systemName: "xmark")
+                        .font(SonnyType.icon(11, weight: .semibold))
+                        .foregroundStyle(SonnyTheme.muted)
+                        .frame(width: 24, height: 24)
+                }
+                .buttonStyle(.plain)
+                .sonnyPointerCursor()
+                .sonnyHoverHighlight(cornerRadius: 12)
+                .accessibilityLabel("Close \(category.title)")
+            }
+            .padding(.horizontal, 20)
+            .padding(.top, 18)
+            .padding(.bottom, 14)
+
+            Rectangle()
+                .fill(SonnyTheme.border)
+                .frame(height: 1)
+
+            if entries.isEmpty {
+                CollectionEmptyState(
+                    systemImage: "tray",
+                    title: MemoryDeletionCopy.emptyTitle(for: category),
+                    message: MemoryDeletionCopy.emptyMessage(for: category)
+                )
+                .frame(maxHeight: .infinity)
+            } else {
+                ScrollView {
+                    LazyVStack(spacing: 0) {
+                        ForEach(Array(entries.enumerated()), id: \.element.id) { index, entry in
+                            MemoryEntryRow(
+                                entry: entry,
+                                isLast: index == entries.count - 1,
+                                delete: {
+                                    pendingDeletion = PendingEntryDeletion(
+                                        id: entry.id,
+                                        index: index,
+                                        title: entry.title
+                                    )
+                                }
+                            )
+                        }
+                    }
+                }
+            }
+        }
+        // Confirmed, like every other per-row delete in Command Center (the workspace card, both
+        // task rows). A misclick here is unrecoverable — a revoked app grant, a snippet, a copied
+        // item — and nothing else in the app deletes a row on one press.
+        .confirmationDialog(
+            pendingDeletion.map { "Delete \($0.title)?" } ?? "",
+            isPresented: Binding(
+                get: { pendingDeletion != nil },
+                set: { if !$0 { pendingDeletion = nil } }
+            ),
+            titleVisibility: .visible
+        ) {
+            if let pendingDeletion {
+                Button("Delete", role: .destructive) {
+                    delete(at: pendingDeletion.index)
+                }
+            }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text(MemoryDeletionCopy.entryMessage(for: category))
+        }
+        .frame(width: 560, height: 460)
+        .background(SonnyTheme.ink)
+        .foregroundStyle(SonnyTheme.text)
+        .overlay(
+            RoundedRectangle(cornerRadius: SonnyRadius.container)
+                .stroke(SonnyTheme.border, lineWidth: 1)
+        )
+        .clipShape(RoundedRectangle(cornerRadius: SonnyRadius.container))
+    }
+
+    private var entries: [MemoryEntryPresentation] {
+        MemoryEntryPresentation.entries(for: category, viewModel: viewModel)
+    }
+
+    /// Deleted by position in the same list the row was rendered from, so the row and the record it
+    /// removes cannot come apart — the view model re-derives both from one published array.
+    private func delete(at index: Int) {
+        viewModel.deleteMemoryEntry(in: category, at: index)
+    }
+}
+
+private struct MemoryEntryRow: View {
+    let entry: MemoryEntryPresentation
+    let isLast: Bool
+    let delete: () -> Void
+
+    var body: some View {
+        VStack(spacing: 0) {
+            HStack(spacing: 14) {
+                VStack(alignment: .leading, spacing: 3) {
+                    Text(entry.title)
+                        .font(SonnyType.bodyEmphasis)
+                        .foregroundStyle(SonnyTheme.text)
+                        .lineLimit(1)
+                    Text(entry.detail)
+                        .font(SonnyType.micro)
+                        .foregroundStyle(SonnyTheme.muted)
+                        .lineLimit(1)
+                }
+
+                Spacer(minLength: 14)
+
+                Button("Delete", action: delete)
+                    .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
+                    .accessibilityLabel("Delete \(entry.title)")
+            }
+            .padding(.horizontal, 20)
+            .frame(height: 52)
+
+            if !isLast {
+                Rectangle()
+                    .fill(SonnyTheme.border)
+                    .frame(height: 1)
+            }
+        }
+    }
+}
+
 private struct CollectionHeader: View {
     let title: String
-    let actionTitle: String
-    let action: () -> Void
+    /// Optional because the Memory page's collections have nothing to add — every row is a memory
+    /// type that already exists, so a "+" there would offer to create a kind of memory. Defaulted so
+    /// the Routines and Workspaces call sites are unchanged.
+    var actionTitle: String? = nil
+    var action: (() -> Void)? = nil
 
     var body: some View {
         HStack(spacing: 12) {
@@ -3810,10 +4552,12 @@ private struct CollectionHeader: View {
                 .font(SonnyType.bodyEmphasis)
                 .foregroundStyle(SonnyTheme.text)
             Spacer()
-            Button(action: action) {
-                Label(actionTitle, systemImage: "plus")
+            if let actionTitle, let action {
+                Button(action: action) {
+                    Label(actionTitle, systemImage: "plus")
+                }
+                .buttonStyle(CommandCenterHeaderActionStyle())
             }
-            .buttonStyle(CommandCenterHeaderActionStyle())
         }
         .padding(.leading, 30)
         .padding(.trailing, 24)
