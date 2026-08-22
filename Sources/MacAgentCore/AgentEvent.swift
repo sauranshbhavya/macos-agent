@@ -135,6 +135,17 @@ public struct AgentRunResult: Equatable, Sendable {
     /// to override would be a real hole; the defence is that this comment, the type's own
     /// enumeration and `theOnlyModelAuthoredRunSummaryIsTheVisionSessions` all point at the same
     /// list.
+    ///
+    /// **That scan is a backstop, not the guard** (SONNY-200). It is textual, and a list of
+    /// property spellings kept missing shapes — most recently `executeChain`'s own accumulator,
+    /// `var summaryProvenance: StoredTaskResult.Provenance = .codeAuthored`, whose type annotation
+    /// sits between the name and the value and matched neither search term. It now counts mentions
+    /// of the *value* instead, which has no spelling hole. The guard on the chain's behaviour is a
+    /// pair of tests that never look at source at all:
+    /// `VisionSessionRunTests.aChainWhoseScreenControlSegmentWrotePartOfTheSummaryStoresItAsModelAuthored`
+    /// for a segment raising the join, and
+    /// `AgentActionExecutorTests.anOrdinaryChainsJoinedSummaryStaysCodeAuthored` for two ordinary
+    /// segments leaving it alone.
     public var summaryProvenance: StoredTaskResult.Provenance
     public var suggestions: [RunSuggestion]
 

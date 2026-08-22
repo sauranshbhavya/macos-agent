@@ -26,6 +26,37 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
     public var mediaTitle: String?
     public var mediaArtist: String?
     public var contextSource: FinderContextSource?
+    /// **Whether this step's folder really came from the Finder selection** — a resolve-phase fact,
+    /// written only by `FinderSelectionResolver.pinningSelectedDirectoryInput` and only on a pass
+    /// that actually drove Finder to read one. `nil` everywhere else, including on every plan the
+    /// planner emits.
+    ///
+    /// It exists because `contextSource` cannot answer that question and never could. That field is
+    /// the *planner's declaration* that the user said "the selected folder"; whether the resolution
+    /// then reached Finder depends on the whole plan, because `pinningSelectedDirectoryInput` pools
+    /// the matching steps and `selectedDirectoryPath` returns `primary ?? secondary` before it looks
+    /// at `contextSource` at all. So a step carrying the declaration *and* its own non-empty
+    /// `inputPath` is satisfied from that path, Finder is never contacted, and the step still
+    /// declares itself selection-driven — which is exactly what `PlanScopedResources` reported
+    /// Finder off until SONNY-185. SONNY-73 fixed the pooled half of that by clearing the
+    /// declaration on the steps the pin back-fills; the per-step half needed a second fact, because
+    /// after the first pass a declaring step the pin filled in and a declaring step that arrived
+    /// with a path are byte-for-byte the same thing.
+    ///
+    /// **Resolver-only in the same sense as `resolvedAppName`**: absent from
+    /// `AgentPlanDecoder.stepKeys` and from the planner schema, so a model cannot assert it, at any
+    /// nesting depth. `resolvedAppName`'s own comment warns against adding a second decode-excluded
+    /// *identity* field, and that warning is respected rather than sidestepped — this is not an
+    /// identity, it names no app and resolves no query, it is one boolean about where a path came
+    /// from. What it does cost is one more key in the per-key exclusion audit, which is why
+    /// `theGoalDecodesWhileThePinsStayResolverOnly` covers it alongside the other two rather than by
+    /// inspection.
+    ///
+    /// **Not persisted into a routine**, for the same reason the two pins are not: a saved routine's
+    /// steps come from the planner's own nested `routineSteps`, which the top-level resolve phase
+    /// never touches, so a stored routine cannot carry a stale answer about a Finder read that
+    /// happened once, long ago.
+    public var resolvedFromFinderSelection: Bool?
     public var routineName: String?
     public var routineSteps: [AgentStep]?
     public var workspaceName: String?
@@ -148,6 +179,7 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
         browserName: String? = nil,
         resolvedAppName: String? = nil,
         resolvedBundleIdentifier: String? = nil,
+        resolvedFromFinderSelection: Bool? = nil,
         visionGoal: String? = nil
     ) {
         self.id = id
@@ -181,6 +213,7 @@ public struct AgentStep: Codable, Equatable, Identifiable, Sendable {
         self.browserName = browserName
         self.resolvedAppName = resolvedAppName
         self.resolvedBundleIdentifier = resolvedBundleIdentifier
+        self.resolvedFromFinderSelection = resolvedFromFinderSelection
         self.visionGoal = visionGoal
     }
 }
@@ -350,8 +383,9 @@ public enum AgentPlanDecoder {
         "draftContent",
         "shortcutName",
         "shortcutInput",
-        // Row I, SONNY-93. The pins beside it (`resolvedAppName`, `resolvedBundleIdentifier`) stay
-        // absent — the goal is the planner's to write, the identity is the resolver's alone.
+        // Row I, SONNY-93. The pins beside it stay absent — the goal is the planner's to write,
+        // and the identity (`resolvedAppName`, `resolvedBundleIdentifier`) and the Finder-read fact
+        // (`resolvedFromFinderSelection`, SONNY-185) are the resolver's alone.
         "visionGoal"
     ]
 

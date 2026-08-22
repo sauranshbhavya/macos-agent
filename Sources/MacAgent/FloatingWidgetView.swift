@@ -213,9 +213,15 @@ struct FloatingWidgetView: View {
     /// Whether the panel (step-log/permission/clarification/result/failure) should render at all.
     /// Delegates to `AgentViewModel.hasVisibleWidgetPanel` — see its doc comment for the full
     /// per-state reasoning (origin-gating on working/result, why permission/clarification/failure
-    /// always show) — kept there rather than duplicated here since
-    /// `FloatingWidgetWindowController`'s compositing decision now depends on the exact same
-    /// predicate and the two must never drift apart.
+    /// always show) — kept there rather than duplicated here since `isMicHintSlotFree` below reads
+    /// the exact same predicate and the two must never drift apart.
+    ///
+    /// Until SONNY-189 that second reader was named as `FloatingWidgetWindowController`'s
+    /// compositing decision. That positioning mode was superseded on 2026-07-21, the controller has
+    /// had exactly one mode since (see its doc comment), and nothing composites into Command Center
+    /// anymore. What survives the correction is why the sentence was here at all: this is one
+    /// predicate read in more than one place, and a second reader disagreeing with it once made the
+    /// widget vanish silently at launch.
     private var showsPanel: Bool {
         viewModel.hasVisibleWidgetPanel
     }

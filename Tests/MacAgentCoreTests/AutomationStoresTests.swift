@@ -57,6 +57,56 @@ struct AutomationStoresTests {
         #expect(innerStep.resolvedBundleIdentifier == nil)
     }
 
+    /// **The third pin, through the real read door** (PR #94 review, F1).
+    ///
+    /// `resolvedFromFinderSelection` was added by SONNY-185 and registered in
+    /// `everyAgentStepFieldIsClassifiedAgainstTheResolverOnlyStrip`'s `resolverOnly` set, whose own
+    /// comment says the strip "must clear it too" — and the strip did not, because that test asserts
+    /// `Mirror` membership rather than behaviour and so passed vacuously. This is the assertion that
+    /// could not: it drives a forged value through `saveBypassingStepValidation` and reads it back.
+    ///
+    /// Both nesting levels, because the Finder pin differs from the two identity pins in exactly the
+    /// place that matters here: its operations are *not* in `forbiddenStepOperations`, so a nested
+    /// `scan_select_largest_files` is a step a routine may legitimately contain, and a hand-written
+    /// file can therefore put a forged pin somewhere the identity pins could never reach.
+    @Test
+    func aForgedFinderSelectionPinIsStrippedAtBothNestingLevels() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+
+        var nested = AgentStep(
+            id: "scan",
+            operation: .scanSelectLargestFiles,
+            description: "Scan the selected folder.",
+            inputPath: "~/Documents/Client",
+            count: 3,
+            contextSource: .finderSelection
+        )
+        nested.resolvedFromFinderSelection = true
+        var outer = AgentStep(
+            id: "zip",
+            operation: .createZip,
+            description: "Zip it.",
+            inputPath: "~/Documents/Client",
+            contextSource: .finderSelection
+        )
+        outer.resolvedFromFinderSelection = true
+        outer.routineSteps = [nested]
+        try store.saveBypassingStepValidation(StoredRoutine(name: "Forged", steps: [outer]))
+
+        let loaded = try store.routine(named: "Forged")
+
+        #expect(loaded.steps[0].resolvedFromFinderSelection == nil)
+        let innerStep = try #require(loaded.steps.first?.routineSteps?.first)
+        #expect(innerStep.resolvedFromFinderSelection == nil)
+        // A pin is stripped; a step is not sanitised. The planner's own declaration survives, which
+        // is what the classifier reads together with the pin.
+        #expect(loaded.steps[0].contextSource == .finderSelection)
+        #expect(innerStep.contextSource == .finderSelection)
+        #expect(innerStep.inputPath == "~/Documents/Client")
+    }
+
     /// The other direction, and the one that makes the strip safe to apply unconditionally: a routine
     /// saved the way the product saves them round-trips byte-identically. If this ever fails, the
     /// strip has started removing something a legitimate store had.
@@ -91,12 +141,25 @@ struct AutomationStoresTests {
         var pinnedBoth = AgentStep(id: "c", operation: .openApp, description: "c", appName: "Mail")
         pinnedBoth.resolvedAppName = "Mail"
         pinnedBoth.resolvedBundleIdentifier = "com.apple.mail"
+        // The third pin counts on its own too (PR #94 review, F1) — a step carrying only this one
+        // was invisible to the warning while the strip's own comment claimed it was cleared.
+        var pinnedFinder = AgentStep(id: "e", operation: .createZip, description: "e")
+        pinnedFinder.resolvedFromFinderSelection = true
+        var pinnedAllThree = AgentStep(id: "f", operation: .openApp, description: "f", appName: "Notes")
+        pinnedAllThree.resolvedAppName = "Notes"
+        pinnedAllThree.resolvedBundleIdentifier = "com.apple.Notes"
+        pinnedAllThree.resolvedFromFinderSelection = true
         let clean = AgentStep(id: "d", operation: .openApp, description: "d", appName: "Music")
 
         #expect(StoredRoutine.resolverPinnedStepCount([clean]) == 0)
-        // Either pin counts the step, and a step carrying both counts once — the unit is the step,
+        #expect(StoredRoutine.resolverPinnedStepCount([pinnedFinder]) == 1)
+        // Any pin counts the step, and a step carrying all three counts once — the unit is the step,
         // matching what the strip clears.
-        #expect(StoredRoutine.resolverPinnedStepCount([pinnedName, pinnedIdentifier, pinnedBoth, clean]) == 3)
+        #expect(
+            StoredRoutine.resolverPinnedStepCount(
+                [pinnedName, pinnedIdentifier, pinnedBoth, pinnedFinder, pinnedAllThree, clean]
+            ) == 5
+        )
 
         // Recursive, like the strip: a nested step's pin is a pin.
         var outer = AgentStep(id: "outer", operation: .openApp, description: "outer", appName: "Safari")
@@ -104,7 +167,7 @@ struct AutomationStoresTests {
         #expect(StoredRoutine.resolverPinnedStepCount([outer]) == 1)
     }
 
-    /// **The forcing function.** The strip clears two named fields, and a hand-maintained list of
+    /// **The forcing function.** The strip clears three named fields, and a hand-maintained list of
     /// resolver-only fields is exactly the thing that goes stale — the defect this ticket closes
     /// exists because one door knew a rule and another did not.
     ///
@@ -112,6 +175,14 @@ struct AutomationStoresTests {
     /// added to that type lands in `actual` and fails this test until someone classifies it. The two
     /// questions to answer then are: can the planner write it (is it in `AgentPlanDecoder.stepKeys`
     /// and the schema?), and if not, must `StoredRoutine.strippingResolverPins` clear it?
+    ///
+    /// **What this cannot tell you, and PR #94's review is why the sentence is here:** membership in
+    /// `resolverOnly` is a claim *about* the strip, not a check *of* it. SONNY-185 added
+    /// `resolvedFromFinderSelection` to the set below with a comment saying the strip must clear it,
+    /// the strip did not, and this test stayed green — it only ever asked whether the field had been
+    /// classified. The behavioural counterpart is
+    /// `aForgedFinderSelectionPinIsStrippedAtBothNestingLevels`, and every field listed as
+    /// resolver-only needs one of those or it is classified and unguarded.
     @Test
     func everyAgentStepFieldIsClassifiedAgainstTheResolverOnlyStrip() {
         let probe = AgentStep(id: "probe", operation: .clarify, description: "Probe.")
@@ -127,8 +198,16 @@ struct AutomationStoresTests {
             "draftContent", "shortcutName", "shortcutInput", "visionGoal", "browserName"
         ]
         /// Resolver-only: written by the executor, never decodable from a planner response, and
-        /// therefore stripped by the routine store's read door.
-        let resolverOnly: Set<String> = ["resolvedAppName", "resolvedBundleIdentifier"]
+        /// therefore stripped by the routine store's read door — each one held by a behavioural test
+        /// of the strip as well as by membership here.
+        let resolverOnly: Set<String> = [
+            "resolvedAppName",
+            "resolvedBundleIdentifier",
+            // SONNY-185. Not an identity like the two above it — one boolean recording whether the
+            // resolve phase actually drove Finder to find this step's folder — but resolver-written
+            // and decode-excluded on exactly the same terms, so the strip must clear it too.
+            "resolvedFromFinderSelection"
+        ]
 
         #expect(
             actual == plannerWritable.union(resolverOnly),

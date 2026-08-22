@@ -50,6 +50,16 @@ extension AgentViewModel: VisionSessionInteracting {
 
     // MARK: - VisionSessionInteracting
 
+    /// One read of the grants file per iteration, taken here rather than three or four times below
+    /// (SONNY-202). Everything the loop asks between this call and the next one gets this answer.
+    ///
+    /// Reading eagerly rather than clearing and letting the first asker fill it is what keeps the
+    /// cache's lifetime statable: `loadApprovedAppsForGate` never writes it, so the only two moments
+    /// it changes are here and the run teardown, and neither is inside an iteration.
+    func visionIterationWillBegin() {
+        cacheApprovedAppsForThisVisionIteration()
+    }
+
     func visionApprovalContext(targetBundleIdentifier: String) -> ApprovalContext {
         approvalContext(visionTarget: targetBundleIdentifier)
     }

@@ -107,14 +107,25 @@ public enum FinderSelectionResolver {
             // with no path of its own did not supply the path this resolution used, so if that
             // resolution never reached Finder, nothing about this step is selection-driven any more.
             //
-            // The residual, stated rather than implied: a step carrying `contextSource` *and* its
-            // own non-empty `inputPath` is back-filled by nothing, keeps its marker, and still names
-            // Finder. After the first pass it is indistinguishable from a genuine declaring step, so
-            // no rule reading these fields can separate the two — telling them apart needs a
-            // resolve-phase provenance pin on `AgentStep` and a classifier keyed on it, which is
-            // SONNY-73's second candidate shape and its own ticket.
+            // **That residual is closed, and it needed a second fact rather than a cleverer rule**
+            // (SONNY-185). A step carrying `contextSource` *and* its own non-empty `inputPath` is
+            // back-filled by nothing, so the clearing below never reaches it: it kept its marker and
+            // `PlanScopedResources` named Finder for a run that never contacted it. After the first
+            // pass such a step is byte-for-byte a genuine declaring step the pin filled in, so no
+            // rule reading only `contextSource` and `inputPath` can tell the two apart. What can is
+            // a fact only this function knows — whether Finder was read on the pass that filled this
+            // step in — so it is written down here and the classifier is keyed on it.
+            //
+            // Written on the back-filled steps and only when Finder really was read, which is the
+            // same restriction the clearing carries and for the same reason: on the second pass
+            // nothing is back-filled, so nothing is written and nothing is lost, and a genuine
+            // selection's pin survives from the first pass. In the genuine case every matching step
+            // is back-filled — Finder is contacted only when no matching step brought a path — so
+            // the declaring step is always among them and never misses its pin.
             if satisfiedWithoutContactingFinder {
                 pinnedPlan.steps[index].contextSource = nil
+            } else {
+                pinnedPlan.steps[index].resolvedFromFinderSelection = true
             }
         }
         return pinnedPlan

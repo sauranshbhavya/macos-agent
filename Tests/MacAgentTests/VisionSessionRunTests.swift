@@ -1457,10 +1457,12 @@ struct VisionSessionRunTests {
 
     /// **The widget must render the capture question, or a Safe-mode session hangs.**
     ///
-    /// `hasVisibleWidgetPanel` is the single source of truth for both the widget's panel and
-    /// `FloatingWidgetWindowController`'s compositing decision, so a parked continuation the panel
-    /// declines to show is a session suspended with nothing on screen able to answer it. Pinned
-    /// beside the other three unconditional states for the same reason they are.
+    /// `hasVisibleWidgetPanel` is the single source of truth for the widget's panel, so a parked
+    /// continuation the panel declines to show is a session suspended with nothing on screen able
+    /// to answer it. Pinned beside the other three unconditional states for the same reason they
+    /// are. (This named `FloatingWidgetWindowController`'s compositing decision as the predicate's
+    /// second reader until SONNY-189; that mode was superseded on 2026-07-21 and the second reader
+    /// is now `FloatingWidgetView.isMicHintSlotFree`.)
     @Test
     func theWidgetPanelIsVisibleWhileACaptureIsWaitingToBeReviewed() async throws {
         let fixture = try makeFixture(
@@ -2745,6 +2747,45 @@ struct VisionSessionRunTests {
         #expect(detail.planSummary == "Control Safari: open my reading list")
         #expect(detail.steps.map(\.operation) == [.visionSession])
         #expect(detail.completedAt == record.completedAt)
+    }
+
+    /// **The live recording path carries the same declaration into the planner's context**
+    /// (SONNY-197), which is the hop that used to drop it — `PriorTaskOutcome` had two stored
+    /// properties and provenance was not one of them, so the value `recordPriorTaskContext` already
+    /// received as `resultProvenance` reached `StoredTaskResult` on disk and stopped there.
+    ///
+    /// Asserted beside the on-disk test above rather than in place of it, because they are two
+    /// different hops out of the same call: one writes the record, the other writes the context the
+    /// next command's planner will read. Both were being handed the same value; only one used it.
+    @Test
+    func aScreenControlRunsPriorTaskContextIsMarkedModelAuthoredToo() async throws {
+        let fixture = try makeFixture(replies: [
+            #"{"action":"done","rationale":"The reading list is open."}"#
+        ])
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.startVisionSession(goal: "open my reading list", appName: "Safari")
+        try await waitForIdle(fixture.viewModel)
+
+        let context = try #require(fixture.viewModel.priorTaskContext)
+        #expect(context.outcome.provenance == .modelAuthored)
+        #expect(context.outcome.summary == "The reading list is open.")
+    }
+
+    /// And an ordinary run's does not, so the marking means something. A calculator command is
+    /// entirely deterministic string-building by this repository.
+    @Test
+    func anOrdinaryRunsPriorTaskContextStaysCodeAuthored() async throws {
+        let fixture = try makeFixture(replies: [])
+        defer { fixture.tearDown() }
+
+        fixture.viewModel.command = "calc 2*2"
+        fixture.viewModel.start()
+        try await waitForIdle(fixture.viewModel)
+
+        let context = try #require(fixture.viewModel.priorTaskContext)
+        #expect(context.outcome.provenance == .codeAuthored)
+        #expect(context.outcome.summary.contains("4"))
     }
 
     /// **The chain join must not launder the model's text.** A plan that does some work with

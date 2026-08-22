@@ -329,9 +329,14 @@ already use. SONNY-98 is its first user.
 
 `Optional`-with-default here is for **call-site compatibility across the 16 real construction sites**
 (11 in `Sources/`, 5 in `Tests/`), **not** for on-disk backward compatibility. `CapabilityRiskAssessment`
-is `Codable` but is embedded in none of the 8 local stores — enumerated directly — and lives only in
+is `Codable` but is embedded in none of the local stores — enumerated directly — and lives only in
 memory as `RiskApprovalRequest.assessment` behind `@Published var approvalRequest`
-(`AgentViewModel.swift:33`). So `AutomationStores.swift`'s `keyNotFound` rule does not apply, and an
+(`AgentViewModel.swift:33`). (**The enumeration said "none of the 8 local stores" and there are now
+eleven; re-run 2026-08-21 by SONNY-183 and the negative still holds.** Method, so it reproduces
+rather than having to be trusted: `git grep -ln "CapabilityRiskAssessment" -- Sources/` returns 14
+files, none of which is a store or a stored-record type, so no store's on-disk payload can reach it.
+The conclusion survived; the warrant behind it had gone stale twice — first at nine stores, then at
+eleven — which is `CLAUDE.md`'s enumerate-before-you-subtract rule met from the inside.) So `AutomationStores.swift`'s `keyNotFound` rule does not apply, and an
 implementer should not reach for migration handling this type never needs. SONNY-97 re-verifies that
 in-branch rather than trusting this paragraph.
 

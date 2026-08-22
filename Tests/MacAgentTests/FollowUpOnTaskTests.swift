@@ -413,6 +413,53 @@ struct FollowUpOnTaskTests {
 
     // MARK: - Fixtures
 
+    /// **A stored result's provenance survives the last hop into the planner's context**
+    /// (SONNY-197). `followUpOnTask` rehydrates a `CompletedTaskRecord` into a `PriorTaskContext`,
+    /// and it used to read `record.result?.text` while `record.result?.provenance` sat unread on the
+    /// same expression — so a screen-control session's closing rationale, which is free text a model
+    /// wrote after looking at the user's screen, entered the trusted block indistinguishable from
+    /// "Zipped 3 files."
+    ///
+    /// **This changes no behaviour and the test says so.** Escaping is unconditional — all four
+    /// interpolated fields go through `escapeForPlanner` whatever the provenance — and nothing reads
+    /// the flag to decide anything yet. What is asserted is that the value arrives, and that the
+    /// text is unchanged by carrying it, so the first reader that does consult it is handed
+    /// something true rather than a default.
+    @Test
+    func aFollowUpCarriesTheStoredResultsProvenanceAndNotJustItsText() throws {
+        let fixture = try makeFollowUpFixture()
+        defer { fixture.cleanUp() }
+        let record = try fixture.seedLargestFilesTask(
+            inputPath: "~/Downloads",
+            result: .modelAuthored("The reading list is open.")
+        )
+
+        #expect(fixture.viewModel.followUpOnTask(record))
+
+        let context = try #require(fixture.viewModel.priorTaskContext)
+        #expect(context.outcome.provenance == .modelAuthored)
+        #expect(context.outcome.summary == "The reading list is open.")
+    }
+
+    /// The ordinary case, asserted separately rather than assumed from the default: a stored result
+    /// this repository wrote arrives `.codeAuthored`, and so does a record with no stored result at
+    /// all — which is every row written before row E, and has no text to have authored.
+    @Test
+    func anOrdinaryFollowUpArrivesCodeAuthoredAndSoDoesOneWithNoStoredResult() throws {
+        let fixture = try makeFollowUpFixture()
+        defer { fixture.cleanUp() }
+        let ordinary = try fixture.seedLargestFilesTask(inputPath: "~/Downloads")
+
+        #expect(fixture.viewModel.followUpOnTask(ordinary))
+        #expect(fixture.viewModel.priorTaskContext?.outcome.provenance == .codeAuthored)
+
+        let withoutResult = makeRecord(command: "open safari", result: nil)
+        #expect(fixture.viewModel.followUpOnTask(withoutResult))
+        let context = try #require(fixture.viewModel.priorTaskContext)
+        #expect(context.outcome.provenance == .codeAuthored)
+        #expect(context.outcome.summary == "")
+    }
+
     private func makeRecord(
         command: String,
         workspaceName: String? = nil,

@@ -41,8 +41,10 @@ none of them could have seen it (SONNY-169). The script empties a build director
 `.build/warnings-scratch`, which is inside `.build/` but is not the `.build/debug/` that `swift
 build` and `swift test` share, so it costs you no incremental rebuild afterwards — and recompiles
 every file, so its count is the whole population of the tree rather than of whatever was edited
-last. About 95s. Exit 0 for none, 2 for some, 1 when no trustworthy measurement was made; a failed
-build is reported as a failed build and never as zero. It measures the working tree, uncommitted
+last. About 95s. Exit 0 for none, 2 for some, 3 when a count was printed but the log carried lines the
+parser could not classify — they are printed above the count, excluded from it, and 3 is what keeps
+that run from reading as a clean one (SONNY-184) — and 1 when no trustworthy measurement was made;
+a failed build is reported as a failed build and never as zero. It measures the working tree, uncommitted
 work included, and stamps the SHA and the uncommitted-file count on its own report, so a number
 cannot be quoted without the tree it came from. `scripts/warnings --help` has a "What this does and
 does not prevent" section — debug only, because `@testable import` needs `-enable-testing` and
@@ -58,7 +60,10 @@ measurements, once in the reassuring direction where a bogus kill claimed covera
 there. It also refuses to run beside another battery in the same checkout, and builds into a
 scratch directory of its own rather than the shared `.build/`, because a battery sharing a build
 directory reports a contaminated result its own output cannot be told apart from a clean one
-(SONNY-176); `scripts/mutate unlock` clears a lock a killed run left behind.
+(SONNY-176); `scripts/mutate unlock` clears a lock a killed run left behind. **The two tools also
+refuse each other** (SONNY-184): a battery is mid-mutant by construction, so a `scripts/warnings`
+run started during one counts the warnings of a deliberately broken tree and stamps them with a SHA
+that never contained that code — whichever starts second refuses, naming the other's lock, **provided the other's lock is already in place**. Two starting within a few milliseconds of each other can both check and both proceed; the check and the `mkdir` are not one step, and closing that needs a lock the two tools share rather than two they read across, which was not worth the redesign (PR #94 review, F5). The refusal covers the reachable case, which is a founder starting one beside a session's run already under way.
 `scripts/mutate --help` has the plan format, and a "What this does and does not prevent" section
 stating what is left over; `scripts/mutate selftest` re-proves every one of those refusals still
 fires.

@@ -12,8 +12,12 @@ import Testing
 /// **Nothing here waits on wall-clock time it did not arm itself.** Every countdown is awaited
 /// through the model's own `dismissCountdown`, so a test finishes when the task it is testing
 /// finishes rather than after a sleep long enough to *probably* be safe. That is why the durations
-/// below are the two extremes and nothing in between: one short enough to be instant, one long
-/// enough that the only way it can finish is cancellation.
+/// below are extremes and nothing in between. There are three, and which one a `show` gets is the
+/// question SONNY-199 turned out to hinge on: `promptly` for a countdown a test waits *out*,
+/// `onlyCancellationCanEndThis` for one it cancels and then awaits, and `longerThanAnyStall` for
+/// the hint an assertion expects to still be there afterwards. The middle one standing in for the
+/// last is what made two of these tests flaky under load — and a test that finishes when its own
+/// task finishes can still lose a race against a *different* task it armed.
 ///
 /// **What is not reachable from here**, stated rather than implied: `FloatingWidgetView`'s four
 /// calls into this model are view wiring, and a view cannot be asked what it renders. One
@@ -34,12 +38,40 @@ struct WidgetMicHoverHintTests {
     /// view model resolves, in `WidgetVoiceEntryTests`.
     static let promptly = Duration.milliseconds(1)
 
-    /// Long enough that this countdown cannot possibly fire on its own while the assertions run, so
-    /// a countdown that finishes at all has been cancelled. Deliberately seconds rather than
-    /// minutes: a mutant that stops cancelling is caught either way, and this is what it costs when
-    /// one is. Deliberately *not* the shipping three either, so no assertion here can be satisfied
-    /// by the two happening to be the same number.
-    static let noSoonerThanTheTestEnds = Duration.seconds(5)
+    /// Armed on a countdown a test then **cancels and awaits**, so a countdown that finishes at all
+    /// has been cancelled. Deliberately seconds rather than minutes: a mutant that stops cancelling
+    /// is caught either way, and five seconds is what it costs when one is. Deliberately *not* the
+    /// shipping three either, so no assertion here can be satisfied by the two happening to be the
+    /// same number.
+    ///
+    /// **Never armed on a hint an assertion later expects to still be there** — that is
+    /// `longerThanAnyStall`, and the difference between the two is the whole of SONNY-199. One
+    /// constant did both jobs until then, which made the second job a bet that everything after
+    /// the `show` would finish inside five seconds.
+    static let onlyCancellationCanEndThis = Duration.seconds(5)
+
+    /// Armed on a hint an assertion expects to **survive**. Nothing may end this countdown on its
+    /// own during a test, at any load.
+    ///
+    /// **Why an hour and not five seconds.** Two tests below arm a countdown, cancel it, arm a
+    /// second one, and then assert the *second* hint is still up. At five seconds that second
+    /// countdown was a live wall-clock deadline racing the rest of the test, and under sustained
+    /// CPU load it won: 2 failures in 12 full-suite runs during PR #89's mutation batteries, at
+    /// `7d164df` and `dccf45c`, both `visibleHint` nil where a hint was expected. This suite is
+    /// `@MainActor` and Swift Testing interleaves suites on that one actor, so an `await` here
+    /// yields to whatever else is queued on it — the gap between arming and asserting is bounded by
+    /// the machine, not by this file.
+    ///
+    /// An hour is not a wait: no test ever awaits this task. It is cancelled, or the process ends
+    /// with it still sleeping, which costs nothing.
+    ///
+    /// **Why this mattered more than an ordinary flake.** A mutation battery decides a mutant was
+    /// killed by whether the suite failed, so a flake and a kill are the same observation. A mutant
+    /// anywhere these two tests reach would have read as killed while the suite was red for a
+    /// timing reason that had nothing to do with it — the reassuring direction. `scripts/mutate`
+    /// prints the name of every test that killed each mutant for exactly this reason; its `--help`
+    /// now says so.
+    static let longerThanAnyStall = Duration.seconds(3600)
 
     static func reminder(clearingAfter delay: Duration?) -> MicHoverHintPresentation {
         MicHoverHintPresentation(
@@ -125,7 +157,7 @@ struct WidgetMicHoverHintTests {
         var resolutions = 0
         let resolve = {
             resolutions += 1
-            return Self.reminder(clearingAfter: Self.noSoonerThanTheTestEnds)
+            return Self.reminder(clearingAfter: Self.longerThanAnyStall)
         }
 
         model.pointerArrived(slotIsFree: true, hint: resolve)
@@ -150,7 +182,7 @@ struct WidgetMicHoverHintTests {
     func aCancelledCountdownCannotClearTheHintThatReplacedIt() async throws {
         let model = MicHoverHintModel()
 
-        model.show(Self.reminder(clearingAfter: Self.noSoonerThanTheTestEnds))
+        model.show(Self.reminder(clearingAfter: Self.onlyCancellationCanEndThis))
         let abandoned = try #require(model.dismissCountdown)
 
         // The panel takes the slot, or the pointer leaves — the view calls this for both.
@@ -159,7 +191,9 @@ struct WidgetMicHoverHintTests {
         #expect(model.dismissCountdown == nil, "a dismissed hint must leave nothing counting")
 
         // Hovered again, and now there is a second hint that the first countdown must not touch.
-        model.show(Self.reminder(clearingAfter: Self.noSoonerThanTheTestEnds))
+        // Its own countdown is armed for longer than any stall (SONNY-199): the assertion below is
+        // about the abandoned task, and a second live deadline racing it is how this test flaked.
+        model.show(Self.reminder(clearingAfter: Self.longerThanAnyStall))
         await abandoned.value
 
         #expect(model.visibleHint != nil, "the abandoned countdown cleared a hint it never armed for")
@@ -180,10 +214,12 @@ struct WidgetMicHoverHintTests {
     func showingAgainReplacesTheCountdownRatherThanAddingASecond() async throws {
         let model = MicHoverHintModel()
 
-        model.show(Self.reminder(clearingAfter: Self.noSoonerThanTheTestEnds))
+        model.show(Self.reminder(clearingAfter: Self.onlyCancellationCanEndThis))
         let superseded = try #require(model.dismissCountdown)
 
-        model.show(Self.reminder(clearingAfter: Self.noSoonerThanTheTestEnds))
+        // Longer than any stall, for the same reason as the test above: `current` is the countdown
+        // whose hint has to still be there at the end, so it must not be a deadline of its own.
+        model.show(Self.reminder(clearingAfter: Self.longerThanAnyStall))
         let current = try #require(model.dismissCountdown)
         #expect(current != superseded)
 
@@ -260,7 +296,7 @@ struct MicHoverArrivalTests {
         tracker.onEnter = {
             model.pointerArrived(slotIsFree: true) {
                 WidgetMicHoverHintTests.reminder(
-                    clearingAfter: WidgetMicHoverHintTests.noSoonerThanTheTestEnds
+                    clearingAfter: WidgetMicHoverHintTests.longerThanAnyStall
                 )
             }
         }
