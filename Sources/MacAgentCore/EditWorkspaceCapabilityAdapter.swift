@@ -320,6 +320,19 @@ public struct EditWorkspaceCapabilityAdapter: CapabilityAdapter {
         let previews = try preview(plan: plan, context: context)
         let edit = try workspaceEdit(plan, context: context)
         log(.act, "Updating workspace \(edit.stored.name)")
+        // **No memory guard here, unlike `CreateWorkspaceCapabilityAdapter`, and that asymmetry is
+        // deliberate** (recorded by PR #98's round-4 pass, N1 — it was right and undocumented, which
+        // left a reader comparing the two adapters nothing to tell them which one was on purpose).
+        //
+        // The Workspaces memory switch stops Sonny *remembering a new workspace*. This adapter
+        // cannot create one: `editWorkspaceSpec` throws `.missingWorkspace` for a name the store
+        // does not already hold, so every write here changes an entry the user already has. That is
+        // the same category as `AgentViewModel.markWorkspaceAsTeam`, which is likewise unguarded —
+        // the user managing what is already remembered, which a switch about *recording more* has
+        // never governed.
+        //
+        // Not reachable from a scheduled run either way: `.editWorkspace` is in
+        // `StoredRoutine.forbiddenStepOperations`, enforced at the write door by `RoutineStore.save`.
         try context.workspaceStore.save(edit.updated)
         log(.summarize, "Workspace updated")
         return AgentRunResult(plan: plan, previews: previews, summary: edit.summary)

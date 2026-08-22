@@ -2115,18 +2115,38 @@ final class AgentViewModel: ObservableObject {
     ///
     /// - `TaskRecordingPolicy` is a *per-task composer* control. A scheduled run passes through no
     ///   composer, so there is nothing for it to answer — and it is not merely absent, it is
-    ///   actively wrong to read: a foreground run paused at a clarification leaves `isRunning` false
-    ///   with the policy still `.suppressTraces`, and `checkScheduledRoutines` only guards on
-    ///   `isRunning` and `isAwaitingApproval`, so a routine firing in that window would silently lose
-    ///   its traces. That is the reachable defect PR #67's F2 fixed by passing `.record` explicitly,
-    ///   and calling `allowsRecording(to:)` here would reintroduce it.
+    ///   actively wrong to read. **The reachable window is the ordinary one, before any dispatch**
+    ///   (corrected by PR #98's round-4 pass, F2): `dontSaveButton` renders only when
+    ///   `!isTaskInFlight` (`FloatingWidgetView.swift`), so "Don't save this task" is a *pre*-dispatch
+    ///   toggle — the user flips it on while composing and has not pressed Send. `isRunning` is
+    ///   false, `approvalRequest` is nil and `clarificationQuestion` is nil, so all three of
+    ///   `checkScheduledRoutines`' guards pass, a routine fires, and reading the policy here would
+    ///   silently strip that routine's traces because of a switch set for a command that has not
+    ///   been sent. That is the same class of defect PR #67's F2 fixed by passing `.record`
+    ///   explicitly, and calling `allowsRecording(to:)` here would reintroduce it.
+    ///
+    ///   **The earlier telling of this named the clarification pause and was false at the SHA it was
+    ///   written at**: `checkScheduledRoutines` guards on three terms, not two — PR #80's F1 added
+    ///   `clarificationQuestion == nil`, closing exactly the window that sentence cited, forty lines
+    ///   below its own documentation. Recorded rather than quietly swapped, because a correct
+    ///   decision resting on a false premise is one refactor away from being reverted: a reader who
+    ///   checks the cited mechanism finds it does not exist and reasonably concludes the deviation
+    ///   is obsolete.
+    ///
+    ///   **And there is no case where a scheduled run should honour the term at all**, which is the
+    ///   half that does not depend on any window being reachable: there is no composer in that path,
+    ///   so a user has no way to ask for a routine's suppression. Honouring it could only ever apply
+    ///   a switch set for a different task — which the toggle's own label, "this task", rules out.
     /// - `MemoryRecordingSettings` is a *standing preference*. It applies to a scheduled run exactly
     ///   as it does to a typed one — `makeExecutor` has said so in a comment since this branch
     ///   started, and everything routed through the executor honours it. The three writes the view
     ///   model performs itself did not, which is what this exists to fix.
     ///
     /// So the rule is: the scheduled path opts out of the composer switch and never out of the
-    /// memory switches. Same shape as the foreground guards at `recordTaskHistoryIfTerminal` and
+    /// memory switches. **One live exception, named rather than left to be re-found:**
+    /// `visionSessionJournalStoreForThisRun` still reads `allowsRecording(to:)` and is handed to a
+    /// scheduled run's executor; it fails closed and unattended vision cannot execute, so it stays
+    /// as it is. Its own doc carries the argument. Same shape as the foreground guards at `recordTaskHistoryIfTerminal` and
     /// `recordTaskPlanDetail`, with the one term that cannot apply removed rather than the whole
     /// conjunction copied.
     func allowsScheduledRecording(to store: LocalStore) -> Bool {
@@ -2148,6 +2168,19 @@ final class AgentViewModel: ObservableObject {
     /// `LocalStoreClassification` calls the most sensitive of the eleven; it had no seam test, no
     /// mutation and no entry under Known limits, while the other traces were each closed or
     /// recorded.
+    /// **The one seam a scheduled run reaches that still reads the composer switch, stated because
+    /// it is a real exception to a rule written as a global one** (PR #98 round-4 pass, N2).
+    /// `allowsScheduledRecording(to:)`'s doc says the scheduled path opts out of `taskRecordingPolicy`;
+    /// this seam is handed over by `makeLiveVisionEnvironment()`, which `makeExecutor` builds for
+    /// every run including a scheduled one, and it uses `allowsRecording(to:)`.
+    ///
+    /// Left as it is, on both counts that matter. It **fails closed** — a stale `.suppressTraces`
+    /// withholds the journal rather than writing one — and it is **unreachable**: unattended vision
+    /// is refused three independent ways (`.visionSession` is a forbidden routine step, the explicit
+    /// belt in `performScheduledRun` checks the routine's steps, its nested steps and the prepared
+    /// plan, and the fixed `.approved(.tier2)` ceiling cannot satisfy a tier-3 assessment). Changing
+    /// it would be a change to the foreground seam every other caller shares, for a path that cannot
+    /// execute, in the safe direction already.
     var visionSessionJournalStoreForThisRun: VisionSessionJournalStore? {
         allowsRecording(to: .visionSessionJournal) ? visionSessionJournalStore : nil
     }
@@ -4262,13 +4295,21 @@ final class AgentViewModel: ObservableObject {
         do {
             // `.record` explicitly, never this run's policy (PR #67 review, F2). A scheduled routine is
             // never suppressed — it passes through no composer, so there is no switch to have been
-            // left on. Inheriting `taskRecordingPolicy` was wrong in one reachable window: a
-            // foreground run paused at a *clarification* leaves `isRunning` false and the policy
-            // still `.suppressTraces`, and `checkScheduledRoutines` only guards on `isRunning` and
-            // `isAwaitingApproval` — so a routine firing then lost its Shortcut run history while
+            // left on. Inheriting `taskRecordingPolicy` lost a routine's Shortcut run history while
             // still writing its task-history row, which is a different writer. Stated here the same
-            // way `recentArtifactStore` already is, rather than left to the policy happening to be
-            // right.
+            // way `recentArtifactStoreForScheduledRun` already is, rather than left to the policy
+            // happening to be right.
+            //
+            // **The window that made it reachable is not the one this comment used to name**
+            // (PR #98 round 4, F2). It said a foreground run paused at a *clarification*, and that
+            // pause has been closed at this door since PR #80's F1 added `clarificationQuestion ==
+            // nil` as `checkScheduledRoutines`' third guard term. The live window is the ordinary
+            // one, before any dispatch: "Don't save this task" is a pre-dispatch toggle
+            // (`dontSaveButton` renders only when `!isTaskInFlight`), so a user who flips it on
+            // while composing and has not pressed Send passes all three guards. Corrected rather
+            // than deleted, because the fix it justifies is still right and a reader who checks a
+            // dead mechanism concludes the fix is dead too. Full reasoning at
+            // `allowsScheduledRecording(to:)`.
             let executor = makeExecutor(recordingPolicy: .record)
             let runner = AgentRunner(
                 planner: InstantOnlyFallbackPlanner(),
@@ -4279,7 +4320,10 @@ final class AgentViewModel: ObservableObject {
                 // that was right about the composer switch and silent about the memory switches —
                 // so a scheduled routine that wrote a file recorded a note naming its full path with
                 // Memory switched off. `recentArtifactStoreForThisRun` is not the fix either: it
-                // folds in `taskRecordingPolicy`, which is exactly what must not be read here.
+                // folds in `taskRecordingPolicy`, which is exactly what must not be read here — see
+                // `allowsScheduledRecording(to:)` for why, and note that the reason is the
+                // pre-dispatch composer window rather than the clarification pause an earlier
+                // telling named (PR #98 round 4, F2).
                 recentArtifactStore: recentArtifactStoreForScheduledRun
             )
             self.runner = runner
@@ -4472,6 +4516,34 @@ final class AgentViewModel: ObservableObject {
             return
         }
 
+        recordScheduledTaskPlanDetail(for: record, plan: plan, evictedTaskIDs: evictedTaskIDs)
+
+        // Regardless of the plan write, because the row landed either way and the list has to agree
+        // with the file. The foreground path refreshes on the same rule — and this line is the whole
+        // reason the plan write moved into its own function below.
+        refreshTaskHistory()
+    }
+
+    /// The plan-detail half of a scheduled run's record, in its own function **so that its guard's
+    /// `return` cannot take `refreshTaskHistory()` with it** (PR #98 round-4 pass, F3).
+    ///
+    /// The guard used to be inline, where returning exited `recordScheduledTaskHistory` entirely and
+    /// skipped the refresh — leaving a row on disk that the Tasks list would not show until
+    /// something else refreshed it. That is verbatim the defect PR #89's review fixed on this same
+    /// pair of writes, and the foreground path has been shaped this way ever since precisely because
+    /// of it: `recordTaskPlanDetail` is a separate function so its own early return is local.
+    ///
+    /// **It was unreachable and that was not a reason to leave it.** Plan details and history rows
+    /// share the `.taskHistory` memory row today, so the guard can only fire in a world where the
+    /// row's guard already returned. But the guard is kept for the day `LocalStore.memoryCategory`
+    /// gives plan details a row of their own — and on that day the inline version became live and
+    /// silently re-introduced a fixed bug. A latent defect that arrives with a future refactor is
+    /// the one shape nobody is watching for.
+    private func recordScheduledTaskPlanDetail(
+        for record: CompletedTaskRecord,
+        plan: AgentPlan?,
+        evictedTaskIDs: [String]
+    ) {
         // Classified `.trace`, and withheld by the same switch that withheld the row — asked
         // explicitly rather than inferred from having got past the row's guard, exactly as the
         // foreground `recordTaskPlanDetail` does and for the same reason: the reach of a suppression
@@ -4484,12 +4556,6 @@ final class AgentViewModel: ObservableObject {
         // `recordTaskPlanDetail` is still not reused here for exactly that reason. What the earlier
         // wording missed is that "no policy check" and "no check at all" are different sentences,
         // and only the first one was true of the intent.
-        //
-        // **Unreachable today, and kept anyway**, stated so a mutation survivor here is read
-        // correctly: plan details and history rows share the `.taskHistory` memory row, so this
-        // guard can only fire in a world where the row's guard already returned. It becomes live the
-        // day `LocalStore.memoryCategory` gives plan details a row of their own, which is exactly
-        // the change that would otherwise slip past.
         guard allowsScheduledRecording(to: .taskPlanDetails) else {
             return
         }
@@ -4512,10 +4578,6 @@ final class AgentViewModel: ObservableObject {
                 "Sonny could not save what this scheduled run planned: \(error.localizedDescription)"
             )
         }
-
-        // Regardless of the plan write, because the row landed either way and the list has to agree
-        // with the file. The foreground path refreshes on the same rule.
-        refreshTaskHistory()
     }
 
     /// Switches a routine's schedule off after an approval refusal and says so, once.
@@ -4574,7 +4636,31 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
+    /// Appends the occurrence to the routine's own run history — the dates the Routines row's streak
+    /// badge is computed from.
+    ///
+    /// **Guarded, by the founder's decision of 2026-08-22** (PR #98 round-4 verification pass, F1).
+    /// This is the fourth write in the category the other three came from and the last one an
+    /// enumeration of the scheduled path found: with every memory switch off, a routine firing on
+    /// its schedule still appended a dated entry to `routines.json` — the file the Routines memory
+    /// row governs — visible to the user as a streak, with no control anywhere that stopped it.
+    ///
+    /// **Guarding it costs nothing operationally, which is what made the call cheap.** Nothing in
+    /// the scheduling path reads `recentRunDates`: the due-check runs off the routine's schedule and
+    /// the clock. The data is display-only, so the badge simply goes quiet while memory is off.
+    ///
+    /// The counter-argument is real and lost on consistency rather than on being wrong: a routine is
+    /// something the user deliberately created, so its run log arguably belongs to the routine
+    /// rather than being something Sonny recorded *about* them. But the same user, in the same
+    /// session, with the same switch off, would otherwise find three kinds of scheduled write silent
+    /// and a fourth still recording, with nothing to tell them apart. The deeper question — that
+    /// turning off Routines memory blocks *saving* a routine while still logging runs, which may be
+    /// backwards, since saving is the deliberate act and logging the passive one — is **SONNY-223**'s,
+    /// not this write's.
     private func recordScheduledRunInHistory(name: String, at occurrence: Date) {
+        guard allowsScheduledRecording(to: .routines) else {
+            return
+        }
         do {
             try routineStore.recordRun(routineNamed: name, at: occurrence)
         } catch {
