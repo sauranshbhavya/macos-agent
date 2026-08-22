@@ -5,6 +5,7 @@ import { classifyFailure, consumeLatest, issueCode, CODE_LIFETIME_SECONDS } from
 import { expiryFields } from "../auth/clock.js";
 import { looksLikeEmail, normalizeEmail, rateLimitEmailKey, resolve } from "../auth/identity.js";
 import { ProviderRejected, ProviderUnavailable, type AuthProvider } from "../auth/provider.js";
+import { drainOwedRevocations } from "../auth/revocation.js";
 import {
   CODE_REQUEST_PER_ADDRESS, CODE_REQUEST_PER_SOURCE, CODE_VERIFY_PER_ADDRESS,
   bucketKey, consume,
@@ -103,6 +104,13 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
       );
     }
     const email = normalizeEmail(parsed.data.email);
+    // **Two keys, deliberately, and which one each thing takes is the whole of F4** (PR #87 third
+    // round). `email` is the IDENTITY key — plus-tags kept, because merging two addresses merges
+    // two accounts — and only `resolve()` and the rate limits' address bucket see it in that role.
+    // `mailbox` folds plus-tags away, because a code is delivered to an inbox rather than to an
+    // identity, and every code-lifecycle call takes it. Keyed the other way, `victim+1@x` and
+    // `victim+2@x` shared one rate-limit budget while each holding its own live code.
+    const mailbox = rateLimitEmailKey(email);
     return deps.withConnection(async (client) => {
 
     // Per source first. A caller over their own ceiling is told so: it is their own behaviour, and
@@ -121,7 +129,7 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
 
     // Per address second, and its refusal is SILENT. Answering 429 here would tell the caller that
     // this particular address has been asked for recently, which is the oracle in a slower form.
-    const byAddress = await consume(client, bucketKey("addr", rateLimitEmailKey(email), salt), CODE_REQUEST_PER_ADDRESS, now());
+    const byAddress = await consume(client, bucketKey("addr", mailbox, salt), CODE_REQUEST_PER_ADDRESS, now());
     if (!byAddress.allowed) return reply.status(200).send(uniform);
 
     try {
@@ -147,7 +155,7 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
       // round, F11): as two statements, concurrent starts for one address each invalidated nothing
       // of each other's and left up to three live codes behind.
       await deps.provider.sendEmailCode(email);
-      await issueCode(client, email, sourceHash(request, salt), now());
+      await issueCode(client, mailbox, sourceHash(request, salt), now());
     } catch (error) {
       // Even a provider failure returns the uniform response. The user is told nothing useful
       // either way, and the alternative leaks that this address reached the send path.
@@ -178,11 +186,18 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
       );
     }
     const email = normalizeEmail(parsed.data.email);
+    // **Two keys, deliberately, and which one each thing takes is the whole of F4** (PR #87 third
+    // round). `email` is the IDENTITY key — plus-tags kept, because merging two addresses merges
+    // two accounts — and only `resolve()` and the rate limits' address bucket see it in that role.
+    // `mailbox` folds plus-tags away, because a code is delivered to an inbox rather than to an
+    // identity, and every code-lifecycle call takes it. Keyed the other way, `victim+1@x` and
+    // `victim+2@x` shared one rate-limit budget while each holding its own live code.
+    const mailbox = rateLimitEmailKey(email);
     return deps.withConnection(async (client) => {
 
     // Verification is guessing, so it is limited per address being guessed at. Without this the
     // code's own entropy is the only thing between an attacker and an account.
-    const limit = await consume(client, bucketKey("verify", rateLimitEmailKey(email), salt), CODE_VERIFY_PER_ADDRESS, now());
+    const limit = await consume(client, bucketKey("verify", mailbox, salt), CODE_VERIFY_PER_ADDRESS, now());
     if (!limit.allowed) {
       return reply
         .status(429)
@@ -197,7 +212,7 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
       session = await deps.provider.verifyEmailCode(email, parsed.data.code);
     } catch (error) {
       if (error instanceof ProviderRejected) {
-        const code = await classifyFailure(client, email, now());
+        const code = await classifyFailure(client, mailbox, now());
         return reply.status(400).send(errorBody(code, "Sign-in code was not accepted.", request.id));
       }
       if (error instanceof ProviderUnavailable) {
@@ -211,7 +226,7 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
     // Consume our own record only after the provider accepted, so a wrong guess never burns the
     // user's live code. If this returns false the code was already consumed concurrently: another
     // request won the race and this one must not also mint a session.
-    if (!(await consumeLatest(client, email, now()))) {
+    if (!(await consumeLatest(client, mailbox, now()))) {
       return reply.status(400).send(
         errorBody("auth.code_used", "Sign-in code was already used.", request.id),
       );
@@ -373,7 +388,6 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
 
     await client.query("BEGIN");
     let closed;
-    let identities;
     try {
       closed = await client.query(
         "UPDATE sonny.account SET deleted_at = now() WHERE id = $1 AND deleted_at IS NULL",
@@ -384,53 +398,52 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
       // `supabase_user_id`s that `provider.deleteUser` and SONNY-196 both need, which is the same
       // reasoning that keeps the account row itself.
       //
-      // **Read INSIDE the transaction, AFTER the close** (PR #87 second round, F2). R1's fix moved
-      // this read before `BEGIN`, which was right against 0003 — that migration DELETEd the rows at
-      // statement end, so reading afterwards read an empty table and revoked nobody. Under 0004 the
-      // rows survive, and reading first became the wrong half of the trade: an identity that joined
-      // this account between the read and the close was never revoked, so a session the user had
-      // just added outlived the account.
-      //
-      // Reading here is race-free rather than merely luckier, and the enumeration is worth spelling
-      // out because a claim like that is only as good as the list it rests on. Three ways a row
-      // this read must see could appear or change, and what stops each:
-      //
-      //   1. **An identity attaching to this account.** Both paths in this codebase that do it —
-      //      `resolve()`'s rule 2 and `linkExplicitly` — take `SELECT … FOR SHARE` on the account
-      //      row first, which conflicts with the `FOR NO KEY UPDATE` the `UPDATE` above holds. So
-      //      either they committed before the close and this read sees them, or they block and find
-      //      the account closed when they wake.
-      //   2. **An existing identity's `supabase_user_id` changing** under `resolve()`'s rule 1,
-      //      which takes no account lock. It is serialised anyway: the close trigger updates every
-      //      identity row on this account at the end of the statement above, so a rule-1 update of
-      //      one of those rows blocks on it and then re-evaluates its own `NOT account_closed` and
-      //      matches nothing.
-      //   3. **Raw SQL from outside this file** — a retention sweep, an operator's `INSERT`. That
-      //      takes no `FOR SHARE` and is NOT covered. It is out of reach of any lock this handler
-      //      can take, and is named here rather than papered over.
-      identities = await client.query<{ supabase_user_id: string }>(
-        `SELECT DISTINCT supabase_user_id FROM sonny.identity
-          WHERE account_id = $1 AND supabase_user_id IS NOT NULL`,
-        [accountId],
-      );
+      // **This transaction used to also read the identities, and the read is gone rather than
+      // moved** (PR #87 third round, F1). Two rounds were spent getting its *position* right —
+      // before `BEGIN` was correct against 0003 and wrong under 0004, then inside the transaction
+      // after the close, with a three-case enumeration of what could slip through the gap. The
+      // third round removed the gap instead of guarding it: the work is now derived from committed
+      // state *after* this transaction ends, out of `provider_session_revoked_at`, so there is no
+      // window for anything to arrive in and nothing left to enumerate. **An ordering that has to
+      // be argued for is a weaker thing than an ordering that cannot matter.**
       await client.query("COMMIT");
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
     }
 
-    // After the close, so a revocation cannot leave the account open with its sessions gone.
-    for (const row of identities.rows) {
-      try {
-        await deps.provider.signOutAllForUser(row.supabase_user_id);
-      } catch (error) {
-        if (!(error instanceof ProviderRejected)) throw error;
-      }
-    }
+    // **After the close, and it CANNOT abort partway** (PR #87 third round, F1).
+    //
+    // This was a bare loop that rethrew anything other than `ProviderRejected`, so one transient
+    // provider error meant every identity ordered after it was never attempted — and because the
+    // close had already committed, `accountForSupabaseUser` could no longer attribute this caller to
+    // the account, so the route was unreachable and the failure was permanent. Reproduced: account
+    // closed and committed, 500 to the caller, the third identity never revoked, the retry 401.
+    //
+    // `drainOwedRevocations` catches and continues, and — the part that actually fixes it — leaves
+    // `provider_session_revoked_at` NULL on whatever it could not do, so the work outlives this
+    // request. `npm run revoke-pending` and the drain at the top of this handler are what finish it.
+    const outcome = await drainOwedRevocations(client, deps.provider, { accountId });
 
     // 204 whether or not a row changed: deleting an already-deleted account is the state the caller
     // asked for, and answering 404 would tell an unauthenticated prober which ids exist.
-    request.log.info({ closed: closed.rowCount }, "account closed");
+    //
+    // **204 even when a revocation failed, and that is a decision rather than an oversight.** The
+    // thing the caller asked for — their account closed — did happen and is committed; a 500 would
+    // describe an outcome that is not the one on disk, and it would invite a retry that cannot
+    // succeed, because the account is closed and no longer attributable to them. The failure is not
+    // swallowed: it is a row in the database with nothing recorded against it, an error line here,
+    // and work for the next drain. What the caller cannot do about it, they are not asked to.
+    if (outcome.failed > 0) {
+      request.log.error(
+        { owed: outcome.failed, revoked: outcome.revoked, reasons: outcome.failures.map((f) => f.reason) },
+        "account closed, but provider-side revocation is still owed for some identities",
+      );
+    }
+    request.log.info(
+      { closed: closed.rowCount, revoked: outcome.revoked, owed: outcome.failed },
+      "account closed",
+    );
     return reply.status(204).send();
     });
   });

@@ -3,7 +3,9 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { Config } from "../src/config.js";
 import { CODE_REQUEST_PER_ADDRESS, CODE_REQUEST_PER_SOURCE, CODE_VERIFY_PER_ADDRESS } from "../src/auth/ratelimit.js";
-import { ProviderRejected, type AuthProvider, type VerifiedSession } from "../src/auth/provider.js";
+import { ProviderRejected, ProviderUnavailable, type AuthProvider, type VerifiedSession } from "../src/auth/provider.js";
+import { drainOwedRevocations, owedRevocationCount } from "../src/auth/revocation.js";
+import { normalizeEmail } from "../src/auth/identity.js";
 import { up } from "../src/db/migrate.js";
 
 const url = process.env["DATABASE_URL"];
@@ -72,8 +74,16 @@ class FakeProvider implements AuthProvider {
     return this.session;
   }
   revokedUsers: string[] = [];
+  /** Provider-side users whose revocation raises a TRANSIENT error — not `ProviderRejected`. */
+  failFor = new Set<string>();
+  /** Provider-side users the provider says it has never heard of. That is a completed revocation. */
+  rejectFor = new Set<string>();
   async signOut() { if (!this.accept) throw new ProviderRejected("already gone"); }
-  async signOutAllForUser(id: string) { this.revokedUsers.push(id); }
+  async signOutAllForUser(id: string) {
+    if (this.failFor.has(id)) throw new ProviderUnavailable("admin API timed out");
+    if (this.rejectFor.has(id)) throw new ProviderRejected("no such user");
+    this.revokedUsers.push(id);
+  }
   async userFromAccessToken(token: string): Promise<string> {
     if (token !== "at") throw new ProviderRejected("bad token");
     return this.session.supabaseUserId;
@@ -180,7 +190,7 @@ describeDb("the auth endpoints", () => {
       const { rows } = await client.query<{ live: number; total: number }>(
         `SELECT count(*) FILTER (WHERE consumed_at IS NULL)::int AS live,
                 count(*)::int AS total
-           FROM sonny.sign_in_code_issue WHERE email_norm = 'swarm@example.com'`,
+           FROM sonny.sign_in_code_issue WHERE mailbox_key = 'swarm@example.com'`,
       );
       // Three sends really happened — the send is a network call and cannot be made transactional —
       // and exactly one of the three records is live. Which one is the newest, which is the
@@ -190,9 +200,48 @@ describeDb("the auth endpoints", () => {
       expect(rows[0]!.live).toBe(1);
       const newest = await client.query<{ consumed_at: Date | null }>(
         `SELECT consumed_at FROM sonny.sign_in_code_issue
-          WHERE email_norm = 'swarm@example.com' ORDER BY issued_at DESC, id DESC LIMIT 1`,
+          WHERE mailbox_key = 'swarm@example.com' ORDER BY issued_at DESC, id DESC LIMIT 1`,
       );
       expect(newest.rows[0]!.consumed_at).toBeNull();
+      await app.close();
+    });
+
+    it("leaves ONE live code when the three requests are PLUS-TAG VARIANTS of one mailbox", async () => {
+      // **The test above raced one literal address, and could not fail** (PR #87 third round, F4).
+      // It was written as the regression guard for the single-live-code guarantee and it was
+      // structurally incapable of seeing the way that guarantee was actually broken: the code
+      // lifecycle keyed on `normalizeEmail` (plus-tags kept) while the rate limit keyed on
+      // `rateLimitEmailKey` (plus-tags folded), so three spellings of one inbox shared one budget
+      // and each held its own live code. Same address three times exercises neither half of that.
+      //
+      // Reproduced before the fix: three 200s, three mails to one inbox, three live codes — a 3×
+      // guessing surface against a guarantee this branch states in three places. The variants below
+      // are the whole point of the test and the reason it is separate rather than a parameter.
+      const app = build();
+      const variants = ["victim@example.com", "victim+1@example.com", "victim+2@example.com"];
+      const results = await Promise.all(variants.map((email) =>
+        app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email } })));
+      expect(results.map((r) => r.statusCode)).toEqual([200, 200, 200]);
+      // All three passed the per-address limit, which proves they really did share one bucket —
+      // otherwise this test would be racing three independent mailboxes and would prove nothing.
+      expect(provider.sent).toHaveLength(3);
+
+      const { rows } = await client.query<{ live: number; total: number; keys: number }>(
+        `SELECT count(*) FILTER (WHERE consumed_at IS NULL)::int AS live,
+                count(*)::int AS total,
+                count(DISTINCT mailbox_key)::int AS keys
+           FROM sonny.sign_in_code_issue`,
+      );
+      expect(rows[0]!.total).toBe(3);
+      // **One key, because there is one inbox.** This is the assertion the old test had no way to
+      // make: keyed the old way there were three rows under three different keys, each of them the
+      // newest of its own key and therefore each live.
+      expect(rows[0]!.keys).toBe(1);
+      expect(rows[0]!.live).toBe(1);
+
+      // And the identity key is untouched by the fix, which is the other half of F4: folding these
+      // together for CODES must not fold them together for ACCOUNTS.
+      expect(normalizeEmail("victim+1@example.com")).not.toBe(normalizeEmail("victim@example.com"));
       await app.close();
     });
   });
@@ -232,7 +281,7 @@ describeDb("the auth endpoints", () => {
       // expired: issued, then aged past its lifetime
       provider.accept = true;
       await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "exp@example.com" } });
-      await client.query("UPDATE sonny.sign_in_code_issue SET expires_at = now() - interval '1 minute' WHERE email_norm = 'exp@example.com'");
+      await client.query("UPDATE sonny.sign_in_code_issue SET expires_at = now() - interval '1 minute' WHERE mailbox_key = 'exp@example.com'");
       provider.accept = false;
       expect((await verify(app, "123456", "exp@example.com")).json().error.code).toBe("auth.code_expired");
       await app.close();
@@ -404,6 +453,87 @@ describeDb("the auth endpoints", () => {
       // and nothing was revoked either — a refusal that still signed the user out would be worse
       // than useless, because it would look like the deletion had partly happened.
       expect(provider.revokedUsers).toEqual([]);
+      await app.close();
+    });
+
+    it("does not let ONE provider failure strand every identity after it", async () => {
+      // **PR #87 third round, F1, and this is the whole defect in one test.** The revocation loop
+      // rethrew anything that was not `ProviderRejected`, so a single transient error aborted it:
+      // every identity ordered after the failing one was never even attempted. Reproduced end to
+      // end — account closed and committed, 500 to the caller, the third identity never revoked,
+      // and the retry answering 401, because a closed account can no longer be attributed to its
+      // caller. There was no retry path at all; the stranded session was permanent.
+      const app = buildWithDelete();
+      await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "flaky@example.com" } });
+      const accountId = (await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "flaky@example.com", code: "1" } })).json().user.id;
+
+      const FAILING = "44444444-4444-4444-4444-444444444444";
+      const AFTER = "55555555-5555-5555-5555-555555555555";
+      for (const [subject, user] of [["apple-flaky", FAILING], ["google-flaky", AFTER]] as const) {
+        await client.query(
+          `INSERT INTO sonny.identity (account_id, provider, subject, email_hint, email_verified,
+             email_is_relay, supabase_user_id, link_method)
+           VALUES ($1,$2,$3,'flaky@example.com',true,false,$4,'explicit')`,
+          [accountId, subject.startsWith("apple") ? "apple" : "google", subject, user],
+        );
+      }
+      // Transient, and deliberately NOT ProviderRejected — that is the class the old loop rethrew.
+      provider.revokedUsers = [];
+      provider.failFor.add(FAILING);
+
+      const response = await app.inject({
+        method: "DELETE", url: "/v1/account", headers: { authorization: "Bearer at" },
+      });
+      // The account really is closed, so the caller is told the thing they asked for happened.
+      expect(response.statusCode).toBe(204);
+      expect((await client.query("SELECT deleted_at FROM sonny.account WHERE id = $1", [accountId]))
+        .rows[0].deleted_at).not.toBeNull();
+
+      // **The identity AFTER the failing one was still attempted.** This is the assertion the fix
+      // is for: under the old loop `revokedUsers` stopped at the first identity.
+      expect(provider.revokedUsers).toContain(AFTER);
+      expect(provider.revokedUsers).toContain("11111111-1111-1111-1111-111111111111");
+      expect(provider.revokedUsers).not.toContain(FAILING);
+
+      // **And the one that failed is recorded as still owed**, which is what gives it a path to
+      // completion at all. A loop that merely caught and continued would leave it nowhere.
+      const owed = await client.query<{ supabase_user_id: string }>(
+        `SELECT supabase_user_id FROM sonny.identity
+          WHERE account_id = $1 AND provider_session_revoked_at IS NULL AND supabase_user_id IS NOT NULL`,
+        [accountId],
+      );
+      expect(owed.rows.map((r) => r.supabase_user_id)).toEqual([FAILING]);
+      expect(await owedRevocationCount(client)).toBe(1);
+
+      // The provider recovers. Nothing about this needs the original caller, who cannot reach the
+      // route any more — which is the point.
+      provider.failFor.clear();
+      const drained = await drainOwedRevocations(client, provider);
+      expect(drained).toEqual({ revoked: 1, failed: 0, failures: [] });
+      expect(provider.revokedUsers).toContain(FAILING);
+      expect(await owedRevocationCount(client)).toBe(0);
+
+      // Idempotent: a second drain finds nothing and calls nobody.
+      const before = provider.revokedUsers.length;
+      expect(await drainOwedRevocations(client, provider)).toEqual({ revoked: 0, failed: 0, failures: [] });
+      expect(provider.revokedUsers).toHaveLength(before);
+      await app.close();
+    });
+
+    it("records a revocation as done when the provider says there is no such session", async () => {
+      // `ProviderRejected` is the provider saying the thing we wanted is already true. Treating it
+      // as owed would mean re-calling forever for a user that does not exist; treating a TIMEOUT the
+      // same way would record an event that did not happen. The two are the same `catch` and they
+      // must not be the same outcome.
+      const app = buildWithDelete();
+      await app.inject({ method: "POST", url: "/v1/auth/email/start", payload: { email: "gonealready@example.com" } });
+      await app.inject({ method: "POST", url: "/v1/auth/email/verify", payload: { email: "gonealready@example.com", code: "1" } });
+      provider.rejectFor.add("11111111-1111-1111-1111-111111111111");
+
+      expect((await app.inject({
+        method: "DELETE", url: "/v1/account", headers: { authorization: "Bearer at" },
+      })).statusCode).toBe(204);
+      expect(await owedRevocationCount(client)).toBe(0);
       await app.close();
     });
 

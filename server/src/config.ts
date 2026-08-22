@@ -1,3 +1,4 @@
+import { isIP } from "node:net";
 import { z } from "zod";
 
 /**
@@ -159,10 +160,65 @@ export class ConfigError extends Error {}
  * nothing, which is the same behaviour, but `false` is the value its documentation describes for
  * "no proxy", and the two have differed across releases. Being explicit costs nothing.
  */
+/**
+ * Fastify's own named proxy sets, which `@fastify/proxy-addr` accepts alongside addresses. Passed
+ * through rather than rejected: they are the documented way to say "the RFC1918 ranges" without
+ * writing three CIDRs out, and refusing them would make this validation narrower than the thing it
+ * is validating for.
+ */
+const NAMED_PROXY_SETS = new Set(["loopback", "linklocal", "uniquelocal"]);
+
+/**
+ * Is one entry something `@fastify/proxy-addr` can compile — an IP, a CIDR, or a named set?
+ *
+ * `net.isIP` returns 4, 6 or 0, which is the whole of the address check. The prefix is checked
+ * against the family's own width, because `10.0.0.0/64` is not a v4 network and `proxy-addr` will
+ * say so at a moment nobody is watching.
+ */
+export function isTrustedProxyEntry(entry: string): boolean {
+  if (NAMED_PROXY_SETS.has(entry)) return true;
+  const slash = entry.indexOf("/");
+  if (slash === -1) return isIP(entry) !== 0;
+  const address = entry.slice(0, slash);
+  const prefix = entry.slice(slash + 1);
+  const family = isIP(address);
+  if (family === 0) return false;
+  if (!/^\d{1,3}$/.test(prefix)) return false;
+  const bits = Number(prefix);
+  return bits >= 0 && bits <= (family === 4 ? 32 : 128);
+}
+
+/**
+ * Parse and **validate** `TRUSTED_PROXIES`.
+ *
+ * **Nothing validated these entries, and the failure was a third-party stack trace at startup**
+ * (PR #87 third round, F5). The array went straight to `@fastify/proxy-addr`'s `compile()`, which
+ * throws a raw `TypeError` **inside the `Fastify(...)` constructor** — before `app.ready()`, before
+ * any logger this server configures, and naming library internals rather than the variable that is
+ * actually wrong. A typo in one CIDR meant a gateway that would not start and a log that did not say
+ * why, which defeats the property the top of this file exists for: a bad environment is a named
+ * `ConfigError` identifying the variable, not a crash.
+ *
+ * The offending entry is named because there is no way to fix a list without knowing which element
+ * is bad, and — unlike a credential — a proxy address is not a secret. `SONNY_ENV` and the rest are
+ * deliberately reported without their values; this one is deliberately reported with it.
+ */
 export function parseTrustedProxies(raw: string): boolean | string[] {
   const trimmed = raw.trim();
   if (trimmed === "") return false;
-  return trimmed.split(",").map((entry) => entry.trim()).filter(Boolean);
+  const entries = trimmed.split(",").map((entry) => entry.trim()).filter(Boolean);
+  const bad = entries.filter((entry) => !isTrustedProxyEntry(entry));
+  if (bad.length > 0) {
+    throw new ConfigError(
+      `TRUSTED_PROXIES contains ${bad.length} entry/entries that are not an IP address, a CIDR ` +
+        `range or a named set: ${bad.map((entry) => JSON.stringify(entry)).join(", ")}. ` +
+        `Expected a comma-separated list like 10.0.0.0/8,172.16.0.0/12, or one of ` +
+        `${[...NAMED_PROXY_SETS].join(", ")}. Left unchecked this reaches Fastify's proxy-address ` +
+        `parser, which throws inside the server constructor and names its own internals instead ` +
+        `of this variable.`,
+    );
+  }
+  return entries;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {

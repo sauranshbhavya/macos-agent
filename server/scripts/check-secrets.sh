@@ -50,6 +50,22 @@ PATTERNS=(
   # PEM in the tree forever -- including a real one. The selftest caught that.
   '-----BEGIN [A-Z ]*PRIVATE KEY-----([A-Za-z0-9+/=[:space:]]|\\\\n){120,}'
   'postgres(ql)?://[^:[:space:]]+:[^@[:space:]]+@'   # connection string with a real password
+)
+
+# **Name-anchored patterns, matched CASE-INSENSITIVELY** (PR #87 third round, F6).
+#
+# Separate from the array above because the two want opposite treatment. A vendor prefix is a
+# literal the vendor issues -- `sk-ant-`, `ghp_`, `re_` -- and matching those without regard to case
+# would widen them for nothing and invite false positives on ordinary prose. A variable NAME is not
+# issued by anyone: the same secret is `RATE_LIMIT_SALT` in a `.env`, `rate_limit_salt` in a Helm
+# values file or a Terraform tfvars, and `Rate_Limit_Salt` wherever somebody felt like it.
+#
+# Case-sensitivity here was a real hole rather than a theoretical one, and it was worst exactly where
+# it mattered most: these three -- RATE_LIMIT_SALT, SUPABASE_JWT_SECRET, SUPABASE_SERVICE_ROLE_KEY --
+# have **no vendor-prefix fallback** (a hex salt and a project secret carry no recognisable shape),
+# so the name is the only thing that can catch them, and the lowercase form is the natural YAML,
+# Helm, Docker-compose and Terraform spelling. Verified missed before this split and caught after.
+PATTERNS_CI=(
   # An assignment of a KNOWN-SECRET variable to something that is not a placeholder.
   #
   # SONNY-127 introduced RATE_LIMIT_SALT, whose value is `openssl rand -hex 32` -- 64 hex
@@ -119,7 +135,13 @@ while IFS= read -r file; do
 done <<< "$FILES"
 
 findings=0
-for pattern in "${PATTERNS[@]}"; do
+# The same body for both arrays; `$1` is the extra grep flag, empty for case-sensitive and `-i` for
+# the name-anchored set. Called normally rather than piped into, so it runs in this shell and its
+# `findings` increments are the real ones.
+scan_patterns() {
+  local case_flag="$1"; shift
+  local pattern
+  for pattern in "$@"; do
   while IFS= read -r hit; do
     [[ -z "$hit" ]] && continue
     file="${hit%%:*}"
@@ -140,7 +162,7 @@ for pattern in "${PATTERNS[@]}"; do
     while IFS= read -r matched; do
       [[ -z "$matched" ]] && continue
       echo "$matched" | grep -Eq "$ALLOW" || { unallowed=1; break; }
-    done < <(echo "$text" | grep -Eo -e "$pattern")
+    done < <(echo "$text" | grep -Eo ${case_flag:+"$case_flag"} -e "$pattern")
     (( unallowed )) || continue
     # Exact-match baseline of known-synthetic fixtures. See secret-scan-baseline.txt for why this
     # is an exact-string list rather than a path skip or a looser pattern.
@@ -154,8 +176,12 @@ for pattern in "${PATTERNS[@]}"; do
     # found has copied it into your terminal scrollback and your CI log.
     echo "  $file:$line  matches /$pattern/" >&2
     findings=$((findings + 1))
-  done < <(echo "$FILES" | tr '\n' '\0' | xargs -0 grep -EnI -e "$pattern" 2>/dev/null)
-done
+  done < <(echo "$FILES" | tr '\n' '\0' | xargs -0 grep -EnI ${case_flag:+"$case_flag"} -e "$pattern" 2>/dev/null)
+  done
+}
+
+scan_patterns "" "${PATTERNS[@]}"
+scan_patterns "-i" "${PATTERNS_CI[@]}"
 
 findings=$((findings + multiline_findings))
 if (( findings > 0 )); then
@@ -176,7 +202,7 @@ while IFS= read -r fixture; do
   fi
 done < "$BASELINE"
 
-echo "check-secrets: clean ($(echo "$FILES" | wc -l | tr -d ' ') $MODE files scanned, ${#PATTERNS[@]} patterns, $(grep -cvE '^\s*(#|$)' "$BASELINE") baselined fixtures)"
+echo "check-secrets: clean ($(echo "$FILES" | wc -l | tr -d ' ') $MODE files scanned, $(( ${#PATTERNS[@]} + ${#PATTERNS_CI[@]} )) patterns, $(grep -cvE '^\s*(#|$)' "$BASELINE") baselined fixtures)"
 (( stale > 0 )) && exit 1
 exit 0
 
@@ -196,6 +222,16 @@ exit 0
 #     pattern above describes the two-segment body an issued key carries; a key in some other shape
 #     is caught only when it sits beside its own variable name. The name-anchored pattern is the
 #     backstop for exactly this, and it is a backstop rather than a guarantee.
+#   - **A secret whose VARIABLE NAME is not on the name-anchored list.** That list is five names
+#     long. Matching is case-insensitive now (PR #87 third round, F6), so `rate_limit_salt` and
+#     `Rate_Limit_Salt` are caught alongside `RATE_LIMIT_SALT` -- but a sixth secret introduced
+#     under a name nobody adds here is invisible unless it carries a vendor prefix. Adding a name is
+#     one word; noticing that one is missing is the part with no mechanism behind it.
+#   - **A name and its value on DIFFERENT LINES.** grep is line-based, so pretty-printed JSON or
+#     wrapped YAML -- `"RATE_LIMIT_SALT":` on one line and its value on the next -- splits the two
+#     halves the name-anchored pattern needs to see together and evades it entirely, even though the
+#     single-line JSON form is specifically covered. Known and filed rather than fixed here: closing
+#     it means the scanner parsing structure rather than matching lines.
 #   - **A credential in an untracked, unstaged file.** `server/.env` is exactly that, deliberately:
 #     it is where a local credential is supposed to live, and flagging the file the design tells
 #     you to create would train people to bypass the check.
