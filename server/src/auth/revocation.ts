@@ -22,8 +22,9 @@ import { ProviderRejected, type AuthProvider } from "./provider.js";
  * 2. **Write down what is still owed.** `sonny.identity.provider_session_revoked_at` is NULL until a
  *    provider call actually returns, so the outstanding work is a query rather than a lost stack
  *    frame. That is what gives a post-closure transient failure a path to eventual completion: the
- *    deletion route drains the backlog on the way in, and `npm run revocations` reports it from outside,
- *    needing no caller who can still authenticate.
+ *    deletion route drains **its own account** after the close — not a backlog, which this line
+ *    used to claim (PR #87 fifth round, F8) — and `npm run revocations` reports what is left from
+ *    outside, needing no caller who can still authenticate.
  *
  * **What this deliberately does not do is retry in a loop inside the request.** A provider that is
  * down stays down for longer than a request should wait, and a caller blocked on it learns nothing
@@ -52,56 +53,80 @@ interface Owed {
  * marking those done would be recording an event that did not happen in the one table that exists to
  * say whether it did.
  *
- * Rows are claimed one at a time with `FOR UPDATE SKIP LOCKED`, so two drains running at once — the
- * route and the CLI, or two instances — divide the work rather than duplicating it or deadlocking
- * over it. `signOutAllForUser` is idempotent at the provider, but a drain that depends on that is a
- * drain resting on someone else's implementation detail.
+ * Rows are claimed one at a time by **taking a lease** — one atomic `UPDATE … RETURNING` that writes
+ * `revocation_claimed_at` and returns the row it wrote — so two drains running at once (the route
+ * and the CLI, or two instances) divide the work rather than duplicating it or deadlocking over it.
+ * **That claim used to be a row lock released at COMMIT, before the provider call**, so it divided
+ * the work only when two drains collided in the same instant (PR #87 fifth round, F3).
+ * `signOutAllForUser` is idempotent at the provider, but a drain that depends on that is a drain
+ * resting on someone else's implementation detail.
  */
 export async function drainOwedRevocations(
   client: pg.Client,
   provider: AuthProvider,
-  options: { accountId?: string; limit?: number } = {},
+  options: { accountId?: string; limit?: number; now?: Date } = {},
 ): Promise<RevocationOutcome> {
   const limit = options.limit ?? 100;
+  const now = options.now ?? new Date();
   let revoked = 0;
   const failures: { supabaseUserId: string; reason: string }[] = [];
 
   for (let attempted = 0; attempted < limit; attempted += 1) {
-    // One claim per iteration, each in its own transaction: the provider call must not happen inside
-    // a transaction holding row locks, because it is a network call of unbounded duration.
-    await client.query("BEGIN");
-    let owed: Owed | undefined;
-    try {
-      const claim = await client.query<Owed>(
-        `SELECT supabase_user_id
-           FROM sonny.identity
-          WHERE account_closed
-            AND provider_session_revoked_at IS NULL
-            AND supabase_user_id IS NOT NULL
-            AND ($1::uuid IS NULL OR account_id = $1::uuid)
-            -- Both sides cast to text on purpose: supabase_user_id is a uuid column, and binding
-            -- this list as uuid[] turns any malformed element into a 22P02 raised by the database
-            -- rather than a value this function can see and refuse.
-            AND supabase_user_id::text <> ALL($2::text[])
-          ORDER BY id
-          LIMIT 1
-          FOR UPDATE SKIP LOCKED`,
-        [options.accountId ?? null, failures.map((f) => f.supabaseUserId)],
-      );
-      owed = claim.rows[0];
-      await client.query("COMMIT");
-    } catch (error) {
-      await client.query("ROLLBACK");
-      throw error;
-    }
+    // **One atomic UPDATE takes the lease and returns what it took** (PR #87 fifth round, F3).
+    //
+    // This was `BEGIN; SELECT … FOR UPDATE SKIP LOCKED; COMMIT` followed by the provider call — and
+    // the COMMIT released the row lock *before* the call, so the lock covered one SELECT rather than
+    // the work it was claiming. The unguarded window was the entire provider call. Reproduced with a
+    // provider taking 300ms: two drains started 100ms apart called `signOutAllForUser` twice for the
+    // same user. Two started simultaneously divided correctly, which is why an ad-hoc test would
+    // have found nothing.
+    //
+    // The lease is written by the statement that selects the row, so there is no window between
+    // choosing and claiming. No transaction is held across the network call, which is what the old
+    // comment here was right to avoid, and a drain that dies mid-call leaves a lease that expires
+    // rather than a claim nobody recorded.
+    const claim = await client.query<Owed>(
+      `UPDATE sonny.identity SET revocation_claimed_at = $3::timestamptz
+        WHERE id = (
+          SELECT id FROM sonny.identity
+           WHERE account_closed
+             AND provider_session_revoked_at IS NULL
+             AND supabase_user_id IS NOT NULL
+             AND ($1::uuid IS NULL OR account_id = $1::uuid)
+             -- Both sides cast to text on purpose: supabase_user_id is a uuid column, and binding
+             -- this list as uuid[] turns any malformed element into a 22P02 raised by the database
+             -- rather than a value this function can see and refuse.
+             AND supabase_user_id::text <> ALL($2::text[])
+             AND (revocation_claimed_at IS NULL
+                  OR revocation_claimed_at
+                       < $3::timestamptz - make_interval(secs => sonny.revocation_lease_seconds()))
+           ORDER BY id
+           LIMIT 1
+           FOR UPDATE SKIP LOCKED
+        )
+        RETURNING supabase_user_id`,
+      [options.accountId ?? null, failures.map((f) => f.supabaseUserId), now],
+    );
+    const owed = claim.rows[0];
     if (!owed) break;
 
     try {
       await provider.signOutAllForUser(owed.supabase_user_id);
     } catch (error) {
       if (!(error instanceof ProviderRejected)) {
-        // Transient, or unknown, which is treated as transient. The row keeps its NULL, so the next
-        // drain finds it again; this run excludes it so one dead user cannot spin the loop.
+        // Transient, or unknown, which is treated as transient. `provider_session_revoked_at` stays
+        // NULL, so the row is still owed and the next drain finds it.
+        //
+        // **The lease is released, and that distinction matters.** A lease says "somebody is calling
+        // the provider about this right now"; a failure that has already returned is not that. Left
+        // set, an operator who fixed the provider and re-ran the drain would be told there was
+        // nothing to do for the next five minutes, which is the same class of wrong answer F2 was
+        // about. Back-off is a different concern and this ticket does not need one.
+        await client.query(
+          "UPDATE sonny.identity SET revocation_claimed_at = NULL WHERE supabase_user_id = $1 AND provider_session_revoked_at IS NULL",
+          [owed.supabase_user_id],
+        );
+        // This run still excludes it, so one dead user cannot spin the loop.
         failures.push({
           supabaseUserId: owed.supabase_user_id,
           reason: (error as Error)?.name || "Error",
@@ -116,11 +141,11 @@ export async function drainOwedRevocations(
     // others owed forever and every drain would call the provider again for nothing.
     await client.query(
       `UPDATE sonny.identity
-          SET provider_session_revoked_at = now()
+          SET provider_session_revoked_at = $2
         WHERE supabase_user_id = $1
           AND account_closed
           AND provider_session_revoked_at IS NULL`,
-      [owed.supabase_user_id],
+      [owed.supabase_user_id, now],
     );
     revoked += 1;
   }

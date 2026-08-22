@@ -298,6 +298,34 @@ describeDb("the identity-linking rule", () => {
       expect(rows[0].account_id).not.toBe(mine.accountId);
     });
 
+    it("refuses on the FLAG alone, when the account itself is not deleted", async () => {
+      // **PR #87 fifth round, F6.** The guard is two conditions — `AND NOT i.account_closed` and an
+      // EXISTS on a live account — and the test above is named "because it checks BOTH" while
+      // driving only the EXISTS half: it deletes the account and clears the flag by hand, so
+      // removing `AND NOT i.account_closed` left the suite green. Same "name contradicts body" shape
+      // this branch already fixed once, as the second round's F8.
+      //
+      // The mirror state pins the other half: the flag set over an account that is NOT deleted. That
+      // is precisely the corrupt row the second round's F1 produced — a moved identity carrying a
+      // stale `account_closed` on a live account — so it is reachable rather than invented, and it
+      // is the state in which the flag is the only thing that can refuse.
+      const live = await resolve(client, emailAssertion("f6-live@example.com"));
+      const flagged = await resolve(client, emailAssertion("f6-flagged@example.com"));
+      await client.query(
+        "UPDATE sonny.identity SET account_closed = true WHERE id = $1", [flagged.identityId]);
+      // The account is untouched, so the EXISTS half of the guard passes and cannot be what refuses.
+      expect((await client.query(
+        "SELECT deleted_at FROM sonny.account WHERE id = $1", [flagged.accountId],
+      )).rows[0].deleted_at).toBeNull();
+
+      await expect(
+        linkExplicitly(client, flagged.identityId, live.accountId, live.accountId, flagged.identityId),
+      ).rejects.toThrow(/closed account/);
+      const { rows } = await client.query(
+        "SELECT account_id FROM sonny.identity WHERE id = $1", [flagged.identityId]);
+      expect(rows[0].account_id).toBe(flagged.accountId);
+    });
+
     it("PINS that provenIdentityId is a consistency check and NOT proof of ownership", async () => {
       // **A characterization test: it asserts the unsafe behaviour on purpose** (PR #87 third
       // round, F3). The existing tests cover only the MISMATCHED case — caller names identity A and
@@ -362,7 +390,7 @@ describeDb("the identity-linking rule", () => {
       expect(rows[0].account_closed).toBe(true);
     });
 
-    it("refuses even when the flag disagrees with the account, because it checks BOTH", async () => {
+    it("refuses on the ACCOUNT alone, when the flag has been cleared by hand", async () => {
       // The guard is `NOT account_closed` **and** an EXISTS on a live account, and this is what the
       // second half is for. `account_closed` is denormalised, so a database that has ever been in a
       // state 0005 repairs — or a future statement nobody has written yet — can carry a false flag
@@ -655,9 +683,14 @@ describeDb("the identity-linking rule", () => {
       // the very defect it was named for.
       //
       // This one uses two connections and holds the closer's transaction open across the resolver's
-      // insert window, which is the interleaving that stranded an identity. `SELECT ... FOR SHARE`
-      // in resolve() is what makes the resolver block on the closer's row lock and re-read, instead
-      // of inserting into the gap.
+      // insert window, which is the interleaving that stranded an identity.
+      //
+      // **This comment used to credit `SELECT … FOR SHARE` in `resolve()`, which no longer exists**
+      // (PR #87 fifth round, F9). That lock was deleted as unreachable in the third round, and the
+      // sweep missed this line — which is the precise harm the deletion was performed to avoid, a
+      // reader reasoning from a guard that is not there. What makes this test pass is rule 1's
+      // row-count re-check: its refresh repeats `NOT account_closed`, so a close committing
+      // underneath it matches nothing and the resolution restarts.
       const victim = await resolve(client, emailAssertion("realrace@example.com"));
 
       const closer = new pg.Client({ connectionString: url });

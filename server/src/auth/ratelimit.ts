@@ -48,6 +48,26 @@ export const CODE_REQUEST_PER_SOURCE: Limit = { max: 10, windowSeconds: 60 * 60 
  * meet a support ticket about it knows it was chosen.
  */
 export const CODE_VERIFY_PER_ADDRESS: Limit = { max: 5, windowSeconds: 15 * 60 };
+/**
+ * **Verification also has a per-SOURCE ceiling, and its absence was a working enumeration
+ * primitive** (PR #87 fifth round, F1).
+ *
+ * The per-address limit above is keyed on the address being guessed at, so it bounds guessing at one
+ * mailbox and bounds nothing at all when every request names a different one. Measured on the route
+ * before this existed: **200 distinct addresses probed from one source, 0 refused** — while
+ * `email/start`, which has had a per-source limit since the first commit, refused 192 of 200 in the
+ * same run from the same source. Each of those 200 also spent a `verifyEmailCode` call against the
+ * provider's own quota.
+ *
+ * 30 in an hour: far above a person mistyping a six-digit code a few times, or a household behind
+ * one address with several people signing in, and far below anything usable for enumerating a user
+ * list. Deliberately looser than `email/start`'s 10, because verifying is what a legitimate user
+ * does repeatedly and requesting is not.
+ *
+ * **Its own bucket kind**, not shared with `email/start`'s source bucket: two limits with different
+ * ceilings counted against one counter is one limit, and it would be whichever is smaller.
+ */
+export const CODE_VERIFY_PER_SOURCE: Limit = { max: 30, windowSeconds: 60 * 60 };
 
 /**
  * Salted hash of a bucket key. Raw addresses and source identifiers are personal data, and a table
@@ -56,7 +76,11 @@ export const CODE_VERIFY_PER_ADDRESS: Limit = { max: 5, windowSeconds: 15 * 60 }
  * The salt comes from configuration and has no default: an unsalted hash of an email address is a
  * rainbow-table lookup away from the address itself.
  */
-export function bucketKey(kind: "addr" | "src" | "verify", value: string, salt: string): string {
+export function bucketKey(
+  kind: "addr" | "src" | "verify" | "verifysrc",
+  value: string,
+  salt: string,
+): string {
   if (!salt) throw new Error("rate-limit salt is not configured");
   return `${kind}:${createHash("sha256").update(`${salt}:${kind}:${value}`).digest("hex")}`;
 }

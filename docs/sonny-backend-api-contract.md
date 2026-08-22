@@ -331,6 +331,38 @@ Returns the token response of 3.2 on success. On failure it returns one of three
 `auth.code_invalid`, `auth.code_expired`, `auth.code_used` — because SONNY-127 has to rate-limit them
 differently and SONNY-128 has to say three different things to the user.
 
+**Amended 2026-08-22 (SONNY-127, PR #87 fifth round, F1): the three distinct codes are disclosed
+only to a caller who can be seen to have requested the code.** Everyone else gets
+`auth.code_invalid`.
+
+The reason is that the three codes *are* an account-existence oracle, and it was a working one. One
+unauthenticated request per address, carrying a code known to be wrong and never calling
+`email/start`, returned `auth.code_used` for a mailbox whose owner had signed in — something the
+caller did not cause and could not otherwise observe — `auth.code_expired` for a mailbox that had
+asked and never used, and `auth.code_invalid` for an address with nothing. Reproduced against a real
+database. The signal also never decayed (still `auth.code_used` after 400 simulated days) and nothing
+bounded enumeration (200 distinct addresses probed from one source, 0 refused).
+
+**Two conditions gate the disclosure**, and both are about the caller rather than the code: the
+issuance's recorded source must match the caller's, and the issuance must be recent — one code
+lifetime past its expiry. The per-source rate limit `email/start` has always had is now on this route
+too.
+
+**What this narrows.** SONNY-127's acceptance criterion — "an expired code, a reused code, and a
+wrong code each fail with the contract's distinct errors" — held for every caller and now holds for
+the caller it was written about: the one completing a sign-in, who is the only party SONNY-128 has to
+say three different things to. A caller who cannot be seen to have asked for the code is told
+`auth.code_invalid`, which is true of what they are holding. **The client contract is unchanged**: a
+client in the flow sees exactly what it saw before, so nothing on SONNY-128 changes.
+
+**What it does not close, stated rather than implied.** The source match is only as good as
+`request.ip`, so a deployment behind a proxy with `TRUSTED_PROXIES` unset collapses every caller to
+one source and the match becomes vacuous — the same misconfiguration the per-source rate limit
+degrades under. The recency bound and the per-source ceiling still apply there. Closing it
+unconditionally would mean `email/start` returning an opaque flow token that `email/verify` echoes
+back, which is a change to two request/response shapes and lands on SONNY-128; it is not built, and
+it is the lever if this is ever judged insufficient.
+
 **Where those three come from, since the provider does not supply them** (noted 2026-08-21,
 SONNY-127). Supabase Auth returns a single `otp_expired` reading "Token has expired or is invalid"
 for all three cases. The gateway therefore derives them from its own record of what it issued —

@@ -100,6 +100,51 @@ describe("provider credentials — two live keys per provider", () => {
     expect(acceptedKeys(loadConfig({ ...base }), "vision")).toEqual([]);
   });
 
+  describe("ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE — the production gate", () => {
+    // **PR #87 fifth round, F4: this control had no test at all.** `grep -rn` across `test/` returned
+    // nothing, and replacing the refusal's condition with `false` left the suite green at 145/145.
+    // It is the control that keeps an unauthenticated destructive route off the one host where it
+    // would matter, and it is the fix for this branch's original CRITICAL.
+    //
+    // The gate does work — a reviewer drove eleven env-value variants and a real compiled-process
+    // launch at it. **That is exactly the shape the founder made this round fix for the race
+    // battery** (F7 of the third round): headline safety evidence living only as a number in a
+    // ticket comment with no command left to run. Same shape, different artifact.
+
+    it("REFUSES to start when the flag is on in production", () => {
+      expect(() => loadConfig({ SONNY_ENV: "production", ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE: "true" }))
+        .toThrow(ConfigError);
+      // Refused rather than silently forced off: a deployment believing a route is mounted that is
+      // not is its own confusion. The message has to name the variable, or the operator is guessing.
+      expect(() => loadConfig({ SONNY_ENV: "production", ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE: "true" }))
+        .toThrow(/ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE/);
+    });
+
+    it("allows it outside production, which is what makes it a gate and not a ban", () => {
+      for (const environment of ["local", "staging"]) {
+        const config = loadConfig({ SONNY_ENV: environment, ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE: "true" });
+        expect(config.allowUnauthenticatedAccountDelete).toBe(true);
+      }
+      expect(loadConfig({ SONNY_ENV: "production" }).allowUnauthenticatedAccountDelete).toBe(false);
+    });
+
+    it("defaults to off when the variable is absent", () => {
+      // The safe direction has to be the default, because the dangerous one is a deployment away.
+      expect(loadConfig({ SONNY_ENV: "local" }).allowUnauthenticatedAccountDelete).toBe(false);
+    });
+
+    it("refuses every near-miss spelling of true rather than guessing at it", () => {
+      // A gate that accepted `TRUE` in production while refusing `true` would be worse than no gate:
+      // it would be a gate somebody had tested. The enum is what makes the refusal total.
+      for (const value of ["TRUE", "True", " true", "1", "yes", "on", ""]) {
+        expect(() => loadConfig({ SONNY_ENV: "production", ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE: value }))
+          .toThrow(ConfigError);
+        expect(() => loadConfig({ SONNY_ENV: "local", ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE: value }))
+          .toThrow(ConfigError);
+      }
+    });
+  });
+
   describe("TRUSTED_PROXIES", () => {
     // **PR #87 third round, F5.** Nothing validated these entries, so a typo reached
     // `@fastify/proxy-addr`'s `compile()` and threw a raw third-party `TypeError` **inside the
