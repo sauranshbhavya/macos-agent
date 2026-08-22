@@ -78,8 +78,10 @@ export function buildApp(config: Config, auth?: AuthDeps): FastifyInstance {
      * caller choose its own apparent address. Not believing it *at all* behind a load balancer is
      * equally wrong in the other direction: every request then reports the balancer, and the
      * per-source rate limit becomes one global bucket. **A boolean has no safe setting**, so this
-     * is a list of trusted proxies (or a hop count) from `TRUSTED_PROXIES`, empty by default —
-     * Fastify walks the forwarded chain and stops at the first hop not on the list.
+     * is a list of trusted proxies from `TRUSTED_PROXIES`, empty by default — Fastify walks the
+     * forwarded chain and stops at the first hop not on the list. **Not a hop count**: the parser
+     * has never produced one, and this comment's parenthesis said otherwise until the second review
+     * round swept the claim out of all three places it lived (PR #87 F3).
      */
     trustProxy: config.trustProxy,
 

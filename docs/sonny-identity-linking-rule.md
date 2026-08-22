@@ -38,6 +38,15 @@ which SONNY-129 would have routed the primitive while reading. It is implemented
 parameter is required rather than optional so that omitting it is a type error rather than a
 judgment call.
 
+**Rule 4 has three conditions, not one, and the third was added last** (PR #87 second round, F1b).
+The caller must hold a session on the **target**; the identity being moved must be the one the caller
+**just proved** by signing in with it; and that identity must not be one a **closed account** left
+behind. The third exists because moving a closed account's identity onto a live one resurrects,
+through a path that looks like a link, exactly what closing the account took away — and because a
+closed identity cannot sign anyone in, so a caller could never honestly satisfy the second condition
+about one. The vacated account is still left for the caller to close: deleting it here would destroy
+content `feature/row-12-retention` owns.
+
 ---
 
 ## 2. Why not "match on email", which is the obvious rule and also Supabase's
@@ -126,5 +135,27 @@ they would encode one provider's policy into our identity key.
 - Apple twice with a relay address lands on one account, because `sub` is stable (the Hide My Email case)
 - an explicit link joins two accounts and moves the identity (rule 4)
 - an explicit link **refuses when the caller's session is not on the target account**
+- an explicit link **refuses to move an identity the caller did not just prove** — authenticating the
+  target says the caller owns the destination and nothing about what is being moved there
 - an explicit link **refuses** to join an account that is deleted
+- an explicit link **refuses to move an identity a closed account left behind**, and refuses it even
+  when the identity's own flag has been cleared by hand, because both the flag and the account are
+  checked
 - two identities on one account may carry two different `supabase_user_id`s — the case the separation exists for
+
+**And the properties the schema holds rather than the resolver** (migrations 0004 and 0005 — see
+`server/test/linking.db.test.ts`'s "the flag follows the account" group):
+
+- an identity **moving** to another account has `account_closed` recomputed from the account it lands
+  on, so a link cannot leave a live account holding an identity rule 1 refuses to see
+- **reopening** an account clears the flag on its identities, so an undone closure does not hand its
+  owner a second account at the next sign-in
+- an insert naming a missing account reports a **foreign-key** violation rather than a not-null one
+- an identity inserted onto an already-closed account never occupies the address
+- identities are **marked, never deleted**, so `link_method` and `supabase_user_id` survive a closure
+- the resolver really does enter its `ON CONFLICT` retry when a concurrent writer wins the insert,
+  proved by holding the winner's transaction open across the loser's insert
+
+**Why every one of these is a database test.** They are asserted against a real Postgres,
+because what is being claimed lives in a partial unique index, a trigger and a transaction rather than
+in TypeScript. A mock would prove the code calls the database, which is not the claim.

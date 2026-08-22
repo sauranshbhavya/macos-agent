@@ -32,13 +32,18 @@ CREATE TABLE sonny.account (
 -- **There is no write path on this branch, and that is recorded rather than implied** (PR #87 F6).
 -- The ticket assigns this ticket "the field and the write path", and consent is captured on the
 -- website (founder, 2026-08-16), so the write path is an authenticated endpoint the website calls.
--- Authenticated-request middleware is SONNY-128's and does not exist, so the endpoint is deferred
--- to SONNY-128 with the field landing here. What SONNY-127 guarantees is the default: not
--- consented, NOT NULL, so there is no third state that could be mistaken for consent and no user
--- is consented by omission.
+-- **That endpoint had no owning ticket, and now it does** (PR #87 second round, F5). This comment
+-- deferred it to SONNY-128, which is the *client* sign-in ticket and whose never-touch list forbids
+-- `server/` work — so the deferral pointed at a ticket that could not have taken it, and the write
+-- path was parked nowhere. **SONNY-203** owns the gateway auth middleware any such endpoint has to
+-- sit behind. The write itself stays the website's under the same founder decision, so what is owed
+-- is the gate, not an in-app toggle. What SONNY-127 guarantees is the default: not consented,
+-- NOT NULL, so there is no third state that could be mistaken for consent and no user is consented
+-- by omission.
 COMMENT ON COLUMN sonny.account.training_consent IS
   'Website-captured training consent. Never written from the app. Honouring it when building '
-  'training snapshots is feature/row-12-retention''s; this column and its write path are SONNY-127''s.';
+  'training snapshots is feature/row-12-retention''s; the column is SONNY-127''s and the write '
+  'path is the website''s, behind SONNY-203''s auth middleware.';
 
 -- One row per (provider, subject). **This is the identity key, and it is never the email address.**
 CREATE TABLE sonny.identity (

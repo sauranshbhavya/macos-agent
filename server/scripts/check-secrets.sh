@@ -32,6 +32,16 @@ PATTERNS=(
   'tvly-[A-Za-z0-9_-]{16,}'          # Tavily
   'ghp_[A-Za-z0-9]{30,}'             # GitHub PAT
   'sbp_[A-Za-z0-9]{30,}'             # Supabase personal access token
+  # Resend, whose key is the one this row is about to start using and which had NO vendor pattern
+  # (PR #87 second round, F9) -- so a Resend key survived here unless it happened to sit beside its
+  # own variable name, and in the JSON form even that missed it.
+  #
+  # Anchored on the `re_` prefix plus the long two-segment body an issued key carries. Deliberately
+  # narrow: a single loose run after `re_` matches ordinary snake_case identifiers -- measured, four
+  # of them in this repository, all of them `re_isolated_test_command` -- while this form matches
+  # none. A key shaped some other way is still covered by the name-anchored pattern below, which is
+  # what that pattern is for.
+  're_[A-Za-z0-9]{8,}_[A-Za-z0-9]{16,}'   # Resend API key
   'eyJ[A-Za-z0-9_-]{10,}\.eyJ[A-Za-z0-9_-]{10,}\.'   # JWT (Supabase anon/service keys)
   # A PEM header alone is not a secret -- it is four words, and this repo's redaction tests contain
   # several with no body or a decorative one. What makes it a secret is the key material after it,
@@ -60,7 +70,14 @@ PATTERNS=(
   # characters, under the sixteen this needs. A hex salt, a base64 key and a `re_`-prefixed token
   # contain no dot either, so nothing real is lost. Anything dotted and secret-shaped is a JWT, and
   # JWTs have their own pattern above.
-  "(RATE_LIMIT_SALT|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_JWT_SECRET|RESEND_API_KEY|SMTP_PASS(WORD)?)[[:space:]]*[=:][[:space:]]*[\"']?[A-Za-z0-9+/=_-]{16,}"   # name-anchored secret assignment
+  #
+  # **The NAME may be quoted too** (PR #87 second round, F9). R9 added the optional quote around the
+  # *value* and left the name bare, so every JSON form went straight through -- `"RATE_LIMIT_SALT":
+  # "..."`, which is how these appear in a Kubernetes secret, a Terraform variables file, a
+  # `docker inspect` dump or anything else that serialises an environment. Verified missed before
+  # the `["']?` was added and caught after. The optional closing quote does not widen anything else:
+  # without a following `=` or `:` there is still no match.
+  "(RATE_LIMIT_SALT|SUPABASE_SERVICE_ROLE_KEY|SUPABASE_JWT_SECRET|RESEND_API_KEY|SMTP_PASS(WORD)?)[\"']?[[:space:]]*[=:][[:space:]]*[\"']?[A-Za-z0-9+/=_-]{16,}"   # name-anchored secret assignment
 )
 
 # Placeholders the repository is supposed to contain. Kept narrow on purpose: this list is the
@@ -175,6 +192,10 @@ exit 0
 #   - **A credential whose shape is not in the pattern list.** The patterns are anchored on vendor
 #     prefixes on purpose -- a generic high-entropy rule would flag every lockfile hash and be
 #     switched off within a week -- so a bearer token with no distinctive prefix passes unseen.
+#   - **A vendor key whose issued shape differs from the pattern written for it.** The Resend
+#     pattern above describes the two-segment body an issued key carries; a key in some other shape
+#     is caught only when it sits beside its own variable name. The name-anchored pattern is the
+#     backstop for exactly this, and it is a backstop rather than a guarantee.
 #   - **A credential in an untracked, unstaged file.** `server/.env` is exactly that, deliberately:
 #     it is where a local credential is supposed to live, and flagging the file the design tells
 #     you to create would train people to bypass the check.
