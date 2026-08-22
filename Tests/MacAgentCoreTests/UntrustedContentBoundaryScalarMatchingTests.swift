@@ -705,17 +705,22 @@ struct UntrustedContentBoundaryScalarMatchingTests {
     @Test
     func theCanonicalBaseGuardCoversEveryScalarThatDecomposesToAnASCIIBase() {
         let delimiterScalars = Set(UntrustedContentBoundary.allDelimiters.joined().unicodeScalars)
+        func isMark(_ mark: Unicode.Scalar) -> Bool {
+            switch mark.properties.generalCategory {
+            case .nonspacingMark, .spacingMark, .enclosingMark: return true
+            default: return false
+            }
+        }
         var found = 0
+        var nonMarkTails = 0
         for value in 0x80...0x212B {
             guard let scalar = Unicode.Scalar(UInt32(value)) else { continue }
             let decomposed = Array(String(scalar).decomposedStringWithCanonicalMapping.unicodeScalars)
-            guard let base = decomposed.first, base.value < 0x80,
-                  decomposed.dropFirst().allSatisfy({ mark in
-                      switch mark.properties.generalCategory {
-                      case .nonspacingMark, .spacingMark, .enclosingMark: return true
-                      default: return false
-                      }
-                  }),
+            guard let base = decomposed.first, base.value < 0x80 else { continue }
+            if decomposed.count > 1, !decomposed.dropFirst().allSatisfy(isMark) {
+                nonMarkTails += 1
+            }
+            guard decomposed.dropFirst().allSatisfy(isMark),
                   ("A"..."Z").contains(base) || base == "_" else { continue }
             found += 1
             #expect(
@@ -738,6 +743,15 @@ struct UntrustedContentBoundaryScalarMatchingTests {
             )
         }
         #expect(found == 244, "the census found \(found) scalars, expected 244")
+        // **The precondition of `canonicalBase`'s all-marks tail check, pinned because nothing can
+        // exercise the check itself.** A canonical decomposition is a singleton mapping or a base
+        // followed by combining marks — never a base followed by anything else — so across the whole
+        // scalar range there are zero inputs that would take that guard's failure branch, and the
+        // mutant that deletes it survives every battery by construction (PR #100 round, M16). What is
+        // assertable is the invariant it stands on, so that is asserted here: if a future Unicode ever
+        // produced such a decomposition, this fires, which is exactly when the guard would start
+        // mattering.
+        #expect(nonMarkTails == 0, "\(nonMarkTails) scalars decompose to an ASCII base with a non-mark tail")
     }
 
     // MARK: - No second copy of the defeated idiom
