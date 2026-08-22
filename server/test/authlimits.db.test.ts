@@ -5,7 +5,8 @@ import {
   invalidateLive, recordIssue,
 } from "../src/auth/codes.js";
 import {
-  CODE_REQUEST_PER_ADDRESS, CODE_REQUEST_PER_SOURCE, bucketKey, consume, sweep,
+  CODE_REQUEST_PER_ADDRESS, CODE_REQUEST_PER_SOURCE, CODE_VERIFY_PER_SOURCE,
+  bucketKey, consume, sweep,
 } from "../src/auth/ratelimit.js";
 import { up } from "../src/db/migrate.js";
 
@@ -89,6 +90,31 @@ describeDb("rate limits and the code lifecycle", () => {
       // Without a salt an email hash is one rainbow-table lookup from the address.
       expect(bucketKey("addr", "x@example.com", "salt-a"))
         .not.toBe(bucketKey("addr", "x@example.com", "salt-b"));
+    });
+
+    it("keeps email/start's and email/verify's SOURCE budgets in separate buckets", async () => {
+      // **PR #87 sixth round: a stated property with no guard.** `ratelimit.ts` says in bold that
+      // the verify source limit gets "its own bucket kind, not shared with `email/start`'s" —
+      // because two ceilings counted against one counter is one limit, whichever is smaller. Nothing
+      // in `test/` mentioned `verifysrc` at all, and changing `bucketKey("verifysrc", …)` to
+      // `bucketKey("src", …)` in the route left the suite green at 162/162.
+      //
+      // The shipped behaviour that mutant would have caused is real: a user who verifies ten times
+      // could no longer request a sign-in code, because verify would have eaten `email/start`'s
+      // budget. Asserted on the property — two kinds over one value must not collide — rather than
+      // on the string, so it survives a rename.
+      const source = "203.0.113.55";
+      expect(bucketKey("verifysrc", source, SALT)).not.toBe(bucketKey("src", source, SALT));
+
+      // And behaviourally, over the real table: spending one budget must not spend the other.
+      const start = bucketKey("src", source, SALT);
+      const verify = bucketKey("verifysrc", source, SALT);
+      for (let i = 0; i < CODE_REQUEST_PER_SOURCE.max; i += 1) {
+        expect((await consume(client, start, CODE_REQUEST_PER_SOURCE)).allowed).toBe(true);
+      }
+      expect((await consume(client, start, CODE_REQUEST_PER_SOURCE)).allowed).toBe(false);
+      // The verify budget is untouched, which is the whole of the property.
+      expect((await consume(client, verify, CODE_VERIFY_PER_SOURCE)).allowed).toBe(true);
     });
 
     it("refuses to build a bucket with no salt configured", () => {

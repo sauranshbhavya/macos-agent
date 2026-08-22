@@ -1,7 +1,9 @@
 import { createHash } from "node:crypto";
 import type { FastifyInstance, FastifyRequest } from "fastify";
 import { z } from "zod";
-import { classifyFailure, consumeLatest, issueCode, CODE_LIFETIME_SECONDS } from "../auth/codes.js";
+import {
+  CODE_LIFETIME_SECONDS, callerOriginatedLatestCode, classifyFailure, consumeLatest, issueCode,
+} from "../auth/codes.js";
 import { expiryFields } from "../auth/clock.js";
 import { looksLikeEmail, normalizeEmail, rateLimitEmailKey, resolve } from "../auth/identity.js";
 import { ProviderRejected, ProviderUnavailable, type AuthProvider } from "../auth/provider.js";
@@ -216,12 +218,35 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
     // code's own entropy is the only thing between an attacker and an account.
     const limit = await consume(client, bucketKey("verify", mailbox, salt), CODE_VERIFY_PER_ADDRESS, now());
     if (!limit.allowed) {
-      return reply
-        .status(429)
-        .header("Retry-After", String(limit.retryAfterSeconds))
-        .send(errorBody("limit.rate", "Too many attempts for this address.", request.id, {
-          retryable: true, retryAfterSeconds: limit.retryAfterSeconds,
-        }));
+      // **The refusal itself is disclosed only to the caller who asked for the code** (PR #87 sixth
+      // round). Answering 429 to everyone made the *count* readable: probe a mailbox and see how
+      // many attempts you get before the wall — 4 for one the victim had verified at, 5 for an
+      // untouched one — which is recent activity at an address the attacker neither caused nor
+      // could otherwise observe. Same channel class as the previous round's oracle, on the same
+      // route, one layer down. `email/start` has always made this asymmetry the other way round for
+      // exactly this reason: its per-ADDRESS refusal is silent and its per-SOURCE one is not.
+      //
+      // The same question as the disclosure gate, so the two cannot drift: originator gets the
+      // helpful 429, everyone else gets the answer a wrong code would have produced.
+      if (await callerOriginatedLatestCode(client, mailbox, now(), sourceHash(request, salt))) {
+        return reply
+          .status(429)
+          .header("Retry-After", String(limit.retryAfterSeconds))
+          .send(errorBody("limit.rate", "Too many attempts for this address.", request.id, {
+            retryable: true, retryAfterSeconds: limit.retryAfterSeconds,
+          }));
+      }
+      // **What this closes and what it does not.** The body and status now match a wrong guess
+      // exactly. The *timing* does not: this path skips the provider call, which in production is a
+      // network round trip, so a refusal is measurably faster. That residual is real, it is the same
+      // trade `email/start`'s silent per-address refusal already makes — it skips the send — and it
+      // is recorded rather than claimed closed.
+      return reply.status(400).send(
+        errorBody(
+          await classifyFailure(client, mailbox, now(), sourceHash(request, salt)),
+          "Sign-in code was not accepted.", request.id,
+        ),
+      );
     }
 
     let session;
