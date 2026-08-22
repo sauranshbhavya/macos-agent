@@ -127,6 +127,50 @@ struct ResumableTaskRunTests {
         #expect(try fixture.resumableTaskStore.loadAll().count == 1)
     }
 
+    /// **A checkpoint that cannot be written is a storage notice, never a failed task.**
+    ///
+    /// CLAUDE.md's write-failure rule, on this store's own door: `errorMessage` means "the thing you
+    /// asked for did not happen", and the widget picks `.failure` ahead of `.result` — so a
+    /// bookkeeping failure routed there replaces the result of a task that ran and succeeded. That
+    /// defect has already arrived through two other doors (PR #89's F4 and SONNY-201). This is a
+    /// third door, and the run below really does succeed while its checkpoint really does fail.
+    ///
+    /// The failure is reached through the one refusal this store has that needs no file-system
+    /// surgery: a plan over `maxEncodedPlanBytes`, which is refused rather than trimmed because a
+    /// trimmed plan would resume a different task from the one the user started.
+    @Test
+    func aCheckpointThatCannotBeWrittenIsANoticeAndTheTaskStillSucceeds() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        let oversized = AgentPlan(
+            summary: "Write a very large note.",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(
+                    id: "draft",
+                    operation: .createLocalDraft,
+                    description: "Write it.",
+                    outputPath: fixture.draftOutput.path,
+                    draftTitle: "Notes",
+                    draftContent: String(repeating: "x", count: ResumableTaskStore.maxEncodedPlanBytes + 1)
+                )
+            ]
+        )
+        try await fixture.run("Write a very large note", plan: oversized)
+
+        // The task itself ran and produced its result.
+        #expect(fixture.viewModel.errorMessage == nil, "a bookkeeping failure is not a failed task")
+        #expect(!fixture.viewModel.finalSummary.isEmpty)
+        #expect(FileManager.default.fileExists(atPath: fixture.draftOutput.path))
+
+        // And the checkpoint's failure was reported on the storage channel, in write wording.
+        let notice = try #require(fixture.viewModel.localStorageNotice)
+        #expect(notice.contains("partway through"))
+        #expect(!notice.contains("decrypted"), "load-failure wording must not be reused for a write")
+        #expect(try fixture.resumableTaskStore.loadAll().isEmpty)
+    }
+
     // MARK: - The pauses
 
     /// The founder's first shape includes "asks something": a question the user walks away from.
