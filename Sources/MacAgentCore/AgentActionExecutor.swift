@@ -990,20 +990,42 @@ public final class AgentActionExecutor {
         // prepared plan's names are what `aChainWritesOnlyFilesThePreparedPlanAlreadyNamed` holds
         // this executor to. The nested plan resolves later, so the nested plan is the one that moves.
         //
-        // **The claims half of this seed now has no reachable contribution of its own, and is kept
-        // anyway — stated here so nobody deletes it as dead.** A mutation battery at `e3dee83`
-        // dropped `claimedEarlierInThisRun.destinations` from this union and the whole suite passed,
-        // including SONNY-190's own test. The reason is enumerable rather than mysterious: of the
-        // eight producers of `ActionPreview.writes` (create_local_draft, docx conversion, the zip,
-        // create/edit workspace, save routine, save snippet, web research), five write exactly the
-        // `outputPath` their step already carries, so `namedByEnclosingPlan` holds those paths too.
-        // The three that do not are the docx conversion's per-document PDFs — its step's
-        // `outputPath` is the output *folder* — and the four local stores' own JSON files. A
-        // generated default is `draft-<slug>-<stamp>.md`, `web-research-<stamp>.md`,
-        // `largest-files-<stamp>.zip` or a Shortcut's output, none of which can equal a `.pdf` or a
-        // store file, so the claims half covers a population that today is empty. It stays because
-        // "a unit wrote somewhere its step did not name" is a real category with a real answer, and
-        // the first capability that lands in it would otherwise reopen SONNY-190 silently.
+        // **Both halves are load-bearing, and neither may be dropped.** The plan-intent half is what
+        // fixes the reverse ordering above. The claims half is what protects a shape the plan-intent
+        // half is structurally blind to: **a chain of two or more sibling `run_routine` steps whose
+        // routines can generate colliding defaults.** A `run_routine` step carries no `outputPath`,
+        // so `PlannedDestinations(namedBy:)` built from such a plan is empty with respect to
+        // everything the nested routines will generate, and the only thing between the second
+        // routine's draft and the first routine's file is what `executeChain` recorded after the
+        // first segment really ran. `segmentPlans(in:)`' repeat rule cuts the second `run_routine`
+        // into its own unit, so the plan classifies as `.chain`, and
+        // `StoredRoutine.forbiddenStepOperations` forbids a `run_routine` *inside* a saved routine
+        // rather than two of them at the outer level — nothing blocks this plan.
+        //
+        // **Recorded because this comment previously said the opposite** (PR #96 review, F1). It
+        // claimed the claims half "covers a population that today is empty", on the strength of a
+        // mutation battery at `e3dee83` where dropping it left the whole suite passing. The battery
+        // was right and the inference was wrong: nothing in the suite exercised the sibling-routine
+        // shape, so the mutant killed a document nothing was watching.
+        // `twoSiblingRoutinesThatEachDraftKeepBothDocuments` is that shape, and the same mutant is
+        // now killed by it (`scripts/mutate`, 1 mutant, 1 killed, stamped at `24fa0ba`). **A green
+        // suite under a mutant is a statement about the suite, not about the code.**
+        //
+        // The two halves still answer different questions and overlap rather than nest. Of the eight
+        // adapters that produce `ActionPreview.writes` — `git grep -l "writes:" --
+        // 'Sources/MacAgentCore/*CapabilityAdapter.swift'` at `24fa0ba` — **three** write exactly the
+        // `outputPath` their own `resolveDefaultOutputs` pinned, so `namedByEnclosingPlan` holds
+        // those paths too: `CreateLocalDraftCapabilityAdapter`, `LargestFilesZipCapabilityAdapter`,
+        // `WebResearchMarkdownCapabilityAdapter`. The other **five** write somewhere no step's
+        // `outputPath` names: `DocxConversionCapabilityAdapter`, whose per-document PDFs sit inside
+        // the output *folder* its step names, and `CreateWorkspaceCapabilityAdapter`,
+        // `EditWorkspaceCapabilityAdapter`, `SaveRoutineCapabilityAdapter` and
+        // `SnippetSaveCapabilityAdapter`, which write their stores' own JSON files. (That split read
+        // "five" and "three" until PR #96's review transposed it back — the member list was right and
+        // the two count words were not.) Those five cannot collide with a generated default —
+        // `draft-<slug>-<stamp>.md`, `web-research-<stamp>.md`, `largest-files-<stamp>.zip` or a
+        // Shortcut's output can equal neither a `.pdf` nor a store file — which is why the claims
+        // half's reachable contribution is the *nested* one above rather than a docx one.
         var claimedOutputPaths: Set<String> = claimedEarlierInThisRun.destinations
             .union(namedByEnclosingPlan.paths)
 
@@ -1720,11 +1742,15 @@ public final class AgentActionExecutor {
         // this run's plan names" — rather than a per-segment subtraction whose correctness would
         // depend on the segmentation staying exactly as it is.
         //
-        // The union with `namedByEnclosingPlan` is unreachable today for the same reason PR #65's F4
-        // threading was: a chain segment is never itself a chain, so a chain never nests inside
-        // another chain and this parameter is always `.none` here. Threaded anyway, because the
-        // alternative is an entry point that quietly drops what it was handed the first time that
-        // changes.
+        // The union with `namedByEnclosingPlan` is **live, not defensive** (PR #96 review, F3). This
+        // comment used to say the parameter "is always `.none` here" on the grounds that a chain
+        // segment is never itself a chain — true, and not the only way to arrive: a *stored routine*
+        // of more than one workflow, say `[open_url, create_local_draft]`, classifies as `.chain`
+        // too, so `executeNestedPlan` re-enters `execute` and reaches this function a second time
+        // carrying the outer plan's destinations. The union is what keeps them from being dropped on
+        // that path. Behaviour is the same either way today — the nested draft is already bumped
+        // before that call — but a comment claiming a live path is dead is an invitation to delete
+        // it, which is the same defect this function's seed comment carries a correction for.
         let namedByThisRun = namedByEnclosingPlan.union(PlannedDestinations(namedBy: plan))
 
         for segment in try chainSegments(in: plan) {
