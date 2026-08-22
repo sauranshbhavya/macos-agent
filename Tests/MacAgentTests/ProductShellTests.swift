@@ -3117,6 +3117,13 @@ private func makeProductShellFixture(
             fileURL: root.appendingPathComponent("approved-apps.json"),
             encryption: encryption
         ),
+        outputLocationStore: OutputLocationStore(
+            fileURL: root.appendingPathComponent("output-locations.json"),
+            encryption: encryption,
+            // The same roots this fixture hands the view model, so the store answers
+            // "is this an output location" against the folders the run really used.
+            whitelist: PathWhitelist(roots: [root])
+        ),
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
             reader: ProductShellPasteboardReader(),
             store: ClipboardHistoryStore(
