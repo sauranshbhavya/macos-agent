@@ -3897,6 +3897,8 @@ struct MemoryRowPresentation: Equatable {
             return "checklist"
         case .recentArtifacts:
             return "doc"
+        case .outputLocations:
+            return "folder"
         case .clipboardHistory:
             return "doc.on.clipboard"
         case .snippets:
@@ -4140,7 +4142,7 @@ enum MemoryRowDestination: Equatable {
             return .page(.workspaces)
         case .taskHistory:
             return .page(.tasks)
-        case .recentArtifacts, .clipboardHistory, .snippets, .approvedApps:
+        case .recentArtifacts, .outputLocations, .clipboardHistory, .snippets, .approvedApps:
             return .entriesSheet
         }
     }
@@ -4262,6 +4264,8 @@ enum MemoryDeletionCopy {
             return "This deletes every task Sonny has recorded, what each one planned, and the records of what Sonny did on screen. Files those tasks created are not deleted."
         case .recentArtifacts:
             return "This deletes Sonny's list of files it recently worked with. The files themselves are not deleted."
+        case .outputLocations:
+            return "This deletes Sonny's record of which folders your files usually go into. The folders and everything in them are not deleted."
         case .clipboardHistory:
             return "This deletes every copied item Sonny has recorded. Your clipboard itself is not affected."
         case .snippets:
@@ -4277,6 +4281,8 @@ enum MemoryDeletionCopy {
         switch category {
         case .recentArtifacts:
             return "This removes Sonny's note about the file. The file itself is not deleted."
+        case .outputLocations:
+            return "This removes Sonny's note about the folder. The folder is not deleted."
         case .clipboardHistory:
             return "This removes the copied item from Sonny's history."
         case .snippets:
@@ -4300,6 +4306,8 @@ enum MemoryDeletionCopy {
         switch category {
         case .recentArtifacts:
             return "Ask Sonny to create or convert a file, then it will appear here."
+        case .outputLocations:
+            return "Ask Sonny to save a file somewhere, and the folder will appear here."
         case .clipboardHistory:
             return "Copy something while clipboard history is on, and it will appear here."
         case .snippets:
@@ -4353,6 +4361,17 @@ struct MemoryEntryPresentation: Identifiable, Equatable {
                     id: item.id.uuidString,
                     title: singleLine(item.text),
                     detail: TaskHistoryDateFormatter.relativeTimestamp(for: item.copiedAt, now: now)
+                )
+            }
+        case .outputLocations:
+            return viewModel.outputLocations.map { location in
+                MemoryEntryPresentation(
+                    // The folder path, not a UUID: a location is keyed by the folder it names and
+                    // the record carries no id of its own — the same choice `approvedApps` makes
+                    // directly below.
+                    id: location.path,
+                    title: location.name,
+                    detail: "\(location.displayPath) · \(location.useCount == 1 ? "1 time" : "\(location.useCount) times") · last \(TaskHistoryDateFormatter.relativeTimestamp(for: location.lastUsedAt, now: now))"
                 )
             }
         case .approvedApps:
@@ -5107,7 +5126,7 @@ private struct SettingsDataPage: View {
                         // next to the label made the row read as too bold/heavy (2026-07-18).
                         SettingsControlLabel(
                             title: "Delete Sonny local data",
-                            detail: "Saved routines, workspaces, clipboard history, snippets, recent artifacts, Shortcut run history, task history, records of what Sonny did on screen, and clipboard settings."
+                            detail: "Saved routines, workspaces, clipboard history, snippets, recent artifacts, common output locations, Shortcut run history, task history, records of what Sonny did on screen, and clipboard settings."
                         )
                     } trailing: {
                         Button {

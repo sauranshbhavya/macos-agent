@@ -80,6 +80,35 @@ struct MemorySettingsTests {
         )
     }
 
+    /// Row 13's output locations is its own row over its own single store, and it is a *record* of
+    /// what happened rather than something the user asked Sonny to save (SONNY-209).
+    ///
+    /// Named rather than left to the population tests above, because the decision that could have
+    /// gone the other way is folding it into `recentArtifacts` — the two are neighbours, both
+    /// `.trace`, and one notes the file where the other notes the folder. `MemoryCategory
+    /// .outputLocations`' own doc carries the argument; this is the assertion that fails if somebody
+    /// merges them.
+    @Test
+    func outputLocationsIsItsOwnRecordedRowOverItsOwnStore() {
+        #expect(MemoryCategory.outputLocations.stores == [.outputLocations])
+        #expect(MemoryCategory.outputLocations.storeKind == .trace)
+        #expect(LocalStore.outputLocations.memoryCategory == .outputLocations)
+        #expect(MemoryCategory.recentArtifacts.stores == [.recentArtifacts])
+    }
+
+    /// Each of the two switches withholds its own store and leaves the other's alone — the assertion
+    /// that fails if the two neighbouring rows were ever wired to one flag.
+    @Test
+    func theOutputLocationsSwitchAndTheRecentArtifactsSwitchAreIndependent() {
+        let outputsOff = MemoryRecordingSettings(categoriesDisabledByUser: [.outputLocations])
+        #expect(!outputsOff.allowsRecording(to: .outputLocations))
+        #expect(outputsOff.allowsRecording(to: .recentArtifacts))
+
+        let artifactsOff = MemoryRecordingSettings(categoriesDisabledByUser: [.recentArtifacts])
+        #expect(!artifactsOff.allowsRecording(to: .recentArtifacts))
+        #expect(artifactsOff.allowsRecording(to: .outputLocations))
+    }
+
     // MARK: - What each switch withholds
 
     @Test

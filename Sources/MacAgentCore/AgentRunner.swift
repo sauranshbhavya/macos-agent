@@ -69,33 +69,50 @@ public final class AgentRunner {
     private let logStore: AgentLogStore
     private let approvalPolicy: RiskApprovalPolicy
     private let recentArtifactStore: RecentArtifactStore?
+    /// Where this run may record the folders it wrote into, or `nil` when it may not (SONNY-209).
+    ///
+    /// **Its own parameter rather than a flag, and its own parameter rather than riding on
+    /// `recentArtifactStore`.** The withhold-the-store seam is what makes a memory switch impossible
+    /// to forget at the writing site — `AgentRunner` treats `nil` as "record nothing", exactly as it
+    /// already does for artifacts and as `AgentViewModel` does for the vision journal. Separate from
+    /// the artifact store because the two are separate Memory rows with separate switches: folding
+    /// them into one optional would make turning off "Recent artifacts" silently stop Sonny learning
+    /// where work goes, which is a switch doing something its label does not say.
+    private let outputLocationStore: OutputLocationStore?
 
     public init(
         planner: any Planning,
         executor: AgentActionExecutor = AgentActionExecutor(),
         logStore: AgentLogStore = AgentLogStore(),
         approvalPolicy: RiskApprovalPolicy = .default,
-        recentArtifactStore: RecentArtifactStore? = nil
+        recentArtifactStore: RecentArtifactStore? = nil,
+        outputLocationStore: OutputLocationStore? = nil
     ) {
         self.plannerProvider = { planner }
         self.executor = executor
         self.logStore = logStore
         self.approvalPolicy = approvalPolicy
         self.recentArtifactStore = recentArtifactStore
+        self.outputLocationStore = outputLocationStore
     }
 
+    /// The second door, and it takes the same stores for the same reason: a store threaded through
+    /// one initializer and defaulted away in the other is a seam that is honoured on whichever path
+    /// somebody happened to look at (SONNY-209).
     public init(
         plannerProvider: @escaping () throws -> any Planning,
         executor: AgentActionExecutor = AgentActionExecutor(),
         logStore: AgentLogStore = AgentLogStore(),
         approvalPolicy: RiskApprovalPolicy = .default,
-        recentArtifactStore: RecentArtifactStore? = nil
+        recentArtifactStore: RecentArtifactStore? = nil,
+        outputLocationStore: OutputLocationStore? = nil
     ) {
         self.plannerProvider = plannerProvider
         self.executor = executor
         self.logStore = logStore
         self.approvalPolicy = approvalPolicy
         self.recentArtifactStore = recentArtifactStore
+        self.outputLocationStore = outputLocationStore
     }
 
     public func prepare(
@@ -256,6 +273,7 @@ public final class AgentRunner {
             self.logStore.append(phase, message)
         }
         recordRecentArtifacts(from: result)
+        recordOutputLocations(from: result)
         return result
     }
 
@@ -278,6 +296,40 @@ public final class AgentRunner {
             let description = "Sonny could not update its recent-artifacts list: \(error.localizedDescription)"
             logStore.append(.observe, description)
             lastRecentArtifactFailure = description
+        }
+    }
+
+    /// Set when output-location bookkeeping failed during the last `execute`, for the same reason
+    /// `lastRecentArtifactFailure` exists: `AgentLogStore` is not a user-visible surface, so a caller
+    /// reads this to put the failure somewhere a person will see it.
+    ///
+    /// A separate property rather than a shared one, so a reader of either can tell which store
+    /// could not be written — CLAUDE.md's rule that a write failure names what could not be saved
+    /// does not survive two stores sharing one sentence.
+    public private(set) var lastOutputLocationFailure: String?
+
+    /// Remembers the folders this run wrote into.
+    ///
+    /// **Beside `recordRecentArtifacts` rather than inside it**, and reading the same `result` — the
+    /// two answer different questions about the same run (which files, which folders) and are
+    /// switched on and off separately, so they are two calls with two `nil` guards rather than one
+    /// call doing both. `outputLocationStore` is `nil` whenever the user has this kind of memory
+    /// off, which is the whole of the check: there is no second flag at this site to get wrong.
+    private func recordOutputLocations(from result: AgentRunResult) {
+        guard let outputLocationStore else {
+            return
+        }
+        do {
+            let recorded = try outputLocationStore.recordOutputs(from: result)
+            if !recorded.isEmpty {
+                let noun = recorded.count == 1 ? "output location" : "output locations"
+                logStore.append(.observe, "Recorded \(recorded.count) \(noun)")
+            }
+            lastOutputLocationFailure = nil
+        } catch {
+            let description = "Sonny could not update its list of output locations: \(error.localizedDescription)"
+            logStore.append(.observe, description)
+            lastOutputLocationFailure = description
         }
     }
 

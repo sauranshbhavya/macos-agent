@@ -56,14 +56,15 @@ final class AgentViewModel: ObservableObject {
     /// or `setMemoryCategoryEnabled(_:to:)`, which persist first and then republish — a settable
     /// property would let a surface show a switch the store never recorded.
     @Published private(set) var memorySettings: MemoryRecordingSettings = .recordEverything
-    /// Snippets, recent artifacts, clipboard items and allowed apps as the Memory section lists
-    /// them. Loaded by `refreshMemoryEntries()`; empty until it runs, and emptied rather than left
-    /// stale when a store will not read — the same choice `refreshTaskHistory` makes, so a list can
-    /// never show entries the notice beside it says are unreadable.
+    /// Snippets, recent artifacts, clipboard items, allowed apps and output locations as the Memory
+    /// section lists them. Loaded by `refreshMemoryEntries()`; empty until it runs, and emptied
+    /// rather than left stale when a store will not read — the same choice `refreshTaskHistory`
+    /// makes, so a list can never show entries the notice beside it says are unreadable.
     @Published private(set) var savedSnippets: [StoredSnippet] = []
     @Published private(set) var recentArtifacts: [RecentArtifact] = []
     @Published private(set) var clipboardHistoryItems: [ClipboardHistoryItem] = []
     @Published private(set) var approvedApps: [ApprovedApp] = []
+    @Published private(set) var outputLocations: [OutputLocation] = []
     /// Outcome of the Memory section's per-type Delete, rendered by the same
     /// `LocalDataDeletionStatusMessage` view Settings' whole-wipe uses. Separate from
     /// `localDataDeletionStatusMessage` so a per-type delete does not post its result onto the
@@ -305,6 +306,9 @@ final class AgentViewModel: ObservableObject {
     /// — so the only thing this view model does with it today is probe it for load failures, which
     /// is the same wiring the other silently-read stores get.
     private let approvedAppStore: ApprovedAppStore
+    /// Row 13's common output locations (SONNY-209) — which folders this Mac's work comes out into.
+    /// Injected like every other store so a test writes to its own file rather than the user's.
+    private let outputLocationStore: OutputLocationStore
     private let clipboardHistoryMonitor: ClipboardHistoryMonitor
     private let localDataDeletionService: LocalDataDeletionService
     private let memorySettingsStore: MemorySettingsStore
@@ -441,6 +445,7 @@ final class AgentViewModel: ObservableObject {
         case snippets
         case recentArtifacts
         case approvedApps
+        case outputLocations
 
         var label: String {
             switch self {
@@ -464,6 +469,10 @@ final class AgentViewModel: ObservableObject {
                 return "recent artifacts"
             case .approvedApps:
                 return "allowed apps"
+            case .outputLocations:
+                // Named for what a person would notice going wrong — Sonny stops offering the folder
+                // they always save into — rather than for the file.
+                return "where your outputs usually go"
             }
         }
     }
@@ -526,6 +535,12 @@ final class AgentViewModel: ObservableObject {
         visionSessionJournalStore: VisionSessionJournalStore = VisionSessionJournalStore(),
         clipboardHistorySettingsStore: ClipboardHistorySettingsStore = ClipboardHistorySettingsStore(),
         approvedAppStore: ApprovedAppStore = ApprovedAppStore(),
+        // `nil` rather than a defaulted `OutputLocationStore()`, so the default store is built with
+        // *this* view model's whitelist (SONNY-209). The store decides what counts as an output
+        // location by asking the whitelist, so a defaulted store carrying its own would answer that
+        // question against different roots than the run that produced the file — right in
+        // production, quietly wrong for any test that injects a whitelist and leaves the store alone.
+        outputLocationStore: OutputLocationStore? = nil,
         clipboardHistoryMonitor: ClipboardHistoryMonitor? = nil,
         localDataDeletionService: LocalDataDeletionService = LocalDataDeletionService(),
         memoryPolicyProvider: any MemoryPolicyProviding = UnmanagedMemoryPolicyProvider(),
@@ -569,6 +584,7 @@ final class AgentViewModel: ObservableObject {
         self.visionSessionJournalStore = visionSessionJournalStore
         self.clipboardHistorySettingsStore = clipboardHistorySettingsStore
         self.approvedAppStore = approvedAppStore
+        self.outputLocationStore = outputLocationStore ?? OutputLocationStore(whitelist: whitelist)
         self.clipboardHistoryMonitor = clipboardHistoryMonitor
             ?? ClipboardHistoryMonitor(settingsStore: clipboardHistorySettingsStore)
         self.localDataDeletionService = localDataDeletionService
@@ -1226,7 +1242,8 @@ final class AgentViewModel: ObservableObject {
                     planner: InstantOnlyFallbackPlanner(),
                     executor: executor,
                     logStore: logStore,
-                    recentArtifactStore: recentArtifactStoreForThisRun
+                    recentArtifactStore: recentArtifactStoreForThisRun,
+                    outputLocationStore: outputLocationStoreForThisRun
                 )
                 prepared = try runner.prepare(plan: prebuiltPlan, source: prebuiltPlanSource)
             } else if let resolution = makeInstantCommandResolver().resolve(command: submittedCommand) {
@@ -1234,7 +1251,8 @@ final class AgentViewModel: ObservableObject {
                     planner: InstantOnlyFallbackPlanner(),
                     executor: executor,
                     logStore: logStore,
-                    recentArtifactStore: recentArtifactStoreForThisRun
+                    recentArtifactStore: recentArtifactStoreForThisRun,
+                    outputLocationStore: outputLocationStoreForThisRun
                 )
                 switch resolution {
                 case .plan(let localPlan), .clarify(let localPlan):
@@ -1257,7 +1275,8 @@ final class AgentViewModel: ObservableObject {
                     planner: selected.planner,
                     executor: executor,
                     logStore: logStore,
-                    recentArtifactStore: recentArtifactStoreForThisRun
+                    recentArtifactStore: recentArtifactStoreForThisRun,
+                    outputLocationStore: outputLocationStoreForThisRun
                 )
                 prepared = try await runner.prepare(
                     command: submittedCommand,
@@ -2211,6 +2230,35 @@ final class AgentViewModel: ObservableObject {
         allowsScheduledRecording(to: .recentArtifacts) ? recentArtifactStore : nil
     }
 
+    /// The output-locations store this run may write to, or `nil` when it may not (SONNY-209).
+    ///
+    /// The third store on the withhold-the-store seam, and it is the seam rather than a flag at the
+    /// writing site for the reason the two above it record: `AgentRunner` already treats `nil` as
+    /// "record nothing", so one definition covers every runner this view model builds and a new
+    /// construction site cannot forget the check by omitting it.
+    ///
+    /// Internal rather than private so the suite can assert the decision directly, which here is
+    /// **necessary and not merely convenient**: recording an output location requires a run that
+    /// really wrote a file into a whitelisted folder, and the deterministic fixtures cannot plan one.
+    /// An end-to-end "with the switch off, nothing was recorded" assertion would therefore pass
+    /// whether or not the switch were ever consulted — the identical trap
+    /// `recentArtifactStoreForThisRun` documents, which a mutation battery caught there.
+    var outputLocationStoreForThisRun: OutputLocationStore? {
+        allowsRecording(to: .outputLocations) ? outputLocationStore : nil
+    }
+
+    /// The output-locations store a **scheduled** run may write to, or `nil` when it may not.
+    ///
+    /// `allowsScheduledRecording(to:)`, never `allowsRecording(to:)`, and the reason is written in
+    /// full on that method: a scheduled run passes through no composer, so reading
+    /// `taskRecordingPolicy` here would apply a "Don't save this task" the user set while composing
+    /// a command they have not sent. A routine that files its output into the user's Reports folder
+    /// every Monday is exactly the habit this store exists to learn, and it is the one Sonny would
+    /// have stopped learning.
+    var outputLocationStoreForScheduledRun: OutputLocationStore? {
+        allowsScheduledRecording(to: .outputLocations) ? outputLocationStore : nil
+    }
+
     /// Puts "Don't save this task" back to off and lets clipboard history resume — but only once the
     /// run is really over.
     ///
@@ -2417,7 +2465,7 @@ final class AgentViewModel: ObservableObject {
 
     // MARK: - Memory (SONNY-208)
 
-    /// Reloads the four memory types that have no list of their own anywhere else in the app.
+    /// Reloads the memory types that have no list of their own anywhere else in the app.
     ///
     /// Routines, workspaces and task history are deliberately absent: they are already published by
     /// `refreshSavedItems()` and `refreshTaskHistory()`, and a second loader for the same file is a
@@ -2435,6 +2483,12 @@ final class AgentViewModel: ObservableObject {
         }
         approvedApps = loadMemoryEntries(.approvedApps) {
             try approvedAppStore.loadAll()
+        }
+        outputLocations = loadMemoryEntries(.outputLocations) {
+            // Already ranked best-suggestion-first by the store, so the sheet lists them in the order
+            // Sonny would actually offer them. Sorting again here would be a second ordering that can
+            // disagree with the behaviour the list is describing.
+            try outputLocationStore.loadAll()
         }
     }
 
@@ -2482,6 +2536,8 @@ final class AgentViewModel: ObservableObject {
             return savedSnippets.count
         case .approvedApps:
             return approvedApps.count
+        case .outputLocations:
+            return outputLocations.count
         }
     }
 
@@ -2609,6 +2665,8 @@ final class AgentViewModel: ObservableObject {
                 return approvedAppStore.fileURL
             case .clipboardHistorySettings:
                 return clipboardHistorySettingsStore.fileURL
+            case .outputLocations:
+                return outputLocationStore.fileURL
             }
         }
     }
@@ -2653,6 +2711,14 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
+    /// Forgets one output location. The folder and everything in it are untouched — this store only
+    /// ever held a count and two dates about where files went.
+    func forgetOutputLocation(_ location: OutputLocation) {
+        performMemoryEntryDelete(named: "output location") {
+            try outputLocationStore.forget(path: location.path)
+        }
+    }
+
     /// The newest thing Sonny remembers of this kind, or `nil` when the type carries no timestamp.
     ///
     /// Routines and workspaces answer `nil` on purpose rather than reaching for a run date: neither
@@ -2672,6 +2738,10 @@ final class AgentViewModel: ObservableObject {
             return savedSnippets.map(\.updatedAt).max()
         case .approvedApps:
             return approvedApps.map(\.approvedAt).max()
+        case .outputLocations:
+            // `lastUsedAt`, not `firstUsedAt`: every other row's "newest" line means the most recent
+            // thing recorded, and a folder's most recent record is the last time work landed in it.
+            return outputLocations.map(\.lastUsedAt).max()
         }
     }
 
@@ -2699,6 +2769,9 @@ final class AgentViewModel: ObservableObject {
         case .approvedApps:
             guard approvedApps.indices.contains(index) else { return }
             forgetApprovedApp(approvedApps[index])
+        case .outputLocations:
+            guard outputLocations.indices.contains(index) else { return }
+            forgetOutputLocation(outputLocations[index])
         case .routines, .workspaces, .taskHistory:
             return
         }
@@ -3124,7 +3197,7 @@ final class AgentViewModel: ObservableObject {
         logStore.reset()
         refreshSavedItems()
         refreshTaskHistory()
-        // The four lists the Memory section renders. Without this the wipe empties their files and
+        // The lists the Memory section renders itself. Without this the wipe empties their files and
         // leaves the page showing every entry it just erased — the same staleness the three calls
         // around it exist to prevent, on the surface that shows the most of it.
         refreshMemoryEntries()
@@ -3257,7 +3330,8 @@ final class AgentViewModel: ObservableObject {
             planner: try makeDelegationPlanner(),
             executor: makeExecutor(),
             logStore: logStore,
-            recentArtifactStore: recentArtifactStoreForThisRun
+            recentArtifactStore: recentArtifactStoreForThisRun,
+            outputLocationStore: outputLocationStoreForThisRun
         )
     }
 
@@ -3767,6 +3841,9 @@ final class AgentViewModel: ObservableObject {
         // The task itself succeeded; a bookkeeping failure is a storage notice, not a task error.
         if let artifactFailure = runner.lastRecentArtifactFailure {
             recordLocalStorageWriteFailure(artifactFailure)
+        }
+        if let outputLocationFailure = runner.lastOutputLocationFailure {
+            recordLocalStorageWriteFailure(outputLocationFailure)
         }
         return result
     }
@@ -4324,7 +4401,11 @@ final class AgentViewModel: ObservableObject {
                 // `allowsScheduledRecording(to:)` for why, and note that the reason is the
                 // pre-dispatch composer window rather than the clarification pause an earlier
                 // telling named (PR #98 round 4, F2).
-                recentArtifactStore: recentArtifactStoreForScheduledRun
+                recentArtifactStore: recentArtifactStoreForScheduledRun,
+                // And its own seam, for the same reason and reading the same standing-switch-only
+                // question (SONNY-209). Never `outputLocationStoreForThisRun`: that one folds in
+                // `taskRecordingPolicy`, which is the term a scheduled run must not read.
+                outputLocationStore: outputLocationStoreForScheduledRun
             )
             self.runner = runner
             // The same plan a typed "run my X routine" produces — built directly rather than
@@ -4411,6 +4492,19 @@ final class AgentViewModel: ObservableObject {
                 // controls no app, so it has no per-app standing.
                 context: approvalContext(visionTarget: nil)
             )
+            // The scheduled twin of the two foreground sites' bookkeeping-failure handover
+            // (SONNY-209). `recordLocalStorageWriteFailure`, never `errorMessage`: the routine ran
+            // and did what it was asked, and only the note about where its file landed could not be
+            // saved — CLAUDE.md's write-failure channel rule exactly.
+            //
+            // **`lastRecentArtifactFailure` is *not* read here, and that is not an oversight of this
+            // ticket's** — it has never been read on this path, so a scheduled routine whose
+            // recent-artifacts write fails still reports nothing. That is the other store's defect
+            // and the other store is on this ticket's never-touch list; it is filed rather than
+            // fixed here.
+            if let outputLocationFailure = runner.lastOutputLocationFailure {
+                recordLocalStorageWriteFailure(outputLocationFailure)
+            }
             recordScheduledRunInHistory(name: name, at: occurrence)
             recordScheduledTaskHistory(
                 status: .completed,
