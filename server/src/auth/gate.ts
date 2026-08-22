@@ -23,6 +23,19 @@ import { verifyAccessToken, type SupabaseJwtPolicy, type TokenRefusal } from "./
  * provider-side user is. Both have to pass. A cryptographically perfect token naming a closed
  * account is refused here.
  *
+ * **Two properties a reviewer will ask about, answered here rather than left to be inferred.** The
+ * hook runs before the body is parsed, so an unauthenticated request is refused without this server
+ * reading the payload it was carrying. And the connection attribution takes is released before the
+ * handler runs — `withConnection` returns it on the way out — so a protected request checks a
+ * connection out twice in sequence and never holds two at once, which is what keeps a small pool
+ * from deadlocking against itself.
+ *
+ * **What an unauthenticated caller can still learn is the route table**, because a path that exists
+ * answers 401 while one that does not answers 404. That is deliberate: §4.1 of the API contract
+ * publishes the route table, so the distinction discloses nothing that is not already written down,
+ * and collapsing 404 into 401 would make every client's "no such route" indistinguishable from
+ * "sign in again".
+ *
  * **The residual, stated rather than papered over.** A Supabase access token is self-contained, so
  * this gateway can verify it without asking the provider — which is the point — and equally cannot
  * un-issue one. Signing out revokes the *refresh* family at the provider; an access token already in
