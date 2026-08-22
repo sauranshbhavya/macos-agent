@@ -161,6 +161,70 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: feature/row-12-gateway-auth-middleware
+Status: complete
+Date: 2026-08-22
+Tickets: SONNY-203 (the gateway auth middleware: verify the Supabase HS256 token, gate every protected route, and remove `ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE`). Cut from `main` at `744eccf`. **The ticket's own description was wrong about its scope and the coordinator's correction comment of 2026-08-22 is what to read**: the description says "the token check itself is being built into SONNY-127", and SONNY-127 built the *seam* with nothing behind it — so this ticket owned both halves, writing the verification and applying it.
+Reviewed by: pending — the adversarial security review is owed before merge, and this is one of row 12's security-critical diffs.
+
+Spec sections covered: contract §3.1 (verification of a presented access token), §3.3 (which 401 the client refreshes on), §3.4 (401 versus 403), §4.1's `Auth` column, §7.2's `auth.*` codes.
+Files changed:
+- `server/src/auth/token.ts` — new. The whole of the verification: HS256 pinned, strict base64url, `iss`/`aud`/`sub`/`nbf`/`exp`.
+- `server/src/auth/gate.ts` — new. `PUBLIC_ROUTES`, the `onRequest` hook, `callerOf`, the refusal→code map.
+- `server/src/auth/attribution.ts` — new, but the function inside it is not: `accountForSupabaseUser` moved unchanged out of `routes/auth.ts`, because the gate now runs it on every protected request.
+- `server/src/db/connection.ts` — new. `WithConnection`, likewise moved unchanged, so a middleware does not import its own dependency type out of a route module.
+- `server/src/config.ts` — `SUPABASE_JWT_SECRET`/`_ISSUER`/`_AUDIENCE` and `requireSupabaseJwtPolicy` added; `ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE`, its production refusal and its `Config` field deleted.
+- `server/src/app.ts` — the gate installed before any route.
+- `server/src/routes/auth.ts` — `DELETE /v1/account` mounted unconditionally and attributing from `callerOf`; `POST /v1/auth/signout` likewise; both hand-rolled bearer checks gone.
+- `server/test/token.test.ts`, `server/test/gate.test.ts`, `server/test/authgate.db.test.ts`, `server/test/support/tokens.ts` — new.
+- `server/test/auth.db.test.ts`, `config.test.ts`, `errors.test.ts`, `health.test.ts` — updated.
+- `server/README.md`, `server/.env.example`, `docs/sonny-backend-api-contract.md` — records.
+Tests: the server half's commands, at `93fe2d8`. `npm run build` -> exit 0. `npm run typecheck` -> exit 0. `npm test` -> 122 passed, 122 skipped (244), exit 0. `npm run test:db` against a throwaway Postgres on port 55437 -> **244 passed (244)**, exit 0, up from **168** at `744eccf` (`npm test`'s own summary line, 54 passed + 114 skipped). `npm run check:secrets` -> clean, 375 tracked files, exit 0; `./scripts/check-secrets-selftest.sh` -> 43 passed, 0 failed, exit 0. The app half was run to prove it is untouched, not because the diff reaches it: `swift build` -> `Build complete! (75.36s)`, exit 0, and the flagged `swift test` -> **1704 tests in 126 suites passed**, exit 0. **No file under `Sources/` or `Tests/` is in the diff** (`git diff --name-only main...HEAD` lists 19 files — the 18 of `93fe2d8` plus this entry — none of them under either, and a `grep -c -E '^(Sources|Tests)/'` over that list prints 0 — read out of a file, because `grep -c` exits 1 on zero matches, which is the construct CLAUDE.md's newest rule was written about), which is what makes `scripts/warnings` inapplicable here rather than skipped: it measures a Swift compile this diff cannot alter (WORKFLOW.md step 7's server-only branch).
+
+Behavior added:
+- **Access tokens are verified.** HS256 against the project's JWT secret, `iss` and `aud` compared exactly, `sub` trusted as the Supabase user id, `exp` judged through `clock.ts`'s `isExpiryAcceptable` — which until now had no caller outside its own test.
+- **Every route is protected unless it is on a list.** One `onRequest` hook, `PUBLIC_ROUTES` as the contract's §4.1 `Auth: none` column, and a population test that walks what `registerHealth`/`registerAuth` actually register rather than a sample of them.
+- **A verified token is attributed to a live account on every request**, so a closed, deleted or ambiguous account is refused whatever token is presented.
+- **`ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE` is gone**, along with its production refusal, and `DELETE /v1/account` is mounted everywhere.
+
+Behavior preserved (required, no blanket claims):
+- `POST /v1/auth/email/start` and `/verify` — untouched and still public: the uniform-response oracle guard, both rate limits and the disclosure asymmetry are the same code and the same tests.
+- `POST /v1/auth/refresh` — public, and deliberately so: it authenticates with the refresh token in its body, so an expired access token can never be the reason a refresh fails. Its own `accountForSupabaseUser` call is the moved function, byte for byte.
+- `POST /v1/auth/signout` — still 204, still idempotent, still hands the provider the token the caller presented (now pinned by a test that reads what the fake was given, rather than by inspection).
+- `DELETE /v1/account` — the close, the trigger-driven identity marking, `drainOwedRevocations` after the commit, the 204-even-when-revocation-is-owed decision and 0008's hard-delete refusal all unchanged; only who the caller is changed.
+- `GET /v1/health` — unauthenticated, and now also proven so for `HEAD`.
+- The identity-linking rule, the rate limiter and the revocation ledger — not touched. `auth/identity.ts`, `auth/ratelimit.ts`, `auth/revocation.ts`, `auth/codes.ts` and every migration are byte-identical to `744eccf` (`git diff --name-only 744eccf..HEAD --` over those five paths prints nothing, at `93fe2d8`, which is the last commit on this branch to touch `server/` at all).
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+**Deny-by-default, and the direction is the whole design.** `PUBLIC_ROUTES` lists what is *public*; everything else is challenged. Opt-in authentication has one failure mode and it is silent — a route added by a later ticket whose author never thinks about auth serves happily, passes its own tests, and looks exactly like a route that was considered. Deny-by-default fails the other way: it answers 401 to its own author. This is the same reasoning `app.ts` already gives for `DEFAULT_BODY_LIMIT_BYTES` being the smallest limit rather than the largest. It bit immediately and usefully: `errors.test.ts` registered a throwaway `/v1/boom` route to test the error envelope, and the gate refused the request before the handler ran. The test moved to `/v1/meta`; the gate was right.
+
+**The hook must be installed before any route, not merely before the ones that matter.** Fastify resolves a route's hook chain when the route is registered. A gate added afterwards covers nothing already registered — and would look installed.
+
+**Verification is local, so `AuthProvider.userFromAccessToken` is NOT on the request path.** Its docstring said this is what SONNY-203's middleware would do; the founder decision of 2026-08-21 says otherwise, and the docstring is corrected. Asking the provider per request would put its latency and its availability in front of every authenticated route. The seam stays on the interface — `deleteUser` has been there unused since SONNY-127 for the same reason, an adapter ticket that will need it — and `authgate.db.test.ts` uses a fake that **throws** from it, so a future middleware that reached for it fails loudly.
+
+**A `sub` is validated as a uuid, and that is not hygiene.** `sonny.identity.supabase_user_id` is a `uuid` column, so a non-uuid `sub` bound into the attribution query is Postgres' `22P02` — a 500 out of a request path — rather than "no such user". The refusal belongs in the verifier, which is the thing that saw the claim.
+
+**Strict base64url matters more than it looks.** `Buffer.from(s, "base64url")` ignores characters outside the alphabet and accepts a final quantum with its unused bits set, so a 43-character HMAC has a *second spelling* that decodes to the identical 32 bytes. A lenient verifier accepts both, and the exact bytes the client sent stop being what was checked. `decodeSegment` refuses anything that is not the canonical encoding of what it decodes to, and there is a test that builds the second spelling and proves it decodes equal.
+
+**`nbf` gets no tolerance and `iat` is not a gate at all.** `clock.ts` fixes the first: tolerance is granted to a token that looks expired and never to one that looks not-yet-valid. The second is the mirror-image trap — `iat` says when the *issuer* minted the token, so gating on it means a gateway clock one second behind Supabase's refuses every freshly issued token. Refusing a token for being too new buys nothing the signature and `nbf` do not already give.
+
+**Refusal reasons are logged, never returned.** One message for every forgery. Answering "wrong audience" to one attempt and "bad signature" to the next is a tuning signal for the third — the same reasoning §3.6 applies to the sign-in routes' uniform answers, one layer up. The refusal→code map has exactly one entry that is not `auth.unauthenticated`: expiry, because §3.3 makes `auth.token_expired` the one 401 a client answers by refreshing and retrying, and a forged token that triggered that would put the client in a loop.
+
+**A closed account answers `auth.token_revoked` where `DELETE /v1/account` used to answer `auth.unauthenticated`.** Deliberate: the refusal moved to the gate, and the refresh route already answered `token_revoked` for the identical state. Two surfaces disagreeing about what a closed account means is how a client learns to retry something that will never succeed.
+
+**What verification cannot do is un-issue a token, and it is written down in three places rather than assumed.** A Supabase access token is self-contained — that is what makes local verification possible — so signing out revokes the refresh family while the access token keeps verifying until its own `exp` (one hour, Supabase's default). What *is* closed on every request is the account: attribution reads live state, so `DELETE /v1/account` takes effect at once for every token naming it, including tokens minted before it. The residual is stated in `auth/gate.ts`'s header, in `server/README.md` and in the contract, and filed as SONNY-237.
+
+**One JWT secret, not an ordered list, unlike every provider credential in this file.** Rotating it signs everyone out. Chosen on purpose: an accepted-but-retired *signing* secret extends the blast radius of a leaked one, and this is a key that mints tokens rather than one that spends money. Filed as SONNY-238 so the trade is somebody's decision rather than an omission.
+
+**The tests were proven against mutants rather than trusted.** Thirteen single-line mutants over `auth/token.ts`, `auth/gate.ts` and `auth/attribution.ts`, each reverted from a byte-for-byte copy taken before the run rather than with `git checkout --` (CLAUDE.md's warning about a hand-rolled battery deleting uncommitted work is about exactly that command, and this branch is `server/`, where `scripts/mutate` — a Swift tool — does not reach): **13 of 13 killed** at `93fe2d8`, against `npm run test:db`'s 244. The ones worth naming, with the number of tests each killed by: removing the algorithm pin (14), accepting every signature (6), skipping `iss` (3) / `aud` (2) / `exp` (4), giving `nbf` an hour of tolerance (2), decoding base64url leniently (1), dropping the uuid check on `sub` (2), letting the gate skip every route (25), reporting every refusal as `auth.token_expired` (2), serving a caller whose attribution failed (5), serving a protected route with no auth configured (1), and attributing closed accounts (3). A mutant killed by exactly one test is not a weakness — it is the one test written for that line — but it is the number to look at first if any of those tests is ever weakened.
+
+Known limitations / deferred scope: **no server process mounts these routes yet** — `buildApp` still takes `auth` as an optional argument and `server.ts` supplies none, exactly as SONNY-127 left it, so the running gateway serves `GET /v1/health` and nothing else and everything above is exercised through `app.inject` against a fake provider. **No real Supabase project has ever issued a token to this verifier**: the issuer, audience and secret are configuration, and the first time they meet a real `auth.users` token is the adapter ticket. The two residuals above are SONNY-237 (access-token denylist) and SONNY-238 (secret rotation with an overlap), both filed Backlog and untriaged. SONNY-229 and SONNY-230 were read before designing and are unaffected: this branch takes the caller's identity from `sub` rather than from a request field, and a superseded `supabase_user_id` fails attribution closed (401) rather than open.
+
+Open questions (required, write "none" if true): none.
+
+Next branch: per the roadmap — row 12 continues with the Supabase adapter and the remaining model routes, each of which now inherits the gate rather than adding one.
+
+
 ### Branch: feature/memory-output-locations
 Status: complete — SONNY-209 Done; PR open
 Date: 2026-08-22
