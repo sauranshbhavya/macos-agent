@@ -989,6 +989,21 @@ public final class AgentActionExecutor {
         // plan named its destination at `prepare` and the user approved a panel saying so, so the
         // prepared plan's names are what `aChainWritesOnlyFilesThePreparedPlanAlreadyNamed` holds
         // this executor to. The nested plan resolves later, so the nested plan is the one that moves.
+        //
+        // **The claims half of this seed now has no reachable contribution of its own, and is kept
+        // anyway — stated here so nobody deletes it as dead.** A mutation battery at `e3dee83`
+        // dropped `claimedEarlierInThisRun.destinations` from this union and the whole suite passed,
+        // including SONNY-190's own test. The reason is enumerable rather than mysterious: of the
+        // eight producers of `ActionPreview.writes` (create_local_draft, docx conversion, the zip,
+        // create/edit workspace, save routine, save snippet, web research), five write exactly the
+        // `outputPath` their step already carries, so `namedByEnclosingPlan` holds those paths too.
+        // The three that do not are the docx conversion's per-document PDFs — its step's
+        // `outputPath` is the output *folder* — and the four local stores' own JSON files. A
+        // generated default is `draft-<slug>-<stamp>.md`, `web-research-<stamp>.md`,
+        // `largest-files-<stamp>.zip` or a Shortcut's output, none of which can equal a `.pdf` or a
+        // store file, so the claims half covers a population that today is empty. It stays because
+        // "a unit wrote somewhere its step did not name" is a real category with a real answer, and
+        // the first capability that lands in it would otherwise reopen SONNY-190 silently.
         var claimedOutputPaths: Set<String> = claimedEarlierInThisRun.destinations
             .union(namedByEnclosingPlan.paths)
 
