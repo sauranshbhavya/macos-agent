@@ -161,6 +161,73 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: feature/memory-task-state
+Status: complete
+Date: 2026-08-22
+Tickets: SONNY-210 (the unfinished-task store, its lifecycle, its Memory row, and the widget's offer to carry a run on). Cut from `main` at `744eccf`. **Its scope was narrowed by the founder on 2026-08-22, after the design sign-off**: §6.10's four shapes of "long-running workflow" are three different mechanisms, and this ticket takes the first two — a task interrupted, and a task that failed partway, which are one mechanism, resume a run from the unit it reached. A job that remembers its place through a list of items is SONNY-235's and a standing watcher is SONNY-236's; both extend this store rather than adding a thirteenth.
+Reviewed by: fresh session (per WORKFLOW.md step 7) — owed at PR time.
+
+Spec sections covered: §6.10's "task-specific state for long-running workflows", for shapes 1 and 2. §6.1's "agent state must be resumable for long-running tasks", to the granularity the executor actually has (see below). Shapes 3 and 4 are deliberately not here and are named tickets.
+Files changed:
+- `Sources/MacAgentCore/ResumableTaskStore.swift` — new. The twelfth store, on the shared pattern, plus `ResumableTask` and its remainder arithmetic.
+- `Sources/MacAgentCore/ChainedArtifactCarry.swift` — new. The one home for "which steps consume the previous unit's output", read by the executor's chain resolution and by a resumed dispatch.
+- `Sources/MacAgentCore/AgentActionExecutor.swift` — `CompletedRunUnit`, and unit-boundary progress reporting from a top-level chain.
+- `Sources/MacAgentCore/AgentRunner.swift` — `PreparedPlanSource.resumedTask`; `execute` forwards the progress channel.
+- `Sources/MacAgentCore/LocalStoreClassification.swift`, `LocalDataDeletionService.swift`, `MemorySettings.swift` — the store's registration: a `.trace` case, the wipe's URL, and a Memory row of its own.
+- `Sources/MacAgent/AgentViewModel.swift` — the store's dependency, the three write points, the settle, the offer, and the Memory wiring.
+- `Sources/MacAgent/FloatingWidgetView.swift` — `WidgetState.resumeOffer` and `WidgetResumeOfferPanel`.
+- `Sources/MacAgent/AgentActivityPresentation.swift` — `ResumeOfferPresentation`.
+- `Sources/MacAgent/CommandCenterView.swift` — the new Memory row's icon, destination, copy and entries.
+- `Sources/MacAgent/AppDelegate.swift` — one launch-time read, so the offer reaches someone who never opens Command Center.
+- `Tests/` — four new suites and eleven amended; every `AgentViewModel` fixture gained the store.
+
+Tests: all at `<SHA>`, clean tree, every exit code read with nothing between it and the command. **`swift build` exit 0. The flagged suite: 1757 tests in 130 suites, exit 0.** **`scripts/warnings`: 0 warnings**, exit 0, over the whole tree, its stamp read from the report's own header. **`scripts/mutate`: 32 mutants, 31 killed, 1 survived**, exit 2 because of the survivor — which is an equivalent mutant recorded at the code rather than a coverage gap (see below). No file under `server/` is in this diff, so the server's commands say nothing about it and were not run.
+
+Behavior added:
+- **A run that begins is checkpointed before anything executes, and the record is removed when it finishes.** That ordering is the mechanism: a record written at the end could only ever describe runs that reached an end, and the case this exists for is the one that does not. So "a record still on disk" means "this run never finished", with no code needed at the moment the laptop closes, where there is none to run.
+- **Sonny offers the unfinished task the next time the widget opens** — "You were partway through X." / Continue / Not now — rather than waiting in a list or resuming on its own (founder, 2026-08-22).
+- **Continuing dispatches what is left through the ordinary path.** The remaining steps go through `start(prebuiltPlan:)`, so the assessment, the gate, the prompt, the trace and the history row are the ones an equivalent typed command would produce. Nothing here is a way past a gate.
+- **A lifecycle of three conditions**: the task completes, the user deletes it, or it goes idle. The idle period is 14 days.
+- **A Memory row of its own**, "Unfinished tasks", with the four controls §6.10 requires.
+
+Behavior preserved (required, no blanket claims):
+- **The scheduled path is untouched and deliberately writes nothing here** — see below. `ScheduledRoutineRunTests` is unchanged apart from its fixture gaining the store, and `aScheduledRoutineRunLeavesNoRecordWhileAForegroundRunInTheSameFixtureDoes` pins the decision with a control.
+- **`PriorTaskContext` is untouched.** No file of row E's is in this diff; the two mechanisms share nothing, and this store reuses none of that expiry.
+- **The widget's four existing panel states keep their precedence.** The offer is added below all of them, and `ResumeOfferPresentationTests` asserts the ordering by position rather than by presence.
+- **The risk engine is untouched.** `PreparedPlanSource` gained a case; nothing reads an origin to weaken a consent, and `assessRisk` did not change.
+- **`AgentActionExecutor.execute` and `AgentRunner.execute` keep every existing caller working** — the progress channel is a defaulted parameter, and the scheduled path passes none.
+- **The other eleven stores' registration is unchanged** except for the counts that had to move, all of which are assertions rather than prose.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**"Sonny already knows what step it was on" was not true, and the granularity it does have is not the plan's.** The ticket's framing assumed per-step progress existed; it did not. `AgentViewModel.stepStatuses` is all-or-nothing (`markAllSteps`), and the executor reported nothing. What it *has* is units: `chainSegments` cuts a plan into maximal runs of one workflow and hands each to one adapter call, so what an adapter does with the two steps of a `[scan, zip]` unit is its own business and there is no moment between them anyone outside can observe. **So a unit boundary is the finest point at which "this is done" is a fact rather than a guess**, and that is what is recorded. The consequences are worth stating rather than discovering: a single-workflow plan has one unit and resuming it re-runs it whole; a routine's own steps run as a nested plan and report nothing, because their ids do not appear in the plan a resume would re-execute; and **a unit that was in flight when the interruption landed is re-run**, because nothing can know how far into an adapter call the power went.
+
+**The offer sits last in the widget's precedence, above nothing but idle, and that is the answer to a hazard this repository has already paid for twice.** `CLAUDE.md` records the widget picking `.failure` ahead of `.result`, and a bookkeeping write failure routed into `errorMessage` twice replaced the result of a task that had succeeded. A fifth thing competing for that panel is the same shape. Every state above the offer describes the task the user is doing *now*; this describes a task from before, so it yields to all of them — including `.failure`, so a run that failed partway shows *why* rather than an offer with the reason hidden. It is pinned by position, not by presence, because a token can be added by a comment.
+
+**A scheduled routine writes no record here, and it is a decision rather than a path nobody wired.** Two reasons, either sufficient. `performScheduledRun`'s own contract is that "every property that surface UI reads as *your last task* is deliberately untouched here", because the user did nothing and nothing they are looking at should change — and a proactive panel that raises itself when they next open the widget is exactly such a surface; it is the same argument `recordScheduledTaskHistory` already makes for keeping a background run out of `PriorTaskContext`. And there would be nothing to resume *from*: a scheduled run prepares the one-step `run_routine` plan, so it has exactly one unit, and "continue" could only mean "run the whole routine again", which the next occurrence already does. **This is a deviation from the kickoff prompt**, which assumed the scheduled path would write under `allowsScheduledRecording`; it is recorded here and on the ticket rather than resolved silently, and it is pinned with a control so it cannot drift.
+
+**Carrying a resumed run's earlier artifact through execution could not work, and the suite is what proved it.** The first implementation threaded the file an earlier unit produced as an execution-time parameter, seeding the chain's carried path. It is wrong for an ordering reason: `AgentRunner.prepare` previews every step, and previewing a bare `open_generated_artifact` throws *"needs outputPath or a previous chained artifact"* long before anything reaches `execute` — so a value supplied at execution cannot be seen by the gate that runs first. The end-to-end test failed on exactly that message. The parameter is gone; `ChainedArtifactCarry.applying(_:toLeadingStepOf:)` writes the path into the plan before dispatch, which also puts the file being opened inside what the assessment sees. The predicate has one home, read by that function and by the executor's own chain resolution, because two copies of "which steps consume a previous artifact" is one copy that gets a new operation added to it.
+
+**The plan is refused rather than trimmed above its size budget, and that is the one cap in this repository that works that way.** Every other store caps by truncating text, which is safe because the text is read back to be shown or summarised. This plan is read back to be **executed**: a plan cut to fit would run a different task from the one the user started, silently, with the user's approval attached to it. So an oversized plan produces no record and no offer — the run simply is not resumable, which is a smaller loss than resuming something else — and the refusal is reported on `localStorageNotice` while the task itself succeeds.
+
+**The idle period is 14 days, and the reasoning is recorded because the founder left the number to the implementer.** It has to be long enough that a genuine intention to come back survives it — a fortnight covers a working week plus a week away, the longest ordinary gap between being interrupted and returning — and short enough that resuming is still safe to offer, because a resumed plan re-executes against the file system and the web as they are *now*. The two anchors this repository already has bracket it: `PriorTaskContext` expires in ten minutes, `ClipboardHistoryStore` ages entries out after seven days. It is one named constant, `ResumableTaskStore.defaultIdleExpiry`, and a test pins both the value and that no production path narrows it.
+
+**The seventh registration step for a new store is not enforced by anything, and it is the one that bit.** `CLAUDE.md` says a new store is six enforced things and that six is a floor. The seventh is that **every test fixture constructing an `AgentViewModel` has to be handed the store**, because a defaulted parameter resolves to the real location under `~/Library` — so a fixture that misses it has its tests writing to the developer's own data and racing every other suite through one shared file. The symptom is a *neighbouring* suite failing for no reason its own diff explains, which is how it was found here (`ConsequenceRuleDispatchTests`, not this ticket's). `CLAUDE.md`'s gotcha now names it, along with two cheaper unenforced ones.
+
+**A mutation battery's kill can arrive as an aborted run rather than a killed mutant, and the cause is in the test.** Three tests indexed an array right after `#expect`-ing its count. `#expect` records an issue and carries on, so under a mutant that empties the array the subscript traps — and a crashed process emits no *"Test … failed"* line for the harness to attribute, so `scripts/mutate` ended at a point that is not one of its exits with no error above it. `try #require` after a count expectation, not a subscript; the three are fixed and the reasoning is at the code.
+
+**One survivor, and it is equivalent rather than uncovered.** M3 swaps the unit-progress write's guard from `allowsRecording(to:)` to the memory switches alone. It survives because only one of the two terms can change mid-run: the Memory switches are standing preferences the user can flip from Command Center while a run is in flight, while "Don't save this task" is a pre-dispatch toggle — and a suppressed run has no checkpoint for that function to append to anyway. It is recorded at `recordResumableTaskUnit` rather than closed with a test that would assert a state the app cannot reach; the conjunction stays because it fails closed and because a per-site subtraction of a term is exactly what `allowsRecording(to:)` exists to stop anyone writing.
+
+Known limitations / deferred scope:
+- **Shapes 3 and 4 are not built here**, by the founder's scope split of 2026-08-22: SONNY-235 (a job over many items) and SONNY-236 (a standing watcher). Both extend this store.
+- **A policy refusal is kept as an unfinished task.** A tier-4 plan arrives at the settle as `.failed`, so its record survives and continuing it will be refused again with the same message. That is a true description of the state — the task really is unfinished — and the alternative is a settle that reads summary text to guess at a cause.
+- **A resumed unit can repeat work.** At most one: the unit that was in flight. Bounded, re-assessed, and pressed by the user.
+- **No wireframe covers the offer panel.** It is built to the panels beside it in System B, on the same footing `WidgetCaptureReviewPanel` is on, and is a candidate for the whole-product UI pass.
+
+Open questions (required, write "none" if true): none.
+
+Next branch: per the roadmap.
+
 ### Branch: feature/row-12-gateway-auth-middleware
 Status: complete
 Date: 2026-08-22
