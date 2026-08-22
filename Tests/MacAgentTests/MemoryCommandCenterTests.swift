@@ -565,6 +565,80 @@ struct MemoryCommandCenterTests {
         #expect(!withoutTheSanctionedHandover.contains("outputLocationStore"))
     }
 
+    /// **The foreground counterpart of the scan above, and the asymmetry it closes is what let three
+    /// of four sites go unheld** (PR #101 review, F1).
+    ///
+    /// The scheduled path had this instrument and the foreground path did not, so at `335ddce` three
+    /// mutants passed the whole suite: `performStart`'s planner branch and `makeDelegationRunner()`
+    /// each wired to the *scheduled* seam, and `performStart`'s instant-resolver branch with the
+    /// argument deleted outright. The first is the one that matters — the planner branch is the path
+    /// most real commands take, the scheduled seam is `allowsScheduledRecording(to:)`, and wiring one
+    /// to the other drops `taskRecordingPolicy` out of the conjunction. A person turns on "Don't save
+    /// this task", Sonny drafts a file into their Documents folder, and the folder is recorded anyway,
+    /// with 1743 tests green.
+    ///
+    /// **Counts per block rather than a bare `contains`**, for the reason `MacAgentSource`'s own doc
+    /// gives: a trailing line comment can add a token but never remove one, so a count is sound where
+    /// a presence check is not. One sanctioned handover per `AgentRunner(` in the block, then the
+    /// sanctioned text is removed and the bare store token must be gone — which catches the scheduled
+    /// seam and a raw store alike, and is the same two-step the scan above uses because
+    /// `outputLocationStore: outputLocationStore` is a prefix of the correct line.
+    ///
+    /// **It covers `recentArtifactStore` too, and that is a fix rather than a bonus.** The reviewer
+    /// mutated that store's handover on the same line and it also survived, so the hole predates this
+    /// branch. Covering it here is one array element, no production change — all four sites already
+    /// read the right seam — so it is closed rather than filed.
+    @Test
+    func everyForegroundRunnerIsHandedTheForegroundSeams() throws {
+        let source = try MacAgentSource.read("AgentViewModel.swift")
+        // Anchored on real code rather than line numbers. `performStart`'s signature spans six lines,
+        // so the anchor carries its last parameter and the brace; a rename fails this loudly, which
+        // is the moment to re-check that the property still holds.
+        let blocks: [(name: String, anchor: String)] = [
+            (
+                "performStart",
+                """
+                        prebuiltPlanSource: PreparedPlanSource = .directUserAction
+                    ) async {
+                """
+            ),
+            ("makeDelegationRunner", "func makeDelegationRunner() throws -> AgentRunner {")
+        ]
+
+        var runnersSeen = 0
+        for block in blocks {
+            let body = try MacAgentSource.braceBlock(of: source, openedBy: block.anchor)
+            let runners = MacAgentSource.count(of: "AgentRunner(", inText: body)
+            #expect(runners > 0, "\(block.name) builds no AgentRunner — the anchor no longer matches")
+            runnersSeen += runners
+
+            for store in ["outputLocationStore", "recentArtifactStore"] {
+                let sanctioned = "\(store): \(store)ForThisRun"
+                #expect(
+                    MacAgentSource.count(of: sanctioned, inText: body) == runners,
+                    """
+                    \(block.name) builds \(runners) AgentRunner(s) but hands over \(sanctioned) \
+                    \(MacAgentSource.count(of: sanctioned, inText: body)) time(s). Every foreground \
+                    runner takes the foreground seam, which is the conjunction of the memory switches \
+                    and "Don't save this task".
+                    """
+                )
+                let withoutTheSanctionedHandovers = body.replacingOccurrences(of: sanctioned, with: "")
+                #expect(
+                    !withoutTheSanctionedHandovers.contains(store),
+                    "\(block.name) reaches \(store) by some other name — the scheduled seam, or the raw store"
+                )
+            }
+        }
+
+        // The population, pinned so a fifth foreground construction site cannot arrive unexamined.
+        // Three in `performStart` (prebuilt plan, instant resolver, planner) and one in
+        // `makeDelegationRunner()`; the fifth `AgentRunner(` in this file is the scheduled one, which
+        // the scan above owns.
+        #expect(runnersSeen == 4, "expected four foreground AgentRunner sites, scanned \(runnersSeen)")
+        #expect(MacAgentSource.count(of: "AgentRunner(", inText: source) == runnersSeen + 1)
+    }
+
     /// **A bookkeeping write failure is a storage notice, never a task error** — CLAUDE.md's
     /// write-failure channel rule, on the path that has to get it right without anybody watching.
     /// `errorMessage` means "the task you asked for did not happen", and the widget picks `.failure`
@@ -932,8 +1006,8 @@ struct MemoryCommandCenterTests {
     /// **Recent artifacts and the vision journal, on the memory half of the conjunction** (PR #98
     /// review, F2). `ProductShellTests.aSuppressedRunIsHandedNoRecentArtifactStore` and
     /// `aSuppressedRunIsHandedNoVisionSessionJournal` flip only `taskRecordingPolicy`, so these two
-    /// of the seven types had their memory switch verified by reading the shared
-    /// `allowsRecording(to:)` rather than by exercising it.
+    /// types had their memory switch verified by reading the shared `allowsRecording(to:)` rather
+    /// than by exercising it.
     ///
     /// **Asserted at the seam rather than by dispatching, and that is the correct instrument here,
     /// not a shortcut.** `recentArtifactStoreForThisRun`'s own doc records why: no command the
@@ -944,6 +1018,14 @@ struct MemoryCommandCenterTests {
     /// execute the live decision at all. Row I built a `nil` store as "run the session, record
     /// nothing", which is what makes asserting the handover the same thing as asserting the
     /// suppression.
+    ///
+    /// **The first half of that premise stopped being true in this file** (SONNY-209). `planDrafting`
+    /// below runs a real `create_local_draft`, which writes a real file, and `.createLocalDraft` is on
+    /// `RecentArtifactStore.shouldRecordPreviewWrites`' operation list — so a dispatch here really
+    /// would reach the recent-artifacts store now. The seam assertion is kept anyway: it is the
+    /// stronger instrument for a decision that has to hold on paths this suite cannot dispatch, and
+    /// the vision half is unreachable end to end either way. Recorded rather than acted on, because
+    /// rewriting this test is that store's work and not this ticket's.
     @Test
     func theRecentArtifactAndVisionJournalHandoversAreWithheldByTheMemorySwitchesToo() throws {
         let fixture = try makeMemoryFixture()
@@ -1334,24 +1416,39 @@ struct MemoryCommandCenterTests {
     /// Insights left the whole suite green, and "each memory type is viewable" is the first clause of
     /// the ticket's acceptance criteria.
     ///
-    /// The row count moved to eight with row 13's output locations (SONNY-209); the assertion below
-    /// takes it from `MemoryCategory.allCases` rather than from a literal, so a ninth row adds a line
-    /// to the explicit list above and nothing else.
+    /// **The population pin is the half that keeps the table honest, and it was briefly a tautology**
+    /// (PR #101 review, F4). Row 13 replaced `destinations.count == 7` with
+    /// `destinations.count == MemoryCategory.allCases.count`, which `map` makes true for any n. The
+    /// literal it replaced was the thing that made a new row break this test — and so the thing that
+    /// forced whoever added the row to state where it leads. What replaces it now is a table of every
+    /// row's destination checked against `allCases` in both directions: a ninth row fails this by
+    /// name rather than by a number, and the explicit `#expect` list the table subsumes is gone
+    /// rather than kept as a second copy of the same eight facts.
     @Test
     func viewLeadsSomewhereSpecificForEveryMemoryType() {
-        #expect(MemoryRowDestination.of(.routines) == .page(.routines))
-        #expect(MemoryRowDestination.of(.workspaces) == .page(.workspaces))
-        #expect(MemoryRowDestination.of(.taskHistory) == .page(.tasks))
-        #expect(MemoryRowDestination.of(.recentArtifacts) == .entriesSheet)
-        #expect(MemoryRowDestination.of(.outputLocations) == .entriesSheet)
-        #expect(MemoryRowDestination.of(.clipboardHistory) == .entriesSheet)
-        #expect(MemoryRowDestination.of(.snippets) == .entriesSheet)
-        #expect(MemoryRowDestination.of(.approvedApps) == .entriesSheet)
+        // Every row's destination, stated once. The keys are checked against the whole population
+        // below, which is what makes a ninth row fail here rather than pass with eight covered.
+        let expected: [MemoryCategory: MemoryRowDestination] = [
+            .routines: .page(.routines),
+            .workspaces: .page(.workspaces),
+            .taskHistory: .page(.tasks),
+            .recentArtifacts: .entriesSheet,
+            .outputLocations: .entriesSheet,
+            .clipboardHistory: .entriesSheet,
+            .snippets: .entriesSheet,
+            .approvedApps: .entriesSheet
+        ]
+        #expect(
+            Set(expected.keys) == Set(MemoryCategory.allCases),
+            "not every memory row has a stated destination: \(Set(MemoryCategory.allCases).subtracting(expected.keys))"
+        )
+        for category in MemoryCategory.allCases {
+            #expect(MemoryRowDestination.of(category) == expected[category], "\(category.title)")
+        }
 
         // Every row leads somewhere, and the three page destinations are distinct — a mapping that
         // sent two rows to one page would satisfy a looser check.
         let destinations = MemoryCategory.allCases.map(MemoryRowDestination.of)
-        #expect(destinations.count == MemoryCategory.allCases.count)
         let pages = destinations.compactMap { destination -> CommandCenterDestination? in
             guard case .page(let page) = destination else { return nil }
             return page
@@ -1426,14 +1523,27 @@ struct MemoryCommandCenterTests {
             #expect(!MemoryDeletionCopy.message(for: category).isEmpty, "\(category.title)")
         }
 
-        // The sheet's copy exists for the four types it opens for, and deliberately not for the
-        // three deleted from their own pages.
-        for category in [MemoryCategory.recentArtifacts, .clipboardHistory, .snippets, .approvedApps] {
+        // **Both loops are derived from `MemoryRowDestination`, not written out** (PR #101 review,
+        // F3). Row 13 added a fifth entries-sheet type and updated one of the two hardcoded lists in
+        // this file — the sibling 66 lines above — and not this one, so `.outputLocations` had no
+        // copy assertion at all: its `entryMessage` and its `emptyMessage` could each be blanked
+        // with the whole suite green, which is precisely the failure this test's own comment says it
+        // exists to catch. Deriving both sides from the destination mapping means a ninth row is
+        // covered by arriving rather than by being remembered here.
+        let sheetTypes = MemoryCategory.allCases.filter { MemoryRowDestination.of($0) == .entriesSheet }
+        let pageTypes = MemoryCategory.allCases.filter { MemoryRowDestination.of($0) != .entriesSheet }
+        #expect(!sheetTypes.isEmpty)
+        #expect(!pageTypes.isEmpty)
+        #expect(sheetTypes.count + pageTypes.count == MemoryCategory.allCases.count)
+
+        // The sheet's copy exists for every type it opens for, and deliberately not for the ones
+        // deleted from their own pages.
+        for category in sheetTypes {
             #expect(!MemoryDeletionCopy.entryMessage(for: category).isEmpty, "\(category.title)")
             #expect(!MemoryDeletionCopy.emptyMessage(for: category).isEmpty, "\(category.title)")
             #expect(MemoryDeletionCopy.emptyTitle(for: category).hasPrefix("No "), "\(category.title)")
         }
-        for category in [MemoryCategory.routines, .workspaces, .taskHistory] {
+        for category in pageTypes {
             #expect(MemoryDeletionCopy.entryMessage(for: category).isEmpty, "\(category.title)")
         }
 

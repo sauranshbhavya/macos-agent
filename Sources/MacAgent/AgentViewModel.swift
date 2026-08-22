@@ -2184,7 +2184,7 @@ final class AgentViewModel: ObservableObject {
     /// nothing".
     ///
     /// It is a `.trace` store — the sixth, since row E's plan details — and the one
-    /// `LocalStoreClassification` calls the most sensitive of the eleven; it had no seam test, no
+    /// `LocalStoreClassification` calls the most sensitive of them all; it had no seam test, no
     /// mutation and no entry under Known limits, while the other traces were each closed or
     /// recorded.
     /// **The one seam a scheduled run reaches that still reads the composer switch, stated because
@@ -2599,7 +2599,7 @@ final class AgentViewModel: ObservableObject {
     /// Forgets everything of one kind, leaving every other kind untouched.
     ///
     /// **`LocalDataDeletionService` again, with a narrower list** — the same service Settings' whole
-    /// wipe uses, constructed over this category's files instead of all eleven. That buys the
+    /// wipe uses, constructed over this category's files instead of every store's. That buys the
     /// attempt-every-file-and-report-what-survived behaviour a privacy delete needs, rather than a
     /// second deletion routine that stops at the first error.
     ///
@@ -3162,7 +3162,7 @@ final class AgentViewModel: ObservableObject {
         completedRunNotice = nil
         // A pending request to open a task's detail would point at a row the wipe has just erased.
         taskDetailRequest = nil
-        // The grants file is one of the eleven stores the wipe erases, so an in-memory copy of its
+        // The grants file is one of the stores the wipe erases, so an in-memory copy of its
         // contents goes with it (SONNY-202). `deleteLocalData` guards on `!isRunning` and this cache
         // is cleared at every session exit, so it is already `nil` here — cleared anyway, because
         // "already nil" is an argument about two other code paths and this is a property of one.

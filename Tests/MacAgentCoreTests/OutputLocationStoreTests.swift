@@ -169,8 +169,9 @@ struct OutputLocationStoreTests {
     /// test whose meaning changes with the developer's filesystem is not a test. `..` collapses
     /// identically everywhere, and it goes through the same `PathWhitelist.canonicalURL` half of the
     /// key that resolves a symlinked temporary directory in production. The case half of the key —
-    /// `DestinationKey.folded`, which needs no filesystem at all — is pinned by
-    /// `theDeleteDoorFoldsCaseTheSameWayTheRecordDoorDoes` below.
+    /// `DestinationKey.folded` — is pinned by `theDeleteDoorFoldsCaseTheSameWayTheRecordDoorDoes`
+    /// below, which deletes the folder first so that canonicalisation cannot answer for the fold.
+    /// (That pointer named the right test and the test did not hold it, until PR #101's review, F2.)
     @Test
     func twoSpellingsOfOneFolderAreOneRecord() throws {
         let fixture = try OutputLocationFixture()
@@ -329,9 +330,30 @@ struct OutputLocationStoreTests {
         #expect(try fixture.store.loadAll(now: .fixture).count == 1)
     }
 
-    /// The delete door folds case the same way the record door does, so a person removing a row
-    /// rendered from one spelling really removes the record stored under the other. No filesystem is
-    /// involved on this path, so the assertion holds on a case-sensitive volume too.
+    /// The delete and read doors fold case the same way the record door does, so a person removing a
+    /// row rendered from one spelling really removes the record stored under the other.
+    ///
+    /// **The folder is deleted first, and that is the whole of what makes this test its own
+    /// subject** (PR #101 review, F2). The previous version recorded into `Outputs/Reports` and
+    /// forgot `Outputs/REPORTS` with the folder still on disk, and it passed with
+    /// `DestinationKey.folded` removed from `storageKey` outright — its doc said "no filesystem is
+    /// involved on this path", which was backwards on both halves. `PathWhitelist.canonicalURL` ends
+    /// in `resolvingSymlinksInPath()`, and **Foundation's** version of that — unlike POSIX
+    /// `realpath`, which does not — returns the on-disk casing for a path whose components all exist.
+    /// Measured at `b74984d` by creating `Outputs/Reports` and canonicalising `Outputs/REPORTS`: it
+    /// came back `.../Outputs/Reports` while the directory was there, and `.../Outputs/REPORTS` once
+    /// it was deleted. So with the folder present the filesystem answers the question before the fold
+    /// is ever consulted, and the test was watching the volume rather than the code it named.
+    ///
+    /// Deleting the folder takes the filesystem out of the comparison, which is also the ordinary
+    /// moment somebody opens the Memory page to forget a note: the folder is gone, and the note about
+    /// it is what is left. Only the case fold can match the two spellings then — asserted below as a
+    /// precondition rather than assumed, so this cannot quietly go vacuous again.
+    ///
+    /// **Volume-independent in the direction that matters.** The precondition asserted is the
+    /// *post*-deletion one, which holds on a case-sensitive volume too, where `REPORTS` never existed
+    /// to be normalised. The pre-deletion behaviour is recorded above as prose, not asserted, because
+    /// that one really is a fact about the volume.
     @Test
     func theDeleteDoorFoldsCaseTheSameWayTheRecordDoorDoes() throws {
         let fixture = try OutputLocationFixture()
@@ -339,7 +361,17 @@ struct OutputLocationStoreTests {
         let reports = try fixture.makeOutputFolder("Reports")
         try fixture.store.recordOutputs(atPaths: [reports.appendingPathComponent("a.md").path], recordedAt: .fixture)
 
-        try fixture.store.forget(path: fixture.outputsRoot.appendingPathComponent("REPORTS").path)
+        try FileManager.default.removeItem(at: reports)
+        let shouted = fixture.outputsRoot.appendingPathComponent("REPORTS", isDirectory: true).path
+        #expect(
+            PathWhitelist.canonicalURL(shouted).path != reports.path,
+            "Precondition: with the folder gone, canonicalisation must leave the casing alone, so the case fold is the only thing that can match these two spellings. If this fails, the assertions below prove nothing about DestinationKey.folded."
+        )
+
+        // The read door first: it is the one a row is rendered from.
+        #expect(try fixture.store.location(for: shouted)?.name == "Reports")
+
+        try fixture.store.forget(path: shouted)
 
         #expect(try fixture.store.loadAll(now: .fixture).isEmpty)
     }

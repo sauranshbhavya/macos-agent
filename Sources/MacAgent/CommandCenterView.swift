@@ -3919,9 +3919,11 @@ struct MemoryRowPresentation: Equatable {
 /// **Where "edit" lives, per type, because it is deliberately not built here.** The ticket's rule is
 /// to reuse each store's existing management rather than reinvent it: Routines, Workspaces and Task
 /// history open the pages that already own their editors (the routine detail sheet, the workspace
-/// detail sheet, the task detail dialog), and the four types that never had a surface of their own
-/// open `MemoryEntriesSheet`, where editing a list of remembered items means removing entries from
-/// it. Nothing here duplicates an editor that exists.
+/// detail sheet, the task detail dialog), and the types that never had a surface of their own open
+/// `MemoryEntriesSheet`, where editing a list of remembered items means removing entries from it.
+/// Nothing here duplicates an editor that exists. (Written as "the four types" until SONNY-209 made
+/// it five; the count is gone rather than incremented, because `MemoryRowDestination.of` is what
+/// decides and a number here can only ever go stale again.)
 ///
 /// **The three shared Command Center surfaces are present because a page without them shows nothing
 /// for a run started from it** — `.claude/rules/macagent-ui-conventions.md`'s Approval visibility
@@ -4061,7 +4063,7 @@ private struct MemoryView: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     // Grouped, like `RoutinesView`'s cadence sections and the Tasks list's status
-                    // groups — a flat stack of seven rows adopts the row idiom without the
+                    // groups — one flat stack of every row adopts the row idiom without the
                     // sectioning that comes with it everywhere else. The split is `LocalStoreKind`,
                     // the classification "Don't save this task" already decides suppression by, so
                     // it is the product's own reading rather than a taxonomy invented for this page.
@@ -4129,7 +4131,7 @@ private struct MemoryView: View {
 /// the one control of the four with no test behind it.
 ///
 /// The split is the reuse rule: a type whose entries already have a page goes to that page, and only
-/// the four that never had one open the sheet.
+/// the ones that never had one open the sheet.
 enum MemoryRowDestination: Equatable {
     case page(CommandCenterDestination)
     case entriesSheet
@@ -4290,8 +4292,8 @@ enum MemoryDeletionCopy {
         case .approvedApps:
             return "Sonny asks again the next time it needs to control this app."
         case .routines, .workspaces, .taskHistory:
-            // Unreachable: the sheet opens for the four types above only, and the other three are
-            // deleted from their own pages.
+            // Unreachable: the sheet opens for the cases above only, and these three are deleted
+            // from their own pages.
             return ""
         }
     }
@@ -4401,12 +4403,12 @@ struct MemoryEntryPresentation: Identifiable, Equatable {
     }
 }
 
-/// The view-and-edit surface for the four memory types that never had one.
+/// The view-and-edit surface for the memory types that never had one.
 ///
 /// Routines, workspaces and task history are deliberately absent — they open their own pages, whose
 /// editors this sheet would otherwise be a worse copy of. What "edit" means here is removing an
-/// entry: these four hold records rather than documents, and nothing in the product has ever
-/// offered to rewrite one.
+/// entry: the types it opens for hold records rather than documents, and nothing in the product has
+/// ever offered to rewrite one.
 private struct MemoryEntriesSheet: View {
     @ObservedObject var viewModel: AgentViewModel
     let category: MemoryCategory
