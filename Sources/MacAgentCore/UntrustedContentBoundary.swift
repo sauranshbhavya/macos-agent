@@ -99,32 +99,42 @@ public enum UntrustedContentBoundary {
     /// U+0301 + `ND` and `UNTRUSTED_OBSERVED_CONTENT_EN` + U+200B + `D` wide open, which is the same
     /// attack moved one letter.
     ///
-    /// **The test is legitimate occurrence, not visibility — and that is a correction, not a
-    /// restatement** (PR #100 review, F1). The first version of this predicate justified itself by
-    /// what a reader sees, and that argument does not survive contact with U+200A HAIR SPACE: a
-    /// one-pixel gap is *less* visible than the U+0301 accent this function exists to close, and
-    /// U+200B (category Cf, stepped over) and U+200A (category Zs, not) are adjacent code points that
-    /// were landing on opposite sides of the predicate. Visibility was the wrong question. The right
-    /// one is **where the scalar can legitimately be**: a scalar is stepped over when it cannot occur
-    /// *inside* a token drawn from `[A-Z_]`.
+    /// **The frontier here is perceptual, it has no bottom, and saying so plainly is the point of this
+    /// paragraph** (PR #100 review round 2, F1 and F3). Two earlier versions of this comment claimed a
+    /// cleaner rule than the code follows. The first argued from visibility and died on U+200A HAIR
+    /// SPACE, a one-pixel gap less visible than the U+0301 accent this function exists to close. The
+    /// second replaced it with a structural-sounding test — "a scalar that cannot legitimately occur
+    /// inside a token drawn from `[A-Z_]`" — which reads better and is *false about this code*: `x` and
+    /// `3` cannot occur inside such a token either, and they are obviously not stepped over. Relabelling
+    /// moved the argument, not the frontier.
     ///
-    /// By that test the combining marks and the invisible formatting scalars are in, as before — they
-    /// attach to or hide between letters. So now are the Unicode **space separators and control
-    /// characters**: a hair space, a narrow no-break space, an ideographic space or a tab may all
-    /// separate *words* in real text, but none of them ever sits *inside* an ASCII identifier, so a
-    /// delimiter carrying one is a forgery every time. Leaving them out is what let
-    /// `UNTRUSTED_OBSERVED_CONTENT_E` + U+200A + `ND` reproduce the ticket's original failure shape
-    /// verbatim, and it also put the two halves of this one boundary in disagreement, since
-    /// `escapeAttribute` has folded exactly that set out of attributes since SONNY-219.
+    /// So, honestly: **what is stepped over is a scalar that contributes no visible glyph of its own** —
+    /// combining marks, which attach to the letter before them; the format and default-ignorable
+    /// scalars; the space separators; the control characters; and U+2800 BRAILLE PATTERN BLANK, the
+    /// braille cell with no dots raised, which is category `So` and which no category test reaches.
+    /// **That is a rendering test.** Unicode will keep supplying scalars that render as nothing, each
+    /// one is another round of this, and three rounds of adversarial review have each found the next
+    /// one — a combining mark, then the invisible spaces, then the braille blank.
     ///
-    /// **Two exclusions, neither of them about how a character looks.** U+0020 SPACE stays out because
-    /// this repository has already decided what a space-separated near-miss means: `escapeAttribute`
-    /// folds separators to `_` *before* escaping precisely because `UNTRUSTED_OBSERVED CONTENT_END`
-    /// carries no delimiter until the fold builds one. Stepping over U+0020 here would contradict that
-    /// recorded decision and would bracket ordinary prose containing the four words. And the line
-    /// breakers — CR, LF, VT, FF, NEL, U+2028, U+2029 — stay out because a delimiter split by one of
-    /// them is genuinely on two lines, and two lines cannot forge the single boundary line this
-    /// wrapper is read by.
+    /// **SONNY-234 is what ends the class, and this function is the interim.** That ticket makes the
+    /// delimiter unguessable — a random tag generated at wrap time, after the untrusted content already
+    /// exists — so a forgery is not a delimiter regardless of how it renders, and the question of
+    /// whether a blank-looking scalar is "close enough" stops being asked. Until then this predicate is
+    /// deliberately over-inclusive: over-matching brackets a string that was going to be read as the
+    /// delimiter anyway, and there is no legitimate text with an invisible scalar inside a
+    /// thirty-character SCREAMING_SNAKE identifier.
+    ///
+    /// **What is not stepped over, and why neither reason is about rendering.** The line breakers — CR,
+    /// LF, VT, FF, NEL, U+2028, U+2029 — because a delimiter split by one of them is genuinely on two
+    /// lines, and two lines cannot forge the single boundary line this wrapper is read by. And U+0020,
+    /// but **only after the delimiter's last letter, never inside it** — see
+    /// `isIgnorableAfterADelimiter`.
+    ///
+    /// **Insertion is closed; substitution is a near-miss and stays open.** A separator standing *in
+    /// place of* a delimiter character produces a different string: `_` is an expected scalar, and a
+    /// skipped scalar cannot supply it, so `UNTRUSTED_OBSERVED CONTENT_END` matches nothing here even
+    /// though every separator is stepped over. That is the same near-miss `escapeAttribute` folds to `_`
+    /// before escaping (SONNY-219), and it is untouched by any of this.
     ///
     /// **Canonically equivalent spellings match, which is not a homoglyph concession** (PR #100 review,
     /// F2). `UNTRUSTED_OBSERVED_CONTENT_` + U+00C9 + `ND` and the same string written `E` + U+0301 are
@@ -179,7 +189,7 @@ public enum UntrustedContentBoundary {
             // A match may never *begin* on an ignorable scalar. Without this, a combining acute in
             // "cafe\u{0301}UNTRUSTED_…" would be swallowed into the replaced range and the accent
             // would vanish from text that had nothing to do with the forgery.
-            if !isIgnorableForDelimiterMatching(scalars[index]),
+            if !isIgnorableInsideADelimiter(scalars[index]),
                let match = targets.lazy.compactMap({ target -> (text: String, end: Int)? in
                    guard let end = matchEnd(of: target.scalars, at: index, in: scalars, bases: bases) else {
                        return nil
@@ -200,15 +210,27 @@ public enum UntrustedContentBoundary {
     /// canonically decomposes to a single base followed only by marks, in which case that base.
     ///
     /// **Guarded on `uppercaseLetter`, and that guard is a measured fact rather than a hopeful range.**
-    /// Decomposing every non-ASCII scalar costs 283ms on a 500KB CJK page (`readableText` is
-    /// uncapped — it is a whole attacker-served article body), which is a cost worth removing on an
-    /// input an attacker chooses the size of. Across the entire scalar range, **exactly 244 scalars
-    /// canonically decompose to an ASCII `[A-Z_]` base followed only by marks, and all 244 are
-    /// category `uppercaseLetter`**, spanning U+00C0 to U+212B — U+212A KELVIN SIGN and U+212B
-    /// ANGSTROM SIGN included, which is why the range runs past the Latin blocks. Measured by
-    /// `scripts/`-free scratch census over `0...0x10FFFF`; `theCanonicalBaseGuardCoversEveryScalarThatDecomposesToAnASCIIBase`
-    /// re-derives it over U+0080–U+212B on every run. Unicode's normalisation stability policy is why
+    /// Across the entire scalar range, **exactly 244 scalars canonically decompose to an ASCII `[A-Z_]`
+    /// base followed only by marks, and all 244 are category `uppercaseLetter`**, spanning U+00C0 to
+    /// U+212B — U+212A KELVIN SIGN and U+212B ANGSTROM SIGN included, which is why the range runs past
+    /// the Latin blocks. `theCanonicalBaseGuardCoversEveryScalarThatDecomposesToAnASCIIBase` re-derives
+    /// it over U+0080–U+212B on every run and asserts the count; a second reviewer re-derived it over
+    /// the whole `0...0x10FFFF` range independently. Unicode's normalisation stability policy is why
     /// that census does not go stale: canonical decompositions of existing characters cannot change.
+    ///
+    /// **What the guard buys, corrected — the figure this comment used to carry did not reproduce**
+    /// (PR #100 review round 2, F5). Timing the `scalars.map(canonicalBase)` pass alone over a
+    /// 173 334-scalar / 520 002-byte varied-CJK page, in the debug configuration the suite runs in,
+    /// with the two predicates written out identically apart from the guard: **17.0 ms guarded,
+    /// 99.7 ms unguarded, a delta of 82.8 ms**, outputs identical (a `@testable` scratch suite over
+    /// `String` built from U+4E00 upward, best of three; an independent reviewer measured 22.9 ms
+    /// against 136.7 ms on the same shape). The old figure said "283ms to nothing" and both halves were
+    /// wrong: 283 ms was measured over 512 000 *scalars* — about 1.5 MB of UTF-8 for CJK, roughly three
+    /// times the page it was labelled as — and 17.0 ms is not nothing. The guard is worth having and
+    /// the direction was right; the number was a mislabelled scalar count reported as a byte size.
+    /// `readableText` is uncapped (`WebResearchService.readableLines` applies no limit), so an attacker
+    /// chooses that size, which is why the pass is worth guarding at all.
+    ///
     private static func canonicalBase(of scalar: Unicode.Scalar) -> Unicode.Scalar {
         guard scalar.value >= 0x80, scalar.properties.generalCategory == .uppercaseLetter else {
             return scalar
@@ -231,10 +253,11 @@ public enum UntrustedContentBoundary {
 
     /// Where a match of `needle` starting at `start` ends, or `nil` if there is none.
     ///
-    /// Ignorable scalars are skipped before each expected scalar and again after the last one. The
-    /// trailing skip is what makes the escaped form **identical however the delimiter was
-    /// decorated**: the mark an attacker hung on the final letter is theirs, not the content's, and
-    /// leaving it behind would simply re-attach it to the `]` of the replacement.
+    /// Ignorable scalars are skipped before each expected scalar and again after the last one, but the
+    /// two skips take **different sets** — `isIgnorableInsideADelimiter` and
+    /// `isIgnorableAfterADelimiter`, which differ by U+0020 alone. The trailing skip is what makes the
+    /// escaped form identical however the delimiter was decorated; excluding the ordinary space from it
+    /// is what stops that canonicalisation eating a space out of ordinary text.
     private static func matchEnd(
         of needle: [Unicode.Scalar],
         at start: Int,
@@ -243,7 +266,7 @@ public enum UntrustedContentBoundary {
     ) -> Int? {
         var cursor = start
         for expected in needle {
-            while cursor < scalars.count, isIgnorableForDelimiterMatching(scalars[cursor]) {
+            while cursor < scalars.count, isIgnorableInsideADelimiter(scalars[cursor]) {
                 cursor += 1
             }
             guard cursor < scalars.count, bases[cursor] == expected else {
@@ -251,33 +274,47 @@ public enum UntrustedContentBoundary {
             }
             cursor += 1
         }
-        while cursor < scalars.count, isIgnorableForDelimiterMatching(scalars[cursor]) {
+        while cursor < scalars.count, isIgnorableAfterADelimiter(scalars[cursor]) {
             cursor += 1
         }
         return cursor
     }
 
-    /// Whether `scalar` cannot legitimately occur *inside* a token drawn from `[A-Z_]`, and so can be
-    /// hidden inside a delimiter by a forger. See `neutralizingDelimiters` for why the test is
-    /// legitimate occurrence rather than visibility.
+    /// Scalars that render as nothing and that no general-category test reaches.
     ///
-    /// **Each of the four branches is held by a corpus entry, because a branch no test holds is a
-    /// comment** — this function shipped once with a fourth clause nothing exercised (PR #100 review,
-    /// F3, and the branch's own M6 lesson arriving in the same function it was written for):
+    /// One member today. U+2800 BRAILLE PATTERN BLANK is the braille cell with no dots raised: category
+    /// `So`, not default-ignorable, and blank in every font that carries braille — which is why it is
+    /// the standard way to fake whitespace in chat clients, and why it defeated a predicate built from
+    /// categories alone (PR #100 review round 2, F3). Listed by scalar rather than by category because
+    /// `So` also contains `©`, `°` and most emoji, every one of which is visible. The rest of the
+    /// braille block has dots raised and is visible, so the block is not the unit either.
+    private static let blankRenderingScalars: Set<Unicode.Scalar> = ["\u{2800}"]
+
+    /// Whether `scalar` contributes no visible glyph, and so can be hidden **inside** a delimiter by a
+    /// forger. See `neutralizingDelimiters` for why this test is perceptual and what ends that.
+    ///
+    /// **Every branch is held by a corpus entry, because a branch no test holds is a comment** — this
+    /// function has now shipped twice with a clause nothing exercised (PR #100 review, F3; and its own
+    /// M6 lesson before that):
     ///
     /// - the three **mark** categories — U+0301, and U+20DD which is `Me` rather than `Mn`;
     /// - **`.format`** — held by U+0600 ARABIC NUMBER SIGN, which is `Cf` and is **not**
-    ///   default-ignorable. The old justification for this clause named U+200B, which *is*
+    ///   default-ignorable. An earlier justification for this clause named U+200B, which *is*
     ///   default-ignorable and therefore establishes nothing about it;
     /// - **`isDefaultIgnorableCodePoint`** — held by U+3164 HANGUL FILLER, category `Lo`, caught by
     ///   no other branch;
-    /// - **space separators and controls** — held by U+200A HAIR SPACE and by U+0009 TAB.
+    /// - **`.spaceSeparator`** — held by U+200A HAIR SPACE and now by U+0020 itself;
+    /// - **`.control`** — held by U+0009 TAB;
+    /// - **`blankRenderingScalars`** — held by U+2800.
     ///
-    /// The two exclusions are `U+0020` and `CharacterSet.newlines`; `neutralizingDelimiters` gives the
-    /// reason for each, and neither is about how the character renders.
-    private static func isIgnorableForDelimiterMatching(_ scalar: Unicode.Scalar) -> Bool {
-        guard scalar != " ", !CharacterSet.newlines.contains(scalar) else {
+    /// The only exclusion is `CharacterSet.newlines`, and it is not about rendering: a delimiter split
+    /// by a real line break is two lines, and two lines cannot forge one boundary line.
+    private static func isIgnorableInsideADelimiter(_ scalar: Unicode.Scalar) -> Bool {
+        guard !CharacterSet.newlines.contains(scalar) else {
             return false
+        }
+        if blankRenderingScalars.contains(scalar) {
+            return true
         }
         switch scalar.properties.generalCategory {
         case .nonspacingMark, .spacingMark, .enclosingMark, .format, .spaceSeparator, .control:
@@ -285,6 +322,23 @@ public enum UntrustedContentBoundary {
         default:
             return scalar.properties.isDefaultIgnorableCodePoint
         }
+    }
+
+    /// The same, for the scalars **following** a completed match — everything above except U+0020.
+    ///
+    /// **The two positions are not the same question, and conflating them was the whole cost of closing
+    /// U+0020** (PR #100 review round 2, F1). Inside a delimiter an ordinary space cannot be
+    /// legitimate: nothing puts one in the middle of a thirty-character identifier, so a space there is
+    /// a forgery every time. Immediately *after* one it is the most ordinary character there is —
+    /// `escape("UNTRUSTED_OBSERVED_CONTENT_BEGIN tail")` must keep its space, and that text reaches the
+    /// user through `WebResearchMarkdownCapabilityAdapter`'s `escape(note.summary)`, so swallowing it
+    /// would corrupt a rendered note over a decoration the attacker never made.
+    ///
+    /// Everything else is still consumed here, which is what keeps the escaped form identical however
+    /// the delimiter was decorated: the mark or zero-width scalar an attacker hung on the final letter
+    /// is theirs, and leaving it behind would re-attach it to the `]` of the replacement.
+    private static func isIgnorableAfterADelimiter(_ scalar: Unicode.Scalar) -> Bool {
+        scalar != " " && isIgnorableInsideADelimiter(scalar)
     }
 
     private static func isMark(_ scalar: Unicode.Scalar) -> Bool {
