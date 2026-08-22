@@ -174,6 +174,34 @@ struct LocalStorageSecurityTests {
         #expect(try store.loadAll() == [record])
     }
 
+    /// The twelfth store's own pattern conformance (SONNY-209): the folder paths a person's work
+    /// goes into never sit on disk in the clear.
+    ///
+    /// Its whitelist points at a directory of this test's own, because the store only records a
+    /// folder it is allowed to write to — a default whitelist here would resolve to the developer's
+    /// real Desktop and Documents.
+    @Test
+    func outputLocationStoreEncryptsRawFileBytesAndRoundTrips() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let marker = "sensitive-folder-\(UUID().uuidString)"
+        let folder = root.appendingPathComponent(marker, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        let store = OutputLocationStore(
+            fileURL: root.appendingPathComponent("output-locations.json"),
+            encryption: testEncryption(),
+            whitelist: PathWhitelist(roots: [root])
+        )
+
+        try store.recordOutputs(
+            atPaths: [folder.appendingPathComponent("report.md").path],
+            recordedAt: .fixture
+        )
+
+        try expectEncryptedFile(store.fileURL, hiding: marker)
+        #expect(try store.loadAll(now: .fixture).first?.name == marker)
+    }
+
     @Test
     func legacyPlaintextFilesMigrateToEncryptedFilesAfterSuccessfulLoad() throws {
         let root = try makeDirectory()
@@ -188,6 +216,7 @@ struct LocalStorageSecurityTests {
         try assertRecentArtifactMigration(root: root, encryption: encryption)
         try assertShortcutHistoryMigration(root: root, encryption: encryption)
         try assertTaskHistoryMigration(root: root, encryption: encryption)
+        try assertOutputLocationMigration(root: root, encryption: encryption)
     }
 
     /// **The strip runs before the legacy-plaintext rewrite, and that ordering is the point of this
@@ -341,7 +370,8 @@ struct LocalStorageSecurityTests {
 
         // Ten since row E (SONNY-147): `task-plan-details.json` holds what each finished task
         // planned. Eleven since row J (SONNY-140): `approved-apps.json` holds which apps the user
-        // let Sonny control. Nine, not eight, was SONNY-154's correction — the vision session
+        // let Sonny control. Twelve since row 13 (SONNY-209): `output-locations.json` holds which
+        // folders their work comes out into. Nine, not eight, was SONNY-154's correction — the vision session
         // journal was the store this test did not create, so the only place the wipe's behaviour is
         // actually exercised covered every store except the most sensitive one.
         //
@@ -354,14 +384,14 @@ struct LocalStorageSecurityTests {
         // too. That question going unasked is how the journal stayed uncovered. The number is
         // deliberately not spelled in this sentence, since a sentence that names it is a fourth
         // place to update and this one already went stale once (PR #89 cycle 2, F3).
-        #expect(fileURLs.count == 11)
-        #expect(result == LocalDataDeletionResult(deletedFileCount: 11, missingFileCount: 0))
+        #expect(fileURLs.count == 12)
+        #expect(result == LocalDataDeletionResult(deletedFileCount: 12, missingFileCount: 0))
         for fileURL in fileURLs {
             #expect(!FileManager.default.fileExists(atPath: fileURL.path))
         }
 
         let secondResult = try service.deleteAllLocalData()
-        #expect(secondResult == LocalDataDeletionResult(deletedFileCount: 0, missingFileCount: 11))
+        #expect(secondResult == LocalDataDeletionResult(deletedFileCount: 0, missingFileCount: 12))
     }
 
     @Test(.requiresUnprivilegedProcess)
@@ -403,16 +433,21 @@ struct LocalStorageSecurityTests {
     /// The wipe's reach, pinned by count and by name. Relocated here from the deleted ledger
     /// suite (PR #49 N4): the ninth store's own `urls.count == 9` pin died with it, and without
     /// a successor a store added to the app but forgotten from this list would vanish from the
-    /// wipe silently. Eleven stores is the current whole population, since row J's approved apps.
+    /// wipe silently. Twelve stores is the current whole population, since row 13's output
+    /// locations.
     ///
-    /// **The count was contended and is now settled.** Row E's plan details landed first, at
-    /// `ebd6c1d`, taking it to ten; row J's approved apps rebased on top of that and took it to
-    /// eleven. A twelfth raises this number and the one in
-    /// `everyLocalStoreFileIsClassifiedExactlyOnce` again.
+    /// **The count moved three times and no longer lives in this test's name** (SONNY-209). Row E's
+    /// plan details landed first, at `ebd6c1d`, taking it to ten; row J's approved apps rebased on
+    /// top of that and took it to eleven; row 13's output locations took it to twelve. Each move
+    /// renamed this test, and each rename left the doc comments elsewhere that name it pointing at a
+    /// symbol that no longer existed — two of them, found by grepping the whole population rather
+    /// than the references anyone remembered. So the name is count-free now and the number lives
+    /// only in the assertion below, where the compiler is what complains. A thirteenth store raises
+    /// this number and the one in `everyLocalStoreFileIsClassifiedExactlyOnce`, and renames nothing.
     @Test
-    func theWipeReachesExactlyTheElevenLocalStores() {
+    func theWipeReachesEveryLocalStore() {
         let urls = LocalDataDeletionService.defaultStoreFileURLs()
-        #expect(urls.count == 11)
+        #expect(urls.count == 12)
         let fileNames = Set(urls.map(\.lastPathComponent))
         // Nine since row I: `vision-sessions.json` is the action journal (SONNY-96). A wipe that
         // left a record of every click Sonny made inside the user's apps would be the loudest
@@ -424,6 +459,10 @@ struct LocalStorageSecurityTests {
         // (SONNY-140). It is the one store here that is not a record of what Sonny did — it is what
         // the user decided — and it is erased with the rest, because "delete my local data" is a
         // promise about the whole directory rather than about the parts a reader thinks of first.
+        //
+        // Twelve since row 13: `output-locations.json` holds which folders this person's work comes
+        // out into (SONNY-209). A short list of paths, which sounds harmless and is not — where
+        // somebody's work goes is a map of what they work on.
         #expect(fileNames == [
             "routines.json",
             "workspaces.json",
@@ -435,7 +474,8 @@ struct LocalStorageSecurityTests {
             "task-history.json",
             "vision-sessions.json",
             "task-plan-details.json",
-            "approved-apps.json"
+            "approved-apps.json",
+            "output-locations.json"
         ])
     }
 
@@ -443,10 +483,11 @@ struct LocalStorageSecurityTests {
     /// decision of 2026-08-16 is that its reach is a rule, not a list — so a store that reaches the
     /// wipe without a `LocalStore` case has to fail here rather than default to "recorded".
     ///
-    /// Row E's `task-plan-details.json` and row J's `approved-apps.json` are the tenth and
-    /// eleventh, and both arrived exactly the way this test was built to make them arrive: the new
-    /// file had no case, so it matched nothing and the suite failed until it was classified.
-    /// Classifying is the fix; deleting the assertion is not.
+    /// Row E's `task-plan-details.json`, row J's `approved-apps.json` and row 13's
+    /// `output-locations.json` are the tenth, eleventh and twelfth, and all three arrived exactly
+    /// the way this test was built to make them arrive: the new file had no case, so it matched
+    /// nothing and the suite failed until it was classified. Classifying is the fix; deleting the
+    /// assertion is not.
     @Test
     func everyLocalStoreFileIsClassifiedExactlyOnce() {
         let wipedURLs = LocalDataDeletionService.defaultStoreFileURLs()
@@ -460,7 +501,7 @@ struct LocalStorageSecurityTests {
         let classifiedURLs = LocalStore.allCases.map { $0.fileURL() }
         #expect(Set(classifiedURLs) == Set(wipedURLs))
         #expect(Set(classifiedURLs).count == LocalStore.allCases.count)
-        #expect(LocalStore.allCases.count == 11)
+        #expect(LocalStore.allCases.count == 12)
     }
 
     /// Pins *which* kind each store is, not merely that it has one. Exhaustiveness alone would let
@@ -479,7 +520,12 @@ struct LocalStorageSecurityTests {
             .shortcutRunHistory,
             .taskHistory,
             .taskPlanDetails,
-            .visionSessionJournal
+            .visionSessionJournal,
+            // Row 13's output locations (SONNY-209). Nobody asked Sonny to remember which folder a
+            // file went into; it is derived from where the run's own output landed, which is the
+            // founder's ground for `.trace` exactly. Suppressing it costs the user nothing they
+            // asked for — the file is still written, and still where they put it.
+            .outputLocations
         ])
         // Never suppressed: the thing the user actually asked for. `approvedApps` is here on that
         // same ground and not on a weaker one (SONNY-140): a grant is the user's own answer to a
@@ -536,6 +582,14 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
         fileURL: root.appendingPathComponent("approved-apps.json"),
         encryption: encryption
     )
+    // The twelfth (row 13, SONNY-209), created here for the identical reason. Its whitelist is this
+    // fixture's own directory, because the store records only a folder it is allowed to write to and
+    // the default whitelist is the developer's real Desktop and Documents.
+    let outputLocationStore = OutputLocationStore(
+        fileURL: root.appendingPathComponent("output-locations.json"),
+        encryption: encryption,
+        whitelist: PathWhitelist(roots: [root])
+    )
 
     try routineStore.save(
         StoredRoutine(
@@ -581,6 +635,12 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
         displayName: "Notes",
         approvedAt: .fixture
     )
+    let outputFolder = root.appendingPathComponent("delete-output-folder", isDirectory: true)
+    try FileManager.default.createDirectory(at: outputFolder, withIntermediateDirectories: true)
+    try outputLocationStore.recordOutputs(
+        atPaths: [outputFolder.appendingPathComponent("delete-output.md").path],
+        recordedAt: .fixture
+    )
 
     return [
         routineStore.fileURL,
@@ -593,7 +653,8 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
         taskHistoryStore.fileURL,
         visionSessionJournalStore.fileURL,
         taskPlanDetailStore.fileURL,
-        approvedAppStore.fileURL
+        approvedAppStore.fileURL,
+        outputLocationStore.fileURL
     ]
 }
 
@@ -674,6 +735,35 @@ private func assertRecentArtifactMigration(root: URL, encryption: LocalStorageEn
     let store = RecentArtifactStore(fileURL: url, encryption: encryption)
 
     #expect(try store.loadAll(now: .fixture).first?.path == artifact.path)
+    try expectEncryptedFile(url, hiding: marker)
+}
+
+private func assertOutputLocationMigration(root: URL, encryption: LocalStorageEncryption) throws {
+    let marker = "legacy-output-folder-\(UUID().uuidString)"
+    let folder = root.appendingPathComponent(marker, isDirectory: true)
+    try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+    let resolved = PathWhitelist.canonicalURL(folder.path).path
+    let url = root.appendingPathComponent("legacy-output-locations.json")
+    // Keyed the way the store keys it, by hand: a fixture that asked the store for its key would be
+    // asserting the migration against whatever the store currently does rather than against the file
+    // a previous version really left on disk.
+    let legacy = [
+        resolved.folding(options: [.caseInsensitive], locale: nil): OutputLocation(
+            path: resolved,
+            useCount: 2,
+            firstUsedAt: .fixture,
+            lastUsedAt: .fixture
+        )
+    ]
+    try JSONEncoder.iso8601PrettySortedForTest.encode(legacy).write(to: url, options: .atomic)
+    let store = OutputLocationStore(
+        fileURL: url,
+        encryption: encryption,
+        whitelist: PathWhitelist(roots: [root])
+    )
+
+    #expect(try store.loadAll(now: .fixture).first?.path == resolved)
+    #expect(try store.location(for: folder.path)?.useCount == 2)
     try expectEncryptedFile(url, hiding: marker)
 }
 

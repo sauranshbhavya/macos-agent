@@ -40,7 +40,8 @@ public enum LocalStoreKind: CaseIterable, Hashable, Sendable {
 ///   file URLs against `LocalDataDeletionService.defaultStoreFileURLs()`, so a **new store file
 ///   fails the suite** until it gets a case here. Row E's `task-plan-details.json` and row J's
 ///   `approved-apps.json` are the tenth and eleventh, and both arrived exactly that way: the suite
-///   failed until each was classified here. The twelfth will fail the same way.
+///   failed until each was classified here. Row 13's `output-locations.json` is the twelfth, and it
+///   arrived the same way. The thirteenth will too.
 ///
 /// `fileURL(fileManager:)` delegates to the store types themselves rather than repeating their
 /// filenames, so the two lists cannot drift apart: a store that moves moves in both.
@@ -56,6 +57,7 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
     case taskHistory
     case taskPlanDetails
     case approvedApps
+    case outputLocations
 
     /// Deliberately one `case` per store rather than three grouped ones: each line is a separate
     /// classification decision, and a reviewer should be able to disagree with exactly one of them.
@@ -64,7 +66,7 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
         case .visionSessionJournal:
             // Row I's action journal: what the screen-control loop did and what it observed after
             // each action. A record *of* the run, never the point of it — and the most sensitive
-            // trace of the eleven.
+            // trace of the twelve.
             return .trace
         case .routines:
             // "Save this as a routine" is the ask itself. Suppressing it would break the task.
@@ -127,6 +129,17 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
             // Row D flagged this store as the first to reach this test and left the call here
             // rather than making it on row J's behalf (SONNY-140, comment of 2026-08-17).
             return .artifact
+        case .outputLocations:
+            // Row 13's common output locations (SONNY-209): which folders this run's files landed
+            // in, kept so Sonny can offer a destination instead of guessing one. Nobody asked Sonny
+            // to remember it — it is derived from where a task's own outputs went — which is the
+            // founder's ground for `.trace` exactly.
+            //
+            // The same reading as `.recentArtifacts`, one level up: that store notes the file, this
+            // one notes the folder, and both are notes *about* a run rather than the thing the run
+            // was for. Suppressing it costs the user nothing they asked for: the files are still
+            // written and still where they put them, and only the note about the folder is withheld.
+            return .trace
         }
     }
 
@@ -157,6 +170,8 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
             return TaskPlanDetailStore(fileManager: fileManager).fileURL
         case .approvedApps:
             return ApprovedAppStore(fileManager: fileManager).fileURL
+        case .outputLocations:
+            return OutputLocationStore(fileManager: fileManager).fileURL
         }
     }
 }
