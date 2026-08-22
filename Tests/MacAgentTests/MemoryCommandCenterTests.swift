@@ -1427,7 +1427,7 @@ struct MemoryCommandCenterTests {
     @Test
     func viewLeadsSomewhereSpecificForEveryMemoryType() {
         // Every row's destination, stated once. The keys are checked against the whole population
-        // below, which is what makes a ninth row fail here rather than pass with eight covered.
+        // below, which is what makes a tenth row fail here rather than pass with nine covered.
         let expected: [MemoryCategory: MemoryRowDestination] = [
             .routines: .page(.routines),
             .workspaces: .page(.workspaces),
@@ -1436,7 +1436,11 @@ struct MemoryCommandCenterTests {
             .outputLocations: .entriesSheet,
             .clipboardHistory: .entriesSheet,
             .snippets: .entriesSheet,
-            .approvedApps: .entriesSheet
+            .approvedApps: .entriesSheet,
+            // Row 13's unfinished runs (SONNY-210) open the sheet, and it is the one type where that
+            // is a decision rather than an absence: an unfinished run has no task-history row to
+            // open, because a row is written when a run terminates.
+            .resumableTasks: .entriesSheet
         ]
         #expect(
             Set(expected.keys) == Set(MemoryCategory.allCases),
@@ -1459,7 +1463,10 @@ struct MemoryCommandCenterTests {
         // Exactly the types the sheet renders entries for open the sheet, so the two mappings cannot
         // drift apart.
         let sheetTypes = MemoryCategory.allCases.filter { MemoryRowDestination.of($0) == .entriesSheet }
-        #expect(Set(sheetTypes) == [.recentArtifacts, .outputLocations, .clipboardHistory, .snippets, .approvedApps])
+        #expect(
+            Set(sheetTypes)
+                == [.recentArtifacts, .outputLocations, .clipboardHistory, .snippets, .approvedApps, .resumableTasks]
+        )
     }
 
     /// The three wirings no runtime assertion in this repository can reach, scanned in the shape
@@ -1785,6 +1792,7 @@ private struct MemoryFixture {
     let taskHistoryStore: TaskHistoryStore
     let taskPlanDetailStore: TaskPlanDetailStore
     let approvedAppStore: ApprovedAppStore
+    let resumableTaskStore: ResumableTaskStore
     let clipboardSettingsStore: ClipboardHistorySettingsStore
     let clipboardHistoryStore: ClipboardHistoryStore
     let outputLocationStore: OutputLocationStore
@@ -2009,6 +2017,10 @@ private func makeMemoryFixture(
         encryption: encryption,
         whitelist: PathWhitelist(roots: [outputsRoot])
     )
+    let resumableTaskStore = ResumableTaskStore(
+        fileURL: root.appendingPathComponent("resumable-tasks.json"),
+        encryption: encryption
+    )
     let deletionService = wipesRealStoreFiles
         ? LocalDataDeletionService(
             fileURLs: [
@@ -2024,6 +2036,7 @@ private func makeMemoryFixture(
                 clipboardHistoryStore.fileURL,
                 approvedAppStore.fileURL,
                 outputLocationStore.fileURL
+                resumableTaskStore.fileURL
             ]
         )
         : LocalDataDeletionService(fileURLs: [])
@@ -2053,6 +2066,7 @@ private func makeMemoryFixture(
         clipboardHistorySettingsStore: clipboardSettingsStore,
         approvedAppStore: approvedAppStore,
         outputLocationStore: outputLocationStore,
+        resumableTaskStore: resumableTaskStore,
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
             reader: pasteboard,
             store: clipboardHistoryStore,
@@ -2075,6 +2089,7 @@ private func makeMemoryFixture(
         taskHistoryStore: taskHistoryStore,
         taskPlanDetailStore: taskPlanDetailStore,
         approvedAppStore: approvedAppStore,
+        resumableTaskStore: resumableTaskStore,
         clipboardSettingsStore: clipboardSettingsStore,
         clipboardHistoryStore: clipboardHistoryStore,
         outputLocationStore: outputLocationStore,

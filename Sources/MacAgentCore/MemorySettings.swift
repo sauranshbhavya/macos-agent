@@ -48,6 +48,17 @@ public enum MemoryCategory: String, CaseIterable, Identifiable, Sendable {
     case clipboardHistory
     case snippets
     case approvedApps
+    /// Runs that began and did not finish (row 13, SONNY-210).
+    ///
+    /// **Its own row rather than folded under `.taskHistory`, and the lifecycle is what decides
+    /// it.** The three stores that *are* folded under task history — plan details, the vision
+    /// journal, Shortcut run history — each hang off a history row: they are parts of a finished
+    /// task, deleted with it and reachable through it. An unfinished run has no history row at all,
+    /// because a row is written when a run terminates and this is the store for runs that have not.
+    /// Folding it in would put its entries behind a page that cannot show them and a delete that
+    /// cannot reach them, and the founder's lifecycle for this store — it lives until the task
+    /// completes **or the user deletes it** — needs a delete the user can actually press.
+    case resumableTasks
 
     public var id: String { rawValue }
 
@@ -76,6 +87,11 @@ public enum MemoryCategory: String, CaseIterable, Identifiable, Sendable {
             return "Snippets"
         case .approvedApps:
             return "Allowed apps"
+        case .resumableTasks:
+            // What the user would call these, not what the store is called. "Unfinished tasks" is
+            // the same sentence the widget's offer makes ("you were partway through X"), so the row
+            // and the offer name one thing.
+            return "Unfinished tasks"
         }
     }
 
@@ -111,7 +127,8 @@ extension LocalStore {
     /// Exhaustive with no `default`, the same guard `kind` uses and for the same reason: a new store
     /// must not be able to arrive on disk, be wiped by Delete Local Data, and be invisible in
     /// the one surface built to show the user what Sonny remembers. Row 13's output locations is the
-    /// first store to arrive since this mapping existed, and it arrived that way.
+    /// first store to arrive since this mapping existed, and SONNY-210's unfinished runs are the
+    /// second; both arrived that way.
     /// `MemorySettingsTests.everyLocalStoreIsPlacedUnderExactlyOneMemoryCategoryOrDeliberatelyExcluded`
     /// pins the union. (That reference read `…OrExcluded` until SONNY-209 — no such test, and the
     /// same renamed-symbol staleness this ticket found four instances of elsewhere.)
@@ -151,6 +168,8 @@ extension LocalStore {
             return .snippets
         case .approvedApps:
             return .approvedApps
+        case .resumableTasks:
+            return .resumableTasks
         case .clipboardHistorySettings:
             // **Not memory — the clipboard switch itself.** This file holds whether clipboard
             // history runs and whether its first-run notice was answered. Deleting it would reset a

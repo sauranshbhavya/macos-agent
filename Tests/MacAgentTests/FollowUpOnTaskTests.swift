@@ -664,6 +664,8 @@ private func makeFollowUpFixture() throws -> FollowUpFixture {
             // The same roots this fixture hands the view model, so the store answers
             // "is this an output location" against the folders the run really used.
             whitelist: PathWhitelist(roots: [root])
+        resumableTaskStore: ResumableTaskStore(
+            fileURL: root.appendingPathComponent("resumable-tasks.json")
         ),
         localDataDeletionService: LocalDataDeletionService(fileURLs: []),
         priorTaskContextStore: PriorTaskContextStore(),

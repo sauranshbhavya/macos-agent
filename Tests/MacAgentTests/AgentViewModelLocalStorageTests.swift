@@ -918,6 +918,8 @@ private func makeViewModel(
         ),
         outputLocationStore: OutputLocationStore(
             fileURL: root.appendingPathComponent("output-locations.json"),
+        resumableTaskStore: ResumableTaskStore(
+            fileURL: root.appendingPathComponent("resumable-tasks.json"),
             encryption: encryption
         ),
         clipboardHistoryMonitor: ClipboardHistoryMonitor(

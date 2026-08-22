@@ -626,7 +626,15 @@ struct ProductShellTests {
             "pendingCommandForPriorTaskContext",
             "pendingTaskHistoryStartedAt",
             "preserveUsageForNextStart",
-            "memoryDeletionStatusMessage"
+            "memoryDeletionStatusMessage",
+            // Row 13's three in-memory slots (SONNY-210). The wipe erases the file all three
+            // describe: a surviving checkpoint would write its task straight back on the next unit
+            // boundary, a surviving arm would let a dispatch continue a record that no longer
+            // exists, and a surviving dismissal set would suppress an offer for an id that can only
+            // now belong to a different task.
+            "activeResumableTask",
+            "resumingTask",
+            "dismissedResumeOfferIDs"
         ]
 
         // Not assigned by the wipe, but rewritten by the four `refresh…` calls it ends with — from
@@ -640,6 +648,7 @@ struct ProductShellTests {
             "clipboardHistoryItems",      // ditto
             "approvedApps",               // ditto
             "outputLocations",            // ditto (SONNY-209)
+            "resumableTasks",             // ditto, via refreshResumableTasks() (SONNY-210)
             "clipboardHistoryEnabled",    // refreshClipboardHistoryNotice()
             "clipboardHistoryTimer",      // ditto, via start/stopClipboardHistoryMonitoring()
             "localStorageLoadFailures",   // record/clearLocalStorageLoadFailure, inside all four
@@ -658,6 +667,7 @@ struct ProductShellTests {
             "runningAppSwitcher", "shortcutInvoker", "finderContextReader", "documentConverter",
             "zipArchiver", "shortcutRunHistoryStore", "taskHistoryStore", "taskPlanDetailStore",
             "clipboardHistorySettingsStore", "approvedAppStore", "outputLocationStore",
+            "resumableTaskStore",
             "clipboardHistoryMonitor",
             "localDataDeletionService", "memorySettingsStore", "memoryPolicyProvider",
             "priorTaskContextStore", "taskUsageRecorder", "plannerProviderRegistry",
@@ -3123,6 +3133,10 @@ private func makeProductShellFixture(
             // The same roots this fixture hands the view model, so the store answers
             // "is this an output location" against the folders the run really used.
             whitelist: PathWhitelist(roots: [root])
+        ),
+        resumableTaskStore: ResumableTaskStore(
+            fileURL: root.appendingPathComponent("resumable-tasks.json"),
+            encryption: encryption
         ),
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
             reader: ProductShellPasteboardReader(),
