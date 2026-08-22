@@ -330,3 +330,73 @@ enum TaskRecordingPresentation {
         isOn ? "On" : "Off"
     }
 }
+
+/// The widget's offer to carry on with an unfinished task (row 13, SONNY-210).
+///
+/// **The founder's own sentence, and it says exactly what pressing Continue does.** The decision of
+/// 2026-08-22 is that Sonny *offers* the unfinished task the next time the user opens the floating
+/// widget — "you were partway through X, continue?" — rather than waiting in a list to be found and
+/// rather than resuming on its own. The message here is the first half of that and the Continue
+/// label is the second.
+///
+/// Nothing here explains how resuming works, per the founder's rule of 2026-08-14: not which steps
+/// are left, not that a unit may re-run, not why the task stopped. What happened to the task is data
+/// and belongs in the Memory row that lists it, which is where `MemoryEntryPresentation` puts it;
+/// the offer is a question with two answers.
+enum ResumeOfferPresentation {
+    static let continueLabel = "Continue"
+    /// "Not now", not "Dismiss": the record is not being deleted and the offer comes back at the
+    /// next launch, so a label that sounded final would over-promise in the direction that loses the
+    /// user's work.
+    static let dismissLabel = "Not now"
+
+    static func message(command: String) -> String {
+        "You were partway through \u{201C}\(truncatedCommand(command))\u{201D}."
+    }
+
+    static func continueAccessibilityLabel(command: String) -> String {
+        "Continue \u{201C}\(truncatedCommand(command))\u{201D}"
+    }
+
+    static func dismissAccessibilityLabel(command: String) -> String {
+        "Not now — leave \u{201C}\(truncatedCommand(command))\u{201D} unfinished"
+    }
+
+    /// The panel is a fixed 472pt wide and a command is whatever the user typed, so this squeezes
+    /// and then trims.
+    ///
+    /// **Newlines first, and the truncation alone would not cover it**: a short first line followed
+    /// by ten more is well under any character budget and still eleven lines tall, which a dictated
+    /// or pasted command really can be.
+    ///
+    /// Its own function rather than `FollowUpPresentation.truncatedCommand`, which is the nearest
+    /// thing: that one has a different budget, no newline squeeze, and an empty-case wording written
+    /// for a chip that says "Following up: …". Sharing it would mean one of the two callers reading
+    /// wrong, and this is copy rather than a rule — the thing this repository consolidates is a rule
+    /// that must not drift, not two sentences that happen to look alike.
+    static func truncatedCommand(_ command: String) -> String {
+        let squeezed = command
+            .components(separatedBy: .newlines)
+            .map { $0.trimmingCharacters(in: .whitespaces) }
+            .filter { !$0.isEmpty }
+            .joined(separator: " ")
+        guard !squeezed.isEmpty else {
+            // Unreachable from a live run — `canSubmit` refuses an empty command — and answered
+            // anyway, because this text comes back off disk. The Tasks list already calls a
+            // command-less record "Untitled task"; the offer uses the same word for the same thing.
+            return "an untitled task"
+        }
+        guard squeezed.count > maximumCommandCharacters else {
+            return squeezed
+        }
+        let head = squeezed.prefix(maximumCommandCharacters)
+        // Cut at the last space inside the budget when one leaves something readable, rather than
+        // mid-word — the same rule the follow-up chip uses, at this panel's own width.
+        if let lastSpace = head.lastIndex(of: " "), head.distance(from: head.startIndex, to: lastSpace) >= 12 {
+            return head[head.startIndex..<lastSpace] + "\u{2026}"
+        }
+        return head + "\u{2026}"
+    }
+
+    private static let maximumCommandCharacters = 60
+}
