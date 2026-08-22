@@ -145,6 +145,10 @@ private let delimiterForgeries: [DelimiterForgery] = [
     DelimiterForgery(label: "U+FEFF byte order mark mid-string") { inserting("\u{FEFF}", at: 3, in: $0) },
     // U+034F exists for precisely this: its published purpose is to defeat grapheme segmentation.
     DelimiterForgery(label: "U+034F combining grapheme joiner mid-string") { inserting("\u{034F}", at: 12, in: $0) },
+    // Default-ignorable but *not* a mark and not a format character — it is category Lo, and it
+    // renders as nothing. Only the `isDefaultIgnorableCodePoint` half of the ignorable test catches
+    // it, so this entry is what makes that half load-bearing rather than decorative.
+    DelimiterForgery(label: "U+3164 Hangul filler mid-string") { inserting("\u{3164}", at: 7, in: $0) },
     DelimiterForgery(label: "trailing U+FE0F variation selector") { $0 + "\u{FE0F}" },
     DelimiterForgery(label: "trailing U+20DD combining enclosing circle") { $0 + "\u{20DD}" },
     DelimiterForgery(label: "two combining marks stacked on the last letter") { $0 + "\u{0301}\u{0308}" }
@@ -507,6 +511,19 @@ struct UntrustedContentBoundaryScalarMatchingTests {
             // A delimiter that is a prefix of a longer word is still a delimiter — pinned because
             // the "ordinary text is untouched" test above must not be read as covering it.
             #expect(UntrustedContentBoundary.escape("\(delimiter)ING") == "\(marker)ING")
+        }
+    }
+
+    /// **A match may not begin on an ignorable scalar, and this is what that buys.** Skipping
+    /// ignorables to *find* a start would let a combining acute belonging to the word before the
+    /// delimiter be swallowed into the replaced range — silently stripping an accent off text that
+    /// had nothing to do with the forgery.
+    @Test
+    func aCombiningMarkOnTheTextBeforeADelimiterSurvivesTheEscape() {
+        for delimiter in UntrustedContentBoundary.allDelimiters {
+            let marker = "[escaped delimiter: \(delimiter)]"
+            #expect(UntrustedContentBoundary.escape("cafe\u{0301}\(delimiter)") == "cafe\u{0301}\(marker)")
+            #expect(UntrustedContentBoundary.escape("cafe\u{0301} \(delimiter)") == "cafe\u{0301} \(marker)")
         }
     }
 
