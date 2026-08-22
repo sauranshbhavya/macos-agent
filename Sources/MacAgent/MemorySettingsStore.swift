@@ -13,9 +13,16 @@ import MacAgentCore
 ///   Data. A memory switch living in one would be erased by the very action a privacy-minded user
 ///   reaches for, and recording would silently resume — the opposite of what they asked for. These
 ///   keys survive it, so "off" stays off.
-/// - **An unreadable store must not fail open.** A local store that will not decrypt reports a
-///   failure and yields nothing; a memory switch read that way would fall back to its default,
-///   which is *on*. `UserDefaults` has no decryption step to fail.
+/// - **The *unexpected* fail-open path is removed, not fail-open itself.** Stated precisely, because
+///   a privacy control is the wrong place for a comfortable summary: this switch's default **is**
+///   on, deliberately — a new user with no key stored must record, which is what
+///   `?? true` below says — so an absent or wrong-typed value reads as recording. What
+///   `UserDefaults` removes is the path where that happens *without the user ever having chosen it*:
+///   a local store that will not decrypt reports a failure and yields nothing, and a switch read
+///   that way would silently fall back to on for someone who had turned it off. There is no
+///   decryption step here to fail, so the only way this reads on is the way it is supposed to —
+///   nobody has turned it off. Do not shorten this to "it fails closed"; it does not, and that was
+///   a real over-claim in this branch's own records (PR #98 round-3 review, F6).
 ///
 /// Booleans are read with `object(forKey:) as? Bool ?? true`, never `.bool(forKey:)` — the same
 /// convention and the same reason as `usePointerCursors`: a missing key must mean "on" for a new
