@@ -1,6 +1,7 @@
 import { randomUUID } from "node:crypto";
 import Fastify, { type FastifyInstance, type FastifyReply } from "fastify";
-import { requireRateLimitSalt, type Config } from "./config.js";
+import { requireRateLimitSalt, requireSupabaseJwtPolicy, type Config } from "./config.js";
+import { registerAuthGate } from "./auth/gate.js";
 import { classify, errorBody, registerErrorHandlers } from "./errors.js";
 import { registerHealth } from "./routes/health.js";
 import { registerAuth, type AuthDeps } from "./routes/auth.js";
@@ -24,9 +25,10 @@ export const API_VERSION = "1.0";
 export const DEFAULT_BODY_LIMIT_BYTES = 1024 * 1024;
 
 /**
- * `auth` is optional so a deployment that mounts no auth route needs no provider and no rate-limit
- * salt. When it is supplied the salt is required, and `requireRateLimitSalt` refuses at startup
- * rather than letting `bucketKey` hash addresses unsalted at request time.
+ * `auth` is optional so a deployment that mounts no auth route needs no provider, no rate-limit salt
+ * and no JWT secret. When it is supplied all three are required, and `requireRateLimitSalt` /
+ * `requireSupabaseJwtPolicy` refuse at startup rather than letting `bucketKey` hash addresses
+ * unsalted, or every protected route refuse every caller, at request time.
  */
 export function buildApp(config: Config, auth?: AuthDeps): FastifyInstance {
   const app = Fastify({
@@ -125,6 +127,23 @@ export function buildApp(config: Config, auth?: AuthDeps): FastifyInstance {
   // Installed before any route, so every route added by a later ticket inherits the contract's
   // error envelope rather than the framework's.
   registerErrorHandlers(app);
+
+  // **And so does the auth gate, for a stronger version of the same reason** (SONNY-203). Fastify
+  // resolves a route's hook chain when the route is registered, so a hook added after a route does
+  // not run for it — a gate installed later would cover some routes and silently not others. It is
+  // installed unconditionally, including when no auth is configured: in that shape it refuses every
+  // non-public route rather than leaving one open.
+  registerAuthGate(
+    app,
+    auth
+      ? {
+          policy: requireSupabaseJwtPolicy(config),
+          withConnection: auth.withConnection,
+          now: auth.now,
+        }
+      : undefined,
+  );
+
   registerHealth(app, config);
   if (auth) {
     requireRateLimitSalt(config);
