@@ -291,7 +291,13 @@ public struct WorkspaceScope: Equatable, Sendable {
             // direction that matters: such a path reads `.outOfScope` and prompts, never `.inScope`.
             // Scope keeps whatever the whitelist does rather than folding case itself, because
             // folding here and not there is exactly the divergence this reuse exists to prevent.
-            let candidate = PathWhitelist.canonicalURL(trimmed)
+            // `canonical`, not `canonicalURL`: a resolution that did not converge is not inside
+            // anything, and `contains` is what enforces that for both this caller and the
+            // whitelist's own. Scope has no error to raise, so such a path reads `.outOfScope` and
+            // prompts — the fail-safe direction, and the same answer as any other path it cannot
+            // place. (SONNY-249's review, F1: a 34-link chain inside a scoped folder read
+            // `.inScope` while it led out of it.)
+            let candidate = PathWhitelist.canonical(trimmed)
             return fileRoots.contains { PathWhitelist.contains(root: $0, candidate: candidate) }
                 ? .inScope
                 : .outOfScope
