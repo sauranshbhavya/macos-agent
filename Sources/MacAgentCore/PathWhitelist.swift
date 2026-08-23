@@ -157,6 +157,17 @@ public struct PathWhitelist: Sendable {
     /// second one. Two path comparisons that disagree about `..` or a symlink is a security bug, not
     /// a style one. Nothing here widens the whitelist: a path this resolves is still subject to
     /// `validateInsideWhitelist` before any capability touches it.
+    ///
+    /// **What it does not resolve, which is most of what it is asked about — read this before
+    /// trusting a containment answer.** `resolvingSymlinksInPath()` resolves nothing at all for a
+    /// path whose leaf does not exist on disk, and the paths a *write* is vetted against have not
+    /// been written yet by definition. Two measured consequences, both owned by **SONNY-249** and
+    /// neither fixed here: an intermediate symlink two or more levels above a non-existent leaf is
+    /// left unresolved, so a path inside `~/Desktop` can pass containment while the bytes land
+    /// outside it; and a leading component that differs only in case from a real folder keeps its
+    /// spelling, so `desktop/note.md` fails containment while `desktop` passes. The paragraph above
+    /// is about this function never *widening* the boundary, and it stands — these are the boundary
+    /// answering the wrong question, not a wider one.
     public static func canonicalURL(_ rawPath: String) -> URL {
         normalizedURL(expandPath(rawPath.trimmingCharacters(in: .whitespacesAndNewlines)))
             .resolvingSymlinksInPath()
