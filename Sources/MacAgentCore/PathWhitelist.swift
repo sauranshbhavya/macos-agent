@@ -53,9 +53,12 @@ public enum PathValidationError: Error, Equatable, LocalizedError {
 /// A path resolved as far as the filesystem allows, and whether that resolution finished.
 ///
 /// **Why this is a type and not a `URL`** (SONNY-249's review, F1). Resolution can fail to converge
-/// — a symbolic link that points at itself, or a chain longer than the kernel will follow — and the
-/// path it has reached by then is not an answer: it is the path it started with, minus however many
-/// hops it managed. Returning that as though it were resolved is what let a chain of 34 links read
+/// — a symbolic link that points at itself, or a chain longer than the budget below — and the path
+/// it has reached by then is not an answer. Usually it is the path it started with and some of its
+/// links followed; for a chain of exactly 33 it is the fully resolved destination, flagged
+/// unresolved because the resolver ran out before it could prove it had finished (measured). What
+/// makes it unusable either way is not how far it got but that nothing knows how far.
+/// Returning it as though it were resolved is what let a chain of 34 links read
 /// as inside the whitelist while the bytes landed outside, because the kernel's own budget started
 /// again from the shortened path and finished the walk that the un-shortened one would have been
 /// refused for. The fact that decides whether a path may be compared therefore travels with the
@@ -66,13 +69,24 @@ public struct CanonicalPath: Equatable, Sendable {
     /// anything else it is an identity — good enough to key a store by, not to compare with a root.
     public let url: URL
 
-    /// The symbolic link resolution stopped at, when it could not finish: the last one it followed
-    /// before the budget ran out, or the loop it kept arriving back at. `nil` when it converged.
+    /// The symbolic link resolution could not get past, when it could not finish: **the first one
+    /// it followed**, or the loop it kept arriving back at. `nil` when it converged.
+    ///
+    /// The first rather than the last (PR #111's review, F6). The last is where the resolver gave
+    /// up, which for a 33-link chain is `<root>/l33` — a path the person never typed, and the exact
+    /// failure this file reasons about two cases away for `outsideWhitelist`: naming only the
+    /// resolved one shows them somewhere they have never heard of. The first link is always a
+    /// component of the path as asked for, so the refusal names something they can act on.
     public let unfollowableLink: URL?
 
     public var isResolved: Bool { unfollowableLink == nil }
 
-    public init(url: URL, unfollowableLink: URL?) {
+    /// **Internal, not public** (PR #111's review, F4). A public memberwise initialiser would let
+    /// any caller write `CanonicalPath(url: x, unfollowableLink: nil)` and hand `contains` exactly
+    /// the pre-fix behaviour — the rule would be back to callers remembering it, which is the thing
+    /// this type exists to stop. Nothing outside `MacAgentCore` constructs one, and the tests that
+    /// do have `@testable import`.
+    init(url: URL, unfollowableLink: URL?) {
         self.url = url
         self.unfollowableLink = unfollowableLink
     }
@@ -139,8 +153,8 @@ public struct PathWhitelist: Sendable {
 
         let canonical = Self.canonical(trimmed)
         // **Before containment, never after** (SONNY-249's review, F1). A resolution that did not
-        // converge has not answered the question; the path it reached is the one it started with,
-        // minus however many hops it managed. Comparing that against a root is what let a chain of
+        // converge has not answered the question, and how far it happened to get is not knowable
+        // from the result. Comparing that against a root is what let a chain of
         // 34 links read as inside while the bytes landed outside — the whitelist handed back a path
         // 33 hops shorter, and the kernel's own budget then started again from there and finished
         // the walk. So it is refused rather than compared, and named as the link it is.
@@ -246,11 +260,15 @@ public struct PathWhitelist: Sendable {
     /// relative-to-home expansion, standardization (which is what collapses `..`), then symlink and
     /// on-disk-spelling resolution of **the longest prefix of the path that exists**.
     ///
-    /// Public, together with `contains(root:candidate:)`, so a *narrower* boundary — a workspace's
-    /// restriction scope — can be evaluated with this whitelist's own path arithmetic instead of a
-    /// second one. Two path comparisons that disagree about `..` or a symlink is a security bug, not
-    /// a style one. Nothing here widens the whitelist: a path this resolves is still subject to
-    /// `validateInsideWhitelist` before any capability touches it.
+    /// The resolution is public, together with `contains(root:candidate:)`, so a *narrower* boundary
+    /// — a workspace's restriction scope — is evaluated with this whitelist's own path arithmetic
+    /// instead of a second one. Two path comparisons that disagree about `..` or a symlink is a
+    /// security bug, not a style one. Nothing here widens the whitelist: a path this resolves is
+    /// still subject to `validateInsideWhitelist` before any capability touches it.
+    ///
+    /// **`canonical` is the one scope uses**, not this overload — `WorkspaceScope.verdict` calls it
+    /// directly. This sentence used to say "`canonicalURL` … so scope can be evaluated with it",
+    /// which was true when it was written and stopped being true in the same branch (F3).
     ///
     /// **Why the longest existing prefix and not the whole path** (SONNY-249). This used to end in
     /// a bare `resolvingSymlinksInPath()`, which resolves nothing at all for a path that is not on
@@ -276,24 +294,38 @@ public struct PathWhitelist: Sendable {
     /// nothing.
     ///
     /// **The returned URL is the one callers write through**, which is what makes this a boundary
-    /// rather than a description: every capability writes to the URL a `validate...` method handed
-    /// back, never to the string the plan named. So the path that was checked and the path the bytes
-    /// go to are the same path.
+    /// rather than a description: a capability writes to the URL a `validate...` method handed back,
+    /// never to the string the plan named — so for a path that goes *through* one of those methods,
+    /// the path that was checked and the path the bytes go to are the same path.
+    ///
+    /// **That last sentence used to be written without its condition, and it was false four times**
+    /// (PR #111's review, F1). A leaf appended to an already-validated folder never goes through a
+    /// `validate...` method at all, and four places do exactly that — `defaultOutputFile` and
+    /// `resolveOutputPath`'s directory branch, both above this comment in this file, plus
+    /// `LargestFilesZipCapabilityAdapter` and `FileInventory`'s PDF destinations. **SONNY-264 owns
+    /// all four**; this comment owns saying so rather than asserting the opposite. What makes it a
+    /// coverage gap rather than a hole is that an unvalidated leaf matters only to a writer that
+    /// follows a leaf symlink, and Foundation's `.atomic` replaces one instead of following it.
     ///
     /// **Two limits, stated rather than left to be found.** A component created between this
     /// resolution and the write is not seen — the check is a check, and closing that would mean
-    /// opening the output file without following links at the two writers that follow one (a leaf
-    /// in front of `/usr/bin/zip`, and a directory component mid-path, which an atomic write does
-    /// follow because it puts its temporary file in the destination's parent). And resolution does
-    /// not always converge: a link that points at itself, or a chain longer than the budget below,
-    /// leaves a path that is not an answer. **That case is refused, not returned** — see
-    /// `CanonicalPath`, and the review finding that says why in as many words.
+    /// opening the output file without following links at the writers that follow one: `/usr/bin/zip`
+    /// and Microsoft Word via Apple Events both follow a leaf link, and *any* writer follows a
+    /// directory component mid-path, an atomic write included, because it puts its temporary file in
+    /// the destination's parent. (The first telling of this said "the two writers" and named zip and
+    /// the mid-path case; Word is a third and follows both — F2, and also SONNY-264's.) And
+    /// resolution does not always converge: a link that points at itself, or a chain longer than the
+    /// budget below, leaves a path that is not an answer. **That case is refused, not returned** —
+    /// see `CanonicalPath`, and the review finding that says why in as many words.
     ///
-    /// **`canonicalURL` is for identity, never for a boundary.** It drops the convergence flag, so
-    /// what it hands back for a non-convergent path is the original with some hops taken out of it
-    /// — fine as a key for "the same folder twice", wrong as something to compare against a root.
-    /// `contains(root:candidate:)` takes a `CanonicalPath` precisely so that a boundary cannot be
-    /// answered from this overload by accident.
+    /// **`canonicalURL` is for identity, and never for the candidate side of a boundary.** It drops
+    /// the convergence flag, so what it hands back for a non-convergent path is a path nothing knows
+    /// the standing of — fine as a key for "the same folder twice", wrong as the thing compared
+    /// against a root. `contains(root:candidate:)` takes a `CanonicalPath` precisely so that cannot
+    /// happen by accident. The *root* side of that call is a plain `URL`, and legitimately so: a
+    /// root reaches it only after `validateInsideWhitelist` has refused every root whose own
+    /// resolution did not converge. Saying "never for a boundary" flat was too strong to be a rule
+    /// anyone could follow, since this file's own root side would break it.
     public static func canonicalURL(_ rawPath: String) -> URL {
         canonical(rawPath).url
     }
@@ -320,7 +352,13 @@ public struct PathWhitelist: Sendable {
     /// converge instead of reporting one, which is what `resolvingExistingPrefix` does.
     ///
     /// So the number is a termination bound with a defensible value rather than a security
-    /// property: chains the kernel would traverse resolve, and everything past that is refused.
+    /// property, and it is **not** the kernel-equivalence the first telling of it claimed (PR #111's
+    /// review, F5). It counts only the links this resolver follows by hand; one
+    /// `resolvingSymlinksInPath()` call can consume many more. Measured at `14c83b3`: 20 existing
+    /// directory links followed by 20 dangling ones is 40 links, which `open` refuses with `ELOOP`
+    /// and which this accepts — and accepting it is right, because what comes back is fully
+    /// resolved, so the write goes to a known destination inside the boundary rather than walking
+    /// the chain. Convergence is the property, not the count.
     /// `PathContainmentResolutionTests` pins both sides of it — 32 links resolve, 33 are refused —
     /// because a constant no test holds is a constant a battery cannot protect, which is exactly
     /// how this survived a green suite and a ten-mutant battery.
@@ -337,23 +375,29 @@ public struct PathWhitelist: Sendable {
     private static func resolvingExistingPrefix(_ url: URL) -> CanonicalPath {
         var current = url
         var followed = 0
-        var lastLink = url
+        var firstLink = url
         while followed <= maximumSymbolicLinkHops {
             switch resolutionPass(current) {
             case .resolved(let resolved):
                 return CanonicalPath(url: resolved, unfollowableLink: nil)
             case .followedLink(let rewritten, let link):
+                // The *first* link, kept for the refusal to name — see `unfollowableLink`. The
+                // initial value is never the one reported: this loop can only end below by
+                // exhausting the budget, which takes at least one pass through here.
+                if followed == 0 {
+                    firstLink = link
+                }
                 current = rewritten
-                lastLink = link
                 followed += 1
             }
         }
 
         // The budget is spent and a link is still in the way. **The path reached is not returned as
-        // an answer** — that is the whole of the review's F1: it is the original with `followed`
-        // hops already taken out of it, and every boundary in this file would then be comparing a
-        // path 33 links shorter than the one the write is going to walk.
-        return CanonicalPath(url: current, unfollowableLink: lastLink)
+        // an answer** — that is the whole of the review's F1: it may be the original with `followed`
+        // hops taken out of it, or it may be the complete destination, and nothing here can tell
+        // which. Compared as though it were resolved, the first of those has every boundary in this
+        // file judging a path 33 links shorter than the one the write is going to walk.
+        return CanonicalPath(url: current, unfollowableLink: firstLink)
     }
 
     private static func resolutionPass(_ url: URL) -> ResolutionPass {
