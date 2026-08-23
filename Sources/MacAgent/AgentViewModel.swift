@@ -449,15 +449,47 @@ final class AgentViewModel: ObservableObject {
     /// the id. One slot answers all three, and the alternative — an id plus a re-read per unit — is
     /// a decrypt on the hot path to recover something this object already had.
     private var activeResumableTask: ResumableTask?
-    /// The record the *next* dispatch is continuing. Armed by `continueResumableTask`, spent by
-    /// `performStart`, and dead either way.
+    /// The record the **next dispatch** carries on, or `nil` when that dispatch is a task of its
+    /// own (row 13, SONNY-210; the second kind added by PR #105 review F1).
     ///
-    /// Exactly the arm-use-once shape `pendingWorkspaceBinding` uses, and for the same reason: a
-    /// slot with a setter and no abandonment path outlives the dispatch that created it, and the
-    /// next unrelated run would then overwrite a record it has nothing to do with. `performStart`
-    /// clears it before it can reach a second task, and `continueResumableTask` clears it itself
-    /// when `dispatch` refuses.
-    private var resumingTask: ResumableTask?
+    /// **Spent by `start()` itself, before its own guards**, and handed to `performStart` as a
+    /// parameter rather than read back off this property. That is deliberate: an arm that survives a
+    /// *refused* dispatch would be inherited by the next unrelated one, which would then overwrite a
+    /// record it has nothing to do with. Read once, cleared once, and the lifetime is one call.
+    private var pendingResumableContinuation: ResumableTaskContinuation?
+
+    /// What a dispatch inherits from a record that is already in flight.
+    ///
+    /// **Two kinds, because two doors mean different things by "the same task".** A *resume* picks
+    /// up what is left of an interrupted run, so it inherits the file an earlier unit produced. A
+    /// *restart* runs the same task again from the top — an answered clarification, or a retry after
+    /// a failure — so there is no earlier unit and nothing to carry from one.
+    ///
+    /// Both inherit the id and the start time, which is what keeps one user-intent task to one
+    /// record: `aTaskInterruptedTwiceStaysOneRecordWithItsOriginalStartTime` asserts it for the
+    /// resume door and `anAnsweredClarificationKeepsOneRecordRatherThanOrphaningTheFirst` for the
+    /// restart door.
+    private struct ResumableTaskContinuation {
+        let id: String
+        let startedAt: Date
+        /// The file an already-finished unit produced. `nil` for a restart, which has none.
+        let chainedArtifactPath: String?
+
+        /// Carrying on with what is left of an interrupted run.
+        static func resuming(_ task: ResumableTask) -> ResumableTaskContinuation {
+            ResumableTaskContinuation(
+                id: task.id,
+                startedAt: task.startedAt,
+                chainedArtifactPath: task.chainedArtifactPath
+            )
+        }
+
+        /// Running the same task again from the top.
+        static func restarting(_ task: ResumableTask) -> ResumableTaskContinuation {
+            ResumableTaskContinuation(id: task.id, startedAt: task.startedAt, chainedArtifactPath: nil)
+        }
+    }
+
     /// Offers the user has waved away in this app session.
     ///
     /// **Session-scoped on purpose, and it is not a delete.** The founder's lifecycle is that a
@@ -465,7 +497,15 @@ final class AgentViewModel: ObservableObject {
     /// none of those. So dismissing takes the offer off the widget without touching the record,
     /// which stays visible and deletable under Memory and comes back at the next launch — and the
     /// idle expiry is what ends it if the user never answers either way.
-    private var dismissedResumeOfferIDs: Set<String> = []
+    ///
+    /// **`@Published`, and that is a fix rather than decoration** (PR #105 review F2). It was a
+    /// plain `private var`, so `dismissResumeOffer()` mutated it, `resumeOffer` went `nil`, and
+    /// `objectWillChange` fired zero times — SwiftUI never re-evaluated `FloatingWidgetView.state`
+    /// and the panel stayed on screen. The user pressed "Not now" and watched nothing happen until
+    /// the six-second collapse took the whole widget instead. **Every input to `resumeOffer` must
+    /// publish**; the other one, `resumableTasks`, already does, and
+    /// `dismissingTheOfferPublishesSoTheWidgetRepaints` holds this one.
+    @Published private var dismissedResumeOfferIDs: Set<String> = []
     private var preserveUsageForNextStart = false
     private var localStorageLoadFailures: [LocalStorageLoadFailureSource: String] = [:]
     /// Last clipboard-poll failure text, so a repeating 1s failure is reported once, not 60×/min.
@@ -1061,13 +1101,20 @@ final class AgentViewModel: ObservableObject {
     /// already uses for that.
     ///
     /// Newest activity first, which is `ResumableTaskStore.loadAll`'s order: the thing they were
-    /// doing most recently is the thing to raise. `isResumable` filters a record with nothing left
-    /// to do, which a settled record never is and a hand-written one can be.
+    /// doing most recently is the thing to raise.
+    ///
+    /// `mayBeOfferedForResume` filters two things: a record with nothing left to do, which a settled
+    /// record never is and a hand-written one can be; and a record whose remaining work contains
+    /// something Sonny must not do twice on its own (PR #105 review F5) — a Shortcut, a routine, a
+    /// screen session. Those stay listed under Memory, where the user can see and delete them; what
+    /// is withheld is Sonny volunteering to finish them.
     var resumeOffer: ResumableTask? {
         guard !isTaskInFlight else {
             return nil
         }
-        return resumableTasks.first { $0.isResumable && !dismissedResumeOfferIDs.contains($0.id) }
+        return resumableTasks.first {
+            $0.mayBeOfferedForResume && !dismissedResumeOfferIDs.contains($0.id)
+        }
     }
 
     var voiceButtonTitle: String {
@@ -1116,6 +1163,13 @@ final class AgentViewModel: ObservableObject {
         // different claims, and for what happened to the second, stronger reason SONNY-81 gave.
         prebuiltPlanSource: PreparedPlanSource = .directUserAction
     ) {
+        // **Spent here, before every guard below** (PR #105 review F1). A dispatch either carries on
+        // the record in flight or is a task of its own, and which it is was decided by the caller —
+        // so the arm is read once and cleared once, and a *refused* dispatch drops it rather than
+        // leaving it for the next, unrelated one to inherit.
+        let continuation = pendingResumableContinuation
+        pendingResumableContinuation = nil
+
         if isAwaitingApproval {
             approvePendingRun()
             return
@@ -1169,7 +1223,8 @@ final class AgentViewModel: ObservableObject {
                 autoExecute: autoExecute,
                 origin: origin,
                 prebuiltPlan: prebuiltPlan,
-                prebuiltPlanSource: prebuiltPlanSource
+                prebuiltPlanSource: prebuiltPlanSource,
+                continuing: continuation
             )
         }
     }
@@ -1189,7 +1244,8 @@ final class AgentViewModel: ObservableObject {
         autoExecute: Bool,
         origin: TaskOrigin,
         prebuiltPlan: AgentPlan? = nil,
-        prebuiltPlanSource: PreparedPlanSource = .directUserAction
+        prebuiltPlanSource: PreparedPlanSource = .directUserAction,
+        continuing: ResumableTaskContinuation? = nil
     ) async {
         activeTaskOrigin = origin
         // Submitting anything is an acknowledgement of whatever was on screen — this one line covers
@@ -1215,16 +1271,21 @@ final class AgentViewModel: ObservableObject {
         pendingCommandForPriorTaskContext = nil
         pendingTaskHistoryStartedAt = nil
         plannerFallbackNotice = nil
-        // The previous run's checkpoint, if it somehow outlived its own settle. A new task must
-        // never append its units to the last task's record, and `settleResumableTask` is the only
-        // other thing that clears this — so clearing it here means the worst a missed settle can
-        // leave behind is one stale entry under Memory, never a record that two runs wrote into.
+        // **The handle on the previous run's checkpoint, dropped — and dropping it is not the same
+        // as abandoning the record** (corrected by PR #105 review F1).
+        //
+        // What this line used to claim: that the worst a missed settle could leave behind is "one
+        // stale entry under Memory". That was wrong, and the wrongness was the bug. The same
+        // published list `resumableTasks` is what `resumeOffer` reads, so a record left behind here
+        // is a live **offer** — Sonny volunteering to carry on with something that has finished.
+        //
+        // What is correct is the rule this line enforces: a run appends units only to its own
+        // record. Whether the record it is dropping should have been *carried* is `continuing`'s
+        // question, decided by the caller, and there are exactly three doors that say yes —
+        // `continueResumableTask`, `submitClarification` and `retryLastCommand`. Every other
+        // dispatch is a different task, and leaving that record on disk is the founder's lifecycle
+        // rather than a leak: an unfinished task survives the user doing something else.
         activeResumableTask = nil
-        // Arm, use once, gone (SONNY-210) — the same shape as `consumeArmedContext()` below and as
-        // `pendingWorkspaceBinding` in `start()`. Read into a local here, at the top, so that every
-        // exit from this function leaves the arm spent whether or not it was ever used.
-        let resumedFrom = resumingTask
-        resumingTask = nil
 
         if preserveUsageForNextStart {
             preserveUsageForNextStart = false
@@ -1391,7 +1452,12 @@ final class AgentViewModel: ObservableObject {
             // clarification or an approval, which is a pause this function returns on a few lines
             // below. A checkpoint written after the gate would cover the laptop and miss the
             // question. Written here, both are one rule with one write site.
-            beginResumableTask(command: submittedCommand, plan: prepared.plan, startedAt: taskHistoryStartedAt, resuming: resumedFrom)
+            beginResumableTask(
+                command: submittedCommand,
+                plan: prepared.plan,
+                startedAt: taskHistoryStartedAt,
+                continuing: continuing
+            )
 
             if let question = prepared.clarificationQuestion {
                 clarificationQuestion = question
@@ -1888,6 +1954,12 @@ final class AgentViewModel: ObservableObject {
         if case .scoped(let scope) = lastAssessedScope {
             retryBinding = scope.workspaceName
         }
+        // **The second restart door, and it has F1's shape too** (found by the re-enumeration that
+        // finding asked for, not by the finding itself). A failed run's record is kept, and
+        // `activeResumableTask` still points at it — so a retry that minted a new id would leave the
+        // failed attempt behind as a live offer even after the retry succeeded. Continuing it keeps
+        // one record for one task, which is the same invariant the other two doors hold.
+        armRestartOfTaskInFlight()
         dispatch(command: lastCommand, origin: origin, workspaceBinding: retryBinding)
     }
 
@@ -2080,6 +2152,11 @@ final class AgentViewModel: ObservableObject {
         clarificationWorkspaceBinding = nil
         clarificationQuestion = nil
         clarificationAnswer = ""
+        // **Answering a question continues the task that asked it** (PR #105 review F1). Without
+        // this the answered run minted a second record, settled only that one, and left the paused
+        // run's record on disk for the full idle period — so after the task finished, Sonny offered
+        // to carry on with it and Continue re-asked a question the user had already answered.
+        armRestartOfTaskInFlight()
         start(autoExecute: shouldAutoExecute, origin: shouldUseOrigin, workspaceBinding: shouldUseBinding)
     }
 
@@ -3311,7 +3388,7 @@ final class AgentViewModel: ObservableObject {
         // surviving dismissal set would silently suppress an offer for a record whose id can only
         // now belong to a different task.
         activeResumableTask = nil
-        resumingTask = nil
+        pendingResumableContinuation = nil
         dismissedResumeOfferIDs = []
         priorTaskContextStore.clear()
         taskUsageRecorder.reset()
@@ -4406,30 +4483,31 @@ final class AgentViewModel: ObservableObject {
     /// reports itself through `scheduledRunNotice` and its paused schedule, exactly as before, and
     /// never through this offer. `aScheduledRoutineRunLeavesNoUnfinishedTaskRecord` pins it.
     ///
-    /// - Parameter resuming: the record this run is continuing, when it is one. Its id and its
-    ///   `startedAt` are kept so a task interrupted twice stays one entry that began when the user
-    ///   first asked for it, and its `chainedArtifactPath` is carried so the executor can seed the
-    ///   chain it is rejoining.
+    /// - Parameter continuing: what this run inherits from a record already in flight, when the
+    ///   dispatch said it is carrying one on. Its id and `startedAt` are kept so a task interrupted
+    ///   twice stays one entry that began when the user first asked for it; its
+    ///   `chainedArtifactPath` is carried only by a *resume*, which is rejoining a chain a finished
+    ///   unit had already fed.
     private func beginResumableTask(
         command: String,
         plan: AgentPlan,
         startedAt: Date,
-        resuming: ResumableTask?
+        continuing: ResumableTaskContinuation?
     ) {
         guard allowsRecording(to: .resumableTasks) else {
             return
         }
         let now = Date()
         let task = ResumableTask(
-            id: resuming?.id ?? UUID().uuidString,
+            id: continuing?.id ?? UUID().uuidString,
             command: command,
             plan: plan,
             // Empty, always. A resumed run's plan *is* the remainder, so its finished steps are the
             // ones that are no longer in it — carrying the old ids forward would subtract them
-            // twice.
+            // twice. A restart has done nothing yet either.
             completedStepIDs: [],
-            chainedArtifactPath: resuming?.chainedArtifactPath,
-            startedAt: resuming?.startedAt ?? startedAt,
+            chainedArtifactPath: continuing?.chainedArtifactPath,
+            startedAt: continuing?.startedAt ?? startedAt,
             updatedAt: now,
             // The value a record keeps when nothing ever settles it, which is the honest description
             // of an interruption: there is no code running at the moment the lid closes to write
@@ -4573,12 +4651,17 @@ final class AgentViewModel: ObservableObject {
     ///   start rather than re-deriving `canSubmit`'s rule.
     @discardableResult
     func continueResumableTask(_ task: ResumableTask) -> Bool {
-        guard task.isResumable else {
+        // **The same gate the offer is filtered by, asked again here** (PR #105 review F5). The
+        // widget never renders Continue for a record that must not be repeated silently, so this is
+        // the belt: `mayBeOfferedForResume` is the whole rule, and a second entry point added later
+        // cannot route around it by holding a `ResumableTask` from somewhere else.
+        guard task.mayBeOfferedForResume else {
+            logStore.append(.observe, "Not continued: finishing this task could repeat something Sonny must not do twice.")
             return false
         }
-        // Armed before the dispatch and disarmed if it is refused, so the arm can never be inherited
-        // by a later, unrelated run. `performStart` spends it at the top of the run it belongs to.
-        resumingTask = task
+        // Armed for this dispatch only. `start()` spends it before its own guards and drops it if
+        // the dispatch is refused, so it can never be inherited by a later, unrelated run.
+        pendingResumableContinuation = .resuming(task)
         let started = dispatch(
             command: task.command,
             // The offer lives on the widget and nowhere else, so `.widget` is the true answer and
@@ -4600,7 +4683,7 @@ final class AgentViewModel: ObservableObject {
             prebuiltPlanSource: .resumedTask
         )
         guard started else {
-            resumingTask = nil
+            pendingResumableContinuation = nil
             return false
         }
         // **Continuing does not dismiss, and that is deliberate.** The obvious extra line here would
@@ -4611,6 +4694,30 @@ final class AgentViewModel: ObservableObject {
         // succeeds the record is deleted; if it fails, the widget shows the failure, which outranks
         // the offer until the user has read it.
         return true
+    }
+
+    /// Arms the **next** dispatch to run the task in flight again from the top rather than as a
+    /// task of its own (PR #105 review F1).
+    ///
+    /// **The two doors that need it, and why they are exactly two.** `performStart` drops its handle
+    /// on the outstanding checkpoint at the top of every run, which is right for a run that is a
+    /// different task and wrong for a run that is the same one continuing. Three dispatches are the
+    /// same task: `continueResumableTask`, which arms `.resuming` because it carries a finished
+    /// unit's file with it; and these two, which arm `.restarting` because nothing has finished yet
+    /// — an answered clarification never executed a step, and a retry starts the command over.
+    ///
+    /// A no-op when there is no checkpoint — memory off, the record deleted, or a run that never
+    /// reached a plan — so the caller does not have to ask.
+    ///
+    /// `everyDispatchEntryPointDecidesWhetherItContinuesTheTaskInFlight` enumerates the doors and
+    /// fails when a new one arrives unclassified. The name deliberately avoids the substring
+    /// `start(`: that scan counts call sites of `start(...)` textually, and a helper whose own name
+    /// ended in `Restart(` was three false positives in the population it pins.
+    private func armRestartOfTaskInFlight() {
+        guard let task = activeResumableTask else {
+            return
+        }
+        pendingResumableContinuation = .restarting(task)
     }
 
     /// Takes the offer off the widget without forgetting the task — see `dismissedResumeOfferIDs`
@@ -4627,10 +4734,13 @@ final class AgentViewModel: ObservableObject {
         performMemoryEntryDelete(named: "unfinished task") {
             try resumableTaskStore.delete(id: task.id)
         }
-        // The in-memory checkpoint would otherwise write the record straight back on this run's next
-        // unit boundary. `deleteMemory(in:)` and this path both guard on `!isRunning`, so there is
-        // no live run to lose — what this clears is a checkpoint left over from a run that already
-        // ended without settling.
+        // **The in-memory checkpoint goes with the record, and this path has no `!isRunning` guard
+        // to lean on** (PR #105 review F8; this comment used to claim one). `deleteMemory(in:)`
+        // guards on `!isRunning, !isAwaitingApproval`; `deleteMemoryEntry(in:at:)` and
+        // `performMemoryEntryDelete` do not, so a per-entry delete really can land while a run is
+        // paused at an approval. That is why the clear is unconditional rather than a tidy-up:
+        // without it the paused run's next unit boundary — or its failure settle — writes the
+        // deleted record straight back.
         if activeResumableTask?.id == task.id {
             activeResumableTask = nil
         }

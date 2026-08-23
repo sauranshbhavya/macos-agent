@@ -233,6 +233,42 @@ struct RunUnitProgressTests {
         #expect(!ChainedArtifactCarry.consumesPreviousArtifact(openURLStep))
     }
 
+    /// **The `inputPath` half of the predicate, which was held by nothing** (PR #105 review F6, M18).
+    /// It is load-bearing rather than symmetric: `RevealInFinderCapabilityAdapter` resolves
+    /// `step.outputPath ?? step.inputPath`, so writing a carried path onto a reveal step that named
+    /// its own `inputPath` makes Finder reveal a different file from the one the plan named.
+    @Test
+    func theCarryLeavesARevealStepThatNamesItsOwnInputPathAlone() {
+        let named = AgentPlan(
+            summary: "Show that one.",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(
+                    id: "reveal",
+                    operation: .revealInFinder,
+                    description: "Reveal it.",
+                    inputPath: "/the/one/the/plan/named.md"
+                )
+            ]
+        )
+
+        #expect(!ChainedArtifactCarry.consumesPreviousArtifact(named.steps[0]))
+        #expect(ChainedArtifactCarry.applying("/some/other/file.md", toLeadingStepOf: named) == named)
+
+        // The control: the same step with neither path takes the carry, so the assertion above is
+        // about `inputPath` rather than about reveal steps being exempt.
+        let bare = AgentPlan(
+            summary: "Show it.",
+            requiresConfirmation: false,
+            steps: [AgentStep(id: "reveal", operation: .revealInFinder, description: "Reveal it.")]
+        )
+        #expect(ChainedArtifactCarry.consumesPreviousArtifact(bare.steps[0]))
+        #expect(
+            ChainedArtifactCarry.applying("/some/other/file.md", toLeadingStepOf: bare).steps[0].outputPath
+                == "/some/other/file.md"
+        )
+    }
+
     /// **The other shape a remainder takes: still a chain.** "Write a note, open it, then open the
     /// page", interrupted after the note, leaves a two-unit plan whose *first* unit is the bare
     /// consumer — so the carry has to reach the leading step of a multi-step plan too, which is a
@@ -361,4 +397,94 @@ private final class RecordingFileOpener: FileOpening {
 
 private struct NoShortcutsForProgressTests: ShortcutCatalogProviding {
     func shortcutNames() throws -> [String] { [] }
+}
+
+/// Which operations Sonny may repeat on its own when a resumed run re-runs the unit that was in
+/// flight (PR #105 review F5).
+///
+/// The classification is one-directional — it can only withhold an offer — so every assertion here
+/// is about *not* volunteering, never about permitting.
+@Suite
+struct ResumeRepeatSafetyTests {
+    /// **The counterexample the review produced, named.** A Shortcut with clean history is tier 1,
+    /// so a repeat of it prompts for nothing; if it sends a message, the message is sent twice.
+    /// `CapabilityRiskEscalation.Consequence.affectsOthers` cannot answer this — its own doc says no
+    /// v1 capability carries it, and `invoke_shortcut` raises no escalation at all.
+    @Test
+    func theOperationsSonnyWillNotRepeatOnItsOwnAreTheFourItCannotSeeInside() {
+        let unsafe = Set(AgentOperation.allCases.filter { $0.resumeRepeatSafety == .mustNotRepeatSilently })
+        #expect(unsafe == [.invokeShortcut, .runRoutine, .visionSession, .unsupported])
+
+        // And the other direction, so a reclassification that quietly widens what Sonny volunteers
+        // to redo fails here rather than only in a scenario test.
+        let safe = Set(AgentOperation.allCases.filter { $0.resumeRepeatSafety == .safeToRepeat })
+        #expect(safe.count + unsafe.count == AgentOperation.allCases.count)
+        #expect(safe.contains(.createLocalDraft), "a second local file is untidy, not the class the rule protects")
+        #expect(safe.contains(.openURL))
+        #expect(safe.contains(.calculateUtility))
+    }
+
+    /// A record is offerable only when every remaining step is safe to repeat — and the control is
+    /// the same record with the Shortcut already behind it.
+    @Test
+    func aRecordWhoseRemainingWorkContainsAShortcutIsNotOfferedAndOneWithoutItIs() {
+        let plan = AgentPlan(
+            summary: "Write it up, then send it.",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(id: "draft", operation: .createLocalDraft, description: "Write it.", draftTitle: "Notes", draftContent: "Body."),
+                AgentStep(id: "send", operation: .invokeShortcut, description: "Send it.", shortcutName: "Send Report")
+            ]
+        )
+        let fixture = Date(timeIntervalSince1970: 1_700_000_000)
+
+        let withShortcutLeft = ResumableTask(
+            command: "Write it up and send it",
+            plan: plan,
+            completedStepIDs: ["draft"],
+            startedAt: fixture,
+            updatedAt: fixture
+        )
+        #expect(withShortcutLeft.isResumable)
+        #expect(!withShortcutLeft.mayBeOfferedForResume)
+        #expect(withShortcutLeft.stepsThatMustNotRepeatSilently.map(\.id) == ["send"])
+
+        // The control: the Shortcut done, only a safe step left.
+        let safePlan = AgentPlan(
+            summary: "Send it, then open the page.",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(id: "send", operation: .invokeShortcut, description: "Send it.", shortcutName: "Send Report"),
+                AgentStep(id: "open", operation: .openURL, description: "Open it.", targetURL: "https://example.com/page")
+            ]
+        )
+        let withShortcutDone = ResumableTask(
+            command: "Send it and open the page",
+            plan: safePlan,
+            completedStepIDs: ["send"],
+            startedAt: fixture,
+            updatedAt: fixture
+        )
+        #expect(withShortcutDone.mayBeOfferedForResume)
+        #expect(withShortcutDone.stepsThatMustNotRepeatSilently.isEmpty)
+    }
+
+    /// A record with nothing left is not offerable either, for the reason it always was.
+    @Test
+    func aRecordWithNothingLeftIsNotOfferable() {
+        let plan = AgentPlan(
+            summary: "Open it.",
+            requiresConfirmation: false,
+            steps: [AgentStep(id: "open", operation: .openURL, description: "Open.", targetURL: "https://example.com/page")]
+        )
+        let fixture = Date(timeIntervalSince1970: 1_700_000_000)
+        let done = ResumableTask(
+            command: "Open it",
+            plan: plan,
+            completedStepIDs: ["open"],
+            startedAt: fixture,
+            updatedAt: fixture
+        )
+        #expect(!done.mayBeOfferedForResume)
+    }
 }
