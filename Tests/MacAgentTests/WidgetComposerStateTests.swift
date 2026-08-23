@@ -42,9 +42,9 @@ struct WidgetComposerStateTests {
     ///
     /// "A question is parked on you and the control is right there" is not the same situation as "a
     /// run is in flight and there is nothing here to type into", and the whole defect was treating
-    /// them alike. `waitingOnYou` points at the panel above; `working` does not, and must not — the
-    /// running branch of `hasVisibleWidgetPanel` is origin-gated, so a Command-Center-originated run
-    /// shows no widget panel and a sentence saying "above" would point at empty space.
+    /// them alike. `waitingOnYou` points at the panel above; `working` does not, and must not — a
+    /// run whose panel is origin-gated may put nothing in the widget at all, and a live
+    /// screen-control session puts a progress HUD there rather than a question.
     @Test
     func onlyTheStateWithAControlAboveItPointsUpwards() {
         #expect(ComposerPresentation.prompt(for: .waitingOnYou).localizedCaseInsensitiveContains("above"))
@@ -86,13 +86,24 @@ struct WidgetComposerStateTests {
 
     // MARK: - The classification, and the gate derived from it
 
-    /// **Every condition the composer disables on is classified, and the classification is the gate.**
+    /// **Every condition the composer disables on is classified, the classification is checked, and
+    /// the ordering that makes it *true* is checked with it.**
     ///
     /// Modelled on `everyDispatchDoorIsClassifiedAndTheClassificationIsChecked` in the sibling file,
     /// and for the same reason: a scan that only counts a population lets a condition sit in the
     /// wrong bucket while reading as coverage. So each of the seven is named with the answer it is
     /// supposed to give, the answer is read off the branch it actually sits in, and the count
     /// underneath is what forces an eighth into the table rather than past it.
+    ///
+    /// **The ordering assertions are new, and they are the part that would have caught F1.** The
+    /// first version of this test was green while the classification it pinned rested on a false
+    /// premise — `isAwaitingApproval` was called `.waitingOnYou` unconditionally, which is wrong
+    /// whenever a live screen-control session outranks the approval in `FloatingWidgetView.state`
+    /// and puts a progress HUD on screen instead of the question. A table alone cannot see that,
+    /// because the table was *correct about which bucket the token was in*; what was wrong was the
+    /// reason the bucket was right. So the branch shape and the relative order are pinned too, and
+    /// `theWidgetsOwnPrecedenceIsWhatMakesTheComposersClassificationTrue` pins the fact in `state`
+    /// they depend on.
     ///
     /// **The second half matters as much as the first.** `isTaskInFlight` is *derived* from
     /// `composerState` rather than computed a second time — so the gate that disables the field and
@@ -107,54 +118,133 @@ struct WidgetComposerStateTests {
             openedBy: "private var composerState: ComposerPresentation.State {"
         )
 
-        // Split at the two returns rather than with `region(of:from:to:)`, which excludes its own
-        // start anchor — and the start anchor here would be one of the conditions being classified.
-        let waitingReturn = try #require(state.range(of: "return .waitingOnYou"), "no .waitingOnYou branch")
-        let workingReturn = try #require(state.range(of: "return .working"), "no .working branch")
-        let waitingBranch = String(state[state.startIndex..<waitingReturn.lowerBound])
-        let workingBranch = String(state[waitingReturn.upperBound..<workingReturn.lowerBound])
+        /// The word after each `return .`, in source order.
+        func returnedCases(of block: String) -> [String] {
+            var results: [String] = []
+            var cursor = block.startIndex
+            while let found = block.range(of: "return .", range: cursor..<block.endIndex) {
+                results.append(String(block[found.upperBound...].prefix { $0.isLetter }))
+                cursor = found.upperBound
+            }
+            return results
+        }
 
-        // A question parked on the user. Each of these makes `hasVisibleWidgetPanel` true before it
-        // reaches any origin gate, so the panel "above" is always really there.
-        let waitingOnYou = [
-            "viewModel.isAwaitingApproval",
-            "viewModel.clarificationQuestion != nil",
-            "viewModel.visionCapturePreview != nil",
-            "viewModel.visionDelegationRequest != nil",
-            "viewModel.visionSessionPause != nil"
-        ]
-        // A run in flight with nothing to type into, and no guaranteed panel.
-        let working = [
-            "viewModel.isRunning",
-            "viewModel.visionSessionProgress != nil"
+        // The branch shape itself. Four guarded returns and a fallthrough, in this order — a fifth
+        // guard, or the same four reordered, is a change to the argument above and fails here.
+        #expect(
+            returnedCases(of: state) == ["waitingOnYou", "working", "waitingOnYou", "working", "ready"],
+            "the branch shape carries the correctness argument — see this test's doc comment"
+        )
+
+        /// Which answer a condition actually gets: the first `return .` that follows it.
+        func answer(for condition: String) throws -> String {
+            let site = try #require(state.range(of: condition), "not in composerState: \(condition)")
+            let rest = state[site.upperBound...]
+            let returned = try #require(rest.range(of: "return ."), "no return follows \(condition)")
+            return String(rest[returned.upperBound...].prefix { $0.isLetter })
+        }
+
+        /// Where a condition sits, for the ordering assertions below.
+        func position(of condition: String) throws -> Int {
+            let site = try #require(state.range(of: condition), "not in composerState: \(condition)")
+            return state.distance(from: state.startIndex, to: site.lowerBound)
+        }
+
+        let classification: [(condition: String, answer: String, why: String)] = [
+            // These three outrank `.controlling` in `state`, so each really does put its own
+            // question on screen whatever else is happening.
+            ("viewModel.visionCapturePreview != nil", "waitingOnYou", "a Safe-mode capture review is its own panel"),
+            ("viewModel.visionDelegationRequest != nil", "waitingOnYou", "a Safe-mode delegation review is its own panel"),
+            ("viewModel.visionSessionPause != nil", "waitingOnYou", "a session pause is its own panel"),
+            // The HUD, which outranks the two below it and carries no question.
+            ("viewModel.visionSessionProgress != nil", "working", "a live session shows a progress HUD, not a question"),
+            // Reachable as questions only once no session is live.
+            ("viewModel.isAwaitingApproval", "waitingOnYou", "with no session live, the approval panel is what renders"),
+            ("viewModel.clarificationQuestion != nil", "waitingOnYou", "with no session live, the clarification panel is what renders"),
+            ("viewModel.isRunning", "working", "an ordinary run in flight, whose panel is origin-gated")
         ]
 
-        for condition in waitingOnYou {
+        for row in classification {
             #expect(
-                MacAgentSource.count(of: condition, inText: waitingBranch) == 1,
-                "\(condition) is a question parked on the user and belongs in the .waitingOnYou branch"
-            )
-            #expect(
-                MacAgentSource.count(of: condition, inText: workingBranch) == 0,
-                "\(condition) has a control above the composer — it is not a bare run in flight"
+                try answer(for: row.condition) == row.answer,
+                "\(row.condition) must answer .\(row.answer) — \(row.why)"
             )
         }
-        for condition in working {
-            #expect(
-                MacAgentSource.count(of: condition, inText: workingBranch) == 1,
-                "\(condition) is a run in flight and belongs in the .working branch"
-            )
-        }
+
+        // **The ordering, stated as the dependency it is.** The approval and the clarification may
+        // only be called `.waitingOnYou` after a live session has been ruled out; moving either
+        // above that check reinstates F1 exactly.
+        let session = try position(of: "viewModel.visionSessionProgress != nil")
+        #expect(
+            try session < position(of: "viewModel.isAwaitingApproval"),
+            "a live session must be ruled out before an approval is called a question above the composer"
+        )
+        #expect(
+            try session < position(of: "viewModel.clarificationQuestion != nil"),
+            "a live session must be ruled out before a clarification is called a question above the composer"
+        )
 
         // `viewModel.isRunning` is a prefix of nothing else here, so the population count is exact:
         // seven conditions, and an eighth fails this until somebody classifies it above.
-        let conditions = MacAgentSource.count(of: "viewModel.", inText: state)
-        #expect(conditions == waitingOnYou.count + working.count, "a condition was added — classify it above")
+        #expect(
+            MacAgentSource.count(of: "viewModel.", inText: state) == classification.count,
+            "a condition was added — classify it above"
+        )
+        #expect(classification.count == 7)
 
         // And the gate is the classification, not a second copy of it.
         let gate = try MacAgentSource.braceBlock(of: widget, openedBy: "private var isTaskInFlight: Bool {")
         #expect(MacAgentSource.count(of: "ComposerPresentation.acceptsInput(composerState)", inText: gate) == 1)
         #expect(MacAgentSource.count(of: "viewModel.", inText: gate) == 0, "the gate must not re-derive the state")
+    }
+
+    /// **The composer's classification is only true because of an ordering in a different property,
+    /// so that ordering is pinned here** (PR #107 review, F1).
+    ///
+    /// `FloatingWidgetView.state` returns the *first* branch that matches, so the panel a user is
+    /// looking at is whichever question outranks the rest. `composerState` mirrors that order, and
+    /// its correctness is inherited rather than local — reorder `state` and the composer starts
+    /// describing a panel that is not on screen, with nothing in its own file changed and nothing in
+    /// the test above failing. That is exactly how F1 shipped, so the dependency gets an assertion
+    /// rather than a sentence.
+    ///
+    /// The three Safe-mode questions must stay *above* `.controlling`, because the composer calls
+    /// them questions unconditionally; the approval and the clarification must stay *below* it,
+    /// because the composer rules a live session out before calling them questions at all.
+    @Test
+    func theWidgetsOwnPrecedenceIsWhatMakesTheComposersClassificationTrue() throws {
+        let precedence = try MacAgentSource.braceBlock(
+            of: MacAgentSource.read("FloatingWidgetView.swift"),
+            openedBy: "private var state: WidgetState {"
+        )
+
+        func position(of branch: String) throws -> Int {
+            let site = try #require(precedence.range(of: branch), "not in state: \(branch)")
+            return precedence.distance(from: precedence.startIndex, to: site.lowerBound)
+        }
+
+        let controlling = try position(of: "return .controlling(progress)")
+
+        for outranking in [
+            "return .captureReview(preview)",
+            "return .delegationReview(delegation)",
+            "return .sessionPaused(pause)"
+        ] {
+            #expect(
+                try position(of: outranking) < controlling,
+                "\(outranking) is called a question above the composer unconditionally, so it must outrank the HUD"
+            )
+        }
+
+        for outranked in [
+            "return .permission(approvalRequest)",
+            "return .clarification(question)"
+        ] {
+            #expect(
+                controlling < (try position(of: outranked)),
+                "the HUD outranks \(outranked), which is why the composer rules a live session out first"
+            )
+        }
     }
 
     /// **The field the user is meant to type into is the field that says so.**
