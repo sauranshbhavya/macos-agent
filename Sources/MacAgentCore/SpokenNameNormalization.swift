@@ -154,9 +154,10 @@ public enum SpokenPath {
     /// phrase such as "my downloads folder", or "~/my downloads folder", which is the same phrase
     /// with the home spelled out. A value with a component below it is a path someone spelled, and
     /// `Documents/Client folder` names a folder that can genuinely be called that. The narrower
-    /// rule costs nothing: the only leading components that can resolve inside the whitelist at all
-    /// are `Desktop` and `Documents`, and neither ends in one of these nouns, so stripping one can
-    /// never turn a path that works today into a different path that works.
+    /// rule costs nothing: the only *named* components that can resolve inside the whitelist at all
+    /// are `Desktop` and `Documents` — a relative value and a `~/` one land in the same home
+    /// directory — and neither ends in one of these nouns, so stripping one can never turn a path
+    /// that works today into a different path that works.
     ///
     /// **Idempotent, and it has to be**, because the resolve phase runs at all three executor gates:
     /// `prepare` previews a path, `assessRisk` checks that path for a collision, and `execute`
