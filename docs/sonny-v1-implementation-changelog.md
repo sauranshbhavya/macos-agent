@@ -207,7 +207,124 @@ Architectural decisions / pitfalls discovered (required, write "none" if true):
 
 **The single-source wording lost its "First failure:" prefix, not just its plural.** With one source there is no second failure for the first to be distinguished from, so the reason follows the sentence directly. The plural branch is unchanged.
 
-Manual-test items the user still owes: `summarize https://en.wikipedia.org/wiki/Machine_learning and save it as Markdown` writes a note (this is the reported command, and the only one that closes the report); `summarize https://en.wikipedia.org/wiki/CAPTCHA` — a page whose visible prose is about CAPTCHAs throughout — also writes a note; a research command aimed at a site that really does gate (`https://www.zillow.com/` is one today) still refuses, with a message naming a wall rather than a generic failure; and a command naming exactly one unreachable URL reads as a sentence in the widget.
+Manual-test items the user still owes: `summarize https://en.wikipedia.org/wiki/Machine_learning and save it as Markdown` writes a note (this is the reported command, and the only one that closes the report); `summarize https://en.wikipedia.org/wiki/CAPTCHA` — a page whose visible prose is about CAPTCHAs throughout — also writes a note; a research command aimed at **`https://www.dropbox.com/login`** still refuses with a message naming a wall; and a command naming exactly one unreachable URL reads as a sentence in the widget. **The third item named `https://www.zillow.com/` when this entry was first written and could not have passed** (PR #108 review, F3): Zillow answers 403, so `badHTTPStatus` throws before the detector runs and the message is "Fetching … failed with HTTP 403" — exactly the generic failure the item said must not appear. Every property of the replacement was checked against the live site on 2026-08-23 before it was written down: robots.txt's `*` group carries no `Disallow: /login` and no bare `Disallow: /`, the page answers 200 `text/html` with no redirect, it renders 0 visible characters to a reader who does not run scripts, and its markup names `recaptcha` and `funcaptcha` — so it is refused by the *markup* stage, which is the stage that otherwise has no live demonstration at all. **Facebook and Pinterest, the review's own suggested replacements, do not work either**: both are 200 with 0 visible characters, but both `robots.txt` files say `User-agent: * / Disallow: /`, so Sonny refuses them one check earlier still.
+
+#### PR #108 review round, 2026-08-23 — records and two pins
+
+The review confirmed the fix's shape, the corpus, the fixtures and both limits, and blocked on
+documentation a future session would act on. Everything below except two tests is a correction to a
+claim; no production code changed in this round.
+
+**F1. "Gone: … that is the whole reported class" was false, and it was the load-bearing sentence.**
+A *short* article about a wall is still refused as one, because the corroboration is an absolute
+length. Confirmed against the live pages: `simonwillison.net/2006/Dec/19/botbouncer/` is HTTP 200
+with **1 080** visible characters, one sentence of which mentions a CAPTCHA service, and it is
+refused; `simonwillison.net/2026/Jun/16/captcha-on-at-least-one-ampersand/` is 200 with **2 136**,
+same blog, same template, same subject, and it is served. 136 characters apart, opposite verdicts.
+The bullet now says what shipped and points at **SONNY-256**, which holds the residual and the
+reviewer's ratio proposal. That fix was deliberately not attempted here, on the reviewer's
+recommendation and the coordinator's: it needs its own corpus and measuring round, and this branch's
+calibration is spent.
+
+**F2. The accepted-regression disclosure understated its own set, and one of its two examples was not
+an instance.** Instagram was named as a page Sonny "writes a thin note from" — it is not: at 792
+visible characters it clears this check and then the extractor throws `noReadableContent`, which this
+branch's own corpus table already recorded as `article: none`. Tumblr (269) behaves the same way. The
+measured instances are **LinkedIn's feed** (200, 703 visible, 556 extracted) and **IEEE Xplore's home
+page** (200, 717 visible, 617 extracted). Two of the review's other suggestions did not survive
+re-measurement either, and are recorded rather than repeated: **Pixiv is refused**, not served —
+200, 599 visible, and its footer carries Google's standard "This site is protected by reCAPTCHA"
+notice — and **ResearchGate answered 403** when measured, so it never reaches this code at all.
+
+**The sentence that mattered most in that block was "three independent checks fail closed on these
+pages, not one", and it was false for exactly the cases the block conceded.** LinkedIn passes the
+status check, is served by the detector, and yields a 556-character article: zero of the three fire.
+That sentence was the justification for narrowing the check, so it is corrected rather than softened.
+The honest characterisation, now in the code: **between 200 and 2 000 visible characters neither
+stage fires unless the page says one of the seven phrases to a reader**, and that band is where most
+real walls measured live — ScienceDirect 526, FT 565, Pixiv 599, Bloomberg 657, LinkedIn 703, IEEE
+717, Medium 720, Instagram 792, Telegraph 888, ResearchGate 318, Tumblr 269.
+
+**The boundary rule's home is `docs/sonny-major-release-spec.md:459` and `:916`** — "Do not bypass
+paywalls, CAPTCHAs, robots restrictions, or login walls" and "Sonny must not bypass paywalls,
+CAPTCHAs, login walls, or robots restrictions". SONNY-245's description attributes it to `CLAUDE.md`,
+which carries no such sentence (`grep -in 'captcha\|bot detection' CLAUDE.md` finds nothing). The
+detector's disclosure block now cites the two real lines; nothing in this branch had cited it at all.
+
+**F4. `interstitialVisibleTextLimit` is not a bound on real walls, and its own doc comment conceded
+the counterexample in a parenthetical while claiming otherwise in the sentence.** Glassdoor's wall
+speaks at 3 884 characters — 1.9× the limit — by repeating one short message in ten languages. It is
+harmless today for two reasons that are not this limit: its wording matches none of the seven
+phrases, and it answers 403. Cloudflare's common "Verifying you are human" likewise does not match
+`verify you are human`. What 2 000 actually sits above is every wall in the corpus that both speaks to
+a reader *and* says one of the phrases, which is one page.
+
+**F5. Two mutants survived the suite, both on behaviour the code claimed and nothing held.**
+`locale: nil` → `.current` in `normalized`, and `let haystack = normalized(text)` → `text`. The second
+is the more serious: `visibleText` already normalises what it returns, so stage 1 keeps working
+without it and only **stage 2 — the one that catches every modern bot wall** — notices. Both are
+pinned now. `markupEvidenceIsFoldedAndCollapsedBeforeItIsSearched` drives the markup stage with a
+mixed-case vendor script (`ct.CAPTCHA-Delivery.com`) and a phrase broken across a line break.
+`phraseMatchingIsLocaleIndependent` is a source scan, because the property is not observable in this
+process: the test machine's locale is `en_IN`, where `.current` and `nil` agree. The hazard behind it
+is measured rather than supposed — three of the seven phrases contain the letter `i`, and
+`"PLEASE LOG IN".folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "tr_TR"))`
+is `please log ın`, which does not contain `please log in`. Per `CLAUDE.md`'s rule that a source scan
+is only a guard once it has been shown to flag the defect it names, the test runs its predicate over
+the historical `.current` code first and asserts it flags line 2.
+
+**F6. The parse guard named a cause that does not exist — the same shape as the `try?` this branch
+already disclosed, arriving a second time.** `visibleText` began "An unparseable page yields `""`, so
+the markup stage applies to it — the fail-closed direction", which reads as a live behaviour for
+malformed input. It is not one: SwiftSoup's HTML parse is permissive by construction, and its three
+parse-path files carry no `throw` of their own (`grep -c 'throw ' Tokeniser.swift TreeBuilder.swift
+HtmlTreeBuilder.swift` in SwiftSoup 2.13.5 answers 0, 0, 0). What can throw there is twelve `Validate`
+calls inside `HtmlTreeBuilder`, and they are internal invariants rather than input checks — four of
+the seven `Validate.fail` messages read "Should not be reachable". The comment now says the `""` is a
+value the compiler asks for on a path this repository does not exercise. **Twice on one branch is the
+pattern worth naming**: a comment that makes the code sound more defensive than the library requires
+is as unverified as one that makes it sound cleverer, and both read as diligence.
+
+**F7. Nothing in the repository constructed a non-2xx `FetchedWebPage`, so `validate`'s ordering was
+unexercised** — while this branch's documentation leaned on it as the reason narrowing the detector is
+affordable. Pre-existing, and closed here rather than filed because it is one test and the argument is
+this branch's. `aWallThatAnswersWithAnErrorStatusIsRefusedOnTheStatusBeforeTheDetectorRuns` serves the
+Zillow fixture at the 403 it was really fetched with and asserts `badHTTPStatus`; its pair serves the
+identical bytes at 200 and asserts the wall's name. The two together pin *which* check speaks, not
+merely that something refuses.
+
+**F8. The ScienceDirect count was swapped between three records.** 523 is the fixture, 526 is the page
+as fetched, and the three-character difference is the IP redaction the fixtures README documents. The
+detector's corpus list said 523 and the README said 526; both are corrected, and the README now states
+which number belongs to which so the next reader does not re-swap them. The README also said "Four
+real pages" in one line and "All three were fetched" eleven lines later.
+
+Tests: **1875 in 135 suites, exit 0 at `795e022`** via the flagged command; **+3** on the round
+(`git diff ec4393c..795e022 -- Tests/ | grep -c '^+    @Test'` = 3). **`scripts/warnings`: 0 at
+`795e022` (clean)**, every file in `Sources/` and `Tests/` compiled.
+
+**Mutation battery at `795e022`: 3 mutants, 3 killed, none survived** — and two of the three kills
+need a caveat, because `scripts/mutate` counts *any* failing test as a killer and both caveats are
+the hazard its own `--help` names.
+
+- **N2** (markup searched unnormalised) is the clean one: killed by
+  `markupEvidenceIsFoldedAndCollapsedBeforeItIsSearched` and by nothing else, which is exactly the
+  claim — no other test in 1875 notices, because `visibleText` normalises what it returns and stage 1
+  never sees the difference.
+- **N1** (folding with `locale: .current` again) is reported as killed by 2 tests. One is
+  `phraseMatchingIsLocaleIndependent`, the scan written for it. **The other is
+  `asyncProcessRunnerCancelsRunningProcess`, which is SONNY-252's flake, not a guard on anything
+  here.** It is a live instance of the thing that ticket is about, and it landed in the harmless
+  direction only because the real guard fired in the same run.
+- **N3** (the wall check moved ahead of the status check) is reported as killed by 48. **One of those
+  is a guard on the property**: `aWallThatAnswersWithAnErrorStatusIsRefusedOnTheStatusBeforeTheDetectorRuns`
+  recorded the exact mismatch — expected `.badHTTPStatus(403, "https://www.zillow.com/")`, got the
+  wall. The rest are dominated by 58 timeout issues in `VisionSessionRunTests`, whose deadline that
+  file documents as "a deadlock backstop, not a timing assertion". They appeared in no other mutant's
+  run (`grep -c "VisionSessionRunTests.swift:475" N1.log N2.log N3.log` → 0, 0, 58) and that run took
+  121s against a 75s baseline. **Why N3 perturbs that suite was not established**, so those failures
+  are recorded as unexplained rather than attributed: they are not evidence about the ordering, and
+  the honest count of tests holding it is one.
 ### Branch: fix/widget-composer-and-resume-panel
 Status: complete
 Date: 2026-08-23
