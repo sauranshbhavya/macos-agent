@@ -380,6 +380,27 @@ public enum PriorTaskOutcomeStatus: String, Codable, Equatable, Sendable {
     case canceled
     case approvalNeeded = "approval_needed"
     case clarificationNeeded = "clarification_needed"
+
+    /// Whether this outcome means the run is over, however it ended.
+    ///
+    /// The two false answers are the pauses — a run waiting for an approval or an answer has not
+    /// finished and may still write. Everything else is terminal, the preview-only exits included:
+    /// they produced no further work and nothing more is coming.
+    ///
+    /// **Here rather than at a call site because two things now read it** (SONNY-246):
+    /// `AgentViewModel.recordTaskHistoryIfTerminal` reloads the Memory section's lists on it, and
+    /// `settleResumableTask` splits the same set further — kept-and-stamped for `.failed`, deleted
+    /// for the rest. That second switch stays its own, because it needs three answers rather than
+    /// two; what it must not do is disagree with this one about which statuses end a run, and both
+    /// being exhaustive over this enum is what stops that.
+    public var endsTheRun: Bool {
+        switch self {
+        case .approvalNeeded, .clarificationNeeded:
+            return false
+        case .prepared, .dryRun, .completed, .failed, .canceled:
+            return true
+        }
+    }
 }
 
 public final class PriorTaskContextStore {

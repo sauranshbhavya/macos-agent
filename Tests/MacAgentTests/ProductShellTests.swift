@@ -667,7 +667,12 @@ struct ProductShellTests {
             "clipboardHistoryEnabled",    // refreshClipboardHistoryNotice()
             "clipboardHistoryTimer",      // ditto, via start/stopClipboardHistoryMonitoring()
             "localStorageLoadFailures",   // record/clearLocalStorageLoadFailure, inside all four
-            "localStorageNotice"          // ditto, via refreshLocalStorageNotice()
+            "localStorageNotice",         // ditto, via refreshLocalStorageNotice()
+            // Derived from `localStorageLoadFailures` by the same publish, so it lands here for the
+            // same reason (SONNY-239). It matters that it does: the wipe deletes the file a row was
+            // marked unreadable for, so a set that survived would leave that row saying "Can't be
+            // read" about a file that no longer exists.
+            "unreadableMemoryCategories"
         ]
 
         // Deliberately untouched, in four groups.

@@ -40,15 +40,24 @@ public struct LocalDataDeletionError: Error, LocalizedError, Equatable {
 public struct LocalDataDeletionService: @unchecked Sendable {
     private let fileManager: FileManager
     private let fileURLs: [URL]
+    private let quarantine: LocalDataQuarantine
 
     public init(fileManager: FileManager = .default, fileURLs: [URL]? = nil) {
         self.fileManager = fileManager
         self.fileURLs = fileURLs ?? Self.defaultStoreFileURLs(fileManager: fileManager)
+        self.quarantine = LocalDataQuarantine(fileManager: fileManager)
     }
 
     /// Attempts every store even when one fails. Stopping at the first error would leave the
     /// remaining files — real user data this action promised to erase — silently untouched and
     /// unreported, which is the opposite of what a privacy wipe must do.
+    ///
+    /// **Each store's set-aside files go too, and that is load-bearing rather than tidy**
+    /// (SONNY-239). `LocalDataQuarantine` renames an unreadable file instead of unlinking it, so a
+    /// store the user cleared from the Memory page leaves its bytes on disk under a suffixed name.
+    /// Those bytes are the user's — folder paths, commands, routines — and a wipe that deleted only
+    /// the exact thirteen names would leave them behind while reporting that everything was erased.
+    /// Sonny cannot read them, which is not the same as their holding nothing.
     public func deleteAllLocalData() throws -> LocalDataDeletionResult {
         var deletedFileCount = 0
         var missingFileCount = 0
@@ -56,6 +65,19 @@ public struct LocalDataDeletionService: @unchecked Sendable {
         var failureDescriptions: [String] = []
 
         for fileURL in unique(fileURLs) {
+            // Before the existence check below, not inside it: a store whose own file was already
+            // moved aside has nothing at its own path and everything at the suffixed one, which is
+            // precisely the state this sweep exists for.
+            for setAside in quarantine.quarantinedSiblings(of: fileURL) {
+                do {
+                    try fileManager.removeItem(at: setAside)
+                    deletedFileCount += 1
+                } catch {
+                    failedFilePaths.append(setAside.path)
+                    failureDescriptions.append(error.localizedDescription)
+                }
+            }
+
             guard fileManager.fileExists(atPath: fileURL.path) else {
                 missingFileCount += 1
                 continue

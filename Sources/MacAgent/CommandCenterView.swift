@@ -3833,14 +3833,43 @@ struct MemoryRowPresentation: Equatable {
     /// it and watches it snap back. Their per-type choices are not lost either way; they stay in
     /// `MemorySettingsStore` and come back when the master switch does.
     let canChangeRecording: Bool
-    /// "12 saved · newest 3:04 PM", or the empty-state half on its own.
+    /// Whether this row's file exists and will not read (SONNY-239).
+    ///
+    /// **The row's two zero-count states are different facts and used to render identically.** A
+    /// store nobody has used loads as zero entries; a store whose file will not decrypt also loads
+    /// as zero entries, because `loadMemoryEntries` empties the list rather than leaving it stale.
+    /// The founder met the second one on 2026-08-23 and read `0 saved` beside a greyed-out Delete,
+    /// which says "there is nothing here to remove" — the opposite of the truth.
+    ///
+    /// It drives two things: what the row says, and whether Delete is live. Both matter, and the
+    /// second is the one the ticket exists for — every door into a store loads before it acts, so a
+    /// file that cannot be read cannot be cleared through the store, and this control is the only
+    /// recovery the product has short of wiping all thirteen stores from Settings.
+    ///
+    /// Not defaulted, deliberately: every construction site decides, so a new one cannot inherit
+    /// "readable" by saying nothing.
+    let isUnreadable: Bool
+    /// "12 saved · newest 3:04 PM", the empty-state half on its own, or the unreadable state.
     let detailText: String
+
+    /// Whether this row's Delete is live.
+    ///
+    /// **A value rather than an expression inside the `.disabled(...)` modifier, because nothing
+    /// could see the old one** — the same reason `canChangeRecording` and `MemoryRowDestination`
+    /// exist (PR #98 review, F3 and F4). This is the control SONNY-239 is about; a gate written only
+    /// in a view modifier is a gate no test can read, and "greyed out at exactly the wrong moment"
+    /// is precisely the defect that shipped.
+    ///
+    /// An empty row still has nothing to do. An *unreadable* row has: its count is zero because the
+    /// file would not open, not because there is nothing in it.
+    var canDelete: Bool { count > 0 || isUnreadable }
 
     init(
         category: MemoryCategory,
         count: Int,
         isRecording: Bool,
         canChangeRecording: Bool,
+        isUnreadable: Bool,
         newestEntryDate: Date?,
         now: Date
     ) {
@@ -3850,6 +3879,15 @@ struct MemoryRowPresentation: Equatable {
         self.count = count
         self.isRecording = isRecording
         self.canChangeRecording = canChangeRecording
+        self.isUnreadable = isUnreadable
+
+        guard !isUnreadable else {
+            // Neither a count nor a timestamp, because the file will not open and Sonny knows
+            // neither. Saying "0 saved" here is not a smaller version of the truth, it is a
+            // different claim — and it is the one that made Delete look unnecessary.
+            self.detailText = "Can't be read"
+            return
+        }
 
         let counted = count == 1 ? "1 saved" : "\(count) saved"
         guard let newestEntryDate else {
@@ -3882,6 +3920,7 @@ struct MemoryRowPresentation: Equatable {
             // The master switch and the policy, folded — not the per-type answer, which is what
             // `isRecording` above already carries.
             canChangeRecording: viewModel.memorySettings.isRecording,
+            isUnreadable: viewModel.unreadableMemoryCategories.contains(category),
             newestEntryDate: viewModel.newestMemoryEntryDate(for: category),
             now: now
         )
@@ -4014,8 +4053,18 @@ private struct MemoryView: View {
             // Every other destructive confirmation in the app names what goes and what stays — the
             // Settings wipe, the workspace delete, both task deletes. This one deletes the most per
             // press of any of them, so it says so rather than being the one that does not.
+            //
+            // **An unreadable row gets different words because it is a different action**
+            // (SONNY-239). The ordinary sentences all name what is being removed — "every copied
+            // item Sonny has recorded" — and Sonny cannot honestly name the contents of a file it
+            // could not open. That press also keeps the file rather than deleting it, which the
+            // confirmation has to say out loud, since every other one in the app means destruction.
             if let deletionCategory {
-                Text(MemoryDeletionCopy.message(for: deletionCategory))
+                Text(
+                    viewModel.unreadableMemoryCategories.contains(deletionCategory)
+                        ? MemoryDeletionCopy.unreadableMessage(for: deletionCategory)
+                        : MemoryDeletionCopy.message(for: deletionCategory)
+                )
             }
         }
     }
@@ -4232,9 +4281,14 @@ private struct MemoryRow: View {
                 // switch. Deleting what is already stored is the next thing someone who turned
                 // recording off wants, and an administrator's disable-memory policy is furthered by
                 // a delete rather than contradicted by one. Only an empty row has nothing to do.
+                //
+                // **And an unreadable row is not an empty one** (SONNY-239). Its count is zero
+                // because the file would not open, not because there is nothing in it, so gating on
+                // the count alone disabled the one control that repairs it at exactly the moment it
+                // was needed. The founder's recovery was deleting the file by hand in the Finder.
                 Button("Delete", action: delete)
                     .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
-                    .disabled(presentation.count == 0)
+                    .disabled(!presentation.canDelete)
                     .accessibilityLabel("Delete \(presentation.title)")
 
                 // **`SonnySettingsToggle`, not the native `.switch` `RoutineRow` uses.** Two
@@ -4297,6 +4351,53 @@ enum MemoryDeletionCopy {
         case .resumableTasks:
             return "This deletes every unfinished task Sonny is keeping. Sonny stops offering to carry on with them. Anything they already did is not undone."
         }
+    }
+
+    /// What the confirmation says when this row's file exists and will not read (SONNY-239).
+    ///
+    /// Two things the founder's decision of 2026-08-23 requires it to be honest about, and neither
+    /// is optional: Sonny cannot say what is in a file it could not open, so it must not imply an
+    /// empty store the way `message(for:)`'s sentences all do; and the file is *kept* rather than
+    /// destroyed, which is the opposite of what every other destructive confirmation in this app
+    /// means and therefore cannot be left to be inferred.
+    ///
+    /// Deliberately not per category. Each of `message(for:)`'s sentences names the contents it is
+    /// about to remove, and the whole point here is that the contents are unknown — a per-category
+    /// version would be nine ways of saying the same unknowable thing.
+    static func unreadableMessage(for category: MemoryCategory) -> String {
+        "Sonny can't read this, so it can't tell you what's in it. \(category.title) starts over. Sonny keeps the file it can't read instead of deleting it."
+    }
+
+    /// What the Memory page reports after a per-type Delete.
+    ///
+    /// One function rather than a literal at the call site because the answer now has two shapes,
+    /// and the shape depends on something the view model learned mid-delete. The readable wording is
+    /// unchanged, so a row with nothing wrong with it reports exactly what it always did.
+    static func outcome(for category: MemoryCategory, deletedFileCount: Int, keptFileCount: Int) -> String {
+        guard keptFileCount > 0 else {
+            let noun = deletedFileCount == 1 ? "file" : "files"
+            return "Deleted \(category.title.lowercased()) — \(deletedFileCount) \(noun)."
+        }
+        let kept = keptFileCount == 1
+            ? "The file Sonny could not read is still on your Mac."
+            : "The \(keptFileCount) files Sonny could not read are still on your Mac."
+        return "\(category.title) starts over. \(kept)"
+    }
+
+    /// The sheet's title when the row's file will not read.
+    ///
+    /// The empty-state title it replaces — "No output locations yet" — is the same lie the row's
+    /// "0 saved" was: a store that has never been used and a store that will not open are different
+    /// facts, and the sheet is the surface a user opens *because* the row said zero.
+    static func unreadableTitle(for category: MemoryCategory) -> String {
+        "Sonny can't read your \(category.title.lowercased())"
+    }
+
+    /// Paired with the command that ends the state, exactly as `emptyMessage(for:)` is — except that
+    /// here the command is a control on the page behind this sheet rather than something to ask
+    /// Sonny for.
+    static func unreadableSheetMessage(for category: MemoryCategory) -> String {
+        "Press Delete on the \(category.title.lowercased()) row to start over. The file stays on your Mac."
     }
 
     /// What removing one entry takes. Shorter than the per-type message because the row beside it
@@ -4510,10 +4611,18 @@ private struct MemoryEntriesSheet: View {
                 .frame(height: 1)
 
             if entries.isEmpty {
+                // The unreadable case is not the empty case, and this sheet is exactly where the
+                // difference bites: the row said zero, the user pressed View to see what Sonny had,
+                // and "No output locations yet · Ask Sonny to save a file somewhere" would tell them
+                // to go and create the entries their file already holds (SONNY-239).
                 CollectionEmptyState(
-                    systemImage: "tray",
-                    title: MemoryDeletionCopy.emptyTitle(for: category),
-                    message: MemoryDeletionCopy.emptyMessage(for: category)
+                    systemImage: isUnreadable ? "exclamationmark.triangle" : "tray",
+                    title: isUnreadable
+                        ? MemoryDeletionCopy.unreadableTitle(for: category)
+                        : MemoryDeletionCopy.emptyTitle(for: category),
+                    message: isUnreadable
+                        ? MemoryDeletionCopy.unreadableSheetMessage(for: category)
+                        : MemoryDeletionCopy.emptyMessage(for: category)
                 )
                 .frame(maxHeight: .infinity)
             } else {
@@ -4568,6 +4677,10 @@ private struct MemoryEntriesSheet: View {
 
     private var entries: [MemoryEntryPresentation] {
         MemoryEntryPresentation.entries(for: category, viewModel: viewModel)
+    }
+
+    private var isUnreadable: Bool {
+        viewModel.unreadableMemoryCategories.contains(category)
     }
 
     /// Deleted by position in the same list the row was rendered from, so the row and the record it

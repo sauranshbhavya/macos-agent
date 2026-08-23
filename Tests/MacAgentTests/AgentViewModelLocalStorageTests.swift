@@ -233,7 +233,14 @@ struct AgentViewModelLocalStorageTests {
         let notice = try #require(viewModel.localStorageNotice)
         let explanation = "A local data file exists but could not be decrypted or decoded."
         #expect(notice.components(separatedBy: explanation).count - 1 == 1)
-        #expect(notice == "Sonny could not load encrypted local data. saved routines: \(explanation)")
+        // The trailing sentence is SONNY-239's: the banner names the control that repairs this,
+        // rather than stopping at an accurate description the reader can do nothing with. It is
+        // appended only when an unreadable store has a Memory row to act from — saved routines has
+        // one — and it carries no second copy of the explanation, which is what this test counts.
+        #expect(
+            notice == "Sonny could not load encrypted local data. saved routines: \(explanation)"
+                + " Open Memory in Command Center to clear it."
+        )
     }
 
     // MARK: - SONNY-78: a corrupt workspace store is not an unbound task

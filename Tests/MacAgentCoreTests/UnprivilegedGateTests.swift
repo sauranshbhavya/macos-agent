@@ -113,7 +113,11 @@ struct UnprivilegedGateTests {
         //
         // Unchanged by SONNY-172: consolidating the trait moved no test and locked no new directory,
         // so this branch's rebase past SONNY-201 takes that ticket's count rather than reconciling one.
-        #expect(lockedAndGated == 8, "expected eight gated directory-locking tests, found \(lockedAndGated)")
+        // Nine since SONNY-239, whose one gated test is in `LocalDataQuarantineTests` and locks a
+        // directory so a *rename* fails rather than a write — the first of the nine to do that. Its
+        // caller writes "the file Sonny could not read is still on your Mac" off that result, so a
+        // swallowed failure would make that sentence true by accident about a row nothing cleared.
+        #expect(lockedAndGated == 9, "expected nine gated directory-locking tests, found \(lockedAndGated)")
         #expect(
             mismatches.isEmpty,
             """
