@@ -620,13 +620,82 @@ final class AgentViewModel: ObservableObject {
     /// Unset means the registry default (OpenAI).
     nonisolated static let plannerSelectionEnvironmentKey = "SONNY_PLANNER"
 
+    /// The view model the shipping app runs on: every local store at its real location under
+    /// `~/Library/Application Support/Sonny/`.
+    ///
+    /// **The one place those locations are named, which is the point** (SONNY-240). They used to be
+    /// named by the initializer's own defaults, where every call site inherited them by saying
+    /// nothing — including fifteen test fixtures that meant to say something else. Here they are a
+    /// call, made from `AppDelegate` and nowhere else, and a store added later has to be added to
+    /// this list before anything compiles.
+    ///
+    /// The whitelist is built once and handed to both the view model and the output-location store,
+    /// because that store answers "is this an output location?" by asking it — see the
+    /// `outputLocationStore:` parameter. The clipboard monitor likewise gets the same settings store
+    /// the view model does, so the switch the user sees and the switch the monitor obeys are one
+    /// object.
+    static func atItsRealStoreLocations() -> AgentViewModel {
+        let whitelist = PathWhitelist()
+        let clipboardHistorySettingsStore = ClipboardHistorySettingsStore()
+        return AgentViewModel(
+            routineStore: RoutineStore(),
+            workspaceStore: WorkspaceStore(),
+            snippetStore: SnippetStore(),
+            recentArtifactStore: RecentArtifactStore(),
+            shortcutRunHistoryStore: ShortcutRunHistoryStore(),
+            taskHistoryStore: TaskHistoryStore(),
+            taskPlanDetailStore: TaskPlanDetailStore(),
+            visionSessionJournalStore: VisionSessionJournalStore(),
+            clipboardHistorySettingsStore: clipboardHistorySettingsStore,
+            approvedAppStore: ApprovedAppStore(),
+            outputLocationStore: OutputLocationStore(whitelist: whitelist),
+            resumableTaskStore: ResumableTaskStore(),
+            clipboardHistoryMonitor: ClipboardHistoryMonitor(settingsStore: clipboardHistorySettingsStore),
+            localDataDeletionService: LocalDataDeletionService(),
+            whitelist: whitelist
+        )
+    }
+
+    /// **No local store on this initializer has a default, and that is enforcement rather than
+    /// style** (SONNY-240).
+    ///
+    /// A defaulted store parameter is invisible to every call site that predates it: adding one
+    /// compiles fourteen fixtures unchanged and silently points the new store at
+    /// `~/Library/Application Support/Sonny/`. A test process writes there under the deterministic
+    /// key `LocalStorageEncryption` substitutes for tests, so the file it leaves behind is one the
+    /// packaged app cannot decrypt — and per SONNY-239 cannot recover from either, because every
+    /// path into these stores loads before it writes. That is not hypothetical: it reached the
+    /// founder's Mac as a storage banner on his first manual item, with 50 test temp directories
+    /// inside his real `output-locations.json`, and it happened a second time a day later.
+    ///
+    /// **So the convenience is gone, deliberately.** Every construction site names every store, and
+    /// a store added later does not compile until each of them has been told about it. The shipping
+    /// app's own site is `atItsRealStoreLocations()` below — one named place where the real
+    /// locations are allowed, rather than fifteen places where they arrive by silence.
+    ///
+    /// **The rejected alternative, on the record:** making the store types' *default paths*
+    /// test-aware, the way `LocalStorageEncryption.defaultKeyManager()` already makes the key
+    /// test-aware. It would stop the corruption and leave the wiring gap exactly where it is — a
+    /// fixture would still be reaching a store nobody meant it to reach, and the next thing that
+    /// needs the fixture's own store would find the same hole with none of the symptoms that made
+    /// this one findable. The root cause is a call site that never named a store; the guard clause
+    /// would make that call site harmless instead of absent.
+    ///
+    /// **What this does not prevent**, stated rather than left to be discovered: a call site is now
+    /// forced to *pass* a store, not to pass a sensible one — `taskHistoryStore: TaskHistoryStore()`
+    /// satisfies the compiler and still writes to the real path. That residue is what
+    /// `LocalStoreInjectionScanTests` covers, and the two together are the whole guard. Nor does it
+    /// touch the non-store seams below (`browserOpener`, `shortcutCatalog`, `zipArchiver` and the
+    /// rest), which default to real implementations that shell out and open real applications; that
+    /// is a different hazard with a different blast radius, and every fixture passes hermetic ones
+    /// today.
     init(
         audioRecorder: AudioCommandRecorder = AudioCommandRecorder(),
         permissionReadinessService: PermissionReadinessService = PermissionReadinessService(),
-        routineStore: RoutineStore = RoutineStore(),
-        workspaceStore: WorkspaceStore = WorkspaceStore(),
-        snippetStore: SnippetStore = SnippetStore(),
-        recentArtifactStore: RecentArtifactStore = RecentArtifactStore(),
+        routineStore: RoutineStore,
+        workspaceStore: WorkspaceStore,
+        snippetStore: SnippetStore,
+        recentArtifactStore: RecentArtifactStore,
         shortcutCatalog: any ShortcutCatalogProviding = ProcessShortcutCatalog(),
         browserOpener: any BrowserOpening = WorkspaceBrowserOpener(),
         appOpener: any AppOpening = WorkspaceAppOpener(),
@@ -637,21 +706,33 @@ final class AgentViewModel: ObservableObject {
         finderContextReader: any FinderContextReading = AppleScriptFinderContextReader(),
         documentConverter: any DocumentConverting = AutoDocumentConverter(),
         zipArchiver: any ZipArchiving = ProcessZipArchiver(),
-        shortcutRunHistoryStore: ShortcutRunHistoryStore = ShortcutRunHistoryStore(),
-        taskHistoryStore: TaskHistoryStore = TaskHistoryStore(),
-        taskPlanDetailStore: TaskPlanDetailStore = TaskPlanDetailStore(),
-        visionSessionJournalStore: VisionSessionJournalStore = VisionSessionJournalStore(),
-        clipboardHistorySettingsStore: ClipboardHistorySettingsStore = ClipboardHistorySettingsStore(),
-        approvedAppStore: ApprovedAppStore = ApprovedAppStore(),
-        // `nil` rather than a defaulted `OutputLocationStore()`, so the default store is built with
-        // *this* view model's whitelist (SONNY-209). The store decides what counts as an output
-        // location by asking the whitelist, so a defaulted store carrying its own would answer that
-        // question against different roots than the run that produced the file — right in
-        // production, quietly wrong for any test that injects a whitelist and leaves the store alone.
-        outputLocationStore: OutputLocationStore? = nil,
-        resumableTaskStore: ResumableTaskStore = ResumableTaskStore(),
-        clipboardHistoryMonitor: ClipboardHistoryMonitor? = nil,
-        localDataDeletionService: LocalDataDeletionService = LocalDataDeletionService(),
+        shortcutRunHistoryStore: ShortcutRunHistoryStore,
+        taskHistoryStore: TaskHistoryStore,
+        taskPlanDetailStore: TaskPlanDetailStore,
+        visionSessionJournalStore: VisionSessionJournalStore,
+        clipboardHistorySettingsStore: ClipboardHistorySettingsStore,
+        approvedAppStore: ApprovedAppStore,
+        // **This one was already `nil`-defaulted for a second reason, and the reason survives at the
+        // caller** (SONNY-209). The store decides what counts as an output location by asking a
+        // whitelist, so it has to be built with the *same* whitelist the view model runs under; a
+        // store carrying its own would answer that question against different roots than the run
+        // that produced the file. It used to be built here to guarantee that. Now the caller passes
+        // both, which makes the pairing visible at the one place that can get it wrong instead of
+        // implicit in a body nobody reads — `atItsRealStoreLocations()` names the whitelist once and
+        // hands it to both.
+        outputLocationStore: OutputLocationStore,
+        resumableTaskStore: ResumableTaskStore,
+        // **The thirteenth store arrives inside this**, which is why it is required too even though
+        // it is a service rather than a store: `ClipboardHistoryMonitor`'s own defaults are the real
+        // `clipboard-history.json` *and* the real system pasteboard, so a fixture that left this out
+        // had a monitor that would have copied the developer's actual clipboard into the developer's
+        // real file. Six of the fifteen fixtures left it out (SONNY-240).
+        clipboardHistoryMonitor: ClipboardHistoryMonitor,
+        // Not a store, and required for a worse reason than the stores are: its default is the real
+        // file list, and this service *deletes* what it is given. All fifteen fixtures already
+        // passed it, so this costs nothing and closes the one door on this initializer where a
+        // silent default would have erased the developer's data rather than corrupted it.
+        localDataDeletionService: LocalDataDeletionService,
         memoryPolicyProvider: any MemoryPolicyProviding = UnmanagedMemoryPolicyProvider(),
         priorTaskContextStore: PriorTaskContextStore = PriorTaskContextStore(),
         taskUsageRecorder: TaskUsageRecorder = TaskUsageRecorder(),
@@ -693,10 +774,9 @@ final class AgentViewModel: ObservableObject {
         self.visionSessionJournalStore = visionSessionJournalStore
         self.clipboardHistorySettingsStore = clipboardHistorySettingsStore
         self.approvedAppStore = approvedAppStore
-        self.outputLocationStore = outputLocationStore ?? OutputLocationStore(whitelist: whitelist)
+        self.outputLocationStore = outputLocationStore
         self.resumableTaskStore = resumableTaskStore
         self.clipboardHistoryMonitor = clipboardHistoryMonitor
-            ?? ClipboardHistoryMonitor(settingsStore: clipboardHistorySettingsStore)
         self.localDataDeletionService = localDataDeletionService
         self.memoryPolicyProvider = memoryPolicyProvider
         self.memorySettingsStore = MemorySettingsStore(userDefaults: userDefaults)
