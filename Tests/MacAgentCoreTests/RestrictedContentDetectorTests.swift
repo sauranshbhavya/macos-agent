@@ -279,6 +279,89 @@ struct RestrictedContentDetectorTests {
         #expect(RestrictedContentDetector.finding(inHTML: html) == nil)
     }
 
+    /// Markup evidence is folded and whitespace-collapsed before it is searched, and **that is the
+    /// stage that catches every modern bot wall** — so it needs its own test rather than sharing the
+    /// visible-text one.
+    ///
+    /// PR #108's review found this unheld: `visibleText` already normalises what it returns, so
+    /// stage 1 keeps working with the normalisation removed from `firstPhrase`, and only stage 2 —
+    /// which is handed raw markup — notices. A mutation that dropped it survived the whole suite.
+    @Test
+    func markupEvidenceIsFoldedAndCollapsedBeforeItIsSearched() {
+        let filler = String(repeating: "a", count: 100)
+        let mixedCase = "<html><body><p>\(filler)</p><script src=\"https://ct.CAPTCHA-Delivery.com/c.js\"></script></body></html>"
+        let brokenAcrossLines = "<html><body><p>\(filler)</p><!-- Please\n      log in --></body></html>"
+
+        let vendorScript = RestrictedContentDetector.finding(inHTML: mixedCase)
+        #expect(vendorScript?.reason == "CAPTCHAs")
+        #expect(vendorScript?.evidence == .markup)
+        #expect(vendorScript?.visibleTextLength == 100)
+
+        let splitPhrase = RestrictedContentDetector.finding(inHTML: brokenAcrossLines)
+        #expect(splitPhrase?.reason == "login walls")
+        #expect(splitPhrase?.evidence == .markup)
+    }
+
+    /// Two Macs must not disagree about the same page, and the hazard is measured rather than
+    /// supposed.
+    ///
+    /// Three of the seven phrases contain the letter `i`, and a Turkish or Azerbaijani locale folds
+    /// uppercase `I` to dotless `ı` — so `PLEASE LOG IN` folds to `please log ın` under
+    /// `locale: .current` on a Mac set to Turkish, and stops matching. The rule this replaced folded
+    /// with `.current`; this one folds with `nil`.
+    ///
+    /// **The test process cannot show that behaviourally** — its locale is en_IN, where `.current`
+    /// and `nil` agree — so the property is held by a scan of the source, and the scan is shown to
+    /// flag the code it exists to forbid before it is believed (`CLAUDE.md`: a source scan is only a
+    /// guard once it has been shown to flag the defect it names). PR #108's review found a mutation
+    /// putting `.current` back surviving the whole suite.
+    @Test
+    func phraseMatchingIsLocaleIndependent() throws {
+        let uppercase = "PLEASE LOG IN"
+        #expect(fold(uppercase, locale: Locale(identifier: "tr_TR")) == "please log ın")
+        #expect(fold(uppercase, locale: nil) == "please log in")
+        #expect(RestrictedContentDetector.reason(inHTML: "<html><body><p>\(uppercase)</p></body></html>") == "login walls")
+
+        let historical = """
+        let normalized = html
+            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
+            .lowercased()
+        """
+        #expect(Self.localeDependentFoldingLines(in: historical) == [2])
+
+        let source = try String(contentsOf: Self.detectorSourceURL, encoding: .utf8)
+        #expect(Self.localeDependentFoldingLines(in: source) == [])
+    }
+
+    /// A wall that answers 4xx never reaches the detector, and until PR #108's review (F7) nothing
+    /// in the repository constructed a non-2xx `FetchedWebPage` at all — so `validate`'s ordering
+    /// was unexercised while this branch's own documentation leaned on it as a safety argument.
+    ///
+    /// The status here is the one the Zillow fixture was really fetched with, recorded in
+    /// `Tests/Fixtures/WebResearch/README.md`. Its pair is
+    /// `theLoaderStillRefusesARealBlockPageAndNamesTheWall`, which serves the identical bytes at 200
+    /// and gets the wall's name instead — so the two together pin which check speaks, not merely
+    /// that something refuses.
+    @Test
+    func aWallThatAnswersWithAnErrorStatusIsRefusedOnTheStatusBeforeTheDetectorRuns() async throws {
+        let url = URL(string: "https://www.zillow.com/")!
+        let loader = PublicWebPageLoader(
+            fetcher: FixtureWebPageFetcher(
+                page: FetchedWebPage(
+                    requestedURL: url,
+                    statusCode: 403,
+                    html: try WebResearchFixture.zillowPerimeterXBlock.html()
+                )
+            ),
+            robotsChecker: AlwaysAllowingRobotsChecker(),
+            extractor: SwiftSoupReadableWebExtractor()
+        )
+
+        await #expect(throws: WebResearchError.badHTTPStatus(403, url.absoluteString)) {
+            _ = try await loader.load(rawURL: url.absoluteString)
+        }
+    }
+
     /// The phrases keep their nouns, and the earlier match in the list wins — unchanged from the
     /// rule this replaces, since SONNY-245 changed the evidence and not the coverage.
     @Test
@@ -321,6 +404,28 @@ struct RestrictedContentDetectorTests {
             .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
             .lowercased()
         return RestrictedContentDetector.phrases.first { normalized.contains($0.phrase) }?.reason
+    }
+
+    /// The detector's own source, for the locale scan.
+    static let detectorSourceURL = TestSourceTree.root
+        .deletingLastPathComponent()
+        .appendingPathComponent("Sources/MacAgentCore/RestrictedContentDetector.swift")
+
+    /// 1-based numbers of the **code** lines that fold with a locale-dependent locale.
+    ///
+    /// Comment-prefixed lines are excluded by `TestSourceTree.codeLines`, which matters here rather
+    /// than being tidiness: the doc comment on `normalized` says the words `locale: .current` while
+    /// explaining why the code does not use them, and a scan that could not tell the two apart would
+    /// fail against the fixed tree.
+    static func localeDependentFoldingLines(in source: String) -> [Int] {
+        TestSourceTree.codeLines(of: source)
+            .filter { $0.text.contains("folding(") || $0.text.contains("locale:") }
+            .filter { $0.text.contains("locale: .current") }
+            .map(\.number)
+    }
+
+    private func fold(_ value: String, locale: Locale?) -> String {
+        value.folding(options: [.caseInsensitive, .diacriticInsensitive], locale: locale).lowercased()
     }
 
     private func caseFolded(_ value: String) -> String {

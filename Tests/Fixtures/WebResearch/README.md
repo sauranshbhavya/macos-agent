@@ -8,7 +8,7 @@ under the rule that fixes it — both refuse it. Only a real page separates them
 that separates them is where in a real page the word actually sits: in a script blob, in an
 attribute, or in a sentence addressed to the reader.
 
-All three were fetched on 2026-08-23 with the headers `URLSessionWebPageFetcher` sends —
+All four were fetched on 2026-08-23 with the headers `URLSessionWebPageFetcher` sends —
 `User-Agent: Sonny/1.0`, `Accept: text/html,application/xhtml+xml` — so they are what Sonny itself
 would receive, not what a browser would.
 
@@ -33,14 +33,20 @@ invisible — a different mechanism, and one no other fixture exercises.
 
 The two block pages are the two shapes a real wall comes in, and they need different evidence to
 catch, which is why both are here rather than one. Zillow's shows 0 characters of text — the only
-trace in what the server sent is `captcha` in a script. ScienceDirect's shows 526 characters, and
-they are the message itself. A rule that reads only markup refuses Wikipedia; a rule that reads only
+trace in what the server sent is `captcha` in a script. ScienceDirect's shows **523** characters,
+and they are the message itself. A rule that reads only markup refuses Wikipedia; a rule that reads only
 visible text lets Zillow through. `RestrictedContentDetector` reads both and corroborates each
 against how much the page has to say.
 
 The ScienceDirect page is also the pair the whole fix turns on: **1.2 MB of markup that is a wall,
 beside 1.1 MB of markup that is an article.** Page size decides nothing; what the page shows a
 reader decides everything.
+
+**523 here, 526 in every corpus figure, and the difference is the redaction below.** The live page
+measured 526 visible characters; replacing the IP with a shorter one took three characters out of the
+saved copy. PR #108's review found the two numbers swapped between this file, the detector's doc
+comment and the changelog (F8), so: **523 is this fixture, 526 is the page as fetched**, and the
+suite asserts 523 because that is what it reads.
 
 ## The one edit
 
