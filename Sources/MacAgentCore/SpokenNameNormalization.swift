@@ -35,10 +35,15 @@ public enum SpokenName {
     /// A name as the user said it, with one leading possessive or article removed.
     ///
     /// Case-insensitive on the match and case-preserving on what survives: "My Desktop" and "MY
-    /// Desktop" both leave `Desktop`, never `desktop`. The comparison takes the prefix of the
-    /// *original* and lowercases that, rather than lowercasing the whole string and dropping from
-    /// it — lowercasing is not always length-preserving, so the two operations have to be performed
-    /// on the same characters or a pathological input drops the wrong ones.
+    /// Desktop" both leave `Desktop`, never `desktop`. Only the separated *word* is lowercased and
+    /// compared, never a prefix of the original, because lowercasing is not always
+    /// length-preserving and a prefix comparison has to drop exactly the characters it matched.
+    ///
+    /// **The separator is any whitespace, not a literal space** (PR #106 review, F5). Dictation and
+    /// pasted rich text produce U+00A0, and "my\u{00A0}Desktop" read as a folder called that under
+    /// the first version of this — the same family as the case folding above, and invisible on
+    /// screen. `rangeOfCharacter(from: .whitespacesAndNewlines)` covers every Unicode space
+    /// separator, and the trims at both ends already did.
     ///
     /// **One article, not a loop, and that is this function's contract rather than an oversight.**
     /// Its callers in `InstantCommandResolver` keep the original candidate *beside* the stripped one
@@ -47,40 +52,52 @@ public enum SpokenName {
     /// `SpokenPath` needs the opposite — one surviving string, so it applies this to a fixed point
     /// itself and says why.
     public static func withoutLeadingArticle(_ raw: String) -> String {
-        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        for article in leadingArticles {
-            let prefix = article + " "
-            guard trimmed.count > prefix.count,
-                  trimmed.prefix(prefix.count).lowercased() == prefix else {
-                continue
-            }
-            let remainder = String(trimmed.dropFirst(prefix.count))
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !remainder.isEmpty else {
-                continue
-            }
-            return remainder
-        }
-        return trimmed
+        withoutLeadingArticle(raw, from: leadingArticles)
     }
 
-    /// A name with one trailing "folder"/"directory" removed, under the same case rules as above.
+    /// The same reading, restricted to a caller's own subset of the list.
+    ///
+    /// **Here for exactly one caller, and the subset is derived rather than chosen** (PR #106 review,
+    /// F3). `InstantCommandResolver.runningAppCandidate` cannot keep the original beside the
+    /// stripped one — a plan carries one `appName` — so every word this strips there is a word an
+    /// app can no longer be called. That site strips an article for one reason: to undo its own
+    /// plausibility guard, whose `leadingStopWords` would otherwise reject "the code app". So the
+    /// words it may strip are the ones that guard rejects, and it passes that intersection here.
+    /// The alternative offered in review — a second two-word constant — is the drifting pair this
+    /// ticket exists to remove, and it would not have been self-maintaining: a stop word added to
+    /// the guard later would silently stop being strippable.
+    static func withoutLeadingArticle(_ raw: String, from articles: [String]) -> String {
+        let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard let separator = trimmed.rangeOfCharacter(from: .whitespacesAndNewlines) else {
+            return trimmed
+        }
+        guard articles.contains(String(trimmed[..<separator.lowerBound]).lowercased()) else {
+            return trimmed
+        }
+        let remainder = String(trimmed[separator.upperBound...])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !remainder.isEmpty else {
+            return trimmed
+        }
+        return remainder
+    }
+
+    /// A name with one trailing "folder"/"directory" removed, under the same case and separator
+    /// rules as above.
     static func withoutTrailingFolderNoun(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        for noun in trailingFolderNouns {
-            let suffix = " " + noun
-            guard trimmed.count > suffix.count,
-                  trimmed.suffix(suffix.count).lowercased() == suffix else {
-                continue
-            }
-            let remainder = String(trimmed.dropLast(suffix.count))
-                .trimmingCharacters(in: .whitespacesAndNewlines)
-            guard !remainder.isEmpty else {
-                continue
-            }
-            return remainder
+        guard let separator = trimmed.rangeOfCharacter(from: .whitespacesAndNewlines, options: .backwards) else {
+            return trimmed
         }
-        return trimmed
+        guard trailingFolderNouns.contains(String(trimmed[separator.upperBound...]).lowercased()) else {
+            return trimmed
+        }
+        let remainder = String(trimmed[..<separator.lowerBound])
+            .trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !remainder.isEmpty else {
+            return trimmed
+        }
+        return remainder
     }
 }
 
@@ -104,33 +121,42 @@ public enum SpokenName {
 public enum SpokenPath {
     /// The path a phrase means, or the phrase unchanged when it was already a path.
     ///
-    /// **An absolute or tilde-prefixed value is returned untouched, and that rule is the whole
-    /// reason this is allowed to sit above a security boundary.** Those are paths, not descriptions:
-    /// `/Users/me/my Desktop` names a real place, and a person who typed it means it. Everything
-    /// else is resolved relative to the home directory by `PathWhitelist.expandPath`, so the only
-    /// values this rewrites are the ones whose first component is being read as a folder name in the
-    /// user's home — which is exactly the population where "my Desktop" is a phrase rather than a
-    /// place.
+    /// **A `/`-absolute value is returned untouched; a `~/` one is not, and the difference is the
+    /// whole of PR #106's F1.** The first version guarded on both, on the reasoning that
+    /// `/Users/me/my Desktop` names a real place and a person who typed it means it. That holds for
+    /// `/` and does not transfer to `~/`: `PathWhitelist.expandPath` expands the tilde and then
+    /// resolves the rest against the same home directory a bare name goes to, so `~/my Desktop` and
+    /// `my Desktop` are the *same* location — one of them was fixed and the other still threw the
+    /// founder's exact error. And the author of these strings is the planner, not a person: the
+    /// system prompt models the tilde spelling in its own worked examples
+    /// (`git show 4a44288:Sources/MacAgentCore/OpenAIPlanner.swift | grep -c "~/Documents"` prints
+    /// 2 lines, carrying 4 occurrences), so `~/` is precisely the spelling a model reaches for.
     ///
-    /// **The guard stating it is redundant, and a battery says so rather than a reading of the
-    /// code**: deleting it leaves the whole suite green (`scripts/mutate`, M5 at `fa40d21`), because
-    /// an absolute path's first component is the empty string, which is not an article, and the
-    /// `head.isEmpty` fallback below then returns the original anyway; a tilde path's first
-    /// component is `~`, which is not an article either. It is kept as an equivalent mutant on
-    /// purpose. Without it the rule above holds only as a consequence of how
-    /// `components(separatedBy:)` treats a leading separator — true today, invisible to a reader,
-    /// and exactly the sort of thing a later edit removes without noticing it was load-bearing.
+    /// A `~` or `~user` leading component is a *home prefix rather than a name*, so the component
+    /// the article comes off is the one after it. Everything else is resolved relative to the home
+    /// directory, which is why those are the values this rewrites at all — exactly the population
+    /// where "my Desktop" is a phrase and not a place.
     ///
-    /// The article comes off the **first component only**. `Desktop/my notes` keeps its folder:
+    /// **The remaining `/` guard is redundant, and a battery says so rather than a reading of the
+    /// code**: deleting it leaves the whole suite green (`scripts/mutate`, M5 at `fa40d21`, still
+    /// equivalent after F1 narrowed it), because an absolute path's first component is the empty
+    /// string, which is not an article, and the `head.isEmpty` fallback below then returns the
+    /// original anyway. It is kept as an equivalent mutant on purpose. Without it the rule holds
+    /// only as a consequence of how `components(separatedBy:)` treats a leading separator — true
+    /// today, invisible to a reader, and exactly the sort of thing a later edit removes without
+    /// noticing it was load-bearing.
+    ///
+    /// The article comes off the **named component only**. `Desktop/my notes` keeps its folder:
     /// only the leading component is the one the home directory is searched for, and a possessive
     /// deeper in the path is part of a name the user really did type.
     ///
-    /// The trailing noun comes off only when the value is a **single** component — a bare phrase
-    /// such as "my downloads folder". A multi-component value is a path someone spelled, and
-    /// `Documents/Client folder` names a folder that can genuinely be called that. The narrower rule
-    /// costs nothing: the only single-component relative values that can resolve inside the
-    /// whitelist at all are `Desktop` and `Documents`, and neither ends in one of these nouns, so
-    /// stripping one can never turn a path that works today into a different path that works.
+    /// The trailing noun comes off only when **nothing sits below the named component** — a bare
+    /// phrase such as "my downloads folder", or "~/my downloads folder", which is the same phrase
+    /// with the home spelled out. A value with a component below it is a path someone spelled, and
+    /// `Documents/Client folder` names a folder that can genuinely be called that. The narrower
+    /// rule costs nothing: the only leading components that can resolve inside the whitelist at all
+    /// are `Desktop` and `Documents`, and neither ends in one of these nouns, so stripping one can
+    /// never turn a path that works today into a different path that works.
     ///
     /// **Idempotent, and it has to be**, because the resolve phase runs at all three executor gates:
     /// `prepare` previews a path, `assessRisk` checks that path for a collision, and `execute`
@@ -150,29 +176,33 @@ public enum SpokenPath {
     /// different success.
     public static func normalized(_ raw: String) -> String {
         let trimmed = raw.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty, !trimmed.hasPrefix("/"), !trimmed.hasPrefix("~") else {
+        guard !trimmed.isEmpty, !trimmed.hasPrefix("/") else {
             return trimmed
         }
 
         var components = trimmed.components(separatedBy: "/")
-        guard let first = components.first else {
+        // `~` and `~user` name the home, not a folder, so the component the user named is the next
+        // one. `components(separatedBy:)` on a non-empty string always yields at least one element,
+        // so index 0 is safe; index 1 is checked because "~" on its own is a whole value.
+        let named = components[0].hasPrefix("~") ? 1 : 0
+        guard components.indices.contains(named) else {
             return trimmed
         }
 
-        var head = first
+        var head = components[named]
         var stripped = SpokenName.withoutLeadingArticle(head)
         while stripped != head {
             head = stripped
             stripped = SpokenName.withoutLeadingArticle(head)
         }
-        if components.filter({ !$0.isEmpty }).count == 1 {
+        if components[(named + 1)...].allSatisfy(\.isEmpty) {
             head = SpokenName.withoutTrailingFolderNoun(head)
         }
         guard !head.isEmpty else {
             return trimmed
         }
 
-        components[0] = head
+        components[named] = head
         return components.joined(separator: "/")
     }
 
@@ -195,8 +225,10 @@ public enum SpokenPath {
     /// The four of them are `inputPath`, `outputPath`, `workspaceFileLocations` and
     /// `workspaceFileLocationsToRemove` — every field on `AgentStep` whose value is a filesystem
     /// path. A fifth added later and not added here is caught by
-    /// `SpokenPathTests.everyPathFieldOnAStepIsNormalisedAndNothingElseIs`, which derives the
-    /// population by reflecting over the type rather than by reading this list.
+    /// `SpokenPathTests.everyPathFieldOnAStepIsNormalisedAndNothingElseIs`, which takes the property
+    /// population off `Mirror` and classifies it against a table asserted in both directions — so a
+    /// new field stops the suite whatever it is called, rather than only when its name ends in
+    /// "Path" (PR #106 review, F6).
     ///
     /// A removal list is normalised alongside the addition list on purpose: removals are matched
     /// against what is stored, and what is stored went through this function on its way in.
