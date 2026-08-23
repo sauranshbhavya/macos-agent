@@ -386,9 +386,27 @@ struct LocalStoreInjectionScanTests {
     /// A wrapper anywhere else in `Sources/` has to construct one to hand it out, so it fails here.
     ///
     /// **And a wrapper inside `AgentViewModel.swift` cannot dodge by spelling the type differently.**
-    /// From inside the type, `Self(…)` and `.init(…)` construct it without the name this counts. Both
-    /// are banned in that one file, where neither appears today; a blanket ban would be useless,
-    /// since `.init(` is ordinary Swift and occurs legitimately across the tree.
+    /// From inside the type, `Self(…)` and a bare contextual `.init(…)` construct it without writing
+    /// the name this counts anywhere near the parenthesis. Both are banned in that one file, where
+    /// neither appears today; a blanket ban would be useless, since `.init(` is ordinary Swift and
+    /// occurs legitimately across the tree.
+    ///
+    /// **The fourth door was that ban's own shape: it is scoped to one file, and the count it backs
+    /// up knew one spelling** (SONNY-248, T3). `AgentViewModel.init(…)` written in any *other* file
+    /// under `Sources/` is an ordinary construction that names the type — and the matcher searched
+    /// for the single literal `AgentViewModel(`, which that text does not contain, so the file
+    /// counted zero and this assertion passed. Probed as a defect before it was fixed, the way the
+    /// two doors above were: a wrapper in `Sources/MacAgent/` with all thirteen stores inline,
+    /// returning `AgentViewModel.init(…)`, and this suite green with it in place (`swift test
+    /// --filter LocalStoreInjectionScanTests` at `9cd5b64` plus the wrapper → 8 tests in 1 suite
+    /// passed; the same command with the count fixed fails here, naming the wrapper's file). The
+    /// module-qualified spelling `MacAgent.AgentViewModel(…)` was probed the same way and passed
+    /// the same way.
+    /// **It is closed in the count rather than by widening the ban** — `constructions(of:in:)` now
+    /// recognises the spellings that construct the type instead of one of them, so this stays an
+    /// assertion that `Sources/` has exactly one construction site rather than becoming a list of
+    /// forbidden strings. What it recognises, and the three spellings that name the type nowhere and
+    /// so remain outside any name-keyed scan, are enumerated on that function.
     @Test
     func theOnlyViewModelConstructionInSourcesIsTheRealStoreFactory() throws {
         let sources = Self.repositoryRoot.appendingPathComponent("Sources")
@@ -506,6 +524,99 @@ struct LocalStoreInjectionScanTests {
         let settings = "ClipboardHistorySettingsStore(fileURL: url)"
         #expect(Self.constructions(of: "ClipboardHistoryStore", in: settings).isEmpty)
         #expect(Self.constructions(of: "ClipboardHistorySettingsStore", in: settings).count == 1)
+    }
+
+    /// **The count knows every spelling that names the type, shown on held text** (SONNY-248, T3).
+    ///
+    /// The matcher used to search for one literal, `AgentViewModel(`, and `AgentViewModel.init(…)`
+    /// is the same construction written the other ordinary way — so the count for a file using it
+    /// was zero and `theOnlyViewModelConstructionInSourcesIsTheRealStoreFactory` passed over a
+    /// wrapper handing out the developer's real stores. Probed as a defect first: the wrapper was
+    /// written into `Sources/MacAgent/` with all thirteen stores inline, and this suite passed with
+    /// it in place (`swift test --filter LocalStoreInjectionScanTests` at `9cd5b64` plus the
+    /// wrapper → 8 tests in 1 suite passed).
+    ///
+    /// **Held samples rather than the tree alone**, for the reason `violations(in:)` was pulled out
+    /// above: a rule run only over a tree that satisfies it cannot be shown to flag anything. Each
+    /// positive below is a spelling `swiftc` accepts for a `final class` with a plain `init`; each
+    /// negative is a thing that looks like one and constructs nothing.
+    @Test
+    func theConstructionCountRecognisesEverySpellingThatNamesTheType() {
+        let constructing = [
+            "AgentViewModel(routineStore: store)",
+            "AgentViewModel.init(routineStore: store)",
+            "AgentViewModel (routineStore: store)",
+            "AgentViewModel\n            .init(routineStore: store)",
+            "AgentViewModel . init(routineStore: store)",
+            "MacAgent.AgentViewModel(routineStore: store)",
+            "MacAgent.AgentViewModel.init(routineStore: store)"
+        ]
+        for text in constructing {
+            #expect(
+                Self.constructions(of: "AgentViewModel", in: text) == ["routineStore: store"],
+                "spelling not counted as a construction: \(text)"
+            )
+        }
+
+        let notConstructing = [
+            "let viewModel: AgentViewModel",
+            "@ObservedObject var viewModel: AgentViewModel",
+            "extension AgentViewModel {",
+            "AgentViewModel.self",
+            "AgentViewModel.initialize(now)",
+            "AgentViewModelFactory(routineStore: store)",
+            "makeAgentViewModel(routineStore: store)",
+            "Legacy.AgentViewModel(routineStore: store)"
+        ]
+        for text in notConstructing {
+            #expect(
+                Self.constructions(of: "AgentViewModel", in: text).isEmpty,
+                "counted as a construction: \(text)"
+            )
+        }
+    }
+
+    /// **The store sweep inherits the same fix, because it is the same matcher** (SONNY-248, T3).
+    ///
+    /// `noTestSourceBuildsALocalStoreWithoutNamingItsFileURL` is the other caller of
+    /// `constructions(of:in:)`, and it had the identical blind spot for the identical reason: a
+    /// fixture writing `TaskHistoryStore.init()` — or `MacAgentCore.TaskHistoryStore()`, which the
+    /// app target has to write when a name collides — was counted zero and swept past, at a store
+    /// pointing straight at `~/Library/Application Support/Sonny`. Checked here rather than assumed
+    /// from the shared helper, because "they call the same function" is exactly the claim this
+    /// repository keeps finding to be true of the code and false of the behaviour — and probed live
+    /// as well as held: a `Tests/MacAgentTests/` file whose only content was
+    /// `TaskHistoryStore.init()` was swept past at `9cd5b64` (`swift test --filter
+    /// LocalStoreInjectionScanTests` → 8 tests in 1 suite passed) and is named by
+    /// `noTestSourceBuildsALocalStoreWithoutNamingItsFileURL` with the matcher fixed.
+    @Test
+    func theFileURLSweepSeesTheSameSpellings() {
+        let defective = """
+        let viewModel = AgentViewModel.init(
+            taskHistoryStore: TaskHistoryStore.init(),
+            outputLocationStore: MacAgentCore.OutputLocationStore(whitelist: PathWhitelist(roots: [root]))
+        )
+        """
+        let fixed = """
+        let viewModel = AgentViewModel.init(
+            taskHistoryStore: TaskHistoryStore.init(fileURL: root.appendingPathComponent("task-history.json")),
+            outputLocationStore: MacAgentCore.OutputLocationStore(
+                fileURL: root.appendingPathComponent("output-locations.json"),
+                whitelist: PathWhitelist(roots: [root])
+            )
+        )
+        """
+
+        for typeName in ["TaskHistoryStore", "OutputLocationStore"] {
+            #expect(
+                Self.constructions(of: typeName, in: defective).filter { !$0.contains("fileURL:") }.count == 1,
+                "\(typeName) was not flagged in the defective text"
+            )
+            #expect(
+                Self.constructions(of: typeName, in: fixed).filter { !$0.contains("fileURL:") }.isEmpty,
+                "\(typeName) was flagged in the fixed text"
+            )
+        }
     }
 
     // MARK: - Reading the initializer
@@ -641,42 +752,148 @@ struct LocalStoreInjectionScanTests {
     ///
     /// Depth-matching rather than line slicing because these calls nest — a fixture's
     /// `AgentViewModel(` argument list contains a dozen further constructions, and a scan that
-    /// stopped at the first `)` would read one argument and call it the call. The character before
-    /// the name is checked so that `ClipboardHistorySettingsStore(` is not read as a
-    /// `ClipboardHistoryStore(`, and so that `SomeType.Store(` or `myStore(` cannot match.
+    /// stopped at the first `)` would read one argument and call it the call.
+    ///
+    /// **It counts the spellings that construct the type, not one of them** (SONNY-248, T3). It used
+    /// to search for the single literal `name + "("`, so `AgentViewModel.init(…)` — ordinary Swift,
+    /// identical in effect — was counted zero, and the wrapper door
+    /// `theOnlyViewModelConstructionInSourcesIsTheRealStoreFactory` exists to close stood open
+    /// again for anyone who spelled it that way. Probed as a defect before it was fixed: a wrapper
+    /// in `Sources/MacAgent/` building all thirteen stores inline and returning
+    /// `AgentViewModel.init(…)` passed this whole suite, and so did a fixture writing
+    /// `TaskHistoryStore.init()` — the evidence is anchored on the two tests that now kill them. The
+    /// `.init` ban in that test is
+    /// scoped to the declaring file, where a bare contextual `.init(` needs no type name at all, so
+    /// it never reached this. What is recognised now, each one compiled rather than assumed
+    /// (`swiftc` accepts all of them):
+    ///
+    /// - `Name(…)` and `Name.init(…)`;
+    /// - either with whitespace or a line break where Swift allows one — `Name (…)`,
+    ///   `Name\n    .init(…)`, `Name . init(…)`;
+    /// - either qualified by the module that declares it — `MacAgentCore.RoutineStore()` from the
+    ///   app target, `MacAgent.AgentViewModel(…)` from inside `MacAgent` itself.
+    ///
+    /// **What still names nothing for this to count**, stated rather than left to be found: a
+    /// `typealias` to the type and a construction through the alias; a metatype value
+    /// (`let t = AgentViewModel.self; t.init(…)`, which a `final` class permits with no `required`
+    /// initializer); and a bare contextual `.init(…)` returned where the type is fixed by an
+    /// annotation or a return type. All three compile — measured, not assumed — and none writes the
+    /// type's name beside its own parenthesis, so no text scan keyed on the name can see them. The
+    /// property that would cover them regardless of spelling is a different one: that `Sources/`
+    /// constructs a *default-path local store* in exactly one place, which is the sweep below run
+    /// over the app tree instead of the test tree. It is not built; it is the recommendation on
+    /// SONNY-248.
+    ///
+    /// The character before the name is checked so that `ClipboardHistorySettingsStore(` is not read
+    /// as a `ClipboardHistoryStore(`, and so that `myStore(` cannot match. A dotted prefix is a
+    /// *different* type — `SomeType.Store(` is `SomeType`'s nested `Store`, not this one — unless
+    /// the prefix is one of this repository's own module names, which is the same type wearing its
+    /// module.
     static func constructions(of name: String, in source: String) -> [String] {
         var results: [String] = []
         var searchStart = source.startIndex
-        while let found = source.range(of: name + "(", range: searchStart..<source.endIndex) {
+        while let found = source.range(of: name, range: searchStart..<source.endIndex) {
             searchStart = found.upperBound
-            if found.lowerBound > source.startIndex {
-                let previous = source[source.index(before: found.lowerBound)]
-                if previous.isLetter || previous.isNumber || previous == "_" || previous == "." {
-                    continue
-                }
+            guard namesThisType(at: found, in: source),
+                  let open = openingParenthesis(afterNameEndingAt: found.upperBound, in: source),
+                  let closed = closingParenthesis(matching: open, in: source) else {
+                continue
             }
-
-            var depth = 0
-            var index = source.index(before: found.upperBound)
-            var closed: String.Index?
-            while index < source.endIndex {
-                if source[index] == "(" {
-                    depth += 1
-                } else if source[index] == ")" {
-                    depth -= 1
-                    if depth == 0 {
-                        closed = index
-                        break
-                    }
-                }
-                index = source.index(after: index)
-            }
-            guard let closed else {
-                break
-            }
-            results.append(String(source[found.upperBound..<closed]))
+            results.append(String(source[source.index(after: open)..<closed]))
             searchStart = closed
         }
         return results
+    }
+
+    /// The module names a type of this repository's own can be qualified by, which are the two
+    /// SwiftPM targets. Swift has no source-level import aliasing, so this list is the whole set of
+    /// prefixes that mean "the same type".
+    static let moduleQualifiers: Set<String> = ["MacAgent", "MacAgentCore"]
+
+    /// Whether the occurrence at `range` is the type's own name rather than the tail of a longer
+    /// identifier or the last component of some other type's nested name.
+    private static func namesThisType(at range: Range<String.Index>, in source: String) -> Bool {
+        guard range.lowerBound > source.startIndex else {
+            return true
+        }
+        let previousIndex = source.index(before: range.lowerBound)
+        let previous = source[previousIndex]
+        if previous.isLetter || previous.isNumber || previous == "_" {
+            return false
+        }
+        guard previous == "." else {
+            return true
+        }
+        return moduleQualifiers.contains(identifier(endingAt: previousIndex, in: source))
+    }
+
+    /// The identifier immediately before `index`, or "" if there is none — the qualifier in
+    /// `MacAgentCore.RoutineStore(`, and nothing at all in a contextual `.init(`.
+    private static func identifier(endingAt index: String.Index, in source: String) -> String {
+        var start = index
+        while start > source.startIndex {
+            let candidate = source.index(before: start)
+            let character = source[candidate]
+            guard character.isLetter || character.isNumber || character == "_" else {
+                break
+            }
+            start = candidate
+        }
+        return String(source[start..<index])
+    }
+
+    /// The `(` that opens a construction written after the name, across both spellings and any
+    /// whitespace Swift permits between the pieces, or `nil` if this occurrence constructs nothing.
+    private static func openingParenthesis(
+        afterNameEndingAt nameEnd: String.Index,
+        in source: String
+    ) -> String.Index? {
+        var index = skippingWhitespace(from: nameEnd, in: source)
+        guard index < source.endIndex else {
+            return nil
+        }
+        if source[index] == "(" {
+            return index
+        }
+        guard source[index] == "." else {
+            return nil
+        }
+        index = skippingWhitespace(from: source.index(after: index), in: source)
+        guard source[index...].hasPrefix("init") else {
+            return nil
+        }
+        // `.initialize(` starts with `init` and constructs nothing: what follows has to be the
+        // argument list itself, not more of a longer name.
+        index = skippingWhitespace(from: source.index(index, offsetBy: 4), in: source)
+        guard index < source.endIndex, source[index] == "(" else {
+            return nil
+        }
+        return index
+    }
+
+    private static func skippingWhitespace(from index: String.Index, in source: String) -> String.Index {
+        var index = index
+        while index < source.endIndex, source[index].isWhitespace {
+            index = source.index(after: index)
+        }
+        return index
+    }
+
+    /// The `)` matching an opening parenthesis, or `nil` for text that never closes it.
+    private static func closingParenthesis(matching open: String.Index, in source: String) -> String.Index? {
+        var depth = 0
+        var index = open
+        while index < source.endIndex {
+            if source[index] == "(" {
+                depth += 1
+            } else if source[index] == ")" {
+                depth -= 1
+                if depth == 0 {
+                    return index
+                }
+            }
+            index = source.index(after: index)
+        }
+        return nil
     }
 }
