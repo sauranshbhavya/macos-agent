@@ -156,6 +156,28 @@ struct WebResearchServiceTests {
         }
     }
 
+    /// SONNY-245. "None of the 1 source could be retrieved" is what a user met every time a single
+    /// URL failed — which is the ordinary case, since most commands name one page.
+    @Test
+    func theAllSourcesFailedMessageReadsAsASentenceWhateverTheCount() {
+        let oneSource = WebResearchError.allSourcesFailed(
+            ["https://en.wikipedia.org/wiki/Machine_learning"],
+            "Sonny will not bypass CAPTCHAs."
+        )
+        let threeSources = WebResearchError.allSourcesFailed(
+            ["https://a.example/x", "https://b.example/y", "https://c.example/z"],
+            "Fetching https://a.example/x failed with HTTP 503."
+        )
+
+        #expect(oneSource.errorDescription == """
+        The source could not be retrieved, so no note was written. Sonny will not bypass CAPTCHAs.
+        """)
+        #expect(threeSources.errorDescription == """
+        None of the 3 sources could be retrieved, so no note was written. First failure: \
+        Fetching https://a.example/x failed with HTTP 503.
+        """)
+    }
+
     @Test
     func robotsPolicyPrefersLongestMatchingRuleAndAllowTie() {
         let policy = RobotsTXTPolicy(text: """
