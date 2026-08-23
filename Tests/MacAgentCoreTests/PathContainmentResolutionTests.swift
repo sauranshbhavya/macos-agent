@@ -161,23 +161,125 @@ struct PathContainmentResolutionTests {
     /// `Desktop` and was accepted, `desktop/note.md` did not and was refused, so the same phrasing
     /// worked or failed depending on whether it named a file.
     ///
-    /// Reads the home directory and writes nothing. Skipped where its precondition does not hold —
-    /// no `~/Desktop`, or a case-sensitive home volume — because there is no defect to see there.
+    /// Reads the home directory and writes nothing. Volume-aware rather than skipped: where
+    /// `~/desktop` is not the same directory as `~/Desktop` the correct answer is that the case is
+    /// left alone, and that is asserted too. A test that returns silently when its precondition
+    /// fails is a vacuous pass that reads exactly like a real one (PR #111's review).
     @Test
     func theLowercaseSpellingOfARealFolderResolvesToItForAFileThatDoesNotExistYet() throws {
         let home = FileManager.default.homeDirectoryForCurrentUser
         let desktop = home.appendingPathComponent("Desktop", isDirectory: true)
         let lowercased = home.appendingPathComponent("desktop", isDirectory: true)
-        guard FileManager.default.fileExists(atPath: desktop.path),
-              FileManager.default.fileExists(atPath: lowercased.path) else {
+        guard FileManager.default.fileExists(atPath: desktop.path) else {
+            // No Desktop at all is the one thing this cannot say anything about.
             return
         }
+        let homeVolumeIsCaseInsensitive = FileManager.default.fileExists(atPath: lowercased.path)
 
         let folder = PathWhitelist.canonicalURL(lowercased.path)
         let file = PathWhitelist.canonicalURL(lowercased.appendingPathComponent("note.md").path)
 
-        #expect(folder.path == desktop.path)
-        #expect(file.path == desktop.appendingPathComponent("note.md").path)
+        if homeVolumeIsCaseInsensitive {
+            #expect(folder.path == desktop.path)
+            #expect(file.path == desktop.appendingPathComponent("note.md").path)
+        } else {
+            #expect(folder.path == lowercased.path)
+            #expect(file.path == lowercased.appendingPathComponent("note.md").path)
+        }
+    }
+
+    // MARK: - A chain of links, and where resolution gives up
+
+    /// **The regression PR #111's review found, at the length it found it.**
+    ///
+    /// The first version of this fix followed at most one link per pass, ran a fixed number of
+    /// passes, and on running out returned the path it had *reached* — the original with 33 hops
+    /// taken out of it. `validateInsideWhitelist` then judged that, and the kernel's own
+    /// `SYMLOOP_MAX` budget started again from the shortened path, so it had plenty left to finish
+    /// the walk. Chains of 34 to 63 links read as inside and the bytes landed outside. At
+    /// `961b9c2` — before any of this — those same chains were refused by the kernel with `ELOOP`,
+    /// so the branch that closed the one-link escape opened a longer one.
+    ///
+    /// A longer budget does not fix it; every finite number has the same cliff. What fixes it is
+    /// that a resolution which did not converge is never reported as inside anything.
+    @Test
+    func aChainLongerThanTheResolverWillFollowIsRefusedRatherThanPartlyResolved() throws {
+        let tree = try SymlinkTree()
+        defer { tree.tearDown() }
+
+        for length in [34, 40, 63] {
+            // A target of its own per length. Sharing one made each length depend on whether an
+            // earlier one had escaped and created it: with the target present, a long-enough tail
+            // of the chain becomes resolvable in a single `resolvingSymlinksInPath` and the answer
+            // changes. Measured while checking this test against the head it was written for.
+            let target = tree.outside.appendingPathComponent("pwned-\(length).txt")
+            let head = try tree.chain(length: length, endingAt: target)
+
+            let attempt = tree.attemptOutput(at: head.path, atomically: false)
+
+            #expect(
+                attempt.landedAt == nil,
+                "a chain of \(length) links put bytes at \(attempt.landedAt ?? "") through an accepted path"
+            )
+            #expect(
+                tree.isSymbolicLinkRejected(attempt.error),
+                "a chain of \(length) links: expected a symlink refusal, got \(attempt.errorText)"
+            )
+            #expect(FileManager.default.fileExists(atPath: target.path) == false)
+        }
+    }
+
+    /// The hop budget pinned on both sides, which is what nothing did before — the constant the
+    /// escape above lived in was held by no test, so the battery that mutated everything around it
+    /// came back clean.
+    ///
+    /// Both chains end at the same place *inside* the root, so length is the only difference
+    /// between them: 32 links resolve and the bytes land at the target, 33 are refused. Neutering
+    /// the budget breaks the first; shortening it by one breaks it too; removing the refusal on
+    /// exhaustion breaks the second.
+    @Test
+    func aChainTheResolverCanFollowResolvesAndOneLinkLongerIsRefused() throws {
+        let tree = try SymlinkTree()
+        defer { tree.tearDown() }
+        let real = tree.root.appendingPathComponent("Reports", isDirectory: true)
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        let target = real.appendingPathComponent("note.md")
+
+        let follows = try tree.chain(length: 32, endingAt: target)
+        let followsAttempt = tree.attemptOutput(at: follows.path)
+
+        #expect(followsAttempt.errorText == "none")
+        #expect(followsAttempt.accepted?.path == target.path)
+        #expect(followsAttempt.landedAt == SymlinkTree.physicalPath(of: target))
+
+        try FileManager.default.removeItem(at: target)
+        let refuses = try tree.chain(length: 33, endingAt: target)
+        let refusesAttempt = tree.attemptOutput(at: refuses.path)
+
+        #expect(refusesAttempt.landedAt == nil)
+        #expect(
+            tree.isSymbolicLinkRejected(refusesAttempt.error),
+            "expected a symlink refusal, got \(refusesAttempt.errorText)"
+        )
+    }
+
+    /// The rule carried by the type rather than by two callers remembering it: the one comparison
+    /// every boundary in the app goes through refuses a path whose resolution did not converge, so
+    /// a future caller cannot reintroduce the escape by forgetting to ask.
+    @Test
+    func containmentRefusesACandidateWhoseResolutionDidNotConverge() throws {
+        let tree = try SymlinkTree()
+        defer { tree.tearDown() }
+        let loop = tree.root.appendingPathComponent("loop")
+        try FileManager.default.createSymbolicLink(atPath: loop.path, withDestinationPath: "loop")
+
+        let candidate = PathWhitelist.canonical(loop.appendingPathComponent("note.md").path)
+
+        #expect(candidate.isResolved == false)
+        #expect(candidate.unfollowableLink?.path == loop.path)
+        // The text alone would say inside — the path still starts with the root.
+        #expect(candidate.url.path.hasPrefix(tree.root.path + "/"))
+        #expect(PathWhitelist.contains(root: tree.root, candidate: candidate) == false)
     }
 
     // MARK: - Where resolution stops
@@ -198,29 +300,38 @@ struct PathContainmentResolutionTests {
         #expect(tree.isOutsideWhitelist(attempt.error), "expected a containment refusal, got \(attempt.errorText)")
     }
 
-    /// A symlink that points at itself is the one shape resolution cannot answer for: the OS refuses
-    /// to follow it, and re-reading it forever is not an option, so the resolver gives up and leaves
-    /// the link in the path. That is what keeps `validateOutputPath`'s parent check alive rather than
-    /// leaving it as a guard nothing can reach — it is now the refusal for links resolution could not
-    /// follow, not a second opinion about containment.
+    /// A symlink that points at itself never converges, so it is refused by the same rule that
+    /// refuses a chain past the budget — one rule, not a special case.
+    ///
+    /// **Both depths, because the first version of this fix only got the first one right.** It
+    /// refused depth one with an `isSymbolicLink` check on the immediate parent, and at depth two
+    /// the parent is `<root>/loop/sub`, which is not itself a link, so the answer fell back to
+    /// "the parent folder does not exist" — true in a useless way, and contradicting what the
+    /// branch's own changelog claimed (the review's F2). Refusing non-convergence answers both.
     @Test
-    func aSymlinkLoopIsRefusedByTheSymlinkCheckThatResolutionCannotAnswerFor() throws {
+    func aSymlinkLoopIsRefusedAtEveryDepthBecauseItsResolutionNeverConverges() throws {
         let tree = try SymlinkTree()
         defer { tree.tearDown() }
         let loop = tree.root.appendingPathComponent("loop")
         try FileManager.default.createSymbolicLink(atPath: loop.path, withDestinationPath: "loop")
 
-        let attempt = tree.attemptOutput(at: loop.appendingPathComponent("note.md").path)
+        for depth in ["note.md", "sub/note.md", "one/two/three/note.md"] {
+            let attempt = tree.attemptOutput(at: loop.appendingPathComponent(depth).path)
 
-        #expect(attempt.landedAt == nil)
-        #expect(tree.isSymbolicLinkRejected(attempt.error), "expected a symlink refusal, got \(attempt.errorText)")
+            #expect(attempt.landedAt == nil)
+            #expect(
+                tree.isSymbolicLinkRejected(attempt.error),
+                "at \(depth): expected a symlink refusal, got \(attempt.errorText)"
+            )
+        }
     }
 
     /// The same unfollowable link named as a *folder*, which is the other door into the whitelist —
-    /// `validateExistingDirectory` is what every read-side capability calls. It reports the link
-    /// rather than "no such folder", which is what `fileExists` would have said about it: a link
-    /// pointing at itself is a different problem from a folder that is not there, and the person
-    /// reading the refusal is the one who has to tell them apart.
+    /// `validateExistingDirectory` is what every read-side capability calls, and it now refuses for
+    /// the same reason the write door does rather than through a check of its own. It reports the
+    /// link rather than "no such folder", which is what `fileExists` would have said about it: a
+    /// link pointing at itself is a different problem from a folder that is not there, and the
+    /// person reading the refusal is the one who has to tell them apart.
     @Test
     func aSymlinkLoopNamedAsAFolderIsRefusedAsALinkRatherThanAsAMissingFolder() throws {
         let tree = try SymlinkTree()
@@ -340,6 +451,22 @@ private struct SymlinkTree {
             attempt.error = error
         }
         return attempt
+    }
+
+    /// A chain of `length` symbolic links inside the root, `l1 -> l2 -> … -> lN -> target`, with
+    /// `target` not existing — which is the ordinary shape of an output path, and the shape a shell
+    /// loop produces in a second. Built from the far end back so each link names one that is
+    /// already there. Returns the head, `l1`.
+    func chain(length: Int, endingAt target: URL) throws -> URL {
+        let fileManager = FileManager.default
+        var destination = target
+        for index in stride(from: length, through: 1, by: -1) {
+            let link = root.appendingPathComponent("l\(index)")
+            try? fileManager.removeItem(at: link)
+            try fileManager.createSymbolicLink(at: link, withDestinationURL: destination)
+            destination = link
+        }
+        return root.appendingPathComponent("l1")
     }
 
     /// Where a file really is, asked of the OS. `realpath` rather than any Foundation URL method,

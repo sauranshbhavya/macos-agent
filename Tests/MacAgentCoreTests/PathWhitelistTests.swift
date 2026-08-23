@@ -98,7 +98,7 @@ struct PathWhitelistTests {
         for testCase in cases {
             let contained = PathWhitelist.contains(
                 root: PathWhitelist.canonicalURL(inside.path),
-                candidate: PathWhitelist.canonicalURL(testCase.path)
+                candidate: PathWhitelist.canonical(testCase.path)
             )
             #expect(contained == testCase.isInside, "wrong verdict for \(testCase.why): \(testCase.path)")
 
@@ -112,12 +112,18 @@ struct PathWhitelistTests {
         let root = URL(fileURLWithPath: "/tmp/scope/Client", isDirectory: true)
 
         #expect(
-            PathWhitelist.contains(root: root, candidate: URL(fileURLWithPath: "/tmp/scope/Client/x.txt"))
+            PathWhitelist.contains(root: root, candidate: resolved("/tmp/scope/Client/x.txt"))
         )
-        #expect(PathWhitelist.contains(root: root, candidate: root))
+        #expect(PathWhitelist.contains(root: root, candidate: resolved(root.path)))
         #expect(
-            PathWhitelist.contains(root: root, candidate: URL(fileURLWithPath: "/tmp/scope/ClientAlpha/x.txt")) == false
+            PathWhitelist.contains(root: root, candidate: resolved("/tmp/scope/ClientAlpha/x.txt")) == false
         )
+    }
+
+    /// A path built by hand, standing in for one whose resolution converged — the text comparison on
+    /// its own, with no filesystem involved.
+    private func resolved(_ path: String) -> CanonicalPath {
+        CanonicalPath(url: URL(fileURLWithPath: path), unfollowableLink: nil)
     }
 
     @Test
