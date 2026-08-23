@@ -1,0 +1,56 @@
+# Failures that are not evidence about a mutant.
+#
+# `scripts/mutate` judges a mutant killed when the suite goes red with it in place. That is sound
+# only while every way the suite can go red is a way the mutant caused. It is not: a test that can
+# fail because the machine was busy fails the same way whether a mutant is present or absent, and
+# the harness cannot tell the two apart. PR #109 is the case this file exists for — R9 was reported
+# KILLED by exactly one test, `asyncProcessRunnerCancelsRunningProcess`; re-run alone against a
+# clean baseline, R9 SURVIVED. The mutant was never killed. Nothing in that report looked wrong,
+# because a manufactured kill and a real one print the same line (SONNY-224).
+#
+# So the harness is told, here, which failures carry no information about a mutant. A failing test
+# whose recorded issue matches a signature below is excluded from that mutant's kill count; a mutant
+# with nothing else against it is reported UNATTRIBUTED rather than KILLED, and the battery exits 2
+# the way a survivor does. Understating coverage is the safe direction. Manufacturing it is not.
+#
+# **Matched against the issue text, not the test name, and that is the whole point.** The same test
+# can fail two ways: on a real assertion, which is evidence, and on a hang backstop, which is not.
+# A name-based list would have to throw away both. Matching the message keeps the first and drops
+# the second — and it needs no maintenance when a suite grows, because a new test written with the
+# same helper produces the same message and is covered the day it lands.
+#
+# Format, one record per entry, directives at column 0. Comments and blank lines are ignored.
+#
+#   >>> signature   literal text, matched as a substring of the issue a failing test recorded.
+#   >>> source      literal text that must still exist somewhere under Tests/. This is what keeps
+#                   the signature honest: `UntrustedFailureDeclarationTests` fails the suite when a
+#                   `source` no longer matches, which is what happens the moment someone rewords the
+#                   helper a signature was written for. A signature that silently stops matching is
+#                   the same defect as a listed test name that no longer exists — it stops
+#                   protecting, and nothing says so.
+#   >>> reason      one line: why a failure like this says nothing about a mutant.
+#
+# What belongs here: a hang backstop, a wall-clock ceiling, anything whose failure is a statement
+# about the machine. What does not: an ordinary assertion that happens to be failing today. This is
+# not a quarantine for broken tests — a red test that is genuinely red still has to be fixed, and
+# nothing here stops it failing the suite.
+
+>>> signature This deadline is a deadlock backstop, not a timing assertion
+>>> source This deadline is a deadlock backstop, not a timing assertion
+>>> reason A poll that ran out of wall clock. It fires when the machine is oversubscribed as readily as when something is genuinely stuck, and a battery is exactly the load that produces the first. Thirty-five of these fired in one measured full-suite run at 961b9c2 with a cold build beside it.
+
+>>> signature did not become idle before timeout
+>>> source did not become idle before timeout
+>>> reason The view-model hang backstop, in the six suites that word it this way. Same thing as above: a deadline reached rather than an expectation violated.
+
+>>> signature did not settle before timeout
+>>> source did not settle before timeout
+>>> reason The same view-model hang backstop, in the two suites that word it "settle" instead of "become idle".
+
+>>> signature the run never finished
+>>> source the run never finished
+>>> reason MemoryCommandCenterTests' own copy of the view-model hang backstop, which asserts its deadline inline rather than recording an issue.
+
+>>> signature Expectation failed: (elapsed →
+>>> source #expect(elapsed < .seconds(
+>>> reason A wall-clock ceiling. It measures the machine, not the code: the redaction ceiling was measured at 1465 ms idle and 11742 ms with a cold build alongside, at 961b9c2, against a bound that was 5000 ms at the time. The ceiling is worth keeping as a tripwire for a pathological regression; its loss under load is worth nothing as evidence about a mutant.
