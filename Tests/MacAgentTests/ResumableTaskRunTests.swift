@@ -1413,6 +1413,54 @@ struct ClarificationKeepsTheRequestTests {
         #expect(first.lowerBound < second.lowerBound)
     }
 
+    /// **The founder's symptom, reached by a second route — a question that wraps onto two lines**
+    /// (PR #109 re-check).
+    ///
+    /// A planner writes the question and `AgentActionExecutor` only end-trims it, so an interior line
+    /// break reaches `composed` intact. Until the fold, that split the question from its answer, the
+    /// pair rule stopped matching, and every label went back to carrying the whole prompt — the
+    /// original report, arrived at from the other side of the same ticket.
+    ///
+    /// **What is end-to-end here and what is at the seam, stated rather than blurred.** The labels
+    /// are end-to-end: a real run pauses on a wrapped question, a real answer goes through `start()`,
+    /// and the record is read back off disk. The resolver half is asserted at the seam
+    /// `performStart` actually gates on, because it is not reachable end-to-end — the resolver's own
+    /// clarifications are fixed single-line constants, and a command it matches never reaches a
+    /// planner that could wrap one.
+    @Test
+    func aQuestionThatWrapsOntoTwoLinesStillLeavesEveryLabelNamingTheRequest() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+        let wrapped = "Which folder should I scan?\nDesktop, or Downloads?"
+
+        fixture.browserOpener.failure = BrowserOutage()
+        try await fixture.run(Self.request, plan: fixture.clarifyingPlan(question: wrapped))
+        #expect(fixture.viewModel.clarificationQuestion == wrapped, "premise: the question really wraps")
+
+        fixture.planner.plan = fixture.draftThenOpenPlan
+        fixture.viewModel.clarificationAnswer = "The Desktop"
+        fixture.viewModel.submitClarification()
+        try await fixture.waitForIdle()
+
+        // The running label and the history row.
+        #expect(fixture.viewModel.runningCommandDisplayText == Self.request)
+        let row = try #require(fixture.viewModel.taskHistoryRecords.first)
+        #expect(row.command == Self.request)
+
+        // The offer, off disk, through a relaunch — the founder's own repro.
+        let relaunched = fixture.makeRelaunchedViewModel()
+        relaunched.refreshResumableTasks()
+        let offer = try #require(relaunched.resumeOffer)
+        #expect(offer.command == Self.request)
+        #expect(!ResumeOfferPresentation.message(command: offer.command).contains("Clarification"))
+
+        // The seam the resolver term reads, and the planner still got the whole question.
+        #expect(ClarifiedCommand.carriesExchange(fixture.viewModel.lastCommand))
+        let continued = try #require(fixture.planner.receivedCommands.last)
+        #expect(continued.contains("Which folder should I scan?"))
+        #expect(continued.contains("Desktop, or Downloads?"))
+    }
+
     /// **A clarified command is not an instant command, and restoring the request is what made that
     /// true.** `InstantCommandResolver` matches on prefixes and raises several of these questions
     /// itself: `=` with nothing after it asks what to calculate. With the request back at the front
