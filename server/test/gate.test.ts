@@ -57,10 +57,17 @@ const build = () => buildApp(config, { provider: new UnusedProvider(), withConne
  * saying nothing about them. A slip that put `GET /v1/account/entitlements` into `PUBLIC_ROUTES`
  * would have had nothing between it and production but someone reading a seven-line literal.
  *
- * `printRoutes` asks the router, so the answer covers every route registered by anything —
- * including, measured, a route registered inside a sibling plugin, which is precisely the wiring
- * F3's table shows the gate does **not** cover. That makes this scan able to fail for the
- * encapsulation hazard too, rather than only for a forgotten `PUBLIC_ROUTES` entry.
+ * `printRoutes` asks the router, so the answer covers every route registered by anything — a route
+ * added directly, one inside a plugin, one nested two plugins deep, one in a second plugin beside a
+ * first, and one behind a prefix. **This docstring called a plugin registered on the instance a
+ * "sibling plugin" and said the gate does not cover it; both halves were wrong** (PR #104's
+ * verification pass, V1).
+ * A plugin registered on the `buildApp` instance is a *descendant* of the gate's context, not a
+ * sibling of it, and F3's table answers 401 for that row. The wiring the gate really misses needs
+ * the gate itself to be inside a plugin, which `buildApp` never does — measured, all five shapes
+ * above answer 401 on a `buildApp` instance, so **no route registered on one can escape the gate at
+ * all**. What this scan is for is therefore the simpler and still-real hazard: a route classified
+ * into `PUBLIC_ROUTES` by mistake, which the behavioural test below then fails on.
  *
  * The parse is guarded against silently returning nothing: a format change fails the assertions in
  * `expectPopulationIsReal` instead of turning every population test vacuous.
@@ -121,17 +128,25 @@ describe("which routes the gate challenges", () => {
     await app.close();
   });
 
-  it("sees a route a third registrar adds, including one the gate would MISS", async () => {
-    // What F5 was about, asserted rather than promised. The extra route below is registered inside a
-    // sibling plugin — the wiring F3 measured the gate does not cover — and the scan finds it. Had
-    // this scan still enumerated `registerHealth` and `registerAuth`, it would report the same seven
-    // routes it always did while an eighth served unauthenticated.
+  it("sees a route a third registrar adds, wherever in the plugin tree it added it", async () => {
+    // What F5 was about, asserted rather than promised: had this scan still enumerated
+    // `registerHealth` and `registerAuth`, it would report the same seven routes it always did while
+    // an eighth went unclassified.
+    //
+    // **The name and comment here said the extra route was in a "sibling plugin" that the gate would
+    // MISS, and that was false** (PR #104's verification pass, V1). `app.register(...)` on a
+    // `buildApp` instance creates a *descendant* of the gate's root context — F3's own 401 row — so
+    // this route is covered, and measurement agrees: it answers 401, as do routes added directly,
+    // nested two plugins deep, in a second plugin beside a first, and behind a prefix. The assertion
+    // below was always right; only the story around it was wrong.
     const app = build();
     app.register(async (scope) => { scope.post("/v1/plan", async () => ({ served: true })); });
     const routes = await registeredRoutes(app);
     expect(routes.map((route) => `${route.method} ${route.url}`)).toContain("POST /v1/plan");
-    // And it is classified as protected, so the behavioural test below is what would fail for it.
+    // And it is classified as protected, so the behavioural test above is what would fail for it.
     expect(isPublicRoute("POST", "/v1/plan")).toBe(false);
+    // Covered, not missed — the claim V1 corrected, asserted rather than described.
+    expect((await app.inject({ method: "POST", url: "/v1/plan" })).statusCode).toBe(401);
     await app.close();
   });
 
