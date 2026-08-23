@@ -72,26 +72,36 @@ final class AgentViewModel: ObservableObject {
     /// Reloaded from the store after every write this view model makes to it, so the offer can never
     /// name a record the file no longer holds.
     @Published private(set) var resumableTasks: [ResumableTask] = []
-    /// The Memory rows whose file exists and will not read (SONNY-239).
+    /// Every store whose file will not read, as of the last probe (SONNY-239).
     ///
-    /// **Its own published set rather than a lookup into `localStorageLoadFailures`, because the
-    /// row has to repaint when it changes.** That dictionary is a plain `private var`, so a row
-    /// reading through a function on it would render once with whatever was true at the time and
-    /// never again — the same defect `dismissedResumeOfferIDs` was fixed for on PR #105.
+    /// **The one source both the Memory page's words and its Delete read**, which is the whole of
+    /// this property's history (PR #110 fix-round review). The row's copy used to come from
+    /// `localStorageLoadFailures` — what something had *happened* to load and fail on — while the
+    /// delete came from a probe. They disagreed in both directions: a confirmation promising to
+    /// delete a file the press then kept, and the mirror case. Worse, that dictionary has eleven
+    /// sources against thirteen stores, so the Task history row could never report damage from the
+    /// vision journal or Shortcut run history, `canDelete` collapsed to `count > 0`, and an empty
+    /// task history beside an unreadable `shortcuts-run-history.json` was the founder's original
+    /// dead end reproduced inside the fix for it.
     ///
-    /// **What it is for is the state the founder met on 2026-08-23.** A store whose file cannot be
-    /// decoded loads as zero entries, so the row said `0 saved` — indistinguishable from a store
-    /// nobody has used — and Delete was greyed out because the count was zero, which is precisely
-    /// when the user needs it. A row in this set says it cannot be read and keeps its Delete live.
+    /// **Published rather than computed on demand, because the row asks on every render.** Probing
+    /// is a file read per store; a view body cannot do that. So it is refreshed at the moments that
+    /// can change it — the Memory page appearing, a run terminating, and a delete about to act.
     ///
-    /// Derived rather than assigned at the failure sites: `publishLocalStorageLoadError()` is the
-    /// one writer, so this set and the banner can never describe different stores.
-    @Published private(set) var unreadableMemoryCategories: Set<MemoryCategory> = []
+    /// **Still `Set<LocalStore>` rather than `Set<MemoryCategory>`**: Task history covers four
+    /// stores and the delete has to act per store, so collapsing to the row would throw away the
+    /// distinction the split depends on.
+    @Published private(set) var unreadableStores: Set<LocalStore> = []
     /// Outcome of the Memory section's per-type Delete, rendered by the same
     /// `LocalDataDeletionStatusMessage` view Settings' whole-wipe uses. Separate from
     /// `localDataDeletionStatusMessage` so a per-type delete does not post its result onto the
     /// Settings page, and vice versa.
     @Published var memoryDeletionStatusMessage: String?
+    /// Where the last per-type Delete put the files it could not read, or empty.
+    ///
+    /// Published because the Reveal in Finder control renders off it, and cleared by every delete
+    /// that keeps nothing — so the control cannot outlive the message it sits beside.
+    @Published private(set) var setAsideFilesFromLastDelete: [URL] = []
     @Published var priorTaskContext: PriorTaskContext?
     @Published var taskUsageSummary: TaskUsageSummary = .empty
     @Published var taskHistoryRecords: [CompletedTaskRecord] = []
@@ -548,6 +558,7 @@ final class AgentViewModel: ObservableObject {
     /// `dismissingTheOfferPublishesSoTheWidgetRepaints` holds this one.
     @Published private var dismissedResumeOfferIDs: Set<String> = []
     private var preserveUsageForNextStart = false
+    private let finderRevealer: ([URL]) -> Void
     private var localStorageLoadFailures: [LocalStorageLoadFailureSource: String] = [:]
     /// Last clipboard-poll failure text, so a repeating 1s failure is reported once, not 60×/min.
     private var clipboardHistoryPollFailure: String?
@@ -601,18 +612,28 @@ final class AgentViewModel: ObservableObject {
 
         /// The store this source reports on.
         ///
-        /// **Here so that a Memory row's damaged state derives from `LocalStore.memoryCategory`
-        /// rather than from a second hand-written mapping** (SONNY-239). Exhaustive with no
-        /// `default`, which makes CLAUDE.md's eighth store-registration step compiler-enforced in
-        /// one direction at last: a new case here does not build until somebody says which store it
-        /// speaks for, and saying so is what puts its failure on a row the user can act from.
+        /// Exhaustive with no `default`, so a new case does not build until somebody says which
+        /// store it speaks for.
         ///
-        /// Two stores have no case in this enum and therefore no row-level damaged state: the vision
-        /// session journal and Shortcut run history. Neither is loaded by this view model at all —
-        /// the journal is read by the task-detail sheet and the run history by a capability adapter
-        /// in `MacAgentCore` — so a case for either would be a case nothing ever sets. Both sit under
-        /// the Task history row, whose Delete already removes all four of its files. Enumerated
-        /// rather than left to be rediscovered; the residual is recorded on SONNY-239.
+        /// **This enum is the *banner's* population, and no longer the Memory row's** (PR #110
+        /// fix-round review). It has eleven cases against `LocalStore`'s thirteen — the vision
+        /// session journal and Shortcut run history have none — and while a row's damaged state was
+        /// derived from here, the Task history row could never leave `.readable` on their account.
+        /// `canDelete` collapsed to `count > 0`, so an empty task history beside an unreadable
+        /// `shortcuts-run-history.json` reproduced the founder's original dead end exactly, inside
+        /// the branch whose whole outcome is that an unreadable memory is clearable. The row and its
+        /// Delete now both read `unreadableStores`, which is probed over all thirteen.
+        ///
+        /// **What this comment used to say, and why it was wrong twice over.** It said "Neither is
+        /// loaded by this view model at all", which is false: `deleteTask` and `deleteScreenRecord`
+        /// both call `visionSessionJournalStore.delete(id:)`, whose first statement is `loadAll()`.
+        /// The conclusion — that a case for either would be a case nothing ever sets — happens to
+        /// survive, for a reason the false premise hid: **both of those loads sit inside a write the
+        /// user pressed a control for**, so their failures correctly go to `errorMessage` rather than
+        /// to a load-failure source, per CLAUDE.md's channel rule. Giving those two stores a source
+        /// would therefore mean adding a *health probe* as a new recording site, and a banner
+        /// sentence naming them that the founder has not seen. That is available and deliberately
+        /// not taken here; the probe closes the reachable dead end without it.
         var store: LocalStore {
             switch self {
             case .savedRoutines:
@@ -781,6 +802,12 @@ final class AgentViewModel: ObservableObject {
         browserOpener: any BrowserOpening = WorkspaceBrowserOpener(),
         appOpener: any AppOpening = WorkspaceAppOpener(),
         fileOpener: any FileOpening = WorkspaceFileOpener(),
+        // Injected rather than called directly, in the shape `ScreenAccessOnboarding` already uses
+        // for its `settingsOpener` (SONNY-239, founder decision 2026-08-23). The one existing reveal
+        // in this class called `NSWorkspace` inline and was therefore untestable; giving it a seam
+        // makes the new control testable and the old one testable as a side effect. A test that
+        // reached the live implementation would open Finder on the developer's machine.
+        finderRevealer: @escaping ([URL]) -> Void = { NSWorkspace.shared.activateFileViewerSelecting($0) },
         mediaOpener: any MediaOpening = NativeMediaOpener(),
         runningAppSwitcher: any RunningAppSwitching = WorkspaceRunningAppSwitcher(),
         shortcutInvoker: any ShortcutInvoking = ProcessShortcutInvoker(),
@@ -843,6 +870,7 @@ final class AgentViewModel: ObservableObject {
         self.browserOpener = browserOpener
         self.appOpener = appOpener
         self.fileOpener = fileOpener
+        self.finderRevealer = finderRevealer
         self.mediaOpener = mediaOpener
         self.runningAppSwitcher = runningAppSwitcher
         self.shortcutInvoker = shortcutInvoker
@@ -3080,8 +3108,11 @@ final class AgentViewModel: ObservableObject {
         // different key, and SONNY-253's recorded architecture can hand that key back after a
         // restore. Per store rather than per row, so a row covering four files — Task history —
         // deletes the three that read and keeps only the one that does not.
-        let unreadable = unreadableStores(in: category)
-        let readable = category.stores.filter { !unreadable.contains($0) }
+        // Probed here so the press acts on the truth, and read back out of the same published set
+        // the row's words and this category's confirmation were built from.
+        refreshStoreReadability()
+        let unreadable = category.stores.filter { unreadableStores.contains($0) }
+        let readable = category.stores.filter { !unreadableStores.contains($0) }
 
         var deletedFileCount = 0
         var keptFileCount = 0
@@ -3100,10 +3131,14 @@ final class AgentViewModel: ObservableObject {
             failures.append(error.localizedDescription)
         }
 
+        // Cleared unconditionally, so a delete that keeps nothing cannot leave the previous one's
+        // Reveal control on screen beside a message that says nothing was kept.
+        setAsideFilesFromLastDelete = []
         if !unreadable.isEmpty {
             do {
                 let moved = try LocalDataQuarantine().moveAsideAll(unreadable.map(storeFileURL))
                 keptFileCount = moved.movedFileURLs.count
+                setAsideFilesFromLastDelete = moved.movedFileURLs
             } catch {
                 failures.append(error.localizedDescription)
             }
@@ -3130,21 +3165,21 @@ final class AgentViewModel: ObservableObject {
         refreshMemorySurfaces()
     }
 
-    /// This category's stores whose file will not read, in `LocalStore.allCases` order.
+    /// Re-reads every store and republishes `unreadableStores`.
     ///
-    /// **Asked at this moment, not read off `localStorageLoadFailures`** (PR #110 review, F5). That
-    /// dictionary holds what something has *happened* to have loaded and failed on, which is not the
-    /// same population: `.taskPlanDetails` is recorded only by `storedPlanDetail(for:)`, so a user
-    /// who has never pressed Follow up has an unreadable plan-detail file classified readable — and
-    /// the delete then unlinks it. `.visionSessionJournal` and `.shortcutRunHistory` have no source
-    /// at all, so they were never protected. Of the four files under the Task history row, exactly
-    /// one was reliably covered by the rule this ticket exists to enforce.
+    /// **The one writer, so the row's words and its Delete cannot come from different answers**
+    /// (PR #110 fix-round review). Called from the Memory page's `onAppear`, from
+    /// `refreshMemoryRowsAfterRun()` so a store that breaks mid-run does not leave the page saying
+    /// `0 saved`, and from the top of `deleteMemory(in:)` so the press acts on the truth rather than
+    /// on a probe from whenever the page last appeared.
     ///
-    /// Probing costs at most four file reads on a control the user pressed, which is the cheapest
-    /// place in the product to spend them, and it makes "never destroy what you cannot prove is
-    /// garbage" true of all thirteen stores rather than of the ones something happened to touch.
-    private func unreadableStores(in category: MemoryCategory) -> [LocalStore] {
-        category.stores.filter { !storeIsReadable($0) }
+    /// **The remaining window is the confirmation dialog itself, and that is the world changing
+    /// rather than two mechanisms disagreeing.** The sentence the user read was built from one probe
+    /// and the press re-probes; if a file broke or healed in between, the press does the right thing
+    /// and `MemoryDeletionCopy.outcome` reports what actually happened. What cannot happen any more
+    /// is the two being derived from different populations.
+    func refreshStoreReadability() {
+        unreadableStores = Set(LocalStore.allCases.filter { !storeIsReadable($0) })
     }
 
     /// Whether this store's file can be read right now.
@@ -3260,6 +3295,10 @@ final class AgentViewModel: ObservableObject {
     private func refreshMemoryRowsAfterRun() {
         refreshSavedItems()
         refreshMemoryEntries()
+        // A store that breaks during a run must not leave the page on screen saying `0 saved` with
+        // its Delete greyed out until the user navigates away and back — which is this branch's two
+        // tickets meeting each other.
+        refreshStoreReadability()
     }
 
     /// Every list the Memory section renders, reloaded together.
@@ -3272,6 +3311,10 @@ final class AgentViewModel: ObservableObject {
         refreshTaskHistory()
         refreshMemoryEntries()
         refreshClipboardHistoryNotice()
+        // The delete that brought us here changed which files exist, so which of them read is a
+        // different answer now — and a row still saying "Can't be read" about a file that has just
+        // been moved aside is the same stale surface the four calls above exist to prevent.
+        refreshStoreReadability()
     }
 
     /// Forgets one snippet.
@@ -3710,10 +3753,31 @@ final class AgentViewModel: ObservableObject {
         let url = URL(fileURLWithPath: suggestion.value)
         switch suggestion.kind {
         case .revealInFinder:
-            NSWorkspace.shared.activateFileViewerSelecting([url])
+            finderRevealer([url])
         case .openFile:
             NSWorkspace.shared.open(url)
         }
+    }
+
+    /// Opens Finder on the folder holding the files Sonny kept, with those files selected.
+    ///
+    /// **The founder's decision of 2026-08-23, recorded on SONNY-239: the user is told where the
+    /// set-aside file is with a control, not with copy.** The confirmation says the file is still on
+    /// their Mac and stops, which is disclosure they cannot act on — and writing the path into the
+    /// sentence would satisfy the letter of "tell them where" and none of the intent, because
+    /// `~/Library` is hidden in Finder by default. It also keeps a sentence explaining where Sonny
+    /// stores its files out of the product, which is the founder's standing rule.
+    ///
+    /// **Every file the delete kept, not the first**, since the copy beside it already branches on
+    /// how many there were and `activateFileViewerSelecting` selects an array.
+    ///
+    /// A no-op when the last delete kept nothing, so the control can be rendered off the same state
+    /// the message is and does not need a second condition to stay in step with.
+    func revealSetAsideFilesInFinder() {
+        guard !setAsideFilesFromLastDelete.isEmpty else {
+            return
+        }
+        finderRevealer(setAsideFilesFromLastDelete)
     }
 
     func copySummary() {
@@ -3792,6 +3856,9 @@ final class AgentViewModel: ObservableObject {
         // gone. `deleteLocalData` writes its own message into `localDataDeletionStatusMessage`
         // straight after this returns, so the two never contradict each other.
         memoryDeletionStatusMessage = nil
+        // The wipe has just deleted the set-aside files too (`deleteAllLocalData` sweeps them), so a
+        // surviving list would leave a Reveal in Finder control pointing at files that are gone.
+        setAsideFilesFromLastDelete = []
         // Row 13's two in-memory slots (SONNY-210). The wipe has just erased the file both describe:
         // a surviving checkpoint would write its task straight back on the next unit boundary, and a
         // surviving dismissal set would silently suppress an offer for a record whose id can only
@@ -3819,6 +3886,10 @@ final class AgentViewModel: ObservableObject {
         // of it.
         refreshMemoryEntries()
         refreshClipboardHistoryNotice()
+        // The wipe deleted every store file, so nothing can still be unreadable. Reached by probing
+        // rather than by emptying the set, for the same reason the load-failure sweep above checks
+        // the disk: a file the wipe failed to delete keeps its damaged state.
+        refreshStoreReadability()
     }
 
     private func startClipboardHistoryMonitoring() {
@@ -3928,11 +3999,6 @@ final class AgentViewModel: ObservableObject {
     /// there made a *successful* task render as a failure in the widget, since the widget picks
     /// `.failure` ahead of `.result`.
     private func publishLocalStorageLoadError() {
-        // Published first, and outside the guard, so clearing the last failure clears the rows too.
-        // A row still saying "Can't be read" after the file reads again is the same class of stale
-        // surface as a list still showing entries whose file will not decrypt.
-        unreadableMemoryCategories = Set(localStorageLoadFailures.keys.compactMap(\.memoryCategory))
-
         guard !localStorageLoadFailures.isEmpty else {
             localStorageNotice = nil
             return
@@ -3960,8 +4026,13 @@ final class AgentViewModel: ObservableObject {
         // page without this sentence: the Clipboard history row's switch commits through
         // `applyClipboardHistoryNoticeChoice`, which writes without loading and overwrites a file it
         // could not read.
+        // **Counted over the failures this banner is naming, not over `unreadableStores`.** They
+        // answer different questions: the row asks "can this row be read", and this asks "of the
+        // stores I am telling you about, how many can the user act on". A banner that pluralised off
+        // the other set would say "them" while naming one store.
+        let rowsNamedHere = Set(localStorageLoadFailures.keys.compactMap(\.memoryCategory))
         let wayOut: String
-        switch unreadableMemoryCategories.count {
+        switch rowsNamedHere.count {
         case 0:
             wayOut = ""
         case 1:
