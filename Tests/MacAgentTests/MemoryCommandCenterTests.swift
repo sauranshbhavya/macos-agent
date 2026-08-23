@@ -591,14 +591,16 @@ struct MemoryCommandCenterTests {
     @Test
     func everyForegroundRunnerIsHandedTheForegroundSeams() throws {
         let source = try MacAgentSource.read("AgentViewModel.swift")
-        // Anchored on real code rather than line numbers. `performStart`'s signature spans six lines,
-        // so the anchor carries its last parameter and the brace; a rename fails this loudly, which
-        // is the moment to re-check that the property still holds.
+        // Anchored on real code rather than line numbers. `performStart`'s signature spans seven
+        // lines, so the anchor carries its last parameter and the brace; a rename fails this loudly,
+        // which is the moment to re-check that the property still holds. It did exactly that when
+        // SONNY-210 added `continuing:` after `prebuiltPlanSource:` — the anchor moved, the property
+        // was re-checked against the real body, and both runners still take the foreground seams.
         let blocks: [(name: String, anchor: String)] = [
             (
                 "performStart",
                 """
-                        prebuiltPlanSource: PreparedPlanSource = .directUserAction
+                        continuing: ResumableTaskContinuation? = nil
                     ) async {
                 """
             ),
@@ -2035,7 +2037,7 @@ private func makeMemoryFixture(
                 clipboardSettingsStore.fileURL,
                 clipboardHistoryStore.fileURL,
                 approvedAppStore.fileURL,
-                outputLocationStore.fileURL
+                outputLocationStore.fileURL,
                 resumableTaskStore.fileURL
             ]
         )

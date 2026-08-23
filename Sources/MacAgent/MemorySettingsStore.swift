@@ -3,7 +3,9 @@ import MacAgentCore
 
 /// Where the Memory section's switches live.
 ///
-/// **`UserDefaults`, not a twelfth encrypted store, and the choice is deliberate** (SONNY-208).
+/// **`UserDefaults`, not another encrypted local store, and the choice is deliberate** (SONNY-208).
+/// (It read "not a twelfth encrypted store" until SONNY-210: written when there were eleven, stale
+/// twice inside two days as row 13 added two. The argument never depended on the number.)
 /// `.claude/rules/macagent-ui-conventions.md`'s Preferences rule sends a non-privacy-sensitive
 /// preference here, and what these keys hold is a boolean about Sonny's future behaviour — never a
 /// word of the user's own content, which is what `LocalStorageEncryption` exists to protect. Two

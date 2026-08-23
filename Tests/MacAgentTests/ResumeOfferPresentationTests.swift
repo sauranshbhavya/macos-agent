@@ -102,6 +102,7 @@ struct ResumeOfferPresentationTests {
             .workspaces: "rectangle.3.group",       // SF Symbols 1, macOS 11
             .taskHistory: "checklist",              // SF Symbols 3, macOS 12
             .recentArtifacts: "doc",                // SF Symbols 1, macOS 11
+            .outputLocations: "folder",             // SF Symbols 1, macOS 11
             .clipboardHistory: "doc.on.clipboard",  // SF Symbols 1, macOS 11
             .snippets: "text.quote",                // SF Symbols 1, macOS 11
             .approvedApps: "app.badge.checkmark",   // SF Symbols 4, macOS 13
