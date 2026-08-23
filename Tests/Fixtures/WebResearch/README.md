@@ -1,6 +1,6 @@
 # Web-research fixtures
 
-Three real pages, saved verbatim, that `RestrictedContentDetectorTests` runs the wall check over.
+Four real pages, saved verbatim, that `RestrictedContentDetectorTests` runs the wall check over.
 
 They exist because the tests that were here before **could not have caught SONNY-245**. A
 hand-written `"<html>…captcha…</html>"` behaves identically under the rule that shipped the bug and
@@ -15,15 +15,21 @@ would receive, not what a browser would.
 | File | Source | HTTP | Bytes | What it is |
 | --- | --- | --- | --- | --- |
 | `wikipedia-machine-learning.html` | `https://en.wikipedia.org/wiki/Machine_learning` | 200 | 1 146 835 | The reported defect. An encyclopedia article, refused by the old rule. |
+| `wikipedia-captcha.html` | `https://en.wikipedia.org/wiki/CAPTCHA` | 200 | 331 832 | A page *about* a wall — it says "captcha" to a reader 167 times. The other half of the reported class. |
 | `zillow-perimeterx-block.html` | `https://www.zillow.com/` | 403 | 5 776 | A genuine bot wall (PerimeterX). Its message is drawn by JavaScript, so it says nothing at all to a reader who does not run scripts. |
 | `sciencedirect-captcha-challenge.html` | `https://www.sciencedirect.com/science/article/pii/S0004370221000862` | 403 | 1 207 697 | A genuine CAPTCHA gate that *does* speak: "Are you a robot? Please confirm you are a human by completing the captcha challenge below." |
 
-## Why these three
+## Why these four
 
 The Wikipedia article matches the old rule twice and is guarded by nothing: `captcha` appears inside
 a `<script>` config naming Wikipedia's own edit-form CAPTCHA, and `subscription required` inside the
 `title=` attribute of the lock icon its citation templates print beside a paywalled reference.
 Neither is text a reader sees.
+
+The CAPTCHA article is the ticket's other half: "a page *about* a thing is treated as a page
+*guarded by* that thing." Unlike the machine-learning article it really does carry the word in its
+visible prose, 167 times, so what serves it is the interstitial limit rather than the word being
+invisible — a different mechanism, and one no other fixture exercises.
 
 The two block pages are the two shapes a real wall comes in, and they need different evidence to
 catch, which is why both are here rather than one. Zillow's shows 0 characters of text — the only
@@ -41,7 +47,7 @@ reader decides everything.
 `sciencedirect-captcha-challenge.html` had the fetching machine's own public IP printed in it, in
 the gate's "IP Address:" line. It is replaced by `203.0.113.42`, from RFC 5737's documentation
 range — three characters shorter than the original, which is the whole difference between this file
-and the 1 207 700 bytes that arrived. Nothing else in any of the three files is altered.
+and the 1 207 700 bytes that arrived. Nothing else in any of the four files is altered.
 
 ## Refreshing them
 

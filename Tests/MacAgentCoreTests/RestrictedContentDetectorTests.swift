@@ -56,6 +56,28 @@ struct RestrictedContentDetectorTests {
         #expect(folded.contains("title=\"paid subscription required\""))
     }
 
+    /// The ticket's own sentence, on a page that makes it literally true: "A page *about* a thing is
+    /// treated as a page *guarded by* that thing."
+    ///
+    /// Wikipedia's CAPTCHA article says the word to a reader 167 times, so unlike the
+    /// machine-learning article it carries visible-text evidence and not only markup evidence. What
+    /// serves it is `interstitialVisibleTextLimit`: at 30 785 visible characters it is an article,
+    /// and an article that discusses CAPTCHAs is still an article.
+    @Test
+    func theCaptchaArticleIsServedThoughItSaysTheWordToAReaderThroughout() throws {
+        let html = try WebResearchFixture.wikipediaCaptcha.html()
+
+        #expect(html.count == 330_488)
+        #expect(oldRuleReason(inHTML: html) == "CAPTCHAs")
+
+        let visible = RestrictedContentDetector.visibleText(inHTML: html)
+        #expect(visible.count == 30_785)
+        #expect(occurrences(of: "captcha", inCaseFolded: visible) == 167)
+        #expect(visible.count > RestrictedContentDetector.interstitialVisibleTextLimit)
+
+        #expect(RestrictedContentDetector.finding(inHTML: html) == nil)
+    }
+
     // MARK: - Genuine walls, one of each shape
 
     /// A wall that says nothing, because JavaScript was going to say it. The only trace in what the
@@ -101,15 +123,15 @@ struct RestrictedContentDetectorTests {
 
     // MARK: - Both ways, on the same three pages
 
-    /// The assertion the ticket asks for in so many words: the old rule cannot separate these three
-    /// pages and the new one can.
+    /// The assertion the ticket asks for in so many words: the old rule cannot separate these pages
+    /// and the new one can.
     ///
     /// This is the test that would have failed before the change — every other test in this suite
     /// asserts one page's verdict, and a reader can always wonder whether the fixtures were chosen
     /// to agree with the code. Here the two rules run over the identical input and disagree in
-    /// exactly one place: the encyclopedia article.
+    /// exactly two places: the two encyclopedia articles.
     @Test
-    func theOldRuleRefusedAllThreePagesAndTheNewRuleRefusesOnlyTheTwoWalls() throws {
+    func theOldRuleRefusedEveryFixtureAndTheNewRuleRefusesOnlyTheTwoWalls() throws {
         var oldVerdicts: [String: String] = [:]
         var newVerdicts: [String: String] = [:]
         for fixture in WebResearchFixture.allCases {
@@ -120,11 +142,13 @@ struct RestrictedContentDetectorTests {
 
         #expect(oldVerdicts == [
             "wikipedia-machine-learning": "CAPTCHAs",
+            "wikipedia-captcha": "CAPTCHAs",
             "zillow-perimeterx-block": "CAPTCHAs",
             "sciencedirect-captcha-challenge": "CAPTCHAs"
         ])
         #expect(newVerdicts == [
             "wikipedia-machine-learning": "served",
+            "wikipedia-captcha": "served",
             "zillow-perimeterx-block": "CAPTCHAs",
             "sciencedirect-captcha-challenge": "CAPTCHAs"
         ])
@@ -324,6 +348,7 @@ struct RestrictedContentDetectorTests {
 /// The saved pages, by the name they are filed under.
 enum WebResearchFixture: String, CaseIterable {
     case wikipediaMachineLearning = "wikipedia-machine-learning"
+    case wikipediaCaptcha = "wikipedia-captcha"
     case zillowPerimeterXBlock = "zillow-perimeterx-block"
     case scienceDirectCaptchaChallenge = "sciencedirect-captcha-challenge"
 
