@@ -128,7 +128,9 @@ struct LocalStoreInjectionScanTests {
         // Twelve of the thirteen; `.clipboardHistory` is the one inside the monitor.
         #expect(expectedLabels.count == LocalStore.allCases.count - 1)
 
+        var checkedLabels: Set<String> = []
         for label in expectedLabels.sorted() + Self.otherRequiredParameters {
+            checkedLabels.insert(label)
             guard let parameter = parameters.first(where: { $0.label == label }) else {
                 Issue.record("`AgentViewModel.init` has no `\(label):` parameter any more")
                 continue
@@ -144,6 +146,14 @@ struct LocalStoreInjectionScanTests {
                 """
             )
         }
+
+        // **What the loop actually covered, because the loop's own input can be emptied** (PR #109
+        // review F6, R9). `otherRequiredParameters` could be set to `[]` with the whole suite green:
+        // nothing else in this file mentions the monitor or the deletion service, so the two
+        // parameters most easily re-defaulted were checked by a list and by nothing that checked the
+        // list.
+        #expect(checkedLabels.count == expectedLabels.count + 2)
+        #expect(checkedLabels.isSuperset(of: ["clipboardHistoryMonitor", "localDataDeletionService"]))
     }
 
     /// The premise the rule above rests on: a store built with no `fileURL` really does land in the
@@ -182,19 +192,35 @@ struct LocalStoreInjectionScanTests {
         let typeNames = LocalStore.allCases.map { Self.injection(of: $0).typeName }
         #expect(Set(typeNames).count == LocalStore.allCases.count, "two stores share a type name")
 
-        // **`MacAgentTests` is the target this scans, and the boundary is deliberate rather than
-        // convenient.** That is where a store reaches an `AgentViewModel`, which is where the damage
-        // this suite exists for was done. `MacAgentCoreTests` is the stores' own target and
+        // **Every test target except one, and the exception is named rather than implied** (PR #109
+        // review F5, which found `MacAgentTestSupport` excluded by an omission this comment did not
+        // even mention).
+        //
+        // `MacAgentTests` is where a store reaches an `AgentViewModel`, which is where the damage
+        // this suite exists for was done. `MacAgentTestSupport` is linked into both test targets and
+        // has none of the defence below, so it is swept too — a helper there would be the least
+        // visible place for a default-path store to sit.
+        //
+        // **`MacAgentCoreTests` is the one excluded target.** It is the stores' own, and it
         // constructs seven default-path stores on purpose — to assert what `ApprovedAppStore()`'s
         // file name is, what `ResumableTaskStore()`'s idle period is, what `TaskHistoryStore()`'s cap
-        // is — and never writes through one; blanket-flagging those would be a false positive on the
-        // tests that pin the very defaults this rule depends on.
+        // is — and never writes through one. Blanket-flagging those would be a false positive on the
+        // tests that pin the very defaults this rule depends on, including
+        // `aStoreBuiltWithNoFileURLLandsInTheDevelopersHomeDirectory` in this file.
         //
         // **The residual, so nobody reads a clean run as a wider claim than it is:** a *write*
         // through a default-path store inside `MacAgentCoreTests` would not be caught here. Those
         // suites use a temp root for every write today, and their subject is the store rather than
         // the view model.
-        let files = try TestSourceTree.swiftFiles(in: "MacAgentTests")
+        let sweptTargets = TestSourceTree.targets.filter { $0 != "MacAgentCoreTests" }
+        #expect(
+            sweptTargets.sorted() == ["MacAgentTestSupport", "MacAgentTests"],
+            "a test target was added to TestSourceTree.targets and this sweep has not been re-argued for it"
+        )
+        var files: [TestSourceTree.SourceFile] = []
+        for target in sweptTargets {
+            files.append(contentsOf: try TestSourceTree.swiftFiles(in: target))
+        }
         #expect(
             !files.isEmpty,
             "the enumerator found no test sources — a scan matching nothing reads exactly like a passing one"
@@ -231,13 +257,58 @@ struct LocalStoreInjectionScanTests {
         )
     }
 
-    /// **The one door the compiler opens on purpose, kept shut for tests.**
+    /// **The one door the compiler opens on purpose, and `main.swift` is the whole of who may walk
+    /// through it** (PR #109 review F4).
     ///
     /// `AgentViewModel.atItsRealStoreLocations()` exists so that the shipping app has somewhere to
-    /// ask for the real `~/Library` paths — and it is a single call that would hand a test every one
-    /// of them at once, undoing this whole change in one line. It belongs to `AppDelegate` and to
-    /// nothing else. Scanned across every test target, because a helper in the support target would
-    /// be the least visible place for it to appear.
+    /// ask for the real `~/Library` paths. It is also a single call that hands its caller every one
+    /// of them at once — so a *defaulted parameter* whose default is that call recreates the exact
+    /// invisibility SONNY-240 removed, one level up, and does it in a file the caller never reads.
+    /// `AppDelegate.init(viewModel:)` was that parameter for one round, and a test writing
+    /// `AppDelegate()` passed every check in this suite: the sweep below looks for the method's
+    /// *name*, and a bare `AppDelegate()` never spells it.
+    ///
+    /// **So this is a population over `Sources/`, not a name search over tests.** Exactly two files
+    /// may mention the method: the one declaring it, and `main.swift`. A third — under any name, at
+    /// any level of indirection — fails here, which is a property no per-site check can offer.
+    @Test
+    func onlyMainAsksForTheRealStoreLocations() throws {
+        let forbidden = "atItsRealStore" + "Locations"
+        let sources = Self.repositoryRoot.appendingPathComponent("Sources")
+        guard let walker = FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil) else {
+            Issue.record("could not enumerate Sources/")
+            return
+        }
+
+        var mentioning: [String] = []
+        var filesRead = 0
+        for case let url as URL in walker where url.pathExtension == "swift" {
+            filesRead += 1
+            let code = TestSourceTree.codeLines(of: try String(contentsOf: url, encoding: .utf8))
+                .map(\.text)
+                .joined(separator: "\n")
+            if code.contains(forbidden) {
+                mentioning.append(url.lastPathComponent)
+            }
+        }
+
+        // A walker that found nothing reads exactly like a tree with no mentions.
+        #expect(filesRead > 50, "the enumerator saw \(filesRead) app sources — too few to be the real tree")
+        #expect(
+            mentioning.sorted() == ["AgentViewModel.swift", "main.swift"],
+            """
+            \(forbidden)() is mentioned in \(mentioning.sorted()) — it may be named only where it is \
+            declared and in main.swift. A default, a wrapper or a convenience that reaches it from \
+            anywhere else hands its callers the developer's real ~/Library stores while every one of \
+            those call sites says nothing at all.
+            """
+        )
+    }
+
+    /// The same door from the other side: no test may ask for the real locations either.
+    ///
+    /// Scanned across every test target, because a helper in the support target would be the least
+    /// visible place for it to appear.
     @Test
     func noTestSourceAsksForTheRealStoreLocations() throws {
         var files: [TestSourceTree.SourceFile] = []
@@ -316,15 +387,17 @@ struct LocalStoreInjectionScanTests {
         let hasDefault: Bool
     }
 
-    /// `Sources/MacAgent/AgentViewModel.swift`, from this file's own location.
+    /// The repository root, from this file's own location.
     ///
     /// `TestSourceTree.root` is `Tests/`, so the repository root is its parent. Its own path rather
     /// than a working-directory-relative one, for the reason `TestSourceTree` gives: a test process
     /// does not run from the repository root.
+    static var repositoryRoot: URL {
+        TestSourceTree.root.deletingLastPathComponent()
+    }
+
     static var viewModelSource: URL {
-        TestSourceTree.root
-            .deletingLastPathComponent()
-            .appendingPathComponent("Sources/MacAgent/AgentViewModel.swift")
+        repositoryRoot.appendingPathComponent("Sources/MacAgent/AgentViewModel.swift")
     }
 
     /// The parameters of `AgentViewModel.init`, in declaration order.

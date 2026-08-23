@@ -626,8 +626,15 @@ final class AgentViewModel: ObservableObject {
     /// **The one place those locations are named, which is the point** (SONNY-240). They used to be
     /// named by the initializer's own defaults, where every call site inherited them by saying
     /// nothing — including fifteen test fixtures that meant to say something else. Here they are a
-    /// call, made from `AppDelegate` and nowhere else, and a store added later has to be added to
+    /// call, made from `main.swift` and nowhere else, and a store added later has to be added to
     /// this list before anything compiles.
+    ///
+    /// **Naming it is not enough on its own, which took a review round to learn** (PR #109 review
+    /// F4). `AppDelegate.init` defaulted its `viewModel:` to this call for one round, which put the
+    /// name in `AppDelegate.swift` and left every `AppDelegate()` call site saying nothing — the
+    /// same invisibility, one level up. `AppDelegate` takes the view model now, and
+    /// `LocalStoreInjectionScanTests.onlyMainAsksForTheRealStoreLocations` holds the population: in
+    /// `Sources/`, exactly two files mention this method — the one declaring it and `main.swift`.
     ///
     /// The whitelist is built once and handed to both the view model and the output-location store,
     /// because that store answers "is this an output location?" by asking it — see the
@@ -4398,12 +4405,25 @@ final class AgentViewModel: ObservableObject {
         resultProvenance: StoredTaskResult.Provenance = .codeAuthored,
         startedAt: Date? = nil
     ) -> String? {
-        // **The request, not the prompt, and it is the same decision at both of this function's
-        // readers** (SONNY-248). The Tasks list names a row by this, the follow-up chip says
-        // "Following up: …" with it, and "Run again" resubmits it — so a clarified task's row shows
-        // what the user asked for, and pressing Run again does the thing the row says rather than a
-        // longer string it never showed. A task still ambiguous the second time is asked about
-        // again, which is the same property that makes `runTaskAgain` re-request an approval.
+        // **The request, not the prompt** (SONNY-248). Four readers, and the fourth was missing from
+        // this list until PR #109's review found it: the Tasks list names a row by this; the
+        // follow-up chip says "Following up: …" with it; `runTaskAgain` resubmits it; and
+        // `followUpOnTask` builds a `PriorTaskContext` from the row, so it reaches a later planner
+        // inside `plannerContextText`. Two labels and two payloads — which is also why
+        // `ClarifiedCommand.request(in:)` matches the whole question-and-answer pair rather than one
+        // line, since a false positive here truncates a command rather than a caption.
+        //
+        // **Why Run again re-runs the request, stated correctly this time** (PR #109 review F1).
+        // The first version of this reasoned by analogy to `runTaskAgain` re-requesting an approval,
+        // and the analogy does not transfer: a re-request is a *safety* property, there because the
+        // world may have changed since the approval was granted, while a clarification answer is
+        // *intent* and does not go stale. The real reason is plainer. This value is the row's label
+        // and the row's payload at once, so the control on that row must submit the thing the row
+        // shows; submitting a longer string the user was never shown would make the product do
+        // something other than what it displayed. Nothing is lost by it — what the answer produced
+        // is in the plan the row stores — and a task that is still ambiguous gets asked again, which
+        // is the honest state rather than a stale answer applied to a new attempt. Pinned by
+        // `runningAClarifiedTaskAgainSubmitsExactlyWhatItsRowShows`.
         let recordedCommand = ClarifiedCommand.request(in: command)
         priorTaskContextStore.record(
             command: recordedCommand,
@@ -4435,6 +4455,14 @@ final class AgentViewModel: ObservableObject {
     ) -> String? {
         // The overload above's decision, restated here because this one records the same two things
         // for a run that never reached a plan (SONNY-248).
+        //
+        // **Held by a test of its own since PR #109's review, which found it held by none** (F2).
+        // Reverting this line to `command` passed the entire suite: every clarification test reached
+        // the *other* overload, because a clarified run that gets as far as a plan has a
+        // `preparedRun`. This one is reached from `performStart`'s catch when the re-plan itself
+        // throws — an offline planner, a missing key — and it wrote the whole prompt, scaffolding
+        // included, into the history row and the prior-task context. Pinned by
+        // `aClarifiedRunThatFailsBeforeItPlansStillRecordsTheRequest`.
         let recordedCommand = ClarifiedCommand.request(in: command)
         priorTaskContextStore.record(
             command: recordedCommand,

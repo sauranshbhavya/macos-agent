@@ -65,23 +65,40 @@ public enum ClarifiedCommand {
     /// the transcript of the conversation about it. The resolver already had its turn on this
     /// command and asked for more; the more is a planner's to read.
     ///
-    /// Matched at the start of a line, so a request that merely mentions the words in passing is not
-    /// mistaken for one. A user who types the label at the start of a line of their own is
-    /// misread — and misread in the safe direction, which is that their command is planned rather
-    /// than resolved locally.
+    /// **Here a false positive is cheap, which is not true of `request(in:)` below** — the two used
+    /// to share one sentence about failing "in the safe direction", and only this half of it was
+    /// ever true (PR #109 review F3). Reading a command as clarified when it is not costs it the
+    /// instant resolver: the command is planned instead, which is slower and correct.
     public static func carriesExchange(_ command: String) -> Bool {
         exchangeLineIndex(in: lines(of: command)) != nil
     }
 
-    /// The request, for a surface that shows a task's command to the user.
+    /// The request half of a clarified command — **read by labels and by two payloads, which is why
+    /// a false positive here is not cheap** (PR #109 review F3).
     ///
-    /// Command Center's running indicator, the widget's offer to carry on with an unfinished task,
-    /// the Tasks list and the follow-up chip all name a task by its command. A user reading any of
-    /// them should see what they asked for, not the scaffolding Sonny wrapped around it — the
-    /// founder's standing rule that the product does not explain its own workings applies to a label
-    /// as much as to a paragraph. Truncation alone does not cover it: those surfaces squeeze a
-    /// command onto one line and cut it to fit, so a *short* request leaves room for the exchange to
-    /// show through behind it.
+    /// The labels: Command Center's running indicator, the widget's offer to carry on with an
+    /// unfinished task, the Tasks list, and the follow-up chip. A user reading any of them should see
+    /// what they asked for, not the scaffolding Sonny wrapped around it — the founder's standing rule
+    /// that the product does not explain its own workings applies to a label as much as to a
+    /// paragraph. Truncation alone does not cover it: those surfaces squeeze a command onto one line
+    /// and cut it to fit, so a *short* request leaves room for the exchange to show through behind it.
+    ///
+    /// **The payloads, and they are the reason this doc comment was wrong before:** the task-history
+    /// row's command is what `runTaskAgain` resubmits, and — through `followUpOnTask`, which builds a
+    /// `PriorTaskContext` from the row — what reaches a later planner inside `plannerContextText`. So
+    /// this does not merely shorten a caption. Reading an exchange that is not there **truncates a
+    /// command**, and the truncated half is what Run again would send.
+    ///
+    /// **Which is why the match is the whole pair.** A `Clarification question:` line counts only
+    /// when the next line opens with `Clarification answer:` — the shape `composed` always writes,
+    /// and one a user would have to type across two consecutive lines to collide with. It used to be
+    /// a single line prefix, and a command whose own text happened to begin a line that way lost
+    /// everything after it.
+    ///
+    /// **The residual, since the class is not closed:** a user who really does write both labels on
+    /// consecutive lines is still truncated, and so is one whose *answer* runs to several lines and
+    /// begins one of them with the question label. Both are unguessable-delimiter problems of the
+    /// same family as SONNY-234's, and neither is worth a random tag for a string this one is.
     ///
     /// Returns the command unchanged when it carries no exchange, and when the exchange is all there
     /// is — a label is never made blank by this, since a blank one tells the user strictly less than
@@ -102,9 +119,21 @@ public enum ClarifiedCommand {
     }
 
     /// The first line that opens an exchange, or `nil` when none does.
+    ///
+    /// **A question line counts only when an answer line follows it** (PR #109 review F3). A lone
+    /// `Clarification question:` line is not an exchange: `composed` never writes one, and treating
+    /// it as an exchange would truncate a user's own command at a line that merely happened to start
+    /// that way — and `request(in:)`'s output is resubmitted by Run again, not only displayed.
     private static func exchangeLineIndex(in commandLines: [Substring]) -> Int? {
-        commandLines.firstIndex {
-            $0.trimmingCharacters(in: .whitespaces).hasPrefix(questionLabel)
+        commandLines.indices.first { index in
+            guard commandLines[index].trimmingCharacters(in: .whitespaces).hasPrefix(questionLabel) else {
+                return false
+            }
+            let next = index + 1
+            guard next < commandLines.count else {
+                return false
+            }
+            return commandLines[next].trimmingCharacters(in: .whitespaces).hasPrefix(answerLabel)
         }
     }
 }
