@@ -95,6 +95,36 @@ struct PathContainmentResolutionTests {
         #expect(attempt.accepted?.path == real.appendingPathComponent("note.md").path)
     }
 
+    /// What the refusal says when resolution is the reason for it.
+    ///
+    /// The fix creates a sentence that could not happen before: the path being refused is not the
+    /// path the person typed. Naming only the resolved one sends them somewhere they have never
+    /// heard of; naming only the typed one refuses a folder they can see listed as allowed two
+    /// clauses later, which is the shape SONNY-242 had just finished removing from this sentence.
+    /// So both, and only when both are needed — an ordinary refusal is unchanged.
+    @Test
+    func theRefusalNamesWhatWasAskedForAndWhereItLedWhenALinkIsWhyItWasRefused() throws {
+        let tree = try SymlinkTree()
+        defer { tree.tearDown() }
+        try FileManager.default.createDirectory(
+            at: tree.outside.appendingPathComponent("sub", isDirectory: true),
+            withIntermediateDirectories: true
+        )
+        let asked = tree.link.appendingPathComponent("sub/new.md").path
+        let leadsTo = tree.outside.appendingPathComponent("sub/new.md").path
+
+        let throughTheLink = tree.attemptOutput(at: asked)
+        let plainlyOutside = tree.attemptOutput(at: tree.outside.appendingPathComponent("other.md").path)
+
+        let refusal = try #require((throughTheLink.error as? PathValidationError)?.errorDescription)
+        #expect(refusal.contains(asked))
+        #expect(refusal.contains(leadsTo))
+
+        let ordinary = try #require((plainlyOutside.error as? PathValidationError)?.errorDescription)
+        #expect(ordinary.hasPrefix(tree.outside.appendingPathComponent("other.md").path))
+        #expect(ordinary.contains("leads to") == false)
+    }
+
     // MARK: - Half two: a folder whose case was typed differently
 
     /// "save it to my desktop" worked and "save it to my desktop as note.md" did not, because the

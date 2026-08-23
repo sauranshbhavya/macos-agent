@@ -5002,7 +5002,7 @@ struct AgentActionExecutorTests {
         // exist as well as for one that does. That used to differ by nothing but existence —
         // `/private/tmp/artifact.md` came back `/tmp/artifact.md` while `/private/tmp/missing.md`
         // came back unchanged — so this is one spelling replacing two.
-        #expect(throws: PathValidationError.outsideWhitelist("/tmp/not-allowed.md", [root.path])) {
+        #expect(throws: PathValidationError.outsideWhitelist(path: "/tmp/not-allowed.md", asked: nil, roots: [root.path])) {
             try executor.preview(plan: openGeneratedArtifactPlan(output: URL(fileURLWithPath: "/private/tmp/not-allowed.md")))
         }
     }

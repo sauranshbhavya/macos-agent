@@ -2,7 +2,9 @@ import Foundation
 
 public enum PathValidationError: Error, Equatable, LocalizedError {
     case pathIsEmpty
-    case outsideWhitelist(String, [String])
+    /// The path that was refused, the path the person actually asked for when resolution is the
+    /// only reason it was refused, and the folders that are allowed.
+    case outsideWhitelist(path: String, asked: String?, roots: [String])
     case notFound(String)
     case notDirectory(String)
     case symbolicLinkRejected(String)
@@ -12,14 +14,26 @@ public enum PathValidationError: Error, Equatable, LocalizedError {
         switch self {
         case .pathIsEmpty:
             return "The path is empty."
-        case .outsideWhitelist(let path, let roots):
+        case .outsideWhitelist(let path, let asked, let roots):
             // "Outside the writable whitelist" named an implementation detail the person reading it
             // has no way to know about, and then listed the roots — one of which, in SONNY-242's
             // report, was the folder they had plainly asked for. The resolution fix is what makes
             // the path in this sentence the one they meant; this half is only the sentence saying
             // it plainly. Path first, because the workspace detail sheet renders this after
             // "Not in effect — " and needs the subject at the front.
-            return "\(path) is not one of the folders Sonny can use: \(roots.joined(separator: ", "))."
+            //
+            // Two sentences, because there are two situations (SONNY-249). Ordinarily the refused
+            // path is the one the person named and saying it back is enough. When something on the
+            // way is a symbolic link leading out of the whitelist, the path that was checked is not
+            // the path they typed — and naming only the resolved one shows them somewhere they have
+            // never heard of, while naming only the typed one refuses a folder they can plainly see
+            // in the allowed list two clauses later, which is the shape SONNY-242 had just finished
+            // removing from this same sentence.
+            guard let asked else {
+                return "\(path) is not one of the folders Sonny can use: \(roots.joined(separator: ", "))."
+            }
+            return "\(asked) leads to \(path), which is not one of the folders Sonny can use: "
+                + "\(roots.joined(separator: ", "))."
         case .notFound(let path):
             return "\(path) does not exist."
         case .notDirectory(let path):
@@ -118,9 +132,30 @@ public struct PathWhitelist: Sendable {
         }
 
         guard allowed else {
-            throw PathValidationError.outsideWhitelist(resolved.path, displayRoots)
+            throw PathValidationError.outsideWhitelist(
+                path: resolved.path,
+                asked: pathAsAskedIfResolutionIsWhatRefusedIt(trimmed, resolved: resolved),
+                roots: displayRoots
+            )
         }
         return resolved
+    }
+
+    /// The path as typed, but only when the whitelist would have accepted it and resolution is the
+    /// whole reason it did not — which is exactly the shape SONNY-249 fixed, something on the way
+    /// being a symbolic link that leads out. `nil` for every other refusal, including the ordinary
+    /// one where the person simply named a folder Sonny cannot use, and including a path whose text
+    /// resolution merely tidied, so the longer sentence appears when it explains something and
+    /// never as noise.
+    private func pathAsAskedIfResolutionIsWhatRefusedIt(_ trimmed: String, resolved: URL) -> String? {
+        let asTyped = Self.normalizedURL(Self.expandPath(trimmed))
+        guard asTyped.path != resolved.path else {
+            return nil
+        }
+        let wouldHaveBeenAllowed = roots.contains { root in
+            Self.contains(root: Self.canonicalURL(root.path), candidate: asTyped)
+        }
+        return wouldHaveBeenAllowed ? asTyped.path : nil
     }
 
     public func defaultOutputFile(name: String, extension ext: String, in rawFolder: String? = nil) throws -> URL {
