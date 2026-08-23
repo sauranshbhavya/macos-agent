@@ -1361,7 +1361,7 @@ struct MemoryCommandCenterTests {
         defer { fixture.cleanUp() }
         try fixture.writeUnreadableFile(at: fixture.outputLocationStore.fileURL)
 
-        fixture.viewModel.refreshMemoryEntries()
+        fixture.memoryPageAppears()
 
         let row = MemoryRowPresentation.row(for: .outputLocations, viewModel: fixture.viewModel)
         #expect(row.readability == .unreadable)
@@ -1393,7 +1393,7 @@ struct MemoryCommandCenterTests {
         #expect(try fixture.outputLocationStore.loadAll().count == 1)
 
         // The row and the banner both stop saying it is broken.
-        #expect(!fixture.viewModel.unreadableMemoryCategories.contains(.outputLocations))
+        #expect(!fixture.viewModel.unreadableStores.contains(.outputLocations))
         #expect(fixture.viewModel.localStorageNotice == nil)
         #expect(MemoryRowPresentation.row(for: .outputLocations, viewModel: fixture.viewModel).readability == .readable)
 
@@ -1458,7 +1458,8 @@ struct MemoryCommandCenterTests {
         // page's follow-up does — and it routes a failure to the same load-failure channel.
         let record = try #require(fixture.viewModel.taskHistoryRecords.first)
         _ = fixture.viewModel.followUpOnTask(record)
-        #expect(fixture.viewModel.unreadableMemoryCategories.contains(.taskHistory))
+        fixture.viewModel.refreshStoreReadability()
+        #expect(fixture.viewModel.unreadableStores == [.taskPlanDetails])
 
         fixture.viewModel.deleteMemory(in: .taskHistory)
 
@@ -1470,7 +1471,7 @@ struct MemoryCommandCenterTests {
         #expect(LocalDataQuarantine().quarantinedSiblings(of: fixture.taskPlanDetailStore.fileURL).count == 1)
         // And the row recovers, which needs the plan-detail source cleared — nothing in
         // `refreshMemorySurfaces()` reloads that store.
-        #expect(!fixture.viewModel.unreadableMemoryCategories.contains(.taskHistory))
+        #expect(fixture.viewModel.unreadableStores.isEmpty)
         #expect(fixture.viewModel.localStorageNotice == nil)
     }
 
@@ -1570,7 +1571,7 @@ struct MemoryCommandCenterTests {
             .sink { _ in emissions += 1 }
         defer { subscription.cancel() }
 
-        fixture.viewModel.refreshMemoryEntries()
+        fixture.memoryPageAppears()
         #expect(emissions == 1, "the first discovery must publish")
         #expect(fixture.viewModel.localStorageNotice != nil)
 
@@ -1588,8 +1589,9 @@ struct MemoryCommandCenterTests {
         #expect(emissions == afterDismissal, "a copy republished the notice \(emissions - afterDismissal) time(s)")
         #expect(fixture.viewModel.localStorageNotice == nil, "the dismissed banner came back")
         // The row still says so, which is where an ongoing condition belongs — the banner is for
-        // news, the row is for state.
-        #expect(fixture.viewModel.unreadableMemoryCategories.contains(.outputLocations))
+        // news, the row is for state. Probed here rather than assumed: the clipboard poll reloads
+        // the lists, not the readability set, so this is the answer from the page's own appearance.
+        #expect(fixture.viewModel.unreadableStores.contains(.outputLocations))
         // And the copies really were recorded, so the silence above is the guard rather than a
         // clipboard monitor that never ran.
         #expect(fixture.viewModel.clipboardHistoryItems.count == 3)
@@ -1682,11 +1684,12 @@ struct MemoryCommandCenterTests {
         try await fixture.waitUntilIdle()
         try fixture.writeUnreadableFile(at: fixture.taskPlanDetailStore.fileURL)
         _ = fixture.viewModel.followUpOnTask(try #require(fixture.viewModel.taskHistoryRecords.first))
-        #expect(fixture.viewModel.unreadableMemoryCategories.contains(.taskHistory))
+        fixture.memoryPageAppears()
+        #expect(fixture.viewModel.unreadableStores.contains(.taskPlanDetails))
 
         fixture.viewModel.deleteLocalData()
 
-        #expect(fixture.viewModel.unreadableMemoryCategories.isEmpty)
+        #expect(fixture.viewModel.unreadableStores.isEmpty)
         #expect(fixture.viewModel.localStorageNotice == nil)
         #expect(!FileManager.default.fileExists(atPath: fixture.taskPlanDetailStore.fileURL.path))
     }
@@ -1711,6 +1714,7 @@ struct MemoryCommandCenterTests {
 
         try fixture.writeUnreadableFile(at: fixture.taskPlanDetailStore.fileURL)
         _ = fixture.viewModel.followUpOnTask(try #require(fixture.viewModel.taskHistoryRecords.first))
+        fixture.memoryPageAppears()
 
         let row = MemoryRowPresentation.row(for: .taskHistory, viewModel: fixture.viewModel)
         #expect(row.readability == .partlyUnreadable)
@@ -1744,8 +1748,14 @@ struct MemoryCommandCenterTests {
         let original = try fixture.writeUnreadableFile(at: fixture.taskPlanDetailStore.fileURL)
 
         // Deliberately no `followUpOnTask` here — nothing in this run has loaded that store, so
-        // nothing has recorded a failure for it. That is the ordinary case.
-        #expect(!fixture.viewModel.unreadableMemoryCategories.contains(.taskHistory))
+        // nothing has recorded a failure for it, and the banner is silent. That is the ordinary
+        // case, and it is what used to leave the file unprotected.
+        #expect(fixture.viewModel.localStorageNotice == nil)
+        // The probe knows anyway, which is the fix: the row's words and the delete's action now come
+        // from the same answer rather than from what something happened to have recorded.
+        fixture.memoryPageAppears()
+        #expect(fixture.viewModel.unreadableStores == [.taskPlanDetails])
+        #expect(MemoryRowReadability.of(.taskHistory, viewModel: fixture.viewModel) == .partlyUnreadable)
 
         fixture.viewModel.deleteMemory(in: .taskHistory)
 
@@ -1756,6 +1766,344 @@ struct MemoryCommandCenterTests {
         // than a delete that kept everything.
         #expect(!FileManager.default.fileExists(atPath: fixture.taskHistoryStore.fileURL.path))
         #expect(LocalDataQuarantine().quarantinedSiblings(of: fixture.taskHistoryStore.fileURL).isEmpty)
+    }
+
+    // MARK: - PR #110 fix-round review: one source of truth, and the two stores it rescued
+
+    /// **The escalated finding: the founder's dead end still existed, for two stores of thirteen.**
+    ///
+    /// `LocalStorageLoadFailureSource` has eleven cases; the vision journal and Shortcut run history
+    /// have none. While the row's damaged state was derived from that dictionary, those two could
+    /// never put the Task history row into a damaged state, `canDelete` collapsed to `count > 0`,
+    /// and an empty task history beside an unreadable `shortcuts-run-history.json` was exactly the
+    /// screenshot this ticket was filed from — inside the branch fixing it.
+    @Test
+    func anUnreadableShortcutHistoryMakesAnEmptyTaskHistoryRowClearable() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        let original = try fixture.writeUnreadableFile(at: fixture.shortcutRunHistoryStore.fileURL)
+
+        fixture.memoryPageAppears()
+
+        // Nothing has recorded a load failure and nothing can: that store has no source at all.
+        #expect(fixture.viewModel.localStorageNotice == nil)
+        #expect(fixture.viewModel.memoryEntryCount(for: .taskHistory) == 0)
+
+        let row = MemoryRowPresentation.row(for: .taskHistory, viewModel: fixture.viewModel)
+        #expect(row.readability == .unreadable)
+        #expect(row.detailText == "Can't be read")
+        #expect(row.canDelete, "the founder's dead end, surviving for this store")
+
+        fixture.viewModel.deleteMemory(in: .taskHistory)
+
+        let setAside = LocalDataQuarantine().quarantinedSiblings(of: fixture.shortcutRunHistoryStore.fileURL)
+        #expect(setAside.count == 1)
+        #expect(try Data(contentsOf: try #require(setAside.first)) == original)
+        #expect(MemoryRowPresentation.row(for: .taskHistory, viewModel: fixture.viewModel).readability == .readable)
+    }
+
+    /// The vision journal is the other sourceless store, and it reaches the same row.
+    @Test
+    func anUnreadableVisionJournalAlsoMakesTheTaskHistoryRowClearable() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        try fixture.writeUnreadableFile(at: fixture.visionSessionJournalStore.fileURL)
+
+        fixture.memoryPageAppears()
+
+        #expect(fixture.viewModel.unreadableStores == [.visionSessionJournal])
+        #expect(MemoryRowPresentation.row(for: .taskHistory, viewModel: fixture.viewModel).canDelete)
+    }
+
+    /// **The words and the action come from one answer, checked in the direction that used to fail.**
+    ///
+    /// The confirmation was derived from the recorded-failure set and the delete from a probe, so a
+    /// row could promise to delete a file the press then kept. `.taskPlanDetails` is the case that
+    /// demonstrated it — nothing records it until the user opens a task's detail.
+    @Test
+    func theConfirmationAndTheDeleteAgreeAboutAFileNothingHasLoaded() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        fixture.viewModel.command = "add two and two"
+        fixture.viewModel.start(prebuiltPlan: planCalculating("2 + 2"))
+        try await fixture.waitUntilIdle()
+        try fixture.writeUnreadableFile(at: fixture.taskPlanDetailStore.fileURL)
+
+        fixture.memoryPageAppears()
+
+        // The words the user is about to read.
+        let readability = MemoryRowReadability.of(.taskHistory, viewModel: fixture.viewModel)
+        #expect(readability == .partlyUnreadable)
+        let confirmation = MemoryDeletionCopy.confirmation(for: .taskHistory, readability: readability)
+        #expect(confirmation.contains("keeps that file instead of deleting it"))
+
+        fixture.viewModel.deleteMemory(in: .taskHistory)
+
+        // And the press did what they said. Before this round the confirmation would have promised
+        // deletion while the press kept the file.
+        #expect(LocalDataQuarantine().quarantinedSiblings(of: fixture.taskPlanDetailStore.fileURL).count == 1)
+        #expect(try #require(fixture.viewModel.memoryDeletionStatusMessage).contains("still on your Mac"))
+    }
+
+    /// The fixture's stand-in for the Memory page appearing has to stay the calls the page makes.
+    ///
+    /// A source scan rather than a comment, because the page's `onAppear` has gained a call twice and
+    /// the fixture had to follow it both times — and a fixture that drifts behind it makes every
+    /// readability assertion in this suite a test of something the app never does.
+    @Test
+    func theMemoryPageAppearanceRefreshesEverythingThisFixtureDoes() throws {
+        let source = try MacAgentSource.read("CommandCenterView.swift")
+        for call in ["viewModel.refreshMemorySettings()", "viewModel.refreshMemoryEntries()", "viewModel.refreshStoreReadability()"] {
+            #expect(
+                MacAgentSource.count(of: call, inText: source) >= 1,
+                "MemoryView's onAppear no longer calls \(call) — update `memoryPageAppears()` with it"
+            )
+        }
+    }
+
+    // MARK: - PR #110 fix-round review: the guards nothing could see
+
+    /// **A run paused at its approval must not reload the Memory rows.**
+    ///
+    /// `if status.endsTheRun` was unpinned: deleting it passed the whole suite. It is load-bearing
+    /// well beyond the preview-only exit — `performStart` records `.approvalNeeded` the moment it
+    /// raises the prompt, so without the guard eight encrypted reads run on the main actor, able to
+    /// raise a storage banner, while an approval panel is on screen waiting for the user.
+    ///
+    /// Observed through a store written behind the view model's back: if a refresh happened at the
+    /// pause, the snippet would be published there.
+    @Test
+    func aRunPausedAtItsApprovalDoesNotReloadTheMemoryRows() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        fixture.memoryPageAppears()
+
+        fixture.viewModel.command = "overwrite the notes"
+        fixture.viewModel.start(prebuiltPlan: try fixture.planNeedingApproval())
+        let deadline = Date().addingTimeInterval(30)
+        while !fixture.viewModel.isAwaitingApproval {
+            #expect(Date() < deadline, "the run never reached its approval")
+            guard Date() < deadline else { return }
+            try await Task.sleep(nanoseconds: 5_000_000)
+        }
+
+        try fixture.snippetStore.save(StoredSnippet(trigger: ";sig", expansion: "signature"))
+        #expect(fixture.viewModel.savedSnippets.isEmpty, "the pause reloaded the Memory rows")
+
+        // The control: the same write is picked up the moment the run actually ends, so the silence
+        // above is the guard rather than a refresh that never works.
+        fixture.viewModel.cancelCurrentRun()
+        try await fixture.waitUntilIdle()
+        #expect(fixture.viewModel.savedSnippets.map(\.trigger) == [";sig"])
+    }
+
+    /// **The banner never instructs someone to press a control that is not there.**
+    ///
+    /// Untested and reachable: the clipboard switch's own settings file is the one source with no
+    /// `memoryCategory`, so when it is the only failure the way-out sentence must not appear.
+    @Test
+    func aBannerAboutAStoreWithNoMemoryRowDoesNotTellTheUserToOpenMemory() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        try fixture.writeUnreadableFile(at: fixture.clipboardSettingsStore.fileURL)
+
+        fixture.viewModel.refreshClipboardHistoryNotice()
+
+        let notice = try #require(fixture.viewModel.localStorageNotice)
+        #expect(notice.contains("clipboard history settings"))
+        #expect(!notice.contains("Open Memory in Command Center"), "there is no row to press: \(notice)")
+
+        // The control, so this is the gate rather than a banner that never carries the sentence: a
+        // store that *does* have a row still gets it.
+        try fixture.writeUnreadableFile(at: fixture.snippetStore.fileURL)
+        fixture.memoryPageAppears()
+        #expect(try #require(fixture.viewModel.localStorageNotice).contains("Open Memory in Command Center"))
+    }
+
+    /// The same source failing with a *different* message is news and must republish — the other
+    /// direction of F1's guard, which compares the whole detail string rather than the source alone.
+    @Test
+    func aSourceFailingForADifferentReasonRepublishesTheNotice() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        try fixture.writeUnreadableFile(at: fixture.snippetStore.fileURL)
+        fixture.memoryPageAppears()
+        let decodeFailure = try #require(fixture.viewModel.localStorageNotice)
+
+        var emissions = 0
+        let subscription = fixture.viewModel.$localStorageNotice
+            .dropFirst()
+            .sink { _ in emissions += 1 }
+        defer { subscription.cancel() }
+
+        // A directory where the file was: still unreadable, and a different sentence about why.
+        try FileManager.default.removeItem(at: fixture.snippetStore.fileURL)
+        try FileManager.default.createDirectory(at: fixture.snippetStore.fileURL, withIntermediateDirectories: true)
+        fixture.viewModel.refreshMemoryEntries()
+
+        #expect(emissions == 1, "a different failure on the same store said nothing")
+        #expect(fixture.viewModel.localStorageNotice != decodeFailure)
+        #expect(try #require(fixture.viewModel.localStorageNotice).contains("snippets"))
+    }
+
+    /// The plural half of the kept-file wording, which had no test.
+    @Test
+    func theDeleteResultCountsTheFilesItKept() {
+        #expect(
+            MemoryDeletionCopy.outcome(for: .taskHistory, deletedFileCount: 2, keptFileCount: 1)
+                == "Task history starts over. The file Sonny could not read is still on your Mac."
+        )
+        #expect(
+            MemoryDeletionCopy.outcome(for: .taskHistory, deletedFileCount: 1, keptFileCount: 2)
+                == "Task history starts over. The 2 files Sonny could not read are still on your Mac."
+        )
+        // Nothing kept keeps the sentence this page has always used.
+        #expect(
+            MemoryDeletionCopy.outcome(for: .snippets, deletedFileCount: 1, keptFileCount: 0)
+                == "Deleted snippets — 1 file."
+        )
+    }
+
+    // MARK: - PR #110 fix-round review: the pages that contradicted their own row
+
+    /// **The three `MemoryRowDestination.page` rows kept the empty-state copy the sheet had replaced.**
+    ///
+    /// With `routines.json` unreadable the Memory row correctly reads "Can't be read", and pressing
+    /// View opened a page saying "No routines yet · Ask Sonny to save a repeatable sequence". These
+    /// are two of the three stores `LocalDataQuarantine` names as things a person made by hand, so
+    /// being told they have none is worst here.
+    @Test
+    func aPageDestinationRowsEmptyStateSaysTheFileCannotBeReadAndNamesTheControl() {
+        for category in MemoryCategory.allCases {
+            guard case .page = MemoryRowDestination.of(category) else { continue }
+            let title = MemoryDeletionCopy.emptyStateTitle(for: category, readability: .unreadable)
+            let message = MemoryDeletionCopy.emptyStateMessage(for: category, readability: .unreadable)
+            #expect(title == "Sonny can't read your \(category.title.lowercased())")
+            // A page away from the Memory row, so the sentence has to name where the control is —
+            // unlike the sheet, which opens over it.
+            #expect(message.hasPrefix("Open Memory in Command Center and press Delete"), "\(category.title): \(message)")
+            #expect(message.contains("The file stays on your Mac."))
+        }
+
+        // The sheet rows keep the shorter sentence, since the row is directly behind them.
+        #expect(
+            MemoryDeletionCopy.emptyStateMessage(for: .snippets, readability: .unreadable)
+                .hasPrefix("Press Delete on the snippets row")
+        )
+    }
+
+    /// And the readable half is unchanged, so the pages say exactly what they said before.
+    @Test
+    func aPageDestinationRowsReadableEmptyStateIsTheSentenceThatPageAlreadyUsed() {
+        #expect(
+            MemoryDeletionCopy.emptyStateMessage(for: .routines, readability: .readable)
+                == "Ask Sonny to save a repeatable sequence, then it will appear here."
+        )
+        #expect(
+            MemoryDeletionCopy.emptyStateMessage(for: .workspaces, readability: .readable)
+                == "Ask Sonny to group apps and safe URLs for one-click opening."
+        )
+        #expect(
+            MemoryDeletionCopy.emptyStateMessage(for: .taskHistory, readability: .readable)
+                == TaskSearchPresentation.neverRanAnything.detail
+        )
+        #expect(MemoryDeletionCopy.emptyStateTitle(for: .routines, readability: .readable) == "No routines yet")
+        #expect(MemoryDeletionCopy.emptyStateTitle(for: .workspaces, readability: .readable) == "No workspaces yet")
+    }
+
+    // MARK: - The founder's Reveal in Finder control
+
+    /// **Telling the user where the kept file is, with a control rather than a path** (founder
+    /// decision, 2026-08-23). Every file the delete kept, not the first, because the message beside
+    /// it already branches on how many there were.
+    @Test
+    func revealingSetAsideFilesShowsEveryOneTheDeleteKept() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        fixture.viewModel.command = "add two and two"
+        fixture.viewModel.start(prebuiltPlan: planCalculating("2 + 2"))
+        try await fixture.waitUntilIdle()
+        // Two files under one row, both unreadable, so one press keeps two.
+        try fixture.writeUnreadableFile(at: fixture.taskPlanDetailStore.fileURL)
+        try fixture.writeUnreadableFile(at: fixture.shortcutRunHistoryStore.fileURL)
+        fixture.memoryPageAppears()
+
+        fixture.viewModel.deleteMemory(in: .taskHistory)
+
+        #expect(fixture.viewModel.setAsideFilesFromLastDelete.count == 2)
+        #expect(
+            try #require(fixture.viewModel.memoryDeletionStatusMessage)
+                .contains("The 2 files Sonny could not read are still on your Mac.")
+        )
+
+        fixture.viewModel.revealSetAsideFilesInFinder()
+
+        let revealed = try #require(fixture.finderReveals.revealed.last)
+        #expect(revealed.count == 2, "the control showed \(revealed.count) of 2 kept files")
+        #expect(Set(revealed) == Set(fixture.viewModel.setAsideFilesFromLastDelete))
+        #expect(revealed.allSatisfy { FileManager.default.fileExists(atPath: $0.path) })
+    }
+
+    /// A delete that kept nothing leaves no control and no stale list behind it.
+    @Test
+    func adeleteThatKeptNothingOffersNothingToReveal() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        try fixture.snippetStore.save(StoredSnippet(trigger: ";sig", expansion: "signature"))
+        fixture.memoryPageAppears()
+
+        fixture.viewModel.deleteMemory(in: .snippets)
+
+        #expect(fixture.viewModel.setAsideFilesFromLastDelete.isEmpty)
+        fixture.viewModel.revealSetAsideFilesInFinder()
+        #expect(fixture.finderReveals.revealed.isEmpty, "a delete that kept nothing opened Finder")
+    }
+
+    /// The list does not outlive the delete that filled it — a second, clean delete clears it, so the
+    /// control cannot sit beside a message that says nothing was kept.
+    @Test
+    func aLaterCleanDeleteClearsWhatTheEarlierOneKept() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        try fixture.writeUnreadableFile(at: fixture.outputLocationStore.fileURL)
+        fixture.memoryPageAppears()
+        fixture.viewModel.deleteMemory(in: .outputLocations)
+        #expect(fixture.viewModel.setAsideFilesFromLastDelete.count == 1)
+
+        try fixture.snippetStore.save(StoredSnippet(trigger: ";sig", expansion: "signature"))
+        fixture.memoryPageAppears()
+        fixture.viewModel.deleteMemory(in: .snippets)
+
+        #expect(fixture.viewModel.setAsideFilesFromLastDelete.isEmpty)
+    }
+
+    /// The seam also makes the reveal that was already there testable, which is why it was worth
+    /// adding rather than reaching for a source scan.
+    @Test
+    func aRunSuggestionsRevealGoesThroughTheSameSeam() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        let file = fixture.root.appendingPathComponent("artifact.md")
+        try Data("x".utf8).write(to: file, options: .atomic)
+
+        fixture.viewModel.runSuggestion(
+            RunSuggestion(title: "Reveal in Finder", kind: .revealInFinder, value: file.path)
+        )
+
+        #expect(fixture.finderReveals.revealed == [[file]])
+    }
+
+    /// What a screen reader is told, which agrees with the message's own singular and plural.
+    @Test
+    func theRevealControlsAccessibilityLabelSaysWhatWillBeShown() {
+        #expect(
+            MemoryDeletionCopy.revealAccessibilityLabel(fileCount: 1)
+                == "Reveal the file Sonny could not read in Finder"
+        )
+        #expect(
+            MemoryDeletionCopy.revealAccessibilityLabel(fileCount: 3)
+                == "Reveal the 3 files Sonny could not read in Finder"
+        )
     }
 
     // MARK: - SONNY-246: the lists reload while the page is open
@@ -1981,7 +2329,8 @@ struct MemoryCommandCenterTests {
         try await fixture.waitUntilIdle()
         try fixture.writeUnreadableFile(at: fixture.taskPlanDetailStore.fileURL)
         _ = fixture.viewModel.followUpOnTask(try #require(fixture.viewModel.taskHistoryRecords.first))
-        #expect(fixture.viewModel.unreadableMemoryCategories.contains(.taskHistory))
+        fixture.memoryPageAppears()
+        #expect(fixture.viewModel.unreadableStores.contains(.taskPlanDetails))
 
         // Read and execute stay, so every load below still works; only the rename and the unlink
         // are refused.
@@ -1993,7 +2342,7 @@ struct MemoryCommandCenterTests {
 
         // The premise: the file really is still there, which is what makes the row's claim true.
         #expect(FileManager.default.fileExists(atPath: fixture.taskPlanDetailStore.fileURL.path))
-        #expect(fixture.viewModel.unreadableMemoryCategories.contains(.taskHistory))
+        #expect(fixture.viewModel.unreadableStores.contains(.taskPlanDetails))
         #expect(try #require(fixture.viewModel.localStorageNotice).contains("what past tasks planned"))
         #expect(
             try #require(fixture.viewModel.memoryDeletionStatusMessage)
@@ -2518,6 +2867,9 @@ private struct MemoryFixture {
     let taskPlanDetailStore: TaskPlanDetailStore
     let approvedAppStore: ApprovedAppStore
     let resumableTaskStore: ResumableTaskStore
+    let shortcutRunHistoryStore: ShortcutRunHistoryStore
+    let visionSessionJournalStore: VisionSessionJournalStore
+    let finderReveals: MemoryFixtureFinderRevealer
     let clipboardSettingsStore: ClipboardHistorySettingsStore
     let clipboardHistoryStore: ClipboardHistoryStore
     let outputLocationStore: OutputLocationStore
@@ -2649,6 +3001,42 @@ private struct MemoryFixture {
     static let foreignEncryption = LocalStorageEncryption(
         keyManager: MemoryFixtureKeyManager(bytes: Data(repeating: 0x99, count: 32))
     )
+
+    /// A plan that stops for an approval: it overwrites a file that already exists, which is what
+    /// the consequence rule escalates. Same shape `ResumableTaskRunTests` uses.
+    func planNeedingApproval() throws -> AgentPlan {
+        let folder = try makeOutputFolder("Reports")
+        let occupied = folder.appendingPathComponent("notes.md")
+        try Data("existing".utf8).write(to: occupied, options: .atomic)
+        return AgentPlan(
+            summary: "Overwrite the notes.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(
+                    id: "draft",
+                    operation: .createLocalDraft,
+                    description: "Overwrite them.",
+                    outputPath: occupied.path,
+                    draftTitle: "Notes",
+                    draftContent: "Replacement."
+                )
+            ]
+        )
+    }
+
+    /// Everything `MemoryView`'s `.onAppear` does, in one call.
+    ///
+    /// **Named for the moment rather than for the calls**, because which calls it is has changed
+    /// twice and every test that listed them had to change with it. It also stops a test asserting a
+    /// damaged row after `refreshMemoryEntries()` alone, which no surface in the app ever does:
+    /// readability comes from `refreshStoreReadability()`, and the page runs both.
+    /// `theMemoryPageAppearanceRefreshesEverythingThisFixtureDoes` pins that this stays the same
+    /// three calls the view makes.
+    func memoryPageAppears() {
+        viewModel.refreshMemorySettings()
+        viewModel.refreshMemoryEntries()
+        viewModel.refreshStoreReadability()
+    }
 
     /// A real folder inside the whitelist, returned in the form the store records it in — the
     /// temporary directory is a symlink on macOS, so a test comparing the unresolved path against a
@@ -2793,6 +3181,7 @@ private func makeMemoryFixture(
         )
         : LocalDataDeletionService(fileURLs: [])
 
+    let finderReveals = MemoryFixtureFinderRevealer()
     let viewModel = AgentViewModel(
         routineStore: routineStore,
         workspaceStore: workspaceStore,
@@ -2805,6 +3194,8 @@ private func makeMemoryFixture(
         browserOpener: HermeticBrowserOpener(),
         appOpener: HermeticAppOpener(),
         fileOpener: HermeticFileOpener(),
+        // A test that reached the live implementation would open Finder on the developer's machine.
+        finderRevealer: { finderReveals.record($0) },
         mediaOpener: HermeticMediaOpener(),
         runningAppSwitcher: HermeticRunningAppSwitcher(),
         shortcutInvoker: HermeticShortcutInvoker(),
@@ -2842,6 +3233,9 @@ private func makeMemoryFixture(
         taskPlanDetailStore: taskPlanDetailStore,
         approvedAppStore: approvedAppStore,
         resumableTaskStore: resumableTaskStore,
+        shortcutRunHistoryStore: shortcutRunHistoryStore,
+        visionSessionJournalStore: visionSessionJournalStore,
+        finderReveals: finderReveals,
         clipboardSettingsStore: clipboardSettingsStore,
         clipboardHistoryStore: clipboardHistoryStore,
         outputLocationStore: outputLocationStore,
@@ -2857,6 +3251,25 @@ private struct MemoryFixtureKeyManager: LocalStorageKeyManaging {
     let bytes: Data
 
     func keyData() throws -> Data { bytes }
+}
+
+/// Records what `revealSetAsideFilesInFinder()` and `runSuggestion(.revealInFinder)` would have
+/// shown, since no agent can watch Finder open (SONNY-239, founder decision 2026-08-23).
+final class MemoryFixtureFinderRevealer: @unchecked Sendable {
+    private let lock = NSLock()
+    private var calls: [[URL]] = []
+
+    func record(_ urls: [URL]) {
+        lock.lock()
+        defer { lock.unlock() }
+        calls.append(urls)
+    }
+
+    var revealed: [[URL]] {
+        lock.lock()
+        defer { lock.unlock() }
+        return calls
+    }
 }
 
 private struct MemoryFixtureShortcutCatalog: ShortcutCatalogProviding {

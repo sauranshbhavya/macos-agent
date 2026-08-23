@@ -501,7 +501,10 @@ private struct TasksFoundationView: View {
                         onToggleSection: toggleSection,
                         onSelect: { selectedLogEntry = logEntry(for: $0) },
                         onDelete: { viewModel.deleteTask($0) },
-                        emptyState: TaskSearchPresentation.emptyState(query: viewModel.taskHistoryQuery)
+                        emptyState: TaskSearchPresentation.emptyState(
+                            query: viewModel.taskHistoryQuery,
+                            readability: MemoryRowReadability.of(.taskHistory, viewModel: viewModel)
+                        )
                     )
                     .padding(.bottom, 24)
                 }
@@ -2750,10 +2753,21 @@ private struct RoutinesView: View {
                     .frame(height: 1)
 
                 if viewModel.savedRoutines.isEmpty {
+                    // **The unreadable case reaches this page too** (PR #110 fix-round review).
+                    // `MemoryRowDestination.of` sends Routines and Workspaces to their own pages
+                    // rather than to `MemoryEntriesSheet`, so the six sheet rows got the
+                    // can't-be-read empty state and these two kept "No routines yet · Ask Sonny to
+                    // save a repeatable sequence" — beside a Memory row correctly reading "Can't be
+                    // read". Routines and workspaces are two of the three stores
+                    // `LocalDataQuarantine` names as things a person made by hand, so this is the
+                    // pair where being told they have none is worst.
+                    let readability = MemoryRowReadability.of(.routines, viewModel: viewModel)
                     CollectionEmptyState(
-                        systemImage: "repeat",
-                        title: "No routines yet",
-                        message: "Ask Sonny to save a repeatable sequence, then it will appear here."
+                        systemImage: readability == .readable
+                            ? "repeat"
+                            : MemoryDeletionCopy.emptyStateSystemImage(for: readability),
+                        title: MemoryDeletionCopy.emptyStateTitle(for: .routines, readability: readability),
+                        message: MemoryDeletionCopy.emptyStateMessage(for: .routines, readability: readability)
                     )
                 } else {
                     ScrollView {
@@ -2949,10 +2963,14 @@ private struct WorkspacesView: View {
                     .frame(height: 1)
 
                 if viewModel.savedWorkspaces.isEmpty {
+                    // The other page-destination row — see the note on `RoutinesView`'s empty state.
+                    let readability = MemoryRowReadability.of(.workspaces, viewModel: viewModel)
                     CollectionEmptyState(
-                        systemImage: "rectangle.3.group",
-                        title: "No workspaces yet",
-                        message: "Ask Sonny to group apps and safe URLs for one-click opening."
+                        systemImage: readability == .readable
+                            ? "rectangle.3.group"
+                            : MemoryDeletionCopy.emptyStateSystemImage(for: readability),
+                        title: MemoryDeletionCopy.emptyStateTitle(for: .workspaces, readability: readability),
+                        message: MemoryDeletionCopy.emptyStateMessage(for: .workspaces, readability: readability)
                     )
                 } else {
                     ScrollView {
@@ -3838,9 +3856,14 @@ enum MemoryRowReadability: Equatable {
     /// A file under this row will not open, and there is nothing left to show.
     case unreadable
 
+    /// **Read off `unreadableStores`, which is the probe's answer** (PR #110 fix-round review). It
+    /// used to read `unreadableMemoryCategories`, derived from the failures something had happened
+    /// to record — so the words on this row and the action its Delete took came from two different
+    /// populations and disagreed in both directions, and two of the thirteen stores could not
+    /// reach it at all.
     @MainActor
     static func of(_ category: MemoryCategory, viewModel: AgentViewModel) -> MemoryRowReadability {
-        guard viewModel.unreadableMemoryCategories.contains(category) else {
+        guard category.stores.contains(where: { viewModel.unreadableStores.contains($0) }) else {
             return .readable
         }
         return viewModel.memoryEntryCount(for: category) > 0 ? .partlyUnreadable : .unreadable
@@ -4063,6 +4086,9 @@ private struct MemoryView: View {
             // lands without a relaunch once row 19 supplies a real provider.
             viewModel.refreshMemorySettings()
             viewModel.refreshMemoryEntries()
+            // Which rows can be read at all, probed rather than inferred from whatever has happened
+            // to fail so far — the one answer this page's words and its Delete both read.
+            viewModel.refreshStoreReadability()
         }
         .sheet(item: $entriesCategory) { category in
             MemoryEntriesSheet(
@@ -4193,10 +4219,34 @@ private struct MemoryView: View {
                     .fill(SonnyTheme.border)
                     .frame(height: 1)
 
-                LocalDataDeletionStatusMessage(message: viewModel.memoryDeletionStatusMessage)
-                    .frame(maxWidth: .infinity, alignment: .leading)
-                    .padding(.horizontal, 18)
-                    .padding(.vertical, 12)
+                // **The control the founder's decision of 2026-08-23 asks for, beside the sentence
+                // rather than inside it.** "The file Sonny could not read is still on your Mac."
+                // is disclosure the user cannot act on, and a path written into the sentence would
+                // not help either — `~/Library` is hidden in Finder by default. This opens that
+                // folder with every kept file selected.
+                //
+                // Gated on the files rather than on the message's words: reading "is still on your
+                // Mac" out of the string would be a second place that has to agree with
+                // `MemoryDeletionCopy.outcome`.
+                HStack(spacing: 12) {
+                    LocalDataDeletionStatusMessage(message: viewModel.memoryDeletionStatusMessage)
+                        .frame(maxWidth: .infinity, alignment: .leading)
+
+                    if !viewModel.setAsideFilesFromLastDelete.isEmpty {
+                        Button("Reveal in Finder") {
+                            viewModel.revealSetAsideFilesInFinder()
+                        }
+                        .buttonStyle(CommandCenterRowActionStyle())
+                        .accessibilityLabel(
+                            MemoryDeletionCopy.revealAccessibilityLabel(
+                                fileCount: viewModel.setAsideFilesFromLastDelete.count
+                            )
+                        )
+                    }
+                }
+                .frame(maxWidth: .infinity, alignment: .leading)
+                .padding(.horizontal, 18)
+                .padding(.vertical, 12)
             }
         }
         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
@@ -4460,6 +4510,17 @@ enum MemoryDeletionCopy {
         return "\(category.title) starts over. \(kept)"
     }
 
+    /// What a screen reader says for the Reveal in Finder control beside a delete's result.
+    ///
+    /// The visible label is two words because the row-action buttons beside it are; the
+    /// accessibility label says what is about to be shown, and agrees with the message's own
+    /// singular/plural rather than being written twice.
+    static func revealAccessibilityLabel(fileCount: Int) -> String {
+        fileCount == 1
+            ? "Reveal the file Sonny could not read in Finder"
+            : "Reveal the \(fileCount) files Sonny could not read in Finder"
+    }
+
     /// The sheet's title when the row's file will not read.
     ///
     /// The empty-state title it replaces — "No output locations yet" — is the same lie the row's
@@ -4470,10 +4531,22 @@ enum MemoryDeletionCopy {
     }
 
     /// Paired with the command that ends the state, exactly as `emptyMessage(for:)` is — except that
-    /// here the command is a control on the page behind this sheet rather than something to ask
-    /// Sonny for.
+    /// here the command is a control rather than something to ask Sonny for.
+    ///
+    /// **Which sentence depends on where the reader is standing, and that is read off
+    /// `MemoryRowDestination` rather than listed again** (PR #110 fix-round review). From the
+    /// entries sheet the Memory row is directly behind them; from the Routines, Workspaces or Tasks
+    /// page it is a page away and has to be named. Those three are exactly the `.page` destinations,
+    /// so the split is the routing that already exists.
     static func unreadableSheetMessage(for category: MemoryCategory) -> String {
-        "Press Delete on the \(category.title.lowercased()) row to start over. The file stays on your Mac."
+        let row = category.title.lowercased()
+        let tail = "to start over. The file stays on your Mac."
+        switch MemoryRowDestination.of(category) {
+        case .entriesSheet:
+            return "Press Delete on the \(row) row \(tail)"
+        case .page:
+            return "Open Memory in Command Center and press Delete on the \(row) row \(tail)"
+        }
     }
 
     /// What removing one entry takes. Shorter than the per-type message because the row beside it
@@ -4519,8 +4592,18 @@ enum MemoryDeletionCopy {
             return "Allow Sonny to control an app during a screen task, and it will appear here."
         case .resumableTasks:
             return "If a task stops before it finishes, it will appear here."
-        case .routines, .workspaces, .taskHistory:
-            return ""
+        case .routines:
+            // **The three page-destination rows have real sentences now** (PR #110 fix-round
+            // review). They returned `""` while the sheet was the only caller; their own pages now
+            // read their empty states from here, so a page and its Memory row cannot say different
+            // things about the same store. The words are the ones those pages already used.
+            return "Ask Sonny to save a repeatable sequence, then it will appear here."
+        case .workspaces:
+            return "Ask Sonny to group apps and safe URLs for one-click opening."
+        case .taskHistory:
+            // Pointed at the constant rather than repeated: `TaskSearchPresentation` owns the Tasks
+            // page's empty copy, including the searching-versus-never-ran split this has no part in.
+            return TaskSearchPresentation.neverRanAnything.detail
         }
     }
 }
