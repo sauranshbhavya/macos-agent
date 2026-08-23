@@ -13,7 +13,13 @@ public enum PathValidationError: Error, Equatable, LocalizedError {
         case .pathIsEmpty:
             return "The path is empty."
         case .outsideWhitelist(let path, let roots):
-            return "\(path) is outside the writable whitelist: \(roots.joined(separator: ", "))."
+            // "Outside the writable whitelist" named an implementation detail the person reading it
+            // has no way to know about, and then listed the roots — one of which, in SONNY-242's
+            // report, was the folder they had plainly asked for. The resolution fix is what makes
+            // the path in this sentence the one they meant; this half is only the sentence saying
+            // it plainly. Path first, because the workspace detail sheet renders this after
+            // "Not in effect — " and needs the subject at the front.
+            return "\(path) is not one of the folders Sonny can use: \(roots.joined(separator: ", "))."
         case .notFound(let path):
             return "\(path) does not exist."
         case .notDirectory(let path):
@@ -107,6 +113,19 @@ public struct PathWhitelist: Sendable {
 
     /// Resolves a user-supplied output path, falling back to a generated default file.
     /// If `rawPath` names an existing directory, `defaultName`/`ext` are appended inside it.
+    ///
+    /// **The existence probe asks about the path this type would resolve, not about a different
+    /// one** (SONNY-242). It used to expand only the tilde, so a *relative* folder name was tested
+    /// against the process's working directory while every other line in this file resolved it
+    /// against the home directory. `Desktop` therefore answered "no such directory" from an app
+    /// whose working directory is `/`, fell through to `validateOutputPath`, and named
+    /// `~/Desktop` — the folder itself — as the file to write. The write then fails, because
+    /// `Data.write(to:)` on a directory throws (measured: "The file ... couldn't be saved in the
+    /// folder ..."), so the draft the person asked for is simply lost. The two answers also
+    /// disagreed by *where the process happened to be* — a suite run from a home directory and one
+    /// run from a checkout would take different branches. `canonicalURL` is the same expansion
+    /// `validateInsideWhitelist` performs on the very next line, which is what makes the probe and
+    /// the validation one question rather than two.
     public func resolveOutputPath(
         rawPath: String?,
         defaultName: String,
@@ -114,7 +133,7 @@ public struct PathWhitelist: Sendable {
         fileManager: FileManager
     ) throws -> URL {
         if let rawPath, !rawPath.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
-            let expanded = (rawPath as NSString).expandingTildeInPath
+            let expanded = Self.canonicalURL(rawPath).path
             if fileManager.fileExists(atPath: expanded) {
                 let url = try validateInsideWhitelist(rawPath)
                 let values = try url.resourceValues(forKeys: [.isDirectoryKey])

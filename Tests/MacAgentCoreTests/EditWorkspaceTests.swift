@@ -398,7 +398,7 @@ struct EditWorkspaceTests {
         }
         #expect(path.hasSuffix(outside.lastPathComponent))
         #expect(roots == [fixture.root.resolvingSymlinksInPath().path])
-        #expect(validation.errorDescription?.contains("is outside the writable whitelist") == true)
+        #expect(validation.errorDescription?.contains("is not one of the folders Sonny can use") == true)
 
         let stored = try fixture.store.workspace(named: "Client Alpha")
         #expect(stored.fileLocations == nil)

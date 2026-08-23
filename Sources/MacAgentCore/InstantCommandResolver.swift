@@ -819,12 +819,12 @@ public struct InstantCommandResolver: Sendable {
         )
     }
 
+    /// The list this used to hold literally now lives in `SpokenName`, which
+    /// `SpokenPath.normalized` reads too (SONNY-242). It was `["my ", "the "]` here and nowhere
+    /// else, so a folder phrase the planner emitted — "my Desktop" — reached `PathWhitelist` with
+    /// the possessive still on it and resolved to `~/my Desktop`. One list, two callers.
     private func strippedLaunchArticle(_ candidate: String) -> String {
-        let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
-        for article in ["my ", "the "] where trimmed.lowercased().hasPrefix(article) {
-            return String(trimmed.dropFirst(article.count))
-        }
-        return trimmed
+        SpokenName.withoutLeadingArticle(candidate)
     }
 
     private func normalizedLaunchName(_ value: String) -> String {

@@ -1000,11 +1000,20 @@ public final class AgentActionExecutor {
     /// Two things stay whole-plan on purpose, both marked below: `edit_workspace`'s plan-shape rule,
     /// which is unenforceable from inside a unit, and a resolver's right to replace the plan with a
     /// clarification.
+    ///
+    /// **A folder a person named in English becomes the folder they meant here, before anything
+    /// reads it** (SONNY-242). This is the first line of the resolve phase all three gates run, so
+    /// it is the one place a phrase can be turned into a path exactly once: `prepare` previews the
+    /// resolved path, `assessRisk` checks that same path for a collision, and `execute` writes it.
+    /// Doing it in `PathWhitelist` instead would put text rewriting inside the containment
+    /// arithmetic a workspace's restriction scope also compares through; `SpokenPath` says why that
+    /// is the wrong home at more length.
     private func resolveDefaultOutputs(
-        in plan: AgentPlan,
+        in rawPlan: AgentPlan,
         claimedEarlierInThisRun: RunClaims = .none,
         namedByEnclosingPlan: PlannedDestinations = .none
     ) throws -> AgentPlan {
+        let plan = SpokenPath.normalizingFolderPhrases(in: rawPlan)
         _ = try workflow(in: plan)
 
         var resolvedSteps: [AgentStep] = []
