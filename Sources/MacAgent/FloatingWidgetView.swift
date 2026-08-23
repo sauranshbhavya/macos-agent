@@ -1650,18 +1650,25 @@ private struct WidgetResultPanel: View {
 /// anything — a cross there would say something the button does not. So the divergence is stated
 /// rather than propagated.
 ///
-/// **What the words cost, and where they went.** The visible text was the only thing naming these
-/// controls for a sighted user, so it now lives in two places instead of one: `.help` carries the
-/// founder's own word ("Continue", "Not now") on hover, and `.accessibilityLabel` keeps the full
-/// sentence naming the task, which matters more once the button shows no text at all.
+/// **What the words cost, and the honest state of where they went.** `.accessibilityLabel` keeps the
+/// full sentence naming the task, which matters *more* once the button shows no text at all, and
+/// that one is solid. `.help` carries the founder's own word — "Continue", "Not now" — on hover, and
+/// **that one may simply not fire**: `micHintPointerEnteredMic` in this same file records `.help()`
+/// as having been "confirmed unreliable here too, not just assumed", which is why the mic's hint is
+/// a real layout row rather than a tooltip. Three other `.help` calls in this file predate that
+/// finding and were left in place, and these two join them on the same footing: free if it works,
+/// nothing lost if it does not. **So the plain reading is that a sighted user loses the words**, which
+/// is the founder's decision costing what it costs rather than a gap papered over with a mechanism
+/// that might not run. The manual item asks specifically whether the tooltip appears at all; a real
+/// hover row like the mic's is the remedy if it does not, and that is a design change, not a fix.
 ///
 /// **The cross is "not now" and nothing else, and the residual ambiguity is real.** It calls the
 /// same `onDismiss` the labelled button called — the record is untouched, the offer returns at the
 /// next launch. A cross does also read as "close this panel", and *closing* is genuinely a different,
 /// weaker action here: letting the widget collapse leaves the offer unanswered and it comes straight
-/// back. Nothing in a 23pt glyph can distinguish the two; the tooltip and the VoiceOver label are the
-/// whole mitigation, and the founder's manual pass is where "does the cross read as an answer" gets
-/// decided.
+/// back. Nothing in a 23pt glyph can distinguish the two, and with the tooltip in doubt the VoiceOver
+/// label is the only mitigation that certainly runs — so "does the cross read as an answer" is a
+/// question only the founder's manual pass can settle.
 private struct WidgetResumeOfferPanel: View {
     let command: String
     let onContinue: () -> Void
