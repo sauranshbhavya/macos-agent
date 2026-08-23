@@ -452,9 +452,14 @@ enum ResumeOfferPresentation {
     /// `.fixedSize(horizontal: false, vertical: true)` is on it: that modifier is precisely what
     /// turns "this text got less height than it needs" from a truncation into an overflow onto
     /// whatever sits below. And a mis-measure is *cheap* here for the reason `messageLineLimit`
-    /// gives: at any width from about 535pt up — the widget's own outer content is 568pt wide, which
-    /// leaves 532pt inside this panel's padding — all three real messages measure as one line, 1.5pt
-    /// under the boundary.
+    /// gives. The widget's own outer content is 568pt wide — a 472pt pill, 12pt, and two 36pt
+    /// circular buttons 12pt apart — which leaves **532pt** inside this panel's 18pt padding, and
+    /// 532pt clears all three real messages on one line: 530.5, 531.4 and 524.7, the tightest of
+    /// them by **0.6pt**. Whether SwiftUI ever measures at that width is not something reading the
+    /// source can settle; that the panel sits two thirds of a point from flipping is.
+    /// `everyTruncatedMessageSitsWithinAWhiskerOfTheOneLineBoundary` re-derives the comparison from
+    /// live font metrics — it asserts the relationship rather than these three figures, which are
+    /// what that same measurement printed.
     ///
     /// Reserving the two lines makes the message's slot a constant the stack can compute without
     /// measuring anything, so the controls below it are placed at the same offset in every pass.
