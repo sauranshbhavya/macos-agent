@@ -573,6 +573,28 @@ struct LocalRedactionLiveVisionTests {
         #expect(ImageFixtures.isWhite(ImageFixtures.rgb(inPNG: redacted, x: 880, yFromTop: 190)))
     }
 
+    /// **The ceiling is a tripwire for a pathological regression, not a latency budget** — and the
+    /// difference is what SONNY-224 came here to fix. At `.seconds(5)` this was a bet on how busy the
+    /// machine was, and it was losing: measured with the flagged suite at `961b9c2`, this same call
+    /// took **1465 ms** on an idle run, **4422 ms** and **4644 ms** with an ordinary parallel suite
+    /// around it, and **11742 ms** with a cold `swift build` beside it (`grep REDACTION-LATENCY-MS`
+    /// over four consecutive runs). The middle two are inside a 5 s ceiling by 7%, which is not a
+    /// margin; the last one is over it. Under a mutation battery that failure is worse than a red
+    /// suite — `scripts/mutate` reads any failing test as the mutant being caught, so a wall-clock
+    /// loss here is recorded as coverage that does not exist.
+    ///
+    /// Sixty seconds keeps every claim this test actually makes. The claim is not "redaction is
+    /// fast" — the real number is printed below and belongs in the record with its SHA — it is that
+    /// a regression turning a second and a half into a minute fails loudly. That still fails, with
+    /// five times the headroom over the worst load yet measured here, and no dependence on what else
+    /// the machine is doing.
+    ///
+    /// The two content expectations are new with the same change. Timing a call that is never
+    /// checked to have done anything is a benchmark rather than a test, and a mutant that made
+    /// `redactCapture` return early would have passed this the whole time — faster. Writing them is
+    /// also what turned up **SONNY-260**: the fixture plants two secrets and the label below says
+    /// two, and the real recognizer finds one. So the card is asserted and the key is not, which is
+    /// the true statement rather than the tidy one.
     @Test
     func redactionLatencyIsBoundedOnARepresentativeCapture() async throws {
         let png = ImageFixtures.renderedTextPNG(
@@ -589,7 +611,7 @@ struct LocalRedactionLiveVisionTests {
 
         let clock = ContinuousClock()
         let start = clock.now
-        _ = try await service.redactCapture(capture(png: png, width: 800, height: 600))
+        let payload = try await service.redactCapture(capture(png: png, width: 800, height: 600))
         let elapsed = clock.now - start
 
         let milliseconds = Double(elapsed.components.seconds) * 1000
@@ -597,7 +619,13 @@ struct LocalRedactionLiveVisionTests {
         print("REDACTION-LATENCY-MS: \(Int(milliseconds.rounded())) (800x600, 4 lines, 2 secrets)")
         // Bounded, not fast: the ceiling exists so a pathological regression fails loudly.
         // The real number for the record is printed above and recorded with its SHA.
-        #expect(elapsed < .seconds(5))
+        #expect(elapsed < .seconds(60))
+
+        // The work the number above is a measurement of actually happened: a planted secret was
+        // classified, and the pixels came back painted. The card and not the key, deliberately —
+        // the real recognizer finds only the card on this fixture, and why that is is SONNY-260.
+        #expect(payload.report.contains { $0.detectionClass == .creditCardNumber })
+        #expect(payload.redactedImageData != nil)
     }
 }
 
