@@ -1,3 +1,4 @@
+import Combine
 import Foundation
 import Testing
 @testable import MacAgent
@@ -111,6 +112,14 @@ struct ResumableTaskRunTests {
 
     /// The record keeps one identity across a resume, so a task interrupted twice is one entry that
     /// began when the user first asked for it rather than a new one each time.
+    ///
+    /// **The `startedAt` half is asserted against a seeded past instant, and that is a fix rather
+    /// than decoration** (PR #105 review F7). The first version compared the two values as the run
+    /// produced them, and could not fail: the store encodes dates with `.iso8601`, which is
+    /// whole-second resolution, and both were written inside the same wall-clock second — so a
+    /// mutant that restarted the clock on every resume passed the test whose name promises it
+    /// cannot. Moving the first record an hour into the past makes the two answers a measurable
+    /// distance apart.
     @Test
     func aTaskInterruptedTwiceStaysOneRecordWithItsOriginalStartTime() async throws {
         let fixture = try makeFixture()
@@ -118,18 +127,87 @@ struct ResumableTaskRunTests {
 
         fixture.browserOpener.failure = BrowserOutage()
         try await fixture.run("Write notes and open the page")
-        let first = try #require(try fixture.resumableTaskStore.loadAll().first)
+        let asWritten = try #require(try fixture.resumableTaskStore.loadAll().first)
 
+        // Back-date the start, leaving `updatedAt` where it is so the record is not idle. This is
+        // the interruption having happened an hour ago, which is the ordinary case and the one the
+        // same-second comparison could not see.
+        var backdated = asWritten
+        backdated.startedAt = asWritten.startedAt.addingTimeInterval(-3_600)
+        try fixture.resumableTaskStore.save(backdated)
+        fixture.viewModel.refreshResumableTasks()
+
+        let offer = try #require(fixture.viewModel.resumeOffer)
+        #expect(offer.startedAt == backdated.startedAt)
+
+        // Fail again, so the record survives the resume and can be read back.
+        #expect(fixture.viewModel.continueResumableTask(offer))
+        try await fixture.waitForIdle()
+
+        let second = try #require(try fixture.resumableTaskStore.loadAll().first)
+        #expect(second.id == asWritten.id)
+        #expect(second.startedAt == backdated.startedAt, "the resumed run inherits the task's start, not its own")
+        #expect(second.startedAt < second.updatedAt.addingTimeInterval(-1_800))
+        // The plan narrowed to what was left, and there is still exactly one record.
+        #expect(second.plan.steps.map(\.id) == ["url"])
+        #expect(try fixture.resumableTaskStore.loadAll().count == 1)
+    }
+
+    /// **F6/M23: the second interruption keeps the file the first run produced.**
+    ///
+    /// Both carry tests until now passed the offer's own value straight into the dispatch, so
+    /// neither exercised that value being written *back* into the record. Without it, a chain
+    /// `[draft, open it]` interrupted at the draft's consumer, resumed, and interrupted again leaves
+    /// a bare `open_generated_artifact` with no path — and every later Continue dies in `prepare`
+    /// with "needs outputPath or a previous chained artifact", so the offer becomes permanently
+    /// un-continuable.
+    @Test
+    func aSecondInterruptionKeepsTheFileTheFirstRunProduced() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        fixture.fileOpener.failure = BrowserOutage()
+        try await fixture.run("Write notes and open them", plan: fixture.draftThenOpenTheDraftPlan)
+        let first = try #require(try fixture.resumableTaskStore.loadAll().first)
+        #expect(first.chainedArtifactPath == fixture.draftOutput.path)
+
+        // Continue, and let it fail again — the second interruption.
         let offer = try #require(fixture.viewModel.resumeOffer)
         #expect(fixture.viewModel.continueResumableTask(offer))
         try await fixture.waitForIdle()
 
         let second = try #require(try fixture.resumableTaskStore.loadAll().first)
-        #expect(second.id == first.id)
-        #expect(second.startedAt == first.startedAt)
-        // The plan narrowed to what was left, and there is still exactly one record.
-        #expect(second.plan.steps.map(\.id) == ["url"])
-        #expect(try fixture.resumableTaskStore.loadAll().count == 1)
+        #expect(second.chainedArtifactPath == fixture.draftOutput.path, "the carried file survives the resume")
+
+        // And the third attempt still works, which is what the carried value buys.
+        fixture.fileOpener.failure = nil
+        let secondOffer = try #require(fixture.viewModel.resumeOffer)
+        #expect(fixture.viewModel.continueResumableTask(secondOffer))
+        try await fixture.waitForIdle()
+
+        #expect(fixture.viewModel.errorMessage == nil)
+        #expect(fixture.fileOpener.opened.last == fixture.draftOutput.path)
+        #expect(try fixture.resumableTaskStore.loadAll().isEmpty)
+    }
+
+    /// **F6/M30: Continue starts a *widget* task**, asserted through the predicate that depends on
+    /// it rather than only through the source scan beside it.
+    @Test
+    func aResumedRunIsAWidgetTaskSoTheWidgetShowsItsResult() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        fixture.browserOpener.failure = BrowserOutage()
+        try await fixture.run("Write notes and open the page")
+        let offer = try #require(fixture.viewModel.resumeOffer)
+
+        fixture.browserOpener.failure = nil
+        #expect(fixture.viewModel.continueResumableTask(offer))
+        try await fixture.waitForIdle()
+
+        #expect(fixture.viewModel.activeTaskOrigin == .widget)
+        #expect(!fixture.viewModel.finalSummary.isEmpty)
+        #expect(fixture.viewModel.hasVisibleWidgetPanel, "a run started from the widget shows its result there")
     }
 
     /// **A checkpoint that cannot be written is a storage notice, never a failed task.**
@@ -289,6 +367,199 @@ struct ResumableTaskRunTests {
 
         #expect(!fixture.viewModel.isAwaitingApproval)
         #expect(try fixture.resumableTaskStore.loadAll().isEmpty)
+    }
+
+    /// **F1: answering a clarification continues the task that asked it.**
+    ///
+    /// Reproduced by the PR #105 reviewer and this is that reproduction: `submitClarification`
+    /// re-enters `start()`, `performStart` drops its handle on the checkpoint, and before the fix
+    /// the answered run minted a second record and settled only that one. The paused run's record
+    /// stayed on disk for the full idle period — so once the task finished, Sonny offered to carry
+    /// on with it, and Continue re-asked a question the user had already answered.
+    @Test
+    func anAnsweredClarificationKeepsOneRecordRatherThanOrphaningTheFirst() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        try await fixture.run("Do the ambiguous thing", plan: fixture.clarifyingPlan)
+        #expect(fixture.viewModel.clarificationQuestion != nil)
+        let paused = try #require(try fixture.resumableTaskStore.loadAll().first)
+
+        // Answering re-plans, so the run that follows is an ordinary two-unit plan that completes.
+        fixture.planner.plan = fixture.draftThenOpenPlan
+        fixture.viewModel.clarificationAnswer = "The Downloads folder"
+        fixture.viewModel.submitClarification()
+        try await fixture.waitForIdle()
+
+        // The premise: the answered run really did finish.
+        #expect(fixture.viewModel.errorMessage == nil)
+        #expect(!fixture.viewModel.finalSummary.isEmpty)
+
+        // One task, one record — and the task finished, so no record at all.
+        #expect(try fixture.resumableTaskStore.loadAll().isEmpty)
+        #expect(fixture.viewModel.resumeOffer == nil, "a finished task is never offered")
+        #expect(paused.command == "Do the ambiguous thing")
+    }
+
+    /// The same shape at the door the re-enumeration found rather than the review: a retry after a
+    /// failure continues the failed attempt's record instead of leaving it behind as a live offer.
+    @Test
+    func aRetryAfterAFailureContinuesTheSameRecordRatherThanLeavingTheFailedOneBehind() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        fixture.browserOpener.failure = BrowserOutage()
+        try await fixture.run("Write notes and open the page")
+        let failed = try #require(try fixture.resumableTaskStore.loadAll().first)
+
+        // The retry succeeds. Its draft unit writes a fresh file, so the plan is rebuilt with a new
+        // output — the retry re-plans from the command, exactly as the product does.
+        fixture.browserOpener.failure = nil
+        fixture.draftOutput = fixture.root.appendingPathComponent("notes-retry.md")
+        fixture.planner.plan = fixture.draftThenOpenPlan
+        fixture.viewModel.retryLastCommand()
+        try await fixture.waitForIdle()
+
+        #expect(fixture.viewModel.errorMessage == nil, "the retry really did succeed")
+        #expect(try fixture.resumableTaskStore.loadAll().isEmpty)
+        #expect(fixture.viewModel.resumeOffer == nil)
+        #expect(failed.stopReason == .failed)
+    }
+
+    /// A run that is *not* a continuation leaves the outstanding record alone — which is the
+    /// founder's lifecycle rather than a leak, and the half the two tests above must not break.
+    @Test
+    func anUnrelatedRunLeavesTheOutstandingRecordExactlyWhereItWas() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        fixture.browserOpener.failure = BrowserOutage()
+        try await fixture.run("Write notes and open the page")
+        let outstanding = try #require(try fixture.resumableTaskStore.loadAll().first)
+
+        // Something else entirely, and it finishes.
+        fixture.browserOpener.failure = nil
+        fixture.draftOutput = fixture.root.appendingPathComponent("other.md")
+        try await fixture.run("A completely different task")
+
+        let after = try fixture.resumableTaskStore.loadAll()
+        #expect(after.count == 1)
+        #expect(after.first?.id == outstanding.id)
+        #expect(after.first?.command == "Write notes and open the page")
+        #expect(fixture.viewModel.resumeOffer?.id == outstanding.id)
+    }
+
+    /// **F2: "Not now" has to repaint the widget.**
+    ///
+    /// `dismissedResumeOfferIDs` was a plain `private var`, so the model agreed the offer was gone
+    /// and nothing told the view: `objectWillChange` fired zero times and the panel sat there until
+    /// the six-second collapse took the whole widget instead of the offer.
+    @Test
+    func dismissingTheOfferPublishesSoTheWidgetRepaints() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        fixture.browserOpener.failure = BrowserOutage()
+        try await fixture.run("Write notes and open the page")
+        fixture.viewModel.clearStaleTaskOutcome()
+        #expect(fixture.viewModel.resumeOffer != nil)
+
+        var publishedChanges = 0
+        let subscription = fixture.viewModel.objectWillChange.sink { _ in publishedChanges += 1 }
+        defer { subscription.cancel() }
+
+        fixture.viewModel.dismissResumeOffer()
+
+        #expect(publishedChanges > 0, "SwiftUI never re-evaluates the widget without a published change")
+        #expect(fixture.viewModel.resumeOffer == nil)
+        #expect(!fixture.viewModel.hasVisibleWidgetPanel)
+    }
+
+    /// **F5: a task whose remaining work could repeat something Sonny must not do twice is not
+    /// offered** — with the control that the identical shape with a safe step is.
+    ///
+    /// The concrete case: a Shortcut with clean history is tier 1, so a repeated one prompts for
+    /// nothing. If it sends a message, the message goes twice.
+    @Test
+    func aTaskWhoseRemainingWorkCouldRepeatAShortcutIsNotOfferedAndASafeOneIs() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        try await fixture.run("Write it up and send it", plan: fixture.draftThenShortcutPlan)
+
+        // The record exists — it is only the *offer* that is withheld, so the user can still see and
+        // delete the unfinished task under Memory.
+        let record = try #require(try fixture.resumableTaskStore.loadAll().first)
+        #expect(record.remainingSteps.map(\.operation).contains(.invokeShortcut))
+        #expect(fixture.viewModel.resumableTasks.count == 1)
+        #expect(MemoryRowPresentation.row(for: .resumableTasks, viewModel: fixture.viewModel).count == 1)
+
+        fixture.viewModel.clearStaleTaskOutcome()
+        #expect(fixture.viewModel.resumeOffer == nil, "Sonny does not volunteer to re-send")
+        #expect(!fixture.viewModel.hasVisibleWidgetPanel)
+        // And the belt: nothing can dispatch it even holding the record.
+        #expect(!fixture.viewModel.continueResumableTask(record))
+
+        // The control, in the same fixture: the same interruption with a safe remaining step *is*
+        // offered, so this is a claim about the Shortcut rather than about the fixture.
+        fixture.viewModel.deleteResumableTask(record)
+        fixture.browserOpener.failure = BrowserOutage()
+        fixture.draftOutput = fixture.root.appendingPathComponent("notes-2.md")
+        try await fixture.run("Write notes and open the page")
+        fixture.viewModel.clearStaleTaskOutcome()
+        #expect(fixture.viewModel.resumeOffer != nil)
+    }
+
+    /// **F10: approving a paused run through to completion clears its record.**
+    ///
+    /// Cancelling at an approval was covered and approving was not — and the clarification door,
+    /// covered the same partial way, is where F1 was hiding. `performApproval` does not re-enter
+    /// `performStart`, so the checkpoint survives the pause and the completed terminal settles it.
+    @Test
+    func approvingAPausedRunThroughToCompletionClearsTheRecord() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        try await fixture.run("Overwrite the notes", plan: fixture.approvalNeedingPlan)
+        #expect(fixture.viewModel.isAwaitingApproval)
+        #expect(try fixture.resumableTaskStore.loadAll().count == 1)
+
+        fixture.viewModel.start()
+        try await fixture.waitForIdle()
+
+        #expect(!fixture.viewModel.isAwaitingApproval)
+        #expect(fixture.viewModel.errorMessage == nil, "the approved run really did complete")
+        #expect(try fixture.resumableTaskStore.loadAll().isEmpty)
+        #expect(fixture.viewModel.resumeOffer == nil)
+    }
+
+    /// **F6/M28: a run that records nothing must not append its units to the last run's record.**
+    ///
+    /// Reachable with the category's switch off: `beginResumableTask` returns early, so the new run
+    /// has no checkpoint of its own — and without the clear in `performStart` the *previous* run's
+    /// checkpoint would still be live for this run's unit boundaries to write into.
+    @Test
+    func aRunThatRecordsNothingDoesNotAppendItsStepsToTheLastRunsRecord() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        fixture.browserOpener.failure = BrowserOutage()
+        try await fixture.run("Write notes and open the page")
+        let before = try #require(try fixture.resumableTaskStore.loadAll().first)
+        #expect(before.completedStepIDs == ["draft"])
+
+        // A second, unrelated two-unit run with recording switched off for this store.
+        fixture.viewModel.setMemoryCategoryEnabled(.resumableTasks, to: false)
+        fixture.browserOpener.failure = nil
+        fixture.draftOutput = fixture.root.appendingPathComponent("notes-2.md")
+        try await fixture.run("Something else entirely")
+
+        let after = try fixture.resumableTaskStore.loadAll()
+        #expect(after.count == 1)
+        #expect(after.first?.id == before.id)
+        #expect(after.first?.command == "Write notes and open the page")
+        #expect(after.first?.completedStepIDs == ["draft"], "the second run wrote nothing into it")
+        #expect(after.first?.updatedAt == before.updatedAt)
     }
 
     // MARK: - The switches, on both paths
@@ -621,8 +892,21 @@ private final class ResumableFixturePlanner: Planning {
     }
 }
 
-private struct NoShortcutsForResumeTests: ShortcutCatalogProviding {
-    func shortcutNames() throws -> [String] { [] }
+/// Names exactly the one Shortcut the F5 test's plan invokes, so that plan reaches the Shortcut unit
+/// rather than being converted into a "which Shortcut did you mean?" clarification by
+/// `AgentActionExecutor.prepare`. Measured: with an empty catalog the stored plan is a one-step
+/// `clarify` and the test asserts nothing about a Shortcut at all.
+private struct OneShortcutForResumeTests: ShortcutCatalogProviding {
+    func shortcutNames() throws -> [String] { ["Send Report"] }
+}
+
+/// Fails the Shortcut unit so the run stops there — the interruption the offer is asked about. The
+/// Shortcut is never really run: this suite must not shell out to the developer's own Shortcuts.
+@MainActor
+private final class FailableShortcutInvoker: ShortcutInvoking {
+    nonisolated func invokeShortcut(name: String, input: String?) async throws -> ProcessResult {
+        throw BrowserOutage()
+    }
 }
 
 @MainActor
@@ -733,6 +1017,32 @@ private final class ResumableFixture {
                     operation: .openURL,
                     description: "Open the page.",
                     targetURL: "https://example.com/page"
+                )
+            ]
+        )
+    }
+
+    /// Two units where the second is something Sonny cannot see inside — the review's own
+    /// counterexample. The Shortcut is never invoked in these tests: the fixture's catalog is empty,
+    /// so the run fails at that unit, which is exactly the interruption the offer is asked about.
+    var draftThenShortcutPlan: AgentPlan {
+        AgentPlan(
+            summary: "Write it up, then send it.",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(
+                    id: "draft",
+                    operation: .createLocalDraft,
+                    description: "Write it up.",
+                    outputPath: draftOutput.path,
+                    draftTitle: "Notes",
+                    draftContent: "Body."
+                ),
+                AgentStep(
+                    id: "send",
+                    operation: .invokeShortcut,
+                    description: "Send it.",
+                    shortcutName: "Send Report"
                 )
             ]
         )
@@ -849,7 +1159,7 @@ private func makeFixture() throws -> ResumableFixture {
         workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json")),
         snippetStore: SnippetStore(fileURL: root.appendingPathComponent("snippets.json")),
         recentArtifactStore: RecentArtifactStore(fileURL: root.appendingPathComponent("recent-artifacts.json")),
-        shortcutCatalog: NoShortcutsForResumeTests(),
+        shortcutCatalog: OneShortcutForResumeTests(),
         // Hermetic seams, defined in ProductShellTests.swift in this same target — except the browser,
         // which is this suite's own failure switch.
         browserOpener: browserOpener,
@@ -857,7 +1167,7 @@ private func makeFixture() throws -> ResumableFixture {
         fileOpener: fileOpener,
         mediaOpener: HermeticMediaOpener(),
         runningAppSwitcher: HermeticRunningAppSwitcher(),
-        shortcutInvoker: HermeticShortcutInvoker(),
+        shortcutInvoker: FailableShortcutInvoker(),
         finderContextReader: HermeticFinderContextReader(),
         documentConverter: HermeticDocumentConverter(),
         zipArchiver: HermeticZipArchiver(),

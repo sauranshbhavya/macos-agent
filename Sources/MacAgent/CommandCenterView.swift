@@ -3887,6 +3887,12 @@ struct MemoryRowPresentation: Equatable {
         )
     }
 
+    /// Internal, and named for the suite, so `everyMemoryRowsIconIsAvailableOnTheDeploymentTarget`
+    /// can read the answer without constructing a view model (PR #105 review F3).
+    static func systemImageForTests(for category: MemoryCategory) -> String {
+        systemImage(for: category)
+    }
+
     private static func systemImage(for category: MemoryCategory) -> String {
         switch category {
         case .routines:
@@ -3906,7 +3912,15 @@ struct MemoryRowPresentation: Equatable {
         case .approvedApps:
             return "app.badge.checkmark"
         case .resumableTasks:
-            return "arrow.trianglehead.clockwise"
+            // **`arrow.clockwise`, and the one it replaces is why this carries a comment** (PR #105
+            // review F3). It was `arrow.trianglehead.clockwise`, which is SF Symbols 6 — macOS 15 —
+            // in a package that declares `.macOS(.v14)`. `Image(systemName:)` resolves nothing for a
+            // name the running system does not have, so the row would render with a blank icon
+            // beside seven rows that have one, and nobody on this branch could see it because the
+            // development machines are newer than the deployment target. Every symbol in
+            // `Sources/` is SF Symbols 5 or earlier for that reason;
+            // `everyMemoryRowsIconIsAvailableOnTheDeploymentTarget` pins this set.
+            return "arrow.clockwise"
         }
     }
 }

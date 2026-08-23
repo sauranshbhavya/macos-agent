@@ -151,6 +151,33 @@ public struct ResumableTask: Codable, Equatable, Sendable, Identifiable {
     /// through a hand-written record, and an offer to continue nothing is worse than no offer.
     public var isResumable: Bool { !remainingSteps.isEmpty }
 
+    /// Whether Sonny may offer to carry this on **by itself** (PR #105 review F5).
+    ///
+    /// **The record is written and listed either way; only the offer is withheld.** Resuming re-runs
+    /// the unit that was in flight, because nothing can know how far into an adapter call the power
+    /// went — so a remainder containing something that must not happen twice is a remainder Sonny
+    /// does not volunteer. The user can still ask for the task again in their own words, which is a
+    /// fresh run through the ordinary gate rather than a repeat of a half-done one, and the record
+    /// stays visible and deletable under Memory.
+    ///
+    /// **Conservative on purpose, and it withholds more than strictly necessary.** Only the *first*
+    /// remaining unit can repeat; a later one never ran at all. This asks the question of every
+    /// remaining step instead, because unit boundaries are the executor's to compute and a rule that
+    /// re-derived them here would be a second copy of `chainSegments`. The cost is that a plan whose
+    /// remaining work contains a Shortcut is never offered even when the Shortcut is not the part
+    /// that would repeat; the benefit is that the answer cannot be wrong in the direction that
+    /// double-sends. Stated so nobody widens it by accident.
+    public var mayBeOfferedForResume: Bool {
+        isResumable && remainingSteps.allSatisfy { $0.operation.resumeRepeatSafety == .safeToRepeat }
+    }
+
+    /// The remaining steps Sonny will not repeat on its own, in plan order — empty exactly when
+    /// `mayBeOfferedForResume` is true for a resumable record. Exists so a caller can say *which*
+    /// step withheld the offer rather than only that something did.
+    public var stepsThatMustNotRepeatSilently: [AgentStep] {
+        remainingSteps.filter { $0.operation.resumeRepeatSafety == .mustNotRepeatSilently }
+    }
+
     /// What a resume actually executes: the same plan with the finished steps removed.
     ///
     /// **The summary is kept verbatim.** It describes the task the user asked for, which is what the
