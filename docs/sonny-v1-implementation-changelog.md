@@ -162,12 +162,23 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 ## Entries
 
 ### Branch: fix/restricted-content-false-positive
-Status: complete — SONNY-245 Done; PR pending, fresh-session review pending
+Status: complete — SONNY-245 Done; PR #108 open, fresh-session review complete (cycle 1, F1–F8), fix
+round coordinator-verified, awaiting the founder's manual pass and merge
 Date: 2026-08-23
 Tickets: **SONNY-245** (web research refuses any page whose HTML merely mentions captcha, paywall or a login wall — Wikipedia included). One ticket, one session, one branch, cut from `main` at `961b9c2`. Found in the founder's manual pass of 2026-08-23, item A4, and reproduced against the live page before the ticket was written.
-Reviewed by: pending
+Reviewed by: fresh session, PR #108 cycle 1, 2026-08-23 — eight findings, all addressed; the fix round
+was verified directly by the coordinator rather than by a third-cycle reviewer session, per
+`WORKFLOW.md` step 7's rule for a round confined to records.
 
-Files changed (across `85fa481`, `ec4393c`, plus this entry's commit):
+**This entry sits newest-first under `## Entries`, and it did not when it was written.** It was
+appended at the end of the file, which is where the previous entry was; the file's real convention is
+newest-first directly under the heading, and the rebase onto `origin/main` at `cf3fa76` moved it
+there. Worth one line because the same mistake is sitting in this file right now — the
+`fix/folder-name-possessives` entry, dated 2026-08-23, is at the very bottom below a 2026-08-21 one.
+Left alone deliberately: it belongs to another branch, and moving another session's record is not this
+one's to do.
+
+Files changed (across `a4c8347`, `928874c`, plus this entry's commits — SHAs are post-rebase):
 - `Sources/MacAgentCore/RestrictedContentDetector.swift` (new — the whole rule, its two limits, the corpus each was calibrated against, and the errors it knowingly accepts)
 - `Sources/MacAgentCore/WebResearchService.swift` (`PublicWebPageLoader.restrictedContentReason(in:)` deleted and `validate` routed to the detector; `WebResearchError.allSourcesFailed`'s single-source wording)
 - `Tests/Fixtures/WebResearch/` (new — four pages saved verbatim, plus a README recording each one's URL, headers, status, byte count and the single redaction)
@@ -359,6 +370,33 @@ the hazard its own `--help` names.
   121s against a 75s baseline. **Why N3 perturbs that suite was not established**, so those failures
   are recorded as unexplained rather than attributed: they are not evidence about the ordering, and
   the honest count of tests holding it is one.
+
+#### Rebased onto `origin/main` at `cf3fa76`, 2026-08-23 — and every SHA above this line is pre-rebase
+
+The branch was cut from `961b9c2`; `main` moved to `cf3fa76` while it was open. **The SHAs cited
+above are not ancestors of this branch any more**, and their measurements are not reproducible at the
+rebased ones either — they were taken against the old base, and `main` has since added tests of its
+own. They are left as written because each one records a real run at a real tree; this section
+restates the figures at the head that will actually merge.
+
+One conflicting file, the changelog, reconstructed from both sides rather than by editing markers —
+`main`'s copy taken whole and this entry re-inserted into it, four times, once per commit that
+touches it. Verified afterwards rather than assumed: this entry's text is byte-identical across the
+rebase, all 86 of `main`'s entry headings survive with this one as the only addition, and the two
+`Sources/` files this branch owns are byte-identical to their pre-rebase state.
+
+**At the rebased head:**
+
+- **Tests: 1913 in 137 suites, exit 0** via the flagged command. **+18** `@Test` lines against the new
+  base (`git diff cf3fa76..HEAD -- Tests/ | grep -c '^+    @Test'` = 18 — 15 from the original work,
+  3 from the review round). The jump from 1875 is `main`'s own new tests arriving with the rebase.
+- **`scripts/warnings`: 0**, stamped `7380cce plus 1 uncommitted file(s)` — the uncommitted file being
+  this section, a `.md` no Swift compile reads. Every file in `Sources/` and `Tests/` recompiled.
+- **`server/scripts/check-secrets.sh tracked`: clean, 398 tracked files, exit 0.**
+- **The executable code has not moved since the review read it.** `git diff f9c99aa..HEAD` over this
+  branch's two `Sources/` files is 104 changed lines, of which **0** are not `///` comments
+  (`… | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' | grep -vE '^[+-][[:space:]]*///' | wc -l` → 0).
+  Everything since the review is a record.
 ### Branch: fix/widget-composer-and-resume-panel
 Status: complete
 Date: 2026-08-23
