@@ -875,6 +875,35 @@ struct ResumableTaskRunTests {
         #expect(fixture.viewModel.hasVisibleWidgetPanel)
     }
 
+    /// **"Don't save this task" does not withhold the offer, and that is the other half of F9's
+    /// guard.** It is a per-run composer switch about the run being *composed* — a pre-dispatch
+    /// toggle, rendered only while `!isTaskInFlight`, which is exactly when the offer is evaluated.
+    /// Reading it here would make an unfinished task disappear from the widget because of a switch
+    /// the user set for the next command, which is a different statement from the standing Memory
+    /// switch that F9 decided.
+    @Test
+    func dontSaveThisTaskDoesNotWithholdAnOfferAboutARecordAlreadyOnDisk() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        fixture.browserOpener.failure = BrowserOutage()
+        try await fixture.run("Write notes and open the page")
+        fixture.viewModel.clearStaleTaskOutcome()
+        let record = try #require(fixture.viewModel.resumeOffer)
+
+        // The user flips "Don't save this task" on while composing the *next* command. Nothing has
+        // been dispatched, so this is the window the toggle actually lives in.
+        fixture.viewModel.taskRecordingPolicy = .suppressTraces
+
+        #expect(fixture.viewModel.resumeOffer?.id == record.id, "the toggle says nothing about records already on disk")
+        #expect(fixture.viewModel.hasVisibleWidgetPanel)
+
+        // And the standing switch still does withhold it, in the same state — so this is a claim
+        // about which switch, not about the offer being ungated.
+        fixture.viewModel.setMemoryCategoryEnabled(.resumableTasks, to: false)
+        #expect(fixture.viewModel.resumeOffer == nil)
+    }
+
     /// The master switch reaches the offer through the same guard — `isMemoryCategoryEnabled` folds
     /// it — so turning memory off wholesale withholds the panel too, with the record equally intact.
     /// And deleting one while the switch is off still works, which is the half that keeps a
