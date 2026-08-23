@@ -781,8 +781,10 @@ struct LocalStoreInjectionScanTests {
     /// type's name beside its own parenthesis, so no text scan keyed on the name can see them. The
     /// property that would cover them regardless of spelling is a different one: that `Sources/`
     /// constructs a *default-path local store* in exactly one place, which is the sweep below run
-    /// over the app tree instead of the test tree. It is not built; it is the recommendation on
-    /// SONNY-248.
+    /// over the app tree instead of the test tree. It is not built, and it is not a mitigation
+    /// sentence either — the last time this guard carried one of those it was false, and a reviewer
+    /// built the door it claimed was covered. It is **SONNY-269**, which carries the population
+    /// measurement and the probe recipe.
     ///
     /// The character before the name is checked so that `ClipboardHistorySettingsStore(` is not read
     /// as a `ClipboardHistoryStore(`, and so that `myStore(` cannot match. A dotted prefix is a
