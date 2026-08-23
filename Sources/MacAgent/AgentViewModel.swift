@@ -1108,8 +1108,36 @@ final class AgentViewModel: ObservableObject {
     /// something Sonny must not do twice on its own (PR #105 review F5) — a Shortcut, a routine, a
     /// screen session. Those stay listed under Memory, where the user can see and delete them; what
     /// is withheld is Sonny volunteering to finish them.
+    ///
+    /// **The Memory switch gates this read as well as the write, and the asymmetry with the Memory
+    /// list is the whole decision** (founder, 2026-08-22, from PR #105's review F9). With
+    /// "Unfinished tasks" off Sonny raises no offer — *including* for records written before the
+    /// switch was flipped — while the records themselves are untouched: still on disk, still listed
+    /// under Memory, still deletable, and the offer returns the moment the switch does.
+    ///
+    /// The two surfaces differ because of who initiates. **Listing an existing record under Memory
+    /// is the user going to look**, and it has to show them, or a store they switched off becomes
+    /// one they cannot clear. **Raising a panel on the widget is Sonny initiating, unasked, from
+    /// memory the user has just said to stop keeping** — and a switch that is off while the product
+    /// still proactively acts on what it recorded reads as a switch that did not work.
+    ///
+    /// **Exactly this one guard, and deliberately not a rule.** Nothing about what is written, what
+    /// is stored, what Memory lists or what deletion does changes, and this is not generalised into
+    /// "a memory switch gates every read path": it is about a *proactive* surface, and the next
+    /// store that grows one is decided on its own terms.
+    ///
+    /// `isMemoryCategoryEnabled(_:)` rather than `allowsRecording(to:)`, on two counts. It is the
+    /// effective answer the row's own switch displays, so the panel and the control cannot disagree
+    /// — which is the founder's framing above. And it leaves out `taskRecordingPolicy`, which has no
+    /// business here: "Don't save this task" is a per-run composer switch about the run being
+    /// composed, not a standing statement about records already on disk. It reads `memorySettings`,
+    /// which is `@Published`, so flipping the switch republishes and the widget re-evaluates — the
+    /// rule F2 cost this branch to learn, that every input to this property must publish.
     var resumeOffer: ResumableTask? {
         guard !isTaskInFlight else {
+            return nil
+        }
+        guard isMemoryCategoryEnabled(.resumableTasks) else {
             return nil
         }
         return resumableTasks.first {
