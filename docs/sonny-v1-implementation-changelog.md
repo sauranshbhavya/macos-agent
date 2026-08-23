@@ -189,7 +189,7 @@ Architectural decisions / pitfalls discovered (required, write "none" if true):
 
 **The rule is: a wall phrase is evidence only on a page that has nothing else to show.** A wall is a page whose entire purpose is the wall, so it has no article on it; an article that discusses CAPTCHAs is still an article. Two stages, because the two kinds of evidence are not equally strong. What the page *says to a reader* is direct, so it counts on any page short enough to be an interstitial — under 2 000 characters. What the page's *markup mentions* is circumstantial, so it counts only when the page shows a reader essentially nothing — under 200 characters.
 
-**Both limits were calibrated against the corpus rather than chosen.** Genuine walls: zillow 0, indeed 0, facebook 0, pinterest 0, g2 43, wsj 43, barrons 43, etsy 43, yelp 43, sciencedirect 523, bloomberg 657, linkedin 703, medium 720, instagram 792, glassdoor 3 884. Innocent pages the old rule refused: target 2 502, walmart 3 117, scribd 4 212, ticketmaster 4 442, nytimes 6 119, newyorker 7 770, seekingalpha 12 179, harpers 13 232, nature 38 469, wikipedia 130 932. The markup limit sits an order of magnitude below the innocent floor deliberately: the pages it protects are the ones a corpus of popular sites cannot see — a small blog post whose comment form loads `recaptcha.js` — and where the corpus is silent the limit errs toward serving the page, which is the direction this ticket exists to correct.
+**Both limits were calibrated against the corpus rather than chosen.** Genuine walls: zillow 0, indeed 0, facebook 0, pinterest 0, g2 43, wsj 43, barrons 43, etsy 43, yelp 43, sciencedirect 526, bloomberg 657, linkedin 703, medium 720, instagram 792, glassdoor 3 884. Innocent pages the old rule refused: target 2 502, walmart 3 117, scribd 4 212, ticketmaster 4 442, nytimes 6 119, newyorker 7 770, seekingalpha 12 179, harpers 13 232, nature 38 469, wikipedia 130 932. The markup limit sits an order of magnitude below the innocent floor deliberately: the pages it protects are the ones a corpus of popular sites cannot see — a small blog post whose comment form loads `recaptcha.js` — and where the corpus is silent the limit errs toward serving the page, which is the direction this ticket exists to correct.
 
 **The corroboration is a character count and not "did the extractor find an article", and that was the first design.** It is worse: `SwiftSoupReadableWebExtractor` throws `noReadableContent` on expedia and chegg, pages carrying 107 857 and 70 114 characters of visible text. Keying markup evidence to the extractor's verdict would license a refusal on a page with a hundred thousand characters on it — the failure this ticket is about, reintroduced through the fix.
 
@@ -229,17 +229,34 @@ calibration is spent.
 **F2. The accepted-regression disclosure understated its own set, and one of its two examples was not
 an instance.** Instagram was named as a page Sonny "writes a thin note from" — it is not: at 792
 visible characters it clears this check and then the extractor throws `noReadableContent`, which this
-branch's own corpus table already recorded as `article: none`. Tumblr (269) behaves the same way. The
-measured instances are **LinkedIn's feed** (200, 703 visible, 556 extracted) and **IEEE Xplore's home
-page** (200, 717 visible, 617 extracted). **Two further pages the review named were re-measured and the results
-differ, but on different URLs, so neither reading contradicts the other** — recorded because a later
-reader will otherwise try to reconcile them. The review measured a *pixiv artwork page* (200, 335
-visible, no article) and a *ResearchGate publication page* (200, 318 visible, 302-character article).
-This session measured pixiv's *home page* (200, 599 visible, 424-character article, and **refused** —
-its footer carries Google's standard "This site is protected by reCAPTCHA" notice), and got **403**
-from both ResearchGate URLs it tried, hours later and from a different network. ResearchGate's status
-is evidently not stable; the pixiv figures are two different pages. The review's numbers stand as
-measured.
+branch's own corpus table already recorded as `article: none`. Tumblr behaves the same way — 269
+visible characters on `tumblr.com/` measured here, 265 on the review's dashboard URL, different pages
+and the same outcome. The measured instances are **LinkedIn's feed** (200, 703 visible, 556 extracted)
+and **IEEE Xplore's home page** (200, 717 visible, 617 extracted), plus a **Scribd document page**
+(200, 2 075 visible, 271 extracted) the review measured.
+
+**The pixiv reading is a genuine two-URL split and is recorded as one**, because a later reader would
+otherwise try to reconcile it: the review measured a *pixiv artwork page* (200, 335 visible, no
+article); this session measured pixiv's *home page* (200, 599 visible, 424-character article, and
+**refused** — its footer carries Google's standard "This site is protected by reCAPTCHA" notice). Two
+correct readings of two different pages, each stated with its page.
+
+**ResearchGate is not that, and this entry got it wrong for a round.** The review grouped a
+ResearchGate publication page under HTTP 200 with a 302-character article. This session measured
+**403**, on two URLs, and then wrote that ResearchGate's "status is evidently not stable" to let both
+readings sit side by side — so both this entry and the type doc went on citing a page that answers 403
+as an example of a note being written. The reviewer has since **retracted it**: four consecutive 403s
+across the two sessions' fetch logs, no 200 ever measured. ResearchGate is dropped from both lists;
+the note-producing set is LinkedIn, IEEE Xplore and Scribd.
+
+**The lesson is written at the code, in `RestrictedContentDetector`'s own doc comment, because it will
+recur: a review is evidence, not authority.** This session measured the page correctly, deferred to
+the reviewer's number over its own, and then wrote a sentence whose only job was to let a correct
+measurement and a mislabel both be true. **When your own measurement disagrees with a reviewer's, the
+disagreement is the finding** — say so plainly and get it settled. Prose that reconciles two numbers
+builds a false record out of two people each being careful, and it reads exactly like diligence, which
+is why nothing in a review cycle catches it. The pixiv entry above is the shape this is *not*: two
+correct readings of two different URLs, each stated with its URL.
 
 **The sentence that mattered most in that block was "three independent checks fail closed on these
 pages, not one", and it was false for exactly the cases the block conceded.** LinkedIn passes the
@@ -248,12 +265,12 @@ That sentence was the justification for narrowing the check, so it is corrected 
 The honest characterisation, now in the code: **between 200 and 2 000 visible characters neither
 stage fires unless the page says one of the seven phrases to a reader**, and that band is where most
 real walls measured live — ScienceDirect 526, FT 565, Bloomberg 657, LinkedIn 703, IEEE 717, Medium
-720, Instagram 792, Telegraph 888, and, on the review's own URLs, a ResearchGate publication page at
-318, a Tumblr dashboard at 265 and a pixiv artwork page at 335. **Being in the band is not the same
-as a note being written**, which is the distinction the Instagram correction turns on: a note is
-really produced from gate chrome for LinkedIn (556 characters extracted), IEEE (617), the ResearchGate
-publication page (302) and a Scribd document page (271), while Instagram, Tumblr and the pixiv artwork
-page are served by the check and then yield nothing, the extractor throwing `noReadableContent`.
+720, Instagram 792, Telegraph 888, and, on the review's own URLs, a Tumblr dashboard at 265 and a
+pixiv artwork page at 335. **Being in the band is not the same as a note being written**, which is the
+distinction the Instagram correction turns on: a note is really produced from gate chrome for LinkedIn
+(556 characters extracted), IEEE Xplore (617) and a Scribd document page (271), while Instagram,
+Tumblr and the pixiv artwork page are served by the check and then yield nothing, the extractor
+throwing `noReadableContent`.
 
 **The boundary rule's home is `docs/sonny-major-release-spec.md:459` and `:916`** — "Do not bypass
 paywalls, CAPTCHAs, robots restrictions, or login walls" and "Sonny must not bypass paywalls,
