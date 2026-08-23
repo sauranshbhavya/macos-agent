@@ -344,11 +344,59 @@ enum TaskRecordingPresentation {
 /// and belongs in the Memory row that lists it, which is where `MemoryEntryPresentation` puts it;
 /// the offer is a question with two answers.
 enum ResumeOfferPresentation {
+    /// The affirmative's word. **Its tooltip since SONNY-244, not its visible text** — the founder's
+    /// decision of 2026-08-23 made the two controls a tick and a cross, so the word survives on
+    /// hover rather than on the button. It is not the VoiceOver name; that is
+    /// `continueAccessibilityLabel`, which names the task an icon no longer can.
     static let continueLabel = "Continue"
     /// "Not now", not "Dismiss": the record is not being deleted and the offer comes back at the
     /// next launch, so a label that sounded final would over-promise in the direction that loses the
-    /// user's work.
+    /// user's work. The cross's tooltip since SONNY-244, on the same footing as `continueLabel` —
+    /// and it is the whole of what stops a cross being read as "close this panel", which is a
+    /// different and weaker thing (see `WidgetResumeOfferPanel`).
     static let dismissLabel = "Not now"
+
+    /// The width the message is actually drawn at: the panel's fixed 472pt less `styledPanel`'s
+    /// 18pt of padding a side.
+    ///
+    /// **Here rather than in the view because the layout it feeds is a measured fact, not a taste**
+    /// (SONNY-244). `theMessageNeverDrawsTallerThanThePanelReservesForIt` re-derives the numbers
+    /// below from real font metrics, and it can only do that if they are reachable from a test.
+    static let panelContentWidth: CGFloat = 436
+
+    /// `WidgetType.caption` is SF Pro Regular 13, whose line height is 16pt
+    /// (`NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: 13))` → 16.0, asserted by that
+    /// same test rather than trusted from this comment).
+    static let messageLineHeight: CGFloat = 16
+
+    /// The most lines the message may draw, and therefore the most it can ever be tall.
+    ///
+    /// **Two, because a truncated command lands within a whisker of the one-versus-two-line
+    /// boundary and essentially always crosses it.** `maximumCommandCharacters` squeezes every long
+    /// command into the same band: measured at 13pt, the founder's two reported messages are 530.5pt
+    /// and 531.4pt on one line against 436pt of width, and a third realistic one is 524.7pt. So the
+    /// panel is permanently balanced on that edge — every one of them wraps to two lines with about
+    /// 95pt on the second — and the *only* input that needs a third line is a 60-character word with
+    /// no space in it, which this cap tail-truncates rather than letting it grow the panel.
+    static let messageLineLimit = 2
+
+    /// The height the panel holds open for the message, whatever it turns out to measure.
+    ///
+    /// **This is the whole of SONNY-244's layout fix, and it is a fix to a measurement rather than
+    /// to a stack.** The founder saw the offer's controls drawn on top of the message's second line,
+    /// intermittently — the same view at the same message length laid out both ways minutes apart —
+    /// which is what a `Text` measured at one width and drawn at another looks like once
+    /// `.fixedSize(horizontal: false, vertical: true)` is on it: that modifier is precisely what
+    /// turns "this text got less height than it needs" from a truncation into an overflow onto
+    /// whatever sits below. And a mis-measure is *cheap* here for the reason `messageLineLimit`
+    /// gives: at any width from about 535pt up — the widget's own outer content is 568pt wide, which
+    /// leaves 532pt inside this panel's padding — all three real messages measure as one line, 1.5pt
+    /// under the boundary.
+    ///
+    /// Reserving the two lines makes the message's slot a constant the stack can compute without
+    /// measuring anything, so the controls below it are placed at the same offset in every pass.
+    /// `minHeight` rather than `height` so a future font that needs more still gets it.
+    static let reservedMessageHeight: CGFloat = messageLineHeight * CGFloat(messageLineLimit)
 
     static func message(command: String) -> String {
         "You were partway through \u{201C}\(truncatedCommand(command))\u{201D}."
