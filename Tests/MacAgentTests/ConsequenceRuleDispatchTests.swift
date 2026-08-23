@@ -299,6 +299,9 @@ private func makeDispatchFixture() throws -> DispatchFixture {
         ),
         taskHistoryStore: TaskHistoryStore(fileURL: root.appendingPathComponent("task-history.json")),
         taskPlanDetailStore: TaskPlanDetailStore(fileURL: root.appendingPathComponent("task-plan-details.json")),
+        visionSessionJournalStore: VisionSessionJournalStore(
+            fileURL: root.appendingPathComponent("vision-sessions.json")
+        ),
         clipboardHistorySettingsStore: ClipboardHistorySettingsStore(
             fileURL: root.appendingPathComponent("clipboard-history-settings.json")
         ),
@@ -310,6 +313,13 @@ private func makeDispatchFixture() throws -> DispatchFixture {
             whitelist: PathWhitelist(roots: [root])
         ),
         resumableTaskStore: ResumableTaskStore(fileURL: root.appendingPathComponent("resumable-tasks.json")),
+        clipboardHistoryMonitor: ClipboardHistoryMonitor(
+            reader: HermeticPasteboardReader(),
+            store: ClipboardHistoryStore(fileURL: root.appendingPathComponent("clipboard-history.json")),
+            settingsStore: ClipboardHistorySettingsStore(
+                fileURL: root.appendingPathComponent("clipboard-history-settings.json")
+            )
+        ),
         localDataDeletionService: LocalDataDeletionService(fileURLs: []),
         priorTaskContextStore: PriorTaskContextStore(),
         taskUsageRecorder: TaskUsageRecorder(),
