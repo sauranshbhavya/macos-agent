@@ -456,15 +456,29 @@ enum ResumeOfferPresentation {
     /// panel is permanently balanced on that edge — every one of them wraps to two lines with about
     /// 95pt on the second.
     ///
-    /// **What needs a third line is an unbreakable run too wide for two lines of `panelContentWidth`
-    /// — a rendered width, not a character count** (PR #107 review, F5). This said "a 60-character
-    /// word with no space in it", which is the wrong property and understates the class: a run
-    /// crosses when nothing in it can be broken and its own width exceeds what two 436pt lines hold.
-    /// Measured at 13pt, `W` crosses at **34** characters (599.8pt on one line), lowercase `w` not
-    /// until 44 (614.0pt), and 54 CJK characters cross it (871.2pt) — one threshold, three different
-    /// counts, because the count was never the thing. This cap tail-truncates any of them rather
-    /// than letting the panel grow, and `aRunTooWideForTwoLinesIsWhatTheCapIsFor` holds the property
-    /// over all three.
+    /// **A third line arrives two different ways, and a count of characters is not either of them**
+    /// (PR #107 review, F5 and its re-check). This first said "a 60-character word with no space in
+    /// it", then "a run wider than two 436pt lines hold". Both were wrong, and the second is
+    /// disproved by its own examples — two 436pt lines hold 872pt and not one of the three crossings
+    /// below reaches it. The two real mechanisms:
+    ///
+    /// - **No break opportunity inside the quoted phrase.** A command with no space in it makes the
+    ///   whole quoted phrase one unbreakable run, because an opening quote binds to the word after
+    ///   it and a closing quote and period bind to the word before. Once that run exceeds a
+    ///   *single* 436pt line it cannot share line one with the lead-in and cannot fit on line two
+    ///   either, so it takes a line of its own and spills onto a third. Measured at 13pt, the run
+    ///   crosses 436 between `W` x33 (425.75pt) and `W` x34 (438.25pt), and between `w` x42
+    ///   (432.40pt) and `w` x43 (442.39pt) — one threshold, two different character counts, which
+    ///   is the whole reason a count cannot express this.
+    /// - **Packing, where nothing is unbreakable at all.** CJK breaks between characters, so no run
+    ///   is ever too wide; the message crosses because whole-character breaks leave part of each
+    ///   line unused. 54 of them need three lines at a message width of 871.21pt — *under* the
+    ///   872pt two lines nominally hold, which is the clearest statement of why "wider than two
+    ///   lines" was never the property.
+    ///
+    /// This cap tail-truncates all of them rather than letting the panel grow, and
+    /// `aThirdLineArrivesTwoWaysAndTheCapCoversBoth` holds both mechanisms with a control one
+    /// character under each Latin crossing.
     static let messageLineLimit = 2
 
     /// The height the panel holds open for the message, whatever it turns out to measure.
