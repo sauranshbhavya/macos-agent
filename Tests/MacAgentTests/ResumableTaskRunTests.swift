@@ -426,6 +426,118 @@ struct ResumableTaskRunTests {
         #expect(failed.stopReason == .failed)
     }
 
+    /// **The fourth door: "Run again" on the failed task's own row in Command Center.**
+    ///
+    /// Reproduced by PR #105's re-check, and this is that reproduction. `runTaskAgain` takes an
+    /// arbitrary historical record rather than whatever is in flight, and it can run after a
+    /// relaunch that left `activeResumableTask` nil — so it matches on the durable link the row
+    /// carries, `CompletedTaskRecord.resumableTaskID`, and continues that record.
+    @Test
+    func runningAFailedTaskAgainFromItsOwnRowContinuesThatTasksRecord() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        fixture.browserOpener.failure = BrowserOutage()
+        try await fixture.run("Write notes and open the page")
+        let outstanding = try #require(try fixture.resumableTaskStore.loadAll().first)
+
+        // The row the Tasks page hands back, carrying the link.
+        let row = try #require(fixture.viewModel.taskHistoryRecords.first)
+        #expect(row.outcomeStatus == .failed)
+        #expect(row.resumableTaskID == outstanding.id, "a failed run's row names the record it left behind")
+
+        // Run it again, and this time it works.
+        fixture.browserOpener.failure = nil
+        fixture.draftOutput = fixture.root.appendingPathComponent("notes-again.md")
+        fixture.planner.plan = fixture.draftThenOpenPlan
+        #expect(fixture.viewModel.runTaskAgain(row))
+        try await fixture.waitForIdle()
+
+        #expect(fixture.viewModel.errorMessage == nil, "the re-run really did finish")
+        #expect(try fixture.resumableTaskStore.loadAll().isEmpty)
+        #expect(fixture.viewModel.resumeOffer == nil, "a task the user has just re-run is not offered")
+    }
+
+    /// **The link survives a relaunch, which is what rules out the in-flight handle.**
+    ///
+    /// Simulated by clearing everything the app keeps in memory and reloading from disk — the state
+    /// a fresh launch is in. `activeResumableTask` is nil there, so a door arming from it would do
+    /// nothing; the row and the record are both still on disk, so the durable link still matches.
+    @Test
+    func theRowsLinkStillFindsTheRecordAfterEverythingInMemoryIsGone() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        fixture.browserOpener.failure = BrowserOutage()
+        try await fixture.run("Write notes and open the page")
+        let outstanding = try #require(try fixture.resumableTaskStore.loadAll().first)
+        let row = try #require(fixture.viewModel.taskHistoryRecords.first)
+
+        // **A relaunch, built rather than simulated**: a second view model over the same store
+        // files, which is what the next launch really is. Nulling fields on the first one would have
+        // been a test asserting against its own idea of a fresh process.
+        let relaunched = fixture.makeRelaunchedViewModel()
+        relaunched.refreshTaskHistory()
+        relaunched.refreshResumableTasks()
+        #expect(relaunched.resumeOffer?.id == outstanding.id, "the offer survives a relaunch")
+
+        fixture.browserOpener.failure = nil
+        fixture.draftOutput = fixture.root.appendingPathComponent("notes-again.md")
+        fixture.planner.plan = fixture.draftThenOpenPlan
+        #expect(relaunched.runTaskAgain(row))
+        try await fixture.waitForIdle(relaunched)
+
+        #expect(relaunched.errorMessage == nil)
+        #expect(try fixture.resumableTaskStore.loadAll().isEmpty)
+        #expect(relaunched.resumeOffer == nil)
+    }
+
+    /// **A row with no link re-runs as a fresh task, and that is the stated boundary.** Every row
+    /// written before the field existed is in this case, and so is one whose record has since been
+    /// deleted or gone idle. The control matters: the record left over is a *different* task's, so
+    /// this is a claim about the link rather than about the re-run doing nothing.
+    @Test
+    func aRowWithNoLinkRunsAgainAsAFreshTaskAndLeavesTheOtherRecordAlone() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        fixture.browserOpener.failure = BrowserOutage()
+        try await fixture.run("Write notes and open the page")
+        let outstanding = try #require(try fixture.resumableTaskStore.loadAll().first)
+        var row = try #require(fixture.viewModel.taskHistoryRecords.first)
+
+        // A row from before the link existed.
+        row.resumableTaskID = nil
+
+        fixture.browserOpener.failure = nil
+        fixture.draftOutput = fixture.root.appendingPathComponent("notes-again.md")
+        fixture.planner.plan = fixture.draftThenOpenPlan
+        #expect(fixture.viewModel.runTaskAgain(row))
+        try await fixture.waitForIdle()
+
+        // The re-run finished and settled its own record; the unlinked one is untouched.
+        #expect(fixture.viewModel.errorMessage == nil)
+        let after = try fixture.resumableTaskStore.loadAll()
+        #expect(after.map(\.id) == [outstanding.id])
+        #expect(after.first?.completedStepIDs == ["draft"])
+    }
+
+    /// A completed run's row carries no link, because the settle deleted its record at the same
+    /// terminal that wrote the row. The ordering inside `recordTaskHistoryIfTerminal` is what makes
+    /// that true rather than incidental.
+    @Test
+    func aFinishedRunsRowNamesNoRecordBecauseThereIsNoneToName() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        try await fixture.run("Write notes and open the page")
+
+        let row = try #require(fixture.viewModel.taskHistoryRecords.first)
+        #expect(row.outcomeStatus == .completed)
+        #expect(row.resumableTaskID == nil)
+        #expect(try fixture.resumableTaskStore.loadAll().isEmpty)
+    }
+
     /// A run that is *not* a continuation leaves the outstanding record alone — which is the
     /// founder's lifecycle rather than a leak, and the half the two tests above must not break.
     @Test
@@ -1086,6 +1198,10 @@ private final class FailableShortcutInvoker: ShortcutInvoking {
 @MainActor
 private final class ResumableFixture {
     let viewModel: AgentViewModel
+    /// Builds another view model over this fixture's *same* store files — a relaunch, as far as
+    /// anything on disk is concerned. Held as a closure so the construction lives once, beside the
+    /// original, rather than being copied into a test.
+    let makeRelaunchedViewModel: @MainActor () -> AgentViewModel
     let root: URL
     let resumableTaskStore: ResumableTaskStore
     let routineStore: RoutineStore
@@ -1100,6 +1216,7 @@ private final class ResumableFixture {
 
     init(
         viewModel: AgentViewModel,
+        makeRelaunchedViewModel: @escaping @MainActor () -> AgentViewModel,
         root: URL,
         resumableTaskStore: ResumableTaskStore,
         routineStore: RoutineStore,
@@ -1111,6 +1228,7 @@ private final class ResumableFixture {
         draftOutput: URL
     ) {
         self.viewModel = viewModel
+        self.makeRelaunchedViewModel = makeRelaunchedViewModel
         self.root = root
         self.resumableTaskStore = resumableTaskStore
         self.routineStore = routineStore
@@ -1270,9 +1388,10 @@ private final class ResumableFixture {
 
     /// The 30 seconds is a deadlock backstop, not a timing assertion — the reasoning is on
     /// `VisionSessionRunTests.hangBackstop`, and this target interleaves its suites on one actor.
-    func waitForIdle(timeout: TimeInterval = 30) async throws {
+    func waitForIdle(_ target: AgentViewModel? = nil, timeout: TimeInterval = 30) async throws {
+        let waited = target ?? viewModel
         let deadline = Date(timeIntervalSinceNow: timeout)
-        while viewModel.isRunning {
+        while waited.isRunning {
             if Date() > deadline {
                 Issue.record("View model did not become idle before timeout.")
                 return
@@ -1328,58 +1447,63 @@ private func makeFixture() throws -> ResumableFixture {
     )
     let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
 
-    let viewModel = AgentViewModel(
-        routineStore: routineStore,
-        workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json")),
-        snippetStore: SnippetStore(fileURL: root.appendingPathComponent("snippets.json")),
-        recentArtifactStore: RecentArtifactStore(fileURL: root.appendingPathComponent("recent-artifacts.json")),
-        shortcutCatalog: OneShortcutForResumeTests(),
-        // Hermetic seams, defined in ProductShellTests.swift in this same target — except the browser,
-        // which is this suite's own failure switch.
-        browserOpener: browserOpener,
-        appOpener: HermeticAppOpener(),
-        fileOpener: fileOpener,
-        mediaOpener: HermeticMediaOpener(),
-        runningAppSwitcher: HermeticRunningAppSwitcher(),
-        shortcutInvoker: FailableShortcutInvoker(),
-        finderContextReader: HermeticFinderContextReader(),
-        documentConverter: HermeticDocumentConverter(),
-        zipArchiver: HermeticZipArchiver(),
-        shortcutRunHistoryStore: ShortcutRunHistoryStore(
+    // One construction, called twice: once for this fixture's own view model and again by
+    // `makeRelaunchedViewModel()` when a test needs the next launch over the same files.
+    let build: @MainActor () -> AgentViewModel = {
+        AgentViewModel(
+            routineStore: routineStore,
+            workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json")),
+            snippetStore: SnippetStore(fileURL: root.appendingPathComponent("snippets.json")),
+            recentArtifactStore: RecentArtifactStore(fileURL: root.appendingPathComponent("recent-artifacts.json")),
+            shortcutCatalog: OneShortcutForResumeTests(),
+            // Hermetic seams, defined in ProductShellTests.swift in this same target — except the browser,
+            // which is this suite's own failure switch.
+            browserOpener: browserOpener,
+            appOpener: HermeticAppOpener(),
+            fileOpener: fileOpener,
+            mediaOpener: HermeticMediaOpener(),
+            runningAppSwitcher: HermeticRunningAppSwitcher(),
+            shortcutInvoker: FailableShortcutInvoker(),
+            finderContextReader: HermeticFinderContextReader(),
+            documentConverter: HermeticDocumentConverter(),
+            zipArchiver: HermeticZipArchiver(),
+            shortcutRunHistoryStore: ShortcutRunHistoryStore(
             fileURL: root.appendingPathComponent("shortcuts-run-history.json")
-        ),
-        taskHistoryStore: TaskHistoryStore(fileURL: root.appendingPathComponent("task-history.json")),
-        taskPlanDetailStore: TaskPlanDetailStore(fileURL: root.appendingPathComponent("task-plan-details.json")),
-        visionSessionJournalStore: VisionSessionJournalStore(
+            ),
+            taskHistoryStore: TaskHistoryStore(fileURL: root.appendingPathComponent("task-history.json")),
+            taskPlanDetailStore: TaskPlanDetailStore(fileURL: root.appendingPathComponent("task-plan-details.json")),
+            visionSessionJournalStore: VisionSessionJournalStore(
             fileURL: root.appendingPathComponent("vision-sessions.json")
-        ),
-        clipboardHistorySettingsStore: ClipboardHistorySettingsStore(
+            ),
+            clipboardHistorySettingsStore: ClipboardHistorySettingsStore(
             fileURL: root.appendingPathComponent("clipboard-history-settings.json")
-        ),
-        approvedAppStore: ApprovedAppStore(fileURL: root.appendingPathComponent("approved-apps.json")),
-        // SONNY-209's store, at this fixture's own root. A defaulted one writes to the real
-        // ~/Library path with a key the packaged app cannot read, which is the failure
-        // `OutputLocationFixtureWiringScanTests` exists to stop — and it caught this file.
-        outputLocationStore: OutputLocationStore(
+            ),
+            approvedAppStore: ApprovedAppStore(fileURL: root.appendingPathComponent("approved-apps.json")),
+            // SONNY-209's store, at this fixture's own root. A defaulted one writes to the real
+            // ~/Library path with a key the packaged app cannot read, which is the failure
+            // `OutputLocationFixtureWiringScanTests` exists to stop — and it caught this file.
+            outputLocationStore: OutputLocationStore(
             fileURL: root.appendingPathComponent("output-locations.json"),
             whitelist: PathWhitelist(roots: [root])
-        ),
-        resumableTaskStore: resumableTaskStore,
-        localDataDeletionService: LocalDataDeletionService(fileURLs: []),
-        priorTaskContextStore: PriorTaskContextStore(),
-        taskUsageRecorder: TaskUsageRecorder(),
-        plannerProviderRegistry: PlannerProviderRegistry(
+            ),
+            resumableTaskStore: resumableTaskStore,
+            localDataDeletionService: LocalDataDeletionService(fileURLs: []),
+            priorTaskContextStore: PriorTaskContextStore(),
+            taskUsageRecorder: TaskUsageRecorder(),
+            plannerProviderRegistry: PlannerProviderRegistry(
             defaultProvider: PlannerProvider(id: "resume-stub", displayName: "Resume Stub") { _ in
                 planner
             }
-        ),
-        plannerSelection: nil,
-        userDefaults: userDefaults,
-        whitelist: PathWhitelist(roots: [root])
-    )
+            ),
+            plannerSelection: nil,
+            userDefaults: userDefaults,
+            whitelist: PathWhitelist(roots: [root])
+        )
+    }
 
     return ResumableFixture(
-        viewModel: viewModel,
+        viewModel: build(),
+        makeRelaunchedViewModel: build,
         root: root,
         resumableTaskStore: resumableTaskStore,
         routineStore: routineStore,
