@@ -3142,12 +3142,6 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
-    /// Every file this category's contents live in, resolved through the stores this view model was
-    /// actually constructed with.
-    private func memoryStoreFileURLs(for category: MemoryCategory) -> [URL] {
-        category.stores.map(storeFileURL)
-    }
-
     /// One store's file, resolved through the instance this view model was constructed with.
     ///
     /// The switch is exhaustive over `LocalStore` with no `default`, so a fourteenth store
