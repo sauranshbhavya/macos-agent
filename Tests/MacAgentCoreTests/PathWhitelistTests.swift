@@ -58,11 +58,13 @@ struct PathWhitelistTests {
         }
     }
 
-    /// `canonicalURL` + `contains` are exposed so a narrower boundary — a workspace's restriction
-    /// scope — reuses this whitelist's path arithmetic instead of running a second one.
+    /// `canonical` + `contains` are exposed so a narrower boundary — a workspace's restriction
+    /// scope — reuses this whitelist's path arithmetic instead of running a second one. (Named
+    /// `canonicalURL` here until PR #111's review, F3; that overload drops the convergence flag and
+    /// is for identity, so a boundary asks the one that keeps it.)
     ///
     /// The assertion that carries the weight is the **expected outcome** for each shape, not the
-    /// agreement between the two entry points: `validateInsideWhitelist` calls `canonicalURL` and
+    /// agreement between the two entry points: `validateInsideWhitelist` calls `canonical` and
     /// `contains` itself, so an agreement-only test would be `f(x) == f(x)` and would pass just as
     /// happily if both were wrong together. The agreement check is kept as a second, weaker
     /// assertion — it is what catches a future change that stops routing one path through the
@@ -97,7 +99,10 @@ struct PathWhitelistTests {
 
         for testCase in cases {
             let contained = PathWhitelist.contains(
-                root: PathWhitelist.canonicalURL(inside.path),
+                // The root side through `canonical` too, though the parameter is a `URL`: the root
+                // here is a folder that exists, so the two agree, and reading one call for both
+                // sides is what keeps the test from demonstrating the habit its own doc warns about.
+                root: PathWhitelist.canonical(inside.path).url,
                 candidate: PathWhitelist.canonical(testCase.path)
             )
             #expect(contained == testCase.isInside, "wrong verdict for \(testCase.why): \(testCase.path)")
