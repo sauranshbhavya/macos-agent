@@ -282,14 +282,15 @@ public struct WorkspaceScope: Equatable, Sendable {
             // two path comparisons that disagree about `..` or a symlink is a security bug, not a
             // style one.
             //
-            // That inheritance includes the whitelist's case sensitivity — a literal string compare
-            // on a filesystem that is usually case-insensitive. Decided rather than left implicit:
-            // scope keeps it. Case-folding here and not in the whitelist would be exactly the
-            // divergence this reuse exists to prevent, and the failure it causes is fail-safe in a
-            // way the alternative is not — a case-variant path reads `.outOfScope` and prompts,
-            // never `.inScope`. (macOS corrects the case of path components that exist; only a
-            // not-yet-created leaf's parent keeps whatever case was typed.) If this ever becomes
-            // worth fixing, it is fixed in `PathWhitelist.contains` for both callers at once.
+            // That inheritance includes what the whitelist does about case, which SONNY-249
+            // changed on both sides at once: `canonicalURL` resolves the longest prefix of a path
+            // that exists, and macOS answers with the real on-disk spelling of those components, so
+            // a differently-cased *folder* is now the folder it names. What is left case-sensitive
+            // is the part with nothing on disk to ask — a not-yet-created folder, and the leaf
+            // itself — and there the comparison is still a literal one, which is fail-safe in the
+            // direction that matters: such a path reads `.outOfScope` and prompts, never `.inScope`.
+            // Scope keeps whatever the whitelist does rather than folding case itself, because
+            // folding here and not there is exactly the divergence this reuse exists to prevent.
             let candidate = PathWhitelist.canonicalURL(trimmed)
             return fileRoots.contains { PathWhitelist.contains(root: $0, candidate: candidate) }
                 ? .inScope
