@@ -449,6 +449,85 @@ struct ResumableTaskRunTests {
         #expect(fixture.viewModel.resumeOffer?.id == outstanding.id)
     }
 
+    /// **A refused dispatch drops the arm rather than leaving it for the next one.**
+    ///
+    /// `retryLastCommand` arms a restart and then calls `dispatch`, which can refuse — `canSubmit`
+    /// also gates on a transcription in flight, which `retryLastCommand`'s own `!isTaskInFlight`
+    /// guard does not cover. An arm that survived that refusal would be spent by the *next*
+    /// dispatch, and an unrelated command would overwrite the failed task's record.
+    @Test
+    func anArmDroppedByARefusedDispatchIsNotInheritedByTheNextOne() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        fixture.browserOpener.failure = BrowserOutage()
+        try await fixture.run("Write notes and open the page")
+        let outstanding = try #require(try fixture.resumableTaskStore.loadAll().first)
+
+        // The retry is refused: a transcription is in flight, which `canSubmit` gates on and
+        // `retryLastCommand`'s own guard does not.
+        fixture.viewModel.isTranscribingVoice = true
+        fixture.viewModel.retryLastCommand()
+        try await fixture.waitForIdle()
+        #expect(try fixture.resumableTaskStore.loadAll().count == 1, "the refused retry ran nothing")
+
+        // Now something unrelated, which must get a record of its own rather than the arm's. It
+        // succeeds, so its own record settles and only the outstanding one is left — which is what
+        // makes the count below discriminate: under an inherited arm the unrelated run would have
+        // settled the *outstanding* record and the store would be empty.
+        fixture.viewModel.isTranscribingVoice = false
+        fixture.browserOpener.failure = nil
+        fixture.draftOutput = fixture.root.appendingPathComponent("other.md")
+        try await fixture.run("A completely different task")
+
+        let after = try fixture.resumableTaskStore.loadAll()
+        #expect(after.count == 1, "the unrelated run finished, so only the outstanding record is left")
+        #expect(after.first?.id == outstanding.id)
+        #expect(after.first?.command == "Write notes and open the page")
+        #expect(after.first?.completedStepIDs == ["draft"])
+    }
+
+    /// **A restart inherits the task's identity and not a finished unit's file.**
+    ///
+    /// `chainedArtifactPath` means "what an already-completed unit produced". A resume rejoins such
+    /// a chain and carries it; a restart — an answered clarification, or a retry — has completed
+    /// nothing, so carrying it would name a file from an attempt whose steps are all going to run
+    /// again. Observable when the retry's own plan fails at its *first* unit, which is the case
+    /// where no unit boundary overwrites the value.
+    @Test
+    func aRestartDoesNotInheritTheEarlierAttemptsFile() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        fixture.fileOpener.failure = BrowserOutage()
+        try await fixture.run("Write notes and open them", plan: fixture.draftThenOpenTheDraftPlan)
+        let first = try #require(try fixture.resumableTaskStore.loadAll().first)
+        #expect(first.chainedArtifactPath == fixture.draftOutput.path)
+
+        // The retry re-plans, as the product does, and this time the plan is a single unit that
+        // fails — so nothing completes and nothing overwrites the record's carried file.
+        fixture.planner.plan = AgentPlan(
+            summary: "Open the page.",
+            requiresConfirmation: false,
+            steps: [
+                AgentStep(
+                    id: "url",
+                    operation: .openURL,
+                    description: "Open the page.",
+                    targetURL: "https://example.com/page"
+                )
+            ]
+        )
+        fixture.browserOpener.failure = BrowserOutage()
+        fixture.viewModel.retryLastCommand()
+        try await fixture.waitForIdle()
+
+        let second = try #require(try fixture.resumableTaskStore.loadAll().first)
+        #expect(second.id == first.id, "one task, one record")
+        #expect(second.completedStepIDs.isEmpty)
+        #expect(second.chainedArtifactPath == nil, "a restart has completed no unit, so it carries no file")
+    }
+
     /// **F2: "Not now" has to repaint the widget.**
     ///
     /// `dismissedResumeOfferIDs` was a plain `private var`, so the model agreed the offer was gone
