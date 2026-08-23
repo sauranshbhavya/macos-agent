@@ -649,7 +649,11 @@ struct ProductShellTests {
             // now belong to a different task.
             "activeResumableTask",
             "pendingResumableContinuation",
-            "dismissedResumeOfferIDs"
+            "dismissedResumeOfferIDs",
+            // SONNY-239's Reveal in Finder control renders off this. The wipe's own sweep has just
+            // deleted the files it names, so a surviving list would offer to show the user files
+            // that are gone.
+            "setAsideFilesFromLastDelete"
         ]
 
         // Not assigned by the wipe, but rewritten by the four `refresh…` calls it ends with — from
@@ -668,11 +672,12 @@ struct ProductShellTests {
             "clipboardHistoryTimer",      // ditto, via start/stopClipboardHistoryMonitoring()
             "localStorageLoadFailures",   // record/clearLocalStorageLoadFailure, inside all four
             "localStorageNotice",         // ditto, via refreshLocalStorageNotice()
-            // Derived from `localStorageLoadFailures` by the same publish, so it lands here for the
-            // same reason (SONNY-239). It matters that it does: the wipe deletes the file a row was
-            // marked unreadable for, so a set that survived would leave that row saying "Can't be
-            // read" about a file that no longer exists.
-            "unreadableMemoryCategories"
+            // Reloaded by `refreshStoreReadability()`, which `refreshMemoryRowsAfterRun()` calls —
+            // and the wipe reaches it the same way the four refreshes above reach the rest
+            // (SONNY-239). It matters that it does: the wipe deletes the file a row was marked
+            // unreadable for, so a set that survived would leave that row saying "Can't be read"
+            // about a file that no longer exists.
+            "unreadableStores"
         ]
 
         // Deliberately untouched, in four groups.
@@ -688,7 +693,7 @@ struct ProductShellTests {
             "zipArchiver", "shortcutRunHistoryStore", "taskHistoryStore", "taskPlanDetailStore",
             "clipboardHistorySettingsStore", "approvedAppStore", "outputLocationStore",
             "resumableTaskStore",
-            "clipboardHistoryMonitor",
+            "clipboardHistoryMonitor", "finderRevealer",
             "localDataDeletionService", "memorySettingsStore", "memoryPolicyProvider",
             "priorTaskContextStore", "taskUsageRecorder", "plannerProviderRegistry",
             "plannerSelection", "userDefaults", "whitelist", "routineScheduleTimer", "wakeObserver",
