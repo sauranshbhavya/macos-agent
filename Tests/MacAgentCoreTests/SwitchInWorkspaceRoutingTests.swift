@@ -39,6 +39,26 @@ struct SwitchInWorkspaceRoutingTests {
         try fixture.assertSwitchPlan(for: "switch to the code app in the workspace Switch", appName: "code")
     }
 
+    /// SONNY-242 merged this file's article list into the shared `SpokenName.leadingArticles` and
+    /// widened it from `["my", "the"]` to four words, which this site could not afford: a plan
+    /// carries one `appName`, so it discards the original candidate and every strippable word is a
+    /// word an app can no longer be called. "our standup app" became `standup`, so an app really
+    /// called *Our Standup* was unreachable — and would have silently activated a running *Standup*
+    /// instead. The strippable set is now the intersection with `runningAppLeadingStopWords`, which
+    /// is the only reason this site strips at all, so the pair below both hold: `the` still comes
+    /// off because the guard rejects it, and `our` stays on because the guard never did.
+    /// (PR #106 review, F3.)
+    @Test
+    func onlyTheArticlesTheGuardRejectsComeOffAnAppName() throws {
+        let fixture = try Fixture()
+        defer { fixture.tearDown() }
+
+        try fixture.assertSwitchPlan(for: "switch to our standup app in the workspace Switch", appName: "our standup")
+        try fixture.assertSwitchPlan(for: "switch to your standup app in the workspace Switch", appName: "your standup")
+        try fixture.assertSwitchPlan(for: "switch to the standup app in the workspace Switch", appName: "standup")
+        try fixture.assertSwitchPlan(for: "switch to my standup app in the workspace Switch", appName: "standup")
+    }
+
     /// Observation 3: *"switch to xcod in the workspace Switch"* → an `edit_workspace` **add** of
     /// the literal string "xcod" to the workspace. A clean prefix of a running app, turned into a
     /// stored boundary entry.
