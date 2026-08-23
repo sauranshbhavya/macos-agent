@@ -761,7 +761,7 @@ struct MemoryCommandCenterTests {
             count: fixture.viewModel.memoryEntryCount(for: .outputLocations),
             isRecording: fixture.viewModel.isMemoryCategoryEnabled(.outputLocations),
             canChangeRecording: fixture.viewModel.memorySettings.isRecording,
-            isUnreadable: fixture.viewModel.unreadableMemoryCategories.contains(.outputLocations),
+            readability: MemoryRowReadability.of(.outputLocations, viewModel: fixture.viewModel),
             newestEntryDate: fixture.viewModel.newestMemoryEntryDate(for: .outputLocations),
             now: now
         )
@@ -1364,14 +1364,14 @@ struct MemoryCommandCenterTests {
         fixture.viewModel.refreshMemoryEntries()
 
         let row = MemoryRowPresentation.row(for: .outputLocations, viewModel: fixture.viewModel)
-        #expect(row.isUnreadable)
+        #expect(row.readability == .unreadable)
         #expect(row.count == 0, "the count is zero, which is the whole difficulty")
         #expect(row.detailText == "Can't be read")
         #expect(row.canDelete, "Delete must be live at a count of zero, or the dead end is intact")
 
         // The control, in both directions: a genuinely empty row is still an empty row.
         let empty = MemoryRowPresentation.row(for: .snippets, viewModel: fixture.viewModel)
-        #expect(!empty.isUnreadable)
+        #expect(empty.readability == .readable)
         #expect(empty.detailText == "0 saved")
         #expect(!empty.canDelete)
     }
@@ -1395,7 +1395,7 @@ struct MemoryCommandCenterTests {
         // The row and the banner both stop saying it is broken.
         #expect(!fixture.viewModel.unreadableMemoryCategories.contains(.outputLocations))
         #expect(fixture.viewModel.localStorageNotice == nil)
-        #expect(!MemoryRowPresentation.row(for: .outputLocations, viewModel: fixture.viewModel).isUnreadable)
+        #expect(MemoryRowPresentation.row(for: .outputLocations, viewModel: fixture.viewModel).readability == .readable)
 
         // And nothing was destroyed (founder decision, 2026-08-23; SONNY-253 is why).
         let setAside = LocalDataQuarantine().quarantinedSiblings(of: fixture.outputLocationStore.fileURL)
@@ -1488,12 +1488,15 @@ struct MemoryCommandCenterTests {
         #expect(notice.hasPrefix("Sonny could not load encrypted local data."))
         #expect(notice.contains("where your outputs usually go"))
         #expect(notice.hasSuffix(" Open Memory in Command Center to clear it."))
+
         // Once, not twice, however many stores are broken — the sentence is appended to the banner
-        // rather than to each store's detail.
+        // rather than to each store's detail. And it counts: the founder's own case was two broken
+        // files, where a singular pronoun covered both (PR #110 review).
         try fixture.writeUnreadableFile(at: fixture.snippetStore.fileURL)
         fixture.viewModel.refreshMemoryEntries()
         let both = try #require(fixture.viewModel.localStorageNotice)
         #expect(both.components(separatedBy: "Open Memory in Command Center").count - 1 == 1)
+        #expect(both.hasSuffix(" Open Memory in Command Center to clear them."))
     }
 
     /// The confirmation is honest about the two things Sonny cannot otherwise be honest about here:
@@ -1526,6 +1529,222 @@ struct MemoryCommandCenterTests {
         // command is a control on the page behind this sheet.
         #expect(message.contains("Press Delete on the output locations row"))
         #expect(message.contains("The file stays on your Mac."))
+    }
+
+    // MARK: - PR #110 review: what the first round got wrong
+
+    /// **F1 — a damaged store must not turn every copy into a notification.**
+    ///
+    /// `recordLocalStorageLoadFailure` reassigned `localStorageNotice` unconditionally, which was
+    /// harmless while its only callers were a page appearing and two deletes the user pressed.
+    /// SONNY-246 gave it one that fires on every recorded clipboard item — up to once a second — and
+    /// `AppDelegate` sinks that publisher with no `removeDuplicates()` into a notification whose
+    /// identifier is a fresh `UUID()`, so nothing replaces anything. With the founder's two broken
+    /// files that was two Notification Center banners per copy, and the widget's own notice back the
+    /// moment after he dismissed it.
+    ///
+    /// Emissions are the thing that has to be zero, not the final value: `AppDelegate` posts one
+    /// notification per non-nil emission, so a banner that is reassigned to the same string is still
+    /// a second notification.
+    @Test
+    func anUnchangedLoadFailureRepublishesNothingAndLeavesADismissedBannerDismissed() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        try fixture.clipboardSettingsStore.save(ClipboardHistorySettings(noticeDismissed: true, isEnabled: true))
+        try fixture.writeUnreadableFile(at: fixture.outputLocationStore.fileURL)
+
+        var emissions = 0
+        let subscription = fixture.viewModel.$localStorageNotice
+            .dropFirst()
+            .sink { _ in emissions += 1 }
+        defer { subscription.cancel() }
+
+        fixture.viewModel.refreshMemoryEntries()
+        #expect(emissions == 1, "the first discovery must publish")
+        #expect(fixture.viewModel.localStorageNotice != nil)
+
+        // The user dismisses it, exactly as the widget's Dismiss does.
+        fixture.viewModel.localStorageNotice = nil
+        let afterDismissal = emissions
+
+        // Three copies, which is three seconds of ordinary work with the page open.
+        for index in 0..<3 {
+            fixture.pasteboard.text = "copied \(index)"
+            fixture.pasteboard.changeCount += 1
+            #expect(fixture.viewModel.pollClipboardHistory())
+        }
+
+        #expect(emissions == afterDismissal, "a copy republished the notice \(emissions - afterDismissal) time(s)")
+        #expect(fixture.viewModel.localStorageNotice == nil, "the dismissed banner came back")
+        // The row still says so, which is where an ongoing condition belongs — the banner is for
+        // news, the row is for state.
+        #expect(fixture.viewModel.unreadableMemoryCategories.contains(.outputLocations))
+        // And the copies really were recorded, so the silence above is the guard rather than a
+        // clipboard monitor that never ran.
+        #expect(fixture.viewModel.clipboardHistoryItems.count == 3)
+    }
+
+    /// A genuinely new failure still publishes, which is what stops the guard above from being a mute.
+    @Test
+    func aSecondStoreBreakingIsNewsAndStillPublishes() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        try fixture.writeUnreadableFile(at: fixture.outputLocationStore.fileURL)
+        fixture.viewModel.refreshMemoryEntries()
+        fixture.viewModel.localStorageNotice = nil
+
+        try fixture.writeUnreadableFile(at: fixture.snippetStore.fileURL)
+        fixture.viewModel.refreshMemoryEntries()
+
+        let notice = try #require(fixture.viewModel.localStorageNotice)
+        #expect(notice.contains("where your outputs usually go"))
+        #expect(notice.contains("snippets"))
+    }
+
+    /// **F2 — an ordinary Delete must not destroy the file the previous press promised to keep.**
+    ///
+    /// The per-row Delete used to call `deleteAllLocalData()`, which sweeps every set-aside sibling
+    /// of the files it is given. So: repair a broken row, use it for weeks, then delete it for the
+    /// ordinary reason, and the bytes SONNY-253 exists to rescue were unlinked — reported inside a
+    /// count of files the user cannot see, and contradicting `LocalDataQuarantine`'s own doc comment.
+    @Test
+    func anOrdinaryDeleteOnARowThatRecoveredKeepsTheFileTheEarlierRepairSetAside() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        let quarantine = LocalDataQuarantine()
+
+        // 1. The file will not read, and the user clears it.
+        let original = try fixture.writeUnreadableFile(at: fixture.outputLocationStore.fileURL)
+        fixture.viewModel.refreshMemoryEntries()
+        fixture.viewModel.deleteMemory(in: .outputLocations)
+        #expect(quarantine.quarantinedSiblings(of: fixture.outputLocationStore.fileURL).count == 1)
+
+        // 2. The store works again and the row fills up.
+        let reports = try fixture.makeOutputFolder("Reports")
+        try fixture.outputLocationStore.recordOutputs(atPaths: [reports.appendingPathComponent("a.md").path])
+        fixture.viewModel.refreshMemoryEntries()
+        #expect(MemoryRowPresentation.row(for: .outputLocations, viewModel: fixture.viewModel).readability == .readable)
+
+        // 3. Weeks later, an ordinary Delete for the ordinary reason.
+        fixture.viewModel.deleteMemory(in: .outputLocations)
+
+        #expect(!FileManager.default.fileExists(atPath: fixture.outputLocationStore.fileURL.path))
+        let setAside = quarantine.quarantinedSiblings(of: fixture.outputLocationStore.fileURL)
+        #expect(setAside.count == 1, "the kept file was destroyed by an ordinary Delete")
+        #expect(try Data(contentsOf: try #require(setAside.first)) == original)
+        // And the figure the user is shown counts only what they can see.
+        #expect(
+            try #require(fixture.viewModel.memoryDeletionStatusMessage) == "Deleted output locations — 1 file."
+        )
+    }
+
+    /// The other half of F2: Settings' whole wipe is still the one door that takes them, so keeping
+    /// them out of the per-row Delete does not leave a privacy hole.
+    @Test
+    func settingsWholeWipeStillTakesASetAsideFile() throws {
+        let fixture = try makeMemoryFixture(wipesRealStoreFiles: true)
+        defer { fixture.cleanUp() }
+        try fixture.writeUnreadableFile(at: fixture.outputLocationStore.fileURL)
+        fixture.viewModel.refreshMemoryEntries()
+        fixture.viewModel.deleteMemory(in: .outputLocations)
+        #expect(LocalDataQuarantine().quarantinedSiblings(of: fixture.outputLocationStore.fileURL).count == 1)
+
+        fixture.viewModel.deleteLocalData()
+
+        #expect(LocalDataQuarantine().quarantinedSiblings(of: fixture.outputLocationStore.fileURL).isEmpty)
+    }
+
+    /// **F3 — the whole wipe must not leave a row saying "Can't be read" about a file it just deleted.**
+    ///
+    /// `clearInMemoryLocalDataState`'s four refreshes reach ten of the eleven load-failure sources.
+    /// The one they never reach is `.taskPlanDetails`, recorded only by `storedPlanDetail(for:)` —
+    /// so a user who had pressed Follow up on a task with a broken plan-detail file, and then wiped
+    /// everything, was told "Deleted 13 local data files." beside a Task history row that still read
+    /// as damaged and a banner still telling them to go and clear it.
+    @Test
+    func theWholeWipeClearsARowMarkedUnreadableByAFileItJustDeleted() async throws {
+        let fixture = try makeMemoryFixture(wipesRealStoreFiles: true)
+        defer { fixture.cleanUp() }
+
+        fixture.viewModel.command = "add two and two"
+        fixture.viewModel.start(prebuiltPlan: planCalculating("2 + 2"))
+        try await fixture.waitUntilIdle()
+        try fixture.writeUnreadableFile(at: fixture.taskPlanDetailStore.fileURL)
+        _ = fixture.viewModel.followUpOnTask(try #require(fixture.viewModel.taskHistoryRecords.first))
+        #expect(fixture.viewModel.unreadableMemoryCategories.contains(.taskHistory))
+
+        fixture.viewModel.deleteLocalData()
+
+        #expect(fixture.viewModel.unreadableMemoryCategories.isEmpty)
+        #expect(fixture.viewModel.localStorageNotice == nil)
+        #expect(!FileManager.default.fileExists(atPath: fixture.taskPlanDetailStore.fileURL.path))
+    }
+
+    /// **F4 — a row with readable entries keeps its count, and its confirmation still names them.**
+    ///
+    /// Task history is the one row over several stores. With `task-plan-details.json` broken and
+    /// twelve readable tasks behind it, the row read "Can't be read" while View listed all twelve —
+    /// two surfaces disagreeing on one screen — and the confirmation dropped from naming everything
+    /// the press destroys to the vaguer cannot-see-inside sentence, at the press that does the most.
+    @Test
+    func aPartlyUnreadableRowKeepsItsCountAndItsConfirmationStillNamesWhatGoes() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+
+        for expression in ["2 + 2", "3 + 3"] {
+            fixture.viewModel.command = "add \(expression)"
+            fixture.viewModel.start(prebuiltPlan: planCalculating(expression))
+            try await fixture.waitUntilIdle()
+        }
+        #expect(fixture.viewModel.memoryEntryCount(for: .taskHistory) == 2)
+
+        try fixture.writeUnreadableFile(at: fixture.taskPlanDetailStore.fileURL)
+        _ = fixture.viewModel.followUpOnTask(try #require(fixture.viewModel.taskHistoryRecords.first))
+
+        let row = MemoryRowPresentation.row(for: .taskHistory, viewModel: fixture.viewModel)
+        #expect(row.readability == .partlyUnreadable)
+        #expect(row.count == 2, "the tasks are readable and the row must still say so")
+        #expect(row.detailText == "2 saved · part can't be read")
+        #expect(row.canDelete)
+
+        // The confirmation keeps the sentence that names what goes, and adds the one that names
+        // what stays. Neither replaces the other.
+        let confirmation = MemoryDeletionCopy.confirmation(for: .taskHistory, readability: .partlyUnreadable)
+        #expect(confirmation.hasPrefix(MemoryDeletionCopy.message(for: .taskHistory)))
+        #expect(confirmation.contains("Part of this can't be read"))
+        #expect(confirmation.contains("keeps that file instead of deleting it"))
+    }
+
+    /// **F5 — a file nothing has tried to load is still protected.**
+    ///
+    /// `unreadableStores(in:)` used to read `localStorageLoadFailures`, which holds what something
+    /// happened to load and fail on. `.taskPlanDetails` is recorded only when the user opens a task's
+    /// detail or presses Follow up; in the ordinary case they have not, so a broken plan-detail file
+    /// was classified readable and unlinked. Of the four files under this row, exactly one was
+    /// reliably covered by "never destroy what you cannot prove is garbage".
+    @Test
+    func aDeleteSetsAsideAnUnreadableFileNothingHasEverTriedToLoad() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+
+        fixture.viewModel.command = "add two and two"
+        fixture.viewModel.start(prebuiltPlan: planCalculating("2 + 2"))
+        try await fixture.waitUntilIdle()
+        let original = try fixture.writeUnreadableFile(at: fixture.taskPlanDetailStore.fileURL)
+
+        // Deliberately no `followUpOnTask` here — nothing in this run has loaded that store, so
+        // nothing has recorded a failure for it. That is the ordinary case.
+        #expect(!fixture.viewModel.unreadableMemoryCategories.contains(.taskHistory))
+
+        fixture.viewModel.deleteMemory(in: .taskHistory)
+
+        let setAside = LocalDataQuarantine().quarantinedSiblings(of: fixture.taskPlanDetailStore.fileURL)
+        #expect(setAside.count == 1, "an unreadable file nobody had opened was unlinked")
+        #expect(try Data(contentsOf: try #require(setAside.first)) == original)
+        // And the readable file beside it really was deleted, so this is the split working rather
+        // than a delete that kept everything.
+        #expect(!FileManager.default.fileExists(atPath: fixture.taskHistoryStore.fileURL.path))
+        #expect(LocalDataQuarantine().quarantinedSiblings(of: fixture.taskHistoryStore.fileURL).isEmpty)
     }
 
     // MARK: - SONNY-246: the lists reload while the page is open
@@ -1672,6 +1891,91 @@ struct MemoryCommandCenterTests {
         #expect(publishedChanges > 0)
     }
 
+    /// **F6 — Routines and Workspaces are Memory rows too, and `refreshMemoryEntries()` does not
+    /// load them.**
+    ///
+    /// They are published by `refreshSavedItems()`, which the first round of SONNY-246 left where it
+    /// was: on the success branches only, and nowhere on the scheduled path. So a run that saved a
+    /// routine or created a workspace and then failed left the row showing the old count — the exact
+    /// symptom this ticket was filed for, on two of the nine rows, unmentioned in its own
+    /// classification of which rows were stale.
+    ///
+    /// The workspace is written behind the view model's back on purpose: what is under test is that
+    /// a *failed* run reloads those rows at all, not that this particular plan creates one.
+    @Test
+    func aFailedRunStillReloadsTheRoutinesAndWorkspacesRows() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        fixture.viewModel.refreshMemoryEntries()
+        fixture.viewModel.refreshSavedItems()
+        #expect(fixture.viewModel.savedWorkspaces.isEmpty)
+
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: []))
+
+        fixture.viewModel.command = "add apples"
+        fixture.viewModel.start(prebuiltPlan: planCalculating("apples"))
+        try await fixture.waitUntilIdle()
+
+        // The control: this really was a failure, so the assertion below is about the failure path.
+        #expect(fixture.viewModel.errorMessage != nil)
+        #expect(fixture.viewModel.savedWorkspaces.map(\.name) == ["Research"])
+        #expect(fixture.viewModel.memoryEntryCount(for: .workspaces) == 1)
+    }
+
+    /// The scheduled half of F6, which had no refresh for these two rows at all.
+    @Test
+    func aScheduledRunReloadsTheRoutinesAndWorkspacesRows() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        _ = try fixture.saveScheduledDraftRoutine()
+        fixture.viewModel.refreshMemoryEntries()
+        fixture.viewModel.refreshSavedItems()
+        #expect(fixture.viewModel.savedWorkspaces.isEmpty)
+
+        try fixture.workspaceStore.save(StoredWorkspace(name: "Research", apps: ["Safari"], urls: []))
+
+        fixture.viewModel.checkScheduledRoutines(now: MemoryFixture.tenAM)
+        try await fixture.waitUntilIdle()
+
+        #expect(fixture.viewModel.savedWorkspaces.map(\.name) == ["Research"])
+    }
+
+    /// **F8 — a Delete that could not happen must leave the row saying so.**
+    ///
+    /// `clearLoadFailuresForStoresWhoseFileIsGone` asks the file system whether the file really went
+    /// before forgetting its failure. Deleting that guard — so the failure is cleared either way —
+    /// survived the whole suite in the reviewer's mutation battery: a Delete that silently did
+    /// nothing would clear the banner and the row's damaged state, and nothing would notice.
+    ///
+    /// Locking the directory is what makes the move fail, so this needs the unprivileged gate.
+    @Test(.requiresUnprivilegedProcess)
+    func aDeleteThatCouldNotHappenLeavesTheRowSayingItCannotBeRead() throws {
+        let fixture = try makeMemoryFixture()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fixture.root.path)
+            fixture.cleanUp()
+        }
+        try fixture.writeUnreadableFile(at: fixture.outputLocationStore.fileURL)
+        fixture.viewModel.refreshMemoryEntries()
+        #expect(fixture.viewModel.unreadableMemoryCategories.contains(.outputLocations))
+
+        // Read and execute stay, so every load below still works; only the rename is refused.
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o500],
+            ofItemAtPath: fixture.root.path
+        )
+        fixture.viewModel.deleteMemory(in: .outputLocations)
+
+        // The premise: the file really is still there, which is what makes the row's claim true.
+        #expect(FileManager.default.fileExists(atPath: fixture.outputLocationStore.fileURL.path))
+        #expect(fixture.viewModel.unreadableMemoryCategories.contains(.outputLocations))
+        #expect(fixture.viewModel.localStorageNotice != nil)
+        #expect(
+            try #require(fixture.viewModel.memoryDeletionStatusMessage)
+                .hasPrefix("Could not delete output locations")
+        )
+    }
+
     /// **The ticket's second question, answered: the sheet cannot disagree with the row.**
     ///
     /// It asked whether an open entries sheet has the same staleness as the row behind it, since a
@@ -1722,7 +2026,7 @@ struct MemoryCommandCenterTests {
             count: fixture.viewModel.memoryEntryCount(for: .snippets),
             isRecording: fixture.viewModel.isMemoryCategoryEnabled(.snippets),
             canChangeRecording: fixture.viewModel.memorySettings.isRecording,
-            isUnreadable: fixture.viewModel.unreadableMemoryCategories.contains(.snippets),
+            readability: MemoryRowReadability.of(.snippets, viewModel: fixture.viewModel),
             newestEntryDate: fixture.viewModel.newestMemoryEntryDate(for: .snippets),
             now: now
         )
@@ -1741,7 +2045,7 @@ struct MemoryCommandCenterTests {
             count: 0,
             isRecording: false,
             canChangeRecording: true,
-            isUnreadable: false,
+            readability: .readable,
             newestEntryDate: nil,
             now: Date(timeIntervalSince1970: 1_700_000_000)
         )
@@ -2297,9 +2601,6 @@ private struct MemoryFixture {
         return PathWhitelist.canonicalURL(folder.path)
     }
 
-    /// A real folder inside the whitelist, returned in the form the store records it in — the
-    /// temporary directory is a symlink on macOS, so a test comparing the unresolved path against a
-    /// stored one would compare two spellings of one place.
     /// Valid ciphertext under a key this fixture's stores do not have.
     ///
     /// **The founder's failure of 2026-08-23 reproduced, rather than a malformed-bytes stand-in.**
@@ -2324,6 +2625,12 @@ private struct MemoryFixture {
         keyManager: MemoryFixtureKeyManager(bytes: Data(repeating: 0x99, count: 32))
     )
 
+    /// A real folder inside the whitelist, returned in the form the store records it in — the
+    /// temporary directory is a symlink on macOS, so a test comparing the unresolved path against a
+    /// stored one would compare two spellings of one place.
+    ///
+    /// (These three lines spent one round stranded above `writeUnreadableFile`, which was inserted
+    /// between them and the function they describe — PR #110 review.)
     func makeOutputFolder(_ name: String) throws -> URL {
         let folder = outputsRoot.appendingPathComponent(name, isDirectory: true)
         try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)

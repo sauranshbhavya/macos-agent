@@ -387,12 +387,20 @@ public enum PriorTaskOutcomeStatus: String, Codable, Equatable, Sendable {
     /// finished and may still write. Everything else is terminal, the preview-only exits included:
     /// they produced no further work and nothing more is coming.
     ///
-    /// **Here rather than at a call site because two things now read it** (SONNY-246):
-    /// `AgentViewModel.recordTaskHistoryIfTerminal` reloads the Memory section's lists on it, and
+    /// **One reader, and the reason it is a named property rather than an inline condition is that
+    /// a second switch three thousand lines away answers the neighbouring question** (SONNY-246).
+    /// `AgentViewModel.recordTaskHistoryIfTerminal` reloads the Memory section's rows on this;
     /// `settleResumableTask` splits the same set further — kept-and-stamped for `.failed`, deleted
-    /// for the rest. That second switch stays its own, because it needs three answers rather than
-    /// two; what it must not do is disagree with this one about which statuses end a run, and both
-    /// being exhaustive over this enum is what stops that.
+    /// for the rest — and stays its own switch, because it needs three answers rather than two. What
+    /// the two must not do is disagree about which statuses end a run, and both being exhaustive
+    /// over this enum is what stops that. (This comment opened "because two things now read it"
+    /// until PR #110's review pointed out that only one does — `git grep -n endsTheRun -- Sources`
+    /// returns the declaration and one call site.)
+    ///
+    /// Every branch is asserted by `PriorTaskOutcomeStatusTests.everyOutcomeSaysWhetherItEndsTheRun`,
+    /// which exists because the `.prepared` arm survived a mutation battery: a preview-only run
+    /// writes nothing the Memory rows show, so no behavioural test can distinguish refreshing after
+    /// one from not (PR #110 review, F8).
     public var endsTheRun: Bool {
         switch self {
         case .approvalNeeded, .clarificationNeeded:
