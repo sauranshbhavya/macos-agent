@@ -632,14 +632,24 @@ struct LocalRedactionLiveVisionTests {
         // the real recognizer finds only the card on this fixture, and why that is is SONNY-260.
         #expect(payload.report.contains { $0.detectionClass == .creditCardNumber })
 
-        // Painted, read off the pixels. The box the real recognizer puts over the card line covers
-        // x 38...505 and y 344...375, and rows 344...347 of the fixture carry no ink at all — so
-        // this one pixel is white before the call and black after it, which is the difference
-        // between "something came back" and "the secret is gone". Sampled at three points rather
-        // than swept: every read decodes the PNG again.
+        // Painted, read off the pixels. Row 360 runs through the middle of the box the real
+        // recognizer puts over the card line — measured at x 38...505, y 344...375 — so every probe
+        // below sits at least fifteen pixels inside it in either direction, rather than on an edge a
+        // Vision update could move by three. Probing the *unredacted* fixture at the same points is
+        // what makes the black mean painted rather than "the glyphs were already dark there": at
+        // that row the rendered text inks 64 of the 468 pixels the box covers, so five out of five
+        // is something only the paint can produce. Five reads rather than a sweep — every read
+        // decodes the PNG again.
         let redacted = try #require(payload.redactedImageData)
-        #expect(ImageFixtures.isWhite(ImageFixtures.rgb(inPNG: png, x: 270, yFromTop: 346)))
-        #expect(ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: 270, yFromTop: 346)))
+        let probes = [60, 150, 270, 390, 490]
+        let paintedBlack = probes
+            .filter { ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: $0, yFromTop: 360)) }
+            .count
+        let fixtureBlack = probes
+            .filter { ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: png, x: $0, yFromTop: 360)) }
+            .count
+        #expect(paintedBlack == probes.count)
+        #expect(fixtureBlack < probes.count)
         // A box, not the whole capture: an all-black image would satisfy the line above.
         #expect(ImageFixtures.isWhite(ImageFixtures.rgb(inPNG: redacted, x: 10, yFromTop: 10)))
     }
