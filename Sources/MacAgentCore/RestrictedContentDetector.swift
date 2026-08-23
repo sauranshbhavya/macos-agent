@@ -94,20 +94,33 @@ import SwiftSoup
 ///   characters — **neither stage fires unless the page says one of the seven phrases to a reader**,
 ///   and that band is where most real walls measured live (ScienceDirect 526, FT 565, Bloomberg 657,
 ///   LinkedIn 703, IEEE 717, Medium 720, Instagram 792, Telegraph 888, and — measured by PR #108's
-///   reviewer on other URLs — a ResearchGate publication page at 318, a Tumblr dashboard at 265, a
-///   pixiv artwork page at 335).
+///   reviewer on other URLs — a Tumblr dashboard at 265 and a pixiv artwork page at 335).
+///
+///   Several of those are caught by something else — a 401 or 403 answered before this code runs, or
+///   an extractor that finds no article — but **not all of them, and the earlier claim that "three
+///   independent checks fail closed on these pages, not one" was false for exactly the cases the
+///   bullets above concede**: LinkedIn passes the status check, is served here, and yields a
+///   556-character article. Zero of the three fire. That sentence was the justification for narrowing
+///   this check, so it is corrected rather than softened (PR #108 review, F2).
 ///
 ///   **Being in the band is not the same as a note being written**, and that distinction is what the
 ///   Instagram correction above turns on. Of the pages measured in it, the ones where a note really
-///   is produced from gate chrome are LinkedIn (556 characters extracted), IEEE (617), the
-///   ResearchGate publication page (302) and a Scribd document page (271). Instagram, Tumblr and the
-///   pixiv artwork page are served by this check and then yield nothing, because the extractor
-///   throws `noReadableContent`. Several of those are caught by something else — a 401 or 403 answered before
-///   this code runs, or an extractor that finds no article — but **not all of them, and the earlier
-///   claim that "three independent checks fail closed on these pages, not one" was false for exactly
-///   the cases the bullets above concede**: LinkedIn passes the status check, is served here, and
-///   yields a 556-character article. Zero of the three fire. That sentence was the justification for
-///   narrowing this check, so it is corrected rather than softened (PR #108 review, F2).
+///   is produced from gate chrome are LinkedIn (556 characters extracted), IEEE Xplore (617) and a
+///   Scribd document page (271). Instagram, Tumblr and the pixiv artwork page are served by this
+///   check and then yield nothing, because the extractor throws `noReadableContent`.
+///
+/// **A review is evidence, not authority — and this file carried a record built the wrong way for one
+/// round, so the lesson is written where the record was.** PR #108's review reported a ResearchGate
+/// publication page as HTTP 200 with a 302-character article and named it among the pages this check
+/// now serves. This session measured **403**, on two URLs. Rather than report that the two readings
+/// disagreed, it wrote that ResearchGate's "status is evidently not stable" — a sentence whose only
+/// job was to let a correct measurement and a mislabel both be true — and the list went on citing a
+/// page that answers 403 as an example of a note being written. The reviewer has since retracted it:
+/// four consecutive 403s across both sessions, no 200 ever measured. **When your own measurement
+/// disagrees with a reviewer's, the disagreement is the finding.** Say so plainly and get it settled;
+/// prose that reconciles two numbers builds a false record out of two people each being careful, and
+/// it reads exactly like diligence. The pixiv entry beside it is the shape this is *not* — two
+/// correct readings of two different URLs, each stated with its URL.
 public enum RestrictedContentDetector {
     /// Where the phrase was found, which is what decides how much it is worth.
     public enum Evidence: String, Equatable, Sendable {
