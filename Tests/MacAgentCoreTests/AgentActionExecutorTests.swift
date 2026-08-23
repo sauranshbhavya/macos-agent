@@ -57,8 +57,13 @@ struct AgentActionExecutorTests {
     /// exit by itself inside any plausible run, which means:
     ///
     /// - the cancel provably reaches a *running* process, rather than passing when it happened to;
-    /// - there is no window to miss, because nothing closes the window but the cancel;
-    /// - the window from the child's own launch signal to `cancel()` is one main-actor turn with no
+    /// - the window is **bounded rather than eliminated**, and the bound is 300 s: nothing closes it
+    ///   but the cancel, except the child's own sleep running out. That is the honest wording, and
+    ///   the absolute this replaces — "there is no window to miss" — was contradicted two paragraphs
+    ///   below by the sentence explaining what the 300 s is for (PR #112 review, F7). The worst
+    ///   main-actor delay ever measured here is 14.5 s, so the margin is twentyfold; it is still a
+    ///   margin;
+    /// - the wait from the child's own launch signal to `cancel()` is one main-actor turn with no
     ///   suspension in it, rather than a 100 ms sleep whose resumption the machine gets to choose.
     ///
     /// **What this does not assert, stated rather than implied: that cancelling *terminated* the

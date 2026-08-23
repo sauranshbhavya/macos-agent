@@ -13,21 +13,44 @@
 # with nothing else against it is reported UNATTRIBUTED rather than KILLED, and the battery exits 2
 # the way a survivor does. Understating coverage is the safe direction. Manufacturing it is not.
 #
-# **Matched against the issue text, not the test name, and that is the whole point.** The same test
-# can fail two ways: on a real assertion, which is evidence, and on a hang backstop, which is not.
-# A name-based list would have to throw away both. Matching the message keeps the first and drops
-# the second — and it needs no maintenance when a suite grows, because a new test written with the
-# same helper produces the same message and is covered the day it lands.
+# **Matched against the issue text, not the test name, and per issue rather than per test.** The
+# same test can fail two ways: on a real assertion, which is evidence, and on a hang backstop, which
+# is not. A name-based list would have to throw away both. Matching the message keeps the first and
+# drops the second — a test is untrusted only when *every* issue it recorded is declared, and one
+# undeclared issue makes it evidence again. It also needs no maintenance when a suite grows, because
+# a new test written with the same helper produces the same message and is covered the day it lands.
+#
+# That per-issue property is stated here because the first version of the classifier did not have
+# it — it ORed over a test's issues, so one declared backstop discarded a real assertion recorded
+# beside it, which is exactly what this paragraph says a name list would do (PR #112 review, F2).
+# Two limits are left, and both are the harness's rather than this file's. Two tests with the same
+# function name in different suites merge, because swift-testing names no suite on either line the
+# classifier reads; the merge undercounts and can misname, never the reverse. And a mutant whose
+# only red is a *trapped* process names no test at all, so nothing here applies to it.
+#
+# Nothing in this file can excuse `UntrustedFailureDeclarationTests`. That suite is the guard on
+# these declarations, so excusing its failure with the declarations it just called stale would be
+# circular — `scripts/mutate` names those tests in `ALWAYS_TRUSTED` and treats them as evidence
+# whatever they record.
 #
 # Format, one record per entry, directives at column 0. Comments and blank lines are ignored.
 #
 #   >>> signature   literal text, matched as a substring of the issue a failing test recorded.
-#   >>> source      literal text that must still exist somewhere under Tests/. This is what keeps
-#                   the signature honest: `UntrustedFailureDeclarationTests` fails the suite when a
-#                   `source` no longer matches, which is what happens the moment someone rewords the
+#   >>> source      literal text that must still exist under Tests/. This is what keeps the
+#                   signature honest: `UntrustedFailureDeclarationTests` fails the suite when a
+#                   `source` stops matching, which is what happens the moment someone rewords the
 #                   helper a signature was written for. A signature that silently stops matching is
 #                   the same defect as a listed test name that no longer exists — it stops
 #                   protecting, and nothing says so.
+#   >>> sites       how many times that `source` appears in the test tree, asserted exactly. The
+#                   `source` check alone only asks whether the text survives *somewhere*, and four
+#                   of the five records below have more than one site — so rewording one of six
+#                   copies left the suite green while that copy's failures went back to counting as
+#                   kills, measured by rewording one (PR #112 review, F4). A count is what makes the
+#                   reword visible. When this number changes, the change itself is the question:
+#                   a new test using the same helper is fine and the number goes up; a site that
+#                   stopped matching is a signature that stopped protecting, and needs its own
+#                   record or its own fix.
 #   >>> reason      one line: why a failure like this says nothing about a mutant.
 #
 # What belongs here: a hang backstop, a wall-clock ceiling, anything whose failure is a statement
@@ -37,20 +60,25 @@
 
 >>> signature This deadline is a deadlock backstop, not a timing assertion
 >>> source This deadline is a deadlock backstop, not a timing assertion
->>> reason VisionSessionRunTests' waitUntil, a poll that ran out of wall clock. It fires when the machine is oversubscribed as readily as when something is genuinely stuck, and a battery is exactly the load that produces the first. Measured: one flagged run at 961b9c2 with a cold swift build beside it went red on 67 test functions from this one message, 87 firings in all (grep -c over that run's log); the two runs either side of it passed.
+>>> sites 2
+>>> reason A poll that ran out of wall clock, in VisionSessionRunTests' waitUntil and in AgentActionExecutorTests' waitForLaunchSignal. It fires when the machine is oversubscribed as readily as when something is genuinely stuck, and a battery is exactly the load that produces the first. One flagged run at 961b9c2 with a cold swift build beside it went red across most of VisionSessionRunTests on this message alone, while the runs either side of it passed; that run's log was a scratch artifact and is not in this repository, so no count is quoted from it. The reach is: 62 waitUntil call sites among 74 test functions in that one file (git grep -c 'waitUntil(' and git grep -c '@Test' over Tests/MacAgentTests/VisionSessionRunTests.swift at 961b9c2).
 
 >>> signature did not become idle before timeout
 >>> source did not become idle before timeout
->>> reason The view-model hang backstop, in the six suites that word it this way. Same construct as above and the same 30 s deadline; not observed firing in the run that produced the numbers above, because those suites happened not to be the ones that lost. Declared on the construct, not on having watched it.
+>>> sites 6
+>>> reason The view-model hang backstop, in the six suites that word it this way. Same construct as above and the same 30 s deadline; not observed firing in the run that produced the note above, because those suites happened not to be the ones that lost. Declared on the construct, not on having watched it.
 
 >>> signature did not settle before timeout
 >>> source did not settle before timeout
+>>> sites 2
 >>> reason The same view-model hang backstop, in the two suites that word it "settle" instead of "become idle". Two wordings of one sentence is a DRY problem rather than a second construct, and SONNY-261 is where that is written down.
 
 >>> signature the run never finished
 >>> source the run never finished
+>>> sites 1
 >>> reason MemoryCommandCenterTests' own copy of the view-model hang backstop, which asserts its deadline inline rather than recording an issue.
 
 >>> signature Expectation failed: (elapsed →
 >>> source #expect(elapsed < .seconds(
+>>> sites 2
 >>> reason A wall-clock ceiling. It measures the machine, not the code: the redaction ceiling was measured at 1465 ms idle and 11742 ms with a cold build alongside, at 961b9c2, against a bound that was 5000 ms at the time. The ceiling is worth keeping as a tripwire for a pathological regression; its loss under load is worth nothing as evidence about a mutant.
