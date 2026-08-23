@@ -52,16 +52,23 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var pushToTalkHotKey: PushToTalkHotKey?
     private var cancellables: Set<AnyCancellable> = []
 
-    /// Injectable purely so tests can drive the menu and hotkey entry points against a fixture
-    /// view model — `main.swift` still constructs the delegate with no arguments and gets the same
-    /// real view model it always did. Nothing else about the delegate is touched at construction
-    /// time: every AppKit-owning collaborator below is `lazy`, so an unlaunched delegate registers
-    /// no status item, no hotkey, and no Combine subscriptions.
+    /// Nothing about the delegate is touched at construction time: every AppKit-owning collaborator
+    /// below is `lazy`, so an unlaunched delegate registers no status item, no hotkey, and no
+    /// Combine subscriptions.
     ///
-    /// **`atItsRealStoreLocations()` rather than a bare `AgentViewModel()`** (SONNY-240). The
-    /// initializer no longer defaults a single local store, so this is the one site in the
-    /// repository that asks for the real `~/Library` locations — and it asks for them by name.
-    init(viewModel: AgentViewModel = .atItsRealStoreLocations()) {
+    /// **`viewModel` has no default, and this parameter is why the rule needed stating twice**
+    /// (SONNY-240, PR #109 review F4). It was `= .atItsRealStoreLocations()` for one round: a
+    /// defaulted parameter resolving to the real `~/Library` stores, invisible at every call site —
+    /// precisely the shape SONNY-240 removed from `AgentViewModel.init`, recreated one level up. A
+    /// test writing `AppDelegate()` got the developer's own data and passed every check, because the
+    /// scan looks for the factory's *name* and a bare `AppDelegate()` never spells it.
+    ///
+    /// So the name is spelled where it is meant: `main.swift` writes
+    /// `AppDelegate(viewModel: .atItsRealStoreLocations())` and is the only file in `Sources/` other
+    /// than the one declaring it that mentions it at all —
+    /// `LocalStoreInjectionScanTests.onlyMainAsksForTheRealStoreLocations` holds that as a
+    /// population, so the door cannot be reopened here or anywhere else under another name.
+    init(viewModel: AgentViewModel) {
         self.viewModel = viewModel
         super.init()
     }
