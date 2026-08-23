@@ -178,7 +178,7 @@ struct FloatingWidgetView: View {
         // was, since there's no more large drop shadow needing room to fade out.
         .padding(16)
         .onAppear {
-            pillFocused = true
+            focusComposerIfItTakesInput()
             scheduleAutoDismissIfNeeded()
         }
         .onChange(of: widgetStateKey) { _, _ in
@@ -203,7 +203,7 @@ struct FloatingWidgetView: View {
             if isCompact {
                 expandFromCompact()
             } else {
-                pillFocused = true
+                focusComposerIfItTakesInput()
                 scheduleAutoDismissIfNeeded()
             }
         }
@@ -359,8 +359,22 @@ struct FloatingWidgetView: View {
 
     private func expandFromCompact() {
         isCompact = false
-        pillFocused = true
+        focusComposerIfItTakesInput()
         scheduleAutoDismissIfNeeded()
+    }
+
+    /// Puts the caret in the composer, but only when the composer is the field that can use it
+    /// (SONNY-247).
+    ///
+    /// **All three callers used to write `pillFocused = true` unconditionally**, which is the wrong
+    /// half of the founder's report. While a question is parked on the user the composer is
+    /// `.disabled`, so a keystroke aimed at it reaches nothing at all — and the field that *is* live
+    /// is the clarification panel's, a few pixels above, which claims the caret for itself the moment
+    /// its question arrives. Writing `false` here rather than skipping the assignment is deliberate:
+    /// the widget being re-opened onto a pending question must not leave the caret parked in a dead
+    /// field just because it was there before.
+    private func focusComposerIfItTakesInput() {
+        pillFocused = ComposerPresentation.acceptsInput(composerState)
     }
 
     private var styledPanel: some View {
@@ -441,14 +455,45 @@ struct FloatingWidgetView: View {
         }
     }
 
-    private var isTaskInFlight: Bool {
-        viewModel.isRunning
-            || viewModel.isAwaitingApproval
+    /// Which of the composer's three states the app is in — and, with it, what the field says while
+    /// it is not taking input (SONNY-247).
+    ///
+    /// **The seven conditions `isTaskInFlight` covers are classified here rather than merged.** They
+    /// were merged, and the cost was a composer that kept its idle placeholder in all seven, stopped
+    /// responding, and swallowed a paste — reported twice in one day as a hung app. What the user
+    /// should do differs between them, so what the composer says has to differ too;
+    /// `ComposerPresentation.State` is where each case's reasoning lives.
+    ///
+    /// **The union is exactly the old disjunction, term for term.** Five conditions are a question
+    /// parked on the user and two are a run in flight; nothing was added, dropped, or reordered into
+    /// a different truth value, which is what lets `isTaskInFlight` below be derived from this rather
+    /// than computed a second time. `everyConditionTheComposerDisablesOnIsClassified` holds the
+    /// population so an eighth cannot arrive unclassified.
+    private var composerState: ComposerPresentation.State {
+        // A question is parked on the user. Every one of these renders a widget panel
+        // unconditionally — `AgentViewModel.hasVisibleWidgetPanel` returns true for all five before
+        // it reaches any origin gate — so the control that answers it really is above this field.
+        if viewModel.isAwaitingApproval
             || viewModel.clarificationQuestion != nil
             || viewModel.visionCapturePreview != nil
             || viewModel.visionDelegationRequest != nil
-            || viewModel.visionSessionPause != nil
-            || viewModel.visionSessionProgress != nil
+            || viewModel.visionSessionPause != nil {
+            return .waitingOnYou
+        }
+        // A run is in flight with nothing here to type into. Not folded in above, because these two
+        // are the ones whose panel is origin-gated: a run a Command Center row action started shows
+        // nothing in the widget at all, and "answer above" would then point at empty space.
+        if viewModel.isRunning || viewModel.visionSessionProgress != nil {
+            return .working
+        }
+        return .ready
+    }
+
+    /// Unchanged in value, derived rather than restated. Every existing reader — the field's
+    /// `.disabled`, the three chips' clear affordances, `dontSaveButton`, the Start button, the
+    /// pill's trailing inset — keeps exactly the behaviour it had.
+    private var isTaskInFlight: Bool {
+        !ComposerPresentation.acceptsInput(composerState)
     }
 
     private func submit() {
@@ -628,14 +673,19 @@ struct FloatingWidgetView: View {
 
     private var composerFieldRow: some View {
         HStack(spacing: 10) {
+            // Dimmed while the field takes nothing (SONNY-247). This glyph is the composer's "type
+            // here" affordance, so turning it down is the composer withdrawing the invitation — the
+            // placeholder beside it carries the actual sentence, and stays at full `textMuted` so
+            // that the one thing able to explain a dead click is the one thing not dimmed.
             Image(systemName: "wand.and.stars.inverse")
                 .font(WidgetType.icon)
-                .foregroundStyle(.white.opacity(0.61))
+                .foregroundStyle(.white.opacity(isTaskInFlight ? 0.28 : 0.61))
 
             TextField(
                 "",
                 text: $viewModel.command,
-                prompt: Text("Let Sonny take it from here\u{2026}").foregroundStyle(WidgetTheme.textMuted)
+                prompt: Text(ComposerPresentation.prompt(for: composerState))
+                    .foregroundStyle(WidgetTheme.textMuted)
             )
             .textFieldStyle(.plain)
             .font(WidgetType.pillQuery)
@@ -1455,6 +1505,16 @@ private struct WidgetClarificationPanel: View {
     let onSubmit: () -> Void
     let onCancel: () -> Void
 
+    /// **The caret goes where the typing can actually land** (SONNY-247).
+    ///
+    /// This panel has always had the only live text field on the widget while a question is parked,
+    /// and it never asked for the caret — the composer below did, unconditionally, and then refused
+    /// every keystroke and every paste because it is `.disabled` in exactly this state. The founder
+    /// reported that twice in one day as the widget being unable to type or paste. Claiming focus
+    /// here is the half of the fix that makes the other half rarely matter: the first key pressed
+    /// after a question appears goes into the answer.
+    @FocusState private var answerFocused: Bool
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             WidgetExistingStepRows(plan: plan, stepStatuses: stepStatuses)
@@ -1499,6 +1559,7 @@ private struct WidgetClarificationPanel: View {
                     .textFieldStyle(.plain)
                     .font(WidgetType.pillQuery)
                     .foregroundStyle(WidgetTheme.textFull)
+                    .focused($answerFocused)
                     .onSubmit(onSubmit)
 
                     Button(action: onSubmit) {
@@ -1516,6 +1577,16 @@ private struct WidgetClarificationPanel: View {
                 .background(Capsule().fill(Color.white.opacity(0.06)))
                 .overlay(Capsule().stroke(WidgetTheme.hairline.opacity(0.4), lineWidth: 0.5))
             }
+        }
+        .onAppear {
+            answerFocused = true
+        }
+        // A run may ask more than one question, and SwiftUI keeps this view's identity across them —
+        // so `onAppear` fires once and the second question would arrive with the caret still sitting
+        // in the answer the user has just sent. The panel appearing and a new question arriving are
+        // two different events and both need the caret.
+        .onChange(of: question) { _, _ in
+            answerFocused = true
         }
     }
 }
