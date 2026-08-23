@@ -636,9 +636,12 @@ final class AgentViewModel: ObservableObject {
     /// `LocalStoreInjectionScanTests.onlyMainAsksForTheRealStoreLocations` holds the population: in
     /// `Sources/`, exactly two files mention this method — the one declaring it and `main.swift` —
     /// and **each mentions it exactly once**, because the file set alone would permit a second
-    /// factory written inside *this* file (PR #109 re-check). What that check does not reach is a
-    /// wrapper that builds the real stores inline without naming this method; the test says so
-    /// rather than claiming more than it enforces.
+    /// factory written inside *this* file (PR #109 re-check). A wrapper that builds the thirteen
+    /// stores **inline**, naming this method not at all, is a third door that check cannot see — and
+    /// it is not hypothetical: the reviewer wrote one and passed every check in that suite. It is
+    /// closed by `theOnlyViewModelConstructionInSourcesIsTheRealStoreFactory`, which holds that
+    /// `Sources/` constructs an `AgentViewModel` in exactly one place, the function below, and that
+    /// this file spells it by name rather than as `Self(…)` or `.init(…)`.
     ///
     /// The whitelist is built once and handed to both the view model and the output-location store,
     /// because that store answers "is this an output location?" by asking it — see the
