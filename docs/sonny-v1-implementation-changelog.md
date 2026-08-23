@@ -231,10 +231,15 @@ an instance.** Instagram was named as a page Sonny "writes a thin note from" —
 visible characters it clears this check and then the extractor throws `noReadableContent`, which this
 branch's own corpus table already recorded as `article: none`. Tumblr (269) behaves the same way. The
 measured instances are **LinkedIn's feed** (200, 703 visible, 556 extracted) and **IEEE Xplore's home
-page** (200, 717 visible, 617 extracted). Two of the review's other suggestions did not survive
-re-measurement either, and are recorded rather than repeated: **Pixiv is refused**, not served —
-200, 599 visible, and its footer carries Google's standard "This site is protected by reCAPTCHA"
-notice — and **ResearchGate answered 403** when measured, so it never reaches this code at all.
+page** (200, 717 visible, 617 extracted). **Two further pages the review named were re-measured and the results
+differ, but on different URLs, so neither reading contradicts the other** — recorded because a later
+reader will otherwise try to reconcile them. The review measured a *pixiv artwork page* (200, 335
+visible, no article) and a *ResearchGate publication page* (200, 318 visible, 302-character article).
+This session measured pixiv's *home page* (200, 599 visible, 424-character article, and **refused** —
+its footer carries Google's standard "This site is protected by reCAPTCHA" notice), and got **403**
+from both ResearchGate URLs it tried, hours later and from a different network. ResearchGate's status
+is evidently not stable; the pixiv figures are two different pages. The review's numbers stand as
+measured.
 
 **The sentence that mattered most in that block was "three independent checks fail closed on these
 pages, not one", and it was false for exactly the cases the block conceded.** LinkedIn passes the
@@ -242,8 +247,13 @@ status check, is served by the detector, and yields a 556-character article: zer
 That sentence was the justification for narrowing the check, so it is corrected rather than softened.
 The honest characterisation, now in the code: **between 200 and 2 000 visible characters neither
 stage fires unless the page says one of the seven phrases to a reader**, and that band is where most
-real walls measured live — ScienceDirect 526, FT 565, Pixiv 599, Bloomberg 657, LinkedIn 703, IEEE
-717, Medium 720, Instagram 792, Telegraph 888, ResearchGate 318, Tumblr 269.
+real walls measured live — ScienceDirect 526, FT 565, Bloomberg 657, LinkedIn 703, IEEE 717, Medium
+720, Instagram 792, Telegraph 888, and, on the review's own URLs, a ResearchGate publication page at
+318, a Tumblr dashboard at 265 and a pixiv artwork page at 335. **Being in the band is not the same
+as a note being written**, which is the distinction the Instagram correction turns on: a note is
+really produced from gate chrome for LinkedIn (556 characters extracted), IEEE (617), the ResearchGate
+publication page (302) and a Scribd document page (271), while Instagram, Tumblr and the pixiv artwork
+page are served by the check and then yield nothing, the extractor throwing `noReadableContent`.
 
 **The boundary rule's home is `docs/sonny-major-release-spec.md:459` and `:916`** — "Do not bypass
 paywalls, CAPTCHAs, robots restrictions, or login walls" and "Sonny must not bypass paywalls,
@@ -258,6 +268,13 @@ harmless today for two reasons that are not this limit: its wording matches none
 phrases, and it answers 403. Cloudflare's common "Verifying you are human" likewise does not match
 `verify you are human`. What 2 000 actually sits above is every wall in the corpus that both speaks to
 a reader *and* says one of the phrases, which is one page.
+
+**The M4/M6 note in this entry was pessimistic, and the review's independent battery says so.** That
+note reported both limits as held by one synthetic test each and said it was "worth knowing it is the
+only thing holding it". The reviewer's own battery also killed the limits moved the *other* way —
+interstitial 2 000 → 1 200, markup 200 → 800, each by one test — so both constants are pinned in both
+directions, and the synthetic edge tests hardcode 1 999 and 199 in their `visibleTextLength`
+assertions, so neither can drift silently.
 
 **F5. Two mutants survived the suite, both on behaviour the code claimed and nothing held.**
 `locale: nil` → `.current` in `normalized`, and `let haystack = normalized(text)` → `text`. The second
