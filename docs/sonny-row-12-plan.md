@@ -594,12 +594,12 @@ Named here so none of them is discovered during implementation. Each has a home 
   detects a breaking change.
 - **Provider key rotation.** Zero-downtime rotation of the backend's own OpenAI, Anthropic, Cerebras,
   Tavily and vision credentials, once a backend sits between every user and every AI call.
-- **Account deletion's server-side reach.** `LocalDataDeletionService` wipes **eleven** local stores
+- **Account deletion's server-side reach.** `LocalDataDeletionService` wipes **twelve** local stores
   and is client-only. (Was written as eight; corrected 2026-08-21 by SONNY-183, which found it stale
-  at nine and then found nine stale too. Count taken from
-  `LocalDataDeletionService.defaultStoreFileURLs()` and pinned by
-  `LocalStorageSecurityTests.theWipeReachesExactlyTheElevenLocalStores`; re-derive it there rather
-  than trusting this number, since it has now moved twice.) Deleting an account must also reach server-held content, usage history and training
+  at nine and then found nine stale too; row 13's output locations took it to twelve, SONNY-209.
+  Count taken from `LocalDataDeletionService.defaultStoreFileURLs()` and pinned by
+  `LocalStorageSecurityTests.theWipeReachesEveryLocalStore`; re-derive it there rather
+  than trusting this number, since it has now moved three times.) Deleting an account must also reach server-held content, usage history and training
   snapshot lineage (§4.2, consequence 3).
 - **Support without violating the retention classification.** A founder needs to look up a user's
   entitlement state and recent usage. That capability is a deliverable, not an afterthought.

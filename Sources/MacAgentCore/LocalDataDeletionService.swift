@@ -102,7 +102,12 @@ public struct LocalDataDeletionService: @unchecked Sendable {
             // Row J's per-app grants. A durable record of which apps the user let Sonny drive is
             // theirs to erase along with everything else — and leaving it behind would also leave
             // the wipe's own promise half-true.
-            ApprovedAppStore(fileManager: fileManager).fileURL
+            ApprovedAppStore(fileManager: fileManager).fileURL,
+            // Row 13's common output locations (SONNY-209). A short list of folder paths, which
+            // sounds harmless and is not: where somebody's work goes is a map of what they work on,
+            // and folder names are theirs. Erased with the rest for the same reason as everything
+            // above it.
+            OutputLocationStore(fileManager: fileManager).fileURL
         ]
     }
 

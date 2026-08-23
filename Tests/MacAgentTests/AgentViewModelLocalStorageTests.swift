@@ -916,6 +916,10 @@ private func makeViewModel(
             fileURL: root.appendingPathComponent("approved-apps.json"),
             encryption: encryption
         ),
+        outputLocationStore: OutputLocationStore(
+            fileURL: root.appendingPathComponent("output-locations.json"),
+            encryption: encryption
+        ),
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
             reader: FakePasteboardReader(),
             store: ClipboardHistoryStore(

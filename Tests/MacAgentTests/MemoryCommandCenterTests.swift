@@ -364,6 +364,454 @@ struct MemoryCommandCenterTests {
         )
     }
 
+    // MARK: - Output locations, the twelfth store (SONNY-209)
+
+    /// **The control, and it is the one that has to exist.** "Nothing was recorded" is equally true
+    /// of a store nothing ever writes to, so the switched-off tests below mean nothing without a
+    /// run that really does record — through `checkScheduledRoutines(now:)`, the real scheduler door,
+    /// with a routine that writes a real file into a real folder.
+    @Test
+    func aScheduledRoutineThatWritesAFileRecordsTheFolderItLandedIn() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        let reports = try fixture.saveScheduledDraftRoutine()
+
+        fixture.viewModel.checkScheduledRoutines(now: MemoryFixture.tenAM)
+        try await fixture.waitUntilIdle()
+
+        // The routine really ran and really wrote the file — without this the store assertion below
+        // could pass over a run that never happened.
+        #expect(FileManager.default.fileExists(atPath: reports.appendingPathComponent("morning.md").path))
+        let stored = try fixture.outputLocationStore.loadAll()
+        #expect(stored.map(\.path) == [reports.path])
+        #expect(stored.first?.useCount == 1)
+        #expect(stored.first?.name == "Reports")
+    }
+
+    @Test
+    func aScheduledRoutineRecordsNoOutputLocationWithTheMasterSwitchOff() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        let reports = try fixture.saveScheduledDraftRoutine()
+        fixture.viewModel.setMemoryEnabled(false)
+
+        fixture.viewModel.checkScheduledRoutines(now: MemoryFixture.tenAM)
+        try await fixture.waitUntilIdle()
+
+        #expect(try fixture.outputLocationStore.loadAll().isEmpty)
+        // The run still happened and the user still has their file. This withholds the note about
+        // where it went; it does not cancel the routine or move the output.
+        #expect(FileManager.default.fileExists(atPath: reports.appendingPathComponent("morning.md").path))
+    }
+
+    @Test
+    func aScheduledRoutineRecordsNoOutputLocationWithTheOutputLocationsSwitchOff() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        let reports = try fixture.saveScheduledDraftRoutine()
+        fixture.viewModel.setMemoryCategoryEnabled(.outputLocations, to: false)
+
+        fixture.viewModel.checkScheduledRoutines(now: MemoryFixture.tenAM)
+        try await fixture.waitUntilIdle()
+
+        #expect(try fixture.outputLocationStore.loadAll().isEmpty)
+        #expect(FileManager.default.fileExists(atPath: reports.appendingPathComponent("morning.md").path))
+    }
+
+    /// **Per type, not wholesale.** Turning off the neighbouring row — recent artifacts, the store
+    /// this one is most likely to be confused with — must leave output locations recording. Without
+    /// this, the test above would pass over a guard that read the master switch or the wrong row.
+    @Test
+    func aScheduledRoutineStillRecordsItsOutputLocationWhenTheRecentArtifactsSwitchIsOff() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        let reports = try fixture.saveScheduledDraftRoutine()
+        fixture.viewModel.setMemoryCategoryEnabled(.recentArtifacts, to: false)
+
+        fixture.viewModel.checkScheduledRoutines(now: MemoryFixture.tenAM)
+        try await fixture.waitUntilIdle()
+
+        #expect(try fixture.outputLocationStore.loadAll().map(\.path) == [reports.path])
+    }
+
+    /// **The scheduled path drops the composer switch, and this is that decision driven end to end**
+    /// (PR #98's F1/F2 shape, one store later). "Don't save this task" is a pre-dispatch toggle: a
+    /// person flips it on while composing a command they have not sent, all three of
+    /// `checkScheduledRoutines`' guards still pass, and a routine fires. Reading the policy on that
+    /// path would silently stop Sonny learning the folder a Monday-morning routine files into,
+    /// because of a switch set for a different task.
+    @Test
+    func aScheduledRoutineStillRecordsItsOutputLocationWhileAForegroundRunHasSuppressionLeftOn() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        let reports = try fixture.saveScheduledDraftRoutine()
+        fixture.viewModel.taskRecordingPolicy = .suppressTraces
+
+        fixture.viewModel.checkScheduledRoutines(now: MemoryFixture.tenAM)
+        try await fixture.waitUntilIdle()
+
+        #expect(try fixture.outputLocationStore.loadAll().map(\.path) == [reports.path])
+    }
+
+    /// The foreground path, through `start(prebuiltPlan:)` and a real lightweight confirmation.
+    ///
+    /// Its own end-to-end test rather than a seam assertion, because the foreground and scheduled
+    /// paths build their runners at four and one construction sites respectively and read *different*
+    /// seams — a handover correct on one says nothing about the other.
+    @Test
+    func aForegroundRunThatWritesAFileRecordsTheFolderItLandedIn() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        let reports = try fixture.makeOutputFolder("Reports")
+
+        fixture.viewModel.command = "draft the morning note"
+        fixture.viewModel.start(prebuiltPlan: planDrafting(into: reports))
+        try await fixture.waitUntilIdle()
+
+        #expect(FileManager.default.fileExists(atPath: reports.appendingPathComponent("morning.md").path))
+        #expect(try fixture.outputLocationStore.loadAll().map(\.path) == [reports.path])
+        #expect(fixture.viewModel.errorMessage == nil)
+    }
+
+    @Test
+    func aForegroundRunRecordsNoOutputLocationWithTheOutputLocationsSwitchOff() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        let reports = try fixture.makeOutputFolder("Reports")
+        fixture.viewModel.setMemoryCategoryEnabled(.outputLocations, to: false)
+
+        fixture.viewModel.command = "draft the morning note"
+        fixture.viewModel.start(prebuiltPlan: planDrafting(into: reports))
+        try await fixture.waitUntilIdle()
+
+        #expect(try fixture.outputLocationStore.loadAll().isEmpty)
+        // The file the user asked for is still there — a trace switch withholds the note, never the
+        // output.
+        #expect(FileManager.default.fileExists(atPath: reports.appendingPathComponent("morning.md").path))
+    }
+
+    /// The other half of the foreground conjunction: "Don't save this task", which the *foreground*
+    /// path does read, with every memory switch on.
+    @Test
+    func aSuppressedForegroundRunRecordsNoOutputLocation() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        let reports = try fixture.makeOutputFolder("Reports")
+        #expect(fixture.viewModel.memorySettings.isRecording)
+        fixture.viewModel.taskRecordingPolicy = .suppressTraces
+
+        fixture.viewModel.command = "draft the morning note"
+        fixture.viewModel.start(prebuiltPlan: planDrafting(into: reports))
+        try await fixture.waitUntilIdle()
+
+        #expect(try fixture.outputLocationStore.loadAll().isEmpty)
+        #expect(FileManager.default.fileExists(atPath: reports.appendingPathComponent("morning.md").path))
+    }
+
+    /// Both seams as values, so each switch's effect on each path is asserted directly rather than
+    /// only through the dispatch tests above — the same belt `theRecentArtifactAndVisionJournalHandoversAreWithheldByTheMemorySwitchesToo`
+    /// provides for its two stores.
+    @Test
+    func theOutputLocationHandoversAreWithheldByTheMemorySwitchesOnBothPaths() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+
+        #expect(fixture.viewModel.outputLocationStoreForThisRun != nil)
+        #expect(fixture.viewModel.outputLocationStoreForScheduledRun != nil)
+
+        fixture.viewModel.setMemoryCategoryEnabled(.outputLocations, to: false)
+        #expect(fixture.viewModel.outputLocationStoreForThisRun == nil)
+        #expect(fixture.viewModel.outputLocationStoreForScheduledRun == nil)
+        // Only this row — the neighbouring store's seams are untouched, which is what fails if the
+        // two rows were ever wired to one flag.
+        #expect(fixture.viewModel.recentArtifactStoreForThisRun != nil)
+        #expect(fixture.viewModel.recentArtifactStoreForScheduledRun != nil)
+
+        fixture.viewModel.setMemoryCategoryEnabled(.outputLocations, to: true)
+        fixture.viewModel.setMemoryEnabled(false)
+        #expect(fixture.viewModel.outputLocationStoreForThisRun == nil)
+        #expect(fixture.viewModel.outputLocationStoreForScheduledRun == nil)
+
+        // And the composer switch parts the two paths, in the direction each is supposed to go.
+        fixture.viewModel.setMemoryEnabled(true)
+        fixture.viewModel.taskRecordingPolicy = .suppressTraces
+        #expect(fixture.viewModel.outputLocationStoreForThisRun == nil)
+        #expect(
+            fixture.viewModel.outputLocationStoreForScheduledRun != nil,
+            "the scheduled seam must not read the composer switch"
+        )
+    }
+
+    /// The scheduled runner is handed the *scheduled* output-location seam, scanned for the same
+    /// reason its recent-artifact twin below is scanned: `AgentRunner` stores the handover privately,
+    /// so no runtime assertion can read which of the two properties reached it.
+    @Test
+    func theScheduledRunnerIsHandedTheScheduledOutputLocationSeam() throws {
+        let source = try MacAgentSource.read("AgentViewModel.swift")
+        let scheduledRun = try MacAgentSource.braceBlock(
+            of: source,
+            openedBy: "private func performScheduledRun(_ routine: StoredRoutine, occurrence: Date) async {"
+        )
+
+        #expect(scheduledRun.contains("outputLocationStore: outputLocationStoreForScheduledRun"))
+
+        // Same shape as the assertion below it: the sanctioned handover is removed first, because
+        // `outputLocationStore: outputLocationStore` is a substring of the correct line and
+        // asserting its absence directly would fail on correct code.
+        let withoutTheSanctionedHandover = scheduledRun.replacingOccurrences(
+            of: "outputLocationStore: outputLocationStoreForScheduledRun",
+            with: ""
+        )
+        #expect(!withoutTheSanctionedHandover.contains("outputLocationStore"))
+    }
+
+    /// **The foreground counterpart of the scan above, and the asymmetry it closes is what let three
+    /// of four sites go unheld** (PR #101 review, F1).
+    ///
+    /// The scheduled path had this instrument and the foreground path did not, so at `335ddce` three
+    /// mutants passed the whole suite: `performStart`'s planner branch and `makeDelegationRunner()`
+    /// each wired to the *scheduled* seam, and `performStart`'s instant-resolver branch with the
+    /// argument deleted outright. The first is the one that matters — the planner branch is the path
+    /// most real commands take, the scheduled seam is `allowsScheduledRecording(to:)`, and wiring one
+    /// to the other drops `taskRecordingPolicy` out of the conjunction. A person turns on "Don't save
+    /// this task", Sonny drafts a file into their Documents folder, and the folder is recorded anyway,
+    /// with 1743 tests green.
+    ///
+    /// **Counts per block rather than a bare `contains`**, for the reason `MacAgentSource`'s own doc
+    /// gives: a trailing line comment can add a token but never remove one, so a count is sound where
+    /// a presence check is not. One sanctioned handover per `AgentRunner(` in the block, then the
+    /// sanctioned text is removed and the bare store token must be gone — which catches the scheduled
+    /// seam and a raw store alike, and is the same two-step the scan above uses because
+    /// `outputLocationStore: outputLocationStore` is a prefix of the correct line.
+    ///
+    /// **It covers `recentArtifactStore` too, and that is a fix rather than a bonus.** The reviewer
+    /// mutated that store's handover on the same line and it also survived, so the hole predates this
+    /// branch. Covering it here is one array element, no production change — all four sites already
+    /// read the right seam — so it is closed rather than filed.
+    @Test
+    func everyForegroundRunnerIsHandedTheForegroundSeams() throws {
+        let source = try MacAgentSource.read("AgentViewModel.swift")
+        // Anchored on real code rather than line numbers. `performStart`'s signature spans six lines,
+        // so the anchor carries its last parameter and the brace; a rename fails this loudly, which
+        // is the moment to re-check that the property still holds.
+        let blocks: [(name: String, anchor: String)] = [
+            (
+                "performStart",
+                """
+                        prebuiltPlanSource: PreparedPlanSource = .directUserAction
+                    ) async {
+                """
+            ),
+            ("makeDelegationRunner", "func makeDelegationRunner() throws -> AgentRunner {")
+        ]
+
+        var runnersSeen = 0
+        for block in blocks {
+            let body = try MacAgentSource.braceBlock(of: source, openedBy: block.anchor)
+            let runners = MacAgentSource.count(of: "AgentRunner(", inText: body)
+            #expect(runners > 0, "\(block.name) builds no AgentRunner — the anchor no longer matches")
+            runnersSeen += runners
+
+            for store in ["outputLocationStore", "recentArtifactStore"] {
+                let sanctioned = "\(store): \(store)ForThisRun"
+                #expect(
+                    MacAgentSource.count(of: sanctioned, inText: body) == runners,
+                    """
+                    \(block.name) builds \(runners) AgentRunner(s) but hands over \(sanctioned) \
+                    \(MacAgentSource.count(of: sanctioned, inText: body)) time(s). Every foreground \
+                    runner takes the foreground seam, which is the conjunction of the memory switches \
+                    and "Don't save this task".
+                    """
+                )
+                let withoutTheSanctionedHandovers = body.replacingOccurrences(of: sanctioned, with: "")
+                #expect(
+                    !withoutTheSanctionedHandovers.contains(store),
+                    "\(block.name) reaches \(store) by some other name — the scheduled seam, or the raw store"
+                )
+            }
+        }
+
+        // The population, pinned so a fifth foreground construction site cannot arrive unexamined.
+        // Three in `performStart` (prebuilt plan, instant resolver, planner) and one in
+        // `makeDelegationRunner()`; the fifth `AgentRunner(` in this file is the scheduled one, which
+        // the scan above owns.
+        #expect(runnersSeen == 4, "expected four foreground AgentRunner sites, scanned \(runnersSeen)")
+        #expect(MacAgentSource.count(of: "AgentRunner(", inText: source) == runnersSeen + 1)
+    }
+
+    /// **A bookkeeping write failure is a storage notice, never a task error** — CLAUDE.md's
+    /// write-failure channel rule, on the path that has to get it right without anybody watching.
+    /// `errorMessage` means "the task you asked for did not happen", and the widget picks `.failure`
+    /// ahead of `.result`; a lost note about a folder must not turn a routine that ran and wrote its
+    /// file into one the user is told failed.
+    ///
+    /// The failure is induced by leaving unreadable bytes in the store's own file rather than by
+    /// locking a directory, so this needs no `.requiresUnprivilegedProcess` gate: `recordOutputs`
+    /// reads before it writes, and a file that will not decode makes the write throw.
+    @Test
+    func aScheduledRunsOutputLocationWriteFailureIsANoticeRatherThanAFailedRun() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        let reports = try fixture.saveScheduledDraftRoutine()
+        try Data("not a store".utf8).write(to: fixture.outputLocationStore.fileURL, options: .atomic)
+
+        fixture.viewModel.checkScheduledRoutines(now: MemoryFixture.tenAM)
+        try await fixture.waitUntilIdle()
+
+        let notice = try #require(fixture.viewModel.localStorageNotice)
+        #expect(
+            notice.hasPrefix("Sonny could not update its list of output locations"),
+            "the notice must name this write, not the load banner and not another store: \(notice)"
+        )
+        #expect(fixture.viewModel.errorMessage == nil)
+        // The routine really ran and the user really has their file — only the note was lost.
+        #expect(FileManager.default.fileExists(atPath: reports.appendingPathComponent("morning.md").path))
+        #expect(fixture.viewModel.scheduledRunNotice != nil)
+    }
+
+    /// The foreground twin, which is a different handover in a different function.
+    @Test
+    func aForegroundRunsOutputLocationWriteFailureIsANoticeRatherThanAFailedRun() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        let reports = try fixture.makeOutputFolder("Reports")
+        try Data("not a store".utf8).write(to: fixture.outputLocationStore.fileURL, options: .atomic)
+
+        fixture.viewModel.command = "draft the morning note"
+        fixture.viewModel.start(prebuiltPlan: planDrafting(into: reports))
+        try await fixture.waitUntilIdle()
+
+        let notice = try #require(fixture.viewModel.localStorageNotice)
+        #expect(
+            notice.hasPrefix("Sonny could not update its list of output locations"),
+            "the notice must name this write, not the load banner and not another store: \(notice)"
+        )
+        #expect(fixture.viewModel.errorMessage == nil)
+        #expect(FileManager.default.fileExists(atPath: reports.appendingPathComponent("morning.md").path))
+    }
+
+    /// The row's count and its "newest" line come from the real store, and "newest" means the most
+    /// recent *use* — every other row's newest line means the most recent thing recorded, and
+    /// `firstUsedAt` would make this one mean something different from all of them.
+    @Test
+    func theOutputLocationRowsCountAndNewestLineComeFromTheRealStore() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let reports = try fixture.makeOutputFolder("Reports")
+        let invoices = try fixture.makeOutputFolder("Invoices")
+        // Two uses each, with the windows deliberately interleaved: Reports was used *first* but
+        // Invoices was used *last*. So `max(firstUsedAt)` and `max(lastUsedAt)` are different dates,
+        // and a row that reached for the wrong one cannot pass by coincidence.
+        for offset in [-2.0, -1.0] {
+            try fixture.outputLocationStore.recordOutputs(
+                atPaths: [reports.appendingPathComponent("a.md").path],
+                recordedAt: now.addingTimeInterval(offset * 86_400)
+            )
+        }
+        try fixture.outputLocationStore.recordOutputs(
+            atPaths: [invoices.appendingPathComponent("b.md").path],
+            recordedAt: now.addingTimeInterval(-3 * 86_400)
+        )
+        try fixture.outputLocationStore.recordOutputs(
+            atPaths: [invoices.appendingPathComponent("c.md").path],
+            recordedAt: now
+        )
+        fixture.viewModel.refreshMemoryEntries()
+
+        let presentation = MemoryRowPresentation(
+            category: .outputLocations,
+            count: fixture.viewModel.memoryEntryCount(for: .outputLocations),
+            isRecording: fixture.viewModel.isMemoryCategoryEnabled(.outputLocations),
+            canChangeRecording: fixture.viewModel.memorySettings.isRecording,
+            newestEntryDate: fixture.viewModel.newestMemoryEntryDate(for: .outputLocations),
+            now: now
+        )
+
+        #expect(presentation.title == "Output locations")
+        #expect(presentation.count == 2)
+        #expect(presentation.isRecording)
+        #expect(presentation.detailText == "2 saved · newest Today, \(expectedTime(for: now))")
+        // The published list is the store's ranked order, so the sheet's first row is the folder
+        // Sonny would actually suggest first.
+        #expect(fixture.viewModel.outputLocations.map(\.name) == ["Invoices", "Reports"])
+    }
+
+    @Test
+    func deletingOutputLocationMemoryLeavesEveryOtherTypeAlone() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        let reports = try fixture.makeOutputFolder("Reports")
+        // A real file, so the "the folder and its contents are untouched" assertion below is about
+        // something that exists — the store records a folder without needing the file to.
+        let output = reports.appendingPathComponent("a.md")
+        try Data("draft".utf8).write(to: output, options: .atomic)
+        try fixture.outputLocationStore.recordOutputs(atPaths: [output.path])
+        try fixture.snippetStore.save(StoredSnippet(trigger: ";sig", expansion: "signature"))
+        fixture.viewModel.refreshMemoryEntries()
+        #expect(fixture.viewModel.memoryEntryCount(for: .outputLocations) == 1)
+
+        fixture.viewModel.deleteMemory(in: .outputLocations)
+
+        #expect(try fixture.outputLocationStore.loadAll().isEmpty)
+        #expect(fixture.viewModel.memoryEntryCount(for: .outputLocations) == 0)
+        #expect(try fixture.snippetStore.loadAll().count == 1)
+        #expect(
+            try #require(fixture.viewModel.memoryDeletionStatusMessage).hasPrefix("Deleted output locations")
+        )
+        // The folder and its contents are untouched — this store only ever held a note about them.
+        #expect(FileManager.default.fileExists(atPath: output.path))
+        #expect(FileManager.default.fileExists(atPath: reports.path))
+    }
+
+    @Test
+    func aPerEntryDeleteRemovesOneOutputLocationAndRepublishesTheList() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        let now = Date(timeIntervalSince1970: 1_700_000_000)
+        let reports = try fixture.makeOutputFolder("Reports")
+        let invoices = try fixture.makeOutputFolder("Invoices")
+        try fixture.outputLocationStore.recordOutputs(
+            atPaths: [reports.appendingPathComponent("a.md").path],
+            recordedAt: now.addingTimeInterval(-86_400)
+        )
+        try fixture.outputLocationStore.recordOutputs(
+            atPaths: [invoices.appendingPathComponent("b.md").path],
+            recordedAt: now
+        )
+        fixture.viewModel.refreshMemoryEntries()
+        #expect(fixture.viewModel.outputLocations.map(\.name) == ["Invoices", "Reports"])
+
+        // By position into the published array the sheet enumerated, which is what the sheet passes.
+        fixture.viewModel.deleteMemoryEntry(in: .outputLocations, at: 0)
+
+        #expect(fixture.viewModel.outputLocations.map(\.name) == ["Reports"])
+        #expect(try fixture.outputLocationStore.loadAll().map(\.name) == ["Reports"])
+        #expect(fixture.viewModel.errorMessage == nil)
+        // Out of range is a no-op rather than a crash: the array can shrink under an open sheet.
+        fixture.viewModel.deleteMemoryEntry(in: .outputLocations, at: 7)
+        #expect(fixture.viewModel.outputLocations.count == 1)
+        // And the store is still encrypted after a per-entry delete — the rewrite goes through the
+        // same door the record did.
+        let raw = try Data(contentsOf: fixture.outputLocationStore.fileURL)
+        #expect(raw.starts(with: LocalStorageEncryption.fileHeader))
+    }
+
+    @Test
+    func aWholeDataWipeEmptiesTheOutputLocationsList() throws {
+        let fixture = try makeMemoryFixture(wipesRealStoreFiles: true)
+        defer { fixture.cleanUp() }
+        let reports = try fixture.makeOutputFolder("Reports")
+        try fixture.outputLocationStore.recordOutputs(atPaths: [reports.appendingPathComponent("a.md").path])
+        fixture.viewModel.refreshMemoryEntries()
+        #expect(fixture.viewModel.outputLocations.count == 1)
+
+        fixture.viewModel.deleteLocalData()
+
+        #expect(fixture.viewModel.outputLocations.isEmpty)
+        #expect(!FileManager.default.fileExists(atPath: fixture.outputLocationStore.fileURL.path))
+    }
+
     /// The scheduled runner reads the scheduled seam, which no runtime assertion in this repository
     /// can reach: `AgentRunner` stores the handed-over store privately and a scheduled run that
     /// generates an artifact would write a real file into a whitelisted directory. So the wiring is
@@ -558,8 +1006,8 @@ struct MemoryCommandCenterTests {
     /// **Recent artifacts and the vision journal, on the memory half of the conjunction** (PR #98
     /// review, F2). `ProductShellTests.aSuppressedRunIsHandedNoRecentArtifactStore` and
     /// `aSuppressedRunIsHandedNoVisionSessionJournal` flip only `taskRecordingPolicy`, so these two
-    /// of the seven types had their memory switch verified by reading the shared
-    /// `allowsRecording(to:)` rather than by exercising it.
+    /// types had their memory switch verified by reading the shared `allowsRecording(to:)` rather
+    /// than by exercising it.
     ///
     /// **Asserted at the seam rather than by dispatching, and that is the correct instrument here,
     /// not a shortcut.** `recentArtifactStoreForThisRun`'s own doc records why: no command the
@@ -570,6 +1018,14 @@ struct MemoryCommandCenterTests {
     /// execute the live decision at all. Row I built a `nil` store as "run the session, record
     /// nothing", which is what makes asserting the handover the same thing as asserting the
     /// suppression.
+    ///
+    /// **The first half of that premise stopped being true in this file** (SONNY-209). `planDrafting`
+    /// below runs a real `create_local_draft`, which writes a real file, and `.createLocalDraft` is on
+    /// `RecentArtifactStore.shouldRecordPreviewWrites`' operation list — so a dispatch here really
+    /// would reach the recent-artifacts store now. The seam assertion is kept anyway: it is the
+    /// stronger instrument for a decision that has to hold on paths this suite cannot dispatch, and
+    /// the vision half is unreachable end to end either way. Recorded rather than acted on, because
+    /// rewriting this test is that store's work and not this ticket's.
     @Test
     func theRecentArtifactAndVisionJournalHandoversAreWithheldByTheMemorySwitchesToo() throws {
         let fixture = try makeMemoryFixture()
@@ -956,23 +1412,43 @@ struct MemoryCommandCenterTests {
         #expect(row.canChangeRecording, "a type switched off could never be switched back on")
     }
 
-    /// **Where "View" leads, for all seven rows** (PR #98 review, F4). Rewiring Task history to open
+    /// **Where "View" leads, for every row** (PR #98 review, F4). Rewiring Task history to open
     /// Insights left the whole suite green, and "each memory type is viewable" is the first clause of
     /// the ticket's acceptance criteria.
+    ///
+    /// **The population pin is the half that keeps the table honest, and it was briefly a tautology**
+    /// (PR #101 review, F4). Row 13 replaced `destinations.count == 7` with
+    /// `destinations.count == MemoryCategory.allCases.count`, which `map` makes true for any n. The
+    /// literal it replaced was the thing that made a new row break this test — and so the thing that
+    /// forced whoever added the row to state where it leads. What replaces it now is a table of every
+    /// row's destination checked against `allCases` in both directions: a ninth row fails this by
+    /// name rather than by a number, and the explicit `#expect` list the table subsumes is gone
+    /// rather than kept as a second copy of the same eight facts.
     @Test
     func viewLeadsSomewhereSpecificForEveryMemoryType() {
-        #expect(MemoryRowDestination.of(.routines) == .page(.routines))
-        #expect(MemoryRowDestination.of(.workspaces) == .page(.workspaces))
-        #expect(MemoryRowDestination.of(.taskHistory) == .page(.tasks))
-        #expect(MemoryRowDestination.of(.recentArtifacts) == .entriesSheet)
-        #expect(MemoryRowDestination.of(.clipboardHistory) == .entriesSheet)
-        #expect(MemoryRowDestination.of(.snippets) == .entriesSheet)
-        #expect(MemoryRowDestination.of(.approvedApps) == .entriesSheet)
+        // Every row's destination, stated once. The keys are checked against the whole population
+        // below, which is what makes a ninth row fail here rather than pass with eight covered.
+        let expected: [MemoryCategory: MemoryRowDestination] = [
+            .routines: .page(.routines),
+            .workspaces: .page(.workspaces),
+            .taskHistory: .page(.tasks),
+            .recentArtifacts: .entriesSheet,
+            .outputLocations: .entriesSheet,
+            .clipboardHistory: .entriesSheet,
+            .snippets: .entriesSheet,
+            .approvedApps: .entriesSheet
+        ]
+        #expect(
+            Set(expected.keys) == Set(MemoryCategory.allCases),
+            "not every memory row has a stated destination: \(Set(MemoryCategory.allCases).subtracting(expected.keys))"
+        )
+        for category in MemoryCategory.allCases {
+            #expect(MemoryRowDestination.of(category) == expected[category], "\(category.title)")
+        }
 
         // Every row leads somewhere, and the three page destinations are distinct — a mapping that
         // sent two rows to one page would satisfy a looser check.
         let destinations = MemoryCategory.allCases.map(MemoryRowDestination.of)
-        #expect(destinations.count == 7)
         let pages = destinations.compactMap { destination -> CommandCenterDestination? in
             guard case .page(let page) = destination else { return nil }
             return page
@@ -980,10 +1456,10 @@ struct MemoryCommandCenterTests {
         #expect(Set(pages).count == pages.count)
         #expect(!pages.contains(.memory), "a row must not send the user back to the page they are on")
 
-        // Exactly the four types the sheet renders entries for open the sheet, so the two mappings
-        // cannot drift apart.
+        // Exactly the types the sheet renders entries for open the sheet, so the two mappings cannot
+        // drift apart.
         let sheetTypes = MemoryCategory.allCases.filter { MemoryRowDestination.of($0) == .entriesSheet }
-        #expect(Set(sheetTypes) == [.recentArtifacts, .clipboardHistory, .snippets, .approvedApps])
+        #expect(Set(sheetTypes) == [.recentArtifacts, .outputLocations, .clipboardHistory, .snippets, .approvedApps])
     }
 
     /// The three wirings no runtime assertion in this repository can reach, scanned in the shape
@@ -1047,14 +1523,27 @@ struct MemoryCommandCenterTests {
             #expect(!MemoryDeletionCopy.message(for: category).isEmpty, "\(category.title)")
         }
 
-        // The sheet's copy exists for the four types it opens for, and deliberately not for the
-        // three deleted from their own pages.
-        for category in [MemoryCategory.recentArtifacts, .clipboardHistory, .snippets, .approvedApps] {
+        // **Both loops are derived from `MemoryRowDestination`, not written out** (PR #101 review,
+        // F3). Row 13 added a fifth entries-sheet type and updated one of the two hardcoded lists in
+        // this file — the sibling 66 lines above — and not this one, so `.outputLocations` had no
+        // copy assertion at all: its `entryMessage` and its `emptyMessage` could each be blanked
+        // with the whole suite green, which is precisely the failure this test's own comment says it
+        // exists to catch. Deriving both sides from the destination mapping means a ninth row is
+        // covered by arriving rather than by being remembered here.
+        let sheetTypes = MemoryCategory.allCases.filter { MemoryRowDestination.of($0) == .entriesSheet }
+        let pageTypes = MemoryCategory.allCases.filter { MemoryRowDestination.of($0) != .entriesSheet }
+        #expect(!sheetTypes.isEmpty)
+        #expect(!pageTypes.isEmpty)
+        #expect(sheetTypes.count + pageTypes.count == MemoryCategory.allCases.count)
+
+        // The sheet's copy exists for every type it opens for, and deliberately not for the ones
+        // deleted from their own pages.
+        for category in sheetTypes {
             #expect(!MemoryDeletionCopy.entryMessage(for: category).isEmpty, "\(category.title)")
             #expect(!MemoryDeletionCopy.emptyMessage(for: category).isEmpty, "\(category.title)")
             #expect(MemoryDeletionCopy.emptyTitle(for: category).hasPrefix("No "), "\(category.title)")
         }
-        for category in [MemoryCategory.routines, .workspaces, .taskHistory] {
+        for category in pageTypes {
             #expect(MemoryDeletionCopy.entryMessage(for: category).isEmpty, "\(category.title)")
         }
 
@@ -1081,11 +1570,15 @@ struct MemoryCommandCenterTests {
     }
 
     @Test
-    func theEntriesSheetRendersOnlyTheFourTypesWithoutPagesOfTheirOwn() throws {
+    func theEntriesSheetRendersOnlyTheTypesWithoutPagesOfTheirOwn() throws {
         let fixture = try makeMemoryFixture()
         defer { fixture.cleanUp() }
         try fixture.snippetStore.save(StoredSnippet(trigger: ";sig", expansion: "line one\nline two"))
         try fixture.approvedAppStore.approve(bundleIdentifier: "com.apple.Safari", displayName: "Safari")
+        let reports = try fixture.makeOutputFolder("Reports")
+        try fixture.outputLocationStore.recordOutputs(
+            atPaths: [reports.appendingPathComponent("a.md").path]
+        )
         fixture.viewModel.refreshMemoryEntries()
 
         let snippets = MemoryEntryPresentation.entries(for: .snippets, viewModel: fixture.viewModel)
@@ -1097,6 +1590,16 @@ struct MemoryCommandCenterTests {
         let apps = MemoryEntryPresentation.entries(for: .approvedApps, viewModel: fixture.viewModel)
         #expect(apps.map(\.title) == ["Safari"])
         #expect(try #require(apps.first).detail.contains("com.apple.Safari"))
+
+        // The row is titled with the folder's own name and detailed with the path, the count and the
+        // last use — the three things that answer "why is Sonny offering me this folder".
+        let locations = MemoryEntryPresentation.entries(for: .outputLocations, viewModel: fixture.viewModel)
+        #expect(locations.map(\.title) == ["Reports"])
+        let detail = try #require(locations.first).detail
+        #expect(detail.contains(reports.path) || detail.contains((reports.path as NSString).abbreviatingWithTildeInPath))
+        #expect(detail.contains("1 time"))
+        // Keyed by the folder, which is what `AgentViewModel.forgetOutputLocation` deletes by.
+        #expect(locations.first?.id == reports.path)
 
         for category in [MemoryCategory.routines, .workspaces, .taskHistory] {
             #expect(
@@ -1210,6 +1713,37 @@ private func planSavingSnippet(trigger: String, expansion: String) -> AgentPlan 
     )
 }
 
+/// A plan that writes one real Markdown file into `folder` (SONNY-209).
+///
+/// `create_local_draft` is the only capability these deterministic fixtures can run that produces a
+/// user-facing file — no network, no Shortcuts, no app. The step names its own `outputPath` so the
+/// folder under test is a named subdirectory and an assertion can say which folder was recorded.
+///
+/// **It auto-runs rather than pausing, and that is the consequence rule rather than a shortcut.**
+/// The capability's default tier is 2, but since 2026-08-13 the requirement comes from what an
+/// action *does*: `CreateLocalDraftCapabilityAdapter` escalates only when its destination already
+/// exists, so a fresh draft carries no escalation, `asksFirst` is false, and
+/// `consequenceRuleRequirement` answers `.autoRun` at tier 2. Nothing here reaches past an approval
+/// gate — there is none to reach past. The approval path is covered anyway: `performStart` and
+/// `performApproval` both execute through the same `executePreparedRun`, which is the one place a
+/// foreground run's runner is asked to execute.
+private func planDrafting(into folder: URL) -> AgentPlan {
+    AgentPlan(
+        summary: "Write the morning note.",
+        requiresConfirmation: false,
+        steps: [
+            AgentStep(
+                id: "draft",
+                operation: .createLocalDraft,
+                description: "Write the morning note.",
+                outputPath: folder.appendingPathComponent("morning.md").path,
+                draftTitle: "Morning",
+                draftContent: "Good morning."
+            )
+        ]
+    )
+}
+
 private func planCreatingWorkspace(named name: String) -> AgentPlan {
     AgentPlan(
         summary: "Create workspace \(name).",
@@ -1253,6 +1787,14 @@ private struct MemoryFixture {
     let approvedAppStore: ApprovedAppStore
     let clipboardSettingsStore: ClipboardHistorySettingsStore
     let clipboardHistoryStore: ClipboardHistoryStore
+    let outputLocationStore: OutputLocationStore
+    /// The whitelist's single root, and deliberately **not** `root` (SONNY-209).
+    ///
+    /// In production Sonny's own stores live under Application Support and the user's outputs never
+    /// do, which is the whole basis on which `OutputLocationStore` tells the two apart. A fixture
+    /// that put both in one directory would record `routines.json`'s folder as an output location
+    /// and could not tell a correct store from a broken one.
+    let outputsRoot: URL
     let pasteboard: MemoryFixturePasteboardReader
     let userDefaults: UserDefaults
     let userDefaultsSuiteName: String
@@ -1308,6 +1850,58 @@ private struct MemoryFixture {
         viewModel.refreshSavedItems()
     }
 
+    /// The same daily 9am routine as `saveScheduledRoutine`, whose one step writes a real Markdown
+    /// file into a real folder inside the whitelist (SONNY-209).
+    ///
+    /// `create_local_draft` is the only capability the deterministic fixtures can run that actually
+    /// produces a user-facing file: it needs no network, no Shortcuts and no app, and it resolves its
+    /// destination through the whitelist exactly as the other three output-writing adapters do. It is
+    /// not on `StoredRoutine.forbiddenStepOperations`, and its tier-2 assessment passes the scheduled
+    /// path's fixed `.approved(.tier2)` ceiling — so a scheduled run really executes it unattended,
+    /// which is what makes an end-to-end assertion on the scheduled path possible at all.
+    ///
+    /// The step names its own `outputPath` so the folder under test is a named subdirectory rather
+    /// than the whitelist root, and an assertion can say *which* folder was recorded.
+    @discardableResult
+    func saveScheduledDraftRoutine(intoFolderNamed folderName: String = "Reports") throws -> URL {
+        let folder = outputsRoot.appendingPathComponent(folderName, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        var schedule = RoutineSchedule(
+            cadence: .daily,
+            hour: 9,
+            minute: 0,
+            unattendedTrusted: true
+        )
+        schedule.setEnabled(true, now: Self.nineAM.addingTimeInterval(-24 * 60 * 60))
+        try routineStore.save(
+            StoredRoutine(
+                name: "Morning",
+                steps: [
+                    AgentStep(
+                        id: "draft",
+                        operation: .createLocalDraft,
+                        description: "Write the morning note.",
+                        outputPath: folder.appendingPathComponent("morning.md").path,
+                        draftTitle: "Morning",
+                        draftContent: "Good morning."
+                    )
+                ],
+                schedule: schedule
+            )
+        )
+        viewModel.refreshSavedItems()
+        return PathWhitelist.canonicalURL(folder.path)
+    }
+
+    /// A real folder inside the whitelist, returned in the form the store records it in — the
+    /// temporary directory is a symlink on macOS, so a test comparing the unresolved path against a
+    /// stored one would compare two spellings of one place.
+    func makeOutputFolder(_ name: String) throws -> URL {
+        let folder = outputsRoot.appendingPathComponent(name, isDirectory: true)
+        try FileManager.default.createDirectory(at: folder, withIntermediateDirectories: true)
+        return PathWhitelist.canonicalURL(folder.path)
+    }
+
     /// The same 30-second deadlock backstop the other dispatch suites use — a bound on a hang, not a
     /// timing assertion.
     func waitUntilIdle() async throws {
@@ -1318,6 +1912,7 @@ private struct MemoryFixture {
             try await Task.sleep(nanoseconds: 5_000_000)
         }
     }
+
 }
 
 /// A second view model over the *same* directory and the same `UserDefaults` suite, for asserting
@@ -1404,6 +1999,16 @@ private func makeMemoryFixture(
         fileURL: root.appendingPathComponent("approved-apps.json"),
         encryption: encryption
     )
+    // The whitelist root is a subdirectory, not `root` itself, so the fixture reproduces production's
+    // separation between where Sonny keeps its own files and where the user's outputs go. See
+    // `MemoryFixture.outputsRoot`.
+    let outputsRoot = root.appendingPathComponent("Outputs", isDirectory: true)
+    try FileManager.default.createDirectory(at: outputsRoot, withIntermediateDirectories: true)
+    let outputLocationStore = OutputLocationStore(
+        fileURL: root.appendingPathComponent("output-locations.json"),
+        encryption: encryption,
+        whitelist: PathWhitelist(roots: [outputsRoot])
+    )
     let deletionService = wipesRealStoreFiles
         ? LocalDataDeletionService(
             fileURLs: [
@@ -1417,7 +2022,8 @@ private func makeMemoryFixture(
                 visionSessionJournalStore.fileURL,
                 clipboardSettingsStore.fileURL,
                 clipboardHistoryStore.fileURL,
-                approvedAppStore.fileURL
+                approvedAppStore.fileURL,
+                outputLocationStore.fileURL
             ]
         )
         : LocalDataDeletionService(fileURLs: [])
@@ -1446,6 +2052,7 @@ private func makeMemoryFixture(
         visionSessionJournalStore: visionSessionJournalStore,
         clipboardHistorySettingsStore: clipboardSettingsStore,
         approvedAppStore: approvedAppStore,
+        outputLocationStore: outputLocationStore,
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
             reader: pasteboard,
             store: clipboardHistoryStore,
@@ -1456,7 +2063,7 @@ private func makeMemoryFixture(
         priorTaskContextStore: PriorTaskContextStore(),
         taskUsageRecorder: TaskUsageRecorder(),
         userDefaults: userDefaults,
-        whitelist: PathWhitelist(roots: [root])
+        whitelist: PathWhitelist(roots: [outputsRoot])
     )
 
     return MemoryFixture(
@@ -1470,6 +2077,8 @@ private func makeMemoryFixture(
         approvedAppStore: approvedAppStore,
         clipboardSettingsStore: clipboardSettingsStore,
         clipboardHistoryStore: clipboardHistoryStore,
+        outputLocationStore: outputLocationStore,
+        outputsRoot: outputsRoot,
         pasteboard: pasteboard,
         userDefaults: userDefaults,
         userDefaultsSuiteName: userDefaultsSuiteName,

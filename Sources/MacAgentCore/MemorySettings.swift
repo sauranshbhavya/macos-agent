@@ -17,6 +17,28 @@ public enum MemoryCategory: String, CaseIterable, Identifiable, Sendable {
     case workspaces
     case taskHistory
     case recentArtifacts
+    /// Where the user's outputs land — §6.10's "common output locations" (SONNY-209).
+    ///
+    /// **A row of its own rather than folded into `recentArtifacts`, and that was the decision.**
+    /// The two are neighbours: one store notes the file a run produced, the other the folder it
+    /// produced it in, and both are `.trace`. Three things settled it apart anyway.
+    ///
+    /// It answers a different question. Recent artifacts is a list Sonny offers *back* — "open the
+    /// thing you just made". Output locations is what Sonny offers *forward*, as a destination for
+    /// something not made yet. A person deciding whether Sonny should keep suggesting folders is not
+    /// deciding whether it should remember files it created, and one switch would make them answer
+    /// both at once.
+    ///
+    /// It has a different lifetime. A recent artifact ages out at thirty days and points at a
+    /// specific file that may since have been deleted or moved; a folder someone has used for a year
+    /// is more valuable the longer it has been used, and `OutputLocationStore` keeps it accordingly.
+    /// Sharing a row would mean one Delete button taking both, which is the wrong grouping for two
+    /// stores that go stale at different rates.
+    ///
+    /// And the founder named it as one of §6.10's missing memory *types* (2026-08-21, SONNY-17),
+    /// alongside preferences and long-running task state. A type the decision names and the surface
+    /// does not show is the gap that decision was taken to close.
+    case outputLocations
     /// **The one category whose own switch predates this enum.** Clipboard recording is turned on
     /// and off through `ClipboardHistorySettings.isEnabled`, which the monitor already fails closed
     /// on, so nothing here duplicates it — `MemorySettingsStore` never writes a per-category flag
@@ -42,6 +64,12 @@ public enum MemoryCategory: String, CaseIterable, Identifiable, Sendable {
             return "Task history"
         case .recentArtifacts:
             return "Recent artifacts"
+        case .outputLocations:
+            // "Output locations", not "Folders" or "Destinations": it is the vocabulary §6.10 and
+            // the founder's own decision use, and it says which folders these are — the ones Sonny's
+            // work comes out into — where a bare "Folders" would read as every folder Sonny has ever
+            // seen.
+            return "Output locations"
         case .clipboardHistory:
             return "Clipboard history"
         case .snippets:
@@ -80,11 +108,13 @@ extension LocalStore {
     /// Which Memory row this store's contents appear under, or `nil` when it holds nothing the
     /// Memory section shows.
     ///
-    /// Exhaustive with no `default`, the same guard `kind` uses and for the same reason: a twelfth
-    /// store must not be able to arrive on disk, be wiped by Delete Local Data, and be invisible in
-    /// the one surface built to show the user what Sonny remembers.
-    /// `MemorySettingsTests.everyLocalStoreIsPlacedUnderExactlyOneMemoryCategoryOrExcluded` pins the
-    /// union.
+    /// Exhaustive with no `default`, the same guard `kind` uses and for the same reason: a new store
+    /// must not be able to arrive on disk, be wiped by Delete Local Data, and be invisible in
+    /// the one surface built to show the user what Sonny remembers. Row 13's output locations is the
+    /// first store to arrive since this mapping existed, and it arrived that way.
+    /// `MemorySettingsTests.everyLocalStoreIsPlacedUnderExactlyOneMemoryCategoryOrDeliberatelyExcluded`
+    /// pins the union. (That reference read `…OrExcluded` until SONNY-209 — no such test, and the
+    /// same renamed-symbol staleness this ticket found four instances of elsewhere.)
     public var memoryCategory: MemoryCategory? {
         switch self {
         case .routines:
@@ -106,11 +136,15 @@ extension LocalStore {
         case .shortcutRunHistory:
             // Which Shortcuts have been observed to run cleanly — a record of past runs, kept so a
             // known-good Shortcut is not re-assessed from scratch. It has no surface of its own and
-            // never had one; grouped with the other records of what tasks did rather than given an
-            // eighth row the founder's enumeration does not name.
+            // never had one; grouped with the other records of what tasks did rather than given a
+            // row of its own that the founder's enumeration does not name. (That last clause said
+            // "an eighth row" when there were seven; SONNY-209 added one and the ordinal would have
+            // gone stale for the second time, so it is gone rather than incremented.)
             return .taskHistory
         case .recentArtifacts:
             return .recentArtifacts
+        case .outputLocations:
+            return .outputLocations
         case .clipboardHistory:
             return .clipboardHistory
         case .snippets:

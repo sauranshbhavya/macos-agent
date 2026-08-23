@@ -353,6 +353,12 @@ private func makeModeFixture() throws -> ModeFixture {
                 fileURL: root.appendingPathComponent("clipboard-history-settings.json")
             ),
             approvedAppStore: ApprovedAppStore(fileURL: root.appendingPathComponent("approved-apps.json")),
+            outputLocationStore: OutputLocationStore(
+                fileURL: root.appendingPathComponent("output-locations.json"),
+                // The same roots this fixture hands the view model, so the store answers
+                // "is this an output location" against the folders the run really used.
+                whitelist: PathWhitelist(roots: [root])
+            ),
             localDataDeletionService: LocalDataDeletionService(fileURLs: []),
             priorTaskContextStore: PriorTaskContextStore(),
             taskUsageRecorder: TaskUsageRecorder(),
