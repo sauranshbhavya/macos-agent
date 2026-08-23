@@ -426,11 +426,16 @@ case. Relaunch and open the widget.
       it more than once: it rendered correctly some of the time on the broken build, so a single
       good look proves nothing. Try it both ways — open the widget from the menu-bar icon and from
       the Ctrl-Opt-Space hotkey — and with a short command as well as a long one
-- [ ] **(new 2026-08-23, SONNY-244)** Hovering the tick says "Continue" and the cross says "Not
-      now"; the cross leaves the task alone (it is still listed under Command Center → Memory →
-      Unfinished tasks) and the offer comes back at the next launch. **Say if the cross reads as
-      "close this panel" rather than as an answer** — that ambiguity is known and unresolved, and
-      your read of it is what decides whether it stays
+- [ ] **(new 2026-08-23, SONNY-244)** Hover the tick and then the cross and **say whether a tooltip
+      appears at all** — it should read "Continue" and "Not now". This one is genuinely in doubt:
+      `FloatingWidgetView` records `.help()` as confirmed unreliable in this widget, which is why the
+      mic's hint is a real row rather than a tooltip, so these two words may simply not be reachable
+      for a sighted user. If no tooltip appears, the tick and cross carry no words at all and that
+      needs a decision
+- [ ] **(new 2026-08-23, SONNY-244)** The cross leaves the task alone — it is still listed under
+      Command Center → Memory → Unfinished tasks, and the offer comes back at the next launch.
+      **Say if the cross reads as "close this panel" rather than as an answer** — that ambiguity is
+      known and unresolved, and your read of it is what decides whether it stays
 
 ### 3e. Result — `6-FloatingWidgetResultOutput.png`
 Use one command that produces a real file (zip largest files, docx conversion) and one that doesn't

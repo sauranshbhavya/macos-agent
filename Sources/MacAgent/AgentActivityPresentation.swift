@@ -409,15 +409,14 @@ enum TaskRecordingPresentation {
 /// the offer is a question with two answers.
 enum ResumeOfferPresentation {
     /// The affirmative's word. **Its tooltip since SONNY-244, not its visible text** — the founder's
-    /// decision of 2026-08-23 made the two controls a tick and a cross, so the word survives on
-    /// hover rather than on the button. It is not the VoiceOver name; that is
-    /// `continueAccessibilityLabel`, which names the task an icon no longer can.
+    /// decision of 2026-08-23 made the two controls a tick and a cross. It is not the VoiceOver name;
+    /// that is `continueAccessibilityLabel`, which names the task an icon no longer can. Whether a
+    /// tooltip in the floating widget fires at all is genuinely in doubt — `WidgetResumeOfferPanel`
+    /// carries the finding and what it means for these two words.
     static let continueLabel = "Continue"
     /// "Not now", not "Dismiss": the record is not being deleted and the offer comes back at the
     /// next launch, so a label that sounded final would over-promise in the direction that loses the
-    /// user's work. The cross's tooltip since SONNY-244, on the same footing as `continueLabel` —
-    /// and it is the whole of what stops a cross being read as "close this panel", which is a
-    /// different and weaker thing (see `WidgetResumeOfferPanel`).
+    /// user's work. The cross's tooltip since SONNY-244, on the same footing as `continueLabel`.
     static let dismissLabel = "Not now"
 
     /// The width the message is actually drawn at: the panel's fixed 472pt less `styledPanel`'s
