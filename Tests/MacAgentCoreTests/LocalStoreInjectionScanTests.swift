@@ -309,23 +309,60 @@ struct LocalStoreInjectionScanTests {
         // A walker that found nothing reads exactly like a tree with no mentions.
         #expect(filesRead > 50, "the enumerator saw \(filesRead) app sources — too few to be the real tree")
         #expect(
-            mentions.keys.sorted() == ["AgentViewModel.swift", "main.swift"],
+            Self.violations(in: mentions).isEmpty,
             """
-            \(forbidden)() is mentioned in \(mentions.keys.sorted()) — it may be named only where it \
-            is declared and in main.swift. A default, a wrapper or a convenience that reaches it from \
-            anywhere else hands its callers the developer's real ~/Library stores while every one of \
-            those call sites says nothing at all.
-            """
-        )
-        #expect(
-            mentions["AgentViewModel.swift"] == 1,
-            """
-            AgentViewModel.swift names \(forbidden)() \(mentions["AgentViewModel.swift"] ?? 0) times. \
-            One is the declaration; a second is a factory calling it, which is the same door under a \
-            new name inside a file this check already trusts.
+            \(forbidden)() reaches the developer's real ~/Library stores in one call, so it may be \
+            named only where it is declared and in main.swift, once each. Found: \
+            \(mentions.sorted { $0.key < $1.key }.map { "\($0.key)×\($0.value)" }). \
+            \(Self.violations(in: mentions).joined(separator: " "))
             """
         )
-        #expect(mentions["main.swift"] == 1, "main.swift should call it exactly once")
+    }
+
+    /// **The rule, as a function, so it can be shown to flag what it names** (PR #109 re-check).
+    ///
+    /// The check above ran the rule against the real tree and nothing else, which makes it the shape
+    /// PR #100's F4 warned about: a guard that cannot be demonstrated without introducing the defect
+    /// it guards against. A mutant weakening the count from `== 1` to `>= 1` survived the suite —
+    /// and read as *killed*, because its only reported killer was SONNY-224's flaky test. Pulling
+    /// the rule out lets it be run over held samples instead.
+    static func violations(in mentions: [String: Int]) -> [String] {
+        var problems: [String] = []
+        for (file, count) in mentions.sorted(by: { $0.key < $1.key }) {
+            switch file {
+            case "AgentViewModel.swift", "main.swift":
+                if count != 1 {
+                    problems.append(
+                        "\(file) names it \(count) times; one is the declaration or the one call, "
+                        + "and a second is the same door under a new name inside a file this check "
+                        + "already trusts."
+                    )
+                }
+            default:
+                problems.append("\(file) may not name it at all.")
+            }
+        }
+        for required in ["AgentViewModel.swift", "main.swift"] where mentions[required] == nil {
+            problems.append("\(required) no longer names it — the guard would pass vacuously.")
+        }
+        return problems
+    }
+
+    /// The rule run over held text: the tree as it should be, and each way it can go wrong.
+    @Test
+    func theRealStoreLocationRuleFlagsASecondFactoryAndAThirdFile() {
+        #expect(Self.violations(in: ["AgentViewModel.swift": 1, "main.swift": 1]).isEmpty)
+
+        // The door the file-set assertion alone permitted: a second named factory inside the file
+        // that legitimately declares the first.
+        #expect(Self.violations(in: ["AgentViewModel.swift": 2, "main.swift": 1]).count == 1)
+        // The door it always caught.
+        #expect(Self.violations(in: [
+            "AgentViewModel.swift": 1, "main.swift": 1, "AppDelegate.swift": 1
+        ]).count == 1)
+        // And a guard that stopped finding either required site is a guard passing over nothing.
+        #expect(Self.violations(in: ["main.swift": 1]).count == 1)
+        #expect(Self.violations(in: [:]).count == 2)
     }
 
     /// The same door from the other side: no test may ask for the real locations either.

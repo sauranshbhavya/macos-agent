@@ -70,7 +70,7 @@ public enum ClarifiedCommand {
     /// ever true (PR #109 review F3). Reading a command as clarified when it is not costs it the
     /// instant resolver: the command is planned instead, which is slower and correct.
     public static func carriesExchange(_ command: String) -> Bool {
-        exchangeLineIndex(in: lines(of: command)) != nil
+        exchangeStart(in: command) != nil
     }
 
     /// The request half of a clarified command — **read by labels and by two payloads, which is why
@@ -110,20 +110,17 @@ public enum ClarifiedCommand {
     /// is — a label is never made blank by this, since a blank one tells the user strictly less than
     /// the wrong one did.
     public static func request(in command: String) -> String {
-        let commandLines = lines(of: command)
-        guard let index = exchangeLineIndex(in: commandLines) else {
+        guard let start = exchangeStart(in: command) else {
             return command
         }
-        let request = commandLines[..<index]
-            .joined(separator: "\n")
-            .trimmingCharacters(in: .whitespacesAndNewlines)
+        let request = command[..<start].trimmingCharacters(in: .whitespacesAndNewlines)
         return request.isEmpty ? command : request
     }
 
     /// Every run of line-break characters in the question, replaced by the two literal characters
     /// `\n`, so the question occupies exactly one line (PR #109 re-check).
     ///
-    /// **This is what makes the pair rule's premise true.** `exchangeLineIndex` counts a question
+    /// **This is what makes the pair rule's premise true.** `exchangeStart` counts a question
     /// line only when the *next* line opens the answer, justified as "the shape `composed` always
     /// writes" — and `composed` did not always write it. The question is interpolated verbatim;
     /// `AgentActionExecutor.clarificationQuestion(in:)` only *end*-trims it
@@ -164,11 +161,19 @@ public enum ClarifiedCommand {
             .joined(separator: "\\n")
     }
 
-    private static func lines(of command: String) -> [Substring] {
-        command.split(separator: "\n", omittingEmptySubsequences: false)
-    }
-
-    /// The first line that opens an exchange, or `nil` when none does.
+    /// Where the first exchange begins, as an index into `command`, or `nil` when none does.
+    ///
+    /// **A line here is a line by `Character.isNewline`, which is the same set `composed` folds**
+    /// (PR #109 re-check, second round). This used to split on `"\n"` alone while `composed` folded
+    /// `CharacterSet.newlines` — a writer and a reader disagreeing about what a line is, which made
+    /// the wide fold unearned and the test asserting it vacuous for seven of its eight cases: a
+    /// question carrying VT, FF, CR, NEL, U+2028 or U+2029 never split the pair here, so folding
+    /// those changed nothing a test could see. A battery mutant narrowing the fold to `"\n"`
+    /// survived the whole suite and is what surfaced it. Both halves take the same set now, so the
+    /// fold is load-bearing for every one of them and the disagreement cannot come back on one side.
+    ///
+    /// `Character.isNewline` rather than a `CharacterSet` membership test on scalars, because Swift
+    /// makes CRLF a single `Character`: iterating characters treats it as one break rather than two.
     ///
     /// **A question line counts only when an answer line follows it** (PR #109 review F3). A lone
     /// `Clarification question:` line is not an exchange: `composed` never writes one, and treating
@@ -180,16 +185,42 @@ public enum ClarifiedCommand {
     /// ever gets *end*-trimmed, so a question wrapping onto two lines wrote exactly the shape this
     /// rejects. `composed` folds line breaks out of the question now, which is what makes the
     /// sentence above true rather than merely intended — see `foldingLineBreaks`.
-    private static func exchangeLineIndex(in commandLines: [Substring]) -> Int? {
-        commandLines.indices.first { index in
-            guard commandLines[index].trimmingCharacters(in: .whitespaces).hasPrefix(questionLabel) else {
-                return false
+    ///
+    /// Returns an index into the original string rather than a line number, so `request(in:)` can
+    /// **slice** the command instead of re-joining split pieces. Re-joining normalises every line
+    /// break it split on, which was lossless while both were `"\n"` and would silently rewrite a
+    /// user's CR or U+2028 the moment the set widened — an edit to a payload, which is the one thing
+    /// F3 established this file must not do.
+    private static func exchangeStart(in command: String) -> String.Index? {
+        let lineRanges = lineRanges(of: command)
+        for (position, range) in lineRanges.enumerated() {
+            guard command[range].trimmingCharacters(in: .whitespaces).hasPrefix(questionLabel) else {
+                continue
             }
-            let next = index + 1
-            guard next < commandLines.count else {
-                return false
+            let next = position + 1
+            guard next < lineRanges.count,
+                  command[lineRanges[next]].trimmingCharacters(in: .whitespaces).hasPrefix(answerLabel) else {
+                continue
             }
-            return commandLines[next].trimmingCharacters(in: .whitespaces).hasPrefix(answerLabel)
+            return range.lowerBound
         }
+        return nil
+    }
+
+    /// Every line of `command`, as ranges into it, split on `Character.isNewline`.
+    private static func lineRanges(of command: String) -> [Range<String.Index>] {
+        var ranges: [Range<String.Index>] = []
+        var lineStart = command.startIndex
+        var index = command.startIndex
+        while index < command.endIndex {
+            let next = command.index(after: index)
+            if command[index].isNewline {
+                ranges.append(lineStart..<index)
+                lineStart = next
+            }
+            index = next
+        }
+        ranges.append(lineStart..<command.endIndex)
+        return ranges
     }
 }
