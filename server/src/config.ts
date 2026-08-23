@@ -1,5 +1,6 @@
 import { isIP } from "node:net";
 import { z } from "zod";
+import type { SupabaseJwtPolicy } from "./auth/token.js";
 
 /**
  * Environment → typed configuration, validated once at startup.
@@ -81,28 +82,39 @@ const schema = z.object({
   RATE_LIMIT_SALT: nonEmpty.optional(),
 
   /**
-   * Mounts `DELETE /v1/account` with **no authentication** (SONNY-127, PR #87 F1).
+   * The Supabase project's **JWT secret**, which is what every access token this gateway accepts is
+   * signed with (SONNY-203; founder decision of 2026-08-21, Sauransh with Bhavya).
    *
-   * The route now attributes its caller from the access token rather than from a header (PR #87
-   * F1), so the specific hole a proof of concept walked through — destroying another account with a
-   * made-up bearer token under `SONNY_ENV=production` — is closed.
+   * **Gateway-only.** It never reaches the Mac app and it is never written down in this repository —
+   * `npm run check:secrets` carries `SUPABASE_JWT_SECRET` on its name-anchored list precisely
+   * because a project secret has no vendor prefix and the variable name is the only thing that can
+   * catch it. A shared HMAC secret is a *signing* key as much as a verifying one: anyone holding it
+   * can mint a token for any user, so it belongs in exactly one process.
    *
-   * **It stays gated for a different and larger reason** (PR #87 R7): **nothing verifies a token
-   * at all.** `AuthProvider.userFromAccessToken` is the seam that will, and no adapter implements
-   * it — so what the route trusts today is whatever the configured provider says, and the only
-   * provider that exists is a test fake. Until **SONNY-203** supplies real verification, a
-   * destructive route is trusting an unimplemented check. Off by default, and **refused outright in
-   * production** by `loadConfig` below, so it cannot be enabled by a misplaced variable on the one
-   * host where it would matter.
-   *
-   * **The gate named SONNY-128 until the second review round, and SONNY-128 could never have
-   * lifted it** (PR #87 F5). That ticket is the *client* sign-in work and its never-touch list
-   * forbids `server/` entirely, so this flag was gated on a condition no ticket owned — the
-   * planning gap the review found. SONNY-203 was created for it: it owns the gateway auth
-   * middleware, the HS256 verification of the Supabase token, and removing this flag once that
-   * exists. Building any of it here is explicitly not SONNY-127's.
+   * No default, like `RATE_LIMIT_SALT` and for the same reason — a development default here would be
+   * a working forgery key that ships everywhere and is never noticed. Optional at load and required
+   * at the point of use, so a deployment mounting no authenticated route need not invent one;
+   * `requireSupabaseJwtPolicy` is what refuses.
    */
-  ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE: z.enum(["true", "false"]).default("false"),
+  SUPABASE_JWT_SECRET: nonEmpty.optional(),
+  /**
+   * The project's auth URL — `https://<project-ref>.supabase.co/auth/v1` — compared exactly against
+   * each token's `iss`.
+   *
+   * **Why check it at all when the signature already passed:** the signature proves the token was
+   * minted by something holding this secret, and `iss` proves it was minted by the *project* this
+   * gateway serves. They come apart the moment the same secret is ever reused across two Supabase
+   * projects (staging and production configured from one copied value is the ordinary way that
+   * happens), at which point a token from the wrong side verifies perfectly and names a user id this
+   * gateway would look up in its own database.
+   */
+  SUPABASE_JWT_ISSUER: nonEmpty.optional(),
+  /**
+   * The `aud` every accepted token must carry. Supabase's own value for a signed-in user is
+   * `authenticated`, which is the default here; it is configurable because it is a project setting
+   * rather than a law, and a wrong value is a gateway that refuses every real token — loudly.
+   */
+  SUPABASE_JWT_AUDIENCE: nonEmpty.default("authenticated"),
 });
 
 export interface Config {
@@ -114,7 +126,9 @@ export interface Config {
   readonly logLevel: z.infer<typeof schema>["LOG_LEVEL"];
   readonly trustProxy: boolean | string[];
   readonly rateLimitSalt: string;
-  readonly allowUnauthenticatedAccountDelete: boolean;
+  readonly supabaseJwtSecret: string | undefined;
+  readonly supabaseJwtIssuer: string | undefined;
+  readonly supabaseJwtAudience: string;
   readonly credentials: readonly ProviderCredentials[];
 }
 
@@ -255,17 +269,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   }
   const value = parsed.data;
 
-  // **Refused rather than ignored.** Silently forcing it off in production would leave a deployment
-  // believing a route is mounted that is not, which is its own confusion; refusing at startup makes
-  // the mistake impossible to hold.
-  if (value.SONNY_ENV === "production" && value.ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE === "true") {
-    throw new ConfigError(
-      "ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE may never be true when SONNY_ENV=production. " +
-        "That route attributes its caller from the access token, but NOTHING VERIFIES THAT TOKEN " +
-        "yet — no adapter implements userFromAccessToken — so it trusts an unimplemented check. " +
-        "It exists only until SONNY-203 supplies real verification.",
-    );
-  }
+  // **`ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE` and its production refusal stood here, and both are
+  // gone with the reason they existed** (SONNY-203). The flag mounted `DELETE /v1/account` only
+  // where a deployment opted in, because that route attributed its caller through a seam no adapter
+  // implemented — a destructive primitive trusting a check that did not exist. Verification now
+  // exists (`auth/token.ts`) and the gate applies it to every protected route, so the route is
+  // mounted unconditionally and attributes its caller from a verified token. Removing the flag
+  // rather than defaulting it off is the point: a flag left in place is a flag someone can set.
 
   return {
     environment: value.SONNY_ENV,
@@ -276,7 +286,9 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     logLevel: value.LOG_LEVEL,
     trustProxy: parseTrustedProxies(value.TRUSTED_PROXIES),
     rateLimitSalt: value.RATE_LIMIT_SALT ?? "",
-    allowUnauthenticatedAccountDelete: value.ALLOW_UNAUTHENTICATED_ACCOUNT_DELETE === "true",
+    supabaseJwtSecret: value.SUPABASE_JWT_SECRET,
+    supabaseJwtIssuer: value.SUPABASE_JWT_ISSUER,
+    supabaseJwtAudience: value.SUPABASE_JWT_AUDIENCE,
     credentials: providerCredentials(env),
   };
 }
@@ -307,4 +319,72 @@ export function requireRateLimitSalt(config: Config): string {
     );
   }
   return config.rateLimitSalt;
+}
+
+/**
+ * The shortest secret this gateway will verify with.
+ *
+ * HS256's security is bounded by the key, not by the digest: a short secret is offline-guessable
+ * against any token the holder has ever seen, and guessing it yields the ability to *mint* tokens
+ * for any user rather than merely to read one. Supabase issues a JWT secret far longer than this, so
+ * the floor only ever catches a human-chosen stand-in — which is exactly the value worth catching,
+ * because it is the one somebody types in a hurry to get a local server started.
+ */
+export const MIN_JWT_SECRET_LENGTH = 32;
+
+/**
+ * The verification policy, or a startup failure naming what is missing.
+ *
+ * Separate from `loadConfig` for the reason `requireRateLimitSalt` is: a deployment that mounts no
+ * authenticated route should not be forced to hold a signing secret, and one that does must not be
+ * able to start without a real value. **Every failure here is a startup failure rather than a
+ * request-time one** — a gateway that boots and then refuses every request looks, from outside,
+ * exactly like a gateway whose users have all been signed out.
+ */
+export function requireSupabaseJwtPolicy(config: Config): SupabaseJwtPolicy {
+  const missing = [
+    config.supabaseJwtSecret ? undefined : "SUPABASE_JWT_SECRET",
+    config.supabaseJwtIssuer ? undefined : "SUPABASE_JWT_ISSUER",
+  ].filter((name): name is string => name !== undefined);
+  if (missing.length > 0) {
+    throw new ConfigError(
+      `${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"} required wherever an ` +
+        "authenticated route is mounted: without them no access token can be verified and every " +
+        "protected route would refuse every caller. Values are omitted deliberately; see " +
+        "server/.env.example for the expected shape.",
+    );
+  }
+  const secret = config.supabaseJwtSecret!;
+  const issuer = config.supabaseJwtIssuer!;
+  if (secret.length < MIN_JWT_SECRET_LENGTH) {
+    // The LENGTH is reported and the value is not. A length is not a secret, and "too short" with no
+    // number is a message that cannot be acted on.
+    throw new ConfigError(
+      `SUPABASE_JWT_SECRET is ${secret.length} characters; at least ${MIN_JWT_SECRET_LENGTH} are ` +
+        "required. Anyone holding this secret can mint a token for any user, so a guessable one is " +
+        "a forgery key rather than a weak password. Supabase's own project secret is longer than " +
+        "this floor, so a value this short is a stand-in rather than the real thing.",
+    );
+  }
+  // The issuer is not a secret — it is a public URL naming the project — so unlike every other
+  // variable here it is reported with its value. A `iss` mismatch is otherwise invisible: every
+  // token verifies against the secret and is then refused, which reads as "all my users are signed
+  // out" rather than as a typo in one variable.
+  let parsed: URL;
+  try {
+    parsed = new URL(issuer);
+  } catch {
+    throw new ConfigError(
+      `SUPABASE_JWT_ISSUER must be the project's auth URL, e.g. ` +
+        `https://<project-ref>.supabase.co/auth/v1 — got ${JSON.stringify(issuer)}, which is not a ` +
+        "URL. It is compared exactly against each token's iss claim, so a project reference or a " +
+        "bare hostname refuses every token that project issues.",
+    );
+  }
+  if (parsed.protocol !== "https:" && parsed.protocol !== "http:") {
+    throw new ConfigError(
+      `SUPABASE_JWT_ISSUER must be an http or https URL — got ${JSON.stringify(parsed.protocol)}.`,
+    );
+  }
+  return { secret, issuer, audience: config.supabaseJwtAudience };
 }
