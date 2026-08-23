@@ -263,6 +263,33 @@ struct PathContainmentResolutionTests {
         )
     }
 
+    /// A refusal names a link the person can find, which is the head of the chain and not the point
+    /// the resolver gave up at (PR #111's review, F6).
+    ///
+    /// Asking for `<root>/l1` used to be refused with "`<root>/l33` is a symbolic link Sonny could
+    /// not follow" — a path they never typed and cannot act on. That is the same failure this file
+    /// reasons about carefully one case away, for `outsideWhitelist`: naming only the far end shows
+    /// somebody somewhere they have never heard of. The first link followed is always a component of
+    /// the path as asked for.
+    @Test
+    func aRefusalNamesTheFirstLinkItCouldNotFollowRatherThanWhereItGaveUp() throws {
+        let tree = try SymlinkTree()
+        defer { tree.tearDown() }
+        let head = try tree.chain(length: 33, endingAt: tree.outside.appendingPathComponent("pwned.txt"))
+
+        let attempt = tree.attemptOutput(at: head.path, atomically: false)
+
+        #expect(attempt.landedAt == nil)
+        guard let validation = attempt.error as? PathValidationError,
+              case .symbolicLinkRejected(let named) = validation else {
+            Issue.record("expected a symlink refusal, got \(attempt.errorText)")
+            return
+        }
+        #expect(named == head.path)
+        #expect(named.hasSuffix("/l33") == false)
+        #expect(validation.errorDescription?.contains(head.path) == true)
+    }
+
     /// The rule carried by the type rather than by two callers remembering it: the one comparison
     /// every boundary in the app goes through refuses a path whose resolution did not converge, so
     /// a future caller cannot reintroduce the escape by forgetting to ask.
