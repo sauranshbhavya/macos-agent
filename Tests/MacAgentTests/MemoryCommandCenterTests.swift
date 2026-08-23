@@ -1877,6 +1877,13 @@ struct MemoryCommandCenterTests {
         let fixture = try makeMemoryFixture()
         defer { fixture.cleanUp() }
         fixture.memoryPageAppears()
+        #expect(fixture.viewModel.savedSnippets.isEmpty)
+
+        // **On disk before the run starts, and that ordering is the whole test** — the first version
+        // wrote it after the pause had already been reached, so the mutant's refresh had happened
+        // before there was anything for it to pick up and the test passed against a broken guard.
+        try fixture.snippetStore.save(StoredSnippet(trigger: ";sig", expansion: "signature"))
+        #expect(fixture.viewModel.savedSnippets.isEmpty, "nothing has refreshed yet")
 
         fixture.viewModel.command = "overwrite the notes"
         fixture.viewModel.start(prebuiltPlan: try fixture.planNeedingApproval())
@@ -1887,7 +1894,6 @@ struct MemoryCommandCenterTests {
             try await Task.sleep(nanoseconds: 5_000_000)
         }
 
-        try fixture.snippetStore.save(StoredSnippet(trigger: ";sig", expansion: "signature"))
         #expect(fixture.viewModel.savedSnippets.isEmpty, "the pause reloaded the Memory rows")
 
         // The control: the same write is picked up the moment the run actually ends, so the silence
@@ -1895,6 +1901,31 @@ struct MemoryCommandCenterTests {
         fixture.viewModel.cancelCurrentRun()
         try await fixture.waitUntilIdle()
         #expect(fixture.viewModel.savedSnippets.map(\.trigger) == [";sig"])
+    }
+
+    /// **A store that breaks while the page is open says so without the user navigating away.**
+    ///
+    /// This is SONNY-239 and SONNY-246 meeting each other: the row's damaged state comes from a probe,
+    /// and a probe that only ran on `onAppear` would leave the page reading `0 saved` with a greyed
+    /// Delete for the whole of a session — which is the founder's screenshot, arrived at from the
+    /// staleness side.
+    @Test
+    func aStoreThatBreaksDuringARunMarksItsRowWithoutRevisitingThePage() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        fixture.memoryPageAppears()
+        #expect(MemoryRowPresentation.row(for: .outputLocations, viewModel: fixture.viewModel).readability == .readable)
+
+        try fixture.writeUnreadableFile(at: fixture.outputLocationStore.fileURL)
+        fixture.viewModel.command = "add two and two"
+        fixture.viewModel.start(prebuiltPlan: planCalculating("2 + 2"))
+        try await fixture.waitUntilIdle()
+
+        // No second `memoryPageAppears()` here, deliberately — that is the navigation the user
+        // should not have to perform.
+        let row = MemoryRowPresentation.row(for: .outputLocations, viewModel: fixture.viewModel)
+        #expect(row.readability == .unreadable)
+        #expect(row.canDelete)
     }
 
     /// **The banner never instructs someone to press a control that is not there.**
