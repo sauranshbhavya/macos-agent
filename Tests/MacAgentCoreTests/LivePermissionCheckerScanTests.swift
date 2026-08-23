@@ -260,7 +260,12 @@ struct LivePermissionCheckerScanTests {
     /// defaulted seam out names nothing forbidden, so the token scan is blind to it — that is how F1
     /// shipped. This is the narrow version that catches the real shape: a file that both builds an
     /// `AgentActionExecutor` and names `.showPermissionReadiness` is one plan away from a live read,
-    /// and there are exactly three of them. Reverting F1's one-line fix fails here.
+    /// and there are exactly four of them. Reverting F1's one-line fix fails here.
+    ///
+    /// It was three until SONNY-210: `RunUnitProgressTests` gained the operation's name when its
+    /// resume-repeat classification started pinning the *safe* set by name as well as the unsafe
+    /// one, and the count is what noticed. That is the population pin working — the file had built
+    /// executors all along and was one plan short of qualifying.
     ///
     /// It requires the injected *form*, not the identifier's presence: `permissionReadinessService: .init()`
     /// contains the name and is a live service (PR #72 C1).
@@ -282,8 +287,8 @@ struct LivePermissionCheckerScanTests {
             }
         }
 
-        // A rule that matched nothing would pass forever; these three are the population today.
-        #expect(checked.count == 3, "expected three readiness-capable executor fixtures, found \(checked)")
+        // A rule that matched nothing would pass forever; these four are the population today.
+        #expect(checked.count == 4, "expected four readiness-capable executor fixtures, found \(checked)")
         #expect(
             missing.isEmpty,
             """

@@ -2026,7 +2026,12 @@ final class AgentViewModel: ObservableObject {
     ///   open on a refusal rather than hiding the fact that nothing happened.
     @discardableResult
     func runTaskAgain(_ record: CompletedTaskRecord) -> Bool {
-        dispatch(
+        // **The fourth continuation door** (PR #105 re-check, F1). Running a failed task again from
+        // its own row is the same task starting over, so it continues that task's record rather than
+        // minting a second one and leaving the first as a live offer for something the user has just
+        // re-run to completion.
+        armRestartOfRecordedTask(record)
+        let started = dispatch(
             command: record.command,
             // Stated rather than defaulted, per `.claude/rules/macagent-ui-conventions.md`: a new
             // task-submitting entry point passes its own real origin. This one is pressed in
@@ -2039,6 +2044,15 @@ final class AgentViewModel: ObservableObject {
             // unscoped rather than erroring or binding to an empty boundary.
             workspaceBinding: record.workspaceName
         )
+        // **`dispatch` can refuse before `start()` ever runs** — its `isAwaitingApproval` guard
+        // returns without calling it — and this door has no in-flight guard of its own, unlike
+        // `retryLastCommand`. So the arm is dropped here rather than left for the next, unrelated
+        // dispatch to spend. Same reason and same shape as `continueResumableTask`'s.
+        guard started else {
+            pendingResumableContinuation = nil
+            return false
+        }
+        return true
     }
 
     /// Reopens a past task into the widget so the user can say the next thing about it (row E,
@@ -4383,7 +4397,15 @@ final class AgentViewModel: ObservableObject {
             // What the run produced, on every terminal exit for the same reason (SONNY-147): a
             // failed run's text is the one a user most wants to read back, and a cancelled run
             // still says "Canceled." rather than nothing.
-            result: result
+            result: result,
+            // **The link to this task's unfinished-run record, read *after* the settle above** — so
+            // it is the id of a record that survived, and `nil` whenever there is nothing to carry
+            // on with. A completed or cancelled run had its record deleted three lines up and
+            // therefore writes no link; a failed run kept its record and writes one, which is what
+            // lets `runTaskAgain` recognise this row's task after a relaunch (PR #105 re-check, F1's
+            // fourth door). The ordering is load-bearing: read before the settle, every row would
+            // claim a link to a record that was about to be deleted.
+            resumableTaskID: activeResumableTask?.id
         )
 
         do {
@@ -4724,10 +4746,44 @@ final class AgentViewModel: ObservableObject {
         return true
     }
 
+    /// Arms the **next** dispatch to continue the unfinished-run record a *history row* names, when
+    /// it names one (PR #105 re-check, F1's fourth door).
+    ///
+    /// **Why this cannot be `armRestartOfTaskInFlight()`, which is the whole of the design here.**
+    /// That helper arms whatever `activeResumableTask` holds, and it is sound for the two doors it
+    /// serves because each of those is *by construction* the run that just paused or just failed.
+    /// This door is neither: it takes an arbitrary historical record off the Tasks page, and it can
+    /// run after a relaunch, when `activeResumableTask` is `nil` while the record and its row both
+    /// survive on disk. Arming blindly there would merge two different tasks into one record — the
+    /// opposite defect — and arming from the in-memory handle would simply do nothing after a
+    /// relaunch, which is the case the user is most likely to be in.
+    ///
+    /// So the answer is durable and exact: `CompletedTaskRecord.resumableTaskID`, written when the
+    /// row was, matched against the published list this view model loads at launch.
+    ///
+    /// **What it does not cover, stated rather than left to be found.** A row written before that
+    /// field existed carries `nil` and re-runs as a fresh task — nothing can invent the link after
+    /// the fact, and the natural key that could approximate it is the `(command, startedAt)` pair
+    /// `CompletedTaskRecord.id` exists because it collides. A record already deleted from Memory or
+    /// past its idle period is not found either, which is correct: there is nothing to carry on
+    /// with. And a *scheduled* run's row never carries a link, because that path writes no resumable
+    /// record at all.
+    ///
+    /// A no-op in every one of those cases, so the caller does not have to ask.
+    private func armRestartOfRecordedTask(_ record: CompletedTaskRecord) {
+        guard let linked = record.resumableTaskID,
+              let task = resumableTasks.first(where: { $0.id == linked }) else {
+            return
+        }
+        pendingResumableContinuation = .restarting(task)
+    }
+
     /// Arms the **next** dispatch to run the task in flight again from the top rather than as a
     /// task of its own (PR #105 review F1).
     ///
-    /// **The two doors that need it, and why they are exactly two.** `performStart` drops its handle
+    /// **The two doors that need it, and why they are exactly two.** A third continuation door,
+    /// `runTaskAgain`, needs the *record-matched* helper above instead — see it for why the
+    /// in-flight handle cannot express what that door is doing. `performStart` drops its handle
     /// on the outstanding checkpoint at the top of every run, which is right for a run that is a
     /// different task and wrong for a run that is the same one continuing. Three dispatches are the
     /// same task: `continueResumableTask`, which arms `.resuming` because it carries a finished

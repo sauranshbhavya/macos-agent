@@ -104,6 +104,33 @@ public struct CompletedTaskRecord: Codable, Equatable, Sendable {
     /// the row because it is small, because it is the first thing task detail renders, and because
     /// keeping it here means a task can say what it produced without a second file read.
     public var result: StoredTaskResult?
+    /// The unfinished-run record this task still has, if it has one — the key into
+    /// `ResumableTaskStore` (row 13, SONNY-210).
+    ///
+    /// **Written only where there is something to point at, which is a failed run.** A run that
+    /// completed or was cancelled had its resumable record deleted at the same terminal that writes
+    /// this row, so the link is `nil` for it and correctly says "nothing to carry on with". A run
+    /// that failed kept its record, and this is what lets a *later* session find it.
+    ///
+    /// **The link is on the row rather than the row's id being on the record, and the direction is
+    /// the decision** (PR #105 re-check, F1's fourth door). `AgentViewModel.runTaskAgain` is handed
+    /// a `CompletedTaskRecord` off the Tasks page and has to answer "is this the task that record
+    /// describes?" — so the answer has to travel with the row. It also has to survive a relaunch,
+    /// which rules out the in-memory handle the other continuation doors use, and it has to be
+    /// exact, which rules out `(command, startedAt)`: that is the compound key `id` above exists
+    /// because two runs of one command inside one second collide on it. And a task can produce
+    /// *several* rows — attempt one, then a retry — which all point at the one record, where a link
+    /// stored the other way round could only name the newest.
+    ///
+    /// Optional, per the twice-documented `AutomationStores.swift` decode rule and the precedent of
+    /// `trigger`, `visionSessionID`, `id` and `result` above. `nil` means "written before this link
+    /// existed, or nothing to link", and nothing backfills it: the association is not recoverable
+    /// after the fact, and guessing it is the collision this field exists to avoid.
+    ///
+    /// **A dangling link is expected and harmless.** The record it names may be deleted from Memory
+    /// or expire after its idle period while this row lives on; the reader looks it up, finds
+    /// nothing, and treats the re-run as the fresh task it then is.
+    public var resumableTaskID: String?
 
     public init(
         id: String? = UUID().uuidString,
@@ -114,7 +141,8 @@ public struct CompletedTaskRecord: Codable, Equatable, Sendable {
         workspaceName: String? = nil,
         trigger: TaskTrigger? = nil,
         visionSessionID: String? = nil,
-        result: StoredTaskResult? = nil
+        result: StoredTaskResult? = nil,
+        resumableTaskID: String? = nil
     ) {
         self.id = id
         self.command = command.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -125,6 +153,7 @@ public struct CompletedTaskRecord: Codable, Equatable, Sendable {
         self.trigger = trigger
         self.visionSessionID = visionSessionID
         self.result = result
+        self.resumableTaskID = resumableTaskID
     }
 
     public var effectiveTrigger: TaskTrigger {

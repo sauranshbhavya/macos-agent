@@ -118,52 +118,103 @@ struct ResumeOfferPresentationTests {
 
     // MARK: - Which dispatches continue the task in flight
 
-    /// **Every route into `performStart` is classified, so a new one cannot arrive unclassified**
-    /// (PR #105 review F1, and the re-enumeration that finding asked for).
+    /// **Every dispatch door is classified, and the classification is checked — not just the
+    /// population** (PR #105 review F1, and its re-check).
     ///
-    /// The defect: `performStart` drops its handle on the outstanding checkpoint at the top of every
-    /// run. That is right for a run that is a *different* task and wrong for a run that is the *same
-    /// task continuing* — and the answered-clarification door was the second kind while behaving
-    /// like the first, so the answered run minted a second record and left the first as a live offer
-    /// for a task that had finished. Patching that one door would have left the retry door, which
-    /// has the identical shape and which this enumeration is what found.
+    /// The defect this exists for: `performStart` drops its handle on the outstanding checkpoint at
+    /// the top of every run, which is right for a run that is a *different* task and wrong for a run
+    /// that is the *same task continuing*. Three doors were wrong at one point or another —
+    /// `submitClarification` (reported), `retryLastCommand` (found by enumerating), and
+    /// `runTaskAgain` (found by the re-check, *while this test was green and naming it*).
     ///
-    /// **The three doors that continue, and nothing else may.** `continueResumableTask` arms
-    /// `.resuming` — it is rejoining a chain a finished unit already fed, so it carries that unit's
-    /// file. `submitClarification` and `retryLastCommand` arm `.restarting` through one shared
-    /// helper — nothing has executed, so there is nothing to carry. Every other dispatch is a task
-    /// of its own and leaves the outstanding record exactly where it is, which is the founder's
-    /// lifecycle rather than a leak.
+    /// **That last one is why this test changed shape.** The first version counted call sites and
+    /// listed the doors in its failure message. It pinned that no door could arrive *unclassified*,
+    /// and it said nothing about whether the classification was *right* — so `runTaskAgain` sat in
+    /// its own message as one of the seven while being the one that was wrong. A scan that lists a
+    /// door and mis-classifies it is worse than one that misses it, because it reads as coverage.
     ///
-    /// Counts rather than `contains`, per `MacAgentSource`'s own rule: a comment can add a token but
-    /// cannot take one away, so a count sees both halves of a rewiring and a presence check sees
-    /// neither.
+    /// So each door is now named with the answer it is supposed to give, and the answer is read off
+    /// its own body. The count assertions stay underneath: they are what forces a *new* door into
+    /// the table rather than past it.
     @Test
-    func everyDispatchEntryPointDecidesWhetherItContinuesTheTaskInFlight() throws {
+    func everyDispatchDoorIsClassifiedAndTheClassificationIsChecked() throws {
         let viewModel = try MacAgentSource.read("AgentViewModel.swift")
 
-        // Exactly one arming site per kind, and the restart helper is declared once and called
-        // twice — `submitClarification` and `retryLastCommand`.
-        #expect(MacAgentSource.count(of: "pendingResumableContinuation = .resuming(task)", inText: viewModel) == 1)
-        #expect(MacAgentSource.count(of: "pendingResumableContinuation = .restarting(task)", inText: viewModel) == 1)
-        #expect(MacAgentSource.count(of: "armRestartOfTaskInFlight()", inText: viewModel) == 3)
+        /// The three ways a door says "this dispatch continues the task the record describes".
+        /// `pendingResumableContinuation = nil` is deliberately not one of them — that is a door
+        /// *dropping* an arm it could not use, which every door is free to do.
+        let armingTokens = [
+            "armRestartOfTaskInFlight()",
+            "armRestartOfRecordedTask(record)",
+            "pendingResumableContinuation = .resuming(task)"
+        ]
 
-        // The population of doors. `dispatch(...)` is the programmatic choke point every non-view
-        // caller goes through, and `start(...)` is what it and the views call. A dispatch door added
-        // later raises one of these and fails here until somebody decides which kind it is.
+        let doors: [(name: String, anchor: String, continuesTheTask: Bool)] = [
+            // Continues: the same task starting over, or picking up where it stopped.
+            ("retryLastCommand", "func retryLastCommand(origin: TaskOrigin = .widget) {", true),
+            ("runTaskAgain", "func runTaskAgain(_ record: CompletedTaskRecord) -> Bool {", true),
+            ("submitClarification", "func submitClarification() {", true),
+            ("continueResumableTask", "func continueResumableTask(_ task: ResumableTask) -> Bool {", true),
+            // A task of its own. Each leaves any outstanding record exactly where it is, which is
+            // the founder's lifecycle rather than a leak: an unfinished task survives the user
+            // doing something else.
+            ("runRoutineWidget", "func runRoutineWidget(_ routine: StoredRoutine) {", false),
+            ("openWorkspaceWidget", "func openWorkspaceWidget(_ workspace: StoredWorkspace) {", false),
+            (
+                "dispatchWorkspaceScopeEdit",
+                "func dispatchWorkspaceScopeEdit(_ edit: WorkspaceScopeEditDispatch) -> Bool {",
+                false
+            ),
+            (
+                "dispatchTranscribedCommand",
+                "func dispatchTranscribedCommand(_ transcript: String, origin: TaskOrigin = .widget) {",
+                false
+            )
+        ]
+
+        for door in doors {
+            let body = try MacAgentSource.braceBlock(of: viewModel, openedBy: door.anchor)
+
+            // The row really names a door, so a table entry cannot drift onto a function that
+            // dispatches nothing and quietly stop covering anything.
+            let dispatches = MacAgentSource.count(of: "dispatch(", inText: body)
+                + MacAgentSource.count(of: "start(", inText: body)
+            #expect(dispatches > 0, "\(door.name) is in the door table but dispatches nothing")
+
+            let arms = armingTokens.contains { MacAgentSource.count(of: $0, inText: body) > 0 }
+            #expect(
+                arms == door.continuesTheTask,
+                door.continuesTheTask
+                    ? "\(door.name) is the same task continuing and must arm a continuation"
+                    : "\(door.name) is a task of its own and must not arm one"
+            )
+        }
+
+        // The arming sites themselves, so an arm cannot be added somewhere the table above does not
+        // look. One `.resuming` (the resume door), and two `.restarting` — one inside each restart
+        // helper, which is what makes the two helpers two rather than one with a branch.
+        #expect(MacAgentSource.count(of: "pendingResumableContinuation = .resuming(task)", inText: viewModel) == 1)
+        #expect(MacAgentSource.count(of: "pendingResumableContinuation = .restarting(task)", inText: viewModel) == 2)
+        // Three: the declaration plus its two callers — the declaration takes no argument, so it
+        // matches the same text a call does.
+        #expect(MacAgentSource.count(of: "armRestartOfTaskInFlight()", inText: viewModel) == 3)
+        // One: its single caller. The declaration takes a labelled parameter, so it does not match.
+        #expect(MacAgentSource.count(of: "armRestartOfRecordedTask(record)", inText: viewModel) == 1)
+
+        // The population, which is what forces a new door into the table rather than past it.
+        // `dispatch` is private to this file, so every one of its call sites is here.
         let dispatchCallSites = MacAgentSource.count(of: "dispatch(", inText: viewModel)
             - MacAgentSource.count(of: "func dispatch(", inText: viewModel)
+        #expect(dispatchCallSites == 7, "a dispatch call site was added or removed — classify it above")
         #expect(
-            dispatchCallSites == 7,
-            """
-            retryLastCommand (restart), runTaskAgain, runRoutineWidget, openWorkspaceWidget, \
-            dispatchWorkspaceScopeEdit, dispatchTranscribedCommand, continueResumableTask (resume)
-            """
+            doors.count == dispatchCallSites + 1,
+            "the table is the seven dispatch callers plus submitClarification, which reaches start() directly"
         )
 
-        // And the routes that reach `start(...)` without going through `dispatch` — the composer,
-        // the answered clarification, the vision envelope, and the three Allow controls, which route
-        // to `approvePendingRun` rather than starting anything.
+        // And the routes into `performStart` that do not go through `dispatch`, counted across every
+        // app source file: `dispatch`'s own, `submitClarification`'s, the vision envelope's, the
+        // widget composer's, and three Allow controls that answer a pending approval rather than
+        // starting anything.
         var startCallSites = 0
         for file in try MacAgentSource.appSourceFiles() {
             let text = try MacAgentSource.read(file)
@@ -171,13 +222,7 @@ struct ResumeOfferPresentationTests {
                 - MacAgentSource.count(of: "func start(", inText: text)
                 - MacAgentSource.count(of: "audioRecorder.start(", inText: text)
         }
-        #expect(
-            startCallSites == 7,
-            """
-            dispatch's own, submitClarification (restart), the vision envelope, the widget composer, \
-            and three Allow controls (AppDelegate, CommandCenterView, FloatingWidgetView)
-            """
-        )
+        #expect(startCallSites == 7, "a route into performStart was added or removed — classify it above")
     }
 
     /// **F6/M32: the launch-time read is what makes the offer reach someone who never opens Command
