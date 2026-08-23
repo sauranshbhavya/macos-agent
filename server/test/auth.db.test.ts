@@ -108,9 +108,15 @@ class FakeProvider implements AuthProvider {
     if (this.rejectFor.has(id)) throw new ProviderRejected("no such user");
     this.revokedUsers.push(id);
   }
-  async userFromAccessToken(token: string): Promise<string> {
-    if (token !== "at") throw new ProviderRejected("bad token");
-    return this.session.supabaseUserId;
+  /**
+   * **Throws, like the fakes in `gate.test.ts` and `authgate.db.test.ts` do** (PR #104's adversarial
+   * review, closing caveat). This returned `this.session.supabaseUserId` for the token `"at"`, which
+   * made the "fails loudly" guarantee hold in two files out of three: a middleware that reached back
+   * for the provider seam would have failed in those two and quietly succeeded here, in the largest
+   * of them. Verification is local by founder decision, so nothing on a request path may call this.
+   */
+  async userFromAccessToken(_accessToken: string): Promise<string> {
+    throw new ProviderRejected("the gate verifies locally; this seam is not on the request path");
   }
   async deleteUser() {}
 }

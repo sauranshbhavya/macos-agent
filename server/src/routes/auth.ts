@@ -433,9 +433,10 @@ export function registerAuth(app: FastifyInstance, config: Config, deps: AuthDep
    * legitimate use of the raw string: hand it back to the provider that issued it.
    *
    * **What signing out does and does not end.** It revokes the refresh-token family, so no new
-   * access token can be minted; the access token in the user's hand stays valid until its own `exp`,
-   * because it is self-contained and this gateway verifies it locally rather than asking the
-   * provider. `auth/gate.ts` states that residual in full.
+   * access token can be minted; the access token in the user's hand stays valid until its own `exp`
+   * plus `EXPIRY_SKEW_TOLERANCE_SECONDS`, because it is self-contained and this gateway verifies it
+   * locally rather than asking the provider. `auth/gate.ts` states that residual in full, tolerance
+   * included (PR #104's adversarial review, F9).
    */
   app.post("/v1/auth/signout", async (request, reply) => {
     try {

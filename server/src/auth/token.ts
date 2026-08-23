@@ -35,9 +35,11 @@ import { isExpiryAcceptable } from "./clock.js";
  * **What this file deliberately does not do:** it does not ask whether the session behind a valid
  * token is still live at the provider. A Supabase access token is self-contained, so signing out
  * revokes the *refresh* family and leaves an already-issued access token cryptographically valid
- * until its own `exp`. `gate.ts` covers the part this gateway can see — a closed or deleted account
- * is refused on every request — and the residual is stated there and in `server/README.md` rather
- * than papered over.
+ * until its own `exp` **plus the tolerance below** — `exp` alone understates it by
+ * `EXPIRY_SKEW_TOLERANCE_SECONDS` (PR #104's adversarial review, F9, which named three statements of
+ * this window; a sweep for the phrase found this one and `routes/auth.ts`'s as well). `gate.ts`
+ * covers the part this gateway can see — a closed or deleted account is refused on every request —
+ * and the residual is stated there and in `server/README.md` rather than papered over.
  */
 
 /** The three project-specific values a verification is judged against. */
@@ -111,9 +113,14 @@ const BASE64URL = /^[A-Za-z0-9_-]+$/;
  */
 function decodeSegment(segment: string): Buffer | undefined {
   if (segment.length === 0 || !BASE64URL.test(segment)) return undefined;
-  // A length of 4n+1 cannot be produced by any byte string; `Buffer` silently truncates it.
-  if (segment.length % 4 === 1) return undefined;
   const decoded = Buffer.from(segment, "base64url");
+  // **One check, not two.** A `segment.length % 4 === 1` guard stood above this line and was dead
+  // rather than merely uncovered (PR #104's adversarial review, F8): neutralising it left the suite
+  // green, because a 4n+1 length has a trailing quantum of six bits, `Buffer` drops it as it cannot
+  // form a byte, and the re-encoding below is then shorter than what came in. Removed rather than
+  // kept as defence in depth, for the reason `identity.ts` gives for deleting rule 2's account lock:
+  // a guard that cannot run is not a second defence, it is a claim about a case the next reader will
+  // reason from. `theOnlyCheckRefusesA4nPlus1Segment` is what keeps the surviving line honest.
   if (decoded.toString("base64url") !== segment) return undefined;
   return decoded;
 }

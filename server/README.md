@@ -121,8 +121,11 @@ disagree about what that state means.
 A Supabase access token is self-contained. That is what lets this gateway verify one without a
 network round trip to the provider on every request — and it is equally why it cannot un-issue one.
 Signing out revokes the **refresh** family at the provider, so no new access token can be minted; the
-one already in the user's hand keeps verifying until its own `exp`, **one hour on Supabase's
-default**.
+one already in the user's hand keeps verifying until its own `exp` **plus the 30-second skew
+tolerance** — so **one hour and thirty seconds** on Supabase's default lifetime. The extra thirty
+seconds are this gateway's own (`src/auth/clock.ts`, one-directional by design), which is exactly why
+they belong in the number: quoting `exp` alone would understate the window by the amount the gate
+adds to it.
 
 What *is* closed, on every single request: a token naming a **closed or deleted account** is refused,
 because attribution reads live state rather than remembering a decision. So `DELETE /v1/account`
