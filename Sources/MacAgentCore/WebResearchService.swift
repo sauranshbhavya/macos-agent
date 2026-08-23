@@ -37,8 +37,13 @@ public enum WebResearchError: Error, Equatable, LocalizedError {
         case .noSearchResults(let query):
             return "No web search results were found for \(query)."
         case .allSourcesFailed(let urls, let firstReason):
-            let count = urls.count
-            return "None of the \(count) source\(count == 1 ? "" : "s") could be retrieved, so no note was written. First failure: \(firstReason)"
+            // "None of the 1 source could be retrieved" is what a user met every time a single URL
+            // failed, which is the common case (SONNY-245). With one source there is also no "first"
+            // failure to distinguish from a second, so the reason follows directly.
+            guard urls.count > 1 else {
+                return "The source could not be retrieved, so no note was written. \(firstReason)"
+            }
+            return "None of the \(urls.count) sources could be retrieved, so no note was written. First failure: \(firstReason)"
         }
     }
 }
@@ -229,27 +234,11 @@ public struct PublicWebPageLoader {
             throw WebResearchError.unsupportedContentType(page.mimeType)
         }
 
-        if let reason = Self.restrictedContentReason(in: page.html) {
+        // The evidence this acts on lives in `RestrictedContentDetector`, which reads the page a
+        // reader would see before it believes a phrase found in a megabyte of markup (SONNY-245).
+        if let reason = RestrictedContentDetector.reason(inHTML: page.html) {
             throw WebResearchError.restrictedContent(reason)
         }
-    }
-
-    private static func restrictedContentReason(in html: String) -> String? {
-        let normalized = html
-            .folding(options: [.caseInsensitive, .diacriticInsensitive], locale: .current)
-            .lowercased()
-
-        let checks: [(needle: String, reason: String)] = [
-            ("captcha", "CAPTCHAs"),
-            ("verify you are human", "CAPTCHAs"),
-            ("please log in", "login walls"),
-            ("sign in to continue", "login walls"),
-            ("subscribe to continue", "paywalls"),
-            ("subscription required", "paywalls"),
-            ("paywall", "paywalls")
-        ]
-
-        return checks.first { normalized.contains($0.needle) }?.reason
     }
 }
 
