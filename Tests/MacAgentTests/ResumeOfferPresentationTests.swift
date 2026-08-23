@@ -1,3 +1,4 @@
+import AppKit
 import Foundation
 import Testing
 @testable import MacAgent
@@ -299,6 +300,293 @@ struct ResumeOfferPresentationTests {
         #expect(!panel.contains("SonnyTheme."), "System A tokens do not belong in the widget")
         #expect(!panel.contains("SonnyType."))
         #expect(!panel.contains("SonnyRadius."))
+    }
+
+    // MARK: - The layout defect (SONNY-244)
+
+    /// **The message can never draw taller than the panel holds open for it, at any width.**
+    ///
+    /// This is the correctness condition for SONNY-244's fix, and it is the only part of that fix a
+    /// test can reach: the founder saw the offer's two controls drawn on top of the message's second
+    /// line, intermittently, and no agent can see this panel render. So what is held here is the
+    /// arithmetic the reservation rests on — the caption font's real line height, and the real
+    /// wrapped height of the real messages at the width they are really drawn at.
+    ///
+    /// **The `> reserved` case at the end is not a contradiction, it is the reason `lineLimit`
+    /// exists.** A 60-character command with no space in it is the one input that needs a third
+    /// line; the cap tail-truncates it rather than letting it grow the panel, so the drawn height
+    /// stays inside the reservation even there. Remove the cap and this reservation stops being
+    /// sufficient — the two are one mechanism.
+    @Test
+    func theMessageNeverDrawsTallerThanThePanelReservesForIt() {
+        let font = NSFont.systemFont(ofSize: 13, weight: .regular)
+        let lineHeight = NSLayoutManager().defaultLineHeight(for: font)
+
+        // The constant in the source is a measurement, so it is measured rather than trusted.
+        #expect(lineHeight == ResumeOfferPresentation.messageLineHeight)
+        #expect(
+            ResumeOfferPresentation.reservedMessageHeight
+                == ResumeOfferPresentation.messageLineHeight * CGFloat(ResumeOfferPresentation.messageLineLimit)
+        )
+
+        func drawnHeight(_ message: String, width: CGFloat) -> CGFloat {
+            (message as NSString).boundingRect(
+                with: NSSize(width: width, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: [.font: font]
+            ).height
+        }
+
+        let width = ResumeOfferPresentation.panelContentWidth
+
+        // The two the founder reported, plus a third long command with no URL in it.
+        let atTheBudget = [
+            "summarize https://news.ycombinator.com and save it as a markdown file on my desktop",
+            "summarize https://en.wikipedia.org/wiki/Machine_learning and save it to my desktop",
+            "Convert every document in the project folder to PDF and then email the results to my team lead"
+        ]
+        for command in atTheBudget {
+            let message = ResumeOfferPresentation.message(command: command)
+            let height = drawnHeight(message, width: width)
+            // Two lines, not one — which is why two are reserved rather than one. A copy or budget
+            // change that puts these back on a single line should come here and shrink the
+            // reservation rather than leave a line of empty panel behind.
+            #expect(height > ResumeOfferPresentation.messageLineHeight, "\u{201C}\(message)\u{201D} fits on one line")
+            #expect(height <= ResumeOfferPresentation.reservedMessageHeight, "\u{201C}\(message)\u{201D} needs \(height)pt")
+        }
+
+        // A short command is one line, and still sits inside the same reserved box.
+        #expect(
+            drawnHeight(ResumeOfferPresentation.message(command: "Zip my three largest files"), width: width)
+                <= ResumeOfferPresentation.reservedMessageHeight
+        )
+
+        // The cap's own case: a single unbreakable word at the truncation budget needs three lines,
+        // and is the only realistic input that does.
+        let unbreakable = String(repeating: "w", count: 200)
+        #expect(
+            drawnHeight(ResumeOfferPresentation.message(command: unbreakable), width: width)
+                > ResumeOfferPresentation.reservedMessageHeight
+        )
+    }
+
+    /// **A third line arrives two different ways, and the cap has to cover both** (PR #107 review,
+    /// F5 and its re-check).
+    ///
+    /// `messageLineLimit`'s doc first named a character count, then named a width — "wider than two
+    /// 436pt lines hold" — and that second wording was disproved by its own examples: two lines hold
+    /// 872pt and none of the three crossings reaches it. So this holds the mechanisms rather than an
+    /// outcome, which is what stops the claim drifting back to a number a third time:
+    ///
+    /// - a Latin command with no space in it makes the quoted phrase one unbreakable run, and it
+    ///   crosses when that run exceeds a **single** line;
+    /// - CJK breaks between characters, so nothing is unbreakable and it crosses on **packing**,
+    ///   at a message width still under what two lines nominally hold.
+    ///
+    /// Each Latin script gets its crossing *and* the character below it, so the assertions read a
+    /// boundary rather than a constant — and the two boundaries land at different counts, which is
+    /// the whole reason a count cannot express this.
+    @Test
+    func aThirdLineArrivesTwoWaysAndTheCapCoversBoth() {
+        let font = NSFont.systemFont(ofSize: 13, weight: .regular)
+        let width = ResumeOfferPresentation.panelContentWidth
+
+        func rendered(_ text: String) -> CGFloat {
+            (text as NSString).size(withAttributes: [.font: font]).width
+        }
+        func naturalHeight(_ command: String) -> CGFloat {
+            (ResumeOfferPresentation.message(command: command) as NSString).boundingRect(
+                with: NSSize(width: width, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: [.font: font]
+            ).height
+        }
+        /// The run with no break opportunity inside it: an opening quote binds to the word after it,
+        /// a closing quote and period to the word before, so the whole quoted phrase is one run.
+        func quotedRun(_ command: String) -> String {
+            "\u{201C}\(command)\u{201D}."
+        }
+
+        // Mechanism one: the unbreakable run crossing a *single* line.
+        let latin: [(script: String, character: String, fits: Int, crosses: Int)] = [
+            (script: "uppercase W", character: "W", fits: 33, crosses: 34),
+            (script: "lowercase w", character: "w", fits: 42, crosses: 43)
+        ]
+        for run in latin {
+            let below = String(repeating: run.character, count: run.fits)
+            let above = String(repeating: run.character, count: run.crosses)
+
+            #expect(rendered(quotedRun(below)) <= width, "\(run.script) x\(run.fits) still fits one line")
+            #expect(rendered(quotedRun(above)) > width, "\(run.script) x\(run.crosses) exceeds one line")
+
+            #expect(
+                naturalHeight(below) <= ResumeOfferPresentation.reservedMessageHeight,
+                "\(run.script) x\(run.fits) is the control — two lines, inside the reservation"
+            )
+            #expect(
+                naturalHeight(above) > ResumeOfferPresentation.reservedMessageHeight,
+                "\(run.script) x\(run.crosses) needs the third line the cap exists to refuse"
+            )
+        }
+
+        // One threshold, two counts — the reason the property is a width and never a count.
+        #expect(Set(latin.map { $0.crosses }).count == latin.count)
+
+        // Mechanism two: nothing unbreakable, so it crosses on packing instead — and it does so at a
+        // message width *under* what two lines nominally hold, which is what disproves the wording
+        // this test replaced.
+        let packed = String(repeating: "\u{6F22}", count: 54)
+        let twoLinesNominally = width * CGFloat(ResumeOfferPresentation.messageLineLimit)
+        let packedMessage = ResumeOfferPresentation.message(command: packed)
+        #expect(rendered(packedMessage) < twoLinesNominally, "under 872pt, and still three lines")
+        #expect(naturalHeight(packed) > ResumeOfferPresentation.reservedMessageHeight)
+        #expect(
+            rendered(quotedRun(packed)) > width,
+            "wider than a line, yet it is not the unbreakable-run mechanism — every character breaks"
+        )
+        #expect(
+            naturalHeight(String(repeating: "\u{6F22}", count: 53)) <= ResumeOfferPresentation.reservedMessageHeight,
+            "53 still packs into two lines — 54 is the crossing"
+        )
+    }
+
+    /// **Why a mis-measured height is reachable at all, recorded as a number rather than a story.**
+    ///
+    /// The addendum on SONNY-244 is that the overlap is intermittent — the same view at the same
+    /// message length laid out both ways minutes apart — which is what a `Text` measured at one width
+    /// and drawn at another looks like. This pins how little slack there is: every message the
+    /// truncation budget produces is *just* over one line at the panel's own 436pt, and *just* under
+    /// one line at 532pt, which is the width left inside this panel's 18pt padding if it were ever
+    /// measured against the widget's own outer content instead (472 pill + 12 + 36 + 12 + 36 = 568).
+    ///
+    /// A failure here is not a regression; it is the hazard changing shape. Whoever sees it should
+    /// re-read `ResumeOfferPresentation.reservedMessageHeight` and decide whether the reservation is
+    /// still the right size, not "fix" this number.
+    @Test
+    func everyTruncatedMessageSitsWithinAWhiskerOfTheOneLineBoundary() {
+        let font = NSFont.systemFont(ofSize: 13, weight: .regular)
+        let widgetOuterContentWidth: CGFloat = 472 + 12 + 36 + 12 + 36
+        let mismeasuredWidth = widgetOuterContentWidth - 36
+
+        for command in [
+            "summarize https://news.ycombinator.com and save it as a markdown file on my desktop",
+            "summarize https://en.wikipedia.org/wiki/Machine_learning and save it to my desktop",
+            "Convert every document in the project folder to PDF and then email the results to my team lead"
+        ] {
+            let message = ResumeOfferPresentation.message(command: command)
+            let singleLineWidth = (message as NSString).size(withAttributes: [.font: font]).width
+            #expect(singleLineWidth > ResumeOfferPresentation.panelContentWidth, "wraps where it is drawn")
+            #expect(singleLineWidth <= mismeasuredWidth, "and does not wrap where it could be measured")
+        }
+    }
+
+    /// **The reservation and the cap are the fix, and neither survives alone.**
+    ///
+    /// Scanned rather than asserted at runtime for the reason every wiring pin in this file is: there
+    /// is no way to drive SwiftUI here. What a later edit must not be able to do quietly is delete
+    /// one of the two lines that make the message's slot a constant — the controls below it are
+    /// placed off that constant, and a measured height is what put them on top of the sentence.
+    @Test
+    func theMessagesHeightIsReservedRatherThanMeasured() throws {
+        let panel = try MacAgentSource.braceBlock(
+            of: MacAgentSource.read("FloatingWidgetView.swift"),
+            openedBy: "private struct WidgetResumeOfferPanel: View {"
+        )
+
+        #expect(MacAgentSource.count(of: ".lineLimit(ResumeOfferPresentation.messageLineLimit)", inText: panel) == 1)
+        #expect(
+            MacAgentSource.count(of: ".frame(minHeight: ResumeOfferPresentation.reservedMessageHeight)", inText: panel) == 1
+        )
+        // `minHeight`, not `height`: a font that ever needs more than the reservation must still get
+        // it, which is the difference between a floor and a cage.
+        #expect(MacAgentSource.count(of: ".frame(height: ResumeOfferPresentation.reservedMessageHeight)", inText: panel) == 0)
+    }
+
+    // MARK: - The founder's tick and cross (SONNY-244)
+
+    /// **Two glyphs, and only the affirmative is tinted.**
+    ///
+    /// The founder's decision of 2026-08-23 replaced the two text buttons with a tick and a cross.
+    /// The thing that decision could quietly cost is the distinction the words were carrying: with
+    /// no text on either control, the tint is the whole of what separates "carry on" from "leave
+    /// it". So the count is what is held — one tinted background and one untinted — rather than the
+    /// mere presence of a tint, which a second tinted control would satisfy just as well.
+    @Test
+    func theOffersControlsAreATickAndACrossWithOnlyTheAffirmativeTinted() throws {
+        let panel = try MacAgentSource.braceBlock(
+            of: MacAgentSource.read("FloatingWidgetView.swift"),
+            openedBy: "private struct WidgetResumeOfferPanel: View {"
+        )
+
+        #expect(MacAgentSource.count(of: "Image(systemName: \"checkmark\")", inText: panel) == 1)
+        #expect(MacAgentSource.count(of: "Image(systemName: \"xmark\")", inText: panel) == 1)
+        // Both are SF Symbols 1 (macOS 11), inside `Package.swift`'s `.macOS(.v14)` deployment
+        // target — the availability trap `everyMemoryRowsIconIsAvailableOnTheDeploymentTarget`
+        // records, where a later symbol ships as a blank circle nobody developing on a newer Mac
+        // can see.
+        #expect(!panel.contains("trianglehead"))
+
+        #expect(MacAgentSource.count(of: "widgetCircularBackground(tint: WidgetTheme.primaryAction)", inText: panel) == 1)
+        #expect(MacAgentSource.count(of: "widgetCircularBackground()", inText: panel) == 1)
+
+        // One `Text` left in the panel: the message. A control that grew a label back would be a
+        // third, and a control that lost its glyph would be caught above.
+        #expect(MacAgentSource.count(of: "Text(", inText: panel) == 1)
+    }
+
+    /// **An icon-only control names itself twice, and the two names are different on purpose.**
+    ///
+    /// `.help` carries the founder's own word on hover — "Continue", "Not now" — which is the right
+    /// length for a tooltip over a 23pt circle. `.accessibilityLabel` keeps the full sentence naming
+    /// the task, which matters *more* once there is no visible text, not less: it is the only place
+    /// left that says which unfinished task the tick belongs to.
+    ///
+    /// Counted per token, both sides, so a swap is visible: wiring the cross's sentence onto the tick
+    /// leaves one token absent and the other doubled.
+    @Test
+    func eachControlCarriesAHoverWordAndAVoiceOverSentenceNamingTheTask() throws {
+        let panel = try MacAgentSource.braceBlock(
+            of: MacAgentSource.read("FloatingWidgetView.swift"),
+            openedBy: "private struct WidgetResumeOfferPanel: View {"
+        )
+
+        #expect(MacAgentSource.count(of: ".help(ResumeOfferPresentation.continueLabel)", inText: panel) == 1)
+        #expect(MacAgentSource.count(of: ".help(ResumeOfferPresentation.dismissLabel)", inText: panel) == 1)
+        #expect(
+            MacAgentSource.count(
+                of: ".accessibilityLabel(ResumeOfferPresentation.continueAccessibilityLabel(command: command))",
+                inText: panel
+            ) == 1
+        )
+        #expect(
+            MacAgentSource.count(
+                of: ".accessibilityLabel(ResumeOfferPresentation.dismissAccessibilityLabel(command: command))",
+                inText: panel
+            ) == 1
+        )
+
+        // The sentences still name the task — the whole reason they are the VoiceOver name rather
+        // than the tooltip.
+        #expect(ResumeOfferPresentation.continueAccessibilityLabel(command: "Zip my files").contains("Zip my files"))
+        #expect(ResumeOfferPresentation.dismissAccessibilityLabel(command: "Zip my files").contains("Zip my files"))
+    }
+
+    /// **The cross answers the offer; it does not merely close the panel.**
+    ///
+    /// A cross reads as "close", and closing is a genuinely different thing here: letting the widget
+    /// collapse leaves the offer unanswered and it returns on the next open, while "not now" marks it
+    /// answered for this session. The ambiguity is real and is recorded on the ticket rather than
+    /// designed away — what is held here is that the glyph is wired to the same closure the labelled
+    /// button was, so the two readings at least never differ in what actually happens.
+    @Test
+    func theCrossIsWiredToTheSameDismissTheLabelledButtonWas() throws {
+        let panel = try MacAgentSource.braceBlock(
+            of: MacAgentSource.read("FloatingWidgetView.swift"),
+            openedBy: "private struct WidgetResumeOfferPanel: View {"
+        )
+
+        #expect(MacAgentSource.count(of: "Button(action: onDismiss) {", inText: panel) == 1)
+        #expect(MacAgentSource.count(of: "Button(action: onContinue) {", inText: panel) == 1)
     }
 
     /// **Where the offer sits in the widget's precedence, pinned by position.**
