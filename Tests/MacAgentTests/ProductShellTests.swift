@@ -3243,7 +3243,7 @@ private final class ProductShellPasteboardReader: PasteboardReading {
 
 /// A pasteboard that is always empty and never changes.
 ///
-/// **The tenth seam, and it is here because six fixtures had no pasteboard seam at all**
+/// **Here because six fixtures had no pasteboard seam at all**
 /// (SONNY-240). `ClipboardHistoryMonitor`'s own defaults are the real `clipboard-history.json` and
 /// the real `NSPasteboard`, so a fixture that let `clipboardHistoryMonitor:` default had a monitor
 /// that would have copied the developer's actual clipboard into the developer's actual store file,
