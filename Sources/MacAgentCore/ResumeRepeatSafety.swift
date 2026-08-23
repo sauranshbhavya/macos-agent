@@ -91,8 +91,11 @@ extension AgentOperation {
             return .safeToRepeat
 
         case .expandSnippet:
-            // Writes the snippet's text to the pasteboard. Repeating it puts the same text there
-            // again — the second write replaces the first with itself, and nothing leaves the Mac.
+            // Returns the snippet's text as the run's summary and touches nothing else — no
+            // pasteboard, no file. Repeating it produces the same sentence twice, which is as close
+            // to free as a repeat gets. (This comment claimed a pasteboard write until PR #105's
+            // re-check read `SnippetExpansionCapabilityAdapter.execute`: the classification was
+            // right and the reason given for it was describing a stronger effect than the code has.)
             return .safeToRepeat
 
         case .saveRoutine, .saveSnippet, .createWorkspace, .editWorkspace:

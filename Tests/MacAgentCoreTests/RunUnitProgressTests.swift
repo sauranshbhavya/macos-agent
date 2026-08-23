@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import MacAgentTestSupport
 @testable import MacAgentCore
 
 /// The progress the executor reports as a run goes (row 13, SONNY-210) — the half of resuming that
@@ -364,6 +365,12 @@ struct RunUnitProgressTests {
             whitelist: PathWhitelist(roots: [root]),
             browserOpener: browserOpener,
             fileOpener: fileOpener,
+            // Deterministic rather than defaulted: this file builds executors *and* names
+            // `.showPermissionReadiness` (in the classification's own safe set below), so a plan run
+            // through it is one step away from live TCC and AVFoundation reads.
+            // `LivePermissionCheckerScanTests.everyExecutorFixtureThatCanDriveReadinessInjectsTheSeam`
+            // is what caught that, by counting the population rather than the tokens.
+            permissionReadinessService: .deterministic(),
             routineStore: routineStore ?? RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
             workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json")),
             clipboardHistoryStore: ClipboardHistoryStore(fileURL: root.appendingPathComponent("clipboard.json")),
@@ -410,18 +417,39 @@ struct ResumeRepeatSafetyTests {
     /// so a repeat of it prompts for nothing; if it sends a message, the message is sent twice.
     /// `CapabilityRiskEscalation.Consequence.affectsOthers` cannot answer this — its own doc says no
     /// v1 capability carries it, and `invoke_shortcut` raises no escalation at all.
+    /// **Both sets named, both directions** (PR #105 re-check). This asserted the unsafe set by name
+    /// and the safe one with three spot-checks plus `safe.count + unsafe.count == allCases.count` —
+    /// which is a tautology: `resumeRepeatSafety` returns one of two values for every input, so the
+    /// two filters partition `allCases` by construction and no reclassification can falsify it. A
+    /// thirty-fourth operation classified `.safeToRepeat` by a hurried author would have compiled,
+    /// passed, and read as deliberate. The compiler forces a decision; nothing forced a *right* one,
+    /// and a rule that can only withhold has no wrong-default to fall back on.
+    ///
+    /// Same shape as the tautology PR #101's review caught in
+    /// `destinations.count == MemoryCategory.allCases.count`, which is the second time it has
+    /// survived a review in this area — hence naming the safe set rather than counting it.
     @Test
     func theOperationsSonnyWillNotRepeatOnItsOwnAreTheFourItCannotSeeInside() {
         let unsafe = Set(AgentOperation.allCases.filter { $0.resumeRepeatSafety == .mustNotRepeatSilently })
         #expect(unsafe == [.invokeShortcut, .runRoutine, .visionSession, .unsupported])
 
-        // And the other direction, so a reclassification that quietly widens what Sonny volunteers
-        // to redo fails here rather than only in a scenario test.
         let safe = Set(AgentOperation.allCases.filter { $0.resumeRepeatSafety == .safeToRepeat })
-        #expect(safe.count + unsafe.count == AgentOperation.allCases.count)
-        #expect(safe.contains(.createLocalDraft), "a second local file is untidy, not the class the rule protects")
-        #expect(safe.contains(.openURL))
-        #expect(safe.contains(.calculateUtility))
+        #expect(safe == [
+            .scanSelectLargestFiles, .createZip, .scanDocx, .convertDocxToPDF,
+            .openHackerNews, .fetchHNHeadlines, .writeMarkdown, .webToMarkdown,
+            .openApp, .openAppSearchURL, .openURL, .playMedia,
+            .getFinderSelection, .revealInFinder, .showPermissionReadiness,
+            .saveRoutine, .createWorkspace, .editWorkspace, .openWorkspace,
+            .openGeneratedArtifact, .createLocalDraft, .calculateUtility,
+            .lookupClipboardHistory, .expandSnippet, .saveSnippet,
+            .switchRunningApp, .lookupRecentArtifacts, .clarify
+        ])
+
+        // And the two sets are the whole population, so an operation cannot be absent from both by
+        // being absent from `allCases`' own iteration. Not a partition check — that one cannot fail,
+        // which is what this test used to lean on.
+        #expect(safe.union(unsafe) == Set(AgentOperation.allCases))
+        #expect(safe.isDisjoint(with: unsafe))
     }
 
     /// A record is offerable only when every remaining step is safe to repeat — and the control is
