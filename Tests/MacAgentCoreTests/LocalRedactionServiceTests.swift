@@ -589,12 +589,18 @@ struct LocalRedactionLiveVisionTests {
     /// five times the headroom over the worst load yet measured here, and no dependence on what else
     /// the machine is doing.
     ///
-    /// The two content expectations are new with the same change. Timing a call that is never
-    /// checked to have done anything is a benchmark rather than a test, and a mutant that made
-    /// `redactCapture` return early would have passed this the whole time — faster. Writing them is
-    /// also what turned up **SONNY-260**: the fixture plants two secrets and the label below says
-    /// two, and the real recognizer finds one. So the card is asserted and the key is not, which is
-    /// the true statement rather than the tidy one.
+    /// The content expectations are new with the same change. Timing a call that is never checked to
+    /// have done anything is a benchmark rather than a test, and a mutant that made `redactCapture`
+    /// return early would have passed this the whole time — faster. Writing them is also what turned
+    /// up **SONNY-260**: the fixture plants two secrets and the label below says two, and the real
+    /// recognizer finds one. So the card is asserted and the key is not, which is the true statement
+    /// rather than the tidy one.
+    ///
+    /// One of those expectations was `redactedImageData != nil`, which asserted nothing at all —
+    /// `redactCapture` builds its payload from `EncodedVisionCapture.data`, a non-optional, so it
+    /// was true by construction on every path that reached it while its own comment claimed it
+    /// proved painted pixels (PR #112 review, F5). It is a pixel check now, on coordinates that were
+    /// measured rather than guessed.
     @Test
     func redactionLatencyIsBoundedOnARepresentativeCapture() async throws {
         let png = ImageFixtures.renderedTextPNG(
@@ -625,7 +631,17 @@ struct LocalRedactionLiveVisionTests {
         // classified, and the pixels came back painted. The card and not the key, deliberately —
         // the real recognizer finds only the card on this fixture, and why that is is SONNY-260.
         #expect(payload.report.contains { $0.detectionClass == .creditCardNumber })
-        #expect(payload.redactedImageData != nil)
+
+        // Painted, read off the pixels. The box the real recognizer puts over the card line covers
+        // x 38...505 and y 344...375, and rows 344...347 of the fixture carry no ink at all — so
+        // this one pixel is white before the call and black after it, which is the difference
+        // between "something came back" and "the secret is gone". Sampled at three points rather
+        // than swept: every read decodes the PNG again.
+        let redacted = try #require(payload.redactedImageData)
+        #expect(ImageFixtures.isWhite(ImageFixtures.rgb(inPNG: png, x: 270, yFromTop: 346)))
+        #expect(ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: 270, yFromTop: 346)))
+        // A box, not the whole capture: an all-black image would satisfy the line above.
+        #expect(ImageFixtures.isWhite(ImageFixtures.rgb(inPNG: redacted, x: 10, yFromTop: 10)))
     }
 }
 

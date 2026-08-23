@@ -286,14 +286,26 @@ What this does and does not prevent:
       What is prevented now: a failure matching a signature in mutate-untrusted-failures is
       excluded from the kill count, and a mutant with nothing else against it is reported
       UNATTRIBUTED rather than KILLED. The match is on the issue a test recorded, not on the test's
-      name, so the same test still counts when it fails on a real assertion.
+      name, and it is per issue rather than per test — a test is excused only when EVERY issue it
+      recorded is declared, so the same test still counts when it fails on a real assertion beside
+      a backstop. Two seams are left in that. Tests sharing a function name across suites merge,
+      because neither line the classifier reads names a suite; the merge undercounts kills and can
+      print the wrong one of the two names, never the reverse. And a mutant that TRAPS the test
+      process names no test at all, so nothing here applies to it — that is the case CLAUDE.md's
+      `try #require` gotcha is about.
+      UntrustedFailureDeclarationTests is exempt from all of it, by name: it is the guard on the
+      declarations, so letting the declarations excuse its failure would leave a stale file marking
+      itself trustworthy. That happened, and the battery printed a reassuring line while running
+      against a file it had just been told was wrong.
       What is NOT prevented, and this is the part to keep in mind: that file is a list, and no
       mechanism can tell it what it is missing. A timing-sensitive test whose failure matches no
       signature reads as a kill exactly as before. `UntrustedFailureDeclarationTests` in the Swift
-      suite holds the direction that can be checked — a declaration that has stopped matching
-      anything fails the suite — and the other direction is judgment. So the old advice stands and
-      is no longer the only thing standing: read the names, not the count. A mutant killed only by
-      a test with no plausible connection to it is a flake wearing a kill's clothes.
+      suite holds the direction that can be checked — a declaration whose source stops appearing at
+      the number of sites it declares fails the suite, so rewording one of six copies of a backstop
+      is caught rather than leaving that copy silently undeclared — and the other direction is
+      judgment. So the old advice stands and is no longer the only thing standing: read the names,
+      not the count. A mutant killed only by a test with no plausible connection to it is a flake
+      wearing a kill's clothes.
       A flaky BASELINE was the harmless direction by comparison — it aborted the run, which cost a
       rerun and told no lies. It now aborts only when something real is red; a baseline red purely
       on declared failures prints them and continues, because none of them can manufacture a kill.
@@ -726,8 +738,11 @@ PY
 }
 
 # ---------------------------------------------------------------------------------------------
-# Running and reading the suite. swift-testing's console glyphs vary with the terminal, so every
-# pattern below matches the words, never the icon.
+# Running and reading the suite. swift-testing's console glyphs vary with the terminal, so no
+# pattern below matches a particular icon. One of them depends on a weaker property that holds for
+# every set: `classify_failures`' boundary rule requires only that whatever prefix a line carries
+# has no letters in it, which is true of the SF Symbols set, of the unicode and ASCII fallbacks,
+# and of a line with no prefix at all.
 # ---------------------------------------------------------------------------------------------
 
 run_suite() {
@@ -763,7 +778,16 @@ failing_tests() {
 #
 # One line per failing test, tab-separated:
 #   T<TAB><name>                    the failure is evidence — an ordinary assertion went red
-#   U<TAB><name><TAB><signature>    the failure matched a declaration, so it is not
+#   U<TAB><name><TAB><signature>    every issue it recorded was declared, so none of it is
+#
+# Classification is per ISSUE, not per test. That is the property mutate-untrusted-failures argues
+# for in its own header — "the same test can fail two ways ... matching the message keeps the first
+# and drops the second" — and the first version of this function did not have it: it ORed over a
+# test's issues, so one declared backstop threw away a real assertion the same test had recorded
+# beside it, which is precisely what that header says a name list would do. A test is untrusted only
+# when EVERY issue it recorded is declared; one undeclared issue makes it evidence again. It lands
+# on the most plausible mutant class, too: one that hangs a view model fires the backstop and breaks
+# that same test's assertions (PR #112 review, F2).
 #
 # Python rather than another sed, for a reason worth stating: swift-testing prints an issue as one
 # line naming the test and a headline, then the issue's own comment on continuation lines below it.
@@ -777,6 +801,27 @@ import sys
 
 log_path, decl_path = sys.argv[1], sys.argv[2]
 
+# The failures no declaration may excuse, because they are the guard ON the declarations. When
+# `UntrustedFailureDeclarationTests` goes red it is saying the file this classifier is reading has
+# gone stale — and excusing that with the stale file is circular. It was not hypothetical: the
+# guard's failure message quoted the very signature it had caught going missing, this classifier
+# matched it, baseline_trusted came back empty, and the battery printed "BASELINE RED, and only on
+# failures this harness does not trust ... Continuing" and ran the whole run against a declaration
+# file it had just been told was wrong (PR #112 review, F1, reproduced by rewording one source).
+#
+# Named rather than message-matched, and the distinction is the point: everything in
+# mutate-untrusted-failures says "this failure is not evidence about a mutant", while this says
+# "this failure invalidates the file that decides what is". A name is the right key for that, and
+# the staleness a name list normally suffers is covered — `UntrustedFailureDeclarationTests` asserts
+# this set is exactly its own `@Test` functions, so a rename fails the suite rather than quietly
+# emptying the list.
+ALWAYS_TRUSTED = frozenset({
+    "theDeclarationFileParsesAndEveryRecordIsComplete",
+    "everyDeclaredSourceStillAppearsAtTheSiteCountItDeclares",
+    "theHarnessAlwaysTrustsExactlyTheTestsInThisSuite",
+    "noDeclaredSignatureAppearsInThisSuitesOwnSource",
+})
+
 signatures = []
 with open(decl_path, encoding="utf-8") as handle:
     for line in handle:
@@ -789,9 +834,32 @@ with open(decl_path, encoding="utf-8") as handle:
 # form: it reads `recorded an issue with 1 argument mode → .safe at File.swift:9:9:`, and a pattern
 # written for `recorded an issue at` misses every case of every parameterized test — which lands
 # them all in the trusted column, silently, in exactly the direction this file exists to close.
-# Measured against a real 185-issue run before it was found (SONNY-224).
+# Found by running this over a real battery log rather than by reading it (SONNY-224); the
+# parameterized case in `selftest` is what keeps it found.
 issue_re = re.compile(r"Test (.+?) recorded an issue\b.*? at \S+:\d+:\d+: (.*)$")
-boundary_re = re.compile(r"(?:^|\s)(?:Test|Suite) \S")
+
+# What ends an issue's block. Anchored, and after a prefix carrying no letters, because that is the
+# shape of every line swift-testing writes and of no line an issue's message can produce: the
+# console recorder puts a symbol and two spaces in front of its own lines, and whichever symbol set
+# a terminal gets — SF Symbols glyphs here, the unicode or ASCII fallbacks elsewhere — none of them
+# is a letter. A verb is required as well, so that even a message opening on punctuation cannot
+# masquerade as a record line.
+#
+# The pattern was `(?:^|\s)(?:Test|Suite) \S`, which fires on those two words ANYWHERE in a line,
+# an issue's own message included. An issue whose first message line read "waited on Suite
+# ProductShellTests to quiesce" ended its own block there, and every line after it — the declared
+# signature among them — was dropped, so the mutant came back KILLED: a manufactured kill, which is
+# the one outcome this harness exists to prevent (PR #112 review, F3). Latent when it was found,
+# since all five declared messages happen to render on one line, and nothing would have detected it.
+#
+# What is left, stated rather than implied: a *record* line whose verb is not on its own physical
+# line no longer ends a block. That happens when a parameterized test's argument contains a newline,
+# and the cost is over-capture — an open block absorbs a few lines it should not — which can only
+# make a failure look MORE declared than it is. Undercounting a kill is the safe direction; the
+# truncation this replaces was the other one.
+boundary_re = re.compile(
+    r"^[^A-Za-z]*(?:Test|Suite) \S.*?\b(?:started|passed|failed|skipped|recorded an issue)\b"
+)
 failed_re = re.compile(r"^.*\sTest (.*) failed after ")
 
 
@@ -800,6 +868,14 @@ def base(name):
 
     A parameterized test's issues are printed per case (`aTest(mode: .normal)`) while its failure
     line names the whole test (`aTest(mode:) with 3 test cases`), so nothing else joins them.
+
+    **Two tests with the same function name in different suites merge here, and the log cannot
+    separate them** — swift-testing names neither line's suite, so there is nothing else to key on.
+    `emptyInputProducesAnEmptyResult` is a `@Test` in four suites today. Per-issue classification is
+    what makes that safe in the direction that matters: a merged group counts as evidence when any
+    issue in it is undeclared, and at least one of the merged tests really did record that issue, so
+    the kill is genuine. What the merge costs is the count and the name — two failing tests are
+    reported as one, under whichever name the log listed first (PR #112 review, F2, aggravating).
     """
     return name.split("(", 1)[0]
 
@@ -846,18 +922,28 @@ with open(log_path, encoding="utf-8", errors="replace") as handle:
 flush()
 
 for key in order:
+    if key in ALWAYS_TRUSTED:
+        print("T\t%s" % failing[key])
+        continue
+    texts = blocks.get(key, [])
+    # A failure with no issue text to read is evidence by default. Nothing declared it, and a
+    # classifier that guessed the other way would widen the untrusted column on silence.
+    undeclared = not texts
     matched = None
-    for text in blocks.get(key, []):
+    for text in texts:
+        hit = None
         for signature in signatures:
             if signature in text:
-                matched = signature
+                hit = signature
                 break
-        if matched:
-            break
-    if matched:
-        print("U\t%s\t%s" % (failing[key], matched))
-    else:
+        if hit is None:
+            undeclared = True
+        elif matched is None:
+            matched = hit
+    if undeclared or matched is None:
         print("T\t%s" % failing[key])
+    else:
+        print("U\t%s\t%s" % (failing[key], matched))
 PY
 }
 
@@ -868,9 +954,16 @@ require_untrusted_declarations() {
   [[ -r "$UNTRUSTED_FILE" ]] ||
     die "cannot read $UNTRUSTED_FILE — the declarations of which failures are not evidence about a
        mutant live there, and without them this harness is back to reporting a flake as a kill."
-  if ! grep -q '^>>> signature ' "$UNTRUSTED_FILE"; then
+  # `.*[^[:space:]]` rather than a bare prefix match, because the classifier strips a signature and
+  # drops it when nothing is left: a file whose only record read '>>> signature' with nothing after
+  # it satisfied the prefix, declared zero signatures, and ran the battery anyway. The Swift suite
+  # catches that; this guard exists so the harness need not depend on the suite having been run
+  # (PR #112 review, recorded residual).
+  if ! grep -q '^>>> signature .*[^[:space:]]' "$UNTRUSTED_FILE"; then
     die "$UNTRUSTED_FILE declares no signatures. An empty declaration file and a deleted one are
-       the same thing here: every failure would count as a kill again."
+       the same thing here: every failure would count as a kill again. A '>>> signature' line with
+       nothing after it is empty too — the classifier strips it and drops it — so a file of those
+       declares nothing while reading like it declares something."
   fi
 }
 
@@ -1300,16 +1393,24 @@ PLAN
   # Stand-ins for the suite, shaped like swift-testing's console output so the report's parsing is
   # exercised too. `kills_the_mutant` fails only while the mutant is in the file, which is what a
   # real killing test does.
-  local always_pass='printf "X  Test run started.\n"
-printf "X  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+  #
+  # The line prefixes are symbols, not letters, because that is what swift-testing writes and what
+  # the classifier's boundary rule is anchored on: a symbol and two spaces in front of every line
+  # the console recorder produces, and never in front of an issue's own message. These fixtures used
+  # a literal "X  " — a shape swift-testing emits in no terminal — which made them agree with a
+  # boundary rule that fired on the words "Test" and "Suite" anywhere in a line, the defect at
+  # PR #112's F3. ◇ ✔ ✘ ↳ are the unicode set; this Mac's runs use SF Symbols glyphs from the
+  # private-use area instead, and the rule holds for both because neither set is a letter.
+  local always_pass='printf "◇  Test run started.\n"
+printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
 
-  local kills_the_mutant='printf "X  Test run started.\n"
+  local kills_the_mutant='printf "◇  Test run started.\n"
 if grep -q "hour < 13" sample.swift; then
-  printf "X  Test labelIsMorningBeforeNoon() failed after 0.001 seconds with 1 issue.\n"
-  printf "X  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
+  printf "✘  Test labelIsMorningBeforeNoon() failed after 0.001 seconds with 1 issue.\n"
+  printf "✘  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
   exit 1
 fi
-printf "X  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
 
   # Signals the harness only once the mutant is in the file. Signalling unconditionally would
   # land during the baseline, before anything is mutated, and the restore assertion below would
@@ -1317,17 +1418,17 @@ printf "X  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
   local signals_the_harness='if grep -q "hour < 13" sample.swift; then
   kill -TERM $PPID
 fi
-printf "X  Test run started.\n"
-printf "X  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+printf "◇  Test run started.\n"
+printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
 
-  local always_fails='printf "X  Test run started.\n"
-printf "X  Test somethingAlreadyBroken() failed after 0.001 seconds with 1 issue.\n"
-printf "X  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
+  local always_fails='printf "◇  Test run started.\n"
+printf "✘  Test somethingAlreadyBroken() failed after 0.001 seconds with 1 issue.\n"
+printf "✘  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
 exit 1'
 
   local records_that_it_ran="touch '$sentinel'
-printf \"X  Test run started.\n\"
-printf \"X  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n\""
+printf \"◇  Test run started.\n\"
+printf \"✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n\""
 
   printf '==> %s selftest\n' "$SCRIPT_NAME"
   printf '    throwaway repository: %s\n\n' "$root/repo"
@@ -1441,49 +1542,49 @@ printf \"X  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n\""
   # line below it — which is the whole reason classify_failures reassembles blocks instead of
   # grepping lines, and the half a line-at-a-time check would silently miss. The second is what
   # `#expect` produces, where the text is on the named line.
-  local untrusted_only='printf "X  Test run started.\n"
+  local untrusted_only='printf "◇  Test run started.\n"
 if grep -q "hour < 13" sample.swift; then
-  printf "X  Test aRunThatNeverSettled() recorded an issue at Fixture.swift:10:5: Issue recorded\n"
-  printf "X  View model did not become idle before timeout.\n"
-  printf "X  Test aRunThatNeverSettled() failed after 0.001 seconds with 1 issue.\n"
-  printf "X  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
+  printf "✘  Test aRunThatNeverSettled() recorded an issue at Fixture.swift:10:5: Issue recorded\n"
+  printf "↳  View model did not become idle before timeout.\n"
+  printf "✘  Test aRunThatNeverSettled() failed after 0.001 seconds with 1 issue.\n"
+  printf "✘  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
   exit 1
 fi
-printf "X  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
 
-  local untrusted_expectation_only='printf "X  Test run started.\n"
+  local untrusted_expectation_only='printf "◇  Test run started.\n"
 if grep -q "hour < 13" sample.swift; then
-  printf "X  Test aLatencyCeiling() recorded an issue at Fixture.swift:20:9: Expectation failed: (elapsed → 11.7 seconds) < (.seconds(60) → 60.0 seconds)\n"
-  printf "X  Test aLatencyCeiling() failed after 0.001 seconds with 1 issue.\n"
-  printf "X  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
+  printf "✘  Test aLatencyCeiling() recorded an issue at Fixture.swift:20:9: Expectation failed: (elapsed → 11.7 seconds) < (.seconds(60) → 60.0 seconds)\n"
+  printf "✘  Test aLatencyCeiling() failed after 0.001 seconds with 1 issue.\n"
+  printf "✘  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
   exit 1
 fi
-printf "X  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
 
-  local kill_beside_untrusted='printf "X  Test run started.\n"
+  local kill_beside_untrusted='printf "◇  Test run started.\n"
 if grep -q "hour < 13" sample.swift; then
-  printf "X  Test labelIsMorningBeforeNoon() recorded an issue at Fixture.swift:5:9: Expectation failed: (label) == \"Morning\"\n"
-  printf "X  Test aRunThatNeverSettled() recorded an issue at Fixture.swift:10:5: Issue recorded\n"
-  printf "X  View model did not settle before timeout.\n"
-  printf "X  Test labelIsMorningBeforeNoon() failed after 0.001 seconds with 1 issue.\n"
-  printf "X  Test aRunThatNeverSettled() failed after 0.001 seconds with 1 issue.\n"
-  printf "X  Test run with 2 tests in 1 suite failed after 0.001 seconds with 2 issues.\n"
+  printf "✘  Test labelIsMorningBeforeNoon() recorded an issue at Fixture.swift:5:9: Expectation failed: (label) == \"Morning\"\n"
+  printf "✘  Test aRunThatNeverSettled() recorded an issue at Fixture.swift:10:5: Issue recorded\n"
+  printf "↳  View model did not settle before timeout.\n"
+  printf "✘  Test labelIsMorningBeforeNoon() failed after 0.001 seconds with 1 issue.\n"
+  printf "✘  Test aRunThatNeverSettled() failed after 0.001 seconds with 1 issue.\n"
+  printf "✘  Test run with 2 tests in 1 suite failed after 0.001 seconds with 2 issues.\n"
   exit 1
 fi
-printf "X  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
 
   # Red on the unmutated tree, and only on a declared failure; a real kill once the mutant lands.
   local untrusted_baseline='if grep -q "hour < 13" sample.swift; then
-  printf "X  Test run started.\n"
-  printf "X  Test labelIsMorningBeforeNoon() failed after 0.001 seconds with 1 issue.\n"
-  printf "X  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
+  printf "◇  Test run started.\n"
+  printf "✘  Test labelIsMorningBeforeNoon() failed after 0.001 seconds with 1 issue.\n"
+  printf "✘  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
   exit 1
 fi
-printf "X  Test run started.\n"
-printf "X  Test aRunThatNeverSettled() recorded an issue at Fixture.swift:10:5: Issue recorded\n"
-printf "X  View model did not become idle before timeout.\n"
-printf "X  Test aRunThatNeverSettled() failed after 0.001 seconds with 1 issue.\n"
-printf "X  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
+printf "◇  Test run started.\n"
+printf "✘  Test aRunThatNeverSettled() recorded an issue at Fixture.swift:10:5: Issue recorded\n"
+printf "↳  View model did not become idle before timeout.\n"
+printf "✘  Test aRunThatNeverSettled() failed after 0.001 seconds with 1 issue.\n"
+printf "✘  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
 exit 1'
 
   printf '\n==> A kill whose only evidence is a declared failure is NOT counted as a kill\n'
@@ -1494,7 +1595,15 @@ exit 1'
   st_contains "the outcome is called out" "$ST_OUT" "UNATTRIBUTED"
   st_contains "the failing test is still named" "$ST_OUT" "aRunThatNeverSettled()"
   st_contains "and the signature that disqualified it is shown" "$ST_OUT" "did not become idle before timeout"
-  st_contains "and it is listed again in the summary" "$ST_OUT" "UNATTRIBUTED — the suite went red"
+  # Summary-only text, and the summary's own counter. The check here used to look for
+  # "UNATTRIBUTED — the suite went red", which the PER-MUTANT line at the top of this outcome also
+  # begins with — so it passed without the summary block existing at all: deleting that block
+  # outright still gave a green selftest (PR #112 review, F6). The survivor check this was modelled
+  # on is not vacuous only because the word SURVIVORS appears nowhere else.
+  st_contains "and it is listed again in the summary" "$ST_OUT" \
+              "killed nor survived: this battery does not know"
+  st_contains "and the summary counts it as unattributed, not as a kill" "$ST_OUT" \
+              "0 killed, 0 survived, 1 unattributed"
   st_absent "it is not reported as a kill" "$ST_OUT" "KILLED"
   st_absent "and not as a survivor either" "$ST_OUT" "SURVIVED"
 
@@ -1513,15 +1622,15 @@ exit 1'
   # column and can manufacture a kill exactly as before, with nothing saying so. Found by running
   # the classifier over a real 185-issue log rather than by reading it (SONNY-224); pinned here so
   # it stays found.
-  local untrusted_parameterized='printf "X  Test run started.\n"
+  local untrusted_parameterized='printf "◇  Test run started.\n"
 if grep -q "hour < 13" sample.swift; then
-  printf "X  Test aRunInEveryMode(mode:) recorded an issue with 1 argument mode → .safe at Fixture.swift:9:9: Issue recorded\n"
-  printf "X  View model did not become idle before timeout.\n"
-  printf "X  Test aRunInEveryMode(mode:) with 3 test cases failed after 0.001 seconds with 1 issue.\n"
-  printf "X  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
+  printf "✘  Test aRunInEveryMode(mode:) recorded an issue with 1 argument mode → .safe at Fixture.swift:9:9: Issue recorded\n"
+  printf "↳  View model did not become idle before timeout.\n"
+  printf "✘  Test aRunInEveryMode(mode:) with 3 test cases failed after 0.001 seconds with 1 issue.\n"
+  printf "✘  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
   exit 1
 fi
-printf "X  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
 
   printf '\n==> A parameterized test names its issues differently, and is classified anyway\n'
   st_run "$untrusted_parameterized" "$root/kill.plan"
@@ -1553,6 +1662,73 @@ printf "X  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
   st_contains "the abort fires" "$ST_OUT" "BASELINE FAILED"
   st_absent "and the continue path does not" "$ST_OUT" "only on failures this harness does not trust"
 
+  # The three below are PR #112's findings, each reproduced against this script before it was fixed
+  # and each pinned here. They share a shape worth naming: every one of them made the harness quieter
+  # than it should have been, and none of them changed a line of its output.
+
+  # F2. Per-issue, not per-test. The first version ORed over a test's issues, so the declared
+  # backstop below threw away the real assertion recorded beside it and the mutant came back
+  # UNATTRIBUTED — a kill discarded, and the mutant class most likely to produce this pair is
+  # exactly the one that hangs a view model and breaks its assertions.
+  local declared_and_real_from_one_test='printf "◇  Test run started.\n"
+if grep -q "hour < 13" sample.swift; then
+  printf "✘  Test aRunThatRecordsBoth() recorded an issue at Fixture.swift:10:5: Issue recorded\n"
+  printf "↳  View model did not become idle before timeout.\n"
+  printf "✘  Test aRunThatRecordsBoth() recorded an issue at Fixture.swift:12:9: Expectation failed: (label) == \"Morning\"\n"
+  printf "✘  Test aRunThatRecordsBoth() failed after 0.001 seconds with 2 issues.\n"
+  printf "✘  Test run with 2 tests in 1 suite failed after 0.001 seconds with 2 issues.\n"
+  exit 1
+fi
+printf "◇  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+
+  printf '\n==> One test recording a declared failure AND a real one still kills\n'
+  st_run "$declared_and_real_from_one_test" "$root/kill.plan"
+  st_eq "the battery exits 0" "$ST_EXIT" "0"
+  st_contains "the real assertion is still evidence" "$ST_OUT" "KILLED by 1 test(s)"
+  st_contains "and the test is named" "$ST_OUT" "aRunThatRecordsBoth()"
+  st_absent "the declared issue did not disqualify the test that recorded it" "$ST_OUT" "UNATTRIBUTED"
+
+  # F3. A declared message that does not fit on one line. The boundary rule used to fire on the
+  # words "Test x" or "Suite x" ANYWHERE in a line, so the first line of this message ended its own
+  # block and the signature on the second line was never read — reported KILLED, exit 0.
+  local declared_message_over_two_lines='printf "◇  Test run started.\n"
+if grep -q "hour < 13" sample.swift; then
+  printf "✘  Test aRunThatNeverSettled() recorded an issue at Fixture.swift:10:5: Issue recorded\n"
+  printf "↳  waited on Suite ProductShellTests to quiesce, then gave up:\n"
+  printf "↳  View model did not become idle before timeout.\n"
+  printf "✘  Test aRunThatNeverSettled() failed after 0.001 seconds with 1 issue.\n"
+  printf "✘  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
+  exit 1
+fi
+printf "◇  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+
+  printf '\n==> A declared message on the second line of an issue is still read\n'
+  st_run "$declared_message_over_two_lines" "$root/kill.plan"
+  st_eq "an unattributed mutant exits 2" "$ST_EXIT" "2"
+  st_contains "the outcome is called out" "$ST_OUT" "UNATTRIBUTED"
+  st_contains "and the signature that disqualified it is shown" "$ST_OUT" \
+              "did not become idle before timeout"
+  st_absent "the first line of the message did not end the block" "$ST_OUT" "KILLED"
+
+  # F1. The guard on the declaration file cannot be excused by the declaration file. Its failure
+  # message quoted the signature it had caught going missing, the classifier matched it, and the
+  # battery printed a reassuring line and ran the whole run against a file it had just been told
+  # was stale. Named in ALWAYS_TRUSTED rather than matched, and UntrustedFailureDeclarationTests
+  # asserts that set is exactly its own tests, so a rename cannot empty it silently.
+  local the_declaration_guard_failing='printf "◇  Test run started.\n"
+printf "✘  Test everyDeclaredSourceStillAppearsAtTheSiteCountItDeclares() recorded an issue at UntrustedFailureDeclarationTests.swift:120:9: Expectation failed\n"
+printf "↳  a declared source no longer appears the number of times it says: the run never finished\n"
+printf "✘  Test everyDeclaredSourceStillAppearsAtTheSiteCountItDeclares() failed after 0.001 seconds with 1 issue.\n"
+printf "✘  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
+exit 1'
+
+  printf '\n==> A stale declaration file aborts the battery instead of excusing itself\n'
+  st_run "$the_declaration_guard_failing" "$root/kill.plan"
+  st_eq "the battery refuses to run" "$ST_EXIT" "1"
+  st_contains "the abort fires" "$ST_OUT" "BASELINE FAILED"
+  st_absent "and the continue arm does not" "$ST_OUT" "only on failures this harness does not trust"
+  st_absent "no mutant was measured against a stale file" "$ST_OUT" "KILLED"
+
   printf '\n==> The declarations are required, and an empty file is the same as a missing one\n'
   # Run a copy of this script from a directory with no declarations beside it. Without this the
   # guard is unwatched, and a deleted mutate-untrusted-failures would put every count back to
@@ -1572,22 +1748,54 @@ printf "X  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
   st_eq "an empty declaration file exits 1 too" "$ST_EXIT" "1"
   st_contains "and says why that is the same thing" "$ST_OUT" "declares no signatures"
   if [[ -e "$sentinel" ]]; then st_fail "a suite ran anyway"; else st_pass "no suite ran"; fi
+
+  # And a file that only looks like it declares something. The guard matched the prefix
+  # '>>> signature ' while the classifier strips the text and drops it when nothing is left, so a
+  # file of bare directives passed the shell guard and ran a battery with zero signatures — every
+  # failure a kill again, which is the state this whole mechanism exists to leave (PR #112 review,
+  # recorded residual). The record below is complete apart from that.
+  printf '>>> signature 
+>>> source something
+>>> sites 1
+>>> reason nothing to match
+' \
+    >"$root/mutate-untrusted-failures"
+  rm -f "$sentinel"
+  ST_EXIT=0
+  ST_OUT="$(MUTATE_TEST_CMD="$records_that_it_ran" "$root/mutate-copy" "$root/kill.plan" 2>&1)" || ST_EXIT=$?
+  st_eq "a signature line with nothing after it exits 1 too" "$ST_EXIT" "1"
+  st_contains "and says why an empty one is empty" "$ST_OUT" "declares no signatures"
+  if [[ -e "$sentinel" ]]; then st_fail "a suite ran anyway"; else st_pass "no suite ran"; fi
   rm -f "$root/mutate-copy" "$root/mutate-untrusted-failures"
 
   printf '\n==> The real declaration file is well formed\n'
   # Read as text, like the default-suite-command check below: every signature needs the `source`
-  # that keeps it honest in the Swift suite and the `reason` that makes it reviewable, and a record
-  # missing one of those is a declaration nobody can check.
-  local signature_count source_count reason_count
-  signature_count="$(grep -c '^>>> signature ' "$UNTRUSTED_FILE" | tr -d ' ')"
-  source_count="$(grep -c '^>>> source ' "$UNTRUSTED_FILE" | tr -d ' ')"
-  reason_count="$(grep -c '^>>> reason ' "$UNTRUSTED_FILE" | tr -d ' ')"
+  # and the `sites` count that keep it honest in the Swift suite, and the `reason` that makes it
+  # reviewable. A record missing one of those is a declaration nobody can check.
+  #
+  # No pipe between grep and the value being read, and `|| true` on each one, for a reason this
+  # repository has written down twice: `grep -c` prints 0 and exits 1 when it matches nothing, so
+  # under `set -o pipefail` the assignment failed and killed the selftest three lines above the
+  # branch that was supposed to report it. `st_fail "it declares nothing"` had never been reachable
+  # (PR #112 review, recorded residual). The digits are then taken with a substitution rather than
+  # `tr`, which would put the pipe straight back.
+  local signature_count source_count sites_count reason_count
+  signature_count="$(grep -c '^>>> signature .*[^[:space:]]' "$UNTRUSTED_FILE" || true)"
+  source_count="$(grep -c '^>>> source .*[^[:space:]]' "$UNTRUSTED_FILE" || true)"
+  sites_count="$(grep -c '^>>> sites .*[^[:space:]]' "$UNTRUSTED_FILE" || true)"
+  reason_count="$(grep -c '^>>> reason .*[^[:space:]]' "$UNTRUSTED_FILE" || true)"
+  signature_count="${signature_count//[^0-9]/}"
+  source_count="${source_count//[^0-9]/}"
+  sites_count="${sites_count//[^0-9]/}"
+  reason_count="${reason_count//[^0-9]/}"
   if [[ "$signature_count" -gt 0 ]]; then
     st_pass "it declares $signature_count signature(s)"
   else
     st_fail "it declares nothing"
   fi
   st_eq "every signature carries a source to check it against" "$source_count" "$signature_count"
+  st_eq "every signature carries the site count that makes the source check bite" \
+        "$sites_count" "$signature_count"
   st_eq "every signature carries a reason" "$reason_count" "$signature_count"
 
   printf '\n==> The default suite command — the one every real battery uses — is isolated\n'
@@ -1703,20 +1911,20 @@ printf "X  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
 # run gets a suite command of its own so that a broken lock cannot recurse: with the mutant already
 # applied its plan matches nothing and its pre-flight refuses.
 if grep -q 'hour < 13' sample.swift; then
-  MUTATE_TEST_CMD='printf "X  Test run started.\n"' "$SELF" "$root/kill.plan" \
+  MUTATE_TEST_CMD='printf "◇  Test run started.\n"' "$SELF" "$root/kill.plan" \
     >"$root/nested.out" 2>&1
   printf '%s' \$? >"$root/nested.exit"
-  MUTATE_TEST_CMD='printf "X  Test run started.\n"' "$SELF" unlock \
+  MUTATE_TEST_CMD='printf "◇  Test run started.\n"' "$SELF" unlock \
     >"$root/nested-unlock.out" 2>&1
   printf '%s' \$? >"$root/nested-unlock.exit"
   if [[ -d .git/mutate.lock ]]; then printf 'yes' >"$root/lock-survived"; else printf 'no' >"$root/lock-survived"; fi
-  printf 'X  Test run started.\n'
-  printf 'X  Test labelIsMorningBeforeNoon() failed after 0.001 seconds with 1 issue.\n'
-  printf 'X  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n'
+  printf '◇  Test run started.\n'
+  printf '✘  Test labelIsMorningBeforeNoon() failed after 0.001 seconds with 1 issue.\n'
+  printf '✘  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n'
   exit 1
 fi
-printf 'X  Test run started.\n'
-printf 'X  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n'
+printf '◇  Test run started.\n'
+printf '✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n'
 REENTER
   chmod +x "$root/reenter.sh"
   st_run "$root/reenter.sh" "$root/kill.plan"
