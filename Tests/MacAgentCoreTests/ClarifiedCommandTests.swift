@@ -123,15 +123,44 @@ struct ClarifiedCommandTests {
         #expect(ClarifiedCommand.request(in: mentioning) == mentioning)
     }
 
-    /// The documented limit, asserted rather than left as a claim: a label typed at the start of a
-    /// line of the user's own *is* read as an exchange. It costs them the instant resolver — their
-    /// command is planned instead — and it is the direction that fails safe, which is why the cheap
-    /// line-start rule was chosen over a stricter one nothing else needs.
+    /// **A lone question label is not an exchange, and the reason is that this truncates a payload**
+    /// (PR #109 review F3).
+    ///
+    /// The first version matched a single `Clarification question:` line and called being wrong
+    /// "the safe direction" — which is true of `carriesExchange`, where the cost is planning a
+    /// command instead of resolving it locally, and false of `request(in:)`, whose output is what
+    /// `runTaskAgain` resubmits and what `followUpOnTask` hands a later planner. So a command of the
+    /// user's own that begins a line that way lost everything after it, and Run again would have
+    /// sent the truncated half.
     @Test
-    func aLabelTypedAtTheStartOfALineIsReadAsAnExchangeAndThatIsTheSafeDirection() {
-        let typed = "do the thing\nClarification question: what did I mean?"
+    func aLoneQuestionLabelIsNotAnExchangeBecauseThisTruncatesWhatRunAgainResubmits() {
+        let typed = "draft the doc with these headings\nClarification question: what to ask"
+
+        #expect(!ClarifiedCommand.carriesExchange(typed))
+        // The whole command survives — the half after the label included.
+        #expect(ClarifiedCommand.request(in: typed) == typed)
+    }
+
+    /// The other side of the pair rule: both labels on consecutive lines *is* an exchange, whoever
+    /// wrote them. This is the residual the doc comment states rather than a case anything prevents —
+    /// a user who types the pair collides with the format, and the only real fix for that family is
+    /// an unguessable delimiter (SONNY-234's shape), which this string does not warrant.
+    @Test
+    func bothLabelsOnConsecutiveLinesAreReadAsAnExchangeWhoeverWroteThem() {
+        let typed = "do the thing\nClarification question: what did I mean?\nClarification answer: this"
 
         #expect(ClarifiedCommand.carriesExchange(typed))
         #expect(ClarifiedCommand.request(in: typed) == "do the thing")
+    }
+
+    /// A question label separated from its answer by a blank line is not the shape `composed`
+    /// writes, so it is not an exchange either. Pins the adjacency rather than merely "an answer
+    /// appears somewhere below".
+    @Test
+    func aQuestionLabelSeparatedFromItsAnswerIsNotAnExchange() {
+        let straddled = "do the thing\nClarification question: what did I mean?\n\nClarification answer: this"
+
+        #expect(!ClarifiedCommand.carriesExchange(straddled))
+        #expect(ClarifiedCommand.request(in: straddled) == straddled)
     }
 }

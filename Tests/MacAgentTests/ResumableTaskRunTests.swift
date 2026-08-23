@@ -1314,6 +1314,67 @@ struct ClarificationKeepsTheRequestTests {
         #expect(fixture.viewModel.priorTaskContext?.previousCommand == Self.request)
     }
 
+    /// **The other overload of the same seam, which nothing held** (PR #109 review F2).
+    ///
+    /// `recordPriorTaskContext` has two: one for a run that reached a plan and one for a run that did
+    /// not. Every other test here reaches the first, because a clarified run that gets as far as a
+    /// plan has a `preparedRun` — so reverting the second to the raw command passed the whole suite.
+    /// It is reached from `performStart`'s catch when the re-plan itself throws, which is an offline
+    /// planner or a missing key, and it wrote the whole prompt into the row and the context.
+    @Test
+    func aClarifiedRunThatFailsBeforeItPlansStillRecordsTheRequest() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        try await fixture.run(Self.request, plan: fixture.clarifyingPlan(question: Self.question))
+
+        // The re-plan throws: the fixture's planner has no plan to give, so `prepare` fails before
+        // `preparedRun` is ever set — the exact state that selects the no-plan overload.
+        fixture.planner.plan = nil
+        fixture.viewModel.clarificationAnswer = "The Desktop"
+        fixture.viewModel.submitClarification()
+        try await fixture.waitForIdle()
+
+        // The premise: it really did fail, and it really did fail before planning.
+        #expect(fixture.viewModel.errorMessage != nil)
+        #expect(fixture.viewModel.plan == nil)
+
+        let row = try #require(fixture.viewModel.taskHistoryRecords.first)
+        #expect(row.command == Self.request)
+        #expect(!row.command.contains(ClarifiedCommand.questionLabel))
+        #expect(fixture.viewModel.priorTaskContext?.previousCommand == Self.request)
+    }
+
+    /// **F1's decision, pinned so the next reader knows it was chosen** (PR #109 review).
+    ///
+    /// The history row is a label and a payload at once, so the control on that row submits the
+    /// thing the row shows. Asserted as the equality rather than as two separate facts, because the
+    /// property is that the two agree — a row displaying one string while Run again sends a longer
+    /// one is the failure this rules out.
+    @Test
+    func runningAClarifiedTaskAgainSubmitsExactlyWhatItsRowShows() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        try await fixture.run(Self.request, plan: fixture.clarifyingPlan(question: Self.question))
+        fixture.planner.plan = fixture.draftThenOpenPlan
+        fixture.viewModel.clarificationAnswer = "The Desktop"
+        fixture.viewModel.submitClarification()
+        try await fixture.waitForIdle()
+
+        let row = try #require(fixture.viewModel.taskHistoryRecords.first)
+        // The run again writes a fresh draft rather than bumping the first one's name.
+        fixture.draftOutput = fixture.root.appendingPathComponent("notes-again.md")
+        fixture.planner.plan = fixture.draftThenOpenPlan
+        #expect(fixture.viewModel.runTaskAgain(row))
+
+        #expect(fixture.viewModel.lastCommand == row.command)
+        #expect(fixture.viewModel.lastCommand == Self.request)
+        // And the answer is not smuggled along behind the label.
+        #expect(!fixture.viewModel.lastCommand.contains("The Desktop"))
+        try await fixture.waitForIdle()
+    }
+
     /// **The two-question case, which is the one a naive fix still gets wrong.** `lastCommand` holds
     /// the request after the first `start()` and looks like a source to compose from — but the
     /// clarification's own `start()` overwrites it with what *that* dispatch submitted, so composing
@@ -1406,6 +1467,38 @@ struct ClarificationKeepsTheRequestTests {
 
         #expect(!fixture.viewModel.lastCommand.contains(Self.request))
         #expect(fixture.viewModel.lastCommand.hasPrefix(ClarifiedCommand.questionLabel))
+    }
+
+    /// The same clear, on the door that *answers* rather than abandons (PR #109 review F6, R2).
+    ///
+    /// `submitClarification` clears the held request before re-entering `start()`, and that line
+    /// could be deleted with the suite green: the answered run's own pause would overwrite the field
+    /// and the abandon path clears it, so nothing read a stale value on a live path. It is
+    /// defence-in-depth, and this is what holds it — the field belongs to the pause that set it and
+    /// must not reach a second one.
+    ///
+    /// **Stated plainly: the second question here is set by hand.** A question raised without a run
+    /// behind it is a test construction, the same device the clarification-gate suites use. What is
+    /// pinned is the clear, not the reachability of the state that exposes it.
+    @Test
+    func answeringAQuestionDoesNotLeaveTheRequestBehindForTheNextOneEither() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        try await fixture.run(Self.request, plan: fixture.clarifyingPlan(question: Self.question))
+        fixture.planner.plan = fixture.draftThenOpenPlan
+        fixture.viewModel.clarificationAnswer = "The Desktop"
+        fixture.viewModel.submitClarification()
+        try await fixture.waitForIdle()
+        #expect(fixture.viewModel.lastCommand.hasPrefix(Self.request), "premise: the answered run carried it")
+
+        fixture.viewModel.clarificationQuestion = "Which of these did you mean?"
+        fixture.viewModel.clarificationAnswer = "The second one"
+        fixture.viewModel.submitClarification()
+
+        #expect(!fixture.viewModel.lastCommand.contains(Self.request))
+        #expect(fixture.viewModel.lastCommand.hasPrefix(ClarifiedCommand.questionLabel))
+        try await fixture.waitForIdle()
     }
 }
 
