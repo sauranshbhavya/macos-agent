@@ -633,7 +633,7 @@ struct ProductShellTests {
             // exists, and a surviving dismissal set would suppress an offer for an id that can only
             // now belong to a different task.
             "activeResumableTask",
-            "resumingTask",
+            "pendingResumableContinuation",
             "dismissedResumeOfferIDs"
         ]
 
