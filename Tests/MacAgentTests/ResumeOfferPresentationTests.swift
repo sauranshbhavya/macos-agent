@@ -370,49 +370,83 @@ struct ResumeOfferPresentationTests {
         )
     }
 
-    /// **What the line cap is for is an unbreakable run too wide for two lines — not a character
-    /// count** (PR #107 review, F5).
+    /// **A third line arrives two different ways, and the cap has to cover both** (PR #107 review,
+    /// F5 and its re-check).
     ///
-    /// `messageLineLimit`'s doc used to say "a 60-character word with no space in it", which named
-    /// the wrong property and understated the class by roughly half: what matters is the *rendered
-    /// width* of a run nothing can break, so the threshold in characters moves with the glyphs. Held
-    /// over three scripts that cross it at three different counts, plus a control just under the
-    /// boundary, so a future edit cannot narrow the claim back to a number.
+    /// `messageLineLimit`'s doc first named a character count, then named a width — "wider than two
+    /// 436pt lines hold" — and that second wording was disproved by its own examples: two lines hold
+    /// 872pt and none of the three crossings reaches it. So this holds the mechanisms rather than an
+    /// outcome, which is what stops the claim drifting back to a number a third time:
+    ///
+    /// - a Latin command with no space in it makes the quoted phrase one unbreakable run, and it
+    ///   crosses when that run exceeds a **single** line;
+    /// - CJK breaks between characters, so nothing is unbreakable and it crosses on **packing**,
+    ///   at a message width still under what two lines nominally hold.
+    ///
+    /// Each Latin script gets its crossing *and* the character below it, so the assertions read a
+    /// boundary rather than a constant — and the two boundaries land at different counts, which is
+    /// the whole reason a count cannot express this.
     @Test
-    func aRunTooWideForTwoLinesIsWhatTheCapIsFor() {
+    func aThirdLineArrivesTwoWaysAndTheCapCoversBoth() {
         let font = NSFont.systemFont(ofSize: 13, weight: .regular)
+        let width = ResumeOfferPresentation.panelContentWidth
 
+        func rendered(_ text: String) -> CGFloat {
+            (text as NSString).size(withAttributes: [.font: font]).width
+        }
         func naturalHeight(_ command: String) -> CGFloat {
             (ResumeOfferPresentation.message(command: command) as NSString).boundingRect(
-                with: NSSize(width: ResumeOfferPresentation.panelContentWidth, height: .greatestFiniteMagnitude),
+                with: NSSize(width: width, height: .greatestFiniteMagnitude),
                 options: [.usesLineFragmentOrigin, .usesFontLeading],
                 attributes: [.font: font]
             ).height
         }
+        /// The run with no break opportunity inside it: an opening quote binds to the word after it,
+        /// a closing quote and period to the word before, so the whole quoted phrase is one run.
+        func quotedRun(_ command: String) -> String {
+            "\u{201C}\(command)\u{201D}."
+        }
 
-        // Three unbreakable runs, three different character counts, one threshold. Each needs a
-        // third line at the panel's own width, and each is what the cap tail-truncates.
-        let overflowing = [
-            (script: "uppercase W", command: String(repeating: "W", count: 34)),
-            (script: "lowercase w", command: String(repeating: "w", count: 44)),
-            (script: "CJK", command: String(repeating: "\u{6F22}", count: 54))
+        // Mechanism one: the unbreakable run crossing a *single* line.
+        let latin: [(script: String, character: String, fits: Int, crosses: Int)] = [
+            (script: "uppercase W", character: "W", fits: 33, crosses: 34),
+            (script: "lowercase w", character: "w", fits: 42, crosses: 43)
         ]
-        for run in overflowing {
+        for run in latin {
+            let below = String(repeating: run.character, count: run.fits)
+            let above = String(repeating: run.character, count: run.crosses)
+
+            #expect(rendered(quotedRun(below)) <= width, "\(run.script) x\(run.fits) still fits one line")
+            #expect(rendered(quotedRun(above)) > width, "\(run.script) x\(run.crosses) exceeds one line")
+
             #expect(
-                naturalHeight(run.command) > ResumeOfferPresentation.reservedMessageHeight,
-                "\(run.script) at \(run.command.count) characters should need a third line"
+                naturalHeight(below) <= ResumeOfferPresentation.reservedMessageHeight,
+                "\(run.script) x\(run.fits) is the control — two lines, inside the reservation"
+            )
+            #expect(
+                naturalHeight(above) > ResumeOfferPresentation.reservedMessageHeight,
+                "\(run.script) x\(run.crosses) needs the third line the cap exists to refuse"
             )
         }
 
-        // The counts really are different, which is the whole point — a cap written as a character
-        // budget would have to pick one of them and be wrong about the other two.
-        #expect(Set(overflowing.map { $0.command.count }).count == overflowing.count)
+        // One threshold, two counts — the reason the property is a width and never a count.
+        #expect(Set(latin.map { $0.crosses }).count == latin.count)
 
-        // And the control, one character under the tightest of the three: still two lines, so the
-        // assertions above are reading a boundary rather than a constant.
+        // Mechanism two: nothing unbreakable, so it crosses on packing instead — and it does so at a
+        // message width *under* what two lines nominally hold, which is what disproves the wording
+        // this test replaced.
+        let packed = String(repeating: "\u{6F22}", count: 54)
+        let twoLinesNominally = width * CGFloat(ResumeOfferPresentation.messageLineLimit)
+        let packedMessage = ResumeOfferPresentation.message(command: packed)
+        #expect(rendered(packedMessage) < twoLinesNominally, "under 872pt, and still three lines")
+        #expect(naturalHeight(packed) > ResumeOfferPresentation.reservedMessageHeight)
         #expect(
-            naturalHeight(String(repeating: "W", count: 33)) <= ResumeOfferPresentation.reservedMessageHeight,
-            "33 uppercase W still fits the reservation — 34 is the crossing"
+            rendered(quotedRun(packed)) > width,
+            "wider than a line, yet it is not the unbreakable-run mechanism — every character breaks"
+        )
+        #expect(
+            naturalHeight(String(repeating: "\u{6F22}", count: 53)) <= ResumeOfferPresentation.reservedMessageHeight,
+            "53 still packs into two lines — 54 is the crossing"
         )
     }
 
