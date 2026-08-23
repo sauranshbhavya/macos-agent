@@ -269,8 +269,21 @@ struct LocalStoreInjectionScanTests {
     /// *name*, and a bare `AppDelegate()` never spells it.
     ///
     /// **So this is a population over `Sources/`, not a name search over tests.** Exactly two files
-    /// may mention the method: the one declaring it, and `main.swift`. A third — under any name, at
-    /// any level of indirection — fails here, which is a property no per-site check can offer.
+    /// may mention the method — the one declaring it, and `main.swift` — and each may mention it
+    /// exactly **once**.
+    ///
+    /// **The count is the second half, and without it the file set alone permits a third door** (PR
+    /// #109 re-check). A new named factory written *inside* `AgentViewModel.swift` would call this
+    /// and keep the file set identical, so the guard would pass while a second convenience handed
+    /// out the real stores. One occurrence per file is the declaration and the one call, and nothing
+    /// else.
+    ///
+    /// **What it still does not reach, so the claim is the size of the check.** A wrapper that
+    /// constructs the real stores *inline* rather than calling this method is invisible here — it
+    /// names nothing to find. Nothing stops that being written; what stops it mattering is that a
+    /// test reaching it would have to construct those stores itself, which
+    /// `noTestSourceBuildsALocalStoreWithoutNamingItsFileURL` refuses. The earlier wording claimed
+    /// "under any name, at any level of indirection", which was more than this enforces.
     @Test
     func onlyMainAsksForTheRealStoreLocations() throws {
         let forbidden = "atItsRealStore" + "Locations"
@@ -280,29 +293,39 @@ struct LocalStoreInjectionScanTests {
             return
         }
 
-        var mentioning: [String] = []
+        var mentions: [String: Int] = [:]
         var filesRead = 0
         for case let url as URL in walker where url.pathExtension == "swift" {
             filesRead += 1
             let code = TestSourceTree.codeLines(of: try String(contentsOf: url, encoding: .utf8))
                 .map(\.text)
                 .joined(separator: "\n")
-            if code.contains(forbidden) {
-                mentioning.append(url.lastPathComponent)
+            let count = code.components(separatedBy: forbidden).count - 1
+            if count > 0 {
+                mentions[url.lastPathComponent] = count
             }
         }
 
         // A walker that found nothing reads exactly like a tree with no mentions.
         #expect(filesRead > 50, "the enumerator saw \(filesRead) app sources — too few to be the real tree")
         #expect(
-            mentioning.sorted() == ["AgentViewModel.swift", "main.swift"],
+            mentions.keys.sorted() == ["AgentViewModel.swift", "main.swift"],
             """
-            \(forbidden)() is mentioned in \(mentioning.sorted()) — it may be named only where it is \
-            declared and in main.swift. A default, a wrapper or a convenience that reaches it from \
+            \(forbidden)() is mentioned in \(mentions.keys.sorted()) — it may be named only where it \
+            is declared and in main.swift. A default, a wrapper or a convenience that reaches it from \
             anywhere else hands its callers the developer's real ~/Library stores while every one of \
             those call sites says nothing at all.
             """
         )
+        #expect(
+            mentions["AgentViewModel.swift"] == 1,
+            """
+            AgentViewModel.swift names \(forbidden)() \(mentions["AgentViewModel.swift"] ?? 0) times. \
+            One is the declaration; a second is a factory calling it, which is the same door under a \
+            new name inside a file this check already trusts.
+            """
+        )
+        #expect(mentions["main.swift"] == 1, "main.swift should call it exactly once")
     }
 
     /// The same door from the other side: no test may ask for the real locations either.

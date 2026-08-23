@@ -62,6 +62,68 @@ struct ClarifiedCommandTests {
         #expect(twice.components(separatedBy: ClarifiedCommand.questionLabel).count == 3)
     }
 
+    /// **A question that wraps onto two lines is still one exchange** (PR #109 re-check).
+    ///
+    /// The pair rule was justified as "the shape `composed` always writes", and `composed` did not
+    /// always write it: it interpolates the question verbatim, `AgentActionExecutor` only
+    /// *end*-trims it, and `AgentStep.question` is model-authored free text — so an interior line
+    /// break survives all the way here and pushes the answer off the question's next line. Both of
+    /// this ticket's symptoms came back for such a question: the clarified command went to
+    /// `InstantCommandResolver`, and the resume offer named Sonny's question, which is the founder's
+    /// original report.
+    @Test
+    func aQuestionThatWrapsOntoTwoLinesIsStillOneExchange() {
+        let composed = ClarifiedCommand.composed(
+            request: Self.request,
+            question: "Which folder should I scan?\nDesktop or Downloads?",
+            answer: "The Desktop"
+        )
+
+        #expect(ClarifiedCommand.carriesExchange(composed))
+        #expect(ClarifiedCommand.request(in: composed) == Self.request)
+        // The whole question is still there for the planner — folded, not truncated.
+        #expect(composed.contains("Which folder should I scan?"))
+        #expect(composed.contains("Desktop or Downloads?"))
+    }
+
+    /// **The fold takes `CharacterSet.newlines`, not `\n`** — the same reasoning
+    /// `PriorTaskContext.foldingLineBreaks` gives for the same job. A plan arrives as
+    /// JSON-serialised UTF-8, so every one of these survives the wire intact and any of them can
+    /// begin a line where the composed command is read back.
+    @Test
+    func everyKindOfLineBreakInAQuestionIsFolded() {
+        for (name, breakCharacter) in [
+            ("LF", "\u{000A}"), ("VT", "\u{000B}"), ("FF", "\u{000C}"), ("CR", "\u{000D}"),
+            ("CRLF", "\u{000D}\u{000A}"), ("NEL", "\u{0085}"),
+            ("line separator", "\u{2028}"), ("paragraph separator", "\u{2029}")
+        ] {
+            let composed = ClarifiedCommand.composed(
+                request: Self.request,
+                question: "Which folder?\(breakCharacter)Desktop or Downloads?",
+                answer: "The Desktop"
+            )
+
+            #expect(ClarifiedCommand.carriesExchange(composed), "\(name) broke the pair")
+            #expect(ClarifiedCommand.request(in: composed) == Self.request, "\(name) truncated the request")
+        }
+    }
+
+    /// The user's own words are **not** folded, and that asymmetry is the point: a multi-line answer
+    /// is safe under the pair rule because it follows its question line, while a multi-line question
+    /// splits the pair. Folding the answer too would edit what the user typed for no gain.
+    @Test
+    func aMultiLineAnswerIsLeftAloneAndStillReadsAsOneExchange() {
+        let composed = ClarifiedCommand.composed(
+            request: Self.request,
+            question: "Which folder should I scan?",
+            answer: "The Desktop\nand the Downloads folder"
+        )
+
+        #expect(ClarifiedCommand.carriesExchange(composed))
+        #expect(ClarifiedCommand.request(in: composed) == Self.request)
+        #expect(composed.contains("The Desktop\nand the Downloads folder"))
+    }
+
     /// An empty request degrades to the exchange alone — the shape this produced for *every*
     /// clarification before the fix, kept deliberately for a question no real run raised.
     @Test

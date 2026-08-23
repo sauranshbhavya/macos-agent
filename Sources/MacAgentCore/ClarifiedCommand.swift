@@ -46,7 +46,7 @@ public enum ClarifiedCommand {
     ///   a request would be worse than having none.
     public static func composed(request: String, question: String, answer: String) -> String {
         let exchange = """
-        \(questionLabel) \(question)
+        \(questionLabel) \(foldingLineBreaks(in: question))
         \(answerLabel) \(answer)
         """
         let trimmedRequest = request.trimmingCharacters(in: .whitespacesAndNewlines)
@@ -95,6 +95,12 @@ public enum ClarifiedCommand {
     /// a single line prefix, and a command whose own text happened to begin a line that way lost
     /// everything after it.
     ///
+    /// **That premise is load-bearing in both directions, which is how the re-check found a defect
+    /// in the fix itself.** Tightening the match to a pair made `composed`'s output the definition of
+    /// what counts — so a question `composed` wrote across two lines stopped being an exchange, and
+    /// both of this ticket's symptoms returned for it. `composed` folds the question onto one line
+    /// now. Read the two together: neither half is correct alone.
+    ///
     /// **The residual, since the class is not closed:** a user who really does write both labels on
     /// consecutive lines is still truncated, and so is one whose *answer* runs to several lines and
     /// begins one of them with the question label. Both are unguessable-delimiter problems of the
@@ -114,6 +120,50 @@ public enum ClarifiedCommand {
         return request.isEmpty ? command : request
     }
 
+    /// Every run of line-break characters in the question, replaced by the two literal characters
+    /// `\n`, so the question occupies exactly one line (PR #109 re-check).
+    ///
+    /// **This is what makes the pair rule's premise true.** `exchangeLineIndex` counts a question
+    /// line only when the *next* line opens the answer, justified as "the shape `composed` always
+    /// writes" — and `composed` did not always write it. The question is interpolated verbatim;
+    /// `AgentActionExecutor.clarificationQuestion(in:)` only *end*-trims it
+    /// (`trimmingCharacters(in: .whitespacesAndNewlines)` removes nothing interior); and
+    /// `AgentStep.question` is model-authored free text. A planner question wrapping onto two lines
+    /// therefore pushed the answer off the question's next line, the pair stopped matching, and both
+    /// of SONNY-248's symptoms returned for that question: the clarified command went back through
+    /// `InstantCommandResolver`, and the resume offer named Sonny's question rather than the user's
+    /// request — the founder's original report, reached by a second route.
+    ///
+    /// **`CharacterSet.newlines`, deliberately wider than `\n`.** It covers LF, VT, FF, CR, CRLF,
+    /// NEL (U+0085) and the Unicode line and paragraph separators (U+2028, U+2029). A plan arrives as
+    /// JSON-serialised UTF-8, so every one of those survives the wire intact and any of them can
+    /// begin a line where this string is read back; folding only `\n` would leave six ways in.
+    ///
+    /// **The question and not the answer.** The answer is the user's own words, and a multi-line one
+    /// is already safe: it *follows* its question line, so the pair still matches and everything
+    /// after it belongs to the answer. Folding it would edit what the user typed for no gain — and
+    /// F3's whole lesson is that this file's output is a payload, not only a caption. The request is
+    /// not folded either, for the same reason and more strongly: on a second clarification the
+    /// request *is* the previous composed command, whose line structure is the thing being preserved.
+    ///
+    /// **Runs collapse to one marker** rather than one per character, so a question of nothing but
+    /// line breaks cannot expand the prompt.
+    ///
+    /// **Second implementation of one rule, named rather than left to be discovered.**
+    /// `PriorTaskContext.foldingLineBreaks` does the same job for the planner's prior-task block, and
+    /// its doc comment is where this reasoning was worked out — including why the marker is `\n`
+    /// rather than a separator character that could rebuild a delimiter. The invariant that must not
+    /// drift between them is the character set. SONNY-262 is the ticket to consolidate them.
+    private static func foldingLineBreaks(in value: String) -> String {
+        guard value.rangeOfCharacter(from: .newlines) != nil else {
+            return value
+        }
+        return value
+            .components(separatedBy: .newlines)
+            .filter { !$0.isEmpty }
+            .joined(separator: "\\n")
+    }
+
     private static func lines(of command: String) -> [Substring] {
         command.split(separator: "\n", omittingEmptySubsequences: false)
     }
@@ -124,6 +174,12 @@ public enum ClarifiedCommand {
     /// `Clarification question:` line is not an exchange: `composed` never writes one, and treating
     /// it as an exchange would truncate a user's own command at a line that merely happened to start
     /// that way — and `request(in:)`'s output is resubmitted by Run again, not only displayed.
+    ///
+    /// **"`composed` never writes one" is an invariant `composed` has to actually hold, and for one
+    /// round it did not** (PR #109 re-check). It interpolates a model-authored question that only
+    /// ever gets *end*-trimmed, so a question wrapping onto two lines wrote exactly the shape this
+    /// rejects. `composed` folds line breaks out of the question now, which is what makes the
+    /// sentence above true rather than merely intended — see `foldingLineBreaks`.
     private static func exchangeLineIndex(in commandLines: [Substring]) -> Int? {
         commandLines.indices.first { index in
             guard commandLines[index].trimmingCharacters(in: .whitespaces).hasPrefix(questionLabel) else {

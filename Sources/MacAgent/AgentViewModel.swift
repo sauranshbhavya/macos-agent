@@ -634,7 +634,11 @@ final class AgentViewModel: ObservableObject {
     /// name in `AppDelegate.swift` and left every `AppDelegate()` call site saying nothing — the
     /// same invisibility, one level up. `AppDelegate` takes the view model now, and
     /// `LocalStoreInjectionScanTests.onlyMainAsksForTheRealStoreLocations` holds the population: in
-    /// `Sources/`, exactly two files mention this method — the one declaring it and `main.swift`.
+    /// `Sources/`, exactly two files mention this method — the one declaring it and `main.swift` —
+    /// and **each mentions it exactly once**, because the file set alone would permit a second
+    /// factory written inside *this* file (PR #109 re-check). What that check does not reach is a
+    /// wrapper that builds the real stores inline without naming this method; the test says so
+    /// rather than claiming more than it enforces.
     ///
     /// The whitelist is built once and handed to both the view model and the output-location store,
     /// because that store answers "is this an output location?" by asking it — see the
