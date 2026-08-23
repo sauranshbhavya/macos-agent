@@ -186,6 +186,54 @@ struct PathContainmentResolutionTests {
         #expect(tree.isSymbolicLinkRejected(attempt.error), "expected a symlink refusal, got \(attempt.errorText)")
     }
 
+    /// The same unfollowable link named as a *folder*, which is the other door into the whitelist —
+    /// `validateExistingDirectory` is what every read-side capability calls. It reports the link
+    /// rather than "no such folder", which is what `fileExists` would have said about it: a link
+    /// pointing at itself is a different problem from a folder that is not there, and the person
+    /// reading the refusal is the one who has to tell them apart.
+    @Test
+    func aSymlinkLoopNamedAsAFolderIsRefusedAsALinkRatherThanAsAMissingFolder() throws {
+        let tree = try SymlinkTree()
+        defer { tree.tearDown() }
+        let loop = tree.root.appendingPathComponent("loop")
+        try FileManager.default.createSymbolicLink(atPath: loop.path, withDestinationPath: "loop")
+
+        var thrown: Error?
+        do {
+            _ = try tree.whitelist.validateExistingDirectory(loop.path)
+        } catch {
+            thrown = error
+        }
+
+        #expect(tree.isSymbolicLinkRejected(thrown), "expected a symlink refusal, got \(String(describing: thrown))")
+    }
+
+    /// Both sides of the comparison go through one arithmetic, which only shows when a whitelist
+    /// root is a path that does not exist yet: the candidates are resolved and a root resolved by a
+    /// different rule would be compared against a spelling nothing produces.
+    ///
+    /// The one test here that does not write bytes, deliberately — the property is that two
+    /// spellings of one root agree, and a root nobody has created is a root nothing can be written
+    /// into. What it pins is that removing `canonicalURL` from the root side is a change with a
+    /// consequence, rather than a tidy-up nothing notices.
+    @Test
+    func aWhitelistRootThatDoesNotExistYetIsResolvedTheSameWayTheCandidatesAre() throws {
+        let base = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: base) }
+        let real = base.appendingPathComponent("real", isDirectory: true)
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        let link = base.appendingPathComponent("link")
+        try FileManager.default.createSymbolicLink(at: link, withDestinationURL: real)
+
+        // Named through the link, and its last component has never been created.
+        let whitelist = PathWhitelist(roots: [link.appendingPathComponent("Scope", isDirectory: true)])
+        let candidate = real.appendingPathComponent("Scope/notes.md").path
+
+        let validated = try whitelist.validateInsideWhitelist(candidate)
+
+        #expect(validated.path == candidate)
+    }
+
     /// The boundary is checked when it is asked, and the bytes are written afterwards. A component
     /// created in between is not seen — pinned here rather than left for someone to discover, because
     /// it is the residual this fix does not close and cannot close from a path string: only opening
