@@ -522,6 +522,43 @@ struct ResumableTaskRunTests {
         #expect(after.first?.completedStepIDs == ["draft"])
     }
 
+    /// **An arm this door could not spend is dropped, not left for the next dispatch.**
+    ///
+    /// `dispatch`'s own `isAwaitingApproval` guard returns *before* `start()` runs, and `start()` is
+    /// where an arm is spent — so a door with no in-flight guard of its own has to drop it itself.
+    /// `runTaskAgain` is that door: unlike `retryLastCommand` it guards nothing, and the Tasks page
+    /// offers Run again while a different run sits at an approval prompt.
+    @Test
+    func anArmTheFourthDoorCouldNotSpendIsNotInheritedByTheNextDispatch() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        // A failed task, with its record and its linked row.
+        fixture.browserOpener.failure = BrowserOutage()
+        try await fixture.run("Write notes and open the page")
+        let outstanding = try #require(try fixture.resumableTaskStore.loadAll().first)
+        let row = try #require(fixture.viewModel.taskHistoryRecords.first)
+        #expect(row.resumableTaskID == outstanding.id)
+
+        // A second run parks at an approval, which is what makes `dispatch` refuse.
+        fixture.browserOpener.failure = nil
+        try await fixture.run("Overwrite the notes", plan: fixture.approvalNeedingPlan)
+        #expect(fixture.viewModel.isAwaitingApproval)
+
+        #expect(!fixture.viewModel.runTaskAgain(row), "dispatch refuses while an approval is pending")
+
+        // End the paused run, then do something unrelated. Under a surviving arm the unrelated run
+        // would settle the *failed* task's record instead of its own.
+        fixture.viewModel.cancelCurrentRun()
+        fixture.draftOutput = fixture.root.appendingPathComponent("other.md")
+        fixture.planner.plan = fixture.draftThenOpenPlan
+        try await fixture.run("A completely different task")
+
+        let after = try fixture.resumableTaskStore.loadAll()
+        #expect(after.map(\.id) == [outstanding.id], "the failed task's record is untouched")
+        #expect(after.first?.completedStepIDs == ["draft"])
+    }
+
     /// A completed run's row carries no link, because the settle deleted its record at the same
     /// terminal that wrote the row. The ordering inside `recordTaskHistoryIfTerminal` is what makes
     /// that true rather than incidental.
