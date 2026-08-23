@@ -161,6 +161,54 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/clarification-keeps-the-command
+Status: complete
+Date: 2026-08-23
+Tickets: SONNY-248 (answering a clarification discarded the user's original command) and SONNY-240 (a test fixture that omits a store writes to the developer's real `~/Library`). Cut from `main` at `961b9c2`, no rebase. Two tickets in one lane because both touch `AgentViewModel`, and one commit each: `b062121` and `de9749c`.
+Reviewed by: fresh-session adversarial review owed at PR time (WORKFLOW.md step 7). Not reviewed as of this entry.
+
+Spec sections covered: none new. Both are defects in shipped behaviour — SONNY-248 in the clarification continuation §6 already specifies, SONNY-240 in the test wiring behind every local store §15.4 specifies.
+
+Files changed:
+- `Sources/MacAgentCore/ClarifiedCommand.swift` — new. The one owner of what a clarified command looks like: it composes the shape, answers whether a command carries an exchange, and pulls the request back out for a label.
+- `Sources/MacAgent/AgentViewModel.swift` — SONNY-248's held request, the composition, the instant-resolver term and the three label seams; SONNY-240's removal of every store default plus `atItsRealStoreLocations()`.
+- `Sources/MacAgent/AppDelegate.swift` — the one site allowed to ask for the real store locations, asking for them by name.
+- `Tests/MacAgentCoreTests/ClarifiedCommandTests.swift` — new, the format's own unit.
+- `Tests/MacAgentCoreTests/LocalStoreInjectionScanTests.swift` — replaces `OutputLocationFixtureWiringScanTests`, generalised from two named stores to `LocalStore.allCases`.
+- `Tests/MacAgentTests/ResumableTaskRunTests.swift` — the new `ClarificationKeepsTheRequestTests` suite, on the real dispatch path.
+- Eleven fixture files under `Tests/MacAgentTests/` gained the stores the compiler asked for (`git diff --name-only b062121..de9749c -- Tests/MacAgentTests | grep -vc ProductShellTests` → 11), plus `ProductShellTests` for SONNY-248's new stored property and a shared hermetic pasteboard reader.
+- `CLAUDE.md` — the seventh registration step rewritten, and what to do about a store that is already poisoned.
+
+Tests: clean tree, every exit code read with nothing between it and the command. **The flagged suite: 1874 tests in 136 suites, exit 0**, at `de9749c`. **`scripts/warnings`: 0 warnings**, exit 0, its stamp read from the report's own header — `measured at : b062121 plus 16 uncommitted file(s)`, the tree that became `de9749c`. **Two mutation batteries.** SONNY-248's: **7 mutants, 7 killed, 0 survived** at `b062121`, one per half of the fix. SONNY-240's: **3 mutants, 3 killed, 0 survived** at `de9749c`. **No file under `server/` is in this diff** (`git diff --name-only origin/main...HEAD | grep -c '^server/'` → 0), so the server's own commands say nothing about it and were not run.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**SONNY-248 — the clarification exchange lives in the command string, and that is a choice rather than an accident.** The request now survives the pause in `clarificationSubmittedCommand`, a fourth value held beside the origin, the auto-execute flag and the workspace binding, cleared at the same three sites. The alternative considered and rejected was holding the *exchange* in a field beside the command: it needs a lifecycle — cleared for a new task, kept across a retry of a clarified one — and every door that starts a task would have to get that right, with `armRestartOfTaskInFlight` the only existing signal and that one silently absent when the user has the unfinished-task memory row switched off. Carried in the string it needs no lifecycle at all: a retry resubmits it without knowing it exists, and a genuinely new command cannot inherit it because it is a different string.
+
+**Restoring the request re-opened the instant resolver, which is the part a reader would not predict.** `InstantCommandResolver` matches on prefixes and raises several of these questions itself — `=` with nothing after it asks what to calculate. Before the fix the continuation began with the question, matched nothing, and fell through to the planner. With the request back at the front, `=` answered with "2 + 2" resolves a *second* time as a calculator expression whose expression is the transcript of the conversation about it. So `performStart` skips the resolver for a command carrying an exchange, and the term is a property of the command rather than of the dispatch, because a retry of the answered run reaches the same branch by a different door.
+
+**Fixing the stored command was not enough for the label, and checking that was the ticket's fourth hazard.** The resume offer squeezes a command onto one line and cuts it at sixty characters, so a *short* request leaves room for `Clarification question: …` to show through behind it — better than naming the question alone and still Sonny quoting its own scaffolding in a sentence about the user's task. The split is therefore at the display half: `lastCommand` keeps the whole prompt because that is what a retry resubmits, while `runningCommandDisplayText`, the resumable record and both `recordPriorTaskContext` overloads take `ClarifiedCommand.request(in:)`. **One consequence worth knowing:** Run again on a clarified history row re-runs the *request*, so a task still ambiguous is asked about again. That is the row doing what it says rather than submitting a longer string it never showed, and it is the same property that already makes `runTaskAgain` re-request an approval.
+
+**SONNY-240 — the compiler is the enforcement and the scan covers what it cannot see.** No local store on `AgentViewModel.init` has a default any more, so a fixture that omits one does not compile. `clipboardHistoryMonitor` and `localDataDeletionService` lost theirs too: the thirteenth store arrives inside the monitor along with the real system pasteboard, and the deletion service's default list is the real files and it deletes rather than writes. Removing the defaults did not merely close a structural hole — the compiler immediately named nine live gaps: seven fixtures missing `visionSessionJournalStore`, two missing `approvedAppStore` (both in the ticket's own addendum) and **six missing the monitor**, which is a thirteenth store nobody had counted.
+
+**The rejected fourth option, recorded because the ticket asked for it on the record.** Making the store types' default *paths* test-aware, the way `LocalStorageEncryption.defaultKeyManager()` already makes the key test-aware, would stop the corruption and leave the wiring gap exactly where it is: a fixture would still be reaching a store nobody meant it to reach, and the next thing that needs the fixture's own store would find the same hole with none of the symptoms that made this one findable. `LocalStoreInjectionScanTests.aStoreBuiltWithNoFileURLLandsInTheDevelopersHomeDirectory` pins the premise, so if that default ever does become temp-aware the suite says so rather than quietly guarding nothing.
+
+**A test-only fixture factory was the ticket's middle option and was not taken.** It would have to rely on nobody reaching around it, which the type system cannot enforce; and `atItsRealStoreLocations()` is the same idea inverted — one named door for the *real* locations, with a scan that fails if any test target so much as mentions it.
+
+**What the pair does not prevent, stated rather than left to be discovered.** A call site is forced to pass a store, not to pass a sensible one: `taskHistoryStore: TaskHistoryStore()` compiles and still writes to the real path, which is why the scan checks every store construction in `MacAgentTests` for a `fileURL:`. That scan does not cover `MacAgentCoreTests`, deliberately: the stores' own target constructs seven default-path stores on purpose, to assert what `ApprovedAppStore()`'s filename is and what `ResumableTaskStore()`'s idle period is, and never writes through one. And none of this touches the non-store seams on the same initializer — `browserOpener`, `shortcutCatalog`, `zipArchiver` and the rest still default to implementations that shell out and open real applications, a different hazard with a different blast radius that every fixture already passes hermetic versions of.
+
+**Two guards fired on this branch and both were the system working.** `ProductShellTests`' stored-property classifier failed until SONNY-248's new field was classified against the wipe — the check that exists because that enumeration has been missed three times. And `swift build --build-tests` failed in eleven fixtures the moment SONNY-240's defaults came off, which is the whole of that ticket's point demonstrated once.
+
+**A mutant that would corrupt the developer's own data is not a mutant this repository runs.** SONNY-240's battery deliberately contains no mutant that drops a `fileURL:` from a fixture or calls the real-locations factory: running that mutant's suite would write to the real `~/Library` store, which is the exact damage the ticket exists to stop. Those two are proved instead by `theSweepFlagsAStoreBuiltWithNoFileURLAndClearsOneBuiltWithIt`, which runs the matcher over text it holds itself, and by a mutant that blinds the matcher and is killed by the sweep's own floor.
+
+Known limitations / deferred scope: (deferrals need the user's explicit decision and a named landing-spot ticket)
+- **SONNY-250**, filed from this lane, untriaged: `AgentActionExecutorTests.asyncProcessRunnerCancelsRunningProcess()` flakes under full-suite load — it sleeps a fixed 100 ms betting the child process has launched — and it aborted one `scripts/mutate` baseline outright. Pre-existing and untouched by this diff; it passes three consecutive runs in isolation.
+- SONNY-239's in-product recovery for an undecodable store file is still owed. Until it lands, the answer is in `CLAUDE.md`: delete that one file from `~/Library/Application Support/Sonny/` and relaunch.
+
+Open questions (required, write "none" if true): none.
+
+Next branch: per the roadmap and the user's assignment; this lane holds no further tickets.
+
 ### Branch: fix/restricted-content-false-positive
 Status: complete — SONNY-245 Done; PR #108 open, fresh-session review complete (cycle 1, F1–F8), fix
 round coordinator-verified, awaiting the founder's manual pass and merge
