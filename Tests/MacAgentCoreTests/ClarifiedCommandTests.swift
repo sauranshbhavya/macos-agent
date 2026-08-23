@@ -108,6 +108,58 @@ struct ClarifiedCommandTests {
         }
     }
 
+    /// **The reader's own width, pinned independently of the writer's** (PR #109 re-check, battery
+    /// survivor S4).
+    ///
+    /// With the fold in place, no wide break ever reaches the reader *from `composed`* — so
+    /// narrowing the reader back to LF passed the whole suite, and every test asserting the reader's
+    /// width was really asserting the writer's. These build the command by hand instead, which is
+    /// what `carriesExchange` and `request(in:)` face as public API: a stored command from an older
+    /// build, or a string somebody assembled elsewhere.
+    ///
+    /// **This is the same residual `bothLabelsOnConsecutiveLinesAreReadAsAnExchangeWhoeverWroteThem`
+    /// records, widened to the whole set**, and it is deliberate rather than tolerated: the reader
+    /// and the writer agree on what a line is, so a pair separated by any break Unicode calls a line
+    /// break is an exchange, whoever wrote it.
+    @Test
+    func theReaderSeesAPairSeparatedByAnyKindOfLineBreak() {
+        for (name, breakCharacter) in [
+            ("LF", "\u{000A}"), ("VT", "\u{000B}"), ("FF", "\u{000C}"), ("CR", "\u{000D}"),
+            ("CRLF", "\u{000D}\u{000A}"), ("NEL", "\u{0085}"),
+            ("line separator", "\u{2028}"), ("paragraph separator", "\u{2029}")
+        ] {
+            let handBuilt = "do the thing\(breakCharacter)"
+                + "\(ClarifiedCommand.questionLabel) Which one?\(breakCharacter)"
+                + "\(ClarifiedCommand.answerLabel) That one"
+
+            #expect(ClarifiedCommand.carriesExchange(handBuilt), "\(name) was not seen as a break")
+            #expect(ClarifiedCommand.request(in: handBuilt) == "do the thing", "\(name) request")
+        }
+    }
+
+    /// **The request comes back byte for byte, whatever breaks it contains** (PR #109 re-check).
+    ///
+    /// `request(in:)` slices the original rather than splitting and re-joining. Re-joining
+    /// normalises every break it split on, which is invisible while the split character and the join
+    /// character are the same one and becomes a silent rewrite the moment the reader widens — and
+    /// this function's output is what Run again resubmits, so a rewrite there edits the user's own
+    /// command. Asserted on the exact scalars, because a comparison that normalises would pass
+    /// against the defect.
+    @Test
+    func theRequestIsReturnedByteForByteIncludingItsOwnLineBreaks() {
+        let request = "draft the notes\u{000D}then zip them\u{2028}and open the folder"
+        let composed = ClarifiedCommand.composed(
+            request: request,
+            question: "Which folder?",
+            answer: "The Desktop"
+        )
+
+        let extracted = ClarifiedCommand.request(in: composed)
+        #expect(Array(extracted.unicodeScalars) == Array(request.unicodeScalars))
+        #expect(extracted.unicodeScalars.contains("\u{000D}"), "a CR was rewritten")
+        #expect(extracted.unicodeScalars.contains("\u{2028}"), "a line separator was rewritten")
+    }
+
     /// The user's own words are **not** folded, and that asymmetry is the point: a multi-line answer
     /// is safe under the pair rule because it follows its question line, while a multi-line question
     /// splits the pair. Folding the answer too would edit what the user typed for no gain.
