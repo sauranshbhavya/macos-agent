@@ -107,6 +107,13 @@ struct LocalStoreInjectionScanTests {
     /// wipe would have erased the developer's data rather than corrupted it.
     static let otherRequiredParameters = ["clipboardHistoryMonitor", "localDataDeletionService"]
 
+    /// The real-store factory's name, **assembled at run time so the literal never appears in this
+    /// file**, which the sweep below reads like any other test source. `TestSourceTree.codeLines`
+    /// drops comment-prefixed lines, so naming the method in prose is free — a string literal
+    /// spelling it out is not, and one in a failure message is what made this constant shared rather
+    /// than local to the sweep.
+    static var realStoreFactoryName: String { "atItsRealStore" + "Locations" }
+
     // MARK: - 1. The defaults cannot come back
 
     @Test
@@ -278,15 +285,12 @@ struct LocalStoreInjectionScanTests {
     /// out the real stores. One occurrence per file is the declaration and the one call, and nothing
     /// else.
     ///
-    /// **What it still does not reach, so the claim is the size of the check.** A wrapper that
-    /// constructs the real stores *inline* rather than calling this method is invisible here — it
-    /// names nothing to find. Nothing stops that being written; what stops it mattering is that a
-    /// test reaching it would have to construct those stores itself, which
-    /// `noTestSourceBuildsALocalStoreWithoutNamingItsFileURL` refuses. The earlier wording claimed
-    /// "under any name, at any level of indirection", which was more than this enforces.
+    /// **A wrapper that constructs the real stores *inline* names nothing for this to find, and is
+    /// caught by `theOnlyViewModelConstructionInSourcesIsTheRealStoreFactory` instead** — see there
+    /// for why the mitigation this comment used to claim was false.
     @Test
     func onlyMainAsksForTheRealStoreLocations() throws {
-        let forbidden = "atItsRealStore" + "Locations"
+        let forbidden = Self.realStoreFactoryName
         let sources = Self.repositoryRoot.appendingPathComponent("Sources")
         guard let walker = FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil) else {
             Issue.record("could not enumerate Sources/")
@@ -365,6 +369,76 @@ struct LocalStoreInjectionScanTests {
         #expect(Self.violations(in: [:]).count == 2)
     }
 
+    /// **The third door, closed rather than documented** (PR #109 re-check, round two).
+    ///
+    /// The name-population check above catches anything that *calls* the real-store factory. It does
+    /// not catch a wrapper that builds the thirteen stores inline and hands over an
+    /// `AgentViewModel` without naming the factory at all — and the sentence that used to sit here
+    /// claimed such a wrapper was mitigated, because a test reaching it "would have to construct
+    /// those stores itself, which `noTestSourceBuildsALocalStoreWithoutNamingItsFileURL` refuses".
+    /// **That was false.** The file-URL sweep walks test targets only, so it never looks where the
+    /// constructions are; the reviewer built the door — a wrapper in `Sources/MacAgent/` with all
+    /// thirteen stores inline, and a test file holding one line that constructs nothing — and every
+    /// check in this suite passed.
+    ///
+    /// **What actually closes it: `Sources/` builds an `AgentViewModel` in exactly one place.** That
+    /// place is `atItsRealStoreLocations()`, which is allowed to and is the whole reason it exists.
+    /// A wrapper anywhere else in `Sources/` has to construct one to hand it out, so it fails here.
+    ///
+    /// **And a wrapper inside `AgentViewModel.swift` cannot dodge by spelling the type differently.**
+    /// From inside the type, `Self(…)` and `.init(…)` construct it without the name this counts. Both
+    /// are banned in that one file, where neither appears today; a blanket ban would be useless,
+    /// since `.init(` is ordinary Swift and occurs legitimately across the tree.
+    @Test
+    func theOnlyViewModelConstructionInSourcesIsTheRealStoreFactory() throws {
+        let sources = Self.repositoryRoot.appendingPathComponent("Sources")
+        guard let walker = FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil) else {
+            Issue.record("could not enumerate Sources/")
+            return
+        }
+
+        var constructionSites: [String: Int] = [:]
+        var declaringFileCode = ""
+        var filesRead = 0
+        for case let url as URL in walker where url.pathExtension == "swift" {
+            filesRead += 1
+            let code = TestSourceTree.codeLines(of: try String(contentsOf: url, encoding: .utf8))
+                .map(\.text)
+                .joined(separator: "\n")
+            let count = Self.constructions(of: "AgentViewModel", in: code).count
+            if count > 0 {
+                constructionSites[url.lastPathComponent] = count
+            }
+            if url.lastPathComponent == "AgentViewModel.swift" {
+                declaringFileCode = code
+            }
+        }
+
+        #expect(filesRead > 50, "the enumerator saw \(filesRead) app sources — too few to be the real tree")
+        let found = constructionSites.sorted { $0.key < $1.key }.map { "\($0.key)×\($0.value)" }
+        #expect(
+            constructionSites == ["AgentViewModel.swift": 1],
+            """
+            Sources/ constructs an AgentViewModel in \(found) — it may do so in exactly one place, \
+            AgentViewModel.\(Self.realStoreFactoryName)(). A second construction hands its callers the \
+            developer's real ~/Library stores, and does it without naming the factory, so the \
+            name-population check cannot see it.
+            """
+        )
+        // The same door from inside the type, where the name is optional.
+        #expect(!declaringFileCode.isEmpty, "AgentViewModel.swift was not read")
+        for spelling in ["Self(", ".init("] {
+            #expect(
+                !declaringFileCode.contains(spelling),
+                """
+                AgentViewModel.swift uses `\(spelling)`, which constructs the type without naming it, \
+                so the count above cannot see it. If this is legitimate, the count needs to learn \
+                the spelling rather than this check being dropped.
+                """
+            )
+        }
+    }
+
     /// The same door from the other side: no test may ask for the real locations either.
     ///
     /// Scanned across every test target, because a helper in the support target would be the least
@@ -377,13 +451,7 @@ struct LocalStoreInjectionScanTests {
         }
         #expect(!files.isEmpty, "the enumerator found no test sources")
 
-        // **Assembled at run time so the literal never appears in this file**, which the sweep reads
-        // like any other: `TestSourceTree.codeLines` drops comment-prefixed lines, so naming the
-        // method in the prose above is free, but a string literal spelling it out would make this
-        // suite fail on itself. The alternative — excluding this file by name — is an exclusion list
-        // that outlives its reason, and it would leave the scan unable to see the one file most
-        // likely to mention the method.
-        let forbidden = "atItsRealStore" + "Locations"
+        let forbidden = Self.realStoreFactoryName
 
         for file in files {
             let code = TestSourceTree.codeLines(of: try TestSourceTree.read(file))
