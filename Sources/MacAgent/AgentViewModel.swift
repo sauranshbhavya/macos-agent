@@ -4931,26 +4931,32 @@ final class AgentViewModel: ObservableObject {
         // saved a snippet or created a workspace, and a refresh that inherited that guard would
         // leave the row that changed showing the old number.
         //
-        // *What it costs, measured rather than guessed.* One reload of five encrypted files per
-        // terminated run — snippets, recent artifacts, clipboard history, allowed apps and output
-        // locations — plus unfinished tasks. **4.7 ms, median of ten reloads with every capped store
-        // at its cap** (clipboard history 100 items of 10 000 characters, a 1 011 740-byte file;
-        // recent artifacts 100; output locations 50; snippets and allowed apps have no cap and were
-        // filled to 100 each; min 4.2 ms, max 5.8 ms; measured at ff1cf63 with a throwaway harness
-        // that built those stores under a fixed key and timed `refreshMemoryEntries()` ten times
-        // after one warm call — deliberately not committed, since a timing assertion in this suite
-        // would be a flake). Routines and workspaces are read too, through `refreshSavedItems()`
-        // beside it, which also probes four of those same stores for readability — so the pass is
-        // eight files rather than six.
+        // *What it costs, measured rather than guessed.* `refreshMemoryRowsAfterRun()` is three
+        // calls: `refreshSavedItems()`, `refreshMemoryEntries()` and `refreshStoreReadability()`.
+        // **18.4 ms, median of ten passes** on a deliberately heavy tree — min 18.2, max 19.3 —
+        // broken down as 6.1 for saved items, 4.3 for the memory lists and 8.9 for the readability
+        // probe. The tree: every capped store at its cap (clipboard history 100 items of 10 000
+        // characters, a 1 011 740-byte file; recent artifacts 100; output locations 50), the
+        // uncapped ones at 100 each (snippets, allowed apps, routines, workspaces), and 500
+        // task-history rows at 343 930 bytes — six times the founder's own 55 KB, and a twentieth of
+        // that store's 10 000 cap. 1.47 MB in total. Measured at 2440938 with a throwaway harness,
+        // deliberately not committed: a timing assertion in this suite would be a flake.
         //
-        // **No ratio against task history here, and the missing one is the point** (PR #110 review).
-        // The obvious comparison is `refreshTaskHistory()` on this same path, whose neighbourhood
-        // records 130 ms at the cap — but `TaskHistoryStore`, where that figure comes from,
-        // attributes it to `record(_:)`: a decode, a re-encrypt and a write, not a load. Dividing
-        // one by the other compares different work. What can be said without measuring the wrong
-        // thing: this is single-digit milliseconds on a control nobody is waiting on, and on a
-        // suppressed or preview-only run — where `refreshTaskHistory()` is never called — it is the
-        // whole of the cost rather than an addition to someone else's.
+        // **The probe re-reads eleven files the other two calls just read, and that duplication is
+        // bought deliberately** (PR #110 fix-round review). Readability has to come from one place
+        // or the row's words and its Delete disagree, which they did — and the loaders cannot supply
+        // it, because two of the thirteen stores have no load-failure source and so were invisible
+        // to anything derived from those. 12 ms of the 18 is that decision.
+        //
+        // **No ratio against task history, and the missing one is the point.** The obvious
+        // comparison is `refreshTaskHistory()` on this same path, whose neighbourhood records 130 ms
+        // at the cap — but `TaskHistoryStore`, where that figure comes from, attributes it to
+        // `record(_:)`: a decode, a re-encrypt and a write, not a load. Dividing one by the other
+        // compares different work; measured here, that load is 4.3 ms on the same tree. What can be
+        // said without measuring the wrong thing: this is tens of milliseconds after a run has
+        // already finished, with nobody waiting on it, and on a suppressed or preview-only run —
+        // where `refreshTaskHistory()` is never called — it is the whole of the cost rather than an
+        // addition to someone else's.
         //
         // The one duplicated read is unfinished tasks, which a run carrying a checkpoint has just
         // reloaded inside the settle above; the ordering is worth it, since a refresh placed before
