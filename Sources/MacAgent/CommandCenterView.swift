@@ -3887,6 +3887,12 @@ struct MemoryRowPresentation: Equatable {
         )
     }
 
+    /// Internal, and named for the suite, so `everyMemoryRowsIconIsAvailableOnTheDeploymentTarget`
+    /// can read the answer without constructing a view model (PR #105 review F3).
+    static func systemImageForTests(for category: MemoryCategory) -> String {
+        systemImage(for: category)
+    }
+
     private static func systemImage(for category: MemoryCategory) -> String {
         switch category {
         case .routines:
@@ -3905,6 +3911,16 @@ struct MemoryRowPresentation: Equatable {
             return "text.quote"
         case .approvedApps:
             return "app.badge.checkmark"
+        case .resumableTasks:
+            // **`arrow.clockwise`, and the one it replaces is why this carries a comment** (PR #105
+            // review F3). It was `arrow.trianglehead.clockwise`, which is SF Symbols 6 — macOS 15 —
+            // in a package that declares `.macOS(.v14)`. `Image(systemName:)` resolves nothing for a
+            // name the running system does not have, so the row would render with a blank icon
+            // beside seven rows that have one, and nobody on this branch could see it because the
+            // development machines are newer than the deployment target. Every symbol in
+            // `Sources/` is SF Symbols 5 or earlier for that reason;
+            // `everyMemoryRowsIconIsAvailableOnTheDeploymentTarget` pins this set.
+            return "arrow.clockwise"
         }
     }
 }
@@ -4144,7 +4160,11 @@ enum MemoryRowDestination: Equatable {
             return .page(.workspaces)
         case .taskHistory:
             return .page(.tasks)
-        case .recentArtifacts, .outputLocations, .clipboardHistory, .snippets, .approvedApps:
+        case .recentArtifacts, .outputLocations, .clipboardHistory, .snippets, .approvedApps,
+             .resumableTasks:
+            // Unfinished tasks join the ones that never had a page: an unfinished run has no task
+            // history row to open — a row is written when a run terminates — so there is nowhere
+            // else for it to lead.
             return .entriesSheet
         }
     }
@@ -4274,6 +4294,8 @@ enum MemoryDeletionCopy {
             return "This deletes every saved snippet and its trigger."
         case .approvedApps:
             return "This deletes every app you have allowed Sonny to control. Sonny asks again the next time it needs one of them."
+        case .resumableTasks:
+            return "This deletes every unfinished task Sonny is keeping. Sonny stops offering to carry on with them. Anything they already did is not undone."
         }
     }
 
@@ -4291,6 +4313,8 @@ enum MemoryDeletionCopy {
             return "This deletes the snippet and its trigger."
         case .approvedApps:
             return "Sonny asks again the next time it needs to control this app."
+        case .resumableTasks:
+            return "Sonny stops offering to carry on with this task. Anything it already did is not undone."
         case .routines, .workspaces, .taskHistory:
             // Unreachable: the sheet opens for the cases above only, and these three are deleted
             // from their own pages.
@@ -4316,6 +4340,8 @@ enum MemoryDeletionCopy {
             return "Ask Sonny to save a snippet, then it will appear here."
         case .approvedApps:
             return "Allow Sonny to control an app during a screen task, and it will appear here."
+        case .resumableTasks:
+            return "If a task stops before it finishes, it will appear here."
         case .routines, .workspaces, .taskHistory:
             return ""
         }
@@ -4386,9 +4412,38 @@ struct MemoryEntryPresentation: Identifiable, Equatable {
                     detail: "\(app.bundleIdentifier) · allowed \(TaskHistoryDateFormatter.relativeTimestamp(for: app.approvedAt, now: now))"
                 )
             }
+        case .resumableTasks:
+            return viewModel.resumableTasks.map { task in
+                MemoryEntryPresentation(
+                    id: task.id,
+                    title: singleLine(task.command),
+                    detail: unfinishedTaskDetail(task, now: now)
+                )
+            }
         case .routines, .workspaces, .taskHistory:
             return []
         }
+    }
+
+    /// "Stopped by an error · 2 of 5 steps left · 3:04 PM".
+    ///
+    /// The stop reason is here rather than in the widget's offer because the offer's copy is the
+    /// founder's, verbatim, and because this is where it changes a decision: someone reading the list
+    /// is choosing whether to carry on, and "Sonny hit an error" and "you closed the lid" are
+    /// different answers. It is data about what happened, not an explanation of how the feature
+    /// works, which is the line the 2026-08-14 rule draws.
+    private static func unfinishedTaskDetail(_ task: ResumableTask, now: Date) -> String {
+        let reason: String
+        switch task.stopReason {
+        case .interrupted:
+            reason = "Interrupted"
+        case .failed:
+            reason = "Stopped by an error"
+        }
+        let left = task.remainingSteps.count
+        let total = task.plan.steps.count
+        let steps = "\(left) of \(total) step\(total == 1 ? "" : "s") left"
+        return "\(reason) · \(steps) · \(TaskHistoryDateFormatter.relativeTimestamp(for: task.updatedAt, now: now))"
     }
 
     /// Collapses newlines so a multi-line clipboard entry or snippet expansion occupies one row

@@ -336,6 +336,9 @@ private func makeRunAgainFixture() throws -> RunAgainFixture {
             // "is this an output location" against the folders the run really used.
             whitelist: PathWhitelist(roots: [root])
         ),
+        resumableTaskStore: ResumableTaskStore(
+            fileURL: root.appendingPathComponent("resumable-tasks.json")
+        ),
         localDataDeletionService: LocalDataDeletionService(fileURLs: []),
         priorTaskContextStore: PriorTaskContextStore(),
         taskUsageRecorder: TaskUsageRecorder(),

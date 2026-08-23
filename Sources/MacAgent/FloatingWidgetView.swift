@@ -35,6 +35,21 @@ private enum WidgetState {
     case controlling(VisionSessionProgress)
     case result(String, RunSuggestion?)
     case failure(String)
+    /// Sonny is offering to carry on with a task an earlier run began and did not finish (row 13,
+    /// SONNY-210).
+    ///
+    /// **Last in the precedence below, above nothing but `.idle`, and that placement is the whole
+    /// of this state's design.** Every case above it describes the task the user is doing *now* — a
+    /// question parked on them, a run in flight, the outcome of the one that just ended. This
+    /// describes a task from before, and a thing from before must never take the surface from a
+    /// thing from now. That is not a stylistic preference: CLAUDE.md records this precedence as
+    /// already delicate, because `.failure` sits ahead of `.result` and a bookkeeping write failure
+    /// routed into `errorMessage` twice replaced the result of a task that had actually succeeded.
+    /// A fifth competitor for the panel is exactly the shape that goes wrong the same way, so it is
+    /// placed where it cannot: below `.failure`, so a run that failed partway shows why rather than
+    /// an offer with the reason hidden, and below `.result`, so a finished task's answer is never
+    /// displaced by an older task's question.
+    case resumeOffer(ResumableTask)
 }
 
 struct FloatingWidgetView: View {
@@ -275,10 +290,18 @@ struct FloatingWidgetView: View {
             return false
         }
         switch state {
-        case .idle:
+        case .idle, .resumeOffer:
             // Idle is the one state where the composer is enabled and the user can actually be
             // mid-typing. Collapsing out from under unsent text after 6s of thinking-while-typing
             // was a real bug — the field is genuinely "in use" even with nothing submitted yet.
+            //
+            // **The offer collapses on exactly the same rule, and collapsing is not answering it**
+            // (SONNY-210). Holding the widget open until an offer is answered would turn a task
+            // abandoned last Tuesday into a permanent panel over the user's screen, which is the
+            // opposite of what an *offer* is; and there is nothing to lose by collapsing, because
+            // `shouldClearOutcomeOnDismiss` does not clear this state and the record stays on disk.
+            // So the widget shrinks back to its capsule, and the offer is there again the next time
+            // it is opened — which is the founder's own wording for when it should be raised.
             return viewModel.command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
         case .result, .failure:
             // An outcome the user was notified about does not collapse (SONNY-121). They were
@@ -392,6 +415,11 @@ struct FloatingWidgetView: View {
             let suggestion = viewModel.suggestions.first { $0.kind == .openFile }
             return .result(viewModel.finalSummary, suggestion)
         }
+        // `AgentViewModel.hasVisibleWidgetPanel` mirrors this branch in the same position, and the
+        // two must not drift — its own doc comment is where the shared rule lives.
+        if let offer = viewModel.resumeOffer {
+            return .resumeOffer(offer)
+        }
         return .idle
     }
 
@@ -409,6 +437,7 @@ struct FloatingWidgetView: View {
         case .controlling: return 9
         case .result: return 4
         case .failure: return 5
+        case .resumeOffer: return 10
         }
     }
 
@@ -885,6 +914,12 @@ private extension FloatingWidgetView {
                 progress: progress,
                 onPause: { viewModel.pauseVisionSession() },
                 onStop: { viewModel.emergencyStopVisionSession() }
+            )
+        case .resumeOffer(let task):
+            WidgetResumeOfferPanel(
+                command: task.command,
+                onContinue: { viewModel.continueResumableTask(task) },
+                onDismiss: { viewModel.dismissResumeOffer() }
             )
         case .result(let summary, let suggestion):
             WidgetResultPanel(
@@ -1514,6 +1549,62 @@ private struct WidgetResultPanel: View {
 
             if let suggestion {
                 WidgetFilePreviewChip(suggestion: suggestion, onOpen: onOpen)
+            }
+        }
+    }
+}
+
+// MARK: - Resume offer (row 13, SONNY-210 — no wireframe)
+
+/// "You were partway through X." — Continue, or not now.
+///
+/// **System B throughout, and only System B.** This is the floating widget, so it is
+/// `WidgetTheme`/`WidgetType` and the circular-background controls the panels around it already use;
+/// `SonnyTheme`/`SonnyType` are Command Center's and do not appear here. The two token sets are
+/// deliberately separate rather than variants of each other (`.claude/rules/
+/// macagent-ui-conventions.md`), and the founder restated the constraint on this specific panel when
+/// signing the design off on 2026-08-22.
+///
+/// No wireframe covers this state, so it is built to the panels beside it rather than to a drawing —
+/// the same footing `WidgetCaptureReviewPanel` is on, and a candidate for the whole-product UI pass
+/// for the same reason. Its shape is `WidgetCaptureReviewPanel`'s: a sentence, then a right-aligned
+/// pair of controls with the affirmative one tinted.
+private struct WidgetResumeOfferPanel: View {
+    let command: String
+    let onContinue: () -> Void
+    let onDismiss: () -> Void
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            Text(ResumeOfferPresentation.message(command: command))
+                .font(WidgetType.caption)
+                .foregroundStyle(WidgetTheme.textFull)
+                .fixedSize(horizontal: false, vertical: true)
+
+            HStack(spacing: 8) {
+                Spacer(minLength: 8)
+
+                Button(action: onDismiss) {
+                    Text(ResumeOfferPresentation.dismissLabel)
+                        .font(WidgetType.captionMedium)
+                        .foregroundStyle(WidgetTheme.textFull)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .frame(height: 23)
+                .widgetCircularBackground()
+                .accessibilityLabel(ResumeOfferPresentation.dismissAccessibilityLabel(command: command))
+
+                Button(action: onContinue) {
+                    Text(ResumeOfferPresentation.continueLabel)
+                        .font(WidgetType.captionMedium)
+                        .foregroundStyle(.white)
+                }
+                .buttonStyle(.plain)
+                .padding(.horizontal, 10)
+                .frame(height: 23)
+                .widgetCircularBackground(tint: WidgetTheme.primaryAction)
+                .accessibilityLabel(ResumeOfferPresentation.continueAccessibilityLabel(command: command))
             }
         }
     }

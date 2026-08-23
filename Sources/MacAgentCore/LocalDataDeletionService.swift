@@ -107,7 +107,12 @@ public struct LocalDataDeletionService: @unchecked Sendable {
             // sounds harmless and is not: where somebody's work goes is a map of what they work on,
             // and folder names are theirs. Erased with the rest for the same reason as everything
             // above it.
-            OutputLocationStore(fileManager: fileManager).fileURL
+            OutputLocationStore(fileManager: fileManager).fileURL,
+            // Row 13's unfinished runs (SONNY-210). It holds a whole plan — the steps, the paths
+            // they name, the draft text they carry — for a task the user started and did not
+            // finish, which is as much of their content as any row in task history and is left
+            // behind by a wipe that forgot it.
+            ResumableTaskStore(fileManager: fileManager).fileURL
         ]
     }
 
