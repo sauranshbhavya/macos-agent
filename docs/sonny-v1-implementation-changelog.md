@@ -5686,14 +5686,14 @@ Date: 2026-08-23
 Tickets: **SONNY-242** ("save it to my Desktop" resolves to `~/my Desktop` and is refused by the whitelist). One ticket, one session, one branch, cut from `main` at `961b9c2`. Found in the founder's manual pass of 2026-08-23, item A1, from a screenshot of the live packaged app.
 Reviewed by: pending
 
-Files changed (all in `fa40d21` plus this entry's commit):
+Files changed (across `fa40d21` and `3dc572f`, plus this entry's commit and the stamping commit that corrected these figures):
 - `Sources/MacAgentCore/SpokenNameNormalization.swift` (new) — `SpokenName`, holding the one possessive/article list and the two strippers, and `SpokenPath`, which turns a phrased path field into the path it means and walks a whole plan doing it
 - `Sources/MacAgentCore/AgentActionExecutor.swift` — `resolveDefaultOutputs` takes `rawPlan` and normalises it on its first line
 - `Sources/MacAgentCore/InstantCommandResolver.swift` — `strippedLaunchArticle` delegates to `SpokenName`; its literal `["my ", "the "]` is gone
 - `Sources/MacAgentCore/PathWhitelist.swift` — `resolveOutputPath`'s existence probe, and `outsideWhitelist`'s user-facing sentence
 - Tests: `SpokenPathTests` (new, 16 tests), `EditWorkspaceTests` and `WorkspaceDetailSheetTests` (one assertion each, following the copy)
 
-Tests: **1873 in 135 suites, exit 0 at `fa40d21`** via the flagged command, and the same figure as the mutation battery's own baseline run at that commit. Net **+16 tests**, all of them the new suite (`git diff 961b9c2..HEAD -- Tests/ | grep -c '^+    @Test'` → 16 at `fa40d21`). Nothing was removed; two existing assertions changed to follow the refusal copy. **`scripts/warnings`: 0 warnings at `fa40d21`**, every file in `Sources/` and `Tests/` compiled.
+Tests: **1873 in 135 suites, exit 0 at `97c69b4`** via the flagged command; the same figure at `fa40d21`, and the same as the mutation battery's own baseline run there. Net **+16 tests**, all of them the new suite (`git diff 961b9c2 97c69b4 -- Tests/ | grep -c '^+    @Test'` → 16). Nothing was removed; two existing assertions changed to follow the refusal copy. **`scripts/warnings`: 0 warnings at `fa40d21` and 0 at `97c69b4`**, every file in `Sources/` and `Tests/` compiled on both runs. Neither is re-run for the stamping commit, whose whole diff is this paragraph and the file list above it.
 
 **Mutation battery at `fa40d21`: 9 mutants, 8 killed, 1 survived** (`scripts/mutate`, which stamps its own SHA). The three that matter most: **M1** removes the plan-ingress normalisation and dies to the two tests that reproduce the founder's report; **M2** restores the old existence probe and dies to the two that pin the second defect; **M3** stops `InstantCommandResolver` from stripping articles at all and is killed by **16** pre-existing tests, which is the evidence that delegating its literal list to `SpokenName` preserved its behaviour rather than merely compiling. M4 (trailing noun), M6 (single strip instead of a fixed point), M7 (case-sensitive article match), M8 (workspace file locations dropped from the step normaliser) and M9 (the routine recursion dropped) are each killed by the test written for them.
 
