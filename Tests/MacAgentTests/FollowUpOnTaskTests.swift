@@ -659,6 +659,7 @@ private func makeFollowUpFixture() throws -> FollowUpFixture {
         clipboardHistorySettingsStore: ClipboardHistorySettingsStore(
             fileURL: root.appendingPathComponent("clipboard-history-settings.json")
         ),
+        approvedAppStore: ApprovedAppStore(fileURL: root.appendingPathComponent("approved-apps.json")),
         outputLocationStore: OutputLocationStore(
             fileURL: root.appendingPathComponent("output-locations.json"),
             // The same roots this fixture hands the view model, so the store answers
@@ -667,6 +668,13 @@ private func makeFollowUpFixture() throws -> FollowUpFixture {
         ),
         resumableTaskStore: ResumableTaskStore(
             fileURL: root.appendingPathComponent("resumable-tasks.json")
+        ),
+        clipboardHistoryMonitor: ClipboardHistoryMonitor(
+            reader: HermeticPasteboardReader(),
+            store: ClipboardHistoryStore(fileURL: root.appendingPathComponent("clipboard-history.json")),
+            settingsStore: ClipboardHistorySettingsStore(
+                fileURL: root.appendingPathComponent("clipboard-history-settings.json")
+            )
         ),
         localDataDeletionService: LocalDataDeletionService(fileURLs: []),
         priorTaskContextStore: PriorTaskContextStore(),

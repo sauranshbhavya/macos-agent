@@ -1793,14 +1793,24 @@ private func makeFixture() throws -> ResumableFixture {
             fileURL: root.appendingPathComponent("clipboard-history-settings.json")
             ),
             approvedAppStore: ApprovedAppStore(fileURL: root.appendingPathComponent("approved-apps.json")),
-            // SONNY-209's store, at this fixture's own root. A defaulted one writes to the real
-            // ~/Library path with a key the packaged app cannot read, which is the failure
-            // `OutputLocationFixtureWiringScanTests` exists to stop — and it caught this file.
+            // SONNY-209's store, at this fixture's own root, and with the same whitelist the view
+            // model gets so the store answers "is this an output location" against the folders the
+            // run really used. Omitting it is no longer possible — SONNY-240 removed every store
+            // default from the initializer — but naming no `fileURL` still writes to the real
+            // ~/Library path with a key the packaged app cannot read, which is what
+            // `LocalStoreInjectionScanTests` covers.
             outputLocationStore: OutputLocationStore(
             fileURL: root.appendingPathComponent("output-locations.json"),
             whitelist: PathWhitelist(roots: [root])
             ),
             resumableTaskStore: resumableTaskStore,
+            clipboardHistoryMonitor: ClipboardHistoryMonitor(
+                reader: HermeticPasteboardReader(),
+                store: ClipboardHistoryStore(fileURL: root.appendingPathComponent("clipboard-history.json")),
+                settingsStore: ClipboardHistorySettingsStore(
+                    fileURL: root.appendingPathComponent("clipboard-history-settings.json")
+                )
+            ),
             localDataDeletionService: LocalDataDeletionService(fileURLs: []),
             priorTaskContextStore: PriorTaskContextStore(),
             taskUsageRecorder: TaskUsageRecorder(),

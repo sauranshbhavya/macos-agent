@@ -54,10 +54,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     /// Injectable purely so tests can drive the menu and hotkey entry points against a fixture
     /// view model — `main.swift` still constructs the delegate with no arguments and gets the same
-    /// real, fully-defaulted `AgentViewModel` it always did. Nothing else about the delegate is
-    /// touched at construction time: every AppKit-owning collaborator below is `lazy`, so an
-    /// unlaunched delegate registers no status item, no hotkey, and no Combine subscriptions.
-    init(viewModel: AgentViewModel = AgentViewModel()) {
+    /// real view model it always did. Nothing else about the delegate is touched at construction
+    /// time: every AppKit-owning collaborator below is `lazy`, so an unlaunched delegate registers
+    /// no status item, no hotkey, and no Combine subscriptions.
+    ///
+    /// **`atItsRealStoreLocations()` rather than a bare `AgentViewModel()`** (SONNY-240). The
+    /// initializer no longer defaults a single local store, so this is the one site in the
+    /// repository that asks for the real `~/Library` locations — and it asks for them by name.
+    init(viewModel: AgentViewModel = .atItsRealStoreLocations()) {
         self.viewModel = viewModel
         super.init()
     }
