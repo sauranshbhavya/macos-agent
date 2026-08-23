@@ -4,6 +4,33 @@ import Testing
 
 @Suite
 struct PriorTaskContextTests {
+    /// **Every branch of `endsTheRun`, asserted as a value because no behaviour can tell two of them
+    /// apart** (PR #110 review, F8).
+    ///
+    /// `AgentViewModel.recordTaskHistoryIfTerminal` reloads Command Center's Memory rows on this
+    /// answer. A preview-only run writes nothing those rows show, so a mutant flipping `.prepared`
+    /// to `false` survives every behavioural test in the repository — the reviewer's battery proved
+    /// it. What the property states is a rule about the seven statuses, so the seven statuses are
+    /// what a test has to read.
+    ///
+    /// The split is the two pauses against everything else: a run waiting for an approval or an
+    /// answer has not finished and may still write, and every other status means nothing more is
+    /// coming — the preview-only exits included.
+    @Test
+    func everyOutcomeSaysWhetherItEndsTheRun() {
+        let waiting: [PriorTaskOutcomeStatus] = [.approvalNeeded, .clarificationNeeded]
+        let finished: [PriorTaskOutcomeStatus] = [.prepared, .dryRun, .completed, .failed, .canceled]
+
+        for status in waiting {
+            #expect(!status.endsTheRun, "\(status.rawValue) is a pause, not an ending")
+        }
+        for status in finished {
+            #expect(status.endsTheRun, "\(status.rawValue) ends the run")
+        }
+        // The population, so a case added later cannot sit in neither list and pass.
+        #expect(Set(waiting + finished).count == 7)
+    }
+
     @Test
     func contextExpiresAfterBoundedWindow() throws {
         var now = Date(timeIntervalSince1970: 1_000)

@@ -1843,7 +1843,10 @@ final class AgentViewModel: ObservableObject {
                 resultProvenance: result.summaryProvenance,
                 startedAt: taskHistoryStartedAt
             )
-            refreshSavedItems()
+            // `refreshSavedItems()` used to sit here, and `recordPriorTaskContext` above now reaches
+            // it through `refreshMemoryRowsAfterRun()` on every terminal outcome rather than on this
+            // one branch — which is the F6 fix. Leaving it would load routines and workspaces twice
+            // for every successful run.
             publishCompletedRunNoticeIfUnreported(result.summary, taskID: recordedTaskID)
         } catch RiskApprovalError.approvalRequired(let request) {
             // Whatever let this run proceed without a prompt — a routine's trust grant, or the
@@ -3087,8 +3090,12 @@ final class AgentViewModel: ObservableObject {
         // Both attempted whatever the other does, the same rule `deleteAllLocalData` follows across
         // its own files: a first step that failed must not leave the second silently unattempted.
         do {
+            // **`deleteStoreFilesOnly`, never `deleteAllLocalData`** (PR #110 review, F2). The wipe's
+            // door also sweeps every file `LocalDataQuarantine` has set aside from these stores, so
+            // this call destroyed the file an earlier press had promised to keep — and reported it
+            // in the "N files" figure, where the user can see only one memory type.
             let service = LocalDataDeletionService(fileURLs: readable.map(storeFileURL))
-            deletedFileCount = try service.deleteAllLocalData().deletedFileCount
+            deletedFileCount = try service.deleteStoreFilesOnly().deletedFileCount
         } catch {
             failures.append(error.localizedDescription)
         }
@@ -3117,14 +3124,71 @@ final class AgentViewModel: ObservableObject {
         // sources are re-probed by `refreshMemorySurfaces()` — `.taskPlanDetails` is loaded when a
         // task's detail is opened and by nothing else — so a row cleared of an unreadable plan-detail
         // file would keep its banner and keep saying "Can't be read" until the user opened a task.
-        clearLoadFailuresForStoresWhoseFileIsGone(in: category)
+        clearLoadFailuresForStoresWhoseFileIsGone(
+            LocalStorageLoadFailureSource.allCases.filter { $0.memoryCategory == category }
+        )
         refreshMemorySurfaces()
     }
 
-    /// This category's stores whose file exists and will not read, in `LocalStore.allCases` order.
+    /// This category's stores whose file will not read, in `LocalStore.allCases` order.
+    ///
+    /// **Asked at this moment, not read off `localStorageLoadFailures`** (PR #110 review, F5). That
+    /// dictionary holds what something has *happened* to have loaded and failed on, which is not the
+    /// same population: `.taskPlanDetails` is recorded only by `storedPlanDetail(for:)`, so a user
+    /// who has never pressed Follow up has an unreadable plan-detail file classified readable — and
+    /// the delete then unlinks it. `.visionSessionJournal` and `.shortcutRunHistory` have no source
+    /// at all, so they were never protected. Of the four files under the Task history row, exactly
+    /// one was reliably covered by the rule this ticket exists to enforce.
+    ///
+    /// Probing costs at most four file reads on a control the user pressed, which is the cheapest
+    /// place in the product to spend them, and it makes "never destroy what you cannot prove is
+    /// garbage" true of all thirteen stores rather than of the ones something happened to touch.
     private func unreadableStores(in category: MemoryCategory) -> [LocalStore] {
-        let failed = Set(localStorageLoadFailures.keys.map(\.store))
-        return category.stores.filter { failed.contains($0) }
+        category.stores.filter { !storeIsReadable($0) }
+    }
+
+    /// Whether this store's file can be read right now.
+    ///
+    /// Exhaustive over `LocalStore` with no `default`, so a fourteenth store cannot be added without
+    /// somebody naming its read door — and a store with no read door named here is a store the
+    /// delete would destroy unreadable.
+    ///
+    /// A store with no file at all answers `true`: every one of these loaders returns empty for a
+    /// missing file, and there is nothing to protect.
+    private func storeIsReadable(_ store: LocalStore) -> Bool {
+        do {
+            switch store {
+            case .visionSessionJournal:
+                _ = try visionSessionJournalStore.loadAll()
+            case .routines:
+                _ = try routineStore.loadAll()
+            case .workspaces:
+                _ = try workspaceStore.loadAll()
+            case .clipboardHistory:
+                _ = try clipboardHistoryMonitor.historyStore.loadAll()
+            case .clipboardHistorySettings:
+                _ = try clipboardHistorySettingsStore.load()
+            case .snippets:
+                _ = try snippetStore.loadAll()
+            case .recentArtifacts:
+                _ = try recentArtifactStore.loadAll()
+            case .shortcutRunHistory:
+                _ = try shortcutRunHistoryStore.loadAll()
+            case .taskHistory:
+                _ = try taskHistoryStore.loadAll()
+            case .taskPlanDetails:
+                _ = try taskPlanDetailStore.loadAll()
+            case .approvedApps:
+                _ = try approvedAppStore.loadAll()
+            case .outputLocations:
+                _ = try outputLocationStore.loadAll()
+            case .resumableTasks:
+                _ = try resumableTaskStore.loadAll()
+            }
+            return true
+        } catch {
+            return false
+        }
     }
 
     /// Forgets the load failures whose file is no longer where it was.
@@ -3132,9 +3196,8 @@ final class AgentViewModel: ObservableObject {
     /// Evidence rather than assumption: it asks the file system whether the file this source failed
     /// on is actually gone, so a move or a delete that silently did nothing cannot clear a banner
     /// that is still true.
-    private func clearLoadFailuresForStoresWhoseFileIsGone(in category: MemoryCategory) {
-        for source in LocalStorageLoadFailureSource.allCases
-        where source.memoryCategory == category && localStorageLoadFailures[source] != nil {
+    private func clearLoadFailuresForStoresWhoseFileIsGone(_ sources: [LocalStorageLoadFailureSource]) {
+        for source in sources where localStorageLoadFailures[source] != nil {
             guard !FileManager.default.fileExists(atPath: storeFileURL(for: source.store).path) else {
                 continue
             }
@@ -3175,6 +3238,28 @@ final class AgentViewModel: ObservableObject {
         case .resumableTasks:
             return resumableTaskStore.fileURL
         }
+    }
+
+    /// Every Memory row a finished run can have changed, reloaded together.
+    ///
+    /// **Two calls, because the Memory section's rows are published by two loaders and always have
+    /// been** (PR #110 review, F6). `refreshMemoryEntries()` owns the five stores with no page of
+    /// their own plus unfinished tasks; `refreshSavedItems()` owns Routines and Workspaces, which it
+    /// deliberately does not, since a second loader for the same file is a second answer that can
+    /// disagree with the first.
+    ///
+    /// The first round of SONNY-246 called only the first of the two, and the row that made the gap
+    /// visible was the one its own comment used as an example: a run that creates a workspace and
+    /// then fails, or *any* scheduled run that creates one, left the Workspaces row showing the old
+    /// count. `refreshSavedItems()` was reached only from the success branches — three of them, none
+    /// on the scheduled path — so the exact symptom SONNY-246 was filed for survived on two of the
+    /// nine rows.
+    ///
+    /// Task history is not here: both terminal paths already call `refreshTaskHistory()` themselves,
+    /// on their own rules, and folding it in would make a third caller of a fourth loader.
+    private func refreshMemoryRowsAfterRun() {
+        refreshSavedItems()
+        refreshMemoryEntries()
     }
 
     /// Every list the Memory section renders, reloaded together.
@@ -3717,6 +3802,15 @@ final class AgentViewModel: ObservableObject {
         priorTaskContextStore.clear()
         taskUsageRecorder.reset()
         logStore.reset()
+        // **Over every source, before the refreshes** (PR #110 review, F3). Those four reload ten of
+        // the eleven load-failure sources between them; the one they never reach is
+        // `.taskPlanDetails`, which only `storedPlanDetail(for:)` records. So a user who had pressed
+        // Follow up on a task with an unreadable plan-detail file, and then wiped everything, was
+        // told "Deleted 13 local data files." while the Task history row still read "Can't be read"
+        // with a live Delete and the banner still said to go and clear a file that no longer existed.
+        // The evidence check inside is what makes this safe: a file the wipe failed to delete keeps
+        // its failure.
+        clearLoadFailuresForStoresWhoseFileIsGone(LocalStorageLoadFailureSource.allCases)
         refreshSavedItems()
         refreshTaskHistory()
         // The lists the Memory section renders itself, unfinished tasks included. Without this the
@@ -3763,9 +3857,11 @@ final class AgentViewModel: ObservableObject {
         do {
             // **Refreshed only when the poll actually recorded something** (SONNY-246). This runs
             // once a second; `poll()` returns `nil` for every tick where the pasteboard did not
-            // change, was concealed, or held no text, and reloading five encrypted files on each of
-            // those would be 60 pointless decrypts a minute on the main actor. A non-nil answer is
-            // exactly the case the Memory page's Clipboard history row is stale for.
+            // change, was concealed, or held no text, and a reload on each of those would be sixty
+            // pointless passes a minute over eight encrypted files — the six `refreshMemoryEntries()`
+            // reads plus the two `refreshSavedItems()` adds — on the main actor. A non-nil answer is
+            // exactly the case the Memory page's Clipboard history row is stale for. (It said "five"
+            // until PR #110's review; `refreshMemoryEntries()` has always loaded six.)
             let recorded = try clipboardHistoryMonitor.poll() != nil
             if recorded {
                 refreshMemoryEntries()
@@ -3791,8 +3887,32 @@ final class AgentViewModel: ObservableObject {
         clipboardHistoryTimer = nil
     }
 
+    /// Records that this store's file will not read, republishing **only when that is news**.
+    ///
+    /// **The guard is the whole of this function's history** (PR #110 review, F1). It used to
+    /// reassign unconditionally, which was harmless while the only readers were a page appearing and
+    /// two deletes the user pressed. SONNY-246 gave it a caller that fires on every recorded
+    /// clipboard item — up to once a second — and each reassignment was a fresh
+    /// `localStorageNotice`, which `AppDelegate` sinks with no `removeDuplicates()` into
+    /// `postStorageNoticeNotification`, whose `deliver` uses a fresh `UUID()` and therefore replaces
+    /// nothing. With the founder's two broken files that was two Notification Center banners **per
+    /// copy**, and the widget's own notice re-raised the moment after the user dismissed it. Before
+    /// SONNY-246 a copy fired none of that.
+    ///
+    /// `clearLocalStorageLoadFailure` below has had the same guard all along, which is what made the
+    /// asymmetry a bug rather than a design: clearing an already-clear source was silent and
+    /// re-recording an identical failure was not.
+    ///
+    /// The consequence, stated rather than discovered: a store that fails identically twice leaves
+    /// whatever is on the channel in between — a write failure's own sentence, say — standing.
+    /// That is the intended reading. The condition has not changed, so there is nothing new to tell
+    /// the user, and the row still says "Can't be read" with a live Delete either way.
     private func recordLocalStorageLoadFailure(_ source: LocalStorageLoadFailureSource, error: Error) {
-        localStorageLoadFailures[source] = "\(source.label): \(error.localizedDescription)"
+        let detail = "\(source.label): \(error.localizedDescription)"
+        guard localStorageLoadFailures[source] != detail else {
+            return
+        }
+        localStorageLoadFailures[source] = detail
         publishLocalStorageLoadError()
     }
 
@@ -3840,9 +3960,18 @@ final class AgentViewModel: ObservableObject {
         // page without this sentence: the Clipboard history row's switch commits through
         // `applyClipboardHistoryNoticeChoice`, which writes without loading and overwrites a file it
         // could not read.
-        let wayOut = unreadableMemoryCategories.isEmpty
-            ? ""
-            : " Open Memory in Command Center to clear it."
+        let wayOut: String
+        switch unreadableMemoryCategories.count {
+        case 0:
+            wayOut = ""
+        case 1:
+            wayOut = " Open Memory in Command Center to clear it."
+        default:
+            // The founder's two broken files were two rows, and the singular pronoun then covered
+            // both (PR #110 review). Small, and it is the sentence someone reads while deciding
+            // whether the thing they are being told about is one problem or several.
+            wayOut = " Open Memory in Command Center to clear them."
+        }
         localStorageNotice = "Sonny could not load encrypted local data. \(details)\(wayOut)"
     }
 
@@ -4739,15 +4868,24 @@ final class AgentViewModel: ObservableObject {
         // filled to 100 each; min 4.2 ms, max 5.8 ms; measured at ff1cf63 with a throwaway harness
         // that built those stores under a fixed key and timed `refreshMemoryEntries()` ten times
         // after one warm call — deliberately not committed, since a timing assertion in this suite
-        // would be a flake). For scale, the largest store in the app is task history, which is *not*
-        // among these six and is already reloaded on this same path by `refreshTaskHistory()` below
-        // at a cost its own doc comment records as 130 ms at the cap.
+        // would be a flake). Routines and workspaces are read too, through `refreshSavedItems()`
+        // beside it, which also probes four of those same stores for readability — so the pass is
+        // eight files rather than six.
+        //
+        // **No ratio against task history here, and the missing one is the point** (PR #110 review).
+        // The obvious comparison is `refreshTaskHistory()` on this same path, whose neighbourhood
+        // records 130 ms at the cap — but `TaskHistoryStore`, where that figure comes from,
+        // attributes it to `record(_:)`: a decode, a re-encrypt and a write, not a load. Dividing
+        // one by the other compares different work. What can be said without measuring the wrong
+        // thing: this is single-digit milliseconds on a control nobody is waiting on, and on a
+        // suppressed or preview-only run — where `refreshTaskHistory()` is never called — it is the
+        // whole of the cost rather than an addition to someone else's.
         //
         // The one duplicated read is unfinished tasks, which a run carrying a checkpoint has just
         // reloaded inside the settle above; the ordering is worth it, since a refresh placed before
         // the settle would publish a checkpoint the settle was about to delete.
         if status.endsTheRun {
-            refreshMemoryEntries()
+            refreshMemoryRowsAfterRun()
         }
 
         guard [.completed, .failed, .canceled].contains(status),
@@ -5367,12 +5505,12 @@ final class AgentViewModel: ObservableObject {
             isRunning = false
             currentTask = nil
             // A scheduled routine writes to the same stores a typed command does — output
-            // locations, recent artifacts, a saved snippet — and Command Center can be open the
-            // whole time it runs (SONNY-246). The foreground twin of this line is in
-            // `recordTaskHistoryIfTerminal`, which this path does not go through; the `defer` is the
-            // one place every exit here passes, including the ones that never reach
+            // locations, recent artifacts, a saved snippet, a *routine or a workspace* — and Command
+            // Center can be open the whole time it runs (SONNY-246). The foreground twin of this
+            // line is in `recordTaskHistoryIfTerminal`, which this path does not go through; the
+            // `defer` is the one place every exit here passes, including the ones that never reach
             // `recordScheduledTaskHistory` at all.
-            refreshMemoryEntries()
+            refreshMemoryRowsAfterRun()
         }
 
         // Whatever happens below, this occurrence is handled. Advancing first means an unexpected
