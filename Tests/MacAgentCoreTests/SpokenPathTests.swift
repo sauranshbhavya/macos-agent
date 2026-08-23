@@ -50,13 +50,46 @@ struct SpokenPathTests {
         #expect(SpokenPath.normalized("my Documents/Client folder") == "Documents/Client folder")
     }
 
-    /// An absolute or tilde path is a place, not a description. `/Users/me/my Desktop` is a folder
+    /// A `/`-absolute path is a place, not a description. `/Users/me/my Desktop` is a folder
     /// somebody can really have, and rewriting it would send a write somewhere they did not ask for.
     @Test
-    func aPathThatIsAlreadyAPathIsNeverRewritten() {
+    func aSlashAbsolutePathIsNeverRewritten() {
         #expect(SpokenPath.normalized("/Users/me/my Desktop") == "/Users/me/my Desktop")
-        #expect(SpokenPath.normalized("~/my Desktop") == "~/my Desktop")
         #expect(SpokenPath.normalized("/Users/me/my downloads folder") == "/Users/me/my downloads folder")
+        #expect(SpokenPath.normalized("/my Desktop") == "/my Desktop")
+    }
+
+    /// **A tilde path is not the same case, and the first version of this suite pinned the bug as
+    /// correct** (PR #106 review, F1). `PathWhitelist.expandPath` expands the tilde and resolves the
+    /// rest against the same home directory a bare name goes to, so `~/my Desktop` and `my Desktop`
+    /// are one location — the reported command was fixed in one spelling and still threw the
+    /// founder's exact error in the other. And the tilde spelling is the planner's own: its prompt
+    /// models `~/Documents` in worked examples.
+    ///
+    /// The `~` component is a home prefix, not a name, so the article comes off the component after
+    /// it — and a component below *that* is a path someone spelled, exactly as in the bare case.
+    @Test
+    func aTildePathHasItsNamedComponentNormalisedLikeABareOne() {
+        #expect(SpokenPath.normalized("~/my Desktop") == "~/Desktop")
+        #expect(SpokenPath.normalized("~/the Documents folder") == "~/Documents")
+        #expect(SpokenPath.normalized("~/my downloads folder") == "~/downloads")
+        #expect(SpokenPath.normalized("~/Documents/Client folder") == "~/Documents/Client folder")
+        #expect(SpokenPath.normalized("~/Desktop/my notes") == "~/Desktop/my notes")
+        #expect(SpokenPath.normalized("~someone/my Desktop") == "~someone/Desktop")
+        #expect(SpokenPath.normalized("~") == "~")
+        #expect(SpokenPath.normalized("~/") == "~/")
+    }
+
+    /// The separator between an article and the name it precedes is any whitespace, not a literal
+    /// U+0020 (PR #106 review, F5). Dictation and pasted rich text produce non-breaking spaces, and
+    /// the difference is invisible on screen — the same family as the case folding above.
+    @Test
+    func aNonBreakingSpaceSeparatesAnArticleJustAsAPlainOneDoes() {
+        #expect(SpokenPath.normalized("my\u{00A0}Desktop") == "Desktop")
+        #expect(SpokenPath.normalized("the\u{00A0}Documents") == "Documents")
+        #expect(SpokenPath.normalized("my downloads\u{00A0}folder") == "downloads")
+        #expect(SpokenPath.normalized("~/my\u{00A0}Desktop") == "~/Desktop")
+        #expect(SpokenName.withoutLeadingArticle("my\u{00A0}Safari") == "Safari")
     }
 
     /// Only the leading component is read as a folder name in the home directory, so a possessive
@@ -72,7 +105,12 @@ struct SpokenPathTests {
     /// the name.
     @Test
     func normalisationIsIdempotent() {
-        for phrase in ["my Desktop", "the Documents folder", "Desktop/my notes", "/tmp/my Desktop", "my The Archive", "the the the Desktop"] {
+        let corpus = [
+            "my Desktop", "the Documents folder", "Desktop/my notes", "/tmp/my Desktop",
+            "my The Archive", "the the the Desktop",
+            "~/my Desktop", "~/my downloads folder", "~", "~/", "my\u{00A0}Desktop"
+        ]
+        for phrase in corpus {
             let once = SpokenPath.normalized(phrase)
             #expect(SpokenPath.normalized(once) == once)
         }
@@ -122,10 +160,55 @@ struct SpokenPathTests {
 
     // MARK: - The whole step, and nothing but the step
 
-    /// Derives the population by reflecting over `AgentStep` rather than by reading the list in
-    /// `SpokenPath.normalizingFolderPhrases(in:)`, so a fifth path field added later and not wired
-    /// in fails here instead of shipping. A field this fixture does not set is `nil`, which cannot
-    /// change under normalisation — so the omission fails the same assertion.
+    /// **Which `AgentStep` properties name a filesystem path, asserted in both directions.**
+    ///
+    /// The first version of this test reflected to get the population and then decided the question
+    /// with a spelling rule — `hasSuffix("Path")` — so a fifth path field called `destinationFolder`
+    /// would have passed in silence while the doc comment claimed the population was derived rather
+    /// than read (PR #106 review, F6). The population still comes off `Mirror`; the *classification*
+    /// is this table, and the assertion below fails both when a property is missing from it and when
+    /// it holds a name no property has. A new field of any spelling therefore stops the suite until
+    /// somebody decides which side it is on, which is `ProductShellTests`' stored-property
+    /// classifier applied to a smaller type.
+    private static let stepPropertyNamesAPath: [String: Bool] = [
+        "id": false,
+        "operation": false,
+        "description": false,
+        "inputPath": true,
+        "outputPath": true,
+        "count": false,
+        "targetURL": false,
+        "appName": false,
+        "question": false,
+        "mediaProvider": false,
+        "mediaTitle": false,
+        "mediaArtist": false,
+        "contextSource": false,
+        "resolvedFromFinderSelection": false,
+        "routineName": false,
+        "routineSteps": false,
+        "workspaceName": false,
+        "workspaceApps": false,
+        "workspaceURLs": false,
+        "workspaceFileLocations": true,
+        "workspaceAppsToRemove": false,
+        "workspaceURLsToRemove": false,
+        "workspaceFileLocationsToRemove": true,
+        "sourceURLs": false,
+        "searchQuery": false,
+        "draftTitle": false,
+        "draftContent": false,
+        "shortcutName": false,
+        "shortcutInput": false,
+        "resolvedAppName": false,
+        "resolvedBundleIdentifier": false,
+        "visionGoal": false,
+        "browserName": false
+    ]
+
+    /// Every property the table above calls a path is normalised, and every property it does not is
+    /// left exactly as it was. A field this fixture does not set is `nil`, which cannot change under
+    /// normalisation — so an unwired path field fails the same assertion.
     @Test
     func everyPathFieldOnAStepIsNormalisedAndNothingElseIs() {
         let phrase = "my Desktop"
@@ -177,18 +260,21 @@ struct SpokenPathTests {
             }
         )
 
-        #expect(beforeFields.count == afterFields.count)
-        var normalisedLabels: Set<String> = []
+        // Both directions: no property the table does not classify, no classification without a
+        // property. A field added to `AgentStep` fails here whatever it is called.
+        #expect(Set(beforeFields.keys) == Set(Self.stepPropertyNamesAPath.keys))
+        #expect(Set(afterFields.keys) == Set(Self.stepPropertyNamesAPath.keys))
+
         for (label, value) in beforeFields {
-            let namesAPath = label.hasSuffix("Path") || label.lowercased().contains("filelocation")
+            guard let namesAPath = Self.stepPropertyNamesAPath[label] else {
+                continue
+            }
             if namesAPath {
                 #expect(afterFields[label] != value, "\(label) names a path and was not normalised")
-                normalisedLabels.insert(label)
             } else {
                 #expect(afterFields[label] == value, "\(label) does not name a path and was changed")
             }
         }
-        #expect(normalisedLabels == ["inputPath", "outputPath", "workspaceFileLocations", "workspaceFileLocationsToRemove"])
     }
 
     /// `SaveRoutineCapabilityAdapter` persists `routineSteps` exactly as the plan carried them, so a
@@ -224,11 +310,46 @@ struct SpokenPathTests {
         #expect(nested.outputPath == "Desktop")
     }
 
-    // MARK: - The reported command, end to end
+    // MARK: - The reported command, through the executor
 
-    /// A `create_local_draft` step carrying the phrase the planner copied out of "save it to my
-    /// Desktop". `prepare` resolves, previews and never writes, so this reads the real home
-    /// directory and touches nothing in it.
+    /// **Every executor here is temp-rooted, stores included** (PR #106 review, F7). A default
+    /// `AgentActionExecutor()` binds six real local stores under `~/Library/Application
+    /// Support/Sonny`, and `LocalStorageEncryption` swaps in an ephemeral key inside a test
+    /// process — so the day a `prepare` path starts writing, it writes the developer's own data
+    /// back unreadable rather than merely wrong. That is SONNY-209's failure with a worse ending,
+    /// and the first version of this suite stood one code change away from it. All six are named
+    /// explicitly; the executor's other defaulted stores are SONNY-240's to close, not this
+    /// suite's to reach around.
+    ///
+    /// The whitelist is temp-rooted too, which costs nothing here: a relative or tilde path always
+    /// resolves against the *home* directory, so what these tests read out of a refusal is the
+    /// resolved path — which is the whole of what the founder's report was about. They never touch
+    /// the real Desktop, and they answer the same whether or not it exists.
+    private struct ExecutorFixture {
+        let root: URL
+        let executor: AgentActionExecutor
+
+        @MainActor
+        init() throws {
+            root = FileManager.default.temporaryDirectory
+                .appendingPathComponent("SpokenPathTests-\(UUID().uuidString)", isDirectory: true)
+            try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+            executor = AgentActionExecutor(
+                whitelist: PathWhitelist(roots: [root]),
+                routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
+                workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json")),
+                clipboardHistoryStore: ClipboardHistoryStore(fileURL: root.appendingPathComponent("clipboard.json")),
+                snippetStore: SnippetStore(fileURL: root.appendingPathComponent("snippets.json")),
+                recentArtifactStore: RecentArtifactStore(fileURL: root.appendingPathComponent("artifacts.json")),
+                shortcutRunHistoryStore: ShortcutRunHistoryStore(fileURL: root.appendingPathComponent("shortcuts.json"))
+            )
+        }
+
+        func tearDown() {
+            try? FileManager.default.removeItem(at: root)
+        }
+    }
+
     private func draftPlan(savedTo destination: String) -> AgentPlan {
         AgentPlan(
             summary: "Write a short note about today's plan.",
@@ -246,68 +367,137 @@ struct SpokenPathTests {
         )
     }
 
+    /// The path a refusal names when the destination is out of bounds — which, under a temp-rooted
+    /// whitelist, every home path is. That path is exactly what the founder's screenshot showed
+    /// going wrong.
+    private func refusedPath(for destination: String, fixture: ExecutorFixture) throws -> String {
+        var thrown: Error?
+        do {
+            _ = try fixture.executor.prepare(plan: draftPlan(savedTo: destination))
+        } catch {
+            thrown = error
+        }
+        guard case .outsideWhitelist(let path, _)? = thrown as? PathValidationError else {
+            Issue.record("Expected .outsideWhitelist for \(destination), got \(String(describing: thrown))")
+            return ""
+        }
+        return path
+    }
+
+    /// The reported command: `/Users/<user>/my Desktop` was the refused path, and the refusal then
+    /// listed the real Desktop as an allowed root. What the fix has to change is which folder the
+    /// plan resolves to, and that is what this reads back.
     @Test
-    func theReportedCommandLandsInDesktopRatherThanASiblingThatDoesNotExist() throws {
+    func theReportedCommandStopsResolvingToASiblingOfDesktop() throws {
+        let fixture = try ExecutorFixture()
+        defer { fixture.tearDown() }
         let desktop = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Desktop", isDirectory: true)
             .resolvingSymlinksInPath()
-        try #require(FileManager.default.fileExists(atPath: desktop.path))
 
-        let prepared = try AgentActionExecutor().prepare(plan: draftPlan(savedTo: "my Desktop"))
-        let resolved = try #require(prepared.plan.steps.first?.outputPath)
-
-        #expect(URL(fileURLWithPath: resolved).deletingLastPathComponent().path == desktop.path)
-        #expect(resolved.hasSuffix(".md"))
-        #expect(!resolved.contains("my Desktop"))
-        #expect(!FileManager.default.fileExists(atPath: resolved))
+        #expect(try refusedPath(for: "my Desktop", fixture: fixture) == desktop.path)
     }
 
-    /// The second half of the same journey, and a defect of its own (SONNY-242).
-    /// `PathWhitelist.resolveOutputPath` probed for an existing directory with
-    /// `expandingTildeInPath`, which leaves a relative name relative — so it was asking the
-    /// *working directory* a question every other line in that file asks the home directory. A bare
-    /// `Desktop` therefore answered "no such directory", fell through, and named `~/Desktop` itself
-    /// as the file to write. The draft write would then have failed on a directory.
+    /// The same command in the spelling the planner's own prompt models, which was still broken
+    /// after the first round (PR #106 review, F1).
     @Test
-    func aBareFolderNameNamesTheFolderRatherThanBecomingTheFile() throws {
+    func theTildeSpellingOfTheReportedCommandResolvesTheSameWay() throws {
+        let fixture = try ExecutorFixture()
+        defer { fixture.tearDown() }
         let desktop = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Desktop", isDirectory: true)
             .resolvingSymlinksInPath()
-        try #require(FileManager.default.fileExists(atPath: desktop.path))
 
-        let prepared = try AgentActionExecutor().prepare(plan: draftPlan(savedTo: "Desktop"))
-        let resolved = try #require(prepared.plan.steps.first?.outputPath)
-
-        #expect(resolved != desktop.path)
-        #expect(URL(fileURLWithPath: resolved).deletingLastPathComponent().path == desktop.path)
+        #expect(try refusedPath(for: "~/my Desktop", fixture: fixture) == desktop.path)
+        #expect(try refusedPath(for: "~/my Desktop", fixture: fixture) == refusedPath(for: "my Desktop", fixture: fixture))
     }
-
-    // MARK: - The refusal, when the folder really is out of bounds
 
     /// A folder Sonny cannot reach is still refused — the point of the fix is that the refusal now
     /// names the folder the person meant instead of a sibling nobody has.
     @Test
-    func aRefusalNamesTheFolderThePersonMeant() {
-        var thrown: Error?
-        do {
-            _ = try AgentActionExecutor().prepare(plan: draftPlan(savedTo: "my Downloads folder"))
-        } catch {
-            thrown = error
-        }
-
-        guard case .outsideWhitelist(let path, _)? = thrown as? PathValidationError else {
-            Issue.record("Expected .outsideWhitelist, got \(String(describing: thrown))")
-            return
-        }
+    func aRefusalNamesTheFolderThePersonMeant() throws {
+        let fixture = try ExecutorFixture()
+        defer { fixture.tearDown() }
         let downloads = FileManager.default.homeDirectoryForCurrentUser
             .appendingPathComponent("Downloads", isDirectory: true)
-        #expect(path == downloads.resolvingSymlinksInPath().path)
+            .resolvingSymlinksInPath()
+
+        let path = try refusedPath(for: "my Downloads folder", fixture: fixture)
+        #expect(path == downloads.path)
         #expect(!path.contains("folder"))
     }
 
-    /// The copy itself. "Outside the writable whitelist" named an implementation detail the reader
-    /// has no way to know about; the sentence has to survive the workspace detail sheet rendering it
-    /// after "Not in effect — ", which is why the path stays at the front.
+    // MARK: - The existence probe
+
+    /// Records what `resolveOutputPath` asks the filesystem about.
+    ///
+    /// The probe is the whole of the second defect, so this pins the question rather than a
+    /// downstream consequence of it — and it needs no real folder to do that, which is what lets
+    /// this test say something exact about a relative path without reading the developer's home.
+    private final class ProbeRecordingFileManager: FileManager, @unchecked Sendable {
+        var probedPaths: [String] = []
+
+        override func fileExists(atPath path: String) -> Bool {
+            probedPaths.append(path)
+            return super.fileExists(atPath: path)
+        }
+    }
+
+    /// `resolveOutputPath` used to probe `(rawPath as NSString).expandingTildeInPath`, which leaves
+    /// a relative name relative — so it asked the process's *working directory* a question every
+    /// other line in that file asks the home directory. A bare `Desktop` therefore answered "no such
+    /// directory" from an app whose working directory is `/`, fell through, and named `~/Desktop` —
+    /// the folder itself — as the file to write.
+    @Test
+    func theExistenceProbeAsksAboutThePathThisTypeWouldResolve() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SpokenPathTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+        let whitelist = PathWhitelist(roots: [root])
+        let recorder = ProbeRecordingFileManager()
+        let home = FileManager.default.homeDirectoryForCurrentUser
+
+        // Throws, because a temp-rooted whitelist contains no home path — the probe has already
+        // happened by then, and the probe is what is under test.
+        _ = try? whitelist.resolveOutputPath(
+            rawPath: "Desktop",
+            defaultName: "draft",
+            extension: "md",
+            fileManager: recorder
+        )
+
+        #expect(recorder.probedPaths == [
+            home.appendingPathComponent("Desktop", isDirectory: true).resolvingSymlinksInPath().path
+        ])
+        #expect(!recorder.probedPaths.contains("Desktop"))
+    }
+
+    /// The branch the probe exists to reach, on a folder that really is inside the whitelist: an
+    /// existing directory takes the generated name *inside* it rather than becoming the file.
+    @Test
+    func anExistingDirectoryTakesTheGeneratedNameInsideIt() throws {
+        let root = FileManager.default.temporaryDirectory
+            .appendingPathComponent("SpokenPathTests-\(UUID().uuidString)", isDirectory: true)
+        try FileManager.default.createDirectory(at: root, withIntermediateDirectories: true)
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let resolved = try PathWhitelist(roots: [root]).resolveOutputPath(
+            rawPath: root.path,
+            defaultName: "draft",
+            extension: "md",
+            fileManager: .default
+        )
+
+        #expect(resolved.deletingLastPathComponent().path == root.resolvingSymlinksInPath().path)
+        #expect(resolved.lastPathComponent == "draft.md")
+    }
+
+    // MARK: - The refusal copy
+
+    /// "Outside the writable whitelist" named an implementation detail the reader has no way to know
+    /// about. The sentence has to survive the workspace detail sheet rendering it after
+    /// "Not in effect — ", which is why the path stays at the front.
     @Test
     func theRefusalCopyIsPlainAndLeadsWithThePath() {
         let error = PathValidationError.outsideWhitelist(
