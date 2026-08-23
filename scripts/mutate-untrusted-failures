@@ -37,15 +37,15 @@
 
 >>> signature This deadline is a deadlock backstop, not a timing assertion
 >>> source This deadline is a deadlock backstop, not a timing assertion
->>> reason A poll that ran out of wall clock. It fires when the machine is oversubscribed as readily as when something is genuinely stuck, and a battery is exactly the load that produces the first. Thirty-five of these fired in one measured full-suite run at 961b9c2 with a cold build beside it.
+>>> reason VisionSessionRunTests' waitUntil, a poll that ran out of wall clock. It fires when the machine is oversubscribed as readily as when something is genuinely stuck, and a battery is exactly the load that produces the first. Measured: one flagged run at 961b9c2 with a cold swift build beside it went red on 67 test functions from this one message, 87 firings in all (grep -c over that run's log); the two runs either side of it passed.
 
 >>> signature did not become idle before timeout
 >>> source did not become idle before timeout
->>> reason The view-model hang backstop, in the six suites that word it this way. Same thing as above: a deadline reached rather than an expectation violated.
+>>> reason The view-model hang backstop, in the six suites that word it this way. Same construct as above and the same 30 s deadline; not observed firing in the run that produced the numbers above, because those suites happened not to be the ones that lost. Declared on the construct, not on having watched it.
 
 >>> signature did not settle before timeout
 >>> source did not settle before timeout
->>> reason The same view-model hang backstop, in the two suites that word it "settle" instead of "become idle".
+>>> reason The same view-model hang backstop, in the two suites that word it "settle" instead of "become idle". Two wordings of one sentence is a DRY problem rather than a second construct, and SONNY-261 is where that is written down.
 
 >>> signature the run never finished
 >>> source the run never finished
