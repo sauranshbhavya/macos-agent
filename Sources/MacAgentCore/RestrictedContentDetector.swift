@@ -92,9 +92,17 @@ import SwiftSoup
 /// - **What the accepted set actually is, since three earlier sentences understated it:** between
 ///   `contentlessVisibleTextLimit` and `interstitialVisibleTextLimit` — 200 to 2 000 visible
 ///   characters — **neither stage fires unless the page says one of the seven phrases to a reader**,
-///   and that band is where most real walls measured live (ScienceDirect 526, FT 565, Pixiv 599,
-///   Bloomberg 657, LinkedIn 703, IEEE 717, Medium 720, Instagram 792, Telegraph 888, ResearchGate
-///   318, Tumblr 269). Several of those are caught by something else — a 401 or 403 answered before
+///   and that band is where most real walls measured live (ScienceDirect 526, FT 565, Bloomberg 657,
+///   LinkedIn 703, IEEE 717, Medium 720, Instagram 792, Telegraph 888, and — measured by PR #108's
+///   reviewer on other URLs — a ResearchGate publication page at 318, a Tumblr dashboard at 265, a
+///   pixiv artwork page at 335).
+///
+///   **Being in the band is not the same as a note being written**, and that distinction is what the
+///   Instagram correction above turns on. Of the pages measured in it, the ones where a note really
+///   is produced from gate chrome are LinkedIn (556 characters extracted), IEEE (617), the
+///   ResearchGate publication page (302) and a Scribd document page (271). Instagram, Tumblr and the
+///   pixiv artwork page are served by this check and then yield nothing, because the extractor
+///   throws `noReadableContent`. Several of those are caught by something else — a 401 or 403 answered before
 ///   this code runs, or an extractor that finds no article — but **not all of them, and the earlier
 ///   claim that "three independent checks fail closed on these pages, not one" was false for exactly
 ///   the cases the bullets above concede**: LinkedIn passes the status check, is served here, and
