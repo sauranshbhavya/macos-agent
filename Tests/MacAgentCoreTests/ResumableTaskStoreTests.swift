@@ -2,7 +2,7 @@ import Foundation
 import Testing
 @testable import MacAgentCore
 
-/// The twelfth store's own behaviour (row 13, SONNY-210): what it keeps, what it refuses, and when
+/// The thirteenth store's own behaviour (row 13, SONNY-210): what it keeps, what it refuses, and when
 /// it forgets.
 ///
 /// The registration half — the wipe, the classification, the Memory row — is asserted where those

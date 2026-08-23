@@ -192,6 +192,8 @@ private func makeViewModel(root: URL, plannerSelection: String?) throws -> Agent
         ),
         outputLocationStore: OutputLocationStore(
             fileURL: root.appendingPathComponent("output-locations.json"),
+            encryption: encryption
+        ),
         resumableTaskStore: ResumableTaskStore(
             fileURL: root.appendingPathComponent("resumable-tasks.json"),
             encryption: encryption
