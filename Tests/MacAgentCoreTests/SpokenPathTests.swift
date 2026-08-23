@@ -123,7 +123,7 @@ struct SpokenPathTests {
     // MARK: - The whole step, and nothing but the step
 
     /// Derives the population by reflecting over `AgentStep` rather than by reading the list in
-    /// `SpokenPath.normalizingFolderPhrases(in:)`, so a sixth path field added later and not wired
+    /// `SpokenPath.normalizingFolderPhrases(in:)`, so a fifth path field added later and not wired
     /// in fails here instead of shipping. A field this fixture does not set is `nil`, which cannot
     /// change under normalisation — so the omission fails the same assertion.
     @Test
@@ -194,7 +194,7 @@ struct SpokenPathTests {
     /// `SaveRoutineCapabilityAdapter` persists `routineSteps` exactly as the plan carried them, so a
     /// phrase left inside one is a phrase stored in the routine's own record.
     @Test
-    func aPhraseNestedInsideARoutineIsNormalisedToo() {
+    func aPhraseNestedInsideARoutineIsNormalisedToo() throws {
         let plan = AgentPlan(
             summary: "Teach a routine.",
             requiresConfirmation: false,
@@ -218,8 +218,10 @@ struct SpokenPathTests {
         )
 
         let normalised = SpokenPath.normalizingFolderPhrases(in: plan)
-        let nested = normalised.steps[0].routineSteps?.first
-        #expect(nested?.outputPath == "Desktop")
+        #expect(normalised.steps.count == 1)
+        let outer = try #require(normalised.steps.first)
+        let nested = try #require(outer.routineSteps?.first)
+        #expect(nested.outputPath == "Desktop")
     }
 
     // MARK: - The reported command, end to end

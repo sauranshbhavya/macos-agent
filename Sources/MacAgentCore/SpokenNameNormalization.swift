@@ -104,12 +104,22 @@ public enum SpokenName {
 public enum SpokenPath {
     /// The path a phrase means, or the phrase unchanged when it was already a path.
     ///
-    /// **An absolute or tilde-prefixed value is returned untouched, and that guard is the whole
-    /// safety argument.** Those are paths, not descriptions: `/Users/me/my Desktop` names a real
-    /// place, and a person who typed it means it. Everything else is resolved relative to the home
-    /// directory by `PathWhitelist.expandPath`, so the only values this rewrites are the ones whose
-    /// first component is being read as a folder name in the user's home — which is exactly the
-    /// population where "my Desktop" is a phrase rather than a place.
+    /// **An absolute or tilde-prefixed value is returned untouched, and that rule is the whole
+    /// reason this is allowed to sit above a security boundary.** Those are paths, not descriptions:
+    /// `/Users/me/my Desktop` names a real place, and a person who typed it means it. Everything
+    /// else is resolved relative to the home directory by `PathWhitelist.expandPath`, so the only
+    /// values this rewrites are the ones whose first component is being read as a folder name in the
+    /// user's home — which is exactly the population where "my Desktop" is a phrase rather than a
+    /// place.
+    ///
+    /// **The guard stating it is redundant, and a battery says so rather than a reading of the
+    /// code**: deleting it leaves the whole suite green (`scripts/mutate`, M5 at `fa40d21`), because
+    /// an absolute path's first component is the empty string, which is not an article, and the
+    /// `head.isEmpty` fallback below then returns the original anyway; a tilde path's first
+    /// component is `~`, which is not an article either. It is kept as an equivalent mutant on
+    /// purpose. Without it the rule above holds only as a consequence of how
+    /// `components(separatedBy:)` treats a leading separator — true today, invisible to a reader,
+    /// and exactly the sort of thing a later edit removes without noticing it was load-bearing.
     ///
     /// The article comes off the **first component only**. `Desktop/my notes` keeps its folder:
     /// only the leading component is the one the home directory is searched for, and a possessive
