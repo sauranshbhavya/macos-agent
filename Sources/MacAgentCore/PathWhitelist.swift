@@ -40,9 +40,41 @@ public enum PathValidationError: Error, Equatable, LocalizedError {
             return "\(path) is not a directory."
         case .symbolicLinkRejected(let path):
             return "\(path) is a symbolic link Sonny could not follow."
+        // Thrown from exactly one place — `validateInsideWhitelist`, when resolution did not
+        // converge. It used to be thrown from two more, as an `isSymbolicLink` check on the parent
+        // and on the folder itself, and those are gone: once a non-convergent resolution is refused
+        // outright, every path that reaches them is fully resolved and has no link left to find.
         case .parentMissing(let path):
             return "The parent folder for \(path) does not exist."
         }
+    }
+}
+
+/// A path resolved as far as the filesystem allows, and whether that resolution finished.
+///
+/// **Why this is a type and not a `URL`** (SONNY-249's review, F1). Resolution can fail to converge
+/// — a symbolic link that points at itself, or a chain longer than the kernel will follow — and the
+/// path it has reached by then is not an answer: it is the path it started with, minus however many
+/// hops it managed. Returning that as though it were resolved is what let a chain of 34 links read
+/// as inside the whitelist while the bytes landed outside, because the kernel's own budget started
+/// again from the shortened path and finished the walk that the un-shortened one would have been
+/// refused for. The fact that decides whether a path may be compared therefore travels with the
+/// path, rather than being dropped at a return statement, and `PathWhitelist.contains` will not
+/// compare one that did not converge.
+public struct CanonicalPath: Equatable, Sendable {
+    /// The path resolution reached. A boundary answer only when `unfollowableLink` is `nil`; for
+    /// anything else it is an identity — good enough to key a store by, not to compare with a root.
+    public let url: URL
+
+    /// The symbolic link resolution stopped at, when it could not finish: the last one it followed
+    /// before the budget ran out, or the loop it kept arriving back at. `nil` when it converged.
+    public let unfollowableLink: URL?
+
+    public var isResolved: Bool { unfollowableLink == nil }
+
+    public init(url: URL, unfollowableLink: URL?) {
+        self.url = url
+        self.unfollowableLink = unfollowableLink
     }
 }
 
@@ -67,13 +99,6 @@ public struct PathWhitelist: Sendable {
 
     public func validateExistingDirectory(_ rawPath: String) throws -> URL {
         let url = try validateInsideWhitelist(rawPath)
-        // Before existence, because a link the resolver could not follow is reported by
-        // `fileExists` as absent and the honest answer is not "no such folder". See
-        // `symbolicLinkRejected`'s note on `validateOutputPath` for why this is the only shape
-        // that reaches either check now.
-        if Self.isSymbolicLink(url) {
-            throw PathValidationError.symbolicLinkRejected(url.path)
-        }
         guard FileManager.default.fileExists(atPath: url.path) else {
             throw PathValidationError.notFound(url.path)
         }
@@ -87,23 +112,14 @@ public struct PathWhitelist: Sendable {
 
     public func validateOutputPath(_ rawPath: String) throws -> URL {
         let url = try validateInsideWhitelist(rawPath)
+        // No symlink check on the parent, and there used to be one (SONNY-249, and then its
+        // review's F1). It was the mechanism that kept a write from leaving the whitelist, and it
+        // was a bad one — it sees the immediate parent only, so a symlink one level up was caught
+        // and two levels up was not. Containment is that mechanism now, and a link resolution
+        // cannot follow is refused by `validateInsideWhitelist` before this line runs, so a path
+        // that gets here is fully resolved and has no link for this check to find. Two mechanisms
+        // splitting one rule is what the first attempt at this fix left behind; this is the one.
         let parent = url.deletingLastPathComponent()
-        // **What this check is for changed with SONNY-249, and it is worth saying which rule it now
-        // carries.** It used to be the mechanism that kept a write from leaving the whitelist, and
-        // it was a bad one: it sees the immediate parent only, so a symlink one level up was caught
-        // and two levels up was not — `<root>/link/sub/new.md` was accepted and the bytes landed in
-        // `<outside>/sub/new.md`. Containment is that mechanism now, because `canonicalURL`
-        // resolves the path before comparing it, and a link is judged by where it leads.
-        //
-        // What is left here is the one shape resolution cannot answer for: a link it could not
-        // follow — a loop, or a chain longer than the kernel itself will follow. That path was
-        // compared *without* following the link, so the containment verdict above says nothing
-        // about it, and refusing is the only safe reading. It runs before the existence guard
-        // because `fileExists` follows links, so a loop reads as absent and would otherwise be
-        // reported as a missing parent, which is not what is wrong with it.
-        if Self.isSymbolicLink(parent) {
-            throw PathValidationError.symbolicLinkRejected(parent.path)
-        }
         guard FileManager.default.fileExists(atPath: parent.path) else {
             throw PathValidationError.parentMissing(parent.path)
         }
@@ -121,20 +137,35 @@ public struct PathWhitelist: Sendable {
             throw PathValidationError.pathIsEmpty
         }
 
-        let resolved = Self.canonicalURL(trimmed)
+        let canonical = Self.canonical(trimmed)
+        // **Before containment, never after** (SONNY-249's review, F1). A resolution that did not
+        // converge has not answered the question; the path it reached is the one it started with,
+        // minus however many hops it managed. Comparing that against a root is what let a chain of
+        // 34 links read as inside while the bytes landed outside — the whitelist handed back a path
+        // 33 hops shorter, and the kernel's own budget then started again from there and finished
+        // the walk. So it is refused rather than compared, and named as the link it is.
+        if let unfollowable = canonical.unfollowableLink {
+            throw PathValidationError.symbolicLinkRejected(unfollowable.path)
+        }
+
+        let resolved = canonical.url
         let allowed = roots.contains { root in
-            // `canonicalURL` on both sides rather than `resolvingSymlinksInPath` on this one: for a
+            // `canonical` on both sides rather than `resolvingSymlinksInPath` on this one: for a
             // root that exists the two are the same call, and for one that does not — a whitelist
             // pointed at a folder the user has not created yet — only the first resolves anything,
             // and a root resolved differently from the candidates compared against it is a boundary
-            // that answers nothing correctly.
-            Self.contains(root: Self.canonicalURL(root.path), candidate: resolved)
+            // that answers nothing correctly. A root that does not resolve cannot contain anything.
+            let canonicalRoot = Self.canonical(root.path)
+            guard canonicalRoot.isResolved else {
+                return false
+            }
+            return Self.contains(root: canonicalRoot.url, candidate: canonical)
         }
 
         guard allowed else {
             throw PathValidationError.outsideWhitelist(
                 path: resolved.path,
-                asked: pathAsAskedIfResolutionIsWhatRefusedIt(trimmed, resolved: resolved),
+                asked: pathAsAskedIfResolutionIsWhatRefusedIt(trimmed),
                 roots: displayRoots
             )
         }
@@ -147,13 +178,19 @@ public struct PathWhitelist: Sendable {
     /// one where the person simply named a folder Sonny cannot use, and including a path whose text
     /// resolution merely tidied, so the longer sentence appears when it explains something and
     /// never as noise.
-    private func pathAsAskedIfResolutionIsWhatRefusedIt(_ trimmed: String, resolved: URL) -> String? {
+    private func pathAsAskedIfResolutionIsWhatRefusedIt(_ trimmed: String) -> String? {
+        // No `asTyped == resolved` early return, though the first version of this had one (the
+        // review's M8). It could not fire as its own behaviour: if the two are equal then the test
+        // below is the identical comparison that has just refused this path, so it is false and the
+        // answer is `nil` either way. A second mechanism producing the first one's answer is what
+        // this repository removed from `validatedFileLocationAdditions` for the same reason.
         let asTyped = Self.normalizedURL(Self.expandPath(trimmed))
-        guard asTyped.path != resolved.path else {
-            return nil
-        }
         let wouldHaveBeenAllowed = roots.contains { root in
-            Self.contains(root: Self.canonicalURL(root.path), candidate: asTyped)
+            let canonicalRoot = Self.canonical(root.path)
+            guard canonicalRoot.isResolved else {
+                return false
+            }
+            return Self.containsPath(root: canonicalRoot.url, candidate: asTyped)
         }
         return wouldHaveBeenAllowed ? asTyped.path : nil
     }
@@ -245,11 +282,24 @@ public struct PathWhitelist: Sendable {
     ///
     /// **Two limits, stated rather than left to be found.** A component created between this
     /// resolution and the write is not seen — the check is a check, and closing that would mean
-    /// opening every output file without following links, at every write site. And a link this
-    /// cannot follow (a loop, or a chain longer than the budget below) stays in the returned path;
-    /// `validateOutputPath` and `validateExistingDirectory` refuse those rather than pretending the
-    /// comparison meant something.
+    /// opening the output file without following links at the two writers that follow one (a leaf
+    /// in front of `/usr/bin/zip`, and a directory component mid-path, which an atomic write does
+    /// follow because it puts its temporary file in the destination's parent). And resolution does
+    /// not always converge: a link that points at itself, or a chain longer than the budget below,
+    /// leaves a path that is not an answer. **That case is refused, not returned** — see
+    /// `CanonicalPath`, and the review finding that says why in as many words.
+    ///
+    /// **`canonicalURL` is for identity, never for a boundary.** It drops the convergence flag, so
+    /// what it hands back for a non-convergent path is the original with some hops taken out of it
+    /// — fine as a key for "the same folder twice", wrong as something to compare against a root.
+    /// `contains(root:candidate:)` takes a `CanonicalPath` precisely so that a boundary cannot be
+    /// answered from this overload by accident.
     public static func canonicalURL(_ rawPath: String) -> URL {
+        canonical(rawPath).url
+    }
+
+    /// The same resolution, with the fact that decides whether its answer may be compared.
+    public static func canonical(_ rawPath: String) -> CanonicalPath {
         resolvingExistingPrefix(
             normalizedURL(expandPath(rawPath.trimmingCharacters(in: .whitespacesAndNewlines)))
         )
@@ -259,32 +309,51 @@ public struct PathWhitelist: Sendable {
     /// kernel itself stops at — `getconf SYMLOOP_MAX` prints 32 on macOS 15 (Darwin 25.5.0), and
     /// the constant is not exposed to Swift, so it is written here rather than read.
     ///
-    /// Matching it is the point rather than a coincidence. The links this counts are a subset of
-    /// the links a lookup of the same path has to traverse, so a chain long enough to exhaust this
-    /// budget is a chain `open` refuses with `ELOOP` — nothing can be written through a path this
-    /// resolver gave up on.
+    /// **A budget exists because resolution has to terminate, not because 32 is safe.** The first
+    /// version of this comment argued that a chain long enough to exhaust the budget is a chain
+    /// `open` refuses with `ELOOP`, so nothing could be written through a path the resolver gave up
+    /// on. That was wrong, and measurably so: the resolver handed back the path it had *reached*,
+    /// which is the original minus 33 hops, and the kernel's budget then started again from there —
+    /// chains of 34 to 63 links read as inside the whitelist and the bytes landed outside, a band
+    /// where `961b9c2` had been safe by accident because the kernel refused the un-shortened path.
+    /// Any finite number has that cliff; what removes it is refusing a resolution that did not
+    /// converge instead of reporting one, which is what `resolvingExistingPrefix` does.
+    ///
+    /// So the number is a termination bound with a defensible value rather than a security
+    /// property: chains the kernel would traverse resolve, and everything past that is refused.
+    /// `PathContainmentResolutionTests` pins both sides of it — 32 links resolve, 33 are refused —
+    /// because a constant no test holds is a constant a battery cannot protect, which is exactly
+    /// how this survived a green suite and a ten-mutant battery.
     private static let maximumSymbolicLinkHops = 32
 
     /// The result of one resolution pass: either the final answer, or a path rewritten through a
-    /// symbolic link that has to be resolved again from the top.
+    /// symbolic link that has to be resolved again from the top, carrying the link it followed so
+    /// that a resolution which runs out of budget can name the one it stopped at.
     private enum ResolutionPass {
         case resolved(URL)
-        case followedLink(URL)
+        case followedLink(rewritten: URL, link: URL)
     }
 
-    private static func resolvingExistingPrefix(_ url: URL) -> URL {
+    private static func resolvingExistingPrefix(_ url: URL) -> CanonicalPath {
         var current = url
-        // One extra pass beyond the hop budget, so a chain of exactly `maximumSymbolicLinkHops`
-        // links still gets the pass that turns its destination into an answer.
-        for _ in 0...maximumSymbolicLinkHops {
+        var followed = 0
+        var lastLink = url
+        while followed <= maximumSymbolicLinkHops {
             switch resolutionPass(current) {
             case .resolved(let resolved):
-                return resolved
-            case .followedLink(let rewritten):
+                return CanonicalPath(url: resolved, unfollowableLink: nil)
+            case .followedLink(let rewritten, let link):
                 current = rewritten
+                lastLink = link
+                followed += 1
             }
         }
-        return current
+
+        // The budget is spent and a link is still in the way. **The path reached is not returned as
+        // an answer** — that is the whole of the review's F1: it is the original with `followed`
+        // hops already taken out of it, and every boundary in this file would then be comparing a
+        // path 33 links shorter than the one the write is going to walk.
+        return CanonicalPath(url: current, unfollowableLink: lastLink)
     }
 
     private static func resolutionPass(_ url: URL) -> ResolutionPass {
@@ -314,7 +383,7 @@ public struct PathWhitelist: Sendable {
             for remaining in components.dropFirst(index + 1) {
                 rewritten.appendPathComponent(remaining)
             }
-            return .followedLink(rewritten.standardizedFileURL)
+            return .followedLink(rewritten: rewritten.standardizedFileURL, link: resolved)
         }
         return .resolved(resolved.standardizedFileURL)
     }
@@ -331,19 +400,30 @@ public struct PathWhitelist: Sendable {
         return URL(fileURLWithPath: destination, relativeTo: url.deletingLastPathComponent()).absoluteURL
     }
 
-    /// Whether the item at `url` is itself a symbolic link, asked without following it — so a link
-    /// pointing nowhere, or at itself, answers `true` where `fileExists` answers `false`.
-    private static func isSymbolicLink(_ url: URL) -> Bool {
-        (try? url.resourceValues(forKeys: [.isSymbolicLinkKey]))?.isSymbolicLink == true
-    }
-
     /// Containment as this whitelist defines it: equal, or a path component below. Deliberately a
     /// `root + "/"` prefix test rather than a bare prefix — `/Documents/ClientAlpha` must not count
     /// as inside `/Documents/Client`.
     ///
-    /// Both sides are expected to be `canonicalURL` output already; passing a raw path here compares
-    /// unresolved text and is a mistake.
-    public static func contains(root: URL, candidate: URL) -> Bool {
+    /// **A candidate whose resolution did not converge is not inside anything**, and that is why
+    /// this takes a `CanonicalPath` rather than a `URL`. It is the one place every boundary
+    /// comparison in the app passes through — `validateInsideWhitelist` and
+    /// `WorkspaceScope.verdict` — so the rule is carried by the type instead of by two callers
+    /// remembering it. `validateInsideWhitelist` refuses such a path before it ever gets here, with
+    /// a message that names the link; scope has no error to raise and reads it as out of scope,
+    /// which prompts. Both are the fail-safe direction.
+    ///
+    /// The root side is a `URL` because it is not the attacker-controlled one: a root reaches here
+    /// only after `validateInsideWhitelist` accepted it, which means it converged.
+    public static func contains(root: URL, candidate: CanonicalPath) -> Bool {
+        guard candidate.isResolved else {
+            return false
+        }
+        return containsPath(root: root, candidate: candidate.url)
+    }
+
+    /// The text comparison alone, for the two callers inside this file that have already settled
+    /// convergence for themselves.
+    private static func containsPath(root: URL, candidate: URL) -> Bool {
         let rootPath = root.standardizedFileURL.path
         let candidatePath = candidate.standardizedFileURL.path
         return candidatePath == rootPath || candidatePath.hasPrefix(rootPath + "/")

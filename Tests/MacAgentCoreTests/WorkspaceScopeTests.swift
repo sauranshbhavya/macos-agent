@@ -212,6 +212,26 @@ struct WorkspaceScopeTests {
         #expect(accepted.path == real.appendingPathComponent("new.md").path)
     }
 
+    /// Scope's half of the review's F1. It has no error to raise, so what it does with a resolution
+    /// that did not converge is answer `.outOfScope` — which prompts, and is the fail-safe
+    /// direction. Before that rule it read `.inScope` for a chain of 34 links whose destination was
+    /// outside the scoped folder, because the whitelist handed it a path 33 hops shorter that still
+    /// began with the scoped folder's own name.
+    @Test
+    func aChainOfLinksTooLongToResolveIsOutOfScopeRatherThanInIt() throws {
+        let fixture = try FileScopeFixture()
+        defer { fixture.tearDown() }
+        var destination = fixture.personal.appendingPathComponent("pwned.md")
+        for index in stride(from: 34, through: 1, by: -1) {
+            let link = fixture.client.appendingPathComponent("l\(index)")
+            try FileManager.default.createSymbolicLink(at: link, withDestinationURL: destination)
+            destination = link
+        }
+        let scope = fixture.scope(fileLocations: [fixture.client.path])
+
+        #expect(scope.verdict(for: .fileLocation(fixture.client.appendingPathComponent("l1").path)) == .outOfScope)
+    }
+
     @Test
     func parentTraversalOutOfAScopedFolderIsOutOfScope() throws {
         let fixture = try FileScopeFixture()
