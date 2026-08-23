@@ -47,6 +47,15 @@ import SwiftSoup
 /// check stops catching the modern web's walls entirely, which would be the false-accept trade the
 /// ticket asks not to make silently.
 ///
+/// A 49th page was fetched afterwards, for the case the corpus of home pages and gates could not
+/// supply and the ticket names as the shape of the defect — a page *about* a wall. Wikipedia's
+/// CAPTCHA article says the word to a reader 167 times across 30 785 visible characters, and stage
+/// 1's limit is what serves it. It is a fixture, not a corpus entry, so none of the counts above
+/// include it.
+///
+/// Four pages are saved verbatim under `Tests/Fixtures/WebResearch/` and
+/// `RestrictedContentDetectorTests` runs both the old rule and this one over every one of them.
+///
 /// **Why the corroboration is a character count and not "did the extractor find an article".**
 /// That was the first design, and it is worse: `SwiftSoupReadableWebExtractor` throws
 /// `noReadableContent` on expedia and chegg, pages carrying 107 857 and 70 114 characters of
@@ -70,8 +79,8 @@ import SwiftSoup
 ///   would be, and the note names its source.
 /// - **Unchanged:** a wall that answers with a non-2xx status never reaches here — `validate`
 ///   throws `badHTTPStatus` first, and that is how most of them answer. Of the walls in the corpus,
-///   exactly four came back 200 (Facebook, Pinterest, Instagram, LinkedIn); the rest answered 401,
-///   402, 403 or 429. And a wall that renders nothing and mentions nothing still yields no article,
+///   four came back 200 (Facebook, Pinterest, Instagram, LinkedIn) and the other eleven answered
+///   401 or 403. And a wall that renders nothing and mentions nothing still yields no article,
 ///   so the extractor throws `noReadableContent`. Three independent checks fail closed on these
 ///   pages, not one, which is why narrowing this one does not leave the boundary resting on it.
 public enum RestrictedContentDetector {
