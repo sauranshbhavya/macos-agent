@@ -1518,17 +1518,28 @@ struct MemoryCommandCenterTests {
 
     /// The sheet a user opens *because* the row said zero must not then tell them the store is empty
     /// and offer them the command that fills it.
+    ///
+    /// **Asserted through `emptyStateTitle`/`emptyStateMessage`, which is what the sheet calls**
+    /// (PR #110 fix round). The first version read the two leaf strings directly, so a mutant that
+    /// made the dispatcher return the empty-state wording for *both* readabilities survived the
+    /// whole suite — the same shape as the defect F7 is about, one function along.
     @Test
     func theSheetForAnUnreadableRowDoesNotClaimTheStoreIsEmpty() {
-        let empty = MemoryDeletionCopy.emptyMessage(for: .outputLocations)
-        #expect(empty == "Ask Sonny to save a file somewhere, and the folder will appear here.")
+        let readable = MemoryDeletionCopy.emptyStateMessage(for: .outputLocations, readability: .readable)
+        #expect(readable == "Ask Sonny to save a file somewhere, and the folder will appear here.")
+        #expect(MemoryDeletionCopy.emptyStateTitle(for: .outputLocations, readability: .readable) == "No output locations yet")
+        #expect(MemoryDeletionCopy.emptyStateSystemImage(for: .readable) == "tray")
 
-        #expect(MemoryDeletionCopy.unreadableTitle(for: .outputLocations) == "Sonny can't read your output locations")
-        let message = MemoryDeletionCopy.unreadableSheetMessage(for: .outputLocations)
+        #expect(
+            MemoryDeletionCopy.emptyStateTitle(for: .outputLocations, readability: .unreadable)
+                == "Sonny can't read your output locations"
+        )
+        let message = MemoryDeletionCopy.emptyStateMessage(for: .outputLocations, readability: .unreadable)
         // Paired with the command that ends the state, exactly as the empty states are — except the
         // command is a control on the page behind this sheet.
         #expect(message.contains("Press Delete on the output locations row"))
         #expect(message.contains("The file stays on your Mac."))
+        #expect(MemoryDeletionCopy.emptyStateSystemImage(for: .unreadable) != "tray")
     }
 
     // MARK: - PR #110 review: what the first round got wrong
@@ -1943,36 +1954,50 @@ struct MemoryCommandCenterTests {
     /// **F8 — a Delete that could not happen must leave the row saying so.**
     ///
     /// `clearLoadFailuresForStoresWhoseFileIsGone` asks the file system whether the file really went
-    /// before forgetting its failure. Deleting that guard — so the failure is cleared either way —
-    /// survived the whole suite in the reviewer's mutation battery: a Delete that silently did
-    /// nothing would clear the banner and the row's damaged state, and nothing would notice.
+    /// before forgetting its failure. Deleting that guard survived the reviewer's battery, and the
+    /// first attempt at this test did not kill it either — which is the interesting part and the
+    /// reason this uses plan details rather than the obvious store.
     ///
-    /// Locking the directory is what makes the move fail, so this needs the unprivileged gate.
+    /// **The guard is only observable for a source nothing re-probes.** With `.outputLocations`, the
+    /// `refreshMemorySurfaces()` at the end of `deleteMemory` re-reads the file, fails again, and
+    /// records the failure a second time — so a wrongly-cleared banner is restored within the same
+    /// call and the mutant hides behind the repair. `.taskPlanDetails` is read by
+    /// `storedPlanDetail(for:)` and by nothing else, so nothing puts it back. That is the same
+    /// property F3 turns on, seen from the other side: the one source the refreshes cannot reach is
+    /// the one the evidence check actually protects.
+    ///
+    /// Locking the directory is what makes both the unlink and the rename fail, so this needs the
+    /// unprivileged gate.
     @Test(.requiresUnprivilegedProcess)
-    func aDeleteThatCouldNotHappenLeavesTheRowSayingItCannotBeRead() throws {
+    func aDeleteThatCouldNotHappenLeavesTheRowSayingItCannotBeRead() async throws {
         let fixture = try makeMemoryFixture()
         defer {
             try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fixture.root.path)
             fixture.cleanUp()
         }
-        try fixture.writeUnreadableFile(at: fixture.outputLocationStore.fileURL)
-        fixture.viewModel.refreshMemoryEntries()
-        #expect(fixture.viewModel.unreadableMemoryCategories.contains(.outputLocations))
 
-        // Read and execute stay, so every load below still works; only the rename is refused.
+        fixture.viewModel.command = "add two and two"
+        fixture.viewModel.start(prebuiltPlan: planCalculating("2 + 2"))
+        try await fixture.waitUntilIdle()
+        try fixture.writeUnreadableFile(at: fixture.taskPlanDetailStore.fileURL)
+        _ = fixture.viewModel.followUpOnTask(try #require(fixture.viewModel.taskHistoryRecords.first))
+        #expect(fixture.viewModel.unreadableMemoryCategories.contains(.taskHistory))
+
+        // Read and execute stay, so every load below still works; only the rename and the unlink
+        // are refused.
         try FileManager.default.setAttributes(
             [.posixPermissions: 0o500],
             ofItemAtPath: fixture.root.path
         )
-        fixture.viewModel.deleteMemory(in: .outputLocations)
+        fixture.viewModel.deleteMemory(in: .taskHistory)
 
         // The premise: the file really is still there, which is what makes the row's claim true.
-        #expect(FileManager.default.fileExists(atPath: fixture.outputLocationStore.fileURL.path))
-        #expect(fixture.viewModel.unreadableMemoryCategories.contains(.outputLocations))
-        #expect(fixture.viewModel.localStorageNotice != nil)
+        #expect(FileManager.default.fileExists(atPath: fixture.taskPlanDetailStore.fileURL.path))
+        #expect(fixture.viewModel.unreadableMemoryCategories.contains(.taskHistory))
+        #expect(try #require(fixture.viewModel.localStorageNotice).contains("what past tasks planned"))
         #expect(
             try #require(fixture.viewModel.memoryDeletionStatusMessage)
-                .hasPrefix("Could not delete output locations")
+                .hasPrefix("Could not delete task history")
         )
     }
 
