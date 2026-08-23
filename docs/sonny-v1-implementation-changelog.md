@@ -6327,7 +6327,7 @@ Files changed (in `7b8a410` plus this entry's commit):
 - `scripts/mutate-untrusted-failures` (new)
 - `CLAUDE.md` (the mutate paragraph, and a new gotcha on wall-clock bets in tests)
 
-Files changed again in the review round (`f65dcd2` and `213ea5d`):
+Files changed again in the review round (`fd4f32d`, `5658f62`, `b589549` and `b16b97a`, all after the rebase onto `main` at `31c2aed`):
 - `scripts/mutate` (`ALWAYS_TRUSTED`; per-issue classification; the anchored block boundary; the non-blank signature guard; 17 more selftest checks and its fixtures reshaped to swift-testing's own line prefixes; `--help`)
 - `scripts/mutate-untrusted-failures` (a `>>> sites` count on every record; the per-issue and merge limits stated; the withdrawn figures replaced)
 - `Tests/MacAgentCoreTests/UntrustedFailureDeclarationTests.swift` (2 tests → 4; no expectation quotes a declaration or takes the scanned tree as an operand)
@@ -6464,12 +6464,18 @@ reword that has quietly stopped being covered.
 `#expect(payload.redactedImageData != nil)` — `redactCapture` builds its payload from
 `EncodedVisionCapture.data`, which is not optional, so on every path that reached that line it was
 true by construction, while the comment above it claimed it proved the pixels came back painted. It
-is a pixel check now, on coordinates measured from the fixture rather than guessed: the box the real
-recognizer paints over the card line covers x 38...505 and y 344...375, and rows 344...347 of the
-fixture carry no ink at all, so `(270, 346)` is white before the call and black after it. A third
-sample at `(10, 10)` keeps an all-black image from satisfying the second. Proved by making the
-service paint an empty region list: the new expectation fails with `(r: 255, g: 255, b: 255)`, and
-the expectation it replaces would have passed.
+is a pixel check now, on geometry measured from the fixture rather than guessed. The box the real
+recognizer paints over the card line covers x 38...505, y 344...375, and five probes along row 360
+sit at least fifteen pixels inside it in both directions. All five must come back black from the
+payload, and the same five against the *unredacted* fixture must not all be black — which is the
+half that makes black mean *painted* rather than "the glyphs were already dark there", since at that
+row the rendered text inks 64 of the 468 pixels the box covers. A sample at `(10, 10)` keeps an
+all-black image from satisfying the first. Proved by making the service paint an empty region list:
+`paintedBlack → 0` against `probes.count → 5`, where the expectation it replaces would have passed.
+**The first version of this check was itself on an edge** and is the reason there are two commits:
+`(270, 346)` sat two pixels inside the top of the box, in the only four-pixel band of it the rendered
+text does not ink, so a three-pixel change in Vision's bounding box would have failed the test for a
+reason having nothing to do with redaction.
 
 **F6: one of the eight selftest checks added by `7b8a410` was vacuous.** It looked for
 `UNATTRIBUTED — the suite went red`, which the per-mutant line also begins with, so it never reached
@@ -6500,6 +6506,21 @@ a reproducible population instead — 62 `waitUntil` call sites among 74 test fu
 `VisionSessionRunTests` (`git grep -c 'waitUntil('` and `git grep -c '@Test'` over that file at
 `961b9c2`).
 
+**The advice this branch retires.** The `fix/folder-name-possessives` entry above ends by saying that
+a kill count in this repository needs `asyncProcessRunnerCancelsRunningProcess` subtracted before it
+is quoted — correct when it was written, and by then the third time that test had turned up in a kill
+list for a mutant it cannot reach. Both halves of it are retired here. The test is deterministic now,
+so it does not appear in a kill list it has not earned; and a battery no longer depends on a reader
+remembering to subtract anything, because a failure that carries no information about a mutant is
+declared, excluded from the count, and printed under its own heading. That entry stays as written —
+it was true at its SHA — and this paragraph is the pointer a reader needs to know it no longer is.
+
+**A note on the SHAs above, because the rebase moved them.** This branch was rebased onto `main` at
+`31c2aed` after the round's measurements were taken, so the commits its earlier paragraphs name —
+`7b8a410` and `bdee146` — are now `7770baa` and `280e11b`, and `194693b`, the commit the review read,
+is now `0de8930`. The figures those paragraphs carry were measured on the pre-rebase tree and are
+left as they were measured; everything in this section is re-measured at `b16b97a`, after the rebase.
+
 **One seam the reviewer recorded and this round did not close, raised for a decision rather than
 deferred silently.** `KILLED — the run failed but named no test` is unreachable: `failing_tests`
 pipes through `grep -v`, which exits 1 on empty input, and `pipefail` kills the script before that
@@ -6509,14 +6530,27 @@ that experience. It is the loud direction rather than a false measurement, and t
 (`sed '/^run with /d'` in place of `grep -v`) would make a documented arm reachable and change what
 that gotcha describes, which is more than this round was asked for.
 
-**Verification of this round, all at `213ea5d` — which is the code commit `f65dcd2` plus a
-Markdown-only commit, so no Swift target and no shell script differs between them.** The flagged
-suite **exit 0, 1861 tests in 135 suites** (13.6 s), which is `+2` on the round before it, both of
-them new guard tests. **`scripts/warnings`: 0 warnings, exit 0**, header stamped `213ea5d (clean)`,
-112 s, every file in `Sources/` and `Tests/` compiled. **`scripts/mutate selftest`: exit 0, 155
-checks** (`grep -c '    PASS'`), up from 138 — seventeen new, covering F1, F2, F3, the empty-signature
-residual, the site count, and the summary block F6 left unwatched. Reverting `issue_re` to the plain
-form still fails exactly 3 checks, which is the parameterized pin the paragraph above now points at
-instead of a vanished log.
+**Verification of this round, all at `b16b97a`, which is the branch rebased onto `main` at `31c2aed`
+with nothing uncommitted.** The flagged suite: **exit 0, 1917 tests in 138 suites** (17.3 s), which
+is **+4 tests and +1 suite** over `origin/main` at `31c2aed` and nothing removed — the whole of
+`UntrustedFailureDeclarationTests` (`git diff origin/main...HEAD -- Tests` piped to `grep -c '^+
+@Test'` gives 4, and to `grep -c '^-    @Test'` gives 0). **`scripts/warnings`: 0 warnings, exit
+0**, header stamped `b16b97a (clean)`, 108 s, every file in `Sources/` and `Tests/` compiled, so
+that is the whole population of the tree rather than of whatever was edited last. **`scripts/mutate
+selftest`: exit 0, 155 checks** (`grep -c '    PASS'` over its output), up from the 138 the reviewer
+counted — seventeen new, covering F1, F2, F3, the empty-signature residual, the site count, and the
+summary block F6 had left unwatched. Reverting `issue_re` to the plain form still fails exactly 3
+checks, which is the parameterized pin that paragraph above now points at instead of a vanished log.
+
+**Mutation battery at `b16b97a`: 2 mutants, 2 killed, 0 survived, 0 unattributed, exit 0**
+(`scripts/mutate`, which stamps its own SHA; report in `.build/mutate/b16b97a-20260823T185759`). It
+is re-run for this round rather than carried over, because the thing that changed is the battery.
+**M1 deletes the post-drain `if box.isCancelled { throw CancellationError() }` and is KILLED by
+exactly one test — `asyncProcessRunnerCancelsRunningProcess()`, in 23 s.** M2 turns `cancel()`'s
+`cancelled = true` into `cancelled = false` and is killed by two, the before-launch test joining it,
+in 1018 s — the battery-cost note above is why. The point of running it at all is the shape of M1's
+report line: one test, named, which is exactly what PR #109's R9 printed — and now it is backed by a
+test that cannot lose a race, under a harness that would have said UNATTRIBUTED if it could not
+attribute it.
 
 Manual-test items the user still owes: none. Nothing user-visible changed.
