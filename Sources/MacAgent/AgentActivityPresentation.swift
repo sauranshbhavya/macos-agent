@@ -251,6 +251,70 @@ enum ClarificationPresentation {
     static let canceledSummary = "Canceled. No action was taken."
 }
 
+/// What the widget's composer says while it is not taking a command (SONNY-247).
+///
+/// **The behaviour this describes is correct and is not what was broken.** The composer is disabled
+/// whenever a task occupies the app, and it should be: starting a second task while one is parked on
+/// your answer is not something the product allows, and the answer has its own field a few pixels
+/// above. What was broken is that none of that was visible — the field kept the idle placeholder,
+/// stopped responding, and swallowed a paste, which is indistinguishable from a hung app. The
+/// founder reported it twice in one day, once as "I cannot type inside the floating widget nor
+/// copy-paste anything" and once as "when a clarification question is asked, the typing bar doesn't
+/// work".
+///
+/// **Three states, not one, and the split is the point.** `FloatingWidgetView.isTaskInFlight` is a
+/// disjunction over seven conditions, and treating them alike is what produced a placeholder that
+/// was wrong in every one of them. A question parked on you, with the control that answers it right
+/// there, is a different situation from a run in flight with nothing here to type into, and they get
+/// different sentences.
+///
+/// Nothing here explains how anything works, per the founder's rule of 2026-08-14. Each line is the
+/// composer describing its own state or naming where to act — not a sentence about the feature.
+enum ComposerPresentation {
+    /// What the composer is doing. `FloatingWidgetView.composerState` maps the view model onto this,
+    /// and derives its `isTaskInFlight` back out of it, so the gate that disables the field and the
+    /// sentence that explains why can never disagree.
+    enum State: CaseIterable {
+        /// Nothing is in the way. The field takes a command and the Start button is there.
+        case ready
+
+        /// A question is parked on the user, and the control that answers it is in the panel above
+        /// this composer.
+        ///
+        /// **"Above" is load-bearing, and it is true by construction rather than by luck.**
+        /// `AgentViewModel.hasVisibleWidgetPanel` returns true unconditionally for every condition
+        /// folded in here — the two Safe-mode reviews, the session pause, the approval and the
+        /// clarification — so the panel this sentence points at is always on screen.
+        case waitingOnYou
+
+        /// A run is in flight and there is nothing here for the user to type into.
+        ///
+        /// Deliberately *not* folded into `waitingOnYou`: the running branch of
+        /// `hasVisibleWidgetPanel` is origin-gated, so a run a Command Center row action started
+        /// shows no widget panel at all, and a sentence pointing "above" would point at nothing.
+        case working
+    }
+
+    /// The field's placeholder, which is the only thing on this surface that can say why a click
+    /// achieved nothing.
+    static func prompt(for state: State) -> String {
+        switch state {
+        case .ready:
+            return "Let Sonny take it from here\u{2026}"
+        case .waitingOnYou:
+            return "Answer above first\u{2026}"
+        case .working:
+            return "Sonny is working\u{2026}"
+        }
+    }
+
+    /// Whether the field takes input. The one place this question is answered, so a control added to
+    /// the composer later cannot invent its own idea of "in flight".
+    static func acceptsInput(_ state: State) -> Bool {
+        state == .ready
+    }
+}
+
 /// The armed-follow-up chip and the action that arms it (row E, SONNY-150).
 ///
 /// Copy approved by the founder on 2026-08-21, with the alternatives put beside it: the chip states

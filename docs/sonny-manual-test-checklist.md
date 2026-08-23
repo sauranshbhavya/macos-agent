@@ -580,9 +580,11 @@ it feels confusing in practice, not just whether it's "technically correct."
       dispatch can't be covered by the automated suite, so this row is the real verification
 - [ ] **(new 2026-07-30)** ⌘Q quits the app from anywhere — it was equally menu-routed and equally
       broken; the status-item menu's Quit only ever dispatched while that dropdown was open
-- [ ] **(new 2026-07-30, fix re-test)** Widget idle state: the Start button now sits 8pt from the
-      pill's trailing edge, matching its 8pt top/bottom insets — confirm it reads even, and that
-      the in-flight state (button hidden, field disabled) looks unchanged from before
+- [ ] **(new 2026-07-30, fix re-test; second half superseded 2026-08-23 by SONNY-247)** Widget idle
+      state: the Start button now sits 8pt from the pill's trailing edge, matching its 8pt
+      top/bottom insets — confirm it reads even. **The in-flight state is no longer meant to look
+      unchanged from before**, which is what this row used to ask: the placeholder now names the
+      state and the wand glyph dims. Check it against §3d's rows instead of against memory
 - [ ] **(new 2026-07-30, fix re-test)** With a workspace saved as "hehe" and no routine by that
       name, "run hehe" asks "…but you do have a workspace called \"hehe\" — did you mean to open
       that?" instead of listing routine names; same cross-reference in the reverse direction
