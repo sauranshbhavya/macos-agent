@@ -226,7 +226,8 @@ have. An omitted privacy field must be a loud error, not a quiet guess.
   so a route added without a thought about authentication refuses everyone rather than serving
   quietly. **What verification cannot do is un-issue a token**: an access token is self-contained, so
   signing out revokes the refresh family while the access token keeps verifying until its own `exp`
-  (one hour on Supabase's default). A closed account is refused immediately on every request; the
+  plus the 30-second skew tolerance of §3.5 — one hour and thirty seconds on Supabase's default
+  lifetime. A closed account is refused immediately on every request; the
   remaining window is SONNY-237's.
 - **Refresh token** — long-lived, opaque, rotated on every use, stored in the Keychain through the
   existing `KeychainSecretStore` (the concrete struct at `KeychainSecretStore.swift:21`, behind the

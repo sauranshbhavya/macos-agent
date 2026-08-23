@@ -116,6 +116,68 @@ describeDb("the gate, attributing a verified token to an account", () => {
     await app.close();
   });
 
+  it("IGNORES Sonny-Account-Id on a valid token — the victim survives, the caller's own account closes", async () => {
+    // **F1 of PR #104's adversarial review: the branch's headline property had no test that could
+    // fail.** Two tests sent `sonny-account-id`, and both sent a token that fails verification
+    // (`Bearer anything`, `Bearer made-up-token`), so the gate refused before the line that picks
+    // the account was ever reached. Replacing `accountId: owner.accountId` in `gate.ts` with
+    // `request.headers["sonny-account-id"] ?? owner.accountId` — PR #87's F1 defect, reintroduced in
+    // one line — left the suite at 244 passed (244) while destroying the wrong account.
+    //
+    // So this is the case that was missing: a **valid** token, a **real** second account, and the
+    // header naming it. It was written before the fix it guards existed anywhere else, run against
+    // that exact mutant, and watched go red — a test nobody has seen fail is a test nobody knows
+    // the failure mode of.
+    const app = build();
+    const attacker = await signIn(app, "attacker@example.com");
+
+    const victimAccount = await client.query<{ id: string }>(
+      "INSERT INTO sonny.account DEFAULT VALUES RETURNING id",
+    );
+    const victim = victimAccount.rows[0]!.id;
+    await client.query(
+      `INSERT INTO sonny.identity (account_id, provider, subject, email_hint, email_verified,
+         email_is_relay, supabase_user_id, link_method)
+       VALUES ($1,'email','victim@example.com','victim@example.com',true,false,$2,'primary')`,
+      [victim, STRANGER],
+    );
+
+    const response = await app.inject({
+      method: "DELETE",
+      url: "/v1/account",
+      headers: { ...bearer(SESSION_USER), "sonny-account-id": victim },
+    });
+    expect(response.statusCode).toBe(204);
+
+    const state = async (id: string) =>
+      (await client.query<{ deleted_at: Date | null }>(
+        "SELECT deleted_at FROM sonny.account WHERE id = $1", [id],
+      )).rows[0]!.deleted_at;
+    // The victim is the whole assertion: named in the request, untouched by it.
+    expect(await state(victim)).toBeNull();
+    // And the caller's own account is the one that closed, so this is not merely "nothing happened".
+    expect(await state(attacker)).not.toBeNull();
+    await app.close();
+  });
+
+  it("IGNORES a Sonny-Account-Id naming nothing at all, rather than failing or acting on it", async () => {
+    // The other half of the same mutant. A header-reading gate that fell back to the token only
+    // when the header was absent would still pass the test above if it refused an unknown id — this
+    // one requires the header to be ignored outright, whatever it names. An account id that names
+    // no row would also be a Postgres `22P02` if it were ever bound as a uuid.
+    const app = build();
+    const mine = await signIn(app, "ignored@example.com");
+    const response = await app.inject({
+      method: "DELETE",
+      url: "/v1/account",
+      headers: { ...bearer(SESSION_USER), "sonny-account-id": "not-even-a-uuid" },
+    });
+    expect(response.statusCode).toBe(204);
+    expect((await client.query("SELECT deleted_at FROM sonny.account WHERE id = $1", [mine]))
+      .rows[0].deleted_at).not.toBeNull();
+    await app.close();
+  });
+
   it("refuses a perfectly valid token whose sub names no identity here", async () => {
     // Signed by this gateway's own secret, correct issuer, correct audience, unexpired — and it
     // still attributes nobody. A token is not a caller until the database says whose it is.
@@ -186,6 +248,38 @@ describeDb("the gate, attributing a verified token to an account", () => {
     await signIn(app, "released@example.com");
     await client.query("UPDATE sonny.identity SET account_closed = true WHERE supabase_user_id = $1",
       [SESSION_USER]);
+    const response = await app.inject({
+      method: "POST", url: "/v1/auth/signout", headers: bearer(SESSION_USER),
+    });
+    expect(response.statusCode).toBe(401);
+    expect(response.json().error.code).toBe("auth.token_revoked");
+    await app.close();
+  });
+
+  it("refuses on the ACCOUNT's deleted_at even when the identity's flag says otherwise", async () => {
+    // **Half the attribution predicate was untested** (PR #104's adversarial review, F7). Dropping
+    // `AND a.deleted_at IS NULL` while keeping `NOT i.account_closed` left the suite at 244 passed,
+    // because the `account_close_marks_identities` trigger keeps the two in step along the one path
+    // every other test walks. They are not the same check: `i.account_closed` is a denormalised copy
+    // and `a.deleted_at` is the fact.
+    //
+    // The state below is produced by correcting the copy back by hand — which is exactly the case
+    // the second predicate exists for, alongside an identity inserted for an already-closed account
+    // and any future migration that touches the flag. A plain `UPDATE ... SET account_closed` does
+    // not re-fire the trigger, which is declared `BEFORE INSERT OR UPDATE OF account_id` (0005).
+    const app = build();
+    const accountId = await signIn(app, "stale-flag@example.com");
+    await client.query("UPDATE sonny.account SET deleted_at = now() WHERE id = $1", [accountId]);
+    const corrected = await client.query(
+      "UPDATE sonny.identity SET account_closed = false WHERE supabase_user_id = $1", [SESSION_USER]);
+    expect(corrected.rowCount).toBe(1);
+    // The state really is the one being tested: account gone, flag saying live.
+    const { rows } = await client.query(
+      `SELECT a.deleted_at, i.account_closed FROM sonny.identity i
+         JOIN sonny.account a ON a.id = i.account_id WHERE i.supabase_user_id = $1`, [SESSION_USER]);
+    expect(rows[0].deleted_at).not.toBeNull();
+    expect(rows[0].account_closed).toBe(false);
+
     const response = await app.inject({
       method: "POST", url: "/v1/auth/signout", headers: bearer(SESSION_USER),
     });
