@@ -1569,6 +1569,28 @@ private struct WidgetResultPanel: View {
 /// the same footing `WidgetCaptureReviewPanel` is on, and a candidate for the whole-product UI pass
 /// for the same reason. Its shape is `WidgetCaptureReviewPanel`'s: a sentence, then a right-aligned
 /// pair of controls with the affirmative one tinted.
+///
+/// **The controls are a tick and a cross, and this panel alone diverges that way** (founder,
+/// 2026-08-23, SONNY-244 — "only tick and cross would be fine"). The panels beside it keep their
+/// words on purpose rather than following: this one asks a yes/no question about a single thing, and
+/// a glyph can carry yes and no. `WidgetCaptureReviewPanel` ("Send" / "Don't send"),
+/// `WidgetDelegationReviewPanel` ("Use tools" / "Keep clicking") and `WidgetSessionPausedPanel`
+/// ("Resume" / "End") each offer two *different actions*, and "Keep clicking" is not the negation of
+/// anything — a cross there would say something the button does not. So the divergence is stated
+/// rather than propagated.
+///
+/// **What the words cost, and where they went.** The visible text was the only thing naming these
+/// controls for a sighted user, so it now lives in two places instead of one: `.help` carries the
+/// founder's own word ("Continue", "Not now") on hover, and `.accessibilityLabel` keeps the full
+/// sentence naming the task, which matters more once the button shows no text at all.
+///
+/// **The cross is "not now" and nothing else, and the residual ambiguity is real.** It calls the
+/// same `onDismiss` the labelled button called — the record is untouched, the offer returns at the
+/// next launch. A cross does also read as "close this panel", and *closing* is genuinely a different,
+/// weaker action here: letting the widget collapse leaves the offer unanswered and it comes straight
+/// back. Nothing in a 23pt glyph can distinguish the two; the tooltip and the VoiceOver label are the
+/// whole mitigation, and the founder's manual pass is where "does the cross read as an answer" gets
+/// decided.
 private struct WidgetResumeOfferPanel: View {
     let command: String
     let onContinue: () -> Void
@@ -1576,35 +1598,48 @@ private struct WidgetResumeOfferPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            // **The reserved height is the fix, not the stack** (SONNY-244) — see
+            // `ResumeOfferPresentation.reservedMessageHeight` for why the controls were being drawn
+            // on top of this sentence intermittently, and why making the stack taller would have
+            // aimed at the wrong thing. `lineLimit` and the reservation are one mechanism and have
+            // to move together: the cap is what makes the reservation sufficient.
             Text(ResumeOfferPresentation.message(command: command))
                 .font(WidgetType.caption)
                 .foregroundStyle(WidgetTheme.textFull)
+                .lineLimit(ResumeOfferPresentation.messageLineLimit)
                 .fixedSize(horizontal: false, vertical: true)
+                .frame(minHeight: ResumeOfferPresentation.reservedMessageHeight)
 
             HStack(spacing: 8) {
                 Spacer(minLength: 8)
 
+                // 23x23 on the neutral circular fill, and a 10pt bold `xmark`: this is
+                // `WidgetClarificationPanel`'s own cancel control, glyph for glyph, which is itself
+                // `WidgetPermissionPanel`'s Deny. No new component and no new System B token.
                 Button(action: onDismiss) {
-                    Text(ResumeOfferPresentation.dismissLabel)
-                        .font(WidgetType.captionMedium)
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(WidgetTheme.textFull)
                 }
                 .buttonStyle(.plain)
-                .padding(.horizontal, 10)
-                .frame(height: 23)
+                .frame(width: 23, height: 23)
                 .widgetCircularBackground()
                 .accessibilityLabel(ResumeOfferPresentation.dismissAccessibilityLabel(command: command))
+                .help(ResumeOfferPresentation.dismissLabel)
 
+                // The affirmative stays the tinted one, which is the whole of what tells "carry on"
+                // apart from "leave it" now that neither carries a word. Borrowed from the same
+                // panel: its Send is an 11pt bold glyph in white on `primaryAction`.
                 Button(action: onContinue) {
-                    Text(ResumeOfferPresentation.continueLabel)
-                        .font(WidgetType.captionMedium)
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(.white)
                 }
                 .buttonStyle(.plain)
-                .padding(.horizontal, 10)
-                .frame(height: 23)
+                .frame(width: 23, height: 23)
                 .widgetCircularBackground(tint: WidgetTheme.primaryAction)
                 .accessibilityLabel(ResumeOfferPresentation.continueAccessibilityLabel(command: command))
+                .help(ResumeOfferPresentation.continueLabel)
             }
         }
     }
