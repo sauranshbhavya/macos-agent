@@ -161,17 +161,21 @@ struct WorkspaceScopeTests {
         #expect(scope.verdict(for: .fileLocation(link.appendingPathComponent("x.txt").path)) == .outOfScope)
     }
 
-    /// The one shape symlink resolution cannot see through, pinned rather than left to be discovered:
-    /// `resolvingSymlinksInPath` only resolves a path that exists, so a *not-yet-created* file
-    /// underneath a symlinked folder still reads as inside the scoped root.
+    /// The shape symlink resolution used to be unable to see through, and now sees (SONNY-249).
     ///
-    /// This is `PathWhitelist`'s own inherited behavior, not a divergence — and it is not a bypass,
-    /// which the second half of this test proves rather than asserts: the whitelist refuses that
-    /// write at execution because the parent it would write through is a symlink. Scope narrows the
-    /// whitelist; it never widens it, so an `.inScope` verdict on a path the whitelist rejects grants
-    /// nothing.
+    /// `resolvingSymlinksInPath` resolved only a path that already existed, so a *not-yet-created*
+    /// file underneath a symlinked folder read as inside the scoped root — this test used to assert
+    /// exactly that, as a pinned blind spot. `PathWhitelist.canonicalURL` now resolves the longest
+    /// prefix that does exist, and scope inherits that with the rest of the arithmetic, so the
+    /// verdict follows the link to where it leads.
+    ///
+    /// The second half is the layering, which the blind spot used to obscure: the link's destination
+    /// is still inside the *whitelist* — `Personal` is a sibling of `Client` under the same root — so
+    /// the whitelist accepts the write and the bytes land in `Personal`. Nothing escapes. What scope
+    /// refuses here is not what the whitelist refuses, and scope refusing it is the entire reason a
+    /// narrower boundary exists.
     @Test
-    func aNotYetCreatedFileUnderASymlinkedFolderInheritsTheWhitelistsOwnBlindSpotAndIsStillRefused() throws {
+    func aNotYetCreatedFileUnderASymlinkedFolderIsJudgedByWhereTheSymlinkLeads() throws {
         let fixture = try FileScopeFixture()
         defer { fixture.tearDown() }
         let link = fixture.client.appendingPathComponent("escape")
@@ -179,15 +183,33 @@ struct WorkspaceScopeTests {
         let unwritten = link.appendingPathComponent("new.md").path
         let scope = fixture.scope(fileLocations: [fixture.client.path])
 
-        #expect(scope.verdict(for: .fileLocation(unwritten)) == .inScope)
+        #expect(scope.verdict(for: .fileLocation(unwritten)) == .outOfScope)
 
-        do {
-            _ = try fixture.whitelist.validateOutputPath(unwritten)
-            Issue.record("Expected the whitelist to refuse a write through a symlinked parent")
-        } catch PathValidationError.symbolicLinkRejected {
-        } catch {
-            Issue.record("Expected symbolicLinkRejected, got \(error)")
-        }
+        let accepted = try fixture.whitelist.validateOutputPath(unwritten)
+        try Data("bytes".utf8).write(to: accepted, options: .atomic)
+
+        #expect(accepted.path == fixture.personal.appendingPathComponent("new.md").path)
+        #expect(FileManager.default.fileExists(atPath: fixture.personal.appendingPathComponent("new.md").path))
+    }
+
+    /// The other direction of the same resolution, so the fix above is not read as "symlinks are out
+    /// of scope now": a link that stays inside the scoped folder keeps a not-yet-created file inside
+    /// it. The boundary the user drew did not move — it is compared against where paths lead
+    /// instead of against how they were spelled.
+    @Test
+    func aNotYetCreatedFileUnderASymlinkThatStaysInsideTheScopedFolderIsInScope() throws {
+        let fixture = try FileScopeFixture()
+        defer { fixture.tearDown() }
+        let real = fixture.client.appendingPathComponent("Reports", isDirectory: true)
+        try FileManager.default.createDirectory(at: real, withIntermediateDirectories: true)
+        let alias = fixture.client.appendingPathComponent("shortcut")
+        try FileManager.default.createSymbolicLink(at: alias, withDestinationURL: real)
+        let scope = fixture.scope(fileLocations: [fixture.client.path])
+
+        #expect(scope.verdict(for: .fileLocation(alias.appendingPathComponent("new.md").path)) == .inScope)
+
+        let accepted = try fixture.whitelist.validateOutputPath(alias.appendingPathComponent("new.md").path)
+        #expect(accepted.path == real.appendingPathComponent("new.md").path)
     }
 
     @Test
@@ -1101,11 +1123,17 @@ struct WorkspaceScopeTests {
         #expect(scope.verdict(for: .fileLocation("   ")) == .outOfScope)
     }
 
-    /// Pitfall 5 in the branch plan, decided rather than left silent: scope inherits
-    /// `PathWhitelist`'s case-sensitive containment verbatim. The assertion that matters is not the
-    /// verdict on its own but that scope and the whitelist give the *same* answer — case-folding in
-    /// one and not the other is the divergence the shared containment exists to prevent. The
-    /// direction is also fail-safe: a case-variant path prompts, it is never quietly let in.
+    /// Pitfall 5 in the branch plan, decided rather than left silent: scope inherits whatever
+    /// `PathWhitelist` does about case, rather than folding case itself. The assertion that matters
+    /// is not the verdict on its own but that scope and the whitelist give the *same* answer —
+    /// case-folding in one and not the other is the divergence the shared containment exists to
+    /// prevent.
+    ///
+    /// The folder here does not exist, which is what keeps this test about *case* after SONNY-249
+    /// rather than about resolution: a folder that exists has its real spelling adopted by both
+    /// sides now, so the two spellings would be one path and there would be nothing left to
+    /// inherit. With nothing on disk to ask, the comparison is literal, and its direction is
+    /// fail-safe — such a path prompts, it is never quietly let in.
     @Test
     func fileMatchingInheritsTheWhitelistsCaseSensitivityRatherThanDivergingFromIt() throws {
         let fixture = try FileScopeFixture()
