@@ -1625,6 +1625,53 @@ struct MemoryCommandCenterTests {
         #expect(!fixture.viewModel.pollClipboardHistory())
     }
 
+    /// A routine that fires with nobody watching writes to the same stores a typed command does, and
+    /// Command Center can be open the whole time. The scheduled path never reaches
+    /// `recordTaskHistoryIfTerminal`, so it needs — and has — its own refresh.
+    @Test
+    func aScheduledRunPublishesWhatItRecordedWithoutTheMemoryPageBeingRevisited() async throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        let reports = try fixture.saveScheduledDraftRoutine()
+        fixture.viewModel.refreshMemoryEntries()
+        #expect(fixture.viewModel.outputLocations.isEmpty)
+
+        fixture.viewModel.checkScheduledRoutines(now: MemoryFixture.tenAM)
+        try await fixture.waitUntilIdle()
+
+        #expect(FileManager.default.fileExists(atPath: reports.appendingPathComponent("morning.md").path))
+        #expect(fixture.viewModel.outputLocations.map(\.name) == ["Reports"])
+        #expect(fixture.viewModel.recentArtifacts.count == 1)
+    }
+
+    /// **A tick that recorded nothing reloads nothing**, counted rather than inferred.
+    ///
+    /// The poll runs once a second. The refresh hangs off `poll()` returning an item precisely so a
+    /// pasteboard nobody touched does not decrypt five files sixty times a minute on the main actor,
+    /// and the only way to see that from outside is to count what the view model published — a
+    /// reload assigns every one of those `@Published` arrays whether or not their contents changed.
+    @Test
+    func anIdleClipboardTickPublishesNothingAtAll() throws {
+        let fixture = try makeMemoryFixture()
+        defer { fixture.cleanUp() }
+        try fixture.clipboardSettingsStore.save(ClipboardHistorySettings(noticeDismissed: true, isEnabled: true))
+        fixture.viewModel.refreshClipboardHistoryNotice()
+
+        var publishedChanges = 0
+        let subscription = fixture.viewModel.objectWillChange.sink { _ in publishedChanges += 1 }
+        defer { subscription.cancel() }
+
+        #expect(!fixture.viewModel.pollClipboardHistory())
+        #expect(publishedChanges == 0, "an idle tick republished \(publishedChanges) time(s)")
+
+        // The control: a tick that *did* record publishes, so zero above is the guard working
+        // rather than a subscription that never fires.
+        fixture.pasteboard.text = "copied"
+        fixture.pasteboard.changeCount += 1
+        #expect(fixture.viewModel.pollClipboardHistory())
+        #expect(publishedChanges > 0)
+    }
+
     /// **The ticket's second question, answered: the sheet cannot disagree with the row.**
     ///
     /// It asked whether an open entries sheet has the same staleness as the row behind it, since a
