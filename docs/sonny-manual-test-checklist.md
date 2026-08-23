@@ -414,13 +414,23 @@ which.
 - [ ] **(new 2026-08-23, SONNY-247)** While an ordinary run is in flight (no question), the same
       composer reads "Sonny is working…" — a different sentence, because there is nothing above to
       answer
+- [ ] **(new 2026-08-23, SONNY-247, from PR #107's review)** During a **screen-control** session the
+      composer also reads "Sonny is working…", not "Answer above first…", for the whole session —
+      including if Sonny asks for an approval part-way through it. That is deliberate: the panel
+      above is the controlling HUD (app, step count, Pause, Stop) and it carries no question, so
+      pointing at it would be a lie. **Separately and not fixed here: an approval raised during a
+      screen-control session reaches no widget surface at all** — that is SONNY-255, it predates
+      this work, and if you hit it the run will appear to stall with only Pause and Stop available
 
 ### 3d-bis. Unfinished-task offer (row 13, SONNY-210; layout and controls SONNY-244 — no wireframe)
 Start something long and multi-step, then quit Sonny before it finishes — "summarize
 https://news.ycombinator.com and save it as a markdown file on my desktop" is the founder's own
 case. Relaunch and open the widget.
 - [ ] **(new 2026-08-23, SONNY-244)** The offer reads "You were partway through "…"." with a **tick
-      and a cross** below it, right-aligned, the tick tinted and the cross plain. No text buttons
+      and a cross** below it, right-aligned, the tick tinted and the cross plain. No text buttons.
+      **Say whether the two glyphs read as the same size** — the tick is 11pt and the cross 10pt,
+      while the only other pair of these two glyphs in the app (the permission panel's Allow and
+      Deny) is 10pt for both. Left as-is deliberately: it is your call, not a session's
 - [ ] **(new 2026-08-23, SONNY-244)** **The controls sit below the message, never on top of it** —
       this is the defect. Use a command long enough that the message wraps to two lines, and check
       it more than once: it rendered correctly some of the time on the broken build, so a single

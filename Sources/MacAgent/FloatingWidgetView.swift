@@ -464,26 +464,47 @@ struct FloatingWidgetView: View {
     /// should do differs between them, so what the composer says has to differ too;
     /// `ComposerPresentation.State` is where each case's reasoning lives.
     ///
-    /// **The union is exactly the old disjunction, term for term.** Five conditions are a question
-    /// parked on the user and two are a run in flight; nothing was added, dropped, or reordered into
-    /// a different truth value, which is what lets `isTaskInFlight` below be derived from this rather
-    /// than computed a second time. `everyConditionTheComposerDisablesOnIsClassified` holds the
-    /// population so an eighth cannot arrive unclassified.
+    /// **The union is exactly the old disjunction, term for term.** Nothing was added or dropped,
+    /// which is what lets `isTaskInFlight` below be derived from this rather than computed a second
+    /// time. `everyConditionTheComposerDisablesOnIsClassified` holds the population so an eighth
+    /// cannot arrive unclassified, and `theWidgetsOwnPrecedenceIsWhatMakesTheComposersClassificationTrue`
+    /// holds the ordering the branches below depend on.
+    ///
+    /// **The branch order mirrors `state`'s, and that mirroring is the whole correctness argument**
+    /// (PR #107 review, F1). The first version asked `hasVisibleWidgetPanel`, which answers "is a
+    /// panel visible" — and then concluded "is *that* panel visible", which is a different question
+    /// and was false. `state` above returns the *first* branch that matches, so the panel a user is
+    /// actually looking at is whichever question outranks the rest; a condition may therefore only
+    /// be called `.waitingOnYou` once every branch that outranks it has been ruled out. That is what
+    /// the ordering here does, rather than a sentence claiming it.
     private var composerState: ComposerPresentation.State {
-        // A question is parked on the user. Every one of these renders a widget panel
-        // unconditionally — `AgentViewModel.hasVisibleWidgetPanel` returns true for all five before
-        // it reaches any origin gate — so the control that answers it really is above this field.
-        if viewModel.isAwaitingApproval
-            || viewModel.clarificationQuestion != nil
-            || viewModel.visionCapturePreview != nil
+        // These three outrank `.controlling` in `state`, so each really does put its own question on
+        // screen whatever else is happening.
+        if viewModel.visionCapturePreview != nil
             || viewModel.visionDelegationRequest != nil
             || viewModel.visionSessionPause != nil {
             return .waitingOnYou
         }
-        // A run is in flight with nothing here to type into. Not folded in above, because these two
-        // are the ones whose panel is origin-gated: a run a Command Center row action started shows
-        // nothing in the widget at all, and "answer above" would then point at empty space.
-        if viewModel.isRunning || viewModel.visionSessionProgress != nil {
+        // **Before the two below it, because `.controlling` outranks both `.permission` and
+        // `.clarification`.** A screen-control session sets `visionSessionProgress` at the top of
+        // every iteration and clears it only when the session ends, so from iteration 1 the panel on
+        // screen is the controlling HUD — the app, the step count, Pause and Stop — and it carries
+        // no question. An approval raised mid-session is pending underneath it and renders in the
+        // widget nowhere at all; that is SONNY-255, it predates this classification and is not fixed
+        // here. What is fixed here is the composer no longer saying "answer above" over a panel with
+        // nothing in it to answer.
+        if viewModel.visionSessionProgress != nil {
+            return .working
+        }
+        // No session is live, so `.permission` and then `.clarification` are the branches that win
+        // and each puts its own control above this field.
+        if viewModel.isAwaitingApproval || viewModel.clarificationQuestion != nil {
+            return .waitingOnYou
+        }
+        // A run in flight with nothing here to type into, and no guaranteed panel either: the
+        // running branch of `hasVisibleWidgetPanel` is origin-gated, so a run a Command Center row
+        // action started shows nothing in the widget at all.
+        if viewModel.isRunning {
             return .working
         }
         return .ready
@@ -1655,9 +1676,14 @@ private struct WidgetResultPanel: View {
 /// that one is solid. `.help` carries the founder's own word — "Continue", "Not now" — on hover, and
 /// **that one may simply not fire**: `micHintPointerEnteredMic` in this same file records `.help()`
 /// as having been "confirmed unreliable here too, not just assumed", which is why the mic's hint is
-/// a real layout row rather than a tooltip. Three other `.help` calls in this file predate that
-/// finding and were left in place, and these two join them on the same footing: free if it works,
-/// nothing lost if it does not. **So the plain reading is that a sighted user loses the words**, which
+/// a real layout row rather than a tooltip. **Two** other `.help` calls in this file predate that
+/// finding and were left in place — the compact capsule's "Open Sonny" and the clarification
+/// panel's cancel — and these two join them on the same footing: free if it works, nothing lost if
+/// it does not. (Two, not the three this said before PR #107's F3. A plain search answers four,
+/// because two of the hits are doc-comment mentions of `.help()` rather than calls; the live count
+/// at the branch point is `git grep -n "help(" -- Sources/MacAgent/FloatingWidgetView.swift` at
+/// `961b9c2` with the comment-prefixed lines dropped, which is 2. SONNY-251 counts 4 for the
+/// current head, being those two plus these two, and the two figures agree.) **So the plain reading is that a sighted user loses the words**, which
 /// is the founder's decision costing what it costs rather than a gap papered over with a mechanism
 /// that might not run. The manual item asks specifically whether the tooltip appears at all; a real
 /// hover row like the mic's is the remedy if it does not, and that is a design change, not a fix.
@@ -1706,8 +1732,17 @@ private struct WidgetResumeOfferPanel: View {
                 .help(ResumeOfferPresentation.dismissLabel)
 
                 // The affirmative stays the tinted one, which is the whole of what tells "carry on"
-                // apart from "leave it" now that neither carries a word. Borrowed from the same
-                // panel: its Send is an 11pt bold glyph in white on `primaryAction`.
+                // apart from "leave it" now that neither carries a word.
+                //
+                // **The 11pt is borrowed from a submit arrow, not from a checkmark** (PR #107, F4).
+                // `WidgetClarificationPanel`'s tinted control is an `arrow.up` that sends the answer
+                // — this comment used to call it a "Send", which is a text button in
+                // `WidgetCaptureReviewPanel` and a different thing — so what was copied is a size
+                // and a treatment, 11pt bold white on `primaryAction`, rather than a matching glyph.
+                // The file's only existing `xmark`/`checkmark` pair is `WidgetPermissionPanel`'s
+                // Deny and Allow, and that pair is 10pt for **both**. Whether these two read as the
+                // same size is a founder call at manual-test time, not a session's, so the sizes
+                // stand and the manual row asks the question.
                 Button(action: onContinue) {
                     Image(systemName: "checkmark")
                         .font(.system(size: 11, weight: .bold))

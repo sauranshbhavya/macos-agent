@@ -278,20 +278,35 @@ enum ComposerPresentation {
         /// Nothing is in the way. The field takes a command and the Start button is there.
         case ready
 
-        /// A question is parked on the user, and the control that answers it is in the panel above
-        /// this composer.
+        /// A question is parked on the user, and the control that answers it is the one in the panel
+        /// above this composer.
         ///
-        /// **"Above" is load-bearing, and it is true by construction rather than by luck.**
-        /// `AgentViewModel.hasVisibleWidgetPanel` returns true unconditionally for every condition
-        /// folded in here — the two Safe-mode reviews, the session pause, the approval and the
-        /// clarification — so the panel this sentence points at is always on screen.
+        /// **"Above" is load-bearing, and what makes it true is a branch order, not a predicate**
+        /// (PR #107 review, F1). The first version of this argued from
+        /// `AgentViewModel.hasVisibleWidgetPanel` — which answers "is a panel visible" — and then
+        /// concluded "is *that* panel visible". Those are different questions and the second was
+        /// false: `FloatingWidgetView.state` returns the first branch that matches, and a live
+        /// screen-control session outranks both the approval and the clarification there, so an
+        /// approval raised mid-session left the widget showing the controlling HUD — the app, the
+        /// step count, Pause and Stop — while this composer said "answer above" over a panel with
+        /// no question in it. The classification now rules out every branch that outranks a
+        /// condition before calling it `.waitingOnYou`, so the sentence is carried by the ordering
+        /// rather than by a claim about it.
+        ///
+        /// **That an approval during a screen-control session reaches no widget surface at all is a
+        /// separate, pre-existing defect** — SONNY-255, filed high — and nothing here fixes it or
+        /// implies otherwise. This case only stops the composer pointing at a panel that cannot
+        /// answer.
         case waitingOnYou
 
         /// A run is in flight and there is nothing here for the user to type into.
         ///
-        /// Deliberately *not* folded into `waitingOnYou`: the running branch of
-        /// `hasVisibleWidgetPanel` is origin-gated, so a run a Command Center row action started
-        /// shows no widget panel at all, and a sentence pointing "above" would point at nothing.
+        /// Deliberately *not* folded into `waitingOnYou`, for two separate reasons. The running
+        /// branch of `hasVisibleWidgetPanel` is origin-gated, so a run a Command Center row action
+        /// started shows no widget panel at all and a sentence pointing "above" would point at
+        /// nothing. And a live screen-control session lands here even while something is pending
+        /// underneath it, because the panel it puts on screen is a progress HUD rather than a
+        /// question — see `waitingOnYou` above.
         case working
     }
 
@@ -439,8 +454,17 @@ enum ResumeOfferPresentation {
     /// command into the same band: measured at 13pt, the founder's two reported messages are 530.5pt
     /// and 531.4pt on one line against 436pt of width, and a third realistic one is 524.7pt. So the
     /// panel is permanently balanced on that edge — every one of them wraps to two lines with about
-    /// 95pt on the second — and the *only* input that needs a third line is a 60-character word with
-    /// no space in it, which this cap tail-truncates rather than letting it grow the panel.
+    /// 95pt on the second.
+    ///
+    /// **What needs a third line is an unbreakable run too wide for two lines of `panelContentWidth`
+    /// — a rendered width, not a character count** (PR #107 review, F5). This said "a 60-character
+    /// word with no space in it", which is the wrong property and understates the class: a run
+    /// crosses when nothing in it can be broken and its own width exceeds what two 436pt lines hold.
+    /// Measured at 13pt, `W` crosses at **34** characters (599.8pt on one line), lowercase `w` not
+    /// until 44 (614.0pt), and 54 CJK characters cross it (871.2pt) — one threshold, three different
+    /// counts, because the count was never the thing. This cap tail-truncates any of them rather
+    /// than letting the panel grow, and `aRunTooWideForTwoLinesIsWhatTheCapIsFor` holds the property
+    /// over all three.
     static let messageLineLimit = 2
 
     /// The height the panel holds open for the message, whatever it turns out to measure.
