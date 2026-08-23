@@ -834,6 +834,72 @@ struct ResumableTaskRunTests {
         #expect(fixture.viewModel.resumeOffer == nil)
     }
 
+    /// **With "Unfinished tasks" memory off, Sonny raises no offer — and the record is untouched.**
+    ///
+    /// Founder decision, 2026-08-22, from PR #105's review F9. The asymmetry is the decision:
+    /// listing an existing record under Memory is the user going to look, and it has to show them or
+    /// a store they switched off becomes one they cannot clear; raising a panel on the widget is
+    /// Sonny initiating, unasked, from memory the user has just said to stop keeping.
+    ///
+    /// Every half is asserted, because "no offer" on its own is equally true of a guard that deleted
+    /// the record: the record stays on disk, stays in the published list, stays counted by the
+    /// Memory row, is still deletable, and the offer comes back when the switch does.
+    @Test
+    func withUnfinishedTaskMemoryOffThereIsNoOfferAndTheRecordIsUntouched() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        // A record written while the switch was on — the case the decision names explicitly.
+        fixture.browserOpener.failure = BrowserOutage()
+        try await fixture.run("Write notes and open the page")
+        fixture.viewModel.clearStaleTaskOutcome()
+        let record = try #require(fixture.viewModel.resumeOffer)
+        #expect(fixture.viewModel.hasVisibleWidgetPanel)
+
+        fixture.viewModel.setMemoryCategoryEnabled(.resumableTasks, to: false)
+
+        // No offer, and no panel — the widget renders nothing for it.
+        #expect(fixture.viewModel.resumeOffer == nil)
+        #expect(!fixture.viewModel.hasVisibleWidgetPanel)
+
+        // And nothing else changed. The record is still on disk, still published, still counted by
+        // the row, and still deletable — a store switched off must not become one nobody can clear.
+        #expect(try fixture.resumableTaskStore.loadAll().map(\.id) == [record.id])
+        #expect(fixture.viewModel.resumableTasks.map(\.id) == [record.id])
+        #expect(MemoryRowPresentation.row(for: .resumableTasks, viewModel: fixture.viewModel).count == 1)
+        #expect(MemoryEntryPresentation.entries(for: .resumableTasks, viewModel: fixture.viewModel).count == 1)
+
+        // Switching it back on brings the offer back, from the same record.
+        fixture.viewModel.setMemoryCategoryEnabled(.resumableTasks, to: true)
+        #expect(fixture.viewModel.resumeOffer?.id == record.id)
+        #expect(fixture.viewModel.hasVisibleWidgetPanel)
+    }
+
+    /// The master switch reaches the offer through the same guard — `isMemoryCategoryEnabled` folds
+    /// it — so turning memory off wholesale withholds the panel too, with the record equally intact.
+    /// And deleting one while the switch is off still works, which is the half that keeps a
+    /// switched-off store clearable.
+    @Test
+    func theMasterMemorySwitchWithholdsTheOfferAndAnEntryIsStillDeletable() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        fixture.browserOpener.failure = BrowserOutage()
+        try await fixture.run("Write notes and open the page")
+        fixture.viewModel.clearStaleTaskOutcome()
+        #expect(fixture.viewModel.resumeOffer != nil)
+
+        fixture.viewModel.setMemoryEnabled(false)
+        #expect(fixture.viewModel.resumeOffer == nil)
+        #expect(try fixture.resumableTaskStore.loadAll().count == 1)
+
+        fixture.viewModel.deleteMemoryEntry(in: .resumableTasks, at: 0)
+
+        #expect(try fixture.resumableTaskStore.loadAll().isEmpty)
+        #expect(fixture.viewModel.resumableTasks.isEmpty)
+        #expect(fixture.viewModel.errorMessage == nil, "a successful delete reports nothing")
+    }
+
     // MARK: - The Memory row
 
     @Test
