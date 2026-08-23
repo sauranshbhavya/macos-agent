@@ -239,6 +239,8 @@ Architectural decisions / pitfalls discovered (required, write "none" if true):
 
 **A killed mutant can arrive as an aborted battery, and the cause is in the test.** Three tests indexed an array right after `#expect`-ing its count. `#expect` records and carries on, so under a mutant that empties the array the subscript traps — and a crashed process emits no "Test … failed" line for the harness to attribute, so `scripts/mutate` ended at a point that is not one of its exits with no error above it. `try #require` after a count expectation, never a subscript.
 
+**The Memory switch gates the offer as well as the write, and the asymmetry with the Memory list is the decision.** *(Founder, 2026-08-22, from PR #105's review F9.)* With "Unfinished tasks" off Sonny raises no offer — *including* for records written before the switch was flipped — while the records themselves are untouched: still on disk, still listed under Memory, still deletable, and the offer returns the moment the switch does. The two surfaces differ because of who initiates. **Listing an existing record under Memory is the user going to look**, and it has to show them, or a store they switched off becomes one they cannot clear. **Raising a panel on the widget is Sonny initiating, unasked, from memory the user has just said to stop keeping** — and a switch that is off while the product still proactively acts on what it recorded reads as a switch that did not work. Scope is exactly one guard in `resumeOffer`: nothing about what is written, what is stored, what Memory lists or what deletion does changes, and it is **deliberately not generalised** into a rule about every store's read path — it is about a *proactive* surface, and the next store that grows one is decided on its own terms. It reads `isMemoryCategoryEnabled(_:)`, the effective answer the row's own switch displays, so the panel and the control cannot disagree; that leaves out `taskRecordingPolicy`, which is a per-run composer switch about the run being composed rather than a standing statement about records already on disk.
+
 **A vacuous assertion in a test whose name promised it.** *(PR #105 review, F7.)* `aTaskInterruptedTwiceStaysOneRecordWithItsOriginalStartTime` compared two `startedAt` values as the run produced them — and the store encodes dates with `.iso8601`, whole-second resolution, with both written inside the same wall-clock second. A mutant restarting the clock on every resume passed it. The first record is back-dated an hour now, which makes the two answers a measurable distance apart.
 
 Known limitations / deferred scope:
@@ -247,8 +249,7 @@ Known limitations / deferred scope:
 - **A resumed unit can repeat work.** At most one: the unit that was in flight. Bounded, re-assessed, and pressed by the user.
 - **No wireframe covers the offer panel.** It is built to the panels beside it in System B, on the same footing `WidgetCaptureReviewPanel` is on, and is a candidate for the whole-product UI pass.
 
-Open questions (required, write "none" if true):
-- **Should the offer survive its own Memory switch being turned off?** *(PR #105 review, F9.)* Turning "Unfinished tasks" off stops new records and touches nothing already stored, which is the founder's requirement verbatim. Nothing gates the *read*, so records written before the switch was flipped keep raising "You were partway through X" afterwards. Listing them under Memory is right — the user needs to be able to delete them. A proactive panel acting on data the user has switched off is a different question, and a founder one. **Behaviour unchanged pending that answer**, rather than decided here.
+Open questions (required, write "none" if true): none.
 
 Next branch: per the roadmap.
 
