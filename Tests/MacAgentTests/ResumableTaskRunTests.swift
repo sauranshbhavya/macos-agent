@@ -1194,6 +1194,221 @@ struct ResumableTaskRunTests {
     static var tenAM: Date { nineAM.addingTimeInterval(3_600) }
 }
 
+/// SONNY-248 — answering a clarification keeps the thing the user asked for.
+///
+/// **The founder's symptom was a label and the defect was the command itself.** After answering a
+/// question and quitting mid-run, the widget offered to carry on with *"Clarification question: What
+/// should the note say, and which…"* — Sonny naming its own question back. `start()` clears
+/// `command` centrally the moment it captures a dispatch, and `submitClarification` then wrapped the
+/// question and answer around that now-empty field, so the request was gone from the planner's
+/// prompt, from `lastCommand` and from the record behind the offer. It survived because the one
+/// question anyone had answered restated the whole task.
+///
+/// **These live in this file for its fixture**, which is the only one in the target with a planner
+/// whose prompts can be read back, a plan that really pauses on a question, and a relaunch over the
+/// same store files. The format's own unit tests are `ClarifiedCommandTests`, in the core target.
+@Suite(.serialized)
+@MainActor
+struct ClarificationKeepsTheRequestTests {
+    private static let request = "Zip my three largest files"
+    private static let question = "Which folder should I scan?"
+
+    /// **The prompt, which is the half that is not a label.** A question that does not restate the
+    /// request — this one names no files, no zipping and no count — left the planner with an answer
+    /// and nothing to apply it to.
+    @Test
+    func answeringAClarificationPlansFromTheRequestRatherThanFromTheQuestion() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        try await fixture.run(Self.request, plan: fixture.clarifyingPlan(question: Self.question))
+        #expect(fixture.viewModel.clarificationQuestion == Self.question)
+        // The premise, and the control for every "the planner received" assertion below: this run
+        // really did reach the planner, with exactly what the user typed.
+        #expect(fixture.planner.receivedCommands == [Self.request])
+
+        fixture.planner.plan = fixture.draftThenOpenPlan
+        fixture.viewModel.clarificationAnswer = "The Desktop"
+        fixture.viewModel.submitClarification()
+        try await fixture.waitForIdle()
+
+        #expect(fixture.planner.receivedCommands.count == 2)
+        let continued = try #require(fixture.planner.receivedCommands.last)
+        #expect(continued.hasPrefix(Self.request))
+        #expect(continued.contains("Clarification question: \(Self.question)"))
+        #expect(continued.contains("Clarification answer: The Desktop"))
+        // The defect itself, inverted: the prompt used to *begin* with the question, because the
+        // empty `command` was interpolated in front of it.
+        #expect(!continued.hasPrefix(ClarifiedCommand.questionLabel))
+    }
+
+    /// `lastCommand` is two things at once and they no longer disagree: the text a retry resubmits,
+    /// which needs the exchange, and the text Command Center's running indicator shows, which does
+    /// not.
+    @Test
+    func theRetryPayloadKeepsTheExchangeAndTheRunningLabelShowsTheRequest() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        try await fixture.run(Self.request, plan: fixture.clarifyingPlan(question: Self.question))
+        fixture.planner.plan = fixture.draftThenOpenPlan
+        fixture.viewModel.clarificationAnswer = "The Desktop"
+        fixture.viewModel.submitClarification()
+        try await fixture.waitForIdle()
+
+        // The retry payload: whole, so retrying a clarified task does not re-ask the question.
+        #expect(fixture.viewModel.lastCommand.hasPrefix(Self.request))
+        #expect(fixture.viewModel.lastCommand.contains("Clarification answer: The Desktop"))
+        // The label: the request alone. Before SONNY-248 this read "Running: Clarification
+        // question: …"; the exchange behind it is the planner's business, not a sentence to read.
+        #expect(fixture.viewModel.runningCommandDisplayText == Self.request)
+    }
+
+    /// **The founder's own repro, end to end**: answer a question, get interrupted, come back, read
+    /// the offer. The relaunch is built rather than simulated — a second view model over the same
+    /// store files, which is what the next launch is.
+    @Test
+    func theOfferToCarryOnNamesTheRequestRatherThanTheQuestionSonnyAsked() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        // The interruption: the answered run's second unit fails, so its record is kept.
+        fixture.browserOpener.failure = BrowserOutage()
+        try await fixture.run(Self.request, plan: fixture.clarifyingPlan(question: Self.question))
+        fixture.planner.plan = fixture.draftThenOpenPlan
+        fixture.viewModel.clarificationAnswer = "The Desktop"
+        fixture.viewModel.submitClarification()
+        try await fixture.waitForIdle()
+
+        let relaunched = fixture.makeRelaunchedViewModel()
+        relaunched.refreshResumableTasks()
+        let offer = try #require(relaunched.resumeOffer)
+
+        #expect(offer.command == Self.request)
+        // The literal sentence the widget renders, because the record being right is only half of
+        // it — the offer squeezes a command onto one line and cuts it to sixty characters, which is
+        // where a short request would otherwise leave room for the exchange to show through.
+        #expect(
+            ResumeOfferPresentation.message(command: offer.command)
+                == "You were partway through \u{201C}\(Self.request)\u{201D}."
+        )
+        #expect(!ResumeOfferPresentation.message(command: offer.command).contains("Clarification"))
+    }
+
+    /// The Tasks list, the follow-up chip and "Run again" all read the history row's command, so it
+    /// is the request too — and a row that shows the request re-runs the request rather than a
+    /// longer string it never showed.
+    @Test
+    func theHistoryRowForAClarifiedTaskRecordsTheRequest() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        try await fixture.run(Self.request, plan: fixture.clarifyingPlan(question: Self.question))
+        fixture.planner.plan = fixture.draftThenOpenPlan
+        fixture.viewModel.clarificationAnswer = "The Desktop"
+        fixture.viewModel.submitClarification()
+        try await fixture.waitForIdle()
+
+        let row = try #require(fixture.viewModel.taskHistoryRecords.first)
+        #expect(row.command == Self.request)
+        #expect(fixture.viewModel.priorTaskContext?.previousCommand == Self.request)
+    }
+
+    /// **The two-question case, which is the one a naive fix still gets wrong.** `lastCommand` holds
+    /// the request after the first `start()` and looks like a source to compose from — but the
+    /// clarification's own `start()` overwrites it with what *that* dispatch submitted, so composing
+    /// from it would lose the request one level deeper instead of at the first question.
+    @Test
+    func aTaskClarifiedTwiceKeepsTheRequestAndBothAnswers() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        try await fixture.run(Self.request, plan: fixture.clarifyingPlan(question: Self.question))
+
+        fixture.planner.plan = fixture.clarifyingPlan(question: "Zip them where?")
+        fixture.viewModel.clarificationAnswer = "The Desktop"
+        fixture.viewModel.submitClarification()
+        try await fixture.waitForIdle()
+        #expect(fixture.viewModel.clarificationQuestion == "Zip them where?")
+
+        // Paused a second time, and the record behind the offer still names the request — not the
+        // request plus one exchange, and not the first question.
+        let pausedTwice = try #require(try fixture.resumableTaskStore.loadAll().first)
+        #expect(pausedTwice.command == Self.request)
+
+        fixture.planner.plan = fixture.draftThenOpenPlan
+        fixture.viewModel.clarificationAnswer = "Into Downloads"
+        fixture.viewModel.submitClarification()
+        try await fixture.waitForIdle()
+
+        #expect(fixture.planner.receivedCommands.count == 3)
+        let continued = try #require(fixture.planner.receivedCommands.last)
+        #expect(continued.hasPrefix(Self.request))
+        #expect(continued.contains("Clarification answer: The Desktop"))
+        #expect(continued.contains("Clarification answer: Into Downloads"))
+        // Both pairs, in the order the conversation happened — accumulated, not overwritten.
+        let first = try #require(continued.range(of: Self.question))
+        let second = try #require(continued.range(of: "Zip them where?"))
+        #expect(first.lowerBound < second.lowerBound)
+    }
+
+    /// **A clarified command is not an instant command, and restoring the request is what made that
+    /// true.** `InstantCommandResolver` matches on prefixes and raises several of these questions
+    /// itself: `=` with nothing after it asks what to calculate. With the request back at the front
+    /// of the continuation, the resolver matches its own prefix a second time and would answer with
+    /// a calculator plan whose expression is the transcript of the conversation about it.
+    ///
+    /// Both halves are asserted, because the second one alone cannot show the resolver was ever
+    /// involved: the first pause reaches the planner not at all.
+    @Test
+    func answeringAQuestionTheResolverRaisedGoesToThePlannerRatherThanBackThroughTheResolver() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+        fixture.planner.plan = fixture.draftThenOpenPlan
+
+        fixture.viewModel.command = "="
+        fixture.viewModel.start(origin: .widget)
+        try await fixture.waitForIdle()
+
+        #expect(fixture.viewModel.clarificationQuestion == "What would you like me to calculate?")
+        // The resolver answered this one locally, so the planner was never asked.
+        #expect(fixture.planner.receivedCommands.isEmpty)
+
+        fixture.viewModel.clarificationAnswer = "2 + 2"
+        fixture.viewModel.submitClarification()
+        try await fixture.waitForIdle()
+
+        let continued = try #require(fixture.planner.receivedCommands.last)
+        #expect(continued.hasPrefix("="))
+        #expect(continued.contains("Clarification answer: 2 + 2"))
+        // And the run that followed is the planner's plan, not a calculator plan the resolver built
+        // out of the exchange.
+        #expect(fixture.viewModel.plan?.steps.map(\.id) == ["draft", "url"])
+    }
+
+    /// The abandoned-question exit takes the held request with it: nothing is going to resume, so a
+    /// request surviving into the next run would be the leak the pause's other carried values are
+    /// cleared to prevent.
+    @Test
+    func abandoningAQuestionDoesNotLeaveTheRequestBehindForTheNextOne() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        try await fixture.run(Self.request, plan: fixture.clarifyingPlan(question: Self.question))
+        fixture.viewModel.cancelCurrentRun()
+        #expect(fixture.viewModel.clarificationQuestion == nil)
+
+        // A different task, clarified by hand rather than by a run — so nothing sets the held
+        // request, and the abandoned one is the only thing that could supply a prefix.
+        fixture.viewModel.clarificationQuestion = "Which of these did you mean?"
+        fixture.viewModel.clarificationAnswer = "The second one"
+        fixture.viewModel.submitClarification()
+
+        #expect(!fixture.viewModel.lastCommand.contains(Self.request))
+        #expect(fixture.viewModel.lastCommand.hasPrefix(ClarifiedCommand.questionLabel))
+    }
+}
+
 /// The widget's panel precedence, as a value a test can hold.
 ///
 /// `FloatingWidgetView.state` is private to a SwiftUI view this repository has no way to drive, so
@@ -1254,8 +1469,16 @@ private final class FailableBrowserOpener: BrowserOpening {
 @MainActor
 private final class ResumableFixturePlanner: Planning {
     var plan: AgentPlan?
+    /// Every prompt this planner was handed, in order.
+    ///
+    /// SONNY-248's: the defect was that a clarified run reached the planner with the user's request
+    /// missing, and the planner's own prompt is the only place that is directly observable. It is
+    /// also the control for the instant resolver — a command the resolver answers locally arrives
+    /// here not at all, so an empty list is a measurement rather than an absence.
+    private(set) var receivedCommands: [String] = []
 
     func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
+        receivedCommands.append(command)
         guard let plan else {
             throw PlannerError.missingAPIKey
         }
@@ -1426,6 +1649,12 @@ private final class ResumableFixture {
     }
 
     var clarifyingPlan: AgentPlan {
+        clarifyingPlan(question: "Which folder did you mean?")
+    }
+
+    /// The same plan with a question of the test's choosing, so a task can be clarified twice and
+    /// the two pauses told apart (SONNY-248).
+    func clarifyingPlan(question: String) -> AgentPlan {
         AgentPlan(
             summary: "Ask first.",
             requiresConfirmation: false,
@@ -1434,7 +1663,7 @@ private final class ResumableFixture {
                     id: "ask",
                     operation: .clarify,
                     description: "Ask.",
-                    question: "Which folder did you mean?"
+                    question: question
                 )
             ]
         )

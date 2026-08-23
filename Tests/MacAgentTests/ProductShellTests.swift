@@ -626,6 +626,12 @@ struct ProductShellTests {
             "clarificationAnswer",
             "clarificationAutoExecute",
             "clarificationWorkspaceBinding",
+            // The request a clarification pause is holding on behalf of the task that asked
+            // (SONNY-248). Cleared with the question it belongs to and for the same reason: the
+            // pause is over, and the user's own text from a task that no longer has a record is the
+            // kind of leftover this wipe exists to remove. `clarificationOrigin` is in group 4 below
+            // rather than here, which is where it already was.
+            "clarificationSubmittedCommand",
             "activeTaskScope",
             "ranWithoutAskingTrace",
             "explicitWorkspaceBinding",

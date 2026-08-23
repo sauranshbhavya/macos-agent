@@ -400,6 +400,32 @@ final class AgentViewModel: ObservableObject {
     /// `clarificationOrigin` preserves the origin — `submitClarification()` re-enters `start()`,
     /// which would otherwise drop it.
     private var clarificationWorkspaceBinding: String?
+    /// What the paused run was submitted with, held across a clarification pause so that answering
+    /// the question continues the user's **request** rather than replacing it (SONNY-248).
+    ///
+    /// **It cannot be read back off `command`, and that is the whole reason this exists.** `start()`
+    /// clears that field centrally the instant it captures a dispatch — deliberately, because
+    /// leaving each call site to do it was itself the defect that centralisation fixed — so by the
+    /// time the question is on screen `command` is empty, and the widget's composer is disabled
+    /// behind `isTaskInFlight` besides, so nothing can put text back in it. `submitClarification`
+    /// interpolated that empty field anyway, and the continuation therefore began with the question
+    /// Sonny had asked: the planner re-planned from a question and an answer with the request
+    /// missing, and `lastCommand`, the task-history row and the resume offer's label each named the
+    /// question back to the user instead of the task.
+    ///
+    /// **Not `lastCommand`, which looks like it would serve and would compound the loss.** That
+    /// holds the original only until the clarification's own `start()` overwrites it with what
+    /// *that* dispatch submitted, so a second question on the same task would compose from a string
+    /// which had already lost the request.
+    ///
+    /// Holds whatever the paused run was submitted with rather than the first thing the user ever
+    /// typed, which is what makes a second question accumulate instead of overwrite: the first pause
+    /// stores the request, answering composes request + Q&A, the second pause stores *that*, and
+    /// answering appends the second pair after it.
+    ///
+    /// Cleared at the same three sites as the three values above — answering, abandoning, and the
+    /// local-data wipe — because its lifecycle is exactly theirs.
+    private var clarificationSubmittedCommand: String?
     /// The workspace a card dispatch named for the **next** command, before one has been typed.
     ///
     /// A pre-dispatch slot, not a second lifecycle: `start()` consumes it into SONNY-38's
@@ -1423,7 +1449,17 @@ final class AgentViewModel: ObservableObject {
                     outputLocationStore: outputLocationStoreForThisRun
                 )
                 prepared = try runner.prepare(plan: prebuiltPlan, source: prebuiltPlanSource)
-            } else if let resolution = makeInstantCommandResolver().resolve(command: submittedCommand) {
+            // **A clarified command is not an instant command, and the first term is what says so**
+            // (SONNY-248). The resolver matches on prefixes and it is the surface that raised
+            // several of these questions in the first place — so once the request is restored to the
+            // front of the continuation, `=` answered with "2 + 2" resolves here a second time, as a
+            // calculator expression whose expression is the transcript of the conversation about it.
+            // The resolver has already had its turn on this command and asked for more; reading the
+            // more is a planner's job. Reachable through the answer and through a retry of the
+            // answered run alike, which is why the term is a property of the command rather than of
+            // this dispatch.
+            } else if !ClarifiedCommand.carriesExchange(submittedCommand),
+                      let resolution = makeInstantCommandResolver().resolve(command: submittedCommand) {
                 runner = AgentRunner(
                     planner: InstantOnlyFallbackPlanner(),
                     executor: executor,
@@ -1492,6 +1528,11 @@ final class AgentViewModel: ObservableObject {
                 clarificationAutoExecute = autoExecute
                 clarificationOrigin = origin
                 clarificationWorkspaceBinding = explicitWorkspaceBinding
+                // The request the question is about, so that answering it continues that request
+                // rather than replacing it with the question (SONNY-248). `submittedCommand` rather
+                // than anything read off `command`, which `start()` emptied on the way in — see
+                // `clarificationSubmittedCommand` for why every other candidate source is worse.
+                clarificationSubmittedCommand = submittedCommand
                 // The same two values the approval pause below preserves, for the same reason and
                 // now for a second one (SONNY-166). A pause is not a terminal state, so no history
                 // row is written here — `recordPriorTaskContext` is called without `startedAt:`
@@ -1840,13 +1881,16 @@ final class AgentViewModel: ObservableObject {
             }
             clarificationQuestion = nil
             clarificationAnswer = ""
-            // The three values the pause held so that answering could resume the task the user
-            // actually started. Nothing is going to resume, so they die with it — an origin or a
-            // binding surviving into the next run is the leak `explicitWorkspaceBinding`'s own
-            // lifecycle rules exist to prevent.
+            // The values the pause held so that answering could resume the task the user actually
+            // started. Nothing is going to resume, so they die with it — an origin, a binding or a
+            // request surviving into the next run is the leak `explicitWorkspaceBinding`'s own
+            // lifecycle rules exist to prevent. (No count in this sentence on purpose: it said
+            // "three" and SONNY-248 made it four, which is how a comment starts describing a
+            // neighbouring line instead of the one below it.)
             clarificationAutoExecute = false
             clarificationOrigin = .commandCenter
             clarificationWorkspaceBinding = nil
+            clarificationSubmittedCommand = nil
             preparedRun = nil
             runner = nil
             pendingCommandForPriorTaskContext = nil
@@ -1908,7 +1952,13 @@ final class AgentViewModel: ObservableObject {
     var runningCommandDisplayText: String {
         // A scheduled run needs a label for Command Center's running indicator without claiming
         // `lastCommand`, which belongs to whatever the user last submitted themselves.
-        scheduledRunDisplayCommand ?? lastCommand
+        //
+        // **The request, not the prompt** (SONNY-248). `lastCommand` is two things at once: the text
+        // a retry resubmits, and the text this indicator shows. A clarified run's prompt carries the
+        // exchange that clarified it, which the retry needs and a sentence reading "Running: …" does
+        // not — so the split happens here, at the display half, and `lastCommand` itself stays the
+        // whole prompt.
+        scheduledRunDisplayCommand ?? ClarifiedCommand.request(in: lastCommand)
     }
 
     /// Called by the widget after a `.result` (including a clean "Canceled.") or a genuinely
@@ -2180,18 +2230,31 @@ final class AgentViewModel: ObservableObject {
             return
         }
 
-        command = """
-        \(command.trimmingCharacters(in: .whitespacesAndNewlines))
-
-        Clarification question: \(question)
-        Clarification answer: \(answer)
-        """
+        // **The request the question was asked about, not whatever `command` holds** (SONNY-248).
+        // This used to interpolate `command`, which `start()` had already emptied when it accepted
+        // this task's own dispatch — so the continuation began with Sonny's question and the user's
+        // request was gone from all three of the places it flows to. `clarificationSubmittedCommand`
+        // is where the request lives across the pause. `nil` there means the question was not raised
+        // by a real run, and the composition degrades to the Q&A alone — which is precisely what
+        // this produced for *every* clarification before the fix.
+        //
+        // **Request + Q&A, rather than the answer substituted into the request.** Substituting means
+        // rewriting the user's own sentence: a planner's job, and a fragile string edit here. It
+        // also discards that Sonny asked and what it asked, which leaves a second question nothing
+        // to build on. Appending keeps the request whole and accumulates in the order the exchange
+        // happened, so a task clarified twice reaches the planner as the request and both pairs.
+        command = ClarifiedCommand.composed(
+            request: clarificationSubmittedCommand ?? "",
+            question: question,
+            answer: answer
+        )
         let shouldAutoExecute = clarificationAutoExecute
         let shouldUseOrigin = clarificationOrigin
         let shouldUseBinding = clarificationWorkspaceBinding
         clarificationAutoExecute = false
         clarificationOrigin = .commandCenter
         clarificationWorkspaceBinding = nil
+        clarificationSubmittedCommand = nil
         clarificationQuestion = nil
         clarificationAnswer = ""
         // **Answering a question continues the task that asked it** (PR #105 review F1). Without
@@ -3411,6 +3474,7 @@ final class AgentViewModel: ObservableObject {
         clarificationAnswer = ""
         clarificationAutoExecute = false
         clarificationWorkspaceBinding = nil
+        clarificationSubmittedCommand = nil
         activeTaskScope = .unscoped
         ranWithoutAskingTrace = nil
         explicitWorkspaceBinding = nil
@@ -4254,14 +4318,21 @@ final class AgentViewModel: ObservableObject {
         resultProvenance: StoredTaskResult.Provenance = .codeAuthored,
         startedAt: Date? = nil
     ) -> String? {
+        // **The request, not the prompt, and it is the same decision at both of this function's
+        // readers** (SONNY-248). The Tasks list names a row by this, the follow-up chip says
+        // "Following up: …" with it, and "Run again" resubmits it — so a clarified task's row shows
+        // what the user asked for, and pressing Run again does the thing the row says rather than a
+        // longer string it never showed. A task still ambiguous the second time is asked about
+        // again, which is the same property that makes `runTaskAgain` re-request an approval.
+        let recordedCommand = ClarifiedCommand.request(in: command)
         priorTaskContextStore.record(
-            command: command,
+            command: recordedCommand,
             plan: preparedRun.plan,
             outcome: PriorTaskOutcome(status: status, summary: summary, provenance: resultProvenance)
         )
         priorTaskContext = priorTaskContextStore.currentContext()
         return recordTaskHistoryIfTerminal(
-            command: command,
+            command: recordedCommand,
             status: status,
             startedAt: startedAt,
             result: StoredTaskResult.declaring(resultProvenance, text: summary),
@@ -4282,13 +4353,16 @@ final class AgentViewModel: ObservableObject {
         resultProvenance: StoredTaskResult.Provenance = .codeAuthored,
         startedAt: Date? = nil
     ) -> String? {
+        // The overload above's decision, restated here because this one records the same two things
+        // for a run that never reached a plan (SONNY-248).
+        let recordedCommand = ClarifiedCommand.request(in: command)
         priorTaskContextStore.record(
-            command: command,
+            command: recordedCommand,
             outcome: PriorTaskOutcome(status: status, summary: summary, provenance: resultProvenance)
         )
         priorTaskContext = priorTaskContextStore.currentContext()
         return recordTaskHistoryIfTerminal(
-            command: command,
+            command: recordedCommand,
             status: status,
             startedAt: startedAt,
             result: StoredTaskResult.declaring(resultProvenance, text: summary),
@@ -4550,7 +4624,13 @@ final class AgentViewModel: ObservableObject {
         let now = Date()
         let task = ResumableTask(
             id: continuing?.id ?? UUID().uuidString,
-            command: command,
+            // **The request, not the prompt** (SONNY-248). This field is a label — `remainingPlan()`
+            // is what a resume actually runs, and `ResumableTask.command`'s own doc says nothing
+            // re-plans from it — and the label is read back in the founder's own sentence, "You were
+            // partway through …". A clarified run's prompt carries the exchange behind the request,
+            // and the offer squeezes a command onto one line and cuts it to sixty characters, so a
+            // short request would leave Sonny quoting its own question back at the user.
+            command: ClarifiedCommand.request(in: command),
             plan: plan,
             // Empty, always. A resumed run's plan *is* the remainder, so its finished steps are the
             // ones that are no longer in it — carrying the old ids forward would subtract them
