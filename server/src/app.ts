@@ -128,10 +128,18 @@ export function buildApp(config: Config, auth?: AuthDeps): FastifyInstance {
   // error envelope rather than the framework's.
   registerErrorHandlers(app);
 
-  // **And so does the auth gate, for a stronger version of the same reason** (SONNY-203). Fastify
-  // resolves a route's hook chain when the route is registered, so a hook added after a route does
-  // not run for it — a gate installed later would cover some routes and silently not others. It is
-  // installed unconditionally, including when no auth is configured: in that shape it refuses every
+  // **And so does the auth gate** (SONNY-203) — installed on THIS instance, the root one, which is
+  // what decides which routes it covers.
+  //
+  // **Not because of registration order**, which this comment used to claim and which PR #104's
+  // adversarial review measured as false (F3): against Fastify 5.12.1 a route registered before the
+  // gate in the same context is challenged exactly like one registered after it. Coverage is
+  // encapsulation — a root-context `onRequest` hook covers every route in this instance and its
+  // descendants, and a gate installed inside a plugin would cover only that plugin's subtree while
+  // a sibling plugin's routes served unauthenticated. `auth/gate.ts` carries the seven wirings that
+  // were measured. The line below is correct for the reason that matters: it is `app`, not a scope.
+  //
+  // Installed unconditionally, including when no auth is configured: in that shape it refuses every
   // non-public route rather than leaving one open.
   registerAuthGate(
     app,

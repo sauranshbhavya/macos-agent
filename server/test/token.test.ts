@@ -3,7 +3,8 @@ import { describe, expect, it } from "vitest";
 import { EXPIRY_SKEW_TOLERANCE_SECONDS } from "../src/auth/clock.js";
 import { verifyAccessToken, type TokenRefusal } from "../src/auth/token.js";
 import {
-  TEST_JWT_POLICY, accessTokenFor, base64url, claimsFor, signToken, tokenWithClaims,
+  TEST_JWT_POLICY, accessTokenFor, base64url, claimsFor, signToken, signatureSecondSpelling,
+  tokenWithBrokenSignature, tokenWithClaims,
 } from "./support/tokens.js";
 
 /**
@@ -140,17 +141,36 @@ describe("verifyAccessToken — the signature", () => {
     // decodes to the identical 32 bytes — so a lenient verifier accepts both spellings, and the
     // exact bytes a client sent stop being the thing that was checked. The canonicality test in
     // `decodeSegment` is what refuses it.
-    const alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
     const honest = accessTokenFor(USER, { now: NOW });
     const [header, claims, signature] = honest.split(".") as [string, string, string];
-    const last = signature[signature.length - 1]!;
-    const index = alphabet.indexOf(last);
-    const perturbed = alphabet[(index & ~0b11) | ((index + 1) & 0b11)]!;
-    expect(perturbed).not.toBe(last);
-    const restated = `${signature.slice(0, -1)}${perturbed}`;
+    const restated = signatureSecondSpelling(signature);
+    expect(restated).not.toBe(signature);
     // Same bytes — which is what makes this a real hole rather than a typo.
     expect(Buffer.from(restated, "base64url").equals(Buffer.from(signature, "base64url"))).toBe(true);
     expect(refusalOf(`${header}.${claims}.${restated}`)).toBe("malformed");
+  });
+
+  it("breaks a signature deterministically, at every one of the sixteen final characters", () => {
+    // **The regression guard for F2**, and the reason it loops rather than sampling: the final
+    // character of a 43-character base64url HMAC has only sixteen possible values, so a perturbation
+    // that happens to be a no-op for one of them is a test that silently stops testing about one run
+    // in sixteen. The tokens below are minted at 200 fixed, successive instants — deterministic
+    // input, deterministic output — which covers every one of the sixteen values that occurs at all.
+    //
+    // The old spelling, `token.replace(/.$/, "A")`, fails this loop on the instants whose signature
+    // already ends in "A". This is the assertion that would have caught it.
+    const seen = new Set<string>();
+    for (let offset = 0; offset < 200; offset += 1) {
+      const honest = accessTokenFor(USER, { now: new Date(NOW.getTime() + offset * 1000) });
+      const broken = tokenWithBrokenSignature(honest);
+      seen.add(honest[honest.length - 1]!);
+      expect(broken).not.toBe(honest);
+      // Refused for the signature rather than for its shape: the perturbation moves the four
+      // significant bits, so the bytes really differ and the result is still canonical base64url.
+      expect(refusalOf(broken, new Date(NOW.getTime() + offset * 1000))).toBe("signature");
+    }
+    // Non-vacuous: if minting ever became constant, this would be a loop over one token.
+    expect(seen.size).toBeGreaterThan(1);
   });
 
   it("refuses a segment padded with '=' or carrying characters outside the alphabet", () => {
@@ -158,6 +178,34 @@ describe("verifyAccessToken — the signature", () => {
     const [header, claims, signature] = honest.split(".") as [string, string, string];
     expect(refusalOf(`${header}.${claims}.${signature}==`)).toBe("malformed");
     expect(refusalOf(`${header}.${claims}.${signature}*`)).toBe("malformed");
+  });
+
+  it("refuses a 4n+1 segment — the canonicality check alone, with no separate length guard", () => {
+    // Named for what it protects (PR #104's adversarial review, F8). A `length % 4 === 1` guard used
+    // to sit above the canonicality check and was dead: `Buffer` drops the orphan six-bit quantum,
+    // so the re-encoding is a character short and the surviving line refuses it anyway. The guard is
+    // gone; this is the test that says the remaining line covers the case it covered.
+    const honest = accessTokenFor(USER, { now: NOW });
+    const [header, claims, signature] = honest.split(".") as [string, string, string];
+    // Padded to the next 4n+1 length rather than by a fixed count, because the two segments start
+    // at different lengths: a 32-byte HMAC is 43 characters and needs two more, this header is 36
+    // and needs one. (43 plus ONE is 44 — a canonical encoding of 33 bytes, refused for its length
+    // by the signature comparison instead, which is a different case and not this one.)
+    const toFourNPlusOne = (segment: string) =>
+      `${segment}${"A".repeat((1 - (segment.length % 4) + 4) % 4)}`;
+
+    for (const [name, mutated] of [
+      ["signature", `${header}.${claims}.${toFourNPlusOne(signature)}`],
+      // The header matters most: a dropped quantum there would otherwise decide which algorithm
+      // this verifier believes it was handed.
+      ["header", `${toFourNPlusOne(header)}.${claims}.${signature}`],
+    ] as const) {
+      const segment = mutated.split(".")[name === "header" ? 0 : 2]!;
+      expect(`${name} length % 4 = ${segment.length % 4}`).toBe(`${name} length % 4 = 1`);
+      // The truncation is real, and it is what a lenient decoder would silently accept.
+      expect(Buffer.from(segment, "base64url").toString("base64url")).not.toBe(segment);
+      expect(`${name} -> ${refusalOf(mutated)}`).toBe(`${name} -> malformed`);
+    }
   });
 
   it("refuses a non-canonical PAYLOAD even when the signature over it is correct", () => {
@@ -178,6 +226,10 @@ describe("verifyAccessToken — the signature", () => {
     // JSON before authenticating it is the wrong order even when the parser is `JSON.parse`.
     const honest = accessTokenFor(USER, { now: NOW });
     const [header, claims, signature] = honest.split(".") as [string, string, string];
+    // `"+"` rather than a derived character, and this is NOT F2's coin toss: `+` belongs to standard
+    // base64's alphabet and not to base64url's, so a segment produced by `toString("base64url")` can
+    // never already end in one and the replacement can never be a no-op. (F2's bug was replacing
+    // with `"A"`, which the signature ends in about one run in sixteen.)
     expect(refusalOf(`${header}.${claims.replace(/.$/, "+")}.${signature}`)).toBe("signature");
   });
 

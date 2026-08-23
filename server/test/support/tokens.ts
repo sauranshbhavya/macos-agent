@@ -92,3 +92,48 @@ export function tokenWithClaims(
     options.secret ?? TEST_JWT_POLICY.secret,
   );
 }
+
+/**
+ * The base64url alphabet, and the two ways to perturb a signature's final character.
+ *
+ * **Both exist because `replace(/.$/, "A")` is a coin toss** (PR #104's adversarial review, F2). A
+ * 32-byte HMAC is 43 base64url characters; the last one carries four significant bits and two unused
+ * ones, so it can only be **one of sixteen values** — and `accessTokenFor` mints at `new Date()`, so
+ * which of the sixteen it is changes every second. Replacing it with a fixed `"A"` is therefore a
+ * no-op about one run in sixteen, 6.25%. Measured twice over 160,000 successive `iat` values, and
+ * the two runs agree on the alphabet and differ in the tail the way two samples of one property do:
+ * the reviewer got 10,042 (6.276%) and this session got **9,890 (6.181%)**, both against the
+ * observed final-character alphabet `048AEIMQUYcgkosw` (`node` over `createHmac` at `6b31c79`; the
+ * sampled `iat` ranges differ, which is the whole of the difference). On those runs the "forgery" is
+ * the honest token, it verifies, and the assertion fails — the reviewer saw it once in their first
+ * `npm test`, once in 48 runs of one file, and once in 24 full runs. **Deriving the replacement from
+ * the character it replaces is what makes it never a no-op**, and `signatureIsAlwaysBroken` in
+ * `token.test.ts` is what keeps it that way.
+ */
+const BASE64URL_ALPHABET = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+
+/**
+ * The same 32 bytes, spelled differently: only the final character's two **unused** bits change, so
+ * `Buffer.from(s, "base64url")` decodes both spellings identically and only a canonicality check
+ * can tell them apart.
+ */
+export function signatureSecondSpelling(signature: string): string {
+  const last = signature[signature.length - 1]!;
+  const index = BASE64URL_ALPHABET.indexOf(last);
+  return `${signature.slice(0, -1)}${BASE64URL_ALPHABET[(index & ~0b11) | ((index + 1) & 0b11)]!}`;
+}
+
+/**
+ * A genuinely different signature: the final character's four **significant** bits change, so the
+ * last byte differs and the HMAC cannot match. Canonical, so it is refused for the signature rather
+ * than for its shape — and it can never equal the character it replaced, because the nibble moves.
+ */
+export function tokenWithBrokenSignature(token: string): string {
+  const [header, claims, signature] = token.split(".") as [string, string, string];
+  const last = signature[signature.length - 1]!;
+  const index = BASE64URL_ALPHABET.indexOf(last);
+  const nibble = ((index >> 2) + 1) % 16;
+  const replacement = BASE64URL_ALPHABET[(nibble << 2) | (index & 0b11)]!;
+  if (replacement === last) throw new Error("perturbation produced the same character");
+  return `${header}.${claims}.${signature.slice(0, -1)}${replacement}`;
+}

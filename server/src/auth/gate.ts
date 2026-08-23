@@ -39,7 +39,10 @@ import { verifyAccessToken, type SupabaseJwtPolicy, type TokenRefusal } from "./
  * **The residual, stated rather than papered over.** A Supabase access token is self-contained, so
  * this gateway can verify it without asking the provider — which is the point — and equally cannot
  * un-issue one. Signing out revokes the *refresh* family at the provider; an access token already in
- * the user's hands stays valid until its own `exp`, which is one hour on Supabase's default. What
+ * the user's hands stays valid until its own `exp` **plus `EXPIRY_SKEW_TOLERANCE_SECONDS`** — one
+ * hour on Supabase's default, and thirty seconds more than that here. The tolerance is deliberate
+ * and `clock.ts` argues for it; naming `exp` alone would understate the window this gate leaves
+ * open by exactly the amount this gate itself adds (PR #104's adversarial review, F9). What
  * this gate does cover is the account: `DELETE /v1/account` closes it, and every subsequent request
  * with any token naming it is refused on the attribution step below, immediately. Closing the
  * remaining window means a denylist of revoked sessions consulted per request, which is a table, a
@@ -146,9 +149,34 @@ export interface GateDeps {
 }
 
 /**
- * Install the gate. **Must run before any route is registered**: Fastify resolves a route's hook
- * chain when the route is added, so a hook added afterwards does not apply to it — which would be a
- * gate that silently covers some routes and not others.
+ * Install the gate **on the root instance**, which is what decides its coverage.
+ *
+ * **The rule is encapsulation, not registration order, and this docstring said the opposite** (PR
+ * #104's adversarial review, F3). It claimed Fastify resolves a route's hook chain when the route is
+ * added, so a hook added afterwards misses it. Measured against Fastify 5.12.1, that is not what
+ * happens — a route registered *before* `registerAuthGate` in the same context is still challenged.
+ * What actually decides coverage is where the hook lives: an `onRequest` hook added to a context
+ * covers every route in that context and its descendants, whenever they were added, and covers
+ * nothing outside it.
+ *
+ * Seven wirings, each answered by a `POST /v1/plan` with no token (`401` = the gate ran):
+ *
+ * | wiring                                            | result |
+ * |---------------------------------------------------|--------|
+ * | route at root, registered BEFORE the gate          | 401    |
+ * | route at root, registered AFTER the gate           | 401    |
+ * | plugin registered before the gate, awaited         | 401    |
+ * | plugin registered before the gate, not awaited     | 401    |
+ * | gate at root, route inside a plugin afterwards     | 401    |
+ * | **gate inside a plugin, route at root afterwards** | **200**|
+ * | **gate in plugin 1, route in a SIBLING plugin 2**  | **200**|
+ *
+ * **So the thing to get right is the context, and the wrong rule was the dangerous one to believe**:
+ * a later ticket that carefully registers its routes after the gate — and wraps either of them in a
+ * plugin for encapsulation — obeys the sentence that used to be here and ships an unauthenticated
+ * route anyway. `app.ts` calls this on the root instance, before the routes, and only the first half
+ * of that is load-bearing. `theGateCoversARouteRegisteredBeforeIt` and its sibling in
+ * `gate.test.ts` pin both halves so the table above is executable rather than remembered.
  *
  * `deps` is optional so a deployment that mounts no authenticated route needs no JWT secret and no
  * database. When it is absent the gate is still installed and still refuses: a protected route
