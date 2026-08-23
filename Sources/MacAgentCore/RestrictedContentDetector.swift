@@ -36,7 +36,7 @@ import SwiftSoup
 /// `visibleText`. Every page and number is in SONNY-245's closing comment; the shape of it:
 ///
 /// - **Genuine walls**: zillow 0, indeed 0, facebook 0, pinterest 0, g2 43, wsj 43, barrons 43,
-///   etsy 43, yelp 43, sciencedirect 523, bloomberg 657, linkedin 703, medium 720, instagram 792,
+///   etsy 43, yelp 43, sciencedirect 526, bloomberg 657, linkedin 703, medium 720, instagram 792,
 ///   glassdoor 3 884.
 /// - **Innocent pages the old rule refused**: target 2 502, walmart 3 117, scribd 4 212,
 ///   ticketmaster 4 442, nytimes 6 119, newyorker 7 770, seekingalpha 12 179, harpers 13 232,
@@ -63,26 +63,43 @@ import SwiftSoup
 /// thousand characters on it, which is the failure this ticket is about.
 ///
 /// **Which errors this chooses, stated rather than left to be discovered** (the ticket asks for
-/// exactly this):
+/// exactly this). Fail-closed stays the direction, and the rule it serves is
+/// `docs/sonny-major-release-spec.md:459` and `:916` — "Sonny must not bypass paywalls, CAPTCHAs,
+/// login walls, or robots restrictions".
 ///
-/// - **Gone:** every false refusal driven by markup on a page that has an article. That is the
-///   whole reported class — Wikipedia, Nature, the NYT, an article *about* CAPTCHAs.
-/// - **Accepted, knowingly:** a login wall that renders its own form and chrome, where the only
-///   trace of a gate is a reCAPTCHA script — Instagram (792 visible characters) and LinkedIn's feed
-///   (703) are the measured examples. Both sit above `contentlessVisibleTextLimit`, so the old rule
-///   refused them and this one does not. Neither says any of the seven phrases to the reader. What
-///   Sonny does with such a page is write a thin note from a sign-in screen: a poor note, not a wall
-///   bypassed, and nothing was circumvented to get it.
+/// - **Gone:** every false refusal driven by *markup* on a page that has an article — Wikipedia,
+///   Nature, the NYT, the CAPTCHA article. **Not the whole reported class, and the first version of
+///   this comment said it was** (PR #108 review, F1). A *short* article about a wall is still
+///   refused as one, because the corroboration is an absolute length: measured on 2026-08-23,
+///   `simonwillison.net/2006/Dec/19/botbouncer/` is HTTP 200 with 1 080 visible characters, one
+///   sentence of which mentions a CAPTCHA service, and it is refused; a 2 136-character post on the
+///   same blog, same template, same subject, is served. 136 characters apart, opposite verdicts.
+///   **SONNY-256** holds that residual and the ratio proposal for it — do not attempt that fix from
+///   here, it needs its own corpus and measuring round.
+/// - **Accepted, knowingly:** a gate that renders its own form and chrome, where the only trace is
+///   a vendor script. The measured instances are **LinkedIn's feed** (HTTP 200, 703 visible
+///   characters, and the extractor gets 556 characters of "article" out of the sign-in chrome) and
+///   **IEEE Xplore's home page** (200, 717 visible, 617 extracted). Both were refused by the old
+///   rule and are served by this one, and both really do produce a thin note from a sign-in screen —
+///   a poor note, not a wall bypassed, and nothing was circumvented to get it. **Instagram and
+///   Tumblr are served too but are not instances of that**, and an earlier version of this comment
+///   named Instagram as one: at 792 and 269 visible characters they clear this check, and then the
+///   extractor throws `noReadableContent`, so no note is written from either (PR #108 review, F2).
 /// - **Accepted, knowingly:** a paywall that serves a teaser — the first paragraphs plus "Subscribe
 ///   to continue". It has an article on it, so it clears both limits. Summarizing what a server
 ///   freely handed an unauthenticated request is not bypassing the wall the way solving a CAPTCHA
 ///   would be, and the note names its source.
-/// - **Unchanged:** a wall that answers with a non-2xx status never reaches here — `validate`
-///   throws `badHTTPStatus` first, and that is how most of them answer. Of the walls in the corpus,
-///   four came back 200 (Facebook, Pinterest, Instagram, LinkedIn) and the other eleven answered
-///   401 or 403. And a wall that renders nothing and mentions nothing still yields no article,
-///   so the extractor throws `noReadableContent`. Three independent checks fail closed on these
-///   pages, not one, which is why narrowing this one does not leave the boundary resting on it.
+/// - **What the accepted set actually is, since three earlier sentences understated it:** between
+///   `contentlessVisibleTextLimit` and `interstitialVisibleTextLimit` — 200 to 2 000 visible
+///   characters — **neither stage fires unless the page says one of the seven phrases to a reader**,
+///   and that band is where most real walls measured live (ScienceDirect 526, FT 565, Pixiv 599,
+///   Bloomberg 657, LinkedIn 703, IEEE 717, Medium 720, Instagram 792, Telegraph 888, ResearchGate
+///   318, Tumblr 269). Several of those are caught by something else — a 401 or 403 answered before
+///   this code runs, or an extractor that finds no article — but **not all of them, and the earlier
+///   claim that "three independent checks fail closed on these pages, not one" was false for exactly
+///   the cases the bullets above concede**: LinkedIn passes the status check, is served here, and
+///   yields a 556-character article. Zero of the three fire. That sentence was the justification for
+///   narrowing this check, so it is corrected rather than softened (PR #108 review, F2).
 public enum RestrictedContentDetector {
     /// Where the phrase was found, which is what decides how much it is worth.
     public enum Evidence: String, Equatable, Sendable {
@@ -112,12 +129,19 @@ public enum RestrictedContentDetector {
     /// A page saying a wall phrase to the reader is a wall if it is short enough to be an
     /// interstitial rather than an article.
     ///
-    /// 2 000 characters sits above every genuine wall in the corpus that speaks to a reader at all
-    /// (the largest, Glassdoor's, reaches 3 884 only by repeating one short message in ten
-    /// languages, and it answers 403 besides) and below every innocent page in it that carries a
-    /// phrase in *visible* text — of which there were none, so this limit is doing its work against
-    /// the case the ticket names rather than against the corpus: an article *about* CAPTCHAs says
-    /// "verify you are human" in its own prose and runs to tens of thousands of characters.
+    /// 2 000 characters sits above every wall in the corpus that both speaks to a reader **and** says
+    /// one of the seven phrases — which is one page, ScienceDirect's gate at 526 — and below every
+    /// innocent page in the corpus carrying a phrase in *visible* text, of which there were none. So
+    /// the limit is doing its work against the case the ticket names rather than against the corpus:
+    /// an article *about* CAPTCHAs says the word in its own prose and runs to tens of thousands of
+    /// characters.
+    ///
+    /// **It is not a bound on real walls, and an earlier version of this comment implied it was while
+    /// conceding the counterexample in its own parenthetical** (PR #108 review, F4). Glassdoor's wall
+    /// speaks at 3 884 characters — 1.9 times this limit — by repeating one short message in ten
+    /// languages. It is harmless today for two reasons that are not this limit: its wording matches
+    /// none of the seven phrases, and it answers 403. Cloudflare's common "Verifying you are human"
+    /// likewise does not match `verify you are human`.
     public static let interstitialVisibleTextLimit = 2_000
 
     /// Markup evidence needs the page to show a reader essentially nothing.
@@ -197,7 +221,18 @@ public enum RestrictedContentDetector {
     /// `SwiftSoupReadableWebExtractor` does, makes the refusal depend on a heuristic tuned for a
     /// different job.
     ///
-    /// An unparseable page yields "", so the markup stage applies to it — the fail-closed direction.
+    /// **The `""` on the failure paths below is a value the compiler asks for, not a decision about
+    /// malformed input** (PR #108 review, F6). An earlier version of this line said an unparseable
+    /// page yields `""` "the fail-closed direction", which reads as a live behaviour and is not one:
+    /// SwiftSoup's HTML parse is permissive by construction, and its three parse-path files contain
+    /// no `throw` of their own (`grep -c 'throw ' Tokeniser.swift TreeBuilder.swift
+    /// HtmlTreeBuilder.swift` in SwiftSoup 2.13.5 answers 0, 0, 0). What can throw there is twelve
+    /// `Validate` calls inside `HtmlTreeBuilder`, and they are internal invariants rather than input
+    /// checks — four of the seven `Validate.fail` messages read "Should not be reachable". So this
+    /// path is reached on the library's own invariant failure, not on bad HTML, and nothing in this
+    /// repository exercises it. Stated this way because the same shape — a comment naming a
+    /// mechanism the library does not have — already shipped once on this branch and was caught by
+    /// running the test without the guard.
     public static func visibleText(inHTML html: String) -> String {
         guard let document = try? SwiftSoup.parse(html) else {
             return ""
