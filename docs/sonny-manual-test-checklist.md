@@ -402,6 +402,35 @@ which.
 - [x] Question text + inline answer field render cleanly — **confirmed 2026-07-24**
 - [x] Return key or the up-arrow button submits and resumes the task — **confirmed 2026-07-24**
 - [x] Empty/whitespace-only answer correctly leaves the submit button disabled — **confirmed 2026-07-24**
+- [ ] **(new 2026-08-23, SONNY-247)** The caret lands in the answer field on its own when the
+      question appears — type immediately, without clicking anything first, and the letters go into
+      the answer
+- [ ] **(new 2026-08-23, SONNY-247)** The main composer at the bottom now reads "Answer above
+      first…" instead of "Let Sonny take it from here…", and its wand glyph is dimmer. Click it,
+      try to type, then copy something and try ⌘V into it — it still takes nothing, which is
+      correct, but it should now look and read as deliberate rather than as a hung app. **This is
+      the whole of what the ticket changed** — the composer was always disabled here, it just never
+      said so, and the founder reported it twice on 2026-08-23
+- [ ] **(new 2026-08-23, SONNY-247)** While an ordinary run is in flight (no question), the same
+      composer reads "Sonny is working…" — a different sentence, because there is nothing above to
+      answer
+
+### 3d-bis. Unfinished-task offer (row 13, SONNY-210; layout and controls SONNY-244 — no wireframe)
+Start something long and multi-step, then quit Sonny before it finishes — "summarize
+https://news.ycombinator.com and save it as a markdown file on my desktop" is the founder's own
+case. Relaunch and open the widget.
+- [ ] **(new 2026-08-23, SONNY-244)** The offer reads "You were partway through "…"." with a **tick
+      and a cross** below it, right-aligned, the tick tinted and the cross plain. No text buttons
+- [ ] **(new 2026-08-23, SONNY-244)** **The controls sit below the message, never on top of it** —
+      this is the defect. Use a command long enough that the message wraps to two lines, and check
+      it more than once: it rendered correctly some of the time on the broken build, so a single
+      good look proves nothing. Try it both ways — open the widget from the menu-bar icon and from
+      the Ctrl-Opt-Space hotkey — and with a short command as well as a long one
+- [ ] **(new 2026-08-23, SONNY-244)** Hovering the tick says "Continue" and the cross says "Not
+      now"; the cross leaves the task alone (it is still listed under Command Center → Memory →
+      Unfinished tasks) and the offer comes back at the next launch. **Say if the cross reads as
+      "close this panel" rather than as an answer** — that ambiguity is known and unresolved, and
+      your read of it is what decides whether it stays
 
 ### 3e. Result — `6-FloatingWidgetResultOutput.png`
 Use one command that produces a real file (zip largest files, docx conversion) and one that doesn't
