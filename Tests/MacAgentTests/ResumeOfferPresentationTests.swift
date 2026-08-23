@@ -370,6 +370,52 @@ struct ResumeOfferPresentationTests {
         )
     }
 
+    /// **What the line cap is for is an unbreakable run too wide for two lines — not a character
+    /// count** (PR #107 review, F5).
+    ///
+    /// `messageLineLimit`'s doc used to say "a 60-character word with no space in it", which named
+    /// the wrong property and understated the class by roughly half: what matters is the *rendered
+    /// width* of a run nothing can break, so the threshold in characters moves with the glyphs. Held
+    /// over three scripts that cross it at three different counts, plus a control just under the
+    /// boundary, so a future edit cannot narrow the claim back to a number.
+    @Test
+    func aRunTooWideForTwoLinesIsWhatTheCapIsFor() {
+        let font = NSFont.systemFont(ofSize: 13, weight: .regular)
+
+        func naturalHeight(_ command: String) -> CGFloat {
+            (ResumeOfferPresentation.message(command: command) as NSString).boundingRect(
+                with: NSSize(width: ResumeOfferPresentation.panelContentWidth, height: .greatestFiniteMagnitude),
+                options: [.usesLineFragmentOrigin, .usesFontLeading],
+                attributes: [.font: font]
+            ).height
+        }
+
+        // Three unbreakable runs, three different character counts, one threshold. Each needs a
+        // third line at the panel's own width, and each is what the cap tail-truncates.
+        let overflowing = [
+            (script: "uppercase W", command: String(repeating: "W", count: 34)),
+            (script: "lowercase w", command: String(repeating: "w", count: 44)),
+            (script: "CJK", command: String(repeating: "\u{6F22}", count: 54))
+        ]
+        for run in overflowing {
+            #expect(
+                naturalHeight(run.command) > ResumeOfferPresentation.reservedMessageHeight,
+                "\(run.script) at \(run.command.count) characters should need a third line"
+            )
+        }
+
+        // The counts really are different, which is the whole point — a cap written as a character
+        // budget would have to pick one of them and be wrong about the other two.
+        #expect(Set(overflowing.map { $0.command.count }).count == overflowing.count)
+
+        // And the control, one character under the tightest of the three: still two lines, so the
+        // assertions above are reading a boundary rather than a constant.
+        #expect(
+            naturalHeight(String(repeating: "W", count: 33)) <= ResumeOfferPresentation.reservedMessageHeight,
+            "33 uppercase W still fits the reservation — 34 is the crossing"
+        )
+    }
+
     /// **Why a mis-measured height is reachable at all, recorded as a number rather than a story.**
     ///
     /// The addendum on SONNY-244 is that the overlap is intermittent — the same view at the same
