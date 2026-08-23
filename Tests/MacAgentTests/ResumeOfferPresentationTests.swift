@@ -136,6 +136,13 @@ struct ResumeOfferPresentationTests {
     /// So each door is now named with the answer it is supposed to give, and the answer is read off
     /// its own body. The count assertions stay underneath: they are what forces a *new* door into
     /// the table rather than past it.
+    ///
+    /// **What this still cannot see, and it is worth saying rather than leaving to be discovered:**
+    /// a body that arms too *late* — after the `dispatch` it was meant to precede — still reads as
+    /// arming. This pins **classification**; the behavioural tests in `ResumableTaskRunTests` are
+    /// what pin **timing**, by running each door and reading the store back. Neither is redundant:
+    /// this one catches a door that never arms at all, including one added later that no behavioural
+    /// test knows exists, and those catch an arm that is present and useless.
     @Test
     func everyDispatchDoorIsClassifiedAndTheClassificationIsChecked() throws {
         let viewModel = try MacAgentSource.read("AgentViewModel.swift")

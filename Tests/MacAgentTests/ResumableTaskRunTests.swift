@@ -559,6 +559,54 @@ struct ResumableTaskRunTests {
         #expect(after.first?.completedStepIDs == ["draft"])
     }
 
+    /// **A dangling link matches nothing, not merely the wrong thing** (PR #105 verification, R4).
+    ///
+    /// Every other test at this door has exactly one record on disk, so `first(where:)` and a bare
+    /// `first` are indistinguishable there — the code was right and nothing held that the match was
+    /// *exact*. This is the case that separates them: the linked record is deleted, a different task
+    /// then fails so the only record on disk belongs to someone else, and Run again is pressed on
+    /// the now-dangling row. It has to start fresh and leave the stranger's record exactly where it
+    /// is; a bare `first` would arm that stranger and delete its record when the re-run finished.
+    @Test
+    func aDanglingLinkStartsFreshAndLeavesAnotherTasksRecordAlone() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        // Task A fails, and its row carries the link.
+        fixture.browserOpener.failure = BrowserOutage()
+        try await fixture.run("Write notes and open the page")
+        let recordA = try #require(try fixture.resumableTaskStore.loadAll().first)
+        let rowA = try #require(fixture.viewModel.taskHistoryRecords.first)
+        #expect(rowA.resumableTaskID == recordA.id)
+
+        // The user deletes A from Memory. The row survives and its link now points at nothing.
+        fixture.viewModel.deleteMemoryEntry(in: .resumableTasks, at: 0)
+        #expect(try fixture.resumableTaskStore.loadAll().isEmpty)
+
+        // Task B fails. It is now the only record on disk, and it belongs to a different task.
+        fixture.draftOutput = fixture.root.appendingPathComponent("other.md")
+        try await fixture.run("A completely different task")
+        let recordB = try #require(try fixture.resumableTaskStore.loadAll().first)
+        #expect(recordB.id != recordA.id)
+        #expect(recordB.command == "A completely different task")
+
+        // Run again on A's dangling row, and let it finish.
+        fixture.browserOpener.failure = nil
+        fixture.draftOutput = fixture.root.appendingPathComponent("notes-again.md")
+        fixture.planner.plan = fixture.draftThenOpenPlan
+        #expect(fixture.viewModel.runTaskAgain(rowA))
+        try await fixture.waitForIdle()
+        #expect(fixture.viewModel.errorMessage == nil, "the re-run really did finish")
+
+        // B is untouched — same id, same progress, still offered. Under a match that took whatever
+        // record happened to be first, the re-run would have continued B and deleted it on success.
+        let after = try fixture.resumableTaskStore.loadAll()
+        #expect(after.map(\.id) == [recordB.id])
+        #expect(after.first?.command == "A completely different task")
+        #expect(after.first?.completedStepIDs == recordB.completedStepIDs)
+        #expect(fixture.viewModel.resumeOffer?.id == recordB.id)
+    }
+
     /// A completed run's row carries no link, because the settle deleted its record at the same
     /// terminal that wrote the row. The ordering inside `recordTaskHistoryIfTerminal` is what makes
     /// that true rather than incidental.
