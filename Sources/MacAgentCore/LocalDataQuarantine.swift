@@ -50,10 +50,13 @@ public struct LocalDataQuarantineError: Error, LocalizedError, Equatable {
 /// file is garbage — it proves the bytes were written under a different key. That is true of a test
 /// process writing them, and equally true of a user who restored from a backup, migrated Macs, or
 /// had their Keychain item replaced. SONNY-253's recorded architecture has a device-bound data key
-/// that a restore can reinstall, so a file that will not open today can open tomorrow. Two of the
-/// thirteen stores — `routines.json` and `workspaces.json` — hold things a person made by hand and
-/// cannot recreate, and destroying those on the signal "I cannot open this right now" would delete
-/// work they could have got back.
+/// that a restore can reinstall, so a file that will not open today can open tomorrow. Three of the
+/// thirteen stores hold things a person made by hand and cannot recreate — `routines.json`,
+/// `workspaces.json` and `snippets.json`, which are three of the four `LocalStoreKind` classifies
+/// `.artifact` — and destroying those on the signal "I cannot open this right now" would delete work
+/// they could have got back. (`approved-apps.json` is the fourth `.artifact` and is deliberately not
+/// in that list: a lost grant costs one answered prompt, not a thing somebody built. The count read
+/// "two" and omitted snippets until PR #110's review.)
 ///
 /// **One mechanism rather than one per store**, which is SONNY-239's fourth question answered: this
 /// operates on a store's file URL and knows nothing about what is in it, so no store type changes
@@ -62,8 +65,12 @@ public struct LocalDataQuarantineError: Error, LocalizedError, Equatable {
 /// store would be a recovery that cannot run.
 ///
 /// **This is not `Delete Local Data`'s behaviour and must not become it.** Settings' whole wipe is
-/// the one place the user asks for destruction, and `LocalDataDeletionService` deletes what this
-/// leaves behind so a privacy wipe stays true.
+/// the one place the user asks for destruction, and `LocalDataDeletionService.deleteAllLocalData()`
+/// deletes what this leaves behind so a privacy wipe stays true. Command Center's per-row Delete
+/// calls `deleteStoreFilesOnly()` instead and leaves set-aside files alone — **for one round of this
+/// branch it called the wipe's door**, so an ordinary press on a row that had since recovered
+/// destroyed the file an earlier press promised to keep, which is this paragraph being false in the
+/// code beneath it (PR #110 review, F2).
 public struct LocalDataQuarantine: @unchecked Sendable {
     /// What a set-aside file's name gains, between the original name and the stamp.
     ///
@@ -136,9 +143,17 @@ public struct LocalDataQuarantine: @unchecked Sendable {
 
     /// The first name in the series that is not taken.
     ///
-    /// The stamp is whole seconds, so two files set aside inside one second would collide — which is
-    /// exactly what happens when a user clears a row whose category covers several stores. The
-    /// counter is not decoration.
+    /// The stamp is whole seconds, so **the same store set aside twice inside one second** collides —
+    /// a file that will not read, cleared, written afresh and breaking again, or simply a second
+    /// press. The counter is not decoration; `twoFilesSetAsideInTheSameSecondDoNotOverwriteEachOther`
+    /// is that case exactly.
+    ///
+    /// **The reason this comment used to give was the one case that cannot happen** (PR #110 review,
+    /// F9): it said one press on a row covering several stores would collide with itself. It cannot —
+    /// the base name begins with `fileURL.lastPathComponent`, and the four files under the Task
+    /// history row have four different ones. Written down rather than quietly corrected because the
+    /// test underneath already disagreed with the prose, and a reader trusting the prose would have
+    /// concluded the counter was unreachable and deleted it.
     private func availableDestination(for fileURL: URL, at date: Date) -> URL {
         let directory = fileURL.deletingLastPathComponent()
         let base = fileURL.lastPathComponent + Self.filenameSuffix + Self.stamp(for: date)

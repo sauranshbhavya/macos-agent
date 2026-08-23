@@ -3818,6 +3818,35 @@ private struct WorkspaceAppIconStack: View {
 /// this repository has no way to drive SwiftUI, so the only thing a test can hold is the value the
 /// view renders. Everything a reader of the row sees — its count line, its newest-entry line,
 /// whether its switch reads on — is decided here and asserted directly.
+/// How much of a Memory row Sonny can read.
+///
+/// **Three answers rather than a boolean, and the middle one is why** (PR #110 review, F4). Task
+/// history is the one row covering four stores. A broken `task-plan-details.json` made
+/// `isUnreadable` true, so the row said "Can't be read" while twelve perfectly readable tasks sat
+/// behind it — and View on that row opens the Tasks page, which listed all twelve. The confirmation
+/// switched at the same moment from naming everything the press destroys to the vaguer
+/// cannot-see-inside sentence, at exactly the press that does the most.
+///
+/// The discriminator is what the row can actually show, not how many of its files are broken: a row
+/// with entries has something to lose and says so, a row with none has nothing to show and says why.
+/// That is also why it needs no new published state — `count` and the damaged set already say it.
+enum MemoryRowReadability: Equatable {
+    /// Nothing wrong. Every sentence the row and its confirmation use is the ordinary one.
+    case readable
+    /// A file under this row will not open, and the row still has entries it can show.
+    case partlyUnreadable
+    /// A file under this row will not open, and there is nothing left to show.
+    case unreadable
+
+    @MainActor
+    static func of(_ category: MemoryCategory, viewModel: AgentViewModel) -> MemoryRowReadability {
+        guard viewModel.unreadableMemoryCategories.contains(category) else {
+            return .readable
+        }
+        return viewModel.memoryEntryCount(for: category) > 0 ? .partlyUnreadable : .unreadable
+    }
+}
+
 struct MemoryRowPresentation: Equatable {
     let category: MemoryCategory
     let title: String
@@ -3833,7 +3862,7 @@ struct MemoryRowPresentation: Equatable {
     /// it and watches it snap back. Their per-type choices are not lost either way; they stay in
     /// `MemorySettingsStore` and come back when the master switch does.
     let canChangeRecording: Bool
-    /// Whether this row's file exists and will not read (SONNY-239).
+    /// How much of this row Sonny can actually read (SONNY-239, three-way since PR #110's F4).
     ///
     /// **The row's two zero-count states are different facts and used to render identically.** A
     /// store nobody has used loads as zero entries; a store whose file will not decrypt also loads
@@ -3848,8 +3877,8 @@ struct MemoryRowPresentation: Equatable {
     ///
     /// Not defaulted, deliberately: every construction site decides, so a new one cannot inherit
     /// "readable" by saying nothing.
-    let isUnreadable: Bool
-    /// "12 saved · newest 3:04 PM", the empty-state half on its own, or the unreadable state.
+    let readability: MemoryRowReadability
+    /// "12 saved · newest 3:04 PM", the empty-state half on its own, or one of the damaged states.
     let detailText: String
 
     /// Whether this row's Delete is live.
@@ -3860,16 +3889,16 @@ struct MemoryRowPresentation: Equatable {
     /// in a view modifier is a gate no test can read, and "greyed out at exactly the wrong moment"
     /// is precisely the defect that shipped.
     ///
-    /// An empty row still has nothing to do. An *unreadable* row has: its count is zero because the
-    /// file would not open, not because there is nothing in it.
-    var canDelete: Bool { count > 0 || isUnreadable }
+    /// An empty row still has nothing to do. A row Sonny cannot fully read has: its count is short
+    /// or zero because a file would not open, not because there is nothing in it.
+    var canDelete: Bool { count > 0 || readability != .readable }
 
     init(
         category: MemoryCategory,
         count: Int,
         isRecording: Bool,
         canChangeRecording: Bool,
-        isUnreadable: Bool,
+        readability: MemoryRowReadability,
         newestEntryDate: Date?,
         now: Date
     ) {
@@ -3879,23 +3908,33 @@ struct MemoryRowPresentation: Equatable {
         self.count = count
         self.isRecording = isRecording
         self.canChangeRecording = canChangeRecording
-        self.isUnreadable = isUnreadable
+        self.readability = readability
 
-        guard !isUnreadable else {
+        let counted = count == 1 ? "1 saved" : "\(count) saved"
+
+        switch readability {
+        case .unreadable:
             // Neither a count nor a timestamp, because the file will not open and Sonny knows
             // neither. Saying "0 saved" here is not a smaller version of the truth, it is a
             // different claim — and it is the one that made Delete look unnecessary.
             self.detailText = "Can't be read"
-            return
+        case .partlyUnreadable:
+            // **The count is real and stays** (PR #110 review, F4). Task history is the one row over
+            // several stores, and a broken plan-detail file used to make it read "Can't be read"
+            // beside twelve perfectly readable tasks — which View then listed on the Tasks page.
+            // Two surfaces disagreeing on one screen is the symptom SONNY-246 was filed to prevent,
+            // reached from the other direction. The "newest" clause goes rather than the count: a
+            // one-line row cannot say everything, and which part is missing matters more than when
+            // the last entry landed.
+            self.detailText = "\(counted) · part can't be read"
+        case .readable:
+            guard let newestEntryDate else {
+                self.detailText = counted
+                return
+            }
+            let newest = TaskHistoryDateFormatter.relativeTimestamp(for: newestEntryDate, now: now)
+            self.detailText = "\(counted) · newest \(newest)"
         }
-
-        let counted = count == 1 ? "1 saved" : "\(count) saved"
-        guard let newestEntryDate else {
-            self.detailText = counted
-            return
-        }
-        let newest = TaskHistoryDateFormatter.relativeTimestamp(for: newestEntryDate, now: now)
-        self.detailText = "\(counted) · newest \(newest)"
     }
 
     /// Builds a row's presentation from the live view model.
@@ -3920,7 +3959,7 @@ struct MemoryRowPresentation: Equatable {
             // The master switch and the policy, folded — not the per-type answer, which is what
             // `isRecording` above already carries.
             canChangeRecording: viewModel.memorySettings.isRecording,
-            isUnreadable: viewModel.unreadableMemoryCategories.contains(category),
+            readability: MemoryRowReadability.of(category, viewModel: viewModel),
             newestEntryDate: viewModel.newestMemoryEntryDate(for: category),
             now: now
         )
@@ -4061,9 +4100,10 @@ private struct MemoryView: View {
             // confirmation has to say out loud, since every other one in the app means destruction.
             if let deletionCategory {
                 Text(
-                    viewModel.unreadableMemoryCategories.contains(deletionCategory)
-                        ? MemoryDeletionCopy.unreadableMessage(for: deletionCategory)
-                        : MemoryDeletionCopy.message(for: deletionCategory)
+                    MemoryDeletionCopy.confirmation(
+                        for: deletionCategory,
+                        readability: MemoryRowReadability.of(deletionCategory, viewModel: viewModel)
+                    )
                 )
             }
         }
@@ -4353,6 +4393,42 @@ enum MemoryDeletionCopy {
         }
     }
 
+    /// What the confirmation says, whichever of the three states the row is in.
+    ///
+    /// **One function rather than a ternary in the view body** (PR #110 review, F7). The branch's own
+    /// `canDelete` doc comment states the rule — "a gate written only in a view modifier is a gate no
+    /// test can read" — and then three new copy decisions were left in view bodies anyway, where a
+    /// swapped ternary leaves the whole suite green. This is that lesson applied to its own branch.
+    static func confirmation(for category: MemoryCategory, readability: MemoryRowReadability) -> String {
+        switch readability {
+        case .readable:
+            return message(for: category)
+        case .partlyUnreadable:
+            // **Both sentences, because the press does both things** (PR #110 review, F4). The row
+            // still holds entries this deletes — naming them is what every other destructive
+            // confirmation in the app does — *and* a file it keeps. Replacing the first with the
+            // second understated the press at exactly the moment it destroyed the most.
+            return message(for: category)
+                + " Part of this can't be read — Sonny keeps that file instead of deleting it."
+        case .unreadable:
+            return unreadableMessage(for: category)
+        }
+    }
+
+    /// The empty-state icon. `exclamationmark.triangle` is SF Symbols 1, well inside the `.macOS(.v14)`
+    /// deployment target `everyMemoryRowsIconIsAvailableOnTheDeploymentTarget` exists to protect.
+    static func emptyStateSystemImage(for readability: MemoryRowReadability) -> String {
+        readability == .readable ? "tray" : "exclamationmark.triangle"
+    }
+
+    static func emptyStateTitle(for category: MemoryCategory, readability: MemoryRowReadability) -> String {
+        readability == .readable ? emptyTitle(for: category) : unreadableTitle(for: category)
+    }
+
+    static func emptyStateMessage(for category: MemoryCategory, readability: MemoryRowReadability) -> String {
+        readability == .readable ? emptyMessage(for: category) : unreadableSheetMessage(for: category)
+    }
+
     /// What the confirmation says when this row's file exists and will not read (SONNY-239).
     ///
     /// Two things the founder's decision of 2026-08-23 requires it to be honest about, and neither
@@ -4616,13 +4692,9 @@ private struct MemoryEntriesSheet: View {
                 // and "No output locations yet · Ask Sonny to save a file somewhere" would tell them
                 // to go and create the entries their file already holds (SONNY-239).
                 CollectionEmptyState(
-                    systemImage: isUnreadable ? "exclamationmark.triangle" : "tray",
-                    title: isUnreadable
-                        ? MemoryDeletionCopy.unreadableTitle(for: category)
-                        : MemoryDeletionCopy.emptyTitle(for: category),
-                    message: isUnreadable
-                        ? MemoryDeletionCopy.unreadableSheetMessage(for: category)
-                        : MemoryDeletionCopy.emptyMessage(for: category)
+                    systemImage: MemoryDeletionCopy.emptyStateSystemImage(for: readability),
+                    title: MemoryDeletionCopy.emptyStateTitle(for: category, readability: readability),
+                    message: MemoryDeletionCopy.emptyStateMessage(for: category, readability: readability)
                 )
                 .frame(maxHeight: .infinity)
             } else {
@@ -4679,8 +4751,8 @@ private struct MemoryEntriesSheet: View {
         MemoryEntryPresentation.entries(for: category, viewModel: viewModel)
     }
 
-    private var isUnreadable: Bool {
-        viewModel.unreadableMemoryCategories.contains(category)
+    private var readability: MemoryRowReadability {
+        MemoryRowReadability.of(category, viewModel: viewModel)
     }
 
     /// Deleted by position in the same list the row was rendered from, so the row and the record it

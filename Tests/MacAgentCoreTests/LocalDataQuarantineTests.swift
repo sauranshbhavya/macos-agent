@@ -195,6 +195,66 @@ struct LocalDataQuarantineTests {
         #expect(try FileManager.default.contentsOfDirectory(atPath: root.path).isEmpty)
     }
 
+    /// **A set-aside file the wipe cannot delete is reported by name, not silently left behind.**
+    ///
+    /// The sibling loop's catch branch is a near-copy of the one below it, which is tested — but it
+    /// is the branch that decides whether a privacy wipe tells the truth about what survived it, and
+    /// "near-copy of a tested branch" is how an untested one gets written off (PR #110 review).
+    ///
+    /// Locking the directory is what blocks the unlink, so this needs the unprivileged gate.
+    @Test(.requiresUnprivilegedProcess)
+    func aSetAsideFileTheWipeCannotDeleteIsNamedInWhatSurvived() throws {
+        let root = try makeDirectory()
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: root.path)
+            try? FileManager.default.removeItem(at: root)
+        }
+        let fileURL = root.appendingPathComponent("output-locations.json")
+        try Data("bytes".utf8).write(to: fileURL, options: .atomic)
+        let setAside = try LocalDataQuarantine().moveAside(fileURL, at: Date(timeIntervalSince1970: 1_787_510_531))
+        try FileManager.default.setAttributes([.posixPermissions: 0o500], ofItemAtPath: root.path)
+
+        var thrown: LocalDataDeletionError?
+        do {
+            _ = try LocalDataDeletionService(fileURLs: [fileURL]).deleteAllLocalData()
+        } catch let error as LocalDataDeletionError {
+            thrown = error
+        }
+
+        let error = try #require(thrown)
+        #expect(error.result.failedFilePaths == [setAside.path])
+        #expect(try #require(error.errorDescription).contains("output-locations.json.unreadable-"))
+        // The premise: it really is still there, which is what the report is about.
+        #expect(FileManager.default.fileExists(atPath: setAside.path))
+    }
+
+    /// **The per-row Delete leaves set-aside files alone — the one door that sweeps is the wipe.**
+    ///
+    /// For one round of this branch both doors were the same call, so an ordinary Delete on a row
+    /// that had recovered destroyed the file an earlier press promised to keep (PR #110 review, F2).
+    @Test
+    func deletingStoreFilesOnlyLeavesWhatWasSetAsideWhereItIs() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let fileURL = root.appendingPathComponent("output-locations.json")
+        let quarantine = LocalDataQuarantine()
+
+        try Data("the unreadable one".utf8).write(to: fileURL, options: .atomic)
+        let setAside = try quarantine.moveAside(fileURL, at: Date(timeIntervalSince1970: 1_787_510_531))
+        try Data("the live one".utf8).write(to: fileURL, options: .atomic)
+
+        let result = try LocalDataDeletionService(fileURLs: [fileURL]).deleteStoreFilesOnly()
+
+        #expect(result.deletedFileCount == 1, "the figure must count only what the user can see")
+        #expect(!FileManager.default.fileExists(atPath: fileURL.path))
+        #expect(try String(decoding: Data(contentsOf: setAside), as: UTF8.self) == "the unreadable one")
+
+        // And the wipe's door, over the same directory, does take it — so the asymmetry is the
+        // decision rather than a sweep that stopped working.
+        _ = try LocalDataDeletionService(fileURLs: [fileURL]).deleteAllLocalData()
+        #expect(!FileManager.default.fileExists(atPath: setAside.path))
+    }
+
     /// A file that merely *starts* with another store's name is not that store's, and must survive.
     ///
     /// `output-locations.json` and a hypothetical `output-locations.json.backup` share a prefix; the
