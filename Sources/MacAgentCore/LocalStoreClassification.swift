@@ -40,8 +40,9 @@ public enum LocalStoreKind: CaseIterable, Hashable, Sendable {
 ///   file URLs against `LocalDataDeletionService.defaultStoreFileURLs()`, so a **new store file
 ///   fails the suite** until it gets a case here. Row E's `task-plan-details.json` and row J's
 ///   `approved-apps.json` are the tenth and eleventh, and both arrived exactly that way: the suite
-///   failed until each was classified here. Row 13's `output-locations.json` is the twelfth, and it
-///   arrived the same way. The thirteenth will too.
+///   failed until each was classified here. Row 13's `output-locations.json` is the twelfth and
+///   `resumable-tasks.json` the thirteenth (SONNY-209 and SONNY-210), and both arrived the same
+///   way. The fourteenth will too.
 ///
 /// `fileURL(fileManager:)` delegates to the store types themselves rather than repeating their
 /// filenames, so the two lists cannot drift apart: a store that moves moves in both.
@@ -58,6 +59,7 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
     case taskPlanDetails
     case approvedApps
     case outputLocations
+    case resumableTasks
 
     /// Deliberately one `case` per store rather than three grouped ones: each line is a separate
     /// classification decision, and a reviewer should be able to disagree with exactly one of them.
@@ -140,6 +142,16 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
             // was for. Suppressing it costs the user nothing they asked for: the files are still
             // written and still where they put them, and only the note about the folder is withheld.
             return .trace
+        case .resumableTasks:
+            // Row 13's unfinished runs (SONNY-210): what a task was partway through, kept so Sonny
+            // can offer to carry on. A record *of* a run, and nobody asked for it — the same shape
+            // as task history, which is what this hangs beside.
+            //
+            // The consequence is the one that decides it: a run with "Don't save this task" on
+            // leaves no record, so it leaves no offer either. The alternative would have Sonny
+            // raise "you were partway through X, continue?" for a task the user explicitly asked it
+            // not to remember, which is the switch failing out loud rather than quietly.
+            return .trace
         }
     }
 
@@ -172,6 +184,8 @@ public enum LocalStore: CaseIterable, Hashable, Sendable {
             return ApprovedAppStore(fileManager: fileManager).fileURL
         case .outputLocations:
             return OutputLocationStore(fileManager: fileManager).fileURL
+        case .resumableTasks:
+            return ResumableTaskStore(fileManager: fileManager).fileURL
         }
     }
 }

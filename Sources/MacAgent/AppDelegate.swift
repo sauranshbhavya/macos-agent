@@ -106,6 +106,16 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // anything it reports must already have somewhere to go.
         viewModel.startRoutineScheduling()
 
+        // Row 13's unfinished runs (SONNY-210), read once at launch.
+        //
+        // **Here and not on a view's `onAppear`, because the surface that needs it is the widget.**
+        // Every other Memory list is loaded by `refreshMemoryEntries()` when the Memory page
+        // appears, which is enough for a page. This list also decides whether the widget offers to
+        // carry on with a task the user was partway through when the app last stopped — and the
+        // whole point of that offer is that it reaches someone who never opens Command Center. The
+        // widget shows the panel off published state, so the state has to exist before it renders.
+        viewModel.refreshResumableTasks()
+
         // Both surfaces open on launch, matching Wispr Flow's reference behavior — a real,
         // confirmed tradeoff: this also makes the Dock icon a permanent fixture, since
         // PrimaryWindowActivationManager only switches out of accessory mode when Command Center

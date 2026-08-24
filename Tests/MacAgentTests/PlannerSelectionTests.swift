@@ -194,6 +194,10 @@ private func makeViewModel(root: URL, plannerSelection: String?) throws -> Agent
             fileURL: root.appendingPathComponent("output-locations.json"),
             encryption: encryption
         ),
+        resumableTaskStore: ResumableTaskStore(
+            fileURL: root.appendingPathComponent("resumable-tasks.json"),
+            encryption: encryption
+        ),
         clipboardHistoryMonitor: ClipboardHistoryMonitor(
             reader: FakePasteboardReader(),
             store: ClipboardHistoryStore(

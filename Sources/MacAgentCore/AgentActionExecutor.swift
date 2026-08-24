@@ -57,6 +57,31 @@ public struct PreparedAgentRun: Equatable, Sendable {
     }
 }
 
+/// One finished unit of a top-level chain, as `AgentActionExecutor.execute` reports it (SONNY-210).
+///
+/// **A unit, not a step, because a unit is the only boundary at which "this is done" is a fact.**
+/// The executor dispatches a plan as maximal runs of consecutive same-workflow steps and hands each
+/// run to one adapter call, so what an adapter does with the two steps of a `[scan, zip]` unit is
+/// its own business and there is no moment between them anyone outside can observe. Reporting steps
+/// would mean inventing a granularity the execution model does not have.
+///
+/// Reported only while another unit is still to come — see `executeChain` for why the last unit of a
+/// chain is deliberately silent, and why a single-unit plan reports nothing at all.
+public struct CompletedRunUnit: Equatable, Sendable {
+    /// The ids of this unit's steps, in plan order.
+    public var stepIDs: [String]
+    /// The file the chain carries forward after this unit, if any — what
+    /// `resolvePreviousArtifactPathIfNeeded` would offer the next unit. Reported because a run
+    /// resuming after this point cannot re-derive it: the file is named nowhere in the steps that
+    /// are left.
+    public var chainedArtifactPath: String?
+
+    public init(stepIDs: [String], chainedArtifactPath: String?) {
+        self.stepIDs = stepIDs
+        self.chainedArtifactPath = chainedArtifactPath
+    }
+}
+
 @MainActor
 public final class AgentActionExecutor {
     /// Whether this run leaves traces (SONNY-120). A `let` rather than a settable property because
@@ -678,10 +703,23 @@ public final class AgentActionExecutor {
     /// so executor-held state would be readable — and mutable — by any other main-actor task that
     /// interleaved, and a routine's browser could leak into a command the user ran meanwhile.
     /// Only `RunRoutineCapabilityAdapter` passes a non-nil value, through `executeNestedPlan`.
+    /// - Parameter onUnitCompleted: Reported after each unit of a **top-level chain** finishes, and
+    ///   only while another unit is still to come — see `executeChain` for why the last one is
+    ///   deliberately silent. `nil`, the default, means nobody is recording progress. SONNY-210's
+    ///   resumable-task checkpoint is the only caller that passes one.
+    ///
+    /// **There is deliberately no "what an earlier attempt produced" parameter here** (SONNY-210). A
+    /// resumed run needs the file its earlier attempt wrote, and threading it through execution was
+    /// tried and is wrong: `prepare` previews every step and rejects a bare
+    /// `open_generated_artifact` before anything reaches this function, so a value supplied here
+    /// cannot be seen by the gate that runs first. `ChainedArtifactCarry.applying(_:toLeadingStepOf:)`
+    /// writes it into the plan before dispatch instead, which also keeps the assessment honest — the
+    /// file being opened is part of what gets assessed.
     public func execute(
         plan: AgentPlan,
         preferredBrowser: MacApp? = nil,
         claimedEarlierInThisRun: RunClaims = .none,
+        onUnitCompleted: ((CompletedRunUnit) -> Void)? = nil,
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
         // Every top-level run starts naming nothing: a plan's own destinations are added by
@@ -695,6 +733,7 @@ public final class AgentActionExecutor {
             preferredBrowser: preferredBrowser,
             claimedEarlierInThisRun: claimedEarlierInThisRun,
             namedByEnclosingPlan: .none,
+            onUnitCompleted: onUnitCompleted,
             log: log
         )
     }
@@ -704,11 +743,18 @@ public final class AgentActionExecutor {
     /// `namedByEnclosingPlan` is **not defaulted**, on purpose: every internal call site states what
     /// the plan around it has named, and a new one that forgets is a compile error rather than a
     /// silent `.none` — which is the exact failure this ticket exists to fix, one level up.
+    ///
+    /// `onUnitCompleted` is undefaulted here for the identical reason (SONNY-210), and the answer at
+    /// both internal call sites is `nil` on purpose rather than by omission: a **nested** plan's
+    /// units are not this run's units — a routine's steps are one unit of the plan that ran it, and
+    /// reporting its insides would record step ids that do not appear in the plan a resume would
+    /// re-execute.
     private func execute(
         plan: AgentPlan,
         preferredBrowser: MacApp?,
         claimedEarlierInThisRun: RunClaims,
         namedByEnclosingPlan: PlannedDestinations,
+        onUnitCompleted: ((CompletedRunUnit) -> Void)?,
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
         let resolvedPlan = try resolveDefaultOutputs(
@@ -774,7 +820,7 @@ public final class AgentActionExecutor {
         case .visionSession:
             return try await executeCapability(for: .visionSession, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .chain:
-            return try await executeChain(resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
+            return try await executeChain(resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, onUnitCompleted: onUnitCompleted, log: log)
         }
     }
 
@@ -1671,6 +1717,13 @@ public final class AgentActionExecutor {
                     preferredBrowser: nestedBrowser,
                     claimedEarlierInThisRun: claimedEarlierInThisRun,
                     namedByEnclosingPlan: namedByEnclosingPlan,
+                    // **`nil`, and it is an answer.** A nested plan is the inside of one unit of the
+                    // plan around it. Its steps have ids the outer plan does not contain, so a
+                    // resume rebuilt from them would subtract nothing and claim progress that the
+                    // outer plan cannot express — and the outer unit is not finished until this
+                    // whole nested run returns anyway, which is what the enclosing `executeChain`
+                    // reports.
+                    onUnitCompleted: nil,
                     log: log
                 )
             },
@@ -1724,6 +1777,7 @@ public final class AgentActionExecutor {
         preferredBrowser: MacApp?,
         claimedEarlierInThisRun: RunClaims = .none,
         namedByEnclosingPlan: PlannedDestinations,
+        onUnitCompleted: ((CompletedRunUnit) -> Void)?,
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
         var summaries: [String] = []
@@ -1763,13 +1817,19 @@ public final class AgentActionExecutor {
         // it, which is the same defect this function's seed comment carries a correction for.
         let namedByThisRun = namedByEnclosingPlan.union(PlannedDestinations(namedBy: plan))
 
-        for segment in try chainSegments(in: plan) {
+        let segments = try chainSegments(in: plan)
+        for (index, segment) in segments.enumerated() {
             let resolved = resolvePreviousArtifactPathIfNeeded(in: segment, previousArtifactPath: previousArtifactPath)
             let result = try await execute(
                 plan: resolved,
                 preferredBrowser: preferredBrowser,
                 claimedEarlierInThisRun: claimed,
                 namedByEnclosingPlan: namedByThisRun,
+                // `nil`: this is the *inside* of one unit, and the loop below is what reports that
+                // unit. A segment that is itself a chain cannot occur — `chainSegments` cuts by
+                // workflow — but a nested routine re-enters this function through
+                // `executeNestedPlan`, which passes `nil` at that door for the reason written there.
+                onUnitCompleted: nil,
                 log: log
             )
             for written in result.previews.flatMap(\.writes) {
@@ -1794,6 +1854,26 @@ public final class AgentActionExecutor {
                 previousArtifactPath = producedPath
             } else if let suggestionPath = result.suggestions.last?.value {
                 previousArtifactPath = suggestionPath
+            }
+
+            // **Reported only while another unit is still to come, and that is the semantics rather
+            // than a saving** (SONNY-210). What a listener does with this is decide where a resume
+            // would start, so a boundary with nothing after it changes no answer: the run is about
+            // to return, its record is about to be settled, and a report there would be a write to
+            // an encrypted file per finished chain for no effect. It also keeps the reported set
+            // honestly *partial* — a listener never sees "every step done", which is a state a
+            // resumable record must never be in.
+            //
+            // `segment.steps`, not `resolved.steps`: the two carry the same ids and the caller
+            // matches on ids, but `segment` is the shape the stored plan holds, so a reader
+            // comparing the two sees the same thing on both sides.
+            if index < segments.count - 1 {
+                onUnitCompleted?(
+                    CompletedRunUnit(
+                        stepIDs: segment.steps.map(\.id),
+                        chainedArtifactPath: previousArtifactPath
+                    )
+                )
             }
         }
 
@@ -1935,18 +2015,18 @@ public final class AgentActionExecutor {
         )
     }
 
+    /// **Which steps consume a previous unit's output is `ChainedArtifactCarry`'s to say** — one
+    /// predicate, because a resumed run needs the identical question answered about the remainder it
+    /// is about to dispatch (SONNY-210), and two copies of it is one copy that gets a new operation
+    /// added to it.
+    ///
+    /// The `steps.count == 1` term stays here: it is this caller's own, and it says that the segment
+    /// being resolved is a whole unit rather than a fragment.
     private func resolvePreviousArtifactPathIfNeeded(in plan: AgentPlan, previousArtifactPath: String?) -> AgentPlan {
-        guard plan.steps.count == 1,
-              [.revealInFinder, .openGeneratedArtifact].contains(plan.steps[0].operation),
-              plan.steps[0].outputPath?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
-              plan.steps[0].inputPath?.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty != false,
-              let previousArtifactPath else {
+        guard plan.steps.count == 1 else {
             return plan
         }
-
-        var resolved = plan
-        resolved.steps[0].outputPath = previousArtifactPath
-        return resolved
+        return ChainedArtifactCarry.applying(previousArtifactPath, toLeadingStepOf: plan)
     }
 
 }

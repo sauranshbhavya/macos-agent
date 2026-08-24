@@ -47,6 +47,22 @@ public enum PreparedPlanSource: String, Equatable, Sendable {
     /// still exists on its own merits, above, and the amendment's instinct was right for the
     /// mechanism that was there.
     case visionSession = "vision_session"
+    /// What is left of a plan an earlier run began and did not finish, dispatched because the user
+    /// pressed Continue on the widget's offer (row 13, SONNY-210).
+    ///
+    /// **Its own case rather than `.directUserAction`, exactly as that case instructs.** The claim
+    /// `.directUserAction` makes is that a plan was constructed field by field with no natural
+    /// language interpreted on the way; these steps came from wherever the original run's did, which
+    /// for most tasks is a planner reading a sentence. Borrowing it would be a false statement about
+    /// how the plan came to exist, which is the one thing this enum is for.
+    ///
+    /// **And it is not the original source replayed**, which was the other option. The stored record
+    /// could have carried the source it was prepared with, but then a *decode* would produce a value
+    /// of this type — and the reason this enum is trustworthy is that no decoding path reaches it.
+    /// Nothing weakens a consent from an origin today, so replaying one would not be a live hole;
+    /// keeping the structural property intact costs one case, and a hole that has to stay closed by
+    /// convention is the kind this repository has already paid for.
+    case resumedTask = "resumed_task"
 
     var planLogMessage: String {
         switch self {
@@ -58,6 +74,8 @@ public enum PreparedPlanSource: String, Equatable, Sendable {
             return "Using the plan this screen built"
         case .visionSession:
             return "Starting a screen-control session"
+        case .resumedTask:
+            return "Continuing what was left of an earlier task"
         }
     }
 }
@@ -212,13 +230,19 @@ public final class AgentRunner {
         return request
     }
 
+    /// `onUnitCompleted` is forwarded to `AgentActionExecutor.execute` unchanged and means exactly
+    /// what it means there (SONNY-210). It defaults to "nobody is recording progress", which is
+    /// every caller but the foreground run's resumable checkpoint — the scheduled path passes none,
+    /// deliberately, because a scheduled routine writes no resumable record at all
+    /// (`AgentViewModel.beginResumableTask`).
     public func execute(
         _ preparedRun: PreparedAgentRun,
         approvalDecision: RiskApprovalDecision = .notRequested,
         confirmationMessage: String = "Execution approved",
         logRiskAssessment: Bool = true,
         scope: TaskWorkspaceScope,
-        context: ApprovalContext
+        context: ApprovalContext,
+        onUnitCompleted: ((CompletedRunUnit) -> Void)? = nil
     ) async throws -> AgentRunResult {
         let request = try approvalRequest(
             for: preparedRun,
@@ -269,7 +293,10 @@ public final class AgentRunner {
         }
 
         logStore.append(.confirm, confirmationMessage)
-        let result = try await executor.execute(plan: preparedRun.plan) { phase, message in
+        let result = try await executor.execute(
+            plan: preparedRun.plan,
+            onUnitCompleted: onUnitCompleted
+        ) { phase, message in
             self.logStore.append(phase, message)
         }
         recordRecentArtifacts(from: result)

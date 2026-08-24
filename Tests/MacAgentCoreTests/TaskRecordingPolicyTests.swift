@@ -21,19 +21,27 @@ struct TaskRecordingPolicyTests {
     }
 
     /// Named explicitly as well, so a reclassification that silently changes what the switch reaches
-    /// fails here and not only in the classification's own test. The withheld seven are the founder's
+    /// fails here and not only in the classification's own test. The withheld set is the founder's
     /// five plus row E's plan details (SONNY-147), a trace for the same reason the row it hangs off
-    /// is, and row 13's output locations (SONNY-209), a trace because nobody asked Sonny to remember
-    /// which folder a file went into; the kept five gained row J's approved-apps store, an
-    /// `.artifact` because a grant is the user's own answer rather than a record of what happened
-    /// (SONNY-140).
+    /// is, row 13's output locations (SONNY-209), a trace because nobody asked Sonny to remember
+    /// which folder a file went into, and row 13's unfinished runs (SONNY-210), a trace for the same
+    /// reason again — so a suppressed run raises no offer to carry on with itself. The kept set
+    /// gained row J's approved-apps store, an `.artifact` because a grant is the user's own answer
+    /// rather than a record of what happened (SONNY-140).
+    ///
+    /// **No count in the name, deliberately** (the SONNY-209 lesson, applied at the moment it would
+    /// otherwise have gone stale again — and it would have, twice, in the two days between these two
+    /// stores landing): this name has been wrong before, and a renamed test takes every doc comment
+    /// that cited it with it. The numbers live in the assertions below, where the suite disagrees
+    /// with a wrong one.
     @Test
-    func theWithheldStoresAreTheSevenTracesAndTheKeptOnesAreTheFiveOthers() {
+    func theWithheldStoresAreTheTracesAndTheKeptOnesAreEverythingElse() {
         let withheld = Set(LocalStore.allCases.filter { !TaskRecordingPolicy.suppressTraces.allowsWriting(to: $0) })
         #expect(withheld == [
             .clipboardHistory,
             .recentArtifacts,
             .outputLocations,
+            .resumableTasks,
             .shortcutRunHistory,
             .taskHistory,
             .taskPlanDetails,
@@ -41,6 +49,9 @@ struct TaskRecordingPolicyTests {
         ])
         let kept = Set(LocalStore.allCases.filter { TaskRecordingPolicy.suppressTraces.allowsWriting(to: $0) })
         #expect(kept == [.routines, .workspaces, .snippets, .clipboardHistorySettings, .approvedApps])
+        // The two sets partition the whole population, which is what makes naming them a claim about
+        // every store rather than about the ones somebody remembered.
+        #expect(withheld.count + kept.count == LocalStore.allCases.count)
     }
 
     @Test

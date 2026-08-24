@@ -384,14 +384,14 @@ struct LocalStorageSecurityTests {
         // too. That question going unasked is how the journal stayed uncovered. The number is
         // deliberately not spelled in this sentence, since a sentence that names it is a fourth
         // place to update and this one already went stale once (PR #89 cycle 2, F3).
-        #expect(fileURLs.count == 12)
-        #expect(result == LocalDataDeletionResult(deletedFileCount: 12, missingFileCount: 0))
+        #expect(fileURLs.count == 13)
+        #expect(result == LocalDataDeletionResult(deletedFileCount: 13, missingFileCount: 0))
         for fileURL in fileURLs {
             #expect(!FileManager.default.fileExists(atPath: fileURL.path))
         }
 
         let secondResult = try service.deleteAllLocalData()
-        #expect(secondResult == LocalDataDeletionResult(deletedFileCount: 0, missingFileCount: 12))
+        #expect(secondResult == LocalDataDeletionResult(deletedFileCount: 0, missingFileCount: 13))
     }
 
     @Test(.requiresUnprivilegedProcess)
@@ -433,21 +433,22 @@ struct LocalStorageSecurityTests {
     /// The wipe's reach, pinned by count and by name. Relocated here from the deleted ledger
     /// suite (PR #49 N4): the ninth store's own `urls.count == 9` pin died with it, and without
     /// a successor a store added to the app but forgotten from this list would vanish from the
-    /// wipe silently. Twelve stores is the current whole population, since row 13's output
-    /// locations.
+    /// wipe silently. Thirteen stores is the current whole population, since row 13's unfinished
+    /// runs.
     ///
-    /// **The count moved three times and no longer lives in this test's name** (SONNY-209). Row E's
+    /// **The count moved four times and no longer lives in this test's name** (SONNY-209). Row E's
     /// plan details landed first, at `ebd6c1d`, taking it to ten; row J's approved apps rebased on
-    /// top of that and took it to eleven; row 13's output locations took it to twelve. Each move
-    /// renamed this test, and each rename left the doc comments elsewhere that name it pointing at a
-    /// symbol that no longer existed — two of them, found by grepping the whole population rather
-    /// than the references anyone remembered. So the name is count-free now and the number lives
-    /// only in the assertion below, where the compiler is what complains. A thirteenth store raises
-    /// this number and the one in `everyLocalStoreFileIsClassifiedExactlyOnce`, and renames nothing.
+    /// top of that and took it to eleven; row 13's output locations took it to twelve, and row 13's
+    /// unfinished runs (SONNY-210) to thirteen. Each of the first three moves renamed this test, and
+    /// each rename left the doc comments elsewhere that name it pointing at a symbol that no longer
+    /// existed. So the name is count-free now and the number lives only in the assertion below,
+    /// where the suite is what complains — which is what let the fourth move cost nothing but two
+    /// numerals. A fourteenth store raises this number and the one in
+    /// `everyLocalStoreFileIsClassifiedExactlyOnce`, and renames nothing.
     @Test
     func theWipeReachesEveryLocalStore() {
         let urls = LocalDataDeletionService.defaultStoreFileURLs()
-        #expect(urls.count == 12)
+        #expect(urls.count == 13)
         let fileNames = Set(urls.map(\.lastPathComponent))
         // Nine since row I: `vision-sessions.json` is the action journal (SONNY-96). A wipe that
         // left a record of every click Sonny made inside the user's apps would be the loudest
@@ -475,7 +476,12 @@ struct LocalStorageSecurityTests {
             "vision-sessions.json",
             "task-plan-details.json",
             "approved-apps.json",
-            "output-locations.json"
+            "output-locations.json",
+            // Thirteen since row 13's second store: `resumable-tasks.json` holds the whole plan of a
+            // task the user started and did not finish — its steps, the paths they name, the draft
+            // text they carry. A wipe that left it behind would leave the plan of every abandoned
+            // task on disk, which is the same failure as leaving the plans of the finished ones.
+            "resumable-tasks.json"
         ])
     }
 
@@ -484,10 +490,10 @@ struct LocalStorageSecurityTests {
     /// wipe without a `LocalStore` case has to fail here rather than default to "recorded".
     ///
     /// Row E's `task-plan-details.json`, row J's `approved-apps.json` and row 13's
-    /// `output-locations.json` are the tenth, eleventh and twelfth, and all three arrived exactly
-    /// the way this test was built to make them arrive: the new file had no case, so it matched
-    /// nothing and the suite failed until it was classified. Classifying is the fix; deleting the
-    /// assertion is not.
+    /// `output-locations.json` and `resumable-tasks.json` are the tenth through thirteenth, and all
+    /// four arrived exactly the way this test was built to make them arrive: the new file had no
+    /// case, so it matched nothing and the suite failed until it was classified. Classifying is the
+    /// fix; deleting the assertion is not.
     @Test
     func everyLocalStoreFileIsClassifiedExactlyOnce() {
         let wipedURLs = LocalDataDeletionService.defaultStoreFileURLs()
@@ -501,7 +507,7 @@ struct LocalStorageSecurityTests {
         let classifiedURLs = LocalStore.allCases.map { $0.fileURL() }
         #expect(Set(classifiedURLs) == Set(wipedURLs))
         #expect(Set(classifiedURLs).count == LocalStore.allCases.count)
-        #expect(LocalStore.allCases.count == 12)
+        #expect(LocalStore.allCases.count == 13)
     }
 
     /// Pins *which* kind each store is, not merely that it has one. Exhaustiveness alone would let
@@ -517,6 +523,11 @@ struct LocalStorageSecurityTests {
         #expect(stores(.trace) == [
             .clipboardHistory,
             .recentArtifacts,
+            // Row 13's unfinished runs (SONNY-210). A record *of* a run that nobody asked for, and
+            // classifying it here is what makes "Don't save this task" cover the offer as well as
+            // the history row — a suppressed run leaves no record, so Sonny never raises "you were
+            // partway through X" for a task the user asked it not to remember.
+            .resumableTasks,
             .shortcutRunHistory,
             .taskHistory,
             .taskPlanDetails,
@@ -590,6 +601,14 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
         encryption: encryption,
         whitelist: PathWhitelist(roots: [root])
     )
+    // The thirteenth (row 13, SONNY-210): what a task was partway through. Created *and written to*
+    // here, which is the whole point of this helper — the journal's own line above records what it
+    // cost to list a store the fixture never wrote, and the only test that runs
+    // `deleteAllLocalData()` over real files would otherwise exercise twelve of thirteen.
+    let resumableTaskStore = ResumableTaskStore(
+        fileURL: root.appendingPathComponent("resumable-tasks.json"),
+        encryption: encryption
+    )
 
     try routineStore.save(
         StoredRoutine(
@@ -641,6 +660,26 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
         atPaths: [outputFolder.appendingPathComponent("delete-output.md").path],
         recordedAt: .fixture
     )
+    try resumableTaskStore.save(
+        ResumableTask(
+            command: "delete unfinished task",
+            plan: AgentPlan(
+                summary: "delete unfinished plan",
+                requiresConfirmation: false,
+                steps: [
+                    AgentStep(id: "calc", operation: .calculateUtility, description: "delete unfinished step")
+                ]
+            ),
+            startedAt: .fixture,
+            updatedAt: .fixture
+        ),
+        // The store drops a record past its idle period on read, and `.fixture` is a fixed instant
+        // in the past — so a `now` of `Date()` would make `save`'s own reload discard what it just
+        // wrote and leave an empty array on disk. Anchored to the record's own clock instead, which
+        // is the same fixed-clock discipline `TaskRecordingPolicyTests` uses for the seven-day
+        // clipboard age-out.
+        now: .fixture
+    )
 
     return [
         routineStore.fileURL,
@@ -654,7 +693,8 @@ private func createAllLocalStoreFiles(root: URL, encryption: LocalStorageEncrypt
         visionSessionJournalStore.fileURL,
         taskPlanDetailStore.fileURL,
         approvedAppStore.fileURL,
-        outputLocationStore.fileURL
+        outputLocationStore.fileURL,
+        resumableTaskStore.fileURL
     ]
 }
 
