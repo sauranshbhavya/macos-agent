@@ -61,7 +61,7 @@
 >>> signature This deadline is a deadlock backstop, not a timing assertion
 >>> source This deadline is a deadlock backstop, not a timing assertion
 >>> sites 2
->>> reason A poll that ran out of wall clock, in VisionSessionRunTests' waitUntil and in AgentActionExecutorTests' waitForLaunchSignal. It fires when the machine is oversubscribed as readily as when something is genuinely stuck, and a battery is exactly the load that produces the first. One flagged run at 961b9c2 with a cold swift build beside it went red across most of VisionSessionRunTests on this message alone, while the runs either side of it passed; that run's log was a scratch artifact and is not in this repository, so no count is quoted from it. The reach is: 62 waitUntil call sites among 74 test functions in that one file (git grep -c 'waitUntil(' and git grep -c '@Test' over Tests/MacAgentTests/VisionSessionRunTests.swift at 961b9c2).
+>>> reason A poll that ran out of wall clock, in VisionSessionRunTests' waitUntil and in AgentActionExecutorTests' waitForLaunchSignal. It fires when the machine is oversubscribed as readily as when something is genuinely stuck, and a battery is exactly the load that produces the first. One flagged run at 98c50c8 with a cold swift build beside it went red across most of VisionSessionRunTests on this message alone, while the runs either side of it passed; that run's log was a scratch artifact and is not in this repository, so no count is quoted from it. The reach is: 62 waitUntil call sites among 74 test functions in that one file (git grep -c 'waitUntil(' and git grep -c '@Test' over Tests/MacAgentTests/VisionSessionRunTests.swift at 98c50c8).
 
 >>> signature did not become idle before timeout
 >>> source did not become idle before timeout
@@ -81,4 +81,4 @@
 >>> signature Expectation failed: (elapsed →
 >>> source #expect(elapsed < .seconds(
 >>> sites 2
->>> reason A wall-clock ceiling. It measures the machine, not the code: the redaction ceiling was measured at 1465 ms idle and 11742 ms with a cold build alongside, at 961b9c2, against a bound that was 5000 ms at the time. The ceiling is worth keeping as a tripwire for a pathological regression; its loss under load is worth nothing as evidence about a mutant.
+>>> reason A wall-clock ceiling. It measures the machine, not the code: the redaction ceiling was measured at 1465 ms idle and 11742 ms with a cold build alongside, at 98c50c8, against a bound that was 5000 ms at the time. The ceiling is worth keeping as a tripwire for a pathological regression; its loss under load is worth nothing as evidence about a mutant.
