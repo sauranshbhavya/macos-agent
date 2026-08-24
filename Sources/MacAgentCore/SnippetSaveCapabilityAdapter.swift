@@ -84,6 +84,11 @@ public struct SnippetSaveCapabilityAdapter: CapabilityAdapter {
     ) async throws -> AgentRunResult {
         let previews = try preview(plan: plan, context: context)
         let spec = try snippetSpec(in: plan)
+        // Snippet memory switched off refuses out loud — see `SaveRoutineCapabilityAdapter.execute`
+        // for why the refusal lands here and not in the assessment (SONNY-208).
+        guard context.allowsRecording(to: .snippets) else {
+            throw MemoryDisabledError(category: .snippets)
+        }
         log(.act, "Saving snippet \(spec.trigger)")
         try context.snippetStore.save(
             StoredSnippet(

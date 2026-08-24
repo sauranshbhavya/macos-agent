@@ -51,6 +51,24 @@ final class AgentViewModel: ObservableObject {
     /// the start of every task, and untouched by the scheduled path, which never writes it.
     @Published private(set) var ranWithoutAskingTrace: String?
     @Published var clipboardHistoryEnabled: Bool = true
+    /// The Memory section's switches, composed from the user's own choices and the enterprise
+    /// policy (SONNY-208). `private(set)` because every write goes through `setMemoryEnabled(_:)`
+    /// or `setMemoryCategoryEnabled(_:to:)`, which persist first and then republish — a settable
+    /// property would let a surface show a switch the store never recorded.
+    @Published private(set) var memorySettings: MemoryRecordingSettings = .recordEverything
+    /// Snippets, recent artifacts, clipboard items and allowed apps as the Memory section lists
+    /// them. Loaded by `refreshMemoryEntries()`; empty until it runs, and emptied rather than left
+    /// stale when a store will not read — the same choice `refreshTaskHistory` makes, so a list can
+    /// never show entries the notice beside it says are unreadable.
+    @Published private(set) var savedSnippets: [StoredSnippet] = []
+    @Published private(set) var recentArtifacts: [RecentArtifact] = []
+    @Published private(set) var clipboardHistoryItems: [ClipboardHistoryItem] = []
+    @Published private(set) var approvedApps: [ApprovedApp] = []
+    /// Outcome of the Memory section's per-type Delete, rendered by the same
+    /// `LocalDataDeletionStatusMessage` view Settings' whole-wipe uses. Separate from
+    /// `localDataDeletionStatusMessage` so a per-type delete does not post its result onto the
+    /// Settings page, and vice versa.
+    @Published var memoryDeletionStatusMessage: String?
     @Published var priorTaskContext: PriorTaskContext?
     @Published var taskUsageSummary: TaskUsageSummary = .empty
     @Published var taskHistoryRecords: [CompletedTaskRecord] = []
@@ -289,6 +307,11 @@ final class AgentViewModel: ObservableObject {
     private let approvedAppStore: ApprovedAppStore
     private let clipboardHistoryMonitor: ClipboardHistoryMonitor
     private let localDataDeletionService: LocalDataDeletionService
+    private let memorySettingsStore: MemorySettingsStore
+    /// Row 19's seam. `UnmanagedMemoryPolicyProvider` is the only implementation that ships, so this
+    /// answers `.unmanaged` in every shipping path — the hook is present and inert, exactly as
+    /// SONNY-17's ratification asked.
+    private let memoryPolicyProvider: any MemoryPolicyProviding
     private let priorTaskContextStore: PriorTaskContextStore
     private let taskUsageRecorder: TaskUsageRecorder
     private let plannerProviderRegistry: PlannerProviderRegistry
@@ -505,6 +528,7 @@ final class AgentViewModel: ObservableObject {
         approvedAppStore: ApprovedAppStore = ApprovedAppStore(),
         clipboardHistoryMonitor: ClipboardHistoryMonitor? = nil,
         localDataDeletionService: LocalDataDeletionService = LocalDataDeletionService(),
+        memoryPolicyProvider: any MemoryPolicyProviding = UnmanagedMemoryPolicyProvider(),
         priorTaskContextStore: PriorTaskContextStore = PriorTaskContextStore(),
         taskUsageRecorder: TaskUsageRecorder = TaskUsageRecorder(),
         plannerProviderRegistry: PlannerProviderRegistry = .default,
@@ -548,11 +572,17 @@ final class AgentViewModel: ObservableObject {
         self.clipboardHistoryMonitor = clipboardHistoryMonitor
             ?? ClipboardHistoryMonitor(settingsStore: clipboardHistorySettingsStore)
         self.localDataDeletionService = localDataDeletionService
+        self.memoryPolicyProvider = memoryPolicyProvider
+        self.memorySettingsStore = MemorySettingsStore(userDefaults: userDefaults)
         self.priorTaskContextStore = priorTaskContextStore
         self.taskUsageRecorder = taskUsageRecorder
         self.plannerProviderRegistry = plannerProviderRegistry
         self.plannerSelection = plannerSelection
         self.whitelist = whitelist
+        // Loaded here rather than on the Memory page's `onAppear`, because the switches gate
+        // *recording*, not a view: an executor built before anything opened Command Center would
+        // otherwise run with the defaults instead of with what the user chose.
+        memorySettings = memorySettingsStore.load(policy: memoryPolicyProvider.currentPolicy())
     }
 
     var hasAPIKey: Bool {
@@ -2065,6 +2095,64 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
+    /// Whether this run may write new memory into `store` — both switches, one question.
+    ///
+    /// **The conjunction is written once, here, and once in `CapabilityExecutionContext`** (SONNY-208).
+    /// `TaskRecordingPolicy` answers "does this one run leave traces"; `MemoryRecordingSettings`
+    /// answers "may Sonny remember this kind of thing at all". Every writing site on this view model
+    /// asks through this, so a site that consulted only one of the two would be a site that ignored
+    /// a switch the user had flipped — which is precisely how the per-store guard this replaces
+    /// would have gone quietly wrong.
+    func allowsRecording(to store: LocalStore) -> Bool {
+        taskRecordingPolicy.allowsWriting(to: store) && memorySettings.allowsRecording(to: store)
+    }
+
+    /// Whether a **scheduled** run may write new memory into `store` — the standing switches only.
+    ///
+    /// **Not `allowsRecording(to:)`, and the difference is a bug in each direction** (PR #98 review,
+    /// F1/F2). The two switches have different scopes and a scheduled run is where that stops being
+    /// academic:
+    ///
+    /// - `TaskRecordingPolicy` is a *per-task composer* control. A scheduled run passes through no
+    ///   composer, so there is nothing for it to answer — and it is not merely absent, it is
+    ///   actively wrong to read. **The reachable window is the ordinary one, before any dispatch**
+    ///   (corrected by PR #98's round-4 pass, F2): `dontSaveButton` renders only when
+    ///   `!isTaskInFlight` (`FloatingWidgetView.swift`), so "Don't save this task" is a *pre*-dispatch
+    ///   toggle — the user flips it on while composing and has not pressed Send. `isRunning` is
+    ///   false, `approvalRequest` is nil and `clarificationQuestion` is nil, so all three of
+    ///   `checkScheduledRoutines`' guards pass, a routine fires, and reading the policy here would
+    ///   silently strip that routine's traces because of a switch set for a command that has not
+    ///   been sent. That is the same class of defect PR #67's F2 fixed by passing `.record`
+    ///   explicitly, and calling `allowsRecording(to:)` here would reintroduce it.
+    ///
+    ///   **The earlier telling of this named the clarification pause and was false at the SHA it was
+    ///   written at**: `checkScheduledRoutines` guards on three terms, not two — PR #80's F1 added
+    ///   `clarificationQuestion == nil`, closing exactly the window that sentence cited, forty lines
+    ///   below its own documentation. Recorded rather than quietly swapped, because a correct
+    ///   decision resting on a false premise is one refactor away from being reverted: a reader who
+    ///   checks the cited mechanism finds it does not exist and reasonably concludes the deviation
+    ///   is obsolete.
+    ///
+    ///   **And there is no case where a scheduled run should honour the term at all**, which is the
+    ///   half that does not depend on any window being reachable: there is no composer in that path,
+    ///   so a user has no way to ask for a routine's suppression. Honouring it could only ever apply
+    ///   a switch set for a different task — which the toggle's own label, "this task", rules out.
+    /// - `MemoryRecordingSettings` is a *standing preference*. It applies to a scheduled run exactly
+    ///   as it does to a typed one — `makeExecutor` has said so in a comment since this branch
+    ///   started, and everything routed through the executor honours it. The three writes the view
+    ///   model performs itself did not, which is what this exists to fix.
+    ///
+    /// So the rule is: the scheduled path opts out of the composer switch and never out of the
+    /// memory switches. **One live exception, named rather than left to be re-found:**
+    /// `visionSessionJournalStoreForThisRun` still reads `allowsRecording(to:)` and is handed to a
+    /// scheduled run's executor; it fails closed and unattended vision cannot execute, so it stays
+    /// as it is. Its own doc carries the argument. Same shape as the foreground guards at `recordTaskHistoryIfTerminal` and
+    /// `recordTaskPlanDetail`, with the one term that cannot apply removed rather than the whole
+    /// conjunction copied.
+    func allowsScheduledRecording(to store: LocalStore) -> Bool {
+        memorySettings.allowsRecording(to: store)
+    }
+
     /// The vision journal this run may write to, or `nil` when it may not.
     ///
     /// Internal and separated from its one call site for the same reason
@@ -2080,8 +2168,21 @@ final class AgentViewModel: ObservableObject {
     /// `LocalStoreClassification` calls the most sensitive of the eleven; it had no seam test, no
     /// mutation and no entry under Known limits, while the other traces were each closed or
     /// recorded.
+    /// **The one seam a scheduled run reaches that still reads the composer switch, stated because
+    /// it is a real exception to a rule written as a global one** (PR #98 round-4 pass, N2).
+    /// `allowsScheduledRecording(to:)`'s doc says the scheduled path opts out of `taskRecordingPolicy`;
+    /// this seam is handed over by `makeLiveVisionEnvironment()`, which `makeExecutor` builds for
+    /// every run including a scheduled one, and it uses `allowsRecording(to:)`.
+    ///
+    /// Left as it is, on both counts that matter. It **fails closed** — a stale `.suppressTraces`
+    /// withholds the journal rather than writing one — and it is **unreachable**: unattended vision
+    /// is refused three independent ways (`.visionSession` is a forbidden routine step, the explicit
+    /// belt in `performScheduledRun` checks the routine's steps, its nested steps and the prepared
+    /// plan, and the fixed `.approved(.tier2)` ceiling cannot satisfy a tier-3 assessment). Changing
+    /// it would be a change to the foreground seam every other caller shares, for a path that cannot
+    /// execute, in the safe direction already.
     var visionSessionJournalStoreForThisRun: VisionSessionJournalStore? {
-        taskRecordingPolicy.allowsWriting(to: .visionSessionJournal) ? visionSessionJournalStore : nil
+        allowsRecording(to: .visionSessionJournal) ? visionSessionJournalStore : nil
     }
 
     /// The recent-artifacts store this run may write to, or `nil` when it may not.
@@ -2096,7 +2197,18 @@ final class AgentViewModel: ObservableObject {
     /// that generates an artifact, so a suppressed run leaves this store untouched either way and
     /// the acceptance test passes for the wrong reason. A mutation battery caught exactly that.
     var recentArtifactStoreForThisRun: RecentArtifactStore? {
-        taskRecordingPolicy.allowsWriting(to: .recentArtifacts) ? recentArtifactStore : nil
+        allowsRecording(to: .recentArtifacts) ? recentArtifactStore : nil
+    }
+
+    /// The recent-artifacts store a **scheduled** run may write to, or `nil` when it may not.
+    ///
+    /// The same withhold-the-store seam as above — `AgentRunner` treats a `nil` store as "record
+    /// nothing" — reading `allowsScheduledRecording(to:)` instead, for the reason written there.
+    /// Internal, and asserted directly by the suite, for the reason `recentArtifactStoreForThisRun`
+    /// gives: no command the fixtures can run generates an artifact, so an end-to-end assertion
+    /// would pass whether or not the switch were consulted.
+    var recentArtifactStoreForScheduledRun: RecentArtifactStore? {
+        allowsScheduledRecording(to: .recentArtifacts) ? recentArtifactStore : nil
     }
 
     /// Puts "Don't save this task" back to off and lets clipboard history resume — but only once the
@@ -2301,6 +2413,310 @@ final class AgentViewModel: ObservableObject {
             localDataDeletionStatusMessage = message
             setError(message)
         }
+    }
+
+    // MARK: - Memory (SONNY-208)
+
+    /// Reloads the four memory types that have no list of their own anywhere else in the app.
+    ///
+    /// Routines, workspaces and task history are deliberately absent: they are already published by
+    /// `refreshSavedItems()` and `refreshTaskHistory()`, and a second loader for the same file is a
+    /// second answer that can disagree with the first.
+    func refreshMemoryEntries() {
+        savedSnippets = loadMemoryEntries(.snippets) {
+            try snippetStore.loadAll().values
+                .sorted { $0.trigger.localizedCaseInsensitiveCompare($1.trigger) == .orderedAscending }
+        }
+        recentArtifacts = loadMemoryEntries(.recentArtifacts) {
+            try recentArtifactStore.loadAll()
+        }
+        clipboardHistoryItems = loadMemoryEntries(.clipboardHistoryItems) {
+            try clipboardHistoryMonitor.historyStore.loadAll()
+        }
+        approvedApps = loadMemoryEntries(.approvedApps) {
+            try approvedAppStore.loadAll()
+        }
+    }
+
+    /// Empties the list on failure rather than leaving it stale, the same choice
+    /// `refreshTaskHistory` makes: a list still showing entries beside a notice saying the file will
+    /// not decrypt is the surface contradicting itself.
+    private func loadMemoryEntries<Entry>(
+        _ source: LocalStorageLoadFailureSource,
+        load: () throws -> [Entry]
+    ) -> [Entry] {
+        do {
+            let entries = try load()
+            clearLocalStorageLoadFailure(source)
+            return entries
+        } catch {
+            recordLocalStorageLoadFailure(source, error: error)
+            return []
+        }
+    }
+
+    /// Re-reads the enterprise policy and the user's switches. Called whenever the Memory section
+    /// appears, so a policy that changed under a running app is picked up without a relaunch.
+    func refreshMemorySettings() {
+        memorySettings = memorySettingsStore.load(policy: memoryPolicyProvider.currentPolicy())
+    }
+
+    /// How many things Sonny currently remembers of this kind.
+    ///
+    /// Reads the same published arrays the rest of the app renders, so a count and the list it
+    /// describes cannot disagree. Task history counts rows, not the plan details and screen records
+    /// hanging off them — those are parts of a row rather than things of their own.
+    func memoryEntryCount(for category: MemoryCategory) -> Int {
+        switch category {
+        case .routines:
+            return savedRoutines.count
+        case .workspaces:
+            return savedWorkspaces.count
+        case .taskHistory:
+            return taskHistoryRecords.count
+        case .recentArtifacts:
+            return recentArtifacts.count
+        case .clipboardHistory:
+            return clipboardHistoryItems.count
+        case .snippets:
+            return savedSnippets.count
+        case .approvedApps:
+            return approvedApps.count
+        }
+    }
+
+    /// Whether new entries of this kind are being recorded right now — the *effective* answer, with
+    /// the master switch and the enterprise policy already folded in.
+    ///
+    /// Effective rather than "what the user chose for this row", deliberately: with memory off
+    /// wholesale, a per-type switch reading "on" beside a type that records nothing is the surface
+    /// telling the user something untrue. Their per-type choices are not lost — they stay in
+    /// `MemorySettingsStore` and come back the moment the master switch does.
+    func isMemoryCategoryEnabled(_ category: MemoryCategory) -> Bool {
+        guard memorySettings.allowsRecording(in: category) else {
+            return false
+        }
+        // Clipboard history's own switch, which predates the Memory section and stays the one
+        // source of truth for it.
+        return category == .clipboardHistory ? clipboardHistoryEnabled : true
+    }
+
+    /// The master switch.
+    ///
+    /// Refuses while an administrator has taken it away, rather than writing a preference the policy
+    /// would override on the next read — a stored value nothing can honour is a switch that springs
+    /// back, which reads as a broken control.
+    func setMemoryEnabled(_ isEnabled: Bool) {
+        guard !memorySettings.isDisabledByPolicy else {
+            return
+        }
+        memorySettingsStore.setMemoryEnabled(isEnabled)
+        refreshMemorySettings()
+        // Clipboard recording is a *timer*, not a guard consulted at write time, so turning memory
+        // off has to actually stop it — and turning memory back on has to restore it from the
+        // clipboard's own setting rather than start it unconditionally.
+        refreshClipboardHistoryNotice()
+    }
+
+    /// One type's switch. The only writer of a per-type memory preference.
+    ///
+    /// Clipboard history routes to the setting it already had, for the reason on
+    /// `MemoryCategory.clipboardHistory`: a second flag over the same behaviour is how a surface
+    /// ends up saying "on" while nothing is recording. The side effect that carries — the first-run
+    /// notice counts as answered — is correct rather than incidental: choosing here *is* answering
+    /// it.
+    func setMemoryCategoryEnabled(_ category: MemoryCategory, to isEnabled: Bool) {
+        guard !memorySettings.isDisabledByPolicy else {
+            return
+        }
+        guard category != .clipboardHistory else {
+            clipboardHistoryEnabled = isEnabled
+            applyClipboardHistoryNoticeChoice()
+            return
+        }
+        memorySettingsStore.setCategoryEnabled(isEnabled, for: category)
+        refreshMemorySettings()
+    }
+
+    /// Forgets everything of one kind, leaving every other kind untouched.
+    ///
+    /// **`LocalDataDeletionService` again, with a narrower list** — the same service Settings' whole
+    /// wipe uses, constructed over this category's files instead of all eleven. That buys the
+    /// attempt-every-file-and-report-what-survived behaviour a privacy delete needs, rather than a
+    /// second deletion routine that stops at the first error.
+    ///
+    /// **The URLs come from the injected stores**, not from `LocalStore.fileURL(fileManager:)`, which
+    /// resolves the *default* location — a test fixture pointing its stores at a temporary directory
+    /// would otherwise delete the developer's real files.
+    func deleteMemory(in category: MemoryCategory) {
+        // `!isAwaitingApproval` as well as `!isRunning`, matching `deleteRoutine` rather than
+        // `deleteLocalData`: a run paused at its approval is a run about to write, and this deletes
+        // the file it is about to write into. `deleteLocalData`'s narrower guard is not the
+        // precedent to copy here — it is the whole-wipe path, which the user reaches from Settings
+        // rather than from beside a live task.
+        guard !isRunning, !isAwaitingApproval else {
+            setError("Finish or stop the current task before deleting memory.")
+            return
+        }
+
+        if category == .clipboardHistory {
+            // The poll timer holds no file handle, but it can write a new entry between the delete
+            // and the refresh — which would leave the list non-empty right after a delete reported
+            // success.
+            stopClipboardHistoryMonitoring()
+        }
+
+        let service = LocalDataDeletionService(fileURLs: memoryStoreFileURLs(for: category))
+        do {
+            let result = try service.deleteAllLocalData()
+            let noun = result.deletedFileCount == 1 ? "file" : "files"
+            memoryDeletionStatusMessage = "Deleted \(category.title.lowercased()) — \(result.deletedFileCount) \(noun)."
+            errorMessage = nil
+        } catch {
+            memoryDeletionStatusMessage = "Could not delete \(category.title.lowercased()): \(error.localizedDescription)"
+        }
+
+        refreshMemorySurfaces()
+    }
+
+    /// Every file this category's contents live in, resolved through the stores this view model was
+    /// actually constructed with.
+    ///
+    /// The inner switch is exhaustive over `LocalStore` with no `default`, so a twelfth store cannot
+    /// be added without someone deciding which injected instance answers for it here.
+    private func memoryStoreFileURLs(for category: MemoryCategory) -> [URL] {
+        category.stores.map { store in
+            switch store {
+            case .routines:
+                return routineStore.fileURL
+            case .workspaces:
+                return workspaceStore.fileURL
+            case .taskHistory:
+                return taskHistoryStore.fileURL
+            case .taskPlanDetails:
+                return taskPlanDetailStore.fileURL
+            case .visionSessionJournal:
+                return visionSessionJournalStore.fileURL
+            case .shortcutRunHistory:
+                return shortcutRunHistoryStore.fileURL
+            case .recentArtifacts:
+                return recentArtifactStore.fileURL
+            case .clipboardHistory:
+                return clipboardHistoryMonitor.historyStore.fileURL
+            case .snippets:
+                return snippetStore.fileURL
+            case .approvedApps:
+                return approvedAppStore.fileURL
+            case .clipboardHistorySettings:
+                return clipboardHistorySettingsStore.fileURL
+            }
+        }
+    }
+
+    /// Every list the Memory section renders, reloaded together.
+    ///
+    /// One function rather than four calls at each site: a delete that refreshed three of them left
+    /// the fourth showing entries that no longer exist, and which three a given delete touches is
+    /// exactly the kind of thing a caller gets wrong.
+    private func refreshMemorySurfaces() {
+        refreshSavedItems()
+        refreshTaskHistory()
+        refreshMemoryEntries()
+        refreshClipboardHistoryNotice()
+    }
+
+    /// Forgets one snippet.
+    func deleteSnippet(_ snippet: StoredSnippet) {
+        performMemoryEntryDelete(named: "snippet") {
+            try snippetStore.delete(trigger: snippet.trigger)
+        }
+    }
+
+    /// Forgets one recorded file. The file itself is untouched — this store only ever held a note.
+    func deleteRecentArtifact(_ artifact: RecentArtifact) {
+        performMemoryEntryDelete(named: "recent artifact") {
+            try recentArtifactStore.delete(id: artifact.id)
+        }
+    }
+
+    /// Forgets one copied item.
+    func deleteClipboardHistoryItem(_ item: ClipboardHistoryItem) {
+        performMemoryEntryDelete(named: "clipboard item") {
+            try clipboardHistoryMonitor.historyStore.delete(id: item.id)
+        }
+    }
+
+    /// Revokes one app's control grant. Sonny asks about that app again the next time it needs it.
+    func forgetApprovedApp(_ app: ApprovedApp) {
+        performMemoryEntryDelete(named: "allowed app") {
+            try approvedAppStore.forget(bundleIdentifier: app.bundleIdentifier)
+        }
+    }
+
+    /// The newest thing Sonny remembers of this kind, or `nil` when the type carries no timestamp.
+    ///
+    /// Routines and workspaces answer `nil` on purpose rather than reaching for a run date: neither
+    /// record carries a created-at field, and `recentRunDates` would make the row's "newest" line
+    /// mean something different from every other row's.
+    func newestMemoryEntryDate(for category: MemoryCategory) -> Date? {
+        switch category {
+        case .routines, .workspaces:
+            return nil
+        case .taskHistory:
+            return taskHistoryRecords.map(\.completedAt).max()
+        case .recentArtifacts:
+            return recentArtifacts.map(\.recordedAt).max()
+        case .clipboardHistory:
+            return clipboardHistoryItems.map(\.copiedAt).max()
+        case .snippets:
+            return savedSnippets.map(\.updatedAt).max()
+        case .approvedApps:
+            return approvedApps.map(\.approvedAt).max()
+        }
+    }
+
+    /// Deletes the entry at `index` of the list the Memory sheet rendered for `category`.
+    ///
+    /// **By position into the same published array the sheet enumerated**, so the row and the record
+    /// it removes cannot come apart — the alternative, passing an identifier back, would let a
+    /// refresh between render and tap resolve to a different record with the same id. Out-of-range
+    /// is a no-op rather than a crash: the array can shrink under a sheet that is still on screen.
+    ///
+    /// The three categories with pages of their own are not handled here and never reach it — the
+    /// sheet only opens for the other four, and their own deletes (`deleteRoutine`,
+    /// `deleteWorkspace`, `deleteTask`) already exist on those pages.
+    func deleteMemoryEntry(in category: MemoryCategory, at index: Int) {
+        switch category {
+        case .snippets:
+            guard savedSnippets.indices.contains(index) else { return }
+            deleteSnippet(savedSnippets[index])
+        case .recentArtifacts:
+            guard recentArtifacts.indices.contains(index) else { return }
+            deleteRecentArtifact(recentArtifacts[index])
+        case .clipboardHistory:
+            guard clipboardHistoryItems.indices.contains(index) else { return }
+            deleteClipboardHistoryItem(clipboardHistoryItems[index])
+        case .approvedApps:
+            guard approvedApps.indices.contains(index) else { return }
+            forgetApprovedApp(approvedApps[index])
+        case .routines, .workspaces, .taskHistory:
+            return
+        }
+    }
+
+    /// The four per-entry deletes' shared body.
+    ///
+    /// `errorMessage`, not `localStorageNotice`, and the distinction is the one CLAUDE.md's
+    /// write-failure gotcha draws: the user pressed a control, and the thing they asked for did not
+    /// happen. A *task's* bookkeeping write failing is the other case and goes to the notice.
+    private func performMemoryEntryDelete(named noun: String, delete: () throws -> Void) {
+        do {
+            try delete()
+        } catch {
+            setError("Could not delete this \(noun): \(error.localizedDescription)")
+            return
+        }
+        refreshMemoryEntries()
     }
 
     /// Creates, replaces, or removes a routine's schedule. Passing nil unschedules it.
@@ -2698,15 +3114,33 @@ final class AgentViewModel: ObservableObject {
         pendingCommandForPriorTaskContext = nil
         pendingTaskHistoryStartedAt = nil
         preserveUsageForNextStart = false
+        // The Memory section's own per-type delete message describes an action the whole-data wipe
+        // has just superseded — "Deleted snippets — 1 file." beside a page where everything is now
+        // gone. `deleteLocalData` writes its own message into `localDataDeletionStatusMessage`
+        // straight after this returns, so the two never contradict each other.
+        memoryDeletionStatusMessage = nil
         priorTaskContextStore.clear()
         taskUsageRecorder.reset()
         logStore.reset()
         refreshSavedItems()
         refreshTaskHistory()
+        // The four lists the Memory section renders. Without this the wipe empties their files and
+        // leaves the page showing every entry it just erased — the same staleness the three calls
+        // around it exist to prevent, on the surface that shows the most of it.
+        refreshMemoryEntries()
         refreshClipboardHistoryNotice()
     }
 
     private func startClipboardHistoryMonitoring() {
+        // The master switch and the enterprise policy, asked at the one place monitoring can begin
+        // — `refreshClipboardHistoryNotice`, `applyClipboardHistoryNoticeChoice` and
+        // `finishRecordingPolicyIfSettled` all start it through here, so one guard covers three
+        // callers and a fourth cannot forget it. The clipboard's *own* switch is checked by the
+        // two callers that read settings, and again inside `poll()`, which fails closed.
+        guard memorySettings.allowsRecording(in: .clipboardHistory) else {
+            stopClipboardHistoryMonitoring()
+            return
+        }
         guard clipboardHistoryTimer == nil else {
             return
         }
@@ -2867,6 +3301,11 @@ final class AgentViewModel: ObservableObject {
         AgentActionExecutor(
             // A fresh executor per run, so this cannot leak into the next task.
             recordingPolicy: recordingPolicy ?? taskRecordingPolicy,
+            // Never overridable by the caller, unlike `recordingPolicy` directly above: the
+            // scheduled path deliberately passes `.record` because an unattended run cannot have
+            // had "Don't save this task" pressed for it, but the memory switches are the user's
+            // standing answer and apply to a scheduled run exactly as they do to a typed one.
+            memoryRecording: memorySettings,
             whitelist: whitelist,
             zipArchiver: zipArchiver,
             documentConverter: documentConverter,
@@ -3263,6 +3702,21 @@ final class AgentViewModel: ObservableObject {
     /// today, because the deny list refuses at three doors above any session, but the reachability
     /// argument lives in another file and this makes the answer structural instead (PR #88, F5).
     func rememberAppControlGrant(bundleIdentifier: String, displayName: String) -> Bool {
+        // **Allowed-apps memory switched off refuses the grant, and the session stops** (SONNY-208).
+        //
+        // `false` here means the caller ends the session — `VisionSessionRunner.resolveAppControl`
+        // returns `.appControlNotRemembered`, whose sentence ("Sonny stopped because it could not
+        // save that you allowed it to control X") is literally what has happened. Nothing weaker was
+        // available without changing what `false` means to that gate, and its contract is the
+        // fail-closed one: never run on a grant that does not exist.
+        //
+        // **This affects new apps only, which is exactly the switch's promise.** An app already on
+        // the list settles at `.allowed` and returns before this method is reached, so existing
+        // grants keep working until the user deletes them. Turning the type off stops Sonny keeping
+        // *new* ones, and screen control on a not-yet-allowed app is what that costs.
+        guard allowsRecording(to: .approvedApps) else {
+            return false
+        }
         do {
             guard try approvedAppStore.approve(
                 bundleIdentifier: bundleIdentifier,
@@ -3573,7 +4027,7 @@ final class AgentViewModel: ObservableObject {
         // Task history is a `.trace` store, so a suppressed run writes no row at all. Note the
         // consequence for a screen-control run: with no row written there is nothing for a deleted
         // journal to dangle from, so suppression creates no dangling link.
-        guard taskRecordingPolicy.allowsWriting(to: .taskHistory) else {
+        guard allowsRecording(to: .taskHistory) else {
             return nil
         }
 
@@ -3671,7 +4125,7 @@ final class AgentViewModel: ObservableObject {
         // explicitly rather than inferred from having got past the row's own guard: the reach of
         // "Don't save this task" is a rule read off `LocalStore.kind`, and a store that relied on a
         // sibling's guard would be the one store the rule did not actually cover.
-        guard taskRecordingPolicy.allowsWriting(to: .taskPlanDetails) else {
+        guard allowsRecording(to: .taskPlanDetails) else {
             return
         }
 
@@ -3841,23 +4295,36 @@ final class AgentViewModel: ObservableObject {
         do {
             // `.record` explicitly, never this run's policy (PR #67 review, F2). A scheduled routine is
             // never suppressed — it passes through no composer, so there is no switch to have been
-            // left on. Inheriting `taskRecordingPolicy` was wrong in one reachable window: a
-            // foreground run paused at a *clarification* leaves `isRunning` false and the policy
-            // still `.suppressTraces`, and `checkScheduledRoutines` only guards on `isRunning` and
-            // `isAwaitingApproval` — so a routine firing then lost its Shortcut run history while
+            // left on. Inheriting `taskRecordingPolicy` lost a routine's Shortcut run history while
             // still writing its task-history row, which is a different writer. Stated here the same
-            // way `recentArtifactStore` already is, rather than left to the policy happening to be
-            // right.
+            // way `recentArtifactStoreForScheduledRun` already is, rather than left to the policy
+            // happening to be right.
+            //
+            // **The window that made it reachable is not the one this comment used to name**
+            // (PR #98 round 4, F2). It said a foreground run paused at a *clarification*, and that
+            // pause has been closed at this door since PR #80's F1 added `clarificationQuestion ==
+            // nil` as `checkScheduledRoutines`' third guard term. The live window is the ordinary
+            // one, before any dispatch: "Don't save this task" is a pre-dispatch toggle
+            // (`dontSaveButton` renders only when `!isTaskInFlight`), so a user who flips it on
+            // while composing and has not pressed Send passes all three guards. Corrected rather
+            // than deleted, because the fix it justifies is still right and a reader who checks a
+            // dead mechanism concludes the fix is dead too. Full reasoning at
+            // `allowsScheduledRecording(to:)`.
             let executor = makeExecutor(recordingPolicy: .record)
             let runner = AgentRunner(
                 planner: InstantOnlyFallbackPlanner(),
                 executor: executor,
                 logStore: logStore,
-                // The real store, deliberately, not `recentArtifactStoreForThisRun`. Scheduled runs
-                // are never suppressed — the switch is a per-task control on the widget's composer
-                // and a scheduled run passes through no composer. Written out rather than left to
-                // the policy happening to be `.record` here.
-                recentArtifactStore: recentArtifactStore
+                // **`recentArtifactStoreForScheduledRun`, which is neither of the two obvious
+                // choices** (PR #98 review, F2). This line used to pass the raw store, on reasoning
+                // that was right about the composer switch and silent about the memory switches —
+                // so a scheduled routine that wrote a file recorded a note naming its full path with
+                // Memory switched off. `recentArtifactStoreForThisRun` is not the fix either: it
+                // folds in `taskRecordingPolicy`, which is exactly what must not be read here — see
+                // `allowsScheduledRecording(to:)` for why, and note that the reason is the
+                // pre-dispatch composer window rather than the clarification pause an earlier
+                // telling named (PR #98 round 4, F2).
+                recentArtifactStore: recentArtifactStoreForScheduledRun
             )
             self.runner = runner
             // The same plan a typed "run my X routine" produces — built directly rather than
@@ -4014,6 +4481,15 @@ final class AgentViewModel: ObservableObject {
         guard let command = scheduledRunDisplayCommand else {
             return
         }
+        // **The memory switches apply to a scheduled run exactly as to a typed one** (PR #98 review,
+        // F1). The foreground twin guards the identical write at `recordTaskHistoryIfTerminal`; this
+        // one guarded nothing, so a routine firing at 9am wrote a row into the encrypted store while
+        // the switch on screen read off — reproduced through `checkScheduledRoutines(now:)`. The
+        // term dropped relative to the foreground guard is `taskRecordingPolicy`, deliberately; see
+        // `allowsScheduledRecording(to:)` for why reading it here would be its own defect.
+        guard allowsScheduledRecording(to: .taskHistory) else {
+            return
+        }
         let record = CompletedTaskRecord(
             command: command,
             startedAt: startedAt,
@@ -4040,13 +4516,51 @@ final class AgentViewModel: ObservableObject {
             return
         }
 
+        recordScheduledTaskPlanDetail(for: record, plan: plan, evictedTaskIDs: evictedTaskIDs)
+
+        // Regardless of the plan write, because the row landed either way and the list has to agree
+        // with the file. The foreground path refreshes on the same rule — and this line is the whole
+        // reason the plan write moved into its own function below.
+        refreshTaskHistory()
+    }
+
+    /// The plan-detail half of a scheduled run's record, in its own function **so that its guard's
+    /// `return` cannot take `refreshTaskHistory()` with it** (PR #98 round-4 pass, F3).
+    ///
+    /// The guard used to be inline, where returning exited `recordScheduledTaskHistory` entirely and
+    /// skipped the refresh — leaving a row on disk that the Tasks list would not show until
+    /// something else refreshed it. That is verbatim the defect PR #89's review fixed on this same
+    /// pair of writes, and the foreground path has been shaped this way ever since precisely because
+    /// of it: `recordTaskPlanDetail` is a separate function so its own early return is local.
+    ///
+    /// **It was unreachable and that was not a reason to leave it.** Plan details and history rows
+    /// share the `.taskHistory` memory row today, so the guard can only fire in a world where the
+    /// row's guard already returned. But the guard is kept for the day `LocalStore.memoryCategory`
+    /// gives plan details a row of their own — and on that day the inline version became live and
+    /// silently re-introduced a fixed bug. A latent defect that arrives with a future refactor is
+    /// the one shape nobody is watching for.
+    private func recordScheduledTaskPlanDetail(
+        for record: CompletedTaskRecord,
+        plan: AgentPlan?,
+        evictedTaskIDs: [String]
+    ) {
+        // Classified `.trace`, and withheld by the same switch that withheld the row — asked
+        // explicitly rather than inferred from having got past the row's guard, exactly as the
+        // foreground `recordTaskPlanDetail` does and for the same reason: the reach of a suppression
+        // is a rule read off `LocalStore.kind`, and a store relying on a sibling's guard is the one
+        // store the rule does not actually cover.
+        //
+        // **The `taskRecordingPolicy` half stays absent, and that was always right** — a scheduled
+        // run passes through no composer, so there is no "Don't save this task" switch to have been
+        // left on, the same reasoning written beside `makeExecutor(recordingPolicy: .record)`.
+        // `recordTaskPlanDetail` is still not reused here for exactly that reason. What the earlier
+        // wording missed is that "no policy check" and "no check at all" are different sentences,
+        // and only the first one was true of the intent.
+        guard allowsScheduledRecording(to: .taskPlanDetails) else {
+            return
+        }
+
         do {
-            // No `taskRecordingPolicy` check on either write, and deliberately: a scheduled run
-            // passes through no composer, so there is no "Don't save this task" switch to have been
-            // left on — the same reasoning already written above beside `makeExecutor(recordingPolicy:
-            // .record)` and `recentArtifactStore`. `recordTaskPlanDetail` is not reused here for
-            // exactly that reason; it asks the policy, which is right for a foreground run and wrong
-            // for this one.
             if let plan, let taskID = record.id {
                 try taskPlanDetailStore.save(
                     StoredTaskPlanDetail(taskID: taskID, completedAt: record.completedAt, plan: plan),
@@ -4064,10 +4578,6 @@ final class AgentViewModel: ObservableObject {
                 "Sonny could not save what this scheduled run planned: \(error.localizedDescription)"
             )
         }
-
-        // Regardless of the plan write, because the row landed either way and the list has to agree
-        // with the file. The foreground path refreshes on the same rule.
-        refreshTaskHistory()
     }
 
     /// Switches a routine's schedule off after an approval refusal and says so, once.
@@ -4126,7 +4636,31 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
+    /// Appends the occurrence to the routine's own run history — the dates the Routines row's streak
+    /// badge is computed from.
+    ///
+    /// **Guarded, by the founder's decision of 2026-08-22** (PR #98 round-4 verification pass, F1).
+    /// This is the fourth write in the category the other three came from and the last one an
+    /// enumeration of the scheduled path found: with every memory switch off, a routine firing on
+    /// its schedule still appended a dated entry to `routines.json` — the file the Routines memory
+    /// row governs — visible to the user as a streak, with no control anywhere that stopped it.
+    ///
+    /// **Guarding it costs nothing operationally, which is what made the call cheap.** Nothing in
+    /// the scheduling path reads `recentRunDates`: the due-check runs off the routine's schedule and
+    /// the clock. The data is display-only, so the badge simply goes quiet while memory is off.
+    ///
+    /// The counter-argument is real and lost on consistency rather than on being wrong: a routine is
+    /// something the user deliberately created, so its run log arguably belongs to the routine
+    /// rather than being something Sonny recorded *about* them. But the same user, in the same
+    /// session, with the same switch off, would otherwise find three kinds of scheduled write silent
+    /// and a fourth still recording, with nothing to tell them apart. The deeper question — that
+    /// turning off Routines memory blocks *saving* a routine while still logging runs, which may be
+    /// backwards, since saving is the deliberate act and logging the passive one — is **SONNY-223**'s,
+    /// not this write's.
     private func recordScheduledRunInHistory(name: String, at occurrence: Date) {
+        guard allowsScheduledRecording(to: .routines) else {
+            return
+        }
         do {
             try routineStore.recordRun(routineNamed: name, at: occurrence)
         } catch {
