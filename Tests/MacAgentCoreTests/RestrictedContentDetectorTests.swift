@@ -397,7 +397,7 @@ struct RestrictedContentDetectorTests {
 
     /// The rule SONNY-245 replaced, reimplemented here so both can be run over the same page.
     ///
-    /// Copied from `PublicWebPageLoader.restrictedContentReason(in:)` as it stood at `961b9c2`. It
+    /// Copied from `PublicWebPageLoader.restrictedContentReason(in:)` as it stood at `98c50c8`. It
     /// lives in the test rather than in the source because its only remaining job is to fail.
     private func oldRuleReason(inHTML html: String) -> String? {
         let normalized = html

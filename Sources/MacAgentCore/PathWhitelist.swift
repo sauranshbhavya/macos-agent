@@ -347,7 +347,7 @@ public struct PathWhitelist: Sendable {
     /// on. That was wrong, and measurably so: the resolver handed back the path it had *reached*,
     /// which is the original minus 33 hops, and the kernel's budget then started again from there —
     /// chains of 34 to 63 links read as inside the whitelist and the bytes landed outside, a band
-    /// where `961b9c2` had been safe by accident because the kernel refused the un-shortened path.
+    /// where `98c50c8` had been safe by accident because the kernel refused the un-shortened path.
     /// Any finite number has that cliff; what removes it is refusing a resolution that did not
     /// converge instead of reporting one, which is what `resolvingExistingPrefix` does.
     ///
