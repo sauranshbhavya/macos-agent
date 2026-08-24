@@ -642,6 +642,7 @@ private func makeFollowUpFixture() throws -> FollowUpFixture {
         browserOpener: HermeticBrowserOpener(),
         appOpener: HermeticAppOpener(),
         fileOpener: HermeticFileOpener(),
+        finderRevealer: hermeticFinderRevealer,
         mediaOpener: HermeticMediaOpener(),
         runningAppSwitcher: HermeticRunningAppSwitcher(),
         shortcutInvoker: HermeticShortcutInvoker(),
