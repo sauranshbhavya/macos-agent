@@ -3897,6 +3897,8 @@ struct MemoryRowPresentation: Equatable {
             return "checklist"
         case .recentArtifacts:
             return "doc"
+        case .outputLocations:
+            return "folder"
         case .clipboardHistory:
             return "doc.on.clipboard"
         case .snippets:
@@ -3917,9 +3919,11 @@ struct MemoryRowPresentation: Equatable {
 /// **Where "edit" lives, per type, because it is deliberately not built here.** The ticket's rule is
 /// to reuse each store's existing management rather than reinvent it: Routines, Workspaces and Task
 /// history open the pages that already own their editors (the routine detail sheet, the workspace
-/// detail sheet, the task detail dialog), and the four types that never had a surface of their own
-/// open `MemoryEntriesSheet`, where editing a list of remembered items means removing entries from
-/// it. Nothing here duplicates an editor that exists.
+/// detail sheet, the task detail dialog), and the types that never had a surface of their own open
+/// `MemoryEntriesSheet`, where editing a list of remembered items means removing entries from it.
+/// Nothing here duplicates an editor that exists. (Written as "the four types" until SONNY-209 made
+/// it five; the count is gone rather than incremented, because `MemoryRowDestination.of` is what
+/// decides and a number here can only ever go stale again.)
 ///
 /// **The three shared Command Center surfaces are present because a page without them shows nothing
 /// for a run started from it** — `.claude/rules/macagent-ui-conventions.md`'s Approval visibility
@@ -4059,7 +4063,7 @@ private struct MemoryView: View {
             ScrollView {
                 LazyVStack(spacing: 0) {
                     // Grouped, like `RoutinesView`'s cadence sections and the Tasks list's status
-                    // groups — a flat stack of seven rows adopts the row idiom without the
+                    // groups — one flat stack of every row adopts the row idiom without the
                     // sectioning that comes with it everywhere else. The split is `LocalStoreKind`,
                     // the classification "Don't save this task" already decides suppression by, so
                     // it is the product's own reading rather than a taxonomy invented for this page.
@@ -4127,7 +4131,7 @@ private struct MemoryView: View {
 /// the one control of the four with no test behind it.
 ///
 /// The split is the reuse rule: a type whose entries already have a page goes to that page, and only
-/// the four that never had one open the sheet.
+/// the ones that never had one open the sheet.
 enum MemoryRowDestination: Equatable {
     case page(CommandCenterDestination)
     case entriesSheet
@@ -4140,7 +4144,7 @@ enum MemoryRowDestination: Equatable {
             return .page(.workspaces)
         case .taskHistory:
             return .page(.tasks)
-        case .recentArtifacts, .clipboardHistory, .snippets, .approvedApps:
+        case .recentArtifacts, .outputLocations, .clipboardHistory, .snippets, .approvedApps:
             return .entriesSheet
         }
     }
@@ -4262,6 +4266,8 @@ enum MemoryDeletionCopy {
             return "This deletes every task Sonny has recorded, what each one planned, and the records of what Sonny did on screen. Files those tasks created are not deleted."
         case .recentArtifacts:
             return "This deletes Sonny's list of files it recently worked with. The files themselves are not deleted."
+        case .outputLocations:
+            return "This deletes Sonny's record of which folders your files usually go into. The folders and everything in them are not deleted."
         case .clipboardHistory:
             return "This deletes every copied item Sonny has recorded. Your clipboard itself is not affected."
         case .snippets:
@@ -4277,6 +4283,8 @@ enum MemoryDeletionCopy {
         switch category {
         case .recentArtifacts:
             return "This removes Sonny's note about the file. The file itself is not deleted."
+        case .outputLocations:
+            return "This removes Sonny's note about the folder. The folder is not deleted."
         case .clipboardHistory:
             return "This removes the copied item from Sonny's history."
         case .snippets:
@@ -4284,8 +4292,8 @@ enum MemoryDeletionCopy {
         case .approvedApps:
             return "Sonny asks again the next time it needs to control this app."
         case .routines, .workspaces, .taskHistory:
-            // Unreachable: the sheet opens for the four types above only, and the other three are
-            // deleted from their own pages.
+            // Unreachable: the sheet opens for the cases above only, and these three are deleted
+            // from their own pages.
             return ""
         }
     }
@@ -4300,6 +4308,8 @@ enum MemoryDeletionCopy {
         switch category {
         case .recentArtifacts:
             return "Ask Sonny to create or convert a file, then it will appear here."
+        case .outputLocations:
+            return "Ask Sonny to save a file somewhere, and the folder will appear here."
         case .clipboardHistory:
             return "Copy something while clipboard history is on, and it will appear here."
         case .snippets:
@@ -4355,6 +4365,17 @@ struct MemoryEntryPresentation: Identifiable, Equatable {
                     detail: TaskHistoryDateFormatter.relativeTimestamp(for: item.copiedAt, now: now)
                 )
             }
+        case .outputLocations:
+            return viewModel.outputLocations.map { location in
+                MemoryEntryPresentation(
+                    // The folder path, not a UUID: a location is keyed by the folder it names and
+                    // the record carries no id of its own — the same choice `approvedApps` makes
+                    // directly below.
+                    id: location.path,
+                    title: location.name,
+                    detail: "\(location.displayPath) · \(location.useCount == 1 ? "1 time" : "\(location.useCount) times") · last \(TaskHistoryDateFormatter.relativeTimestamp(for: location.lastUsedAt, now: now))"
+                )
+            }
         case .approvedApps:
             return viewModel.approvedApps.map { app in
                 MemoryEntryPresentation(
@@ -4382,12 +4403,12 @@ struct MemoryEntryPresentation: Identifiable, Equatable {
     }
 }
 
-/// The view-and-edit surface for the four memory types that never had one.
+/// The view-and-edit surface for the memory types that never had one.
 ///
 /// Routines, workspaces and task history are deliberately absent — they open their own pages, whose
 /// editors this sheet would otherwise be a worse copy of. What "edit" means here is removing an
-/// entry: these four hold records rather than documents, and nothing in the product has ever
-/// offered to rewrite one.
+/// entry: the types it opens for hold records rather than documents, and nothing in the product has
+/// ever offered to rewrite one.
 private struct MemoryEntriesSheet: View {
     @ObservedObject var viewModel: AgentViewModel
     let category: MemoryCategory
@@ -5107,7 +5128,7 @@ private struct SettingsDataPage: View {
                         // next to the label made the row read as too bold/heavy (2026-07-18).
                         SettingsControlLabel(
                             title: "Delete Sonny local data",
-                            detail: "Saved routines, workspaces, clipboard history, snippets, recent artifacts, Shortcut run history, task history, records of what Sonny did on screen, and clipboard settings."
+                            detail: "Saved routines, workspaces, clipboard history, snippets, recent artifacts, common output locations, Shortcut run history, task history, records of what Sonny did on screen, and clipboard settings."
                         )
                     } trailing: {
                         Button {

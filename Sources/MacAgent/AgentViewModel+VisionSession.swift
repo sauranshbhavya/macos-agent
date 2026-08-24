@@ -422,6 +422,9 @@ extension AgentViewModel: VisionSessionInteracting {
                     if let artifactFailure = runner.lastRecentArtifactFailure {
                         recordLocalStorageWriteFailure(artifactFailure)
                     }
+                    if let outputLocationFailure = runner.lastOutputLocationFailure {
+                        recordLocalStorageWriteFailure(outputLocationFailure)
+                    }
                     return .completed(summary: result.summary)
                 } catch RiskApprovalError.approvalRequired(let refreshed) {
                     guard let approved = try await requestVisionActionApproval(refreshed) else {
