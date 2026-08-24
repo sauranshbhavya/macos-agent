@@ -357,6 +357,7 @@ struct VisionSessionRunTests {
             snippetStore: SnippetStore(fileURL: root.appendingPathComponent("snippets.json")),
             recentArtifactStore: RecentArtifactStore(fileURL: root.appendingPathComponent("artifacts.json")),
             shortcutCatalog: NoShortcuts(),
+            finderRevealer: hermeticFinderRevealer,
             shortcutRunHistoryStore: ShortcutRunHistoryStore(fileURL: root.appendingPathComponent("shortcut-history.json")),
             taskHistoryStore: taskHistoryStore,
             taskPlanDetailStore: taskPlanDetailStore,

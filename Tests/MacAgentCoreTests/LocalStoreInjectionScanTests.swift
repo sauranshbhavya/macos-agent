@@ -105,7 +105,18 @@ struct LocalStoreInjectionScanTests {
     /// `localDataDeletionService` is worse than either: its default is the real file list and the
     /// service *deletes* what it is given, so a fixture that let it default and then exercised the
     /// wipe would have erased the developer's data rather than corrupted it.
-    static let otherRequiredParameters = ["clipboardHistoryMonitor", "localDataDeletionService"]
+    ///
+    /// `finderRevealer` is the third, and it is the one that shows this list is about a *shape*
+    /// rather than about stores (SONNY-239). It touches no file at all — its live implementation is
+    /// `NSWorkspace.activateFileViewerSelecting`, so the worst a fixture that let it default could
+    /// do is steal focus and open Finder windows in the middle of a suite run. It landed defaulted,
+    /// which is the whole argument against defaults arriving one parameter at a time: "a call site
+    /// that predates the parameter cannot know to pass it" does not care what the parameter is for.
+    static let otherRequiredParameters = [
+        "clipboardHistoryMonitor",
+        "localDataDeletionService",
+        "finderRevealer"
+    ]
 
     /// The real-store factory's name, **assembled at run time so the literal never appears in this
     /// file**, which the sweep below reads like any other test source. `TestSourceTree.codeLines`
@@ -159,8 +170,12 @@ struct LocalStoreInjectionScanTests {
         // nothing else in this file mentions the monitor or the deletion service, so the two
         // parameters most easily re-defaulted were checked by a list and by nothing that checked the
         // list.
-        #expect(checkedLabels.count == expectedLabels.count + 2)
-        #expect(checkedLabels.isSuperset(of: ["clipboardHistoryMonitor", "localDataDeletionService"]))
+        #expect(checkedLabels.count == expectedLabels.count + Self.otherRequiredParameters.count)
+        #expect(
+            checkedLabels.isSuperset(
+                of: ["clipboardHistoryMonitor", "localDataDeletionService", "finderRevealer"]
+            )
+        )
     }
 
     /// The premise the rule above rests on: a store built with no `fileURL` really does land in the
@@ -352,6 +367,50 @@ struct LocalStoreInjectionScanTests {
         return problems
     }
 
+    /// **The splitter, run over held samples rather than only over the real signature.**
+    ///
+    /// Written when a closure-typed parameter broke it (SONNY-239's rebase): `@escaping ([URL]) ->
+    /// Void` decremented the bracket depth at the arrow, so the real signature parsed as 11
+    /// parameters and eleven required labels vanished. The premise check caught that, but a check
+    /// that only fires against the live tree cannot say *which* syntax it handles — so the cases are
+    /// held here, where a future parameter type can be added to the list before it is added to the
+    /// signature.
+    @Test
+    func theParameterSplitterSurvivesAClosureTypedParameter() {
+        // The case that broke it, minimal: an arrow between two ordinary parameters.
+        let arrow = LocalStoreInjectionScanTests.splitTopLevel(
+            Substring("a: Int, b: @escaping ([URL]) -> Void, c: String")
+        )
+        #expect(arrow.count == 3, "the arrow swallowed the commas after it: \(arrow)")
+        #expect(arrow.map { $0.trimmingCharacters(in: .whitespaces) }.first == "a: Int")
+        #expect(arrow.map { $0.trimmingCharacters(in: .whitespaces) }.last == "c: String")
+
+        // Generics still bracket, so a comma inside one is not a split.
+        let generic = LocalStoreInjectionScanTests.splitTopLevel(
+            Substring("a: Dictionary<String, Int>, b: Int")
+        )
+        #expect(generic.count == 2, "a generic's comma split the list: \(generic)")
+
+        // A tuple return, which has both an arrow and a bracketed comma after it.
+        let tuple = LocalStoreInjectionScanTests.splitTopLevel(
+            Substring("a: () -> (Int, Int), b: Int")
+        )
+        #expect(tuple.count == 2, "\(tuple)")
+
+        // Nested closures, where the arrow appears inside a bracket as well as outside one.
+        let nested = LocalStoreInjectionScanTests.splitTopLevel(
+            Substring("a: (@escaping (Int) -> Void) -> Void, b: Int")
+        )
+        #expect(nested.count == 2, "\(nested)")
+
+        // And the defaulted form, since that is what the loop above reads afterwards.
+        let defaulted = LocalStoreInjectionScanTests.splitTopLevel(
+            Substring("a: @escaping ([URL]) -> Void = { _ in }, b: Int")
+        )
+        #expect(defaulted.count == 2, "\(defaulted)")
+        #expect(LocalStoreInjectionScanTests.containsTopLevelDefaultForTests(defaulted[0]))
+    }
+
     /// The rule run over held text: the tree as it should be, and each way it can go wrong.
     @Test
     func theRealStoreLocationRuleFlagsASecondFactoryAndAThirdFile() {
@@ -455,6 +514,40 @@ struct LocalStoreInjectionScanTests {
                 """
             )
         }
+    }
+
+    /// **The one construction really does hand the shipping app the live Finder reveal.**
+    ///
+    /// Written because a mutant that replaced it with `{ _ in }` was reported killed by exactly one
+    /// test — and that test was `asyncProcessRunnerCancelsRunningProcess`, SONNY-224's load flake.
+    /// By this repository's own discriminator that is a survivor, not a kill (SONNY-239's rebase
+    /// onto this branch). The line cannot be reached from a test: `atItsRealStoreLocations()` builds
+    /// the real `~/Library` stores, and `noTestSourceAsksForTheRealStoreLocations` forbids calling
+    /// it — so a scan is the only instrument left, which is the same answer
+    /// `onlyMainAsksForTheRealStoreLocations` reaches for the same reason.
+    ///
+    /// **The same gap covers the thirteen store constructions beside it and is not closed here.**
+    /// `routineStore: RoutineStore()` could become a temp store with the whole suite green, for
+    /// exactly this reason. Generalising this check to every argument of that one call is available
+    /// and belongs to whoever owns that suite; recording the gap is better than quietly benefiting
+    /// from the fact that nobody has mutated those lines yet.
+    @Test
+    func theRealStoreFactoryHandsTheAppTheLiveFinderReveal() throws {
+        let source = try String(contentsOf: Self.viewModelSource, encoding: .utf8)
+        let code = TestSourceTree.codeLines(of: source).map(\.text).joined(separator: "\n")
+
+        let calls = Self.constructions(of: "AgentViewModel", in: code)
+        #expect(calls.count == 1, "AgentViewModel.swift constructs the type \(calls.count) times")
+        let factoryCall = try #require(calls.first)
+
+        // The live implementation, named in the argument the app actually passes.
+        #expect(
+            factoryCall.contains("activateFileViewerSelecting"),
+            """
+            \(Self.realStoreFactoryName)() no longer hands the app a real Finder reveal, so the product's Reveal in Finder control would do nothing and no test could see it — the line is unreachable from a test by construction. The name is interpolated rather than spelled, because this file is itself swept for that literal.
+            """
+        )
+        #expect(factoryCall.contains("finderRevealer:"), "the argument is not passed by that label any more")
     }
 
     /// The same door from the other side: no test may ask for the real locations either.
@@ -691,17 +784,38 @@ struct LocalStoreInjectionScanTests {
     }
 
     /// Splits a parameter list on commas that are not inside brackets of any kind.
-    private static func splitTopLevel(_ text: Substring) -> [String] {
+    ///
+    /// **The `>` of a `->` is not a closing bracket, and getting that wrong silently halves the
+    /// parse** (SONNY-239's rebase onto this branch). `finderRevealer: @escaping ([URL]) -> Void`
+    /// took `depth` to `-1` at the arrow, after which no comma was ever at depth 0 again: the
+    /// signature parsed as **11** parameters instead of 34, and eleven of the labels the loop above
+    /// requires simply were not there. The premise check — `parameters.count > 20` — is what caught
+    /// it rather than a quiet pass, which is that assertion doing exactly the job it was written for.
+    ///
+    /// Two guards, because one of them would have been enough here and the other is what makes the
+    /// function honest about the rest of Swift's syntax: an arrow's `>` is skipped, and `depth` can
+    /// never go below zero — if some other construct unbalances it, the split degrades to
+    /// top-level-ish rather than to one enormous piece, and the premise check still fires.
+    ///
+    /// Internal rather than private since the same rebase, so
+    /// `theParameterSplitterSurvivesAClosureTypedParameter` can run it over held samples. That is
+    /// the shape PR #109's re-check established for the F4 rule and PR #100's F4 before it: a parser
+    /// that is only ever run against the real tree cannot be shown to handle what it claims to.
+    static func splitTopLevel(_ text: Substring) -> [String] {
         var pieces: [String] = []
         var current = ""
         var depth = 0
+        var previous: Character?
         for character in text {
             switch character {
             case "(", "[", "<":
                 depth += 1
                 current.append(character)
+            case ">" where previous == "-":
+                // `->`, not the end of a generic argument list.
+                current.append(character)
             case ")", "]", ">":
-                depth -= 1
+                depth = max(0, depth - 1)
                 current.append(character)
             case "," where depth == 0:
                 pieces.append(current)
@@ -709,6 +823,7 @@ struct LocalStoreInjectionScanTests {
             default:
                 current.append(character)
             }
+            previous = character
         }
         if !current.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty {
             pieces.append(current)
@@ -720,14 +835,32 @@ struct LocalStoreInjectionScanTests {
     ///
     /// Depth-aware so that a generic constraint or a defaulted closure argument nested inside the
     /// type cannot be read as this parameter's own default.
+    /// Internal, and named for the suite, so the splitter's held samples can check the half that
+    /// reads a piece after it has been split — the same shape `MemoryRowPresentation.systemImageForTests`
+    /// uses.
+    static func containsTopLevelDefaultForTests(_ text: String) -> Bool {
+        containsTopLevelDefault(text)
+    }
+
+    /// **The arrow's `>` is skipped here for the same reason as in `splitTopLevel`, and here it was
+    /// a hole in the guard rather than a parse failure** (SONNY-239's rebase). A closure-typed
+    /// parameter's `->` took the depth to `-1`, so its own `= { … }` was never at depth 0 and
+    /// `hasDefault` came back `false`. A defaulted `finderRevealer: @escaping ([URL]) -> Void = { … }`
+    /// would have passed the check above while being exactly what it exists to refuse — invisible,
+    /// because no store has a closure type and the case had never arisen.
+    /// `theParameterSplitterSurvivesAClosureTypedParameter` holds it.
     private static func containsTopLevelDefault(_ text: String) -> Bool {
         var depth = 0
+        var previousCharacter: Character?
         for (offset, character) in text.enumerated() {
+            defer { previousCharacter = character }
             switch character {
             case "(", "[", "<":
                 depth += 1
+            case ">" where previousCharacter == "-":
+                break
             case ")", "]", ">":
-                depth -= 1
+                depth = max(0, depth - 1)
             case "=" where depth == 0:
                 // Not `==`, `>=` or `!=`, none of which appear in a signature today but all of
                 // which would read as a default.

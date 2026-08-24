@@ -1849,6 +1849,7 @@ struct ScheduledRoutineRunTests {
                 browserOpener: browserOpener,
                 appOpener: appOpener,
                 fileOpener: HermeticFileOpener(),
+                finderRevealer: hermeticFinderRevealer,
                 mediaOpener: HermeticMediaOpener(),
                 runningAppSwitcher: HermeticRunningAppSwitcher(),
                 shortcutInvoker: HermeticShortcutInvoker(),

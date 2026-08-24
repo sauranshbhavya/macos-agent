@@ -344,6 +344,7 @@ private func makeModeFixture() throws -> ModeFixture {
             snippetStore: SnippetStore(fileURL: root.appendingPathComponent("snippets.json")),
             recentArtifactStore: RecentArtifactStore(fileURL: root.appendingPathComponent("recent-artifacts.json")),
             shortcutCatalog: EmptyModeShortcutCatalog(),
+            finderRevealer: hermeticFinderRevealer,
             shortcutRunHistoryStore: ShortcutRunHistoryStore(
                 fileURL: root.appendingPathComponent("shortcuts-run-history.json")
             ),

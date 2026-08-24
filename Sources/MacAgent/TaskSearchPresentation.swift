@@ -33,8 +33,25 @@ enum TaskSearchPresentation {
     )
 
     /// One decision point, so the list and its empty state cannot disagree about whether the user is
-    /// searching.
-    static func emptyState(query: String) -> EmptyState {
-        TaskHistorySearch.isSearching(query) ? noMatches : neverRanAnything
+    /// searching — or about whether the file can be read at all.
+    ///
+    /// **The unreadable case wins over the search, and that order is the point** (PR #110 fix-round
+    /// review). A store that will not decode publishes zero records, so *every* query matches
+    /// nothing; "Try a different word, or clear the search." is then advice that cannot work, in the
+    /// same family as telling somebody with four hundred tasks that they have never run one. The
+    /// wording comes from `MemoryDeletionCopy` rather than a third copy of it, so this page and the
+    /// Memory row it hangs off say the same thing.
+    ///
+    /// This page is one of the three `MemoryRowDestination.page` rows, which is the population that
+    /// had this gap: `MemoryEntriesSheet` got the can't-be-read state and the three pages kept
+    /// telling the user to go and make some.
+    static func emptyState(query: String, readability: MemoryRowReadability) -> EmptyState {
+        guard readability == .readable else {
+            return EmptyState(
+                title: MemoryDeletionCopy.emptyStateTitle(for: .taskHistory, readability: readability),
+                detail: MemoryDeletionCopy.emptyStateMessage(for: .taskHistory, readability: readability)
+            )
+        }
+        return TaskHistorySearch.isSearching(query) ? noMatches : neverRanAnything
     }
 }

@@ -113,7 +113,14 @@ struct UnprivilegedGateTests {
         //
         // Unchanged by SONNY-172: consolidating the trait moved no test and locked no new directory,
         // so this branch's rebase past SONNY-201 takes that ticket's count rather than reconciling one.
-        #expect(lockedAndGated == 8, "expected eight gated directory-locking tests, found \(lockedAndGated)")
+        // Eleven since SONNY-239, whose three gated tests all lock a directory so a *rename* fails
+        // rather than a write — the first three to do that. `LocalDataQuarantineTests` has two: one
+        // for a store file that cannot be moved aside, one for a set-aside file the whole wipe
+        // cannot delete, which is the branch that decides whether a privacy wipe reports a file it
+        // could not remove. `MemoryCommandCenterTests` has the third, added in PR #110's fix round
+        // for a mutant that survived: a Delete that silently did nothing must leave the row still
+        // saying "Can't be read" rather than clearing a banner that is still true.
+        #expect(lockedAndGated == 11, "expected eleven gated directory-locking tests, found \(lockedAndGated)")
         #expect(
             mismatches.isEmpty,
             """
