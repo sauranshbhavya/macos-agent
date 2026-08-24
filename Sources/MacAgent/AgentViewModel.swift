@@ -97,11 +97,39 @@ final class AgentViewModel: ObservableObject {
     /// `localDataDeletionStatusMessage` so a per-type delete does not post its result onto the
     /// Settings page, and vice versa.
     @Published var memoryDeletionStatusMessage: String?
-    /// Where the last per-type Delete put the files it could not read, or empty.
+    /// What the Memory page's last per-row Delete did — which row, how many files it deleted, where
+    /// it put the files it could not read, and whether a step failed — or `nil` when the last one
+    /// kept nothing.
     ///
-    /// Published because the Reveal in Finder control renders off it, and cleared by every delete
-    /// that keeps nothing — so the control cannot outlive the message it sits beside.
-    @Published private(set) var setAsideFilesFromLastDelete: [URL] = []
+    /// **A record rather than the bare list of kept files, because the sentence beside the Reveal
+    /// control has to follow the files** (PR #117 review, F1). Settings' narrower control and the
+    /// whole wipe can each remove *some* of those files and fail on the rest; "The 2 files Sonny
+    /// could not read are still on your Mac" then names a file that is gone, and a control that
+    /// reveals it selects nothing. The list alone could be pruned but the sentence could not be
+    /// rewritten — it needs the row and the deleted count — so both are kept together, and
+    /// `MemoryDeletionCopy.perRowDeleteReport` derives the sentence from the record in one place,
+    /// at the press and again after a prune.
+    ///
+    /// Published because the Reveal in Finder control renders off it, and replaced by every per-row
+    /// Delete — one that keeps nothing sets it to `nil` — so the control cannot outlive the message
+    /// it sits beside.
+    @Published private(set) var lastPerRowDelete: LastPerRowDelete?
+
+    /// Where the last per-row Delete put the files it could not read, or empty — the record's list,
+    /// read through the name the Reveal in Finder control and its tests already use.
+    var setAsideFilesFromLastDelete: [URL] {
+        lastPerRowDelete?.keptFileURLs ?? []
+    }
+    /// How many files are set aside across the thirteen stores and how much space they hold — the
+    /// line Settings' Data page shows, with the control that removes them (SONNY-266, founder
+    /// decision 2026-08-24).
+    ///
+    /// Published rather than computed, for the reason `unreadableStores` gives: a view body cannot
+    /// list a directory. Refreshed at the moments that change it — the Data page appearing, a
+    /// per-row Delete that keeps a file, the whole wipe, and the control itself — and read from the
+    /// same `LocalDataDeletionService` the control deletes through, so the count the user sees and
+    /// the files the press removes are one listing.
+    @Published private(set) var setAsideFilesSummary: SetAsideFilesSummary = .none
     @Published var priorTaskContext: PriorTaskContext?
     @Published var taskUsageSummary: TaskUsageSummary = .empty
     @Published var taskHistoryRecords: [CompletedTaskRecord] = []
@@ -2947,6 +2975,112 @@ final class AgentViewModel: ObservableObject {
             localDataDeletionStatusMessage = message
             setError(message)
         }
+        // After either branch, because the failure branch is the one where both matter: a wipe that
+        // took some of the Memory page's kept files and failed on the rest has left that page's
+        // sentence and its Reveal control naming a file that is gone (PR #117 review, F1) — on
+        // success the record is already `nil` — and a wipe that could not remove a set-aside file
+        // leaves it on disk, so the Data page's line has to say so rather than go quiet because the
+        // wipe was pressed.
+        pruneLastPerRowDeleteToFilesStillOnDisk()
+        refreshSetAsideFiles()
+    }
+
+    // MARK: - Set-aside files (SONNY-266)
+
+    /// Re-lists the files set aside from every store and republishes `setAsideFilesSummary`.
+    ///
+    /// Called from the Data page's `onAppear` — a file set aside on a previous launch, or moved
+    /// there by hand, is only ever found by looking — and by the three things in this view model
+    /// that change the population: `deleteMemory(in:)`, which adds to it, and `deleteLocalData()`
+    /// and `deleteSetAsideFiles()`, which empty it — through `deleteAllLocalData()` and
+    /// `deleteSetAsideFilesOnly()` respectively.
+    func refreshSetAsideFiles() {
+        setAsideFilesSummary = localDataDeletionService.setAsideFilesSummary()
+    }
+
+    /// Deletes every file set aside from a store, and nothing else — Settings' narrower control
+    /// (SONNY-266, founder decision 2026-08-24).
+    ///
+    /// **Guarded on a running task by founder decision (PR #117 review, F3), and the reason is the
+    /// error channel, not the files.** The population argument the first version rested on still
+    /// holds: the only writer of a set-aside file is `deleteMemory(in:)` — the one caller of
+    /// `LocalDataQuarantine.moveAsideAll` in `Sources/` — and it refuses during a run, so nothing
+    /// this deletes can change under one. What that argument missed is where a failure goes. It goes
+    /// to `errorMessage`, which both surfaces suppress while `isRunning` and rank above the task's
+    /// result once it ends — `performStart`'s `defer` clears `isRunning` and leaves `errorMessage`
+    /// standing — so a control that could fail mid-run would report a task that ran and succeeded as
+    /// this delete's failure, and pop the widget for it: the SONNY-201 shape, through a new door. The
+    /// wipe and the per-row Delete never face it because their guards keep them out of a run. The
+    /// guard copied is the wipe's — same page, same row shape, same `isRunning` condition — so the
+    /// three doors agree, and the button is disabled under the same condition so this is the
+    /// backstop rather than the surface.
+    ///
+    /// Reports on `localDataDeletionStatusMessage`, the Data page's own slot, which is where the
+    /// control sits. A failure also goes to `errorMessage`, as the whole wipe's does: this is a
+    /// write the user pressed a control for, and the thing they asked for did not happen.
+    func deleteSetAsideFiles() {
+        guard !isRunning else {
+            setError(MemoryDeletionCopy.setAsideFilesRunGuard)
+            return
+        }
+
+        do {
+            let result = try localDataDeletionService.deleteSetAsideFilesOnly()
+            localDataDeletionStatusMessage = MemoryDeletionCopy.setAsideFilesOutcome(
+                deletedFileCount: result.deletedFileCount
+            )
+            errorMessage = nil
+        } catch let error as LocalDataDeletionError {
+            // The service's error taken apart rather than quoted: its own sentence is the wipe's
+            // ("Deleted 0 local data files, but 1 could not be deleted…"), and to the user these
+            // are not local data files but the files Sonny could not read (PR #117 review, F4).
+            let message = MemoryDeletionCopy.setAsideFilesFailure(error)
+            localDataDeletionStatusMessage = message
+            setError(message)
+        } catch {
+            let message = MemoryDeletionCopy.setAsideFilesFailure(describing: error.localizedDescription)
+            localDataDeletionStatusMessage = message
+            setError(message)
+        }
+        pruneLastPerRowDeleteToFilesStillOnDisk()
+        refreshSetAsideFiles()
+    }
+
+    /// Prunes the last per-row Delete's kept files to the ones still on disk, and re-derives its
+    /// sentence from what is left (PR #117 review, F1).
+    ///
+    /// Settings' narrower control and the whole wipe both remove these files, and both can remove
+    /// some and fail on the rest. Evidence rather than assumption, after either branch of either:
+    /// every kept file is checked on disk, the survivors stay named — the Reveal control selects
+    /// exactly them — and the sentence beside it is derived again from the pruned record, so "The 2
+    /// files … are still on your Mac" becomes "The file … is still on your Mac" when one remains and
+    /// goes when none does. An outcome sentence counts the files and so follows them; a failure
+    /// sentence names the step that failed and stays true whatever happens to them, so it is left
+    /// alone.
+    ///
+    /// The sentence on screen is always this record's, which is what lets it be rewritten without
+    /// looking at it: `memoryDeletionStatusMessage` has one other writer, `deleteMemory(in:)`, and
+    /// that one replaces the record in the same breath (`theMemoryPagesSentenceHasOneWriterBesidesThePrune`).
+    /// A first draft compared the sentence to the record's before rewriting it, which was a branch
+    /// nothing could reach and no test could hold.
+    ///
+    /// The first version cleared the whole record when *any* named file was gone, which retired the
+    /// sentence and the control for a file still on disk — the one surface that names it.
+    private func pruneLastPerRowDeleteToFilesStillOnDisk() {
+        guard let last = lastPerRowDelete else {
+            return
+        }
+        let survivors = last.keptFileURLs.filter { FileManager.default.fileExists(atPath: $0.path) }
+        guard survivors.count < last.keptFileURLs.count else {
+            return
+        }
+        var pruned = last
+        pruned.keptFileURLs = survivors
+        lastPerRowDelete = survivors.isEmpty ? nil : pruned
+        guard last.failure == nil else {
+            return
+        }
+        memoryDeletionStatusMessage = survivors.isEmpty ? nil : MemoryDeletionCopy.perRowDeleteReport(pruned)
     }
 
     // MARK: - Memory (SONNY-208)
@@ -3129,7 +3263,6 @@ final class AgentViewModel: ObservableObject {
         let readable = category.stores.filter { !unreadableStores.contains($0) }
 
         var deletedFileCount = 0
-        var keptFileCount = 0
         var failures: [String] = []
 
         // Both attempted whatever the other does, the same rule `deleteAllLocalData` follows across
@@ -3145,27 +3278,28 @@ final class AgentViewModel: ObservableObject {
             failures.append(error.localizedDescription)
         }
 
-        // Cleared unconditionally, so a delete that keeps nothing cannot leave the previous one's
-        // Reveal control on screen beside a message that says nothing was kept.
-        setAsideFilesFromLastDelete = []
+        var keptFileURLs: [URL] = []
         if !unreadable.isEmpty {
             do {
-                let moved = try LocalDataQuarantine().moveAsideAll(unreadable.map(storeFileURL))
-                keptFileCount = moved.movedFileURLs.count
-                setAsideFilesFromLastDelete = moved.movedFileURLs
+                keptFileURLs = try LocalDataQuarantine().moveAsideAll(unreadable.map(storeFileURL)).movedFileURLs
             } catch {
                 failures.append(error.localizedDescription)
             }
         }
 
-        if let failure = failures.first {
-            memoryDeletionStatusMessage = "Could not delete \(category.title.lowercased()): \(failure)"
-        } else {
-            memoryDeletionStatusMessage = MemoryDeletionCopy.outcome(
-                for: category,
-                deletedFileCount: deletedFileCount,
-                keptFileCount: keptFileCount
-            )
+        // Replaced on every press — a delete that keeps nothing leaves `nil`, so the previous one's
+        // Reveal control cannot stay on screen beside a message that says nothing was kept — and the
+        // sentence is derived from the record rather than written here, so the prune that follows a
+        // partial removal of these files derives it again from the same place (PR #117 review, F1).
+        let record = LastPerRowDelete(
+            category: category,
+            deletedFileCount: deletedFileCount,
+            keptFileURLs: keptFileURLs,
+            failure: failures.first
+        )
+        lastPerRowDelete = record.keptFileURLs.isEmpty ? nil : record
+        memoryDeletionStatusMessage = MemoryDeletionCopy.perRowDeleteReport(record)
+        if record.failure == nil {
             errorMessage = nil
         }
 
@@ -3177,6 +3311,9 @@ final class AgentViewModel: ObservableObject {
             LocalStorageLoadFailureSource.allCases.filter { $0.memoryCategory == category }
         )
         refreshMemorySurfaces()
+        // This is the one press that adds to what Settings' Data page counts (SONNY-266), so the
+        // line is re-listed here rather than waiting for that page to appear.
+        refreshSetAsideFiles()
     }
 
     /// Re-reads every store and republishes `unreadableStores`.
@@ -3871,8 +4008,8 @@ final class AgentViewModel: ObservableObject {
         // straight after this returns, so the two never contradict each other.
         memoryDeletionStatusMessage = nil
         // The wipe has just deleted the set-aside files too (`deleteAllLocalData` sweeps them), so a
-        // surviving list would leave a Reveal in Finder control pointing at files that are gone.
-        setAsideFilesFromLastDelete = []
+        // surviving record would leave a Reveal in Finder control pointing at files that are gone.
+        lastPerRowDelete = nil
         // Row 13's two in-memory slots (SONNY-210). The wipe has just erased the file both describe:
         // a surviving checkpoint would write its task straight back on the next unit boundary, and a
         // surviving dismissal set would silently suppress an offer for a record whose id can only
@@ -6032,4 +6169,19 @@ private struct InstantOnlyFallbackPlanner: Planning {
     func plan(command: String, priorTaskContext: PriorTaskContext?) async throws -> AgentPlan {
         throw PlannerError.missingAPIKey
     }
+}
+
+/// What the Memory page's last per-row Delete did, kept so its sentence can be derived again when
+/// the files it kept change from under it (PR #117 review, F1). `AgentViewModel.lastPerRowDelete`
+/// holds one; `MemoryDeletionCopy.perRowDeleteReport` turns one into the sentence.
+struct LastPerRowDelete: Equatable {
+    let category: MemoryCategory
+    /// The files that read and were deleted.
+    let deletedFileCount: Int
+    /// Where the files that would not read now live — pruned to the ones still on disk when
+    /// Settings' narrower control or the whole wipe removes some of them.
+    var keptFileURLs: [URL]
+    /// The first step that failed, if one did, in which case the sentence is about that and not
+    /// about the kept files.
+    let failure: String?
 }

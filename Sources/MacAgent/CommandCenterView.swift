@@ -4516,9 +4516,111 @@ enum MemoryDeletionCopy {
     /// accessibility label says what is about to be shown, and agrees with the message's own
     /// singular/plural rather than being written twice.
     static func revealAccessibilityLabel(fileCount: Int) -> String {
+        "Reveal \(theFilesSonnyCouldNotRead(fileCount)) in Finder"
+    }
+
+    // MARK: - Settings' set-aside files (SONNY-266)
+
+    /// The one name the product has for these files, in the definite form the Reveal control, the
+    /// confirmation and the delete's result all use — so Settings' line and the Memory page's
+    /// sentence are about the same thing in the same words.
+    private static func theFilesSonnyCouldNotRead(_ fileCount: Int) -> String {
         fileCount == 1
-            ? "Reveal the file Sonny could not read in Finder"
-            : "Reveal the \(fileCount) files Sonny could not read in Finder"
+            ? "the file Sonny could not read"
+            : "the \(fileCount) files Sonny could not read"
+    }
+
+    /// The row's title on Settings' Data page: the count, and the name of the thing counted.
+    ///
+    /// **The count and the size are the whole line, by decision** (founder, 2026-08-24, recorded on
+    /// SONNY-266). Why the files exist is said nowhere in the product — that is the standing
+    /// no-explanatory-copy rule of 2026-08-14 — so the name is narrowed until no sentence beside it
+    /// is needed (`docs/sonny-founder-design-decisions.md`, "A precise label is not explanation").
+    static func setAsideFilesTitle(fileCount: Int) -> String {
+        fileCount == 1
+            ? "1 file Sonny could not read"
+            : "\(fileCount) files Sonny could not read"
+    }
+
+    /// The row's detail: how much space the files hold, in the unit Finder shows first.
+    ///
+    /// `.file`, not `.memory`: the two disagree from a million bytes up, and the figure beside a
+    /// file in Finder is the decimal one.
+    static func setAsideFilesDetail(byteCount: Int64) -> String {
+        ByteCountFormatter.string(fromByteCount: byteCount, countStyle: .file)
+    }
+
+    /// The confirmation's title, in the shape the Memory page's confirmations use.
+    static func setAsideFilesConfirmationTitle(fileCount: Int) -> String {
+        "Delete \(theFilesSonnyCouldNotRead(fileCount))?"
+    }
+
+    /// What goes and what stays — the shape every destructive confirmation in the app has. Nothing
+    /// about why the files exist or what a later key restore could do with them; the rule above.
+    static func setAsideFilesConfirmation(fileCount: Int) -> String {
+        "This deletes \(theFilesSonnyCouldNotRead(fileCount)). Everything else stays."
+    }
+
+    /// What a screen reader says for the row's Delete, which sits one row below another Delete.
+    static func setAsideFilesDeleteAccessibilityLabel(fileCount: Int) -> String {
+        "Delete \(theFilesSonnyCouldNotRead(fileCount))"
+    }
+
+    /// What the Data page reports after the control is pressed.
+    ///
+    /// Starts with "Deleted" for the same reason the wipe's does — `LocalDataDeletionStatusMessage`
+    /// reads that prefix as success — except when nothing was there to delete: the files went
+    /// between the page listing them and the press, by hand or by the wipe in another window, and a
+    /// "Deleted 0 files" line reads as a defect rather than as that.
+    static func setAsideFilesOutcome(deletedFileCount: Int) -> String {
+        guard deletedFileCount > 0 else {
+            return "The files Sonny could not read were already gone."
+        }
+        return "Deleted \(setAsideFilesTitle(fileCount: deletedFileCount))."
+    }
+
+    /// What the Data page reports when the control could not take everything it was asked for,
+    /// composed from the error's own fields rather than from its sentence (PR #117 review, F4).
+    ///
+    /// `LocalDataDeletionError.errorDescription` is the wipe's — "Deleted 0 local data files, but 1
+    /// could not be deleted and still hold data" — and the wipe's noun is wrong here: to the user
+    /// these are the files Sonny could not read, and this is the one place they are counted in
+    /// those words. Starts with "Could not delete" whatever the split, because
+    /// `LocalDataDeletionStatusMessage` reads a leading "Deleted" as success and a partial removal
+    /// is not one.
+    static func setAsideFilesFailure(_ error: LocalDataDeletionError) -> String {
+        let failedNames = error.result.failedFilePaths.map { URL(fileURLWithPath: $0).lastPathComponent }
+        let attempted = error.result.deletedFileCount + failedNames.count
+        let which = error.result.deletedFileCount == 0
+            ? theFilesSonnyCouldNotRead(failedNames.count)
+            : "\(failedNames.count) of \(theFilesSonnyCouldNotRead(attempted))"
+        let detail = error.underlyingDescriptions.first.map { " (\($0))" } ?? ""
+        return "Could not delete \(which): \(failedNames.joined(separator: ", ")).\(detail)"
+    }
+
+    /// The same report for an error that is not the service's own — the door only throws
+    /// `LocalDataDeletionError`, but `throws` promises nothing, and a sentence is owed either way.
+    static func setAsideFilesFailure(describing detail: String) -> String {
+        "Could not delete the files Sonny could not read: \(detail)"
+    }
+
+    /// What the control says when pressed during a run. The wipe's sentence with the wipe's noun
+    /// swapped for these files' — same page, same guard, same shape (PR #117 review, F3).
+    static let setAsideFilesRunGuard = "Stop the current run before deleting the files Sonny could not read."
+
+    /// What the Memory page reports after a per-row Delete, derived from the record of that press —
+    /// at the press, and again when Settings' narrower control or the whole wipe prunes the files it
+    /// kept (PR #117 review, F1). A failure sentence names the step that failed and is unchanged by
+    /// what happens to the kept files afterwards; an outcome sentence counts them, so it follows.
+    static func perRowDeleteReport(_ delete: LastPerRowDelete) -> String {
+        if let failure = delete.failure {
+            return "Could not delete \(delete.category.title.lowercased()): \(failure)"
+        }
+        return outcome(
+            for: delete.category,
+            deletedFileCount: delete.deletedFileCount,
+            keptFileCount: delete.keptFileURLs.count
+        )
     }
 
     /// The sheet's title when the row's file will not read.
@@ -5436,6 +5538,7 @@ private struct SettingsSecurityAccessPage: View {
 private struct SettingsDataPage: View {
     @ObservedObject var viewModel: AgentViewModel
     @State private var showDeleteLocalDataConfirmation = false
+    @State private var showDeleteSetAsideFilesConfirmation = false
 
     var body: some View {
         VStack(alignment: .leading, spacing: 0) {
@@ -5464,6 +5567,71 @@ private struct SettingsDataPage: View {
                         .help("Delete local Sonny data")
                     }
 
+                    // **The files a per-row Delete kept, counted and sized, with the control that
+                    // removes them** (SONNY-266, founder decision 2026-08-24). One line and one
+                    // control, in this section: the user had been told a file was kept and never
+                    // how many or how much space, which is disclosure they cannot act on. Hidden
+                    // at zero rather than reading "0 files", because this is a state most users
+                    // never reach and a line for it would be new surface for nothing. The gate is
+                    // `SetAsideFilesSummary.isEmpty`, a value a test can read, and the words are
+                    // `MemoryDeletionCopy`'s — the count and the size, and nothing about why the
+                    // files exist. System A throughout: the row, the label and the button are the
+                    // ones the wipe's row uses.
+                    if !viewModel.setAsideFilesSummary.isEmpty {
+                        SettingsDivider()
+
+                        SettingsAdaptiveControlRow {
+                            SettingsControlLabel(
+                                title: MemoryDeletionCopy.setAsideFilesTitle(
+                                    fileCount: viewModel.setAsideFilesSummary.fileCount
+                                ),
+                                detail: MemoryDeletionCopy.setAsideFilesDetail(
+                                    byteCount: viewModel.setAsideFilesSummary.byteCount
+                                )
+                            )
+                        } trailing: {
+                            Button {
+                                showDeleteSetAsideFilesConfirmation = true
+                            } label: {
+                                Label("Delete", systemImage: "trash")
+                            }
+                            .buttonStyle(SonnyButtonStyle(tone: .danger, width: 96))
+                            // The wipe's condition, one row up, by founder decision (PR #117
+                            // review, F3): a delete that can fail mid-run reports its failure on
+                            // `errorMessage`, which outranks the task's result once the run ends.
+                            .disabled(viewModel.isRunning)
+                            .help("Delete the files Sonny could not read")
+                            .accessibilityLabel(
+                                MemoryDeletionCopy.setAsideFilesDeleteAccessibilityLabel(
+                                    fileCount: viewModel.setAsideFilesSummary.fileCount
+                                )
+                            )
+                        }
+                        // On the row rather than on the page, which already carries the wipe's
+                        // dialog — two confirmations on one node is the shape SwiftUI has dropped
+                        // one of before — and on the row rather than on the button, because the
+                        // button sits inside a `ViewThatFits` candidate and the row is the node
+                        // that is rendered exactly once.
+                        .confirmationDialog(
+                            MemoryDeletionCopy.setAsideFilesConfirmationTitle(
+                                fileCount: viewModel.setAsideFilesSummary.fileCount
+                            ),
+                            isPresented: $showDeleteSetAsideFilesConfirmation,
+                            titleVisibility: .visible
+                        ) {
+                            Button("Delete", role: .destructive) {
+                                viewModel.deleteSetAsideFiles()
+                            }
+                            Button("Cancel", role: .cancel) {}
+                        } message: {
+                            Text(
+                                MemoryDeletionCopy.setAsideFilesConfirmation(
+                                    fileCount: viewModel.setAsideFilesSummary.fileCount
+                                )
+                            )
+                        }
+                    }
+
                     LocalDataDeletionStatusMessage(message: viewModel.localDataDeletionStatusMessage)
                 }
                 .padding(.vertical, 16)
@@ -5471,6 +5639,11 @@ private struct SettingsDataPage: View {
             .padding(.top, 24)
         }
         .frame(maxWidth: 760, alignment: .topLeading)
+        .onAppear {
+            // A file set aside on a previous launch is only ever found by looking, and this is the
+            // page that shows it.
+            viewModel.refreshSetAsideFiles()
+        }
         .localDataDeletionConfirmationDialog(isPresented: $showDeleteLocalDataConfirmation, viewModel: viewModel)
     }
 }
