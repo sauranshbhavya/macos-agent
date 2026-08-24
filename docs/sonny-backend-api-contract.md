@@ -206,10 +206,21 @@ have. An omitted privacy field must be a loud error, not a quiet guess.
 
 ### 3.1 Two tokens
 
-- **Access token** — short-lived, opaque to the client, sent as `Authorization: Bearer`. The client
-  must not decode or inspect it. Entitlement is a separate, signed, deliberately-parseable claim
-  (section 5); keeping the access token opaque is what stops the client making entitlement decisions
-  from an authentication artifact.
+- **Access token** — short-lived, sent as `Authorization: Bearer`. **A JWT issued by Supabase Auth**
+  (amended 2026-08-21, SONNY-127 — see section 14). **The client must not decode, inspect or make any
+  decision from it.** Entitlement is a separate, signed, deliberately-parseable claim (section 5),
+  and that separation is the property this rule protects: what stops the client making entitlement
+  decisions from an authentication artifact is the rule, not the encoding. The token was specified as
+  opaque because opacity enforced the rule mechanically; under the founder's 2026-08-21 decision to
+  use Supabase Auth it is a JWT, so **the rule is now a contract obligation the client must keep
+  rather than one its encoding keeps for it**, and SONNY-128's review is where that is checked.
+  **Verification of a presented access token — signature and expiry — is SONNY-203's and does not
+  exist yet** (noted 2026-08-21, PR #87 F2; owner corrected from SONNY-128 the same day, PR #87
+  second round F5 — SONNY-128 is the client half and its never-touch list forbids `server/`, so it
+  could never have supplied this). SONNY-127 issues tokens and supplies the skew tolerance that
+  verification will apply; no route on that branch verifies one. SONNY-203 verifies the Supabase
+  token as **HS256 with the algorithm pinned**, checking `iss`, `aud` and `exp`, and trusting `sub`
+  as the user id.
 - **Refresh token** — long-lived, opaque, rotated on every use, stored in the Keychain through the
   existing `KeychainSecretStore` (the concrete struct at `KeychainSecretStore.swift:21`, behind the
   `KeychainSecretStoring` protocol at `:4-7`) as a new account on the existing store, following the
@@ -250,8 +261,11 @@ time. A client that has both never has to choose between a wrong local clock and
   previous token stays valid for a short overlap window, so a crash between receiving a new token and
   writing it to the Keychain does not sign the user out. Presenting a refresh token that has already
   been rotated away *past* the overlap is treated as theft: the whole token family is revoked and the
-  response is `401 auth.token_revoked`. The overlap's length is SONNY-127's to set; the shape is
-  fixed here because retrofitting reuse detection after tokens exist is the expensive path.
+  response is `401 auth.token_revoked`. The overlap's length is **not** SONNY-127's to set after all: under the
+  2026-08-21 decision to serve auth from Supabase Auth it is the platform's, and is **10 seconds**
+  by default (corrected 2026-08-21, PR #87 F10 — this line previously said SONNY-127's, which was
+  written before that decision). The shape is fixed here because retrofitting reuse detection after
+  tokens exist is the expensive path, and the platform's shape matches it.
 - Sign-out revokes the family server-side and clears the Keychain entry locally. **Sign-out, "delete
   my local data", and "reset the encryption identity" are three different actions with three
   different blast radii.** Branch 7 deliberately made local data deletion leave the Keychain
@@ -315,9 +329,80 @@ for whoever finds that instead.
 
 Returns the token response of 3.2 on success. On failure it returns one of three distinct codes —
 `auth.code_invalid`, `auth.code_expired`, `auth.code_used` — because SONNY-127 has to rate-limit them
-differently and SONNY-128 has to say three different things to the user. Codes are single-use, so a
+differently and SONNY-128 has to say three different things to the user.
+
+**Amended 2026-08-22 (SONNY-127, PR #87 fifth round, F1): the three distinct codes are disclosed
+only to a caller who can be seen to have requested the code.** Everyone else gets
+`auth.code_invalid`.
+
+The reason is that the three codes *are* an account-existence oracle, and it was a working one. One
+unauthenticated request per address, carrying a code known to be wrong and never calling
+`email/start`, returned `auth.code_used` for a mailbox whose owner had signed in — something the
+caller did not cause and could not otherwise observe — `auth.code_expired` for a mailbox that had
+asked and never used, and `auth.code_invalid` for an address with nothing. Reproduced against a real
+database. The signal also never decayed (still `auth.code_used` after 400 simulated days) and nothing
+bounded enumeration (200 distinct addresses probed from one source, 0 refused).
+
+**Two conditions gate the disclosure**, and both are about the caller rather than the code: the
+issuance's recorded source must match the caller's, and the issuance must be recent — one code
+lifetime past its expiry. The per-source rate limit `email/start` has always had is now on this route
+too.
+
+**What this narrows.** SONNY-127's acceptance criterion — "an expired code, a reused code, and a
+wrong code each fail with the contract's distinct errors" — held for every caller and now holds for
+the caller it was written about: the one completing a sign-in, who is the only party SONNY-128 has to
+say three different things to. A caller who cannot be seen to have asked for the code is told
+`auth.code_invalid`, which is true of what they are holding. **The client contract is unchanged**: a
+client in the flow sees exactly what it saw before, so nothing on SONNY-128 changes.
+
+**What it does not close, stated rather than implied, and widened 2026-08-22 after measurement.**
+The match is on a salted hash of `request.ip` — unforgeable over the wire, and still a statement
+about *where* a request came from rather than *who* sent it. Two sizes:
+
+- **Even with `TRUSTED_PROXIES` set correctly**, everyone behind one public address shares a source.
+  A co-tenant on a victim's NAT who knows the victim's address learns, within the disclosure window,
+  whether that mailbox consumed its code. Household and office are the small version; a carrier's
+  CGNAT egress or a shared VPN exit is the large one. Narrower than the oracle this closed, and real.
+- **With `TRUSTED_PROXIES` unset behind a proxy**, every caller collapses to one source and the match
+  is vacuous deployment-wide — the same misconfiguration the per-source rate limit degrades under.
+
+The recency bound applies in both. **The unconditional fix is a flow token**: `email/start` returning
+an opaque value that `email/verify` echoes back, which ties disclosure to *this exchange* rather than
+to a network location. Two request/response shapes, landing on SONNY-128; not built, and the lever if
+the residual above is ever judged too wide.
+
+**The per-address rate-limit refusal is gated the same way** (added 2026-08-22). Answering `429` to
+every caller made the attempt *count* readable — probe a mailbox and see how many tries you get
+before the wall — which is recent activity at an address the prober neither caused nor could
+otherwise observe. A caller who asked for the code still gets `429` with `Retry-After`; everyone else
+gets the `400` a wrong code produces. The body and status now match; the *timing* does not, because
+the refused path skips the provider call, and that residual is the same one `email/start`'s silent
+per-address refusal already carries.
+
+**Where those three come from, since the provider does not supply them** (noted 2026-08-21,
+SONNY-127). Supabase Auth returns a single `otp_expired` reading "Token has expired or is invalid"
+for all three cases. The gateway therefore derives them from its own record of what it issued —
+consumed, aged out, or neither — rather than from the provider's error. What the client receives is
+unchanged; this note exists so nobody later reads the provider's single error as evidence that the
+contract over-specified. Codes are single-use, so a
 replay of this call returns the stored original result — including the original failure — and never
 un-consumes a code. Section 9.3 has the whole retry table.
+
+**`link_hint`, an optional field on the token response** (added 2026-08-21, extended 2026-08-22,
+SONNY-127). Present when the server can see a reason to suspect this sign-in belongs with an existing
+account and cannot prove one. It is advisory: it names no account and carries no identifier, because
+naming one would answer "does this address have an account?" to anyone who can reach the endpoint.
+Two values:
+
+| `link_hint` | Means |
+|---|---|
+| `relay_address_may_belong_to_existing_account` | An Apple Hide My Email relay address, which matches nothing by design |
+| `verified_email_matches_existing_account` | A verified, non-relay address that **does** match an existing identity — and which no longer merges on that alone (founder decision, 2026-08-22; `docs/sonny-identity-linking-rule.md` §2.1) |
+
+A client that ignores the field is correct and gets two accounts; there is no failure mode in
+ignoring it, only a worse experience. **Surfacing it — the prompt that offers to join the two — is
+SONNY-128's and SONNY-129's**, and neither the field nor the prompt merges anything: rule 4 is the
+only path that joins two existing accounts.
 
 `POST /v1/auth/oauth/google` and `POST /v1/auth/oauth/apple` — the body is whatever the provider's
 flow yields and is SONNY-129's to fix, once that ticket has established which Sign in with Apple
@@ -1222,3 +1307,4 @@ author's own drafting would bury the changes a downstream session actually has t
 | Date | Change | Ticket |
 |---|---|---|
 | 2026-08-17 | Created, at `main` `6f89a5d` | SONNY-124 |
+| 2026-08-21 | **3.1 — the access token is a JWT rather than opaque.** Founder decision of 2026-08-21 to serve auth from Supabase Auth, which issues JWTs. The client's obligation not to decode it or decide anything from it is unchanged and is now carried by this contract rather than by the encoding. Three things this does **not** change, checked against the platform rather than assumed: 3.3's rotation, overlap and reuse detection are exactly what Supabase Auth does (10-second reuse interval; reuse beyond it revokes the whole family), 3.2's response shape is unchanged, and 3.6's three code failures are unchanged — the gateway derives them from its own issuance record because the provider returns one error for all three. | SONNY-127 |
