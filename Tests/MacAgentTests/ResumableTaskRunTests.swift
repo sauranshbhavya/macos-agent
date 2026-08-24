@@ -1916,6 +1916,7 @@ private func makeFixture() throws -> ResumableFixture {
             browserOpener: browserOpener,
             appOpener: HermeticAppOpener(),
             fileOpener: fileOpener,
+            finderRevealer: hermeticFinderRevealer,
             mediaOpener: HermeticMediaOpener(),
             runningAppSwitcher: HermeticRunningAppSwitcher(),
             shortcutInvoker: FailableShortcutInvoker(),
