@@ -37,6 +37,30 @@ public struct LocalDataDeletionError: Error, LocalizedError, Equatable {
     }
 }
 
+/// How many files are set aside across a service's stores, and how many bytes they hold.
+///
+/// What Settings' Data page states — the count and the size, and nothing about why the files exist
+/// (SONNY-266, founder decision 2026-08-24; the standing no-explanatory-copy rule is why the second
+/// half is a negative). `isEmpty` is that row's gate: a line reading "0 files" would be a surface
+/// for a state most users never reach.
+public struct SetAsideFilesSummary: Equatable, Sendable {
+    public var fileCount: Int
+    /// Logical size, summed — the figure Finder shows first and the unit SONNY-266's own measurement
+    /// of `clipboard-history.json` (1 011 740 bytes at its cap) is in. Not the allocated size.
+    public var byteCount: Int64
+
+    public init(fileCount: Int, byteCount: Int64) {
+        self.fileCount = fileCount
+        self.byteCount = byteCount
+    }
+
+    public static let none = SetAsideFilesSummary(fileCount: 0, byteCount: 0)
+
+    public var isEmpty: Bool {
+        fileCount == 0
+    }
+}
+
 public struct LocalDataDeletionService: @unchecked Sendable {
     private let fileManager: FileManager
     private let fileURLs: [URL]
@@ -61,13 +85,16 @@ public struct LocalDataDeletionService: @unchecked Sendable {
     /// thirteen names would leave them behind while reporting that everything was erased. Sonny
     /// cannot read them, which is not the same as their holding nothing.
     ///
-    /// **This is the one door that sweeps, and `deleteStoreFilesOnly()` is the reason that sentence
-    /// is now enforceable rather than aspirational** (PR #110 review, F2). Command Center's per-row
-    /// Delete used to call *this* method, so an ordinary press on a readable row destroyed a file an
-    /// earlier press had promised to keep — measured against the real types: set one aside, rewrite
-    /// the store, press Delete, and the result was `deletedFileCount == 2` with the kept file gone.
+    /// **Two doors reach the set-aside files — this one and `deleteSetAsideFilesOnly()` — and
+    /// `deleteStoreFilesOnly()` is what makes that an enforceable statement rather than an
+    /// aspiration** (PR #110 review, F2). Command Center's per-row Delete used to call *this* method,
+    /// so an ordinary press on a readable row destroyed a file an earlier press had promised to keep
+    /// — measured against the real types: set one aside, rewrite the store, press Delete, and the
+    /// result was `deletedFileCount == 2` with the kept file gone. (This paragraph said "the one
+    /// door that sweeps" until SONNY-266 added the second; both live on Settings, which is still the
+    /// one place the user asks for destruction.)
     public func deleteAllLocalData() throws -> LocalDataDeletionResult {
-        try delete(sweepingSetAsideFiles: true)
+        try delete(reaching: .storeFilesAndSetAsideFiles)
     }
 
     /// **Command Center's per-row Delete: the store files themselves, and nothing set aside from
@@ -83,14 +110,86 @@ public struct LocalDataDeletionService: @unchecked Sendable {
     /// **The asymmetry with `deleteAllLocalData` is deliberate and is the smaller of two broken
     /// promises.** Leaving it means "Delete routines" leaves unreadable routine bytes on disk, which
     /// is real — but it is *disclosed* (the user was told the file is kept) and *recoverable*
-    /// (Settings → Delete Local Data removes it, and that is the control the product already frames
-    /// as the destructive one). Sweeping it here would destroy data the product promised to keep,
-    /// undisclosed and with no undo. Disclosed-and-recoverable beats silent-and-final.
+    /// (Settings' Data page counts and sizes those files and removes exactly them through
+    /// `deleteSetAsideFilesOnly()`, and its whole wipe takes them too — both controls the product
+    /// already frames as destructive). Sweeping it here would destroy data the product promised to
+    /// keep, undisclosed and with no undo. Disclosed-and-recoverable beats silent-and-final.
+    ///
+    /// **Re-asked once the files became visible, and the answer stayed no** (SONNY-266's founder
+    /// comment of 2026-08-23 put the question on that ticket; its decision of 2026-08-24 gave the
+    /// files a surface and left this door alone). Visibility is what makes leaving them honest: the
+    /// user can now see how many there are, how much space they hold, and remove them from the line
+    /// that says so — which is a better answer than a per-row Delete silently taking them.
     public func deleteStoreFilesOnly() throws -> LocalDataDeletionResult {
-        try delete(sweepingSetAsideFiles: false)
+        try delete(reaching: .storeFilesOnly)
     }
 
-    private func delete(sweepingSetAsideFiles: Bool) throws -> LocalDataDeletionResult {
+    /// **Settings' narrower control: every file set aside from one of these stores, and none of the
+    /// store files themselves** (SONNY-266, founder decision 2026-08-24).
+    ///
+    /// The second caller of `quarantinedSiblings(of:)` that removes anything. The user is shown how
+    /// many files there are and how much space they hold, and this is what the control beside that
+    /// line does — the whole wipe's loop with the store files left out, rather than a third deletion
+    /// routine, so the attempt-every-file-and-report-what-survived behaviour comes for free and the
+    /// sweep's suffix match is written once.
+    ///
+    /// **This is destruction, asked for.** A set-aside file exists because a decrypt failure proves
+    /// only that the bytes were written under a different key, and SONNY-253's key migration may
+    /// hand that key back. Nothing prunes, caps or ages these files out — the founder's decision is
+    /// that deleting them is precisely what the design exists to avoid — so the only thing that
+    /// removes one is a control the user pressed: this, or the whole wipe.
+    ///
+    /// Named beside `deleteStoreFilesOnly()` rather than after the view model's control, which was
+    /// its first name, so that `everyDeletionDoorIsCalledOnceFromTheMethodThatOwnsIt` can tell the
+    /// service's three doors from the controls that call them by name alone (PR #117 review, F5).
+    public func deleteSetAsideFilesOnly() throws -> LocalDataDeletionResult {
+        try delete(reaching: .setAsideFilesOnly)
+    }
+
+    /// Every file set aside from one of these stores, in a stable order — exactly what
+    /// `deleteSetAsideFilesOnly()` would remove.
+    ///
+    /// One listing, read by the summary and walked by the delete, so the number the user is shown
+    /// and the files the press takes cannot come from different populations.
+    public func setAsideFiles() -> [URL] {
+        unique(fileURLs).flatMap { quarantine.quarantinedSiblings(of: $0) }
+    }
+
+    /// How many files are set aside and how many bytes they hold — the line Settings' Data page shows.
+    ///
+    /// The count is the listing's. The bytes are summed over the files whose size could be read: a
+    /// file whose attributes cannot be read is still there and the delete will still attempt it, so
+    /// it counts, and it contributes nothing to the size rather than failing the whole summary.
+    public func setAsideFilesSummary() -> SetAsideFilesSummary {
+        let files = setAsideFiles()
+        let byteCount = files.reduce(Int64(0)) { total, fileURL in
+            let size = (try? fileURL.resourceValues(forKeys: [.fileSizeKey]))?.fileSize ?? 0
+            return total + Int64(size)
+        }
+        return SetAsideFilesSummary(fileCount: files.count, byteCount: byteCount)
+    }
+
+    /// Which of a store's files a delete reaches. Three doors, one loop — the difference between
+    /// them is the whole of what each public method promises, so it is a named value rather than two
+    /// booleans a caller could cross.
+    private enum Reach {
+        /// The store file and every file set aside from it — Settings' whole wipe.
+        case storeFilesAndSetAsideFiles
+        /// The store file alone — Command Center's per-row Delete.
+        case storeFilesOnly
+        /// The set-aside files alone — Settings' narrower control (SONNY-266).
+        case setAsideFilesOnly
+
+        var includesStoreFiles: Bool {
+            self != .setAsideFilesOnly
+        }
+
+        var includesSetAsideFiles: Bool {
+            self != .storeFilesOnly
+        }
+    }
+
+    private func delete(reaching reach: Reach) throws -> LocalDataDeletionResult {
         var deletedFileCount = 0
         var missingFileCount = 0
         var failedFilePaths: [String] = []
@@ -100,7 +199,7 @@ public struct LocalDataDeletionService: @unchecked Sendable {
             // Before the existence check below, not inside it: a store whose own file was already
             // moved aside has nothing at its own path and everything at the suffixed one, which is
             // precisely the state this sweep exists for.
-            if sweepingSetAsideFiles {
+            if reach.includesSetAsideFiles {
                 for setAside in quarantine.quarantinedSiblings(of: fileURL) {
                     do {
                         try fileManager.removeItem(at: setAside)
@@ -110,6 +209,13 @@ public struct LocalDataDeletionService: @unchecked Sendable {
                         failureDescriptions.append(error.localizedDescription)
                     }
                 }
+            }
+
+            // The narrower control stops here: the store file is the user's live memory, and this
+            // door never touches it. `missingFileCount` stays at zero for that door — nothing it was
+            // asked for was absent.
+            guard reach.includesStoreFiles else {
+                continue
             }
 
             guard fileManager.fileExists(atPath: fileURL.path) else {

@@ -650,10 +650,11 @@ struct ProductShellTests {
             "activeResumableTask",
             "pendingResumableContinuation",
             "dismissedResumeOfferIDs",
-            // SONNY-239's Reveal in Finder control renders off this. The wipe's own sweep has just
-            // deleted the files it names, so a surviving list would offer to show the user files
-            // that are gone.
-            "setAsideFilesFromLastDelete"
+            // SONNY-239's Reveal in Finder control renders off this record — the list of kept files
+            // it holds, and the row and count its sentence is derived from (PR #117 review, F1). The
+            // wipe's own sweep has just deleted the files it names, so a surviving record would offer
+            // to show the user files that are gone.
+            "lastPerRowDelete"
         ]
 
         // Not assigned by the wipe, but rewritten by the four `refresh…` calls it ends with — from
@@ -677,7 +678,13 @@ struct ProductShellTests {
             // (SONNY-239). It matters that it does: the wipe deletes the file a row was marked
             // unreadable for, so a set that survived would leave that row saying "Can't be read"
             // about a file that no longer exists.
-            "unreadableStores"
+            "unreadableStores",
+            // Re-listed by `refreshSetAsideFiles()`, which `deleteLocalData` calls after either of
+            // its branches (SONNY-266). The wipe sweeps the set-aside files itself, so the Data
+            // page's line has to go to nothing when it succeeds — and has to keep counting the file
+            // it could not remove when it does not, which is why that reload sits outside the
+            // success path rather than among the refreshes above.
+            "setAsideFilesSummary"
         ]
 
         // Deliberately untouched, in four groups.

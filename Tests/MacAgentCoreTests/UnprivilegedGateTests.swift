@@ -120,7 +120,13 @@ struct UnprivilegedGateTests {
         // could not remove. `MemoryCommandCenterTests` has the third, added in PR #110's fix round
         // for a mutant that survived: a Delete that silently did nothing must leave the row still
         // saying "Can't be read" rather than clearing a banner that is still true.
-        #expect(lockedAndGated == 11, "expected eleven gated directory-locking tests, found \(lockedAndGated)")
+        //
+        // Twelve since SONNY-266, whose one gated test locks the directory so Settings' narrower
+        // control cannot unlink the file it was pressed for:
+        // `MemoryCommandCenterTests.aSetAsideFileTheControlCannotDeleteStaysOnTheLineAndIsNamed`,
+        // which is the branch that decides whether the Data page's line keeps counting a file the
+        // press could not remove, and names it, rather than going quiet because the press happened.
+        #expect(lockedAndGated == 12, "expected twelve gated directory-locking tests, found \(lockedAndGated)")
         #expect(
             mismatches.isEmpty,
             """
