@@ -132,7 +132,7 @@ Notes on sequencing decisions behind this table:
 
 ## Entry Template (v2, 2026-08-02)
 
-Copy this for each completed branch. Fill every field — "none" is a valid answer, a blank field is not. Product context, constraints, and non-negotiables already live permanently in the spec (§1-§26); do not restate them here, only reference section numbers. The two fields marked **(required, no blanket claims)** exist because a vague answer there is exactly how a later chat regresses something silently. Per-ticket history (what each ticket did, closing comments, blocked findings) lives on the Plane tickets, not here — this entry is the branch-level architectural record. The v1 template's `Implementing agent`/`Reviewing agent` fields and its kickoff-prompt block are retired: session handoff now happens through ticket descriptions and closing comments per `WORKFLOW.md`.
+Copy this for each completed branch. Fill every field — "none" is a valid answer, a blank field is not. Product context, constraints, and non-negotiables already live permanently in the spec (§1-§26); do not restate them here, only reference section numbers. The two fields marked **(required, no blanket claims)** exist because a vague answer there is exactly how a later chat regresses something silently. Per-ticket history (what each ticket did, closing comments, blocked findings) lives on the Plane tickets, not here — this entry is the branch-level architectural record. The v1 template's `Implementing agent`/`Reviewing agent` fields and its kickoff-prompt block are retired: session handoff now happens through ticket descriptions and closing comments per `WORKFLOW.md`. **Every figure in the entry carries the SHA it was measured at, and that SHA is the head that merges** (`CLAUDE.md`, Claims and evidence): the entry is written before the PR opens, so when a fix round or a rebase moves the head afterwards, re-measure each figure at the new head or drop it — never carry one forward across a rebase. Once the entry has merged, `git merge-base --is-ancestor <sha> origin/main` exits 0 for every SHA it cites; a SHA that fails that check is a timestamp on a branch, not a tree a reader can fetch.
 
 ```
 ### Branch: feature/<name>
@@ -143,7 +143,7 @@ Reviewed by: fresh session (per WORKFLOW.md step 7) — findings and their resol
 
 Spec sections covered: (list; flag any left partial and why)
 Files changed: (actual list — not "see diff")
-Tests: (exact command run, from CLAUDE.md) -> (pass/fail, counts)
+Tests: (exact command run, from CLAUDE.md) -> (pass/fail, counts) at <SHA — the head that merges; re-measured if the head moves after this is written>
 
 Behavior added: (one bullet per new capability)
 Behavior preserved (required, no blanket claims): (one bullet per EXISTING flow this branch touched, confirming it still works — "everything else still works" is not acceptable, name them)
