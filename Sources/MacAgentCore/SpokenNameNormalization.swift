@@ -104,7 +104,7 @@ public enum SpokenName {
 /// A path field as a person phrased it, turned into the path they meant.
 ///
 /// **Deliberately above `PathWhitelist` rather than inside it** (SONNY-242). The whitelist's
-/// `canonicalURL` is the arithmetic every containment check in the app compares through, including
+/// `canonical` is the arithmetic every containment check in the app compares through, including
 /// a workspace's narrower restriction scope; a step that rewrote path *text* in there would mean a
 /// workspace boundary the user drew around "my notes" silently became a boundary around "notes",
 /// and the security check and the thing it is checking would no longer be the same string for
