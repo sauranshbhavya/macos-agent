@@ -1860,6 +1860,9 @@ struct ScheduledRoutineRunTests {
                 ),
                 taskHistoryStore: taskHistoryStore,
                 taskPlanDetailStore: taskPlanDetailStore,
+                visionSessionJournalStore: VisionSessionJournalStore(
+                    fileURL: root.appendingPathComponent("vision-sessions.json")
+                ),
                 clipboardHistorySettingsStore: ClipboardHistorySettingsStore(
                     fileURL: root.appendingPathComponent("clipboard-history-settings.json")
                 ),

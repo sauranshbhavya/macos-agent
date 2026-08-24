@@ -401,6 +401,9 @@ private func makeViewModel(root: URL) throws -> AgentViewModel {
         ),
         taskHistoryStore: TaskHistoryStore(fileURL: root.appendingPathComponent("task-history.json")),
         taskPlanDetailStore: TaskPlanDetailStore(fileURL: root.appendingPathComponent("task-plan-details.json")),
+        visionSessionJournalStore: VisionSessionJournalStore(
+            fileURL: root.appendingPathComponent("vision-sessions.json")
+        ),
         clipboardHistorySettingsStore: ClipboardHistorySettingsStore(
             fileURL: root.appendingPathComponent("clipboard-history-settings.json")
         ),
