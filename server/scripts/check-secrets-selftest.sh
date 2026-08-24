@@ -70,6 +70,57 @@ pooler_ord="postgres.abcdefg:${pooler_pw}"
 check "Supabase pooler DSN with a <placeholder> user is refused" 1 "DATABASE_URL=${pooler_scheme}${pooler_ph}${pooler_tail}"
 check "the same pooler DSN with an ordinary user is refused"    1 "DATABASE_URL=${pooler_scheme}${pooler_ord}${pooler_tail}"
 
+# SONNY-127: a secret whose VALUE has no recognisable shape. RATE_LIMIT_SALT is 64 hex characters
+# with no vendor prefix, so it is caught by its variable name or not at all.
+salt_value="$(printf '%s' "$(openssl rand -hex 32 2>/dev/null || printf 'a%.0s' {1..64})")"
+check "a real RATE_LIMIT_SALT is refused"     1 "RATE_LIMIT_SALT=${salt_value}"
+check "a placeholder RATE_LIMIT_SALT passes"  0 'RATE_LIMIT_SALT=replace-me'
+check "a service-role key assignment is refused" 1 "SUPABASE_SERVICE_ROLE_KEY=${salt_value}"
+check "a Resend key assignment is refused"    1 "RESEND_API_KEY=${salt_value}"
+# A lockfile-style hash must NOT be caught: a generic entropy rule would flag every one of them,
+# and this pattern is name-anchored precisely so it does not.
+check "a bare hash is not a secret"           0 "integrity sha512-${salt_value}"
+# A TypeScript type annotation names the same variable and is not an assignment. This was a real
+# false positive on the pattern's first run, against config.ts.
+check "a type annotation is not an assignment" 0 '  RATE_LIMIT_SALT: nonEmpty.optional(),'
+
+# PR #87 R9: the QUOTED forms, which are how these are actually written. All six went through the
+# first version of the pattern, which required a bare value after `=`.
+check "a double-quoted salt is refused"      1 "RATE_LIMIT_SALT=\"${salt_value}\""
+check "a single-quoted salt is refused"      1 "RATE_LIMIT_SALT='${salt_value}'"
+check "a YAML quoted secret is refused"      1 "  RESEND_API_KEY: \"${salt_value}\""
+check "a YAML unquoted secret is refused"    1 "  RESEND_API_KEY: ${salt_value}"
+check "an exported shell secret is refused"  1 "export SMTP_PASSWORD=\"${salt_value}\""
+check "a compose list entry is refused"      1 "- RESEND_API_KEY=\"${salt_value}\""
+
+# PR #87 second round, F9. R9 made the VALUE's quotes optional and left the NAME bare, so every
+# serialised-environment form went through: a Kubernetes secret, a Terraform tfvars file and a
+# `docker inspect` dump all write the name in quotes. Verified missed before the fix.
+check "a JSON-quoted salt name is refused"    1 "  \"RATE_LIMIT_SALT\": \"${salt_value}\","
+check "a JSON-quoted key with no space is refused" 1 "{\"RESEND_API_KEY\":\"${salt_value}\"}"
+check "a quoted name with no value stays clean"    0 '  "RATE_LIMIT_SALT": null,'
+
+# F9's other half: RESEND_API_KEY had no VENDOR pattern, so a key not sitting beside its own name
+# had zero coverage. `re_` plus the two-segment body an issued key carries.
+resend_key="re_$(printf 'a%.0s' {1..10})_$(printf 'b%.0s' {1..24})"
+check "a bare Resend key is refused"          1 "curl -H 'Authorization: Bearer ${resend_key}'"
+# ...and the narrowness that keeps it usable: an ordinary snake_case identifier beginning `re_` is
+# not a credential. This repository contains four of them.
+check "a re_-prefixed identifier is not a key" 0 'local re_isolated_test_command="$1"'
+
+# PR #87 third round, F6. The name-anchored pattern was case-SENSITIVE, so the lowercase and
+# snake_case spellings -- the natural YAML, Helm, compose and Terraform shapes -- were invisible.
+# It matters most for exactly these three: they have no vendor-prefix fallback, so the variable name
+# is the only thing that can catch them at all. Each of the four below was verified to pass (exit 0,
+# i.e. NOT caught) before the case-insensitive split.
+check "a lowercase salt assignment is refused"     1 "rate_limit_salt=${salt_value}"
+check "a lowercase YAML jwt secret is refused"     1 "  supabase_jwt_secret: \"${salt_value}\""
+check "a mixed-case service-role key is refused"   1 "Supabase_Service_Role_Key=${salt_value}"
+check "a lowercase Helm-style value is refused"    1 "  rate_limit_salt: ${salt_value}"
+# ...and the vendor-prefix patterns stay case-SENSITIVE, which is the other half of the split. An
+# uppercased prefix is not a shape any vendor issues, and loosening it buys nothing.
+check "an uppercased vendor prefix is not a key"   0 'const k = "SK-ANT-'"$(printf 'B%.0s' {1..30})"'";'
+
 # C2: two matches of the SAME pattern on one line, the first allowlisted. `head -1` took only
 # the leading match, so the allowlisted local DSN shadowed a real credential after it.
 check "an allowlisted match does not shadow a later one" 1 'postgres://postgres:postgres@localhost/db then postgres://real:'"$(printf 'S%.0s' {1..12})"'@prod.internal/db'

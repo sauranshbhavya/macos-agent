@@ -24,10 +24,47 @@ Run from `server/`.
 | `npm run typecheck` | Types without emitting, over `src/`, `test/` **and** `vitest.config.ts`. The build's own tsconfig has `rootDir: src`, so it checked zero test files. |
 | `npm run dev` | Local server with reload. |
 | `npm run migrate -- up\|down\|status` | Apply, roll back one, or list. Needs `DATABASE_URL` and a prior `npm run build`. **The same command works inside the container image**, which is why it runs the compiled runner rather than the source. |
+| `npm run revocations` | What provider-side revocation is still owed on closed accounts. Exit 1 when any is. See "Owed revocations" below. |
 | `npm run check:secrets` | Refuse a credential in the repository. Also `check-secrets.sh staged`. |
 | `./scripts/check-secrets-selftest.sh` | Prove the scanner still refuses things. |
 | `./scripts/deploy.sh local` | Build the image, run it, verify `/v1/health` serves that build. |
 | `./scripts/deploy.sh staging\|production` | **Stubbed** — see "Deploying" below. |
+
+### Owed revocations
+
+Closing an account revokes its provider-side sessions. When the provider is unreachable at that
+moment the account **still closes** — that is the state the user asked for and it is committed — and
+the revocation is recorded as **owed**: `sonny.identity.provider_session_revoked_at` stays NULL.
+
+This matters because a closed account can no longer be attributed to its caller, by design, so the
+user cannot retry it themselves. Before the debt was recorded (PR #87 third round, F1) one transient
+provider error meant every identity after it in the loop was never attempted and nothing anywhere
+remembered, so the session survived indefinitely.
+
+```
+npm run revocations     # exit 0 when nothing is owed, 1 when something is
+```
+
+It reports account ids and counts, never provider-side user ids. **It does not currently drain**:
+`drainOwedRevocations` is written and tested, and it needs a real `AuthProvider` to call — which does
+not exist yet, blocked on the same founder-owned Resend/Supabase work as the rest of sign-in. The
+deletion route drains **its own account** after the close, which covers every case where the provider
+recovers inside the request. Wiring the residual to a schedule is one call and belongs to the ticket
+that lands the adapter.
+
+**The constraint this places on anything that deletes accounts — `feature/row-12-retention` above
+all.** The debt lives on the identity row, and `sonny.identity.account_id` cascades on delete, so a
+hard `DELETE FROM sonny.account` would take the record of the debt with it while the provider-side
+session stayed live — and this command would then report a clean sweep, which is the worst possible
+answer (PR #87 fifth round, F2). **Migration 0008 refuses that delete** with a
+`foreign_key_violation` naming the account and this command. The ordering it enforces is: **drain
+first, then delete.** Two things a sweep needs to know about it:
+
+- `TRUNCATE` bypasses it, because row triggers do not fire for `TRUNCATE`. That is deliberate — it is
+  a whole-table operator action, and the test suite resets itself with it — but a retention sweep
+  must not reach for `TRUNCATE` to get around a refusal.
+- Soft-deleting (`deleted_at`) is unaffected and always was. The refusal is only about removing the
+  row.
 
 The full suite needs a Postgres. One line, and it is thrown away afterwards:
 
