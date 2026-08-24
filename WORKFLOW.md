@@ -377,13 +377,18 @@ tickets' final states.
 
 **Pull requests are merged with a merge commit, never a squash.** Decided by Sauransh on
 2026-08-23, after noticing the strategy had drifted without anyone writing it down: `main`
-carried merge commits through PR #94 and then **sixteen consecutive squashes** — #96 through
-#109 and #111, plus #87, which merged late and out of number order — after which #110 and #112
-were merged with merge commits again. (The sequence is still readable:
+carried merge commits through PR #94 and then **sixteen consecutive squashes**, after which #110
+and #112 were merged with merge commits again. (The sequence is still readable:
 `git log --first-parent --format='%h %P %s' 98b4668..refs/archive/pre-rewrite-main` prints one
 parent for each of the sixteen and two for the last two.) Neither this file nor `CLAUDE.md`
 stated a strategy, so no session could have known which was intended — which is why it is
 stated here rather than left to be inferred from `git log`, the way it was found.
+
+**The run is #96 through #109 and #111 — and also #87, which is easy to miss and is why the
+count is sixteen rather than fifteen.** #87 opened long before the others and merged late, so it
+sits between #102 and #103 on the mainline despite the lower number. Ordering a set of PRs by
+number and reading off a range silently drops it. Merge order is the only ordering that answers
+this correctly, here and in the changelog's entry order.
 
 **Why merge commits.** Two reasons, and the second is specific to how this repository works.
 
@@ -410,8 +415,12 @@ judged smaller than losing the granularity.
 ### The 2026-08-24 rewrite
 
 `main` was rewritten so the previously-squashed pull requests appear as merge commits with
-their own commits intact, matching the **89** that already did
-(`git rev-list --first-parent --merges --count 98b4668`). **No code changed** — the
+their own commits intact, matching the PR merges that already did — **89** of them
+(`git rev-list --first-parent --merges --count 98b4668`). **Two counts of that are both right
+and differ by one**: 89 is PR merges on the mainline, and `git rev-list --merges --count 98b4668`
+answers **90**, because one reachable merge is not a PR merge at all — `008c8b0`, a
+`Merge remote-tracking branch 'origin/main' into feature/ui-ux-wireframe-fidelity` made inside a
+branch. Say which of the two a figure is before comparing it with another. **No code changed** — the
 file tree was verified identical at all eighteen steps and again at the end. Eighteen commits of
 `main` were replaced: the sixteen squashes — #87, #96 through #109, and #111 — plus #110 and
 #112, which were already merge commits and changed SHA only because the ancestry beneath them
@@ -443,20 +452,27 @@ across the rewrite is safe for exactly the reason renaming across a rebase is no
 ### Where the pre-rewrite history lives
 
 The commits the rewrite replaced, and the original copies of the branch commits it re-parented
-— **190** of them (`git rev-list --count 98b4668..20a180e` → 208, minus
-`git rev-list --count --first-parent 98b4668..20a180e` → 18) — are published under a
-non-default namespace:
+— **190** of them, meaning non-merge commits inside today's eighteen-entry range
+(`git rev-list --no-merges --count 98b4668..20a180e`) — are published under a non-default
+namespace. **SONNY-270's figure of 144 is a different measurement, not a superseded one**: it
+counted the commits made unreachable across the fourteen PRs archived on 2026-08-23, before #110
+and #112 existed and over a smaller set of refs. Neither number is wrong; they answer different
+questions, and a figure of this kind is worth naming rather than quoting.
+
+The refs:
 
 - `refs/archive/pre-rewrite-main` — `main`'s old head, `dc21d89`. Everything that was ever on
   the old mainline is reachable from it.
-- `refs/archive/pr-<N>` — the original head of a squashed PR's branch. Sixteen are published:
-  #95 through #109 and #111. (#95 is there because it was closed *unmerged* by founder decision
-  and its analysis was worth keeping.) #110 and #112 need none — they were real merge commits, so
-  their branch commits are reachable from `pre-rewrite-main` already.
-- **`refs/archive/pr-87` exists in at least one local clone and is not published.** #87 was a
-  squash, so its branch commits are on no published ref at all; whoever still has that ref should
-  push it. `git ls-remote origin 'refs/archive/*'` prints seventeen refs and this is not one of
-  them.
+- `refs/archive/pr-<N>` — the original head of a squashed PR's branch. **Seventeen are
+  published**: #87, and #95 through #109 and #111. (#95 is there because it was closed *unmerged*
+  by founder decision and its analysis was worth keeping.) #110 and #112 need none — they were
+  real merge commits, so their branch commits are reachable from `pre-rewrite-main` already.
+  `git ls-remote origin 'refs/archive/*'` prints **18** refs, those seventeen plus
+  `pre-rewrite-main`.
+- `refs/archive/pr-87` was local-only until 2026-08-24 and is now pushed. It was the one gap:
+  #87 was a squash, so until it was published its branch commits were reachable from no
+  published ref at all. Worth a check whenever a squashed branch is archived — a ref that exists
+  in the clone that made it looks identical to a ref that exists on the remote.
 
 **None of the archive namespace is fetched by a default clone**, and this is the part worth
 knowing before relying on it: the refspec a clone configures is
