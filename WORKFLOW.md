@@ -265,7 +265,12 @@ exception: when a post-open fix commit changes user-visible behavior the descrip
 names, append a short dated note (never rewrite) before the user's merge read. The
 changelog entry for the branch is written before the PR opens, by the session that closes
 the branch's last ticket — tickets hold per-task history, the changelog holds the durable
-architectural decisions and pitfalls; both, not either.
+architectural decisions and pitfalls; both, not either. **Its figures are measured at the
+head that merges.** The entry is written before the head stops moving, so when a fix round
+or a rebase moves it, every figure the entry cites is re-measured at the new head or
+dropped — never carried forward — and once merged, `git merge-base --is-ancestor <sha>
+origin/main` exits 0 for every SHA the entry cites (`CLAUDE.md`, Claims and evidence; the
+mechanism is in §8).
 
 **Fresh-session review:** the user launches a new CLI session, giving it only the branch
 name and its ticket identifiers — no implementer context. It hunts for problems rather
@@ -277,6 +282,9 @@ than validating:
   findings written against a tree that has moved are part already-fixed and part aimed at
   code that no longer exists, and separating the two costs more than re-reading. (Trigger:
   PR #26, where the reviewer's read and the implementer's push landed 14 seconds apart.)
+  While anchored there, run `git merge-base --is-ancestor <sha> <head>` on every SHA the
+  branch's changelog entry cites: one that exits 1 was stamped at a head a rebase has since
+  replaced, and its figure is re-measured or dropped before merge (§8).
 - Reads the full diff, and pulls every ticket's complete history *including closing
   comments* — verifying each comment's claims (files touched, decisions, evidence)
   against the real diff. A confident closing comment is a claim to check, not a fact.
@@ -378,9 +386,10 @@ tickets' final states.
 **Pull requests are merged with a merge commit, never a squash.** Decided by Sauransh on
 2026-08-23, after noticing the strategy had drifted without anyone writing it down: `main`
 carried merge commits through PR #94 and then **sixteen consecutive squashes**, after which #110
-and #112 were merged with merge commits again. (The sequence is still readable:
-`git log --first-parent --format='%h %P %s' 98b4668..refs/archive/pre-rewrite-main` prints one
-parent for each of the sixteen and two for the last two.) Neither this file nor `CLAUDE.md`
+and #112 were merged with merge commits again. (The squashes themselves are no longer readable —
+the pre-rewrite head they sat on went with the archive namespace, below — but their order is,
+because the rewrite kept it: `git log --first-parent --merges --format='%h %s' 98b4668..20a180e`
+prints the eighteen replacements in the order the originals merged.) Neither this file nor `CLAUDE.md`
 stated a strategy, so no session could have known which was intended — which is why it is
 stated here rather than left to be inferred from `git log`, the way it was found.
 
@@ -426,9 +435,10 @@ file tree was verified identical at all eighteen steps and again at the end. Eig
 #112, which were already merge commits and changed SHA only because the ancestry beneath them
 did.
 
-Every replaced SHA still resolves and none is an ancestor of `main` any more, so anything
-citing one needed repointing (SONNY-271 did that pass). Old commit on the left, the merge
-commit that replaced it on the right:
+None of the replaced SHAs is an ancestor of `main`, so anything citing one needed repointing
+(SONNY-271 did that pass); since the archive namespace was deleted they resolve from no published
+ref either, and this table is the record of them. Old commit on the left, the merge commit that
+replaced it on the right:
 
 ```
 #96   c4d9680 -> 385de7a      #105  961b9c2 -> 98c50c8
@@ -443,51 +453,98 @@ commit that replaced it on the right:
 ```
 
 **Each pair holds the same tree**, so repointing a citation renames the tree rather than
-restating the measurement — `git rev-parse <old>^{tree} <new>^{tree}` prints one SHA twice for
-all eighteen pairs. That distinction is load-bearing and is the opposite of what a *rebase*
+restating the measurement — `git rev-parse <old>^{tree} <new>^{tree}` printed one SHA twice for
+all eighteen pairs, checked on 2026-08-24 while the old commits were still published. It cannot
+be re-run from a fresh clone now, which is why the result is written here rather than left as a
+command. That distinction is load-bearing and is the opposite of what a *rebase*
 does: a rebase replays a branch onto a moved base, so its new commit holds different content
 and a figure measured at the old one has to be **re-measured, never translated**. Renaming
 across the rewrite is safe for exactly the reason renaming across a rebase is not.
 
-### Where the pre-rewrite history lives
+### What the archive held, and why it is gone
 
-The commits the rewrite replaced, and the original copies of the branch commits it re-parented
-— **190** of them, meaning non-merge commits inside today's eighteen-entry range
-(`git rev-list --no-merges --count 98b4668..20a180e`) — are published under a non-default
-namespace. **SONNY-270's figure of 144 is a different measurement, not a superseded one**: it
-counted the commits made unreachable across the fourteen PRs archived on 2026-08-23, before #110
-and #112 existed and over a smaller set of refs. Neither number is wrong; they answer different
-questions, and a figure of this kind is worth naming rather than quoting.
+Until 2026-08-24 the commits the rewrite replaced, and the original copies of the branch commits
+it re-parented — **190** of them, meaning non-merge commits inside today's eighteen-entry range
+(`git rev-list --no-merges --count 98b4668..20a180e`) — were published under a non-default
+namespace, `refs/archive/*`: `pre-rewrite-main`, the old head of `main` at `dc21d89`, and
+seventeen `pr-<N>` refs holding the original head of each squashed branch — #87, and #95 through
+#109 and #111 (#95 closed *unmerged* by founder decision and was kept for its analysis; #110 and
+#112 needed none, being real merges reachable from the old head). Eighteen refs, outside the
+refspec a clone configures, so no clone ever fetched them without asking. **SONNY-270's figure of
+144 is a different measurement, not a superseded one**: it counted the commits made unreachable
+across the fourteen PRs archived on 2026-08-23, before #110 and #112 existed and over a smaller
+set of refs. Neither number is wrong; they answer different questions, and a figure of this kind
+is worth naming rather than quoting.
 
-The refs:
+**The namespace was deleted entirely, by founder decision on 2026-08-24 (SONNY-274), rather than
+made clone-reachable.** The question had been whether to publish tags so a fresh clone could
+resolve pre-rewrite SHAs; measuring what actually needed them changed the answer. Of every
+hex-shaped token in the tracked files at `a10ff01`, 529 name a commit, and **161 of those name a
+commit that no published ref reaches — 153 of them in the changelog** — and not one of the 161 is
+a pre-rewrite `main` commit. They are branch-only commits that were never on `main`: measurement
+heads that a later rebase on the same branch replaced. A fresh clone never resolved them, before
+the rewrite or after it, and no archive could have helped. (Measured in a clone that still held
+the archive, since the split needs it: `git ls-files -z | xargs -0 grep -I -ohE
+'\b[0-9a-f]{7,40}\b' | sort -u` → 975 tokens; the 529 are those `git rev-parse --verify
+<token>^{commit}` accepts; each is then looked up in `git rev-list` over `refs/remotes/origin/*`
+and, separately, over `refs/archive/*` — **300** reachable from an `origin` branch, **68** from the
+archive alone, **161** from neither; the changelog's share is `git grep -l -w <token> --
+docs/sonny-v1-implementation-changelog.md` over the 161. With the archive gone, the same
+commands answer 229 from nothing published, the 68 having joined the 161; that is the expected
+answer now, not a regression.)
 
-- `refs/archive/pre-rewrite-main` — `main`'s old head, `dc21d89`. Everything that was ever on
-  the old mainline is reachable from it.
-- `refs/archive/pr-<N>` — the original head of a squashed PR's branch. **Seventeen are
-  published**: #87, and #95 through #109 and #111. (#95 is there because it was closed *unmerged*
-  by founder decision and its analysis was worth keeping.) #110 and #112 need none — they were
-  real merge commits, so their branch commits are reachable from `pre-rewrite-main` already.
-  `git ls-remote origin 'refs/archive/*'` prints **18** refs, those seventeen plus
-  `pre-rewrite-main`.
-- `refs/archive/pr-87` was local-only until 2026-08-24 and is now pushed. It was the one gap:
-  #87 was a squash, so until it was published its branch commits were reachable from no
-  published ref at all. Worth a check whenever a squashed branch is archived — a ref that exists
-  in the clone that made it looks identical to a ref that exists on the remote.
-
-**None of the archive namespace is fetched by a default clone**, and this is the part worth
-knowing before relying on it: the refspec a clone configures is
-`+refs/heads/*:refs/remotes/origin/*`, which does not cover `refs/archive/*`, and
-`git ls-remote --tags origin` returns nothing, so there is no tag picking them up either.
-To read them:
+Nothing the archive uniquely held is lost, and that was verified by patch identity rather than
+reasoned about. Of the 161, **124** have patch-identical content on `main` (`git show --format=
+<sha> | git patch-id --stable`, matched against the same over `git rev-list --no-merges
+origin/main`, at `a10ff01`); the other **37** are two kinds, neither of them lost work —
+superseded intermediate versions (a branch writes an entry, a later commit on the same branch
+moves or restamps it, so the intermediate patch never lands while the final one does) and
+deliberately unmerged work (the SONNY-69/80 CUA experiment, and PR #95's chip-row branch), all
+reachable from GitHub's own `refs/pull/<N>/head`, which GitHub keeps and this project does not
+manage. The one thing reachable from nothing else was the rollback anchor, `pre-rewrite-main`,
+and its one remaining use was a single command proving the rewrite faithful. That proof was run
+before the ref went, and is the record that survives it:
 
 ```
-git fetch origin '+refs/archive/*:refs/archive/*'
-git log --oneline refs/archive/pr-105        # the commits behind one PR
-git show <sha>                               # anything those commits contain
+pre-rewrite (dc21d89) tree: dc3f3ed0ffbe63abce5a76393c13adbb988e2801
+rewritten   (20a180e) tree: dc3f3ed0ffbe63abce5a76393c13adbb988e2801
+git diff --stat dc21d89 20a180e  ->  empty, exit 0
+commits: 734 -> 893
 ```
 
-**And one class of cited SHA is not published anywhere:** a branch's *pre-rebase* commits.
-Several changelog entries stamp figures at a commit that a later rebase on the same branch
-replaced — `c85572d`, `10b8df0`, `b705b99`, `ec4393c`, `5b4731c` among them — and those exist
-only in whichever worktree created them. That is not a consequence of the rewrite; they were
-never on `main` and never archived. It is the reason a figure belongs at the head that merges.
+Identical trees, an empty diff, at the rewritten head before PRs #113 and #114 added real
+content on top. Keeping the ref beyond that would have preserved only the ability to roll back
+to squashed history, which is what the rewrite was performed to remove. The mapping table above
+stays: it is a record of the rewrite, not a set of pointers to follow, and it is useful after the
+objects are gone. Its left column resolves nowhere now, which is what the convention below says
+to expect.
+
+### The convention, and the rule that stops the count growing
+
+**A branch SHA in this repository records *when* a measurement was taken, not a tree a reader is
+expected to fetch.** It resolves in the clone that made it and is not expected to resolve
+anywhere else. That has always been true; it was never written down, which is why its
+consequences read as a defect — 161 unresolvable citations looked like something the archive
+should have fixed, when the archive never held them. On the founder's Mac every worktree shares
+one object store, so a rebased-away head keeps resolving there for as long as that store lives;
+a fresh clone never sees it; neither is wrong. What a reader can rely on is the *ancestry* check
+in `CLAUDE.md`'s Claims and evidence: a SHA that `git merge-base --is-ancestor <sha> origin/main`
+accepts is on `main` for as long as `main` exists, and one it rejects — or one that does not
+resolve at all — is a timestamp on a branch, and the figure beside it is read as "true of that
+branch at that moment" and nothing more. The pre-rebase heads several entries stamp — `c85572d`,
+`10b8df0`, `b705b99`, `ec4393c`, `5b4731c` among them — were never published, never on `main`,
+and were never going to be. That is the convention working, not a gap in the archive.
+
+**The figures an entry ships with are measured at the head that merges.** `CLAUDE.md` states
+this in full, beside the SHA-stamping rule it completes; it is repeated here because the
+mechanism is a property of merge commits, which is what this section is about. A branch head
+that merges is preserved on `main` forever as the merge commit's second parent — #113's
+`b5d80d1` and #114's `e02c4a6` both pass the ancestry check today — and so is every commit
+beneath it. A head a later rebase replaced is preserved nowhere: #113's `064f387`, #112's
+`714606f` and #110's `9fe7ace` are each orphaned exactly that way, and they are how the 161
+accumulated. So when a branch's head moves after its entry is written — a fix round, a rebase
+onto a merged neighbour — an earlier figure is restated at the new head or dropped, never carried
+forward and never re-stamped. The check, once the entry has merged: `git merge-base --is-ancestor
+<sha> origin/main` exits 0 for every SHA the entry cites, read with nothing between the command
+and `$?`. Before the merge, the reviewer runs the same check against the branch head under
+review (step 7, "Step 0"), and a rebase after that review re-runs it.
