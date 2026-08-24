@@ -372,3 +372,122 @@ Then: the user runs the aggregated manual checklist in the real packaged app, an
 Delete the branch, remove the worktree if its session's sequence ends here (step 3's
 lifecycle rule — a session with tickets still ahead of it keeps the same one), confirm the
 tickets' final states.
+
+## 8. Merge strategy, and the history rewrite of 2026-08-24
+
+**Pull requests are merged with a merge commit, never a squash.** Decided by Sauransh on
+2026-08-23, after noticing the strategy had drifted without anyone writing it down: `main`
+carried merge commits through PR #94 and then **sixteen consecutive squashes**, after which #110
+and #112 were merged with merge commits again. (The sequence is still readable:
+`git log --first-parent --format='%h %P %s' 98b4668..refs/archive/pre-rewrite-main` prints one
+parent for each of the sixteen and two for the last two.) Neither this file nor `CLAUDE.md`
+stated a strategy, so no session could have known which was intended — which is why it is
+stated here rather than left to be inferred from `git log`, the way it was found.
+
+**The run is #96 through #109 and #111 — and also #87, which is easy to miss and is why the
+count is sixteen rather than fifteen.** #87 opened long before the others and merged late, so it
+sits between #102 and #103 on the mainline despite the lower number. Ordering a set of PRs by
+number and reading off a range silently drops it. Merge order is the only ordering that answers
+this correctly, here and in the changelog's entry order.
+
+**Why merge commits.** Two reasons, and the second is specific to how this repository works.
+
+- **They give both views; a squash gives only the coarse one.** `git bisect --first-parent`
+  walks the mainline one step per ticket, which is exactly what a squash offers, while a plain
+  `git bisect` descends into a branch's own commits when a finer answer is wanted, and
+  `git blame` lands on the commit that actually introduced a line instead of on a
+  thousand-line squash.
+- **A squash orphans every SHA this repository cites.** `CLAUDE.md`'s *Claims and evidence*
+  rule requires every measurement to carry the commit it was taken at, and the changelog alone
+  carries **501** distinct SHA-shaped strings
+  (`grep -o -E '\b[0-9a-f]{7,40}\b' docs/sonny-v1-implementation-changelog.md | sort -u | wc -l`
+  at `2ceb530`; that pattern also catches the odd tree hash, so read it as an upper bound).
+  A squash makes each one non-ancestral the moment it merges — and `git show` still prints a
+  commit for it, so it reads as checkable while proving nothing about `main`. A reader who
+  checks it sees a real tree, stops, and has verified nothing. Merge commits keep those stamps
+  genuinely checkable, which is the whole point of stamping them.
+
+**The cost, stated rather than left to be found:** a few intermediate commits inside a rebased
+branch do not compile — PR #111 reported four — so a `git bisect` that descends past the
+mainline can land on a commit that does not build. `git bisect skip` handles it. That cost was
+judged smaller than losing the granularity.
+
+### The 2026-08-24 rewrite
+
+`main` was rewritten so the previously-squashed pull requests appear as merge commits with
+their own commits intact, matching the PR merges that already did — **89** of them
+(`git rev-list --first-parent --merges --count 98b4668`). **Two counts of that are both right
+and differ by one**: 89 is PR merges on the mainline, and `git rev-list --merges --count 98b4668`
+answers **90**, because one reachable merge is not a PR merge at all — `008c8b0`, a
+`Merge remote-tracking branch 'origin/main' into feature/ui-ux-wireframe-fidelity` made inside a
+branch. Say which of the two a figure is before comparing it with another. **No code changed** — the
+file tree was verified identical at all eighteen steps and again at the end. Eighteen commits of
+`main` were replaced: the sixteen squashes — #87, #96 through #109, and #111 — plus #110 and
+#112, which were already merge commits and changed SHA only because the ancestry beneath them
+did.
+
+Every replaced SHA still resolves and none is an ancestor of `main` any more, so anything
+citing one needed repointing (SONNY-271 did that pass). Old commit on the left, the merge
+commit that replaced it on the right:
+
+```
+#96   c4d9680 -> 385de7a      #105  961b9c2 -> 98c50c8
+#97   b278209 -> ff17b71      #106  30dfc44 -> f3162c6
+#98   9bf36d1 -> 7255551      #107  cf3fa76 -> 971713e
+#99   8917a76 -> f755622      #108  31c2aed -> effbb43
+#100  2b14312 -> 76db3c3      #109  896035d -> dcca54d
+#101  187e46f -> 0c1e8ff      #110  ee84994 -> 56c8cf7
+#102  3036b34 -> 5f32f19      #111  2f22076 -> 70c024e
+#103  744eccf -> eb40294      #112  dc21d89 -> 20a180e
+#104  fb8420c -> e7732a9      #87   2c5804a -> 6cfd3ab
+```
+
+**Each pair holds the same tree**, so repointing a citation renames the tree rather than
+restating the measurement — `git rev-parse <old>^{tree} <new>^{tree}` prints one SHA twice for
+all eighteen pairs. That distinction is load-bearing and is the opposite of what a *rebase*
+does: a rebase replays a branch onto a moved base, so its new commit holds different content
+and a figure measured at the old one has to be **re-measured, never translated**. Renaming
+across the rewrite is safe for exactly the reason renaming across a rebase is not.
+
+### Where the pre-rewrite history lives
+
+The commits the rewrite replaced, and the original copies of the branch commits it re-parented
+— **190** of them, meaning non-merge commits inside today's eighteen-entry range
+(`git rev-list --no-merges --count 98b4668..20a180e`) — are published under a non-default
+namespace. **SONNY-270's figure of 144 is a different measurement, not a superseded one**: it
+counted the commits made unreachable across the fourteen PRs archived on 2026-08-23, before #110
+and #112 existed and over a smaller set of refs. Neither number is wrong; they answer different
+questions, and a figure of this kind is worth naming rather than quoting.
+
+The refs:
+
+- `refs/archive/pre-rewrite-main` — `main`'s old head, `dc21d89`. Everything that was ever on
+  the old mainline is reachable from it.
+- `refs/archive/pr-<N>` — the original head of a squashed PR's branch. **Seventeen are
+  published**: #87, and #95 through #109 and #111. (#95 is there because it was closed *unmerged*
+  by founder decision and its analysis was worth keeping.) #110 and #112 need none — they were
+  real merge commits, so their branch commits are reachable from `pre-rewrite-main` already.
+  `git ls-remote origin 'refs/archive/*'` prints **18** refs, those seventeen plus
+  `pre-rewrite-main`.
+- `refs/archive/pr-87` was local-only until 2026-08-24 and is now pushed. It was the one gap:
+  #87 was a squash, so until it was published its branch commits were reachable from no
+  published ref at all. Worth a check whenever a squashed branch is archived — a ref that exists
+  in the clone that made it looks identical to a ref that exists on the remote.
+
+**None of the archive namespace is fetched by a default clone**, and this is the part worth
+knowing before relying on it: the refspec a clone configures is
+`+refs/heads/*:refs/remotes/origin/*`, which does not cover `refs/archive/*`, and
+`git ls-remote --tags origin` returns nothing, so there is no tag picking them up either.
+To read them:
+
+```
+git fetch origin '+refs/archive/*:refs/archive/*'
+git log --oneline refs/archive/pr-105        # the commits behind one PR
+git show <sha>                               # anything those commits contain
+```
+
+**And one class of cited SHA is not published anywhere:** a branch's *pre-rebase* commits.
+Several changelog entries stamp figures at a commit that a later rebase on the same branch
+replaced — `c85572d`, `10b8df0`, `b705b99`, `ec4393c`, `5b4731c` among them — and those exist
+only in whichever worktree created them. That is not a consequence of the rewrite; they were
+never on `main` and never archived. It is the reason a figure belongs at the head that merges.

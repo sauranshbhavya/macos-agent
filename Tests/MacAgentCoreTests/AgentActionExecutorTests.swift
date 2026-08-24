@@ -47,7 +47,7 @@ struct AgentActionExecutorTests {
     /// resumptions that decided it — the unstructured `Task`'s first step, and the test's own step
     /// after the sleep — were both queued on the main actor, and this suite is `@MainActor`, so a
     /// busy machine delayed both by however long it delayed anything, independently. Measured with a
-    /// probe on this ticket at `961b9c2`, four consecutive flagged runs with a cold `swift build`
+    /// probe on this ticket at `98c50c8`, four consecutive flagged runs with a cold `swift build`
     /// beside the last three: that gap was 39 ms and 48 ms on the two runs that passed, and
     /// **8781 ms and 14474 ms on the two that failed** — both past `/bin/sleep 5`, both landing on
     /// the "expected cancellation to throw" branch, which is exactly what PR #109's R9 was reported
