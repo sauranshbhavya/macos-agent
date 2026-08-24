@@ -377,9 +377,13 @@ tickets' final states.
 
 **Pull requests are merged with a merge commit, never a squash.** Decided by Sauransh on
 2026-08-23, after noticing the strategy had drifted without anyone writing it down: `main`
-carried merge commits through PR #94 and then fourteen consecutive squashes. Neither this file
-nor `CLAUDE.md` stated a strategy, so no session could have known which was intended — which
-is why it is stated here rather than left to be inferred from `git log`, the way it was found.
+carried merge commits through PR #94 and then **sixteen consecutive squashes** — #96 through
+#109 and #111, plus #87, which merged late and out of number order — after which #110 and #112
+were merged with merge commits again. (The sequence is still readable:
+`git log --first-parent --format='%h %P %s' 98b4668..refs/archive/pre-rewrite-main` prints one
+parent for each of the sixteen and two for the last two.) Neither this file nor `CLAUDE.md`
+stated a strategy, so no session could have known which was intended — which is why it is
+stated here rather than left to be inferred from `git log`, the way it was found.
 
 **Why merge commits.** Two reasons, and the second is specific to how this repository works.
 
@@ -389,11 +393,14 @@ is why it is stated here rather than left to be inferred from `git log`, the way
   `git blame` lands on the commit that actually introduced a line instead of on a
   thousand-line squash.
 - **A squash orphans every SHA this repository cites.** `CLAUDE.md`'s *Claims and evidence*
-  rule requires every measurement to carry the commit it was taken at, and the changelog cites
-  hundreds of them. A squash makes each one non-ancestral the moment it merges — and `git show`
-  still prints a commit for it, so it reads as checkable while proving nothing about `main`. A
-  reader who checks it sees a real tree, stops, and has verified nothing. Merge commits keep
-  those stamps genuinely checkable, which is the whole point of stamping them.
+  rule requires every measurement to carry the commit it was taken at, and the changelog alone
+  carries **501** distinct SHA-shaped strings
+  (`grep -o -E '\b[0-9a-f]{7,40}\b' docs/sonny-v1-implementation-changelog.md | sort -u | wc -l`
+  at `2ceb530`; that pattern also catches the odd tree hash, so read it as an upper bound).
+  A squash makes each one non-ancestral the moment it merges — and `git show` still prints a
+  commit for it, so it reads as checkable while proving nothing about `main`. A reader who
+  checks it sees a real tree, stops, and has verified nothing. Merge commits keep those stamps
+  genuinely checkable, which is the whole point of stamping them.
 
 **The cost, stated rather than left to be found:** a few intermediate commits inside a rebased
 branch do not compile — PR #111 reported four — so a `git bisect` that descends past the
@@ -403,7 +410,8 @@ judged smaller than losing the granularity.
 ### The 2026-08-24 rewrite
 
 `main` was rewritten so the previously-squashed pull requests appear as merge commits with
-their own commits intact, matching the eighty-nine that already did. **No code changed** — the
+their own commits intact, matching the **89** that already did
+(`git rev-list --first-parent --merges --count 98b4668`). **No code changed** — the
 file tree was verified identical at all eighteen steps and again at the end. Eighteen commits of
 `main` were replaced: the sixteen squashes — #87, #96 through #109, and #111 — plus #110 and
 #112, which were already merge commits and changed SHA only because the ancestry beneath them
@@ -434,8 +442,10 @@ across the rewrite is safe for exactly the reason renaming across a rebase is no
 
 ### Where the pre-rewrite history lives
 
-The commits the rewrite replaced, and the original copies of the 144 branch commits it
-re-parented, are published under a non-default namespace:
+The commits the rewrite replaced, and the original copies of the branch commits it re-parented
+— **190** of them (`git rev-list --count 98b4668..20a180e` → 208, minus
+`git rev-list --count --first-parent 98b4668..20a180e` → 18) — are published under a
+non-default namespace:
 
 - `refs/archive/pre-rewrite-main` — `main`'s old head, `dc21d89`. Everything that was ever on
   the old mainline is reachable from it.
@@ -449,9 +459,10 @@ re-parented, are published under a non-default namespace:
   them.
 
 **None of the archive namespace is fetched by a default clone**, and this is the part worth
-knowing before relying on it: this repository's refspec is `+refs/heads/*:refs/remotes/origin/*`, which does not cover
-`refs/archive/*`, and `git ls-remote --tags origin` returns nothing, so there is no tag picking
-them up either. To read them:
+knowing before relying on it: the refspec a clone configures is
+`+refs/heads/*:refs/remotes/origin/*`, which does not cover `refs/archive/*`, and
+`git ls-remote --tags origin` returns nothing, so there is no tag picking them up either.
+To read them:
 
 ```
 git fetch origin '+refs/archive/*:refs/archive/*'
