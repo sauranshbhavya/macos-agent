@@ -765,9 +765,20 @@ run_tally() {
 # parameterized test reads "<name> with 10 test cases failed after ...", so the case count is
 # trimmed off the end. The run-level line ("Test run with N tests ... failed") is excluded by
 # name, and suite-level lines never contain " Test ".
+#
+# `sed '/^run with /d'` and not `grep -v '^run with '`, for a reason that has nothing to do with
+# style: grep exits 1 when it matches nothing, and on EMPTY input it always matches nothing. Under
+# `set -o pipefail` that made this whole function fail whenever no test was named — which is exactly
+# the case a mutant that TRAPS the test process produces, since a trapped process prints no
+# "Test ... failed after" line at all. The caller's `names="$(failing_tests "$log")"` then failed
+# under `set -e`, and the battery died three lines above the arm written to report it: "exiting 1 —
+# the harness ended at a point that is not one of its exits", with nothing above it saying which
+# mutant or why. sed deletes lines and exits 0 on empty input, so the arm is reachable and a trapped
+# run is reported instead of ending the battery mid-sentence (SONNY-224, founder decision after
+# PR #112's review recorded it).
 failing_tests() {
   sed -n 's/^.*[[:space:]]Test \(.*\) failed after .*$/\1/p' "$1" \
-    | grep -v '^run with ' \
+    | sed '/^run with /d' \
     | sed 's/ with [0-9][0-9]* test cases$//' \
     | sort -u
 }
@@ -1536,6 +1547,45 @@ printf \"✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n\""
   st_contains "the survivor is called out" "$ST_OUT" "SURVIVED"
   st_contains "and listed again in the summary" "$ST_OUT" "SURVIVORS"
   st_absent "a survivor is not reported as a kill" "$ST_OUT" "KILLED"
+
+  # A mutant that TRAPS the test process: the run starts, dies part way through, and never prints a
+  # "Test ... failed after" line for anything. `failing_tests` therefore returns nothing — which used
+  # to take the whole battery down with it, because `grep -v` exits 1 on empty input and `pipefail`
+  # turned that into a failed command substitution under `set -e`. The battery ended at "the harness
+  # ended at a point that is not one of its exits", three lines above the arm written to report
+  # exactly this, and with nothing above it naming the mutant. That direction under-reports rather
+  # than manufacturing a kill, which is why PR #112's reviewer recorded it rather than raising it;
+  # it is fixed here because a harness that dies mid-sentence is the extreme case of this branch's
+  # own thesis (SONNY-224, founder decision).
+  local traps_the_process='printf "◇  Test run started.\n"
+if grep -q "hour < 13" sample.swift; then
+  printf "◇  Suite ProductShellTests started.\n"
+  printf "◇  Test theListHasOneRow() started.\n"
+  exit 4
+fi
+printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+
+  printf '\n==> A mutant that traps the test process is reported, not a silent death\n'
+  st_run "$traps_the_process" "$root/kill.plan"
+  st_eq "the battery finishes and exits 0" "$ST_EXIT" "0"
+  st_contains "the outcome is reported" "$ST_OUT" "KILLED — the run failed but named no test"
+  st_contains "and it names the log to read" "$ST_OUT" "a crash or a harness error looks like this"
+  st_contains "and the summary carries it" "$ST_OUT" "KILLED (no named tests)"
+  st_absent "the harness did not die mid-sentence" "$ST_OUT" "not one of its exits"
+
+  # The same seam on the baseline, which took the same route out. A baseline that traps has to abort
+  # — nothing can be attributed to a mutant that was never applied — but it has to abort by SAYING
+  # so, which is what the arm below the failing-test list is for.
+  local baseline_traps='printf "◇  Test run started.\n"
+printf "◇  Suite ProductShellTests started.\n"
+exit 4'
+
+  printf '\n==> A baseline that traps aborts by saying so\n'
+  st_run "$baseline_traps" "$root/kill.plan"
+  st_eq "a trapped baseline exits 1" "$ST_EXIT" "1"
+  st_contains "the abort fires" "$ST_OUT" "BASELINE FAILED"
+  st_contains "and says the suite was red before any mutant" "$ST_OUT" "red before any mutant was applied"
+  st_absent "and does not die mid-sentence either" "$ST_OUT" "not one of its exits"
 
   # Stand-ins for the two shapes a declared failure arrives in. The first is what `Issue.record`
   # produces: "Issue recorded" on the line naming the test, and the message itself on a continuation
