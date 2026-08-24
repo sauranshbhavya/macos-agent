@@ -551,6 +551,15 @@ struct LocalRedactionImageTests {
 
 // MARK: - Live Vision pipeline
 
+/// **Serialized, because every test in here drives the real on-device recognizer** (PR #113 review,
+/// F5). Widening the realistic-size case into seven took this suite from three concurrent
+/// `VNRecognizeTextRequest`s to ten, and at ten the test process **stalls**: measured at `064f387`
+/// plus the F5 change, thirteen test cases print `started.` and the process then sits at 0% CPU
+/// with no further output and never finishes — reproduced twice, killed by hand both times. Each
+/// case on its own is fast (the seven parameterized ones together pass in 1.97 s), so it is the
+/// concurrency and not any one size. `.serialized` runs this suite's tests one at a time; the suite
+/// still runs in parallel with the other 141, so the latency test below still measures under load.
+@Suite(.serialized)
 struct LocalRedactionLiveVisionTests {
     @Test
     func renderedAPIKeyIsFoundAndPaintedByTheRealRecognizer() async throws {
@@ -588,10 +597,13 @@ struct LocalRedactionLiveVisionTests {
     /// a regression turning half a second into a minute fails loudly. That still fails, with five
     /// times the headroom over the worst load yet measured here, and no dependence on what else the
     /// machine is doing. Those four figures were measured on the **32 pt** fixture, which SONNY-260
-    /// replaced; the 24 pt fixture's own numbers are recorded on that ticket, measured the same way
-    /// (`grep REDACTION-LATENCY-MS` over consecutive flagged runs) and printed by this test on every
-    /// run, and they are smaller — so the ceiling's headroom grew rather than shrank and the four
-    /// figures above stay the worst case on record.
+    /// replaced, under a suite where this suite's live-Vision tests still ran in parallel with each
+    /// other. Both of those changed, so the numbers are not comparable and the smaller ones do not
+    /// mean redaction got faster: this fixture's own three-run figures are in SONNY-260's changelog
+    /// entry with the SHA they were measured at, and most of the drop is the `.serialized` above
+    /// taking nine concurrent recognizer calls off this one's back rather than anything about
+    /// redaction. What survives the change is the only thing the ceiling rests on: the worst load
+    /// ever measured here is still the 11742 ms cold-build run, and 60 s is still five times that.
     ///
     /// The content expectations are new with the same change. Timing a call that is never checked to
     /// have done anything is a benchmark rather than a test, and a mutant that made `redactCapture`
@@ -628,12 +640,18 @@ struct LocalRedactionLiveVisionTests {
     /// the region came back every time, with text a human reads as a secret, and the patterns did
     /// not match it. At every realistic capture size measured — 1280x800 at 12 and 14 pt,
     /// 1440x900 at 13 and 26 pt, 2560x1600 at 26 pt, 2880x1800 at 28 pt, and this 800x600 at 13 pt —
-    /// the key is found. `aPlantedKeyIsFoundAtARealisticCaptureSize` below is that result kept honest
-    /// by a test rather than by this paragraph. Nothing in `LocalRedactionService` changed: there is
-    /// no edge-of-capture case for it to handle, because the edge is measurably not what breaks this.
-    /// Every sweep quoted here — the width sweep, the font sweep, the position sweep at fixed width,
-    /// the candidate-depth probe and the realistic sizes — is reproduced with its exact probe code
-    /// and its SHA in SONNY-260's closing comment; none of it is re-derivable from this file alone.
+    /// the key is found — **all seven of those, pinned by
+    /// `aPlantedKeyIsFoundAtEveryRealisticCaptureSize` below**, which takes them as its arguments so
+    /// the list and the coverage cannot drift apart; `aPlantedKeyAtARealisticCaptureSizeIsPainted`
+    /// adds the pixel check on one of them. Nothing in `LocalRedactionService` changed: there is no
+    /// edge-of-capture case for it to handle, because the edge is measurably not what breaks this.
+    ///
+    /// The sweeps behind the paragraph above — the width sweep, the font sweep, the position sweep at
+    /// fixed width and the candidate-depth probe — were run from throwaway probe suites that are
+    /// **not in this tree**. SONNY-260 carries them: its closing comment has the results and a prose
+    /// recipe, and a later comment on the same ticket has the probe suites' full source, which is the
+    /// one place to copy them from rather than rewriting them. PR #113's reviewer rewrote all five
+    /// from scratch for want of that, which is why the source is now recorded instead of described.
     @Test
     func redactionLatencyIsBoundedOnARepresentativeCapture() async throws {
         let png = ImageFixtures.renderedTextPNG(
@@ -677,6 +695,13 @@ struct LocalRedactionLiveVisionTests {
         // dark there": at those rows the rendered text inks 1 of the 5 probed pixels on the card row
         // and 0 of 5 on the key row, so five out of five is something only the paint can produce.
         // Five reads per row rather than a sweep — every read decodes the PNG again.
+        //
+        // **The ink guards are pinned at those measured counts, not at `< 5`** (PR #113 review, F4).
+        // `< 5` passes at four-of-five, where "only the paint can produce this" no longer follows —
+        // the guard would have agreed with a fixture that had drifted until it was inking almost
+        // every probe. These fixtures are rendered by CoreText from fixed coordinates, so the counts
+        // are deterministic and there is nothing to leave slack for; the card row's one is the
+        // glyph stroke that happens to fall under x=270.
         let redacted = try #require(payload.redactedImageData)
         let cardProbes = [60, 130, 200, 270, 350]
         let keyProbes = [60, 180, 300, 420, 560]
@@ -693,70 +718,140 @@ struct LocalRedactionLiveVisionTests {
             .filter { ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: png, x: $0, yFromTop: 218)) }
             .count
         #expect(cardPainted == cardProbes.count)
-        #expect(cardInFixture < cardProbes.count)
+        #expect(cardInFixture == 1)
         #expect(keyPainted == keyProbes.count)
-        #expect(keyInFixture < keyProbes.count)
+        #expect(keyInFixture == 0)
         // A box, not the whole capture: an all-black image would satisfy the lines above.
         #expect(ImageFixtures.isWhite(ImageFixtures.rgb(inPNG: redacted, x: 10, yFromTop: 10)))
     }
 
-    /// The measurement the product's privacy claim actually rests on, kept as a test rather than as
+    /// The measurement the product's privacy claim actually rests on, kept as tests rather than as
     /// a sentence in the comment above (SONNY-260).
     ///
     /// The fixture above is a *representative capture* for timing a call; it is not representative of
     /// how much text a real window holds, and the 32 pt version of it is what made a missed key look
-    /// like a recognition limit. This is the other end: a 1440x900 capture with 41 lines of 13 pt
-    /// text — a realistic screenful, glyphs a third the size — carrying one planted key among the
-    /// prose. The runs behind that claim are recorded on SONNY-260 with the SHA they were measured
-    /// at; this is the case that matters, because it is the case a real capture looks like.
+    /// like a recognition limit. These are the other end: a realistic screenful — 13 pt to 28 pt at a
+    /// 1.6x line pitch, which is how a mail or notes window actually packs text — carrying one
+    /// planted key among the prose, at each of the seven capture sizes SONNY-260 measured.
     ///
-    /// It deliberately asserts only what is durable: that the key is found and its region painted.
-    /// It does **not** assert the recognizer's exact reading of any line, and no test here asserts
-    /// that the 32 pt fixture *fails* — encoding Vision's current misreads would be a test that
-    /// breaks when Vision improves.
+    /// **All seven are arguments rather than prose** (PR #113 review, F5). The doc comment above once
+    /// listed seven sizes and said the test below kept them honest while the test pinned one of them,
+    /// both Retina sizes included — a coverage gap that read like coverage. Taking the list as
+    /// arguments means the sentence and the suite cannot disagree: a size dropped from here is a
+    /// test that disappears from the run.
+    ///
+    /// They deliberately assert only what is durable — the key is found — and no test here asserts
+    /// that the 32 pt fixture *fails*, because encoding Vision's current misreads would break the
+    /// suite when Vision improves. The pixel half is ``aPlantedKeyAtARealisticCaptureSizeIsPainted``
+    /// below, on one size, because painting is a property of the service rather than of the size:
+    /// `redactCapture` paints every observation a match touches, so a found key is a painted key by
+    /// construction and seven pixel checks would be seven measurements of one fact.
+    @Test(arguments: RealisticCaptureSize.allMeasured)
+    func aPlantedKeyIsFoundAtEveryRealisticCaptureSize(_ size: RealisticCaptureSize) async throws {
+        let png = ImageFixtures.renderedTextPNG(
+            width: size.width,
+            height: size.height,
+            lines: size.lines,
+            fontSize: size.fontSize
+        )
+
+        let payload = try await LocalRedactionService()
+            .redactCapture(capture(png: png, width: size.width, height: size.height))
+
+        #expect(payload.report.contains { $0.detectionClass == .apiKey })
+    }
+
+    /// The pixel half of the case above, on the middle size of the seven.
+    ///
+    /// Found and *painted* are different claims, and the report alone establishes only the first.
+    /// This one reads the bytes that would leave the device.
     @Test
-    func aPlantedKeyIsFoundAtARealisticCaptureSize() async throws {
-        let secretLine = "api_key=sk-Abc123Def456Ghi789JklMno012Pqr"
+    func aPlantedKeyAtARealisticCaptureSizeIsPainted() async throws {
+        let size = RealisticCaptureSize.paintProbed
+        let png = ImageFixtures.renderedTextPNG(
+            width: size.width,
+            height: size.height,
+            lines: size.lines,
+            fontSize: size.fontSize
+        )
+
+        let payload = try await LocalRedactionService()
+            .redactCapture(capture(png: png, width: size.width, height: size.height))
+
+        #expect(payload.report.contains { $0.detectionClass == .apiKey })
+
+        // Painted, read off the pixels, and read the same way the latency test above does: the
+        // probes are checked against the *unredacted* fixture too, or a black pixel could just be a
+        // glyph stroke. The recognizer's box over the secret's line measures x 23...347,
+        // y 274...289, which the service pads by 2 px on every side; row 282 sits about nine pixels
+        // inside it top and bottom, and every probe at least fifteen pixels inside it horizontally.
+        // At that row the 13 pt glyphs ink **none** of the seven probed pixels — the line's
+        // ascenders and descenders miss all of them — so seven out of seven black is the paint and
+        // nothing else. Pinned at `== 0` rather than `< 7` for the reason the latency test's guards
+        // are (PR #113 review, F4): `< 7` passes at six-of-seven, where the sentence before it
+        // stops being true.
+        let redacted = try #require(payload.redactedImageData)
+        let probes = [40, 90, 140, 190, 240, 290, 320]
+        let painted = probes
+            .filter { ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: $0, yFromTop: 282)) }
+            .count
+        let inFixture = probes
+            .filter { ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: png, x: $0, yFromTop: 282)) }
+            .count
+        #expect(painted == probes.count)
+        #expect(inFixture == 0)
+        // Untouched where nothing was planted: the far right of the capture holds no text at all.
+        #expect(ImageFixtures.isWhite(ImageFixtures.rgb(inPNG: redacted, x: 1400, yFromTop: 860)))
+    }
+}
+
+/// One realistic capture size, and the screenful of text it carries.
+///
+/// The construction is shared by every size so that the only thing varying across the seven is the
+/// size itself — a per-size layout would make a miss ambiguous between the size and the layout,
+/// which is the mistake SONNY-260 spent a session undoing at 32 pt.
+struct RealisticCaptureSize: Sendable, CustomStringConvertible {
+    let width: Int
+    let height: Int
+    let fontSize: CGFloat
+
+    var description: String { "\(width)x\(height) at \(Int(fontSize)) pt" }
+
+    /// The seven SONNY-260 measured, in the order its record lists them.
+    static let allMeasured: [RealisticCaptureSize] = [
+        RealisticCaptureSize(width: 1280, height: 800, fontSize: 12),
+        RealisticCaptureSize(width: 1280, height: 800, fontSize: 14),
+        RealisticCaptureSize(width: 1440, height: 900, fontSize: 13),
+        RealisticCaptureSize(width: 1440, height: 900, fontSize: 26),
+        RealisticCaptureSize(width: 2560, height: 1600, fontSize: 26),
+        RealisticCaptureSize(width: 2880, height: 1800, fontSize: 28),
+        RealisticCaptureSize(width: 800, height: 600, fontSize: 13)
+    ]
+
+    /// The one the pixel check runs on. A `MacBook`-shaped capture at ordinary UI text size, and the
+    /// probe coordinates in that test are measured against *this* layout — changing it moves them.
+    static let paintProbed = RealisticCaptureSize(width: 1440, height: 900, fontSize: 13)
+
+    /// Prose at a 1.6x line pitch with one planted key at a fixed index, so the secret sits in the
+    /// middle of a block of text rather than alone on an empty capture. Index 12 fits every size
+    /// above: the smallest, 800x600 at 13 pt, holds 27 lines.
+    var lines: [(text: String, topLeft: CGPoint)] {
         let filler = [
             "Inbox — 42 unread", "Design review notes", "Deploy checklist", "Staging config",
             "Follow-ups assigned to the platform team", "Meeting notes for the design review",
             "Release train Thursday", "Rotate the staging credential"
         ]
-        // 13 pt at a 21 px line pitch, the way a mail or notes window actually packs text. The
-        // secret is the thirteenth line so it sits in the middle of the block rather than alone.
-        var lines: [(text: String, topLeft: CGPoint)] = []
-        var y: CGFloat = 24
+        let secretLine = "api_key=sk-Abc123Def456Ghi789JklMno012Pqr"
+        let pitch = fontSize * 1.6
+        var result: [(text: String, topLeft: CGPoint)] = []
+        var y = pitch
         var index = 0
-        while y < 880 {
-            lines.append((index == 12 ? secretLine : filler[index % filler.count], CGPoint(x: 24, y: y)))
-            y += 21
+        while y < CGFloat(height) - pitch {
+            result.append((index == 12 ? secretLine : filler[index % filler.count], CGPoint(x: 24, y: y)))
+            y += pitch
             index += 1
         }
-        let png = ImageFixtures.renderedTextPNG(width: 1440, height: 900, lines: lines, fontSize: 13)
-
-        let payload = try await LocalRedactionService().redactCapture(capture(png: png, width: 1440, height: 900))
-
-        #expect(payload.report.contains { $0.detectionClass == .apiKey })
-
-        // Painted, read off the pixels, and read the same way the test above does: the probes are
-        // checked against the *unredacted* fixture too, or a black pixel could just be a glyph
-        // stroke. The recognizer's box over the secret's line measures x 23...347, y 278...293,
-        // which the service pads by 2 px on every side; row 286 sits about nine pixels inside it
-        // vertically and every probe at least fifteen pixels inside it horizontally. At that row
-        // the 13 pt glyphs ink **none** of the seven probed pixels — the line's ascenders and
-        // descenders miss all of them — so seven out of seven black is the paint and nothing else.
-        let redacted = try #require(payload.redactedImageData)
-        let probes = [40, 90, 140, 190, 240, 290, 320]
-        let painted = probes
-            .filter { ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: $0, yFromTop: 286)) }
-            .count
-        let inFixture = probes
-            .filter { ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: png, x: $0, yFromTop: 286)) }
-            .count
-        #expect(painted == probes.count)
-        #expect(inFixture < probes.count)
-        // Untouched where nothing was planted: the far right of the capture holds no text at all.
-        #expect(ImageFixtures.isWhite(ImageFixtures.rgb(inPNG: redacted, x: 1400, yFromTop: 860)))
+        return result
     }
 }
 
