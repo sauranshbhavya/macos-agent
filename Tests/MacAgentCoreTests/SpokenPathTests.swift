@@ -377,7 +377,7 @@ struct SpokenPathTests {
         } catch {
             thrown = error
         }
-        guard case .outsideWhitelist(let path, _)? = thrown as? PathValidationError else {
+        guard case .outsideWhitelist(let path, _, _)? = thrown as? PathValidationError else {
             Issue.record("Expected .outsideWhitelist for \(destination), got \(String(describing: thrown))")
             return ""
         }
@@ -500,9 +500,13 @@ struct SpokenPathTests {
     /// "Not in effect — ", which is why the path stays at the front.
     @Test
     func theRefusalCopyIsPlainAndLeadsWithThePath() {
+        // `asked: nil` is the ordinary refusal — the person named a folder Sonny cannot use, and
+        // nothing resolved the path out from under them. SONNY-249's second sentence, for a path a
+        // symbolic link led out of, is pinned in `PathContainmentResolutionTests`.
         let error = PathValidationError.outsideWhitelist(
-            "/Users/someone/Downloads",
-            ["/Users/someone/Desktop", "/Users/someone/Documents"]
+            path: "/Users/someone/Downloads",
+            asked: nil,
+            roots: ["/Users/someone/Desktop", "/Users/someone/Documents"]
         )
         #expect(
             error.errorDescription
