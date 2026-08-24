@@ -410,14 +410,18 @@ struct LocalRedactionTextTests {
 
     /// The byte-offset trap, with the folded text itself carrying wider-than-ASCII scalars ahead of
     /// the secret (PR #116 review, F4): U+0416 and U+4E2D have no Latin twin, so they survive the
-    /// fold as two and three UTF-8 bytes, and an ordinal computed from a byte offset in the *folded* text would
-    /// land on the wrong original scalar. `lookAlikesAheadOfASecretDoNotShiftWhatIsMasked` cannot
-    /// catch that — its folded text is pure ASCII, so bytes and scalars coincide there.
+    /// fold as two and three UTF-8 bytes, and an ordinal computed from a byte offset in the *folded*
+    /// text lands four scalars late. `lookAlikesAheadOfASecretDoNotShiftWhatIsMasked` cannot catch
+    /// that — its folded text is pure ASCII, so bytes and scalars coincide there. The ASCII tail after
+    /// the secret is what lets this test *name* that mutant: with it, the wrong ordinal is still inside
+    /// the mapping and the mask lands on the wrong scalars, which an assertion sees; without it the
+    /// ordinal runs past the mapping and the precondition traps the process instead, which names no
+    /// test at all.
     @Test
     func unfoldableScalarsAheadOfASecretDoNotShiftWhatIsMasked() {
-        let payload = textService().redactText("\u{0416}\u{0416} \u{4E2D} p\u{0430}ssword: hunter2")
+        let payload = textService().redactText("\u{0416}\u{0416} \u{4E2D} p\u{0430}ssword: hunter2 is the value on this line")
 
-        #expect(Array((payload.maskedText ?? "").unicodeScalars) == Array("\u{0416}\u{0416} \u{4E2D} p\u{0430}ssword: •••••".unicodeScalars))
+        #expect(Array((payload.maskedText ?? "").unicodeScalars) == Array("\u{0416}\u{0416} \u{4E2D} p\u{0430}ssword: ••••• is the value on this line".unicodeScalars))
         #expect(payload.report.map(\.detectionClass) == [.passwordField])
     }
 
