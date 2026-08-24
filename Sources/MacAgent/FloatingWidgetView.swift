@@ -1682,7 +1682,7 @@ private struct WidgetResultPanel: View {
 /// it does not. (Two, not the three this said before PR #107's F3. A plain search answers four,
 /// because two of the hits are doc-comment mentions of `.help()` rather than calls; the live count
 /// at the branch point is `git grep -n "help(" -- Sources/MacAgent/FloatingWidgetView.swift` at
-/// `961b9c2` with the comment-prefixed lines dropped, which is 2. SONNY-251 counts 4 for the
+/// `98c50c8` with the comment-prefixed lines dropped, which is 2. SONNY-251 counts 4 for the
 /// current head, being those two plus these two, and the two figures agree.) **So the plain reading is that a sighted user loses the words**, which
 /// is the founder's decision costing what it costs rather than a gap papered over with a mechanism
 /// that might not run. The manual item asks specifically whether the tooltip appears at all; a real

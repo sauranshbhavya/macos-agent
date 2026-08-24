@@ -170,7 +170,7 @@ public enum SpokenPath {
     /// relatively, reads as `Archive`. **That cannot cost anybody a folder**, and the reason is
     /// structural rather than lucky: a relative value is resolved against the home directory, and
     /// every whitelist in production is built on the default roots (`git grep -n "PathWhitelist("
-    /// 961b9c2 -- Sources | grep -v PathWhitelist.swift` prints 6 sites, all of them
+    /// 98c50c8 -- Sources | grep -v PathWhitelist.swift` prints 6 sites, all of them
     /// `= PathWhitelist()`), so the only leading components that can land inside the whitelist at
     /// all are `Desktop` and `Documents`. `~/The Archive` and `~/Archive` are both refused, with or
     /// without this. What the strip can change is a refusal into a success — never a success into a

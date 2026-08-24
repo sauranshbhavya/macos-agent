@@ -736,7 +736,7 @@ struct UntrustedContentBoundaryScalarMatchingTests {
     /// first version required the call and a delimiter name on one line, case-sensitively. Every
     /// historical instance of the defect is a multi-line call whose first line carries no delimiter
     /// name, and the one single-line instance names the lower-case loop variable `delimiter`, so the
-    /// scan flagged 0 of 13 candidate lines at `c4d9680` and 0 of 9 at `b278209` — it would have caught
+    /// scan flagged 0 of 13 candidate lines at `385de7a` and 0 of 9 at `ff17b71` — it would have caught
     /// none of the three defects this branch fixed. Reading to the closing parenthesis is what makes
     /// the promise in the doc comment below true.
     private static func replacingOccurrencesCalls(in source: String) -> [String] {
@@ -781,14 +781,14 @@ struct UntrustedContentBoundaryScalarMatchingTests {
 
     /// **The guard proves it can see the defect before it is trusted to say the defect is gone.**
     ///
-    /// The three historical instances, copied verbatim out of `c4d9680` and `b278209`, are run through
+    /// The three historical instances, copied verbatim out of `385de7a` and `ff17b71`, are run through
     /// the same predicate the live sweep below uses. A guard that cannot flag the bugs it was written
     /// for is worse than no guard, because it reads as coverage — which is exactly what the first
     /// version of this test was.
     @Test
     func theSweepFlagsEveryHistoricalInstanceOfTheDefeatedIdiom() throws {
         let historical: [(String, String)] = [
-            ("UntrustedContentBoundary.escape at c4d9680", """
+            ("UntrustedContentBoundary.escape at 385de7a", """
                     var escaped = value
                     for delimiter in allDelimiters {
                         escaped = escaped.replacingOccurrences(
@@ -797,20 +797,20 @@ struct UntrustedContentBoundaryScalarMatchingTests {
                         )
                     }
                 """),
-            ("UntrustedContentBoundary.escapeURLValue at c4d9680 — the single-line one", """
+            ("UntrustedContentBoundary.escapeURLValue at 385de7a — the single-line one", """
                     for delimiter in allDelimiters {
                         let encoded = delimiter.addingPercentEncoding(withAllowedCharacters: .alphanumerics) ?? delimiter
                         escaped = escaped.replacingOccurrences(of: delimiter, with: encoded)
                     }
                 """),
-            ("WebResearchPromptBuilder.escapeObserved at b278209", """
+            ("WebResearchPromptBuilder.escapeObserved at ff17b71", """
                     value
                         .replacingOccurrences(
                             of: observedBeginDelimiter,
                             with: "[escaped observed delimiter: \\(observedBeginDelimiter)]"
                         )
                 """),
-            ("PriorTaskContext.escapeForPlanner at b278209", """
+            ("PriorTaskContext.escapeForPlanner at ff17b71", """
                     foldingLineBreaks(in: value)
                         .replacingOccurrences(
                             of: "TRUSTED_PRIOR_TASK_CONTEXT_BEGIN",
