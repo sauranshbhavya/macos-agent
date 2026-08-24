@@ -392,7 +392,7 @@ struct EditWorkspaceTests {
         }
 
         let validation = try #require(thrown as? PathValidationError)
-        guard case .outsideWhitelist(let path, let roots) = validation else {
+        guard case .outsideWhitelist(let path, _, let roots) = validation else {
             Issue.record("Expected .outsideWhitelist, got \(validation)")
             return
         }
