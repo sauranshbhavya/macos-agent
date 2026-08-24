@@ -85,7 +85,7 @@ public struct LocalDataDeletionService: @unchecked Sendable {
     /// thirteen names would leave them behind while reporting that everything was erased. Sonny
     /// cannot read them, which is not the same as their holding nothing.
     ///
-    /// **Two doors reach the set-aside files — this one and `deleteSetAsideFiles()` — and
+    /// **Two doors reach the set-aside files — this one and `deleteSetAsideFilesOnly()` — and
     /// `deleteStoreFilesOnly()` is what makes that an enforceable statement rather than an
     /// aspiration** (PR #110 review, F2). Command Center's per-row Delete used to call *this* method,
     /// so an ordinary press on a readable row destroyed a file an earlier press had promised to keep
@@ -111,7 +111,7 @@ public struct LocalDataDeletionService: @unchecked Sendable {
     /// promises.** Leaving it means "Delete routines" leaves unreadable routine bytes on disk, which
     /// is real — but it is *disclosed* (the user was told the file is kept) and *recoverable*
     /// (Settings' Data page counts and sizes those files and removes exactly them through
-    /// `deleteSetAsideFiles()`, and its whole wipe takes them too — both controls the product
+    /// `deleteSetAsideFilesOnly()`, and its whole wipe takes them too — both controls the product
     /// already frames as destructive). Sweeping it here would destroy data the product promised to
     /// keep, undisclosed and with no undo. Disclosed-and-recoverable beats silent-and-final.
     ///
@@ -138,12 +138,16 @@ public struct LocalDataDeletionService: @unchecked Sendable {
     /// hand that key back. Nothing prunes, caps or ages these files out — the founder's decision is
     /// that deleting them is precisely what the design exists to avoid — so the only thing that
     /// removes one is a control the user pressed: this, or the whole wipe.
-    public func deleteSetAsideFiles() throws -> LocalDataDeletionResult {
+    ///
+    /// Named beside `deleteStoreFilesOnly()` rather than after the view model's control, which was
+    /// its first name, so that `everyDeletionDoorIsCalledOnceFromTheMethodThatOwnsIt` can tell the
+    /// service's three doors from the controls that call them by name alone (PR #117 review, F5).
+    public func deleteSetAsideFilesOnly() throws -> LocalDataDeletionResult {
         try delete(reaching: .setAsideFilesOnly)
     }
 
     /// Every file set aside from one of these stores, in a stable order — exactly what
-    /// `deleteSetAsideFiles()` would remove.
+    /// `deleteSetAsideFilesOnly()` would remove.
     ///
     /// One listing, read by the summary and walked by the delete, so the number the user is shown
     /// and the files the press takes cannot come from different populations.

@@ -68,7 +68,7 @@ public struct LocalDataQuarantineError: Error, LocalizedError, Equatable {
 /// the user asks for destruction: its whole wipe, `LocalDataDeletionService.deleteAllLocalData()`,
 /// deletes what this leaves behind so a privacy wipe stays true, and since SONNY-266 its Data page
 /// also counts and sizes what this has set aside and removes exactly that, through
-/// `deleteSetAsideFiles()`. Nothing else prunes, caps or ages these files out, by founder decision
+/// `deleteSetAsideFilesOnly()`. Nothing else prunes, caps or ages these files out, by founder decision
 /// (2026-08-24): deleting them is precisely what this type exists to avoid. Command Center's per-row
 /// Delete calls `deleteStoreFilesOnly()` instead and leaves set-aside files alone — **for one round
 /// of this branch it called the wipe's door**, so an ordinary press on a row that had since recovered

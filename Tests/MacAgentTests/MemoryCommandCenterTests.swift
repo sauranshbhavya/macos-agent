@@ -1734,6 +1734,9 @@ struct MemoryCommandCenterTests {
             )
         )
         #expect(fixture.viewModel.setAsideFilesSummary.fileCount == 1)
+        // Stale on purpose, so the success branch's clearing of it is pinned rather than inherited
+        // from a fixture that starts at `nil` (PR #117 review, R8).
+        fixture.viewModel.errorMessage = "an earlier failure"
 
         fixture.viewModel.deleteSetAsideFiles()
 
@@ -1803,27 +1806,34 @@ struct MemoryCommandCenterTests {
         #expect(fixture.viewModel.setAsideFilesSummary == .none)
     }
 
-    /// **No run guard on the control, and that is a decision with an enumerated reason rather than
-    /// an omission.** The only writer of a set-aside file is `deleteMemory(in:)`, which refuses while
-    /// a task runs, and a run's bookkeeping writes to live store files and never to a suffixed name
-    /// — so the population this deletes cannot change under a run. Both halves are asserted: the
-    /// delete goes through, and the one writer really does refuse.
+    /// **The control refuses during a run, by founder decision (PR #117 review, F3).** The first
+    /// version carried no guard, on the argument that nothing this deletes can change under a run —
+    /// which is still true, and is the second half asserted here. The reason for the guard is the
+    /// other channel: a failure goes to `errorMessage`, which is suppressed while `isRunning` and
+    /// outranks the task's result once it ends, so a control that could fail mid-run would report a
+    /// task that succeeded as its own failure. The wipe's guard, the wipe's condition.
     @Test
-    func theSetAsideFilesCanBeDeletedWhileATaskIsRunning() throws {
+    func theSetAsideFilesCannotBeDeletedWhileATaskIsRunning() throws {
         let fixture = try makeMemoryFixture(wipesRealStoreFiles: true)
         defer { fixture.cleanUp() }
         try fixture.writeUnreadableFile(at: fixture.outputLocationStore.fileURL)
         fixture.memoryPageAppears()
         fixture.viewModel.deleteMemory(in: .outputLocations)
+        let before = fixture.viewModel.setAsideFilesSummary
+        #expect(before.fileCount == 1)
         fixture.viewModel.isRunning = true
         defer { fixture.viewModel.isRunning = false }
 
         fixture.viewModel.deleteSetAsideFiles()
 
-        #expect(fixture.viewModel.setAsideFilesSummary == .none)
-        #expect(fixture.viewModel.localDataDeletionStatusMessage == "Deleted 1 file Sonny could not read.")
+        #expect(LocalDataQuarantine().quarantinedSiblings(of: fixture.outputLocationStore.fileURL).count == 1)
+        #expect(fixture.viewModel.setAsideFilesSummary == before)
+        #expect(fixture.viewModel.errorMessage == "Stop the current run before deleting the files Sonny could not read.")
+        #expect(fixture.viewModel.localDataDeletionStatusMessage == nil)
+        // A refused press leaves the Memory page's sentence and its control exactly as they were.
+        #expect(fixture.viewModel.setAsideFilesFromLastDelete.count == 1)
 
-        // The premise: nothing can add to this population while a task runs.
+        // The population half, still true: nothing can add to these files while a task runs.
         try fixture.writeUnreadableFile(at: fixture.snippetStore.fileURL)
         fixture.viewModel.deleteMemory(in: .snippets)
         #expect(LocalDataQuarantine().quarantinedSiblings(of: fixture.snippetStore.fileURL).isEmpty)
@@ -1857,6 +1867,204 @@ struct MemoryCommandCenterTests {
         #expect(fixture.viewModel.memoryDeletionStatusMessage == nil)
     }
 
+    // MARK: - PR #117 review, F1: a partial removal follows the files, at both doors, at n ≥ 2
+
+    /// Sets or clears the user-immutable flag on one file, so an unlink of exactly that file is
+    /// refused (`EPERM`) while its neighbours delete normally — the only way to make one press
+    /// remove some of the files it was asked for and fail on the rest. Locking the directory
+    /// refuses every unlink in it, which is a different case. Owner and root are both refused while
+    /// the flag is set, so these tests need no privilege gate; the flag is cleared before the fixture
+    /// is removed.
+    private static func setImmutable(_ isImmutable: Bool, at fileURL: URL) throws {
+        try FileManager.default.setAttributes([.immutable: isImmutable], ofItemAtPath: fileURL.path)
+    }
+
+    /// Two files kept by one press — the Task history row covers four stores — as the founder's
+    /// replaced-Keychain case produces them. Returns the two set-aside files in the order the
+    /// service's listing walks them.
+    private static func keepTwoFilesFromOnePress(in fixture: MemoryFixture) throws -> (first: URL, second: URL) {
+        try fixture.writeUnreadableFile(at: fixture.taskHistoryStore.fileURL)
+        try fixture.writeUnreadableFile(at: fixture.taskPlanDetailStore.fileURL)
+        fixture.memoryPageAppears()
+        fixture.viewModel.deleteMemory(in: .taskHistory)
+        let quarantine = LocalDataQuarantine()
+        let first = try #require(quarantine.quarantinedSiblings(of: fixture.taskHistoryStore.fileURL).first)
+        let second = try #require(quarantine.quarantinedSiblings(of: fixture.taskPlanDetailStore.fileURL).first)
+        #expect(Set(fixture.viewModel.setAsideFilesFromLastDelete) == [first, second])
+        #expect(
+            fixture.viewModel.memoryDeletionStatusMessage
+                == "Task history starts over. The 2 files Sonny could not read are still on your Mac."
+        )
+        #expect(fixture.viewModel.setAsideFilesSummary.fileCount == 2)
+        return (first, second)
+    }
+
+    /// **The Data page's control removes one of two kept files and fails on the other: the Memory
+    /// page's sentence follows the files, and its Reveal control still names the one on disk.**
+    ///
+    /// The first version cleared the whole record when *any* named file was gone, so this press
+    /// retired "The 2 files … are still on your Mac" and the control beside it while a file that
+    /// sentence names was still there — and Reveal is the one surface that names it. Mutants that
+    /// read "any" for "every", or prune only on success, all survived because every test kept
+    /// exactly one file.
+    @Test
+    func aPartialRemovalFromTheDataPageKeepsTheMemoryPagesSentenceForTheFileStillOnDisk() throws {
+        let fixture = try makeMemoryFixture(wipesRealStoreFiles: true)
+        let kept = try Self.keepTwoFilesFromOnePress(in: fixture)
+        defer {
+            try? Self.setImmutable(false, at: kept.second)
+            fixture.cleanUp()
+        }
+        try Self.setImmutable(true, at: kept.second)
+
+        fixture.viewModel.deleteSetAsideFiles()
+
+        // The premise: one went, one did not.
+        #expect(!FileManager.default.fileExists(atPath: kept.first.path))
+        #expect(FileManager.default.fileExists(atPath: kept.second.path))
+        // The Data page's own report, composed from what happened (F4), and the line still counting.
+        let report = try #require(fixture.viewModel.localDataDeletionStatusMessage)
+        #expect(report.hasPrefix("Could not delete 1 of the 2 files Sonny could not read: task-plan-details.json.unreadable-"))
+        #expect(fixture.viewModel.errorMessage == report)
+        #expect(fixture.viewModel.setAsideFilesSummary.fileCount == 1)
+        // The Memory page: the survivor still named, the sentence re-derived for one.
+        #expect(fixture.viewModel.setAsideFilesFromLastDelete == [kept.second])
+        #expect(
+            fixture.viewModel.memoryDeletionStatusMessage
+                == "Task history starts over. The file Sonny could not read is still on your Mac."
+        )
+    }
+
+    /// The same press with nothing in its way: both go, and the sentence and the control go with
+    /// them — "every named file gone" at n = 2, which the one-file tests could not tell from "any".
+    @Test
+    func removingBothKeptFilesFromTheDataPageRetiresTheSentenceAndTheControlTogether() throws {
+        let fixture = try makeMemoryFixture(wipesRealStoreFiles: true)
+        defer { fixture.cleanUp() }
+        _ = try Self.keepTwoFilesFromOnePress(in: fixture)
+
+        fixture.viewModel.deleteSetAsideFiles()
+
+        #expect(fixture.viewModel.localDataDeletionStatusMessage == "Deleted 2 files Sonny could not read.")
+        #expect(fixture.viewModel.setAsideFilesFromLastDelete.isEmpty)
+        #expect(fixture.viewModel.memoryDeletionStatusMessage == nil)
+        #expect(fixture.viewModel.setAsideFilesSummary == .none)
+    }
+
+    /// **The whole wipe is the other door, and a wipe that fails part-way never reaches the wipe's
+    /// own clearing** — so its failure branch has to prune the record the same way, or the Memory
+    /// page keeps naming a file the wipe removed.
+    @Test
+    func aPartialWipeKeepsTheMemoryPagesSentenceForTheFileStillOnDisk() throws {
+        let fixture = try makeMemoryFixture(wipesRealStoreFiles: true)
+        let kept = try Self.keepTwoFilesFromOnePress(in: fixture)
+        defer {
+            try? Self.setImmutable(false, at: kept.second)
+            fixture.cleanUp()
+        }
+        try Self.setImmutable(true, at: kept.second)
+
+        fixture.viewModel.deleteLocalData()
+
+        #expect(!FileManager.default.fileExists(atPath: kept.first.path))
+        #expect(FileManager.default.fileExists(atPath: kept.second.path))
+        #expect(try #require(fixture.viewModel.localDataDeletionStatusMessage).hasPrefix("Could not delete local data:"))
+        #expect(fixture.viewModel.setAsideFilesSummary.fileCount == 1)
+        #expect(fixture.viewModel.setAsideFilesFromLastDelete == [kept.second])
+        #expect(
+            fixture.viewModel.memoryDeletionStatusMessage
+                == "Task history starts over. The file Sonny could not read is still on your Mac."
+        )
+    }
+
+    /// **A failure sentence is about the step that failed, not the kept files, so a prune leaves it
+    /// standing** — while the Reveal control, which is about the files, still goes when they do.
+    ///
+    /// The per-row press here fails its readable half (the live task-history file is immutable) and
+    /// keeps its unreadable half; the Data page's control then removes the kept file.
+    @Test
+    func pruningLeavesAPerRowFailureSentenceStandingWhileItsControlGoes() async throws {
+        let fixture = try makeMemoryFixture(wipesRealStoreFiles: true)
+        defer {
+            try? Self.setImmutable(false, at: fixture.taskHistoryStore.fileURL)
+            fixture.cleanUp()
+        }
+        fixture.viewModel.command = "add two and two"
+        fixture.viewModel.start(prebuiltPlan: planCalculating("2 + 2"))
+        try await fixture.waitUntilIdle()
+        try fixture.writeUnreadableFile(at: fixture.taskPlanDetailStore.fileURL)
+        try Self.setImmutable(true, at: fixture.taskHistoryStore.fileURL)
+        fixture.memoryPageAppears()
+
+        fixture.viewModel.deleteMemory(in: .taskHistory)
+
+        let failure = try #require(fixture.viewModel.memoryDeletionStatusMessage)
+        #expect(failure.hasPrefix("Could not delete task history:"))
+        #expect(fixture.viewModel.setAsideFilesFromLastDelete.count == 1)
+
+        fixture.viewModel.deleteSetAsideFiles()
+
+        #expect(fixture.viewModel.setAsideFilesFromLastDelete.isEmpty)
+        #expect(fixture.viewModel.memoryDeletionStatusMessage == failure)
+        #expect(fixture.viewModel.setAsideFilesSummary == .none)
+    }
+
+    /// **The prune rewrites the Memory page's sentence without reading it, and this is what makes
+    /// that safe**: the sentence has exactly one writer besides the prune and the wipe's clearing —
+    /// `deleteMemory(in:)`, which replaces the record in the same breath — so the sentence on screen
+    /// is always the current record's. A second writer would make the prune overwrite a sentence
+    /// about something else, and this scan is where that arrives as a red test.
+    @Test
+    func theMemoryPagesSentenceHasOneWriterBesidesThePrune() throws {
+        let viewModel = try MacAgentSource.read("AgentViewModel.swift")
+        var writers: [String: Int] = [:]
+        for owner in [
+            "func deleteMemory(in category: MemoryCategory) {",
+            "private func pruneLastPerRowDeleteToFilesStillOnDisk() {",
+            "private func clearInMemoryLocalDataState() {"
+        ] {
+            let body = try MacAgentSource.braceBlock(of: viewModel, openedBy: owner)
+            writers[owner] = MacAgentSource.count(of: "memoryDeletionStatusMessage = ", inText: body)
+        }
+        #expect(writers["func deleteMemory(in category: MemoryCategory) {"] == 1)
+        #expect(writers["private func pruneLastPerRowDeleteToFilesStillOnDisk() {"] == 1)
+        #expect(writers["private func clearInMemoryLocalDataState() {"] == 1)
+        // And nowhere else in the target.
+        var total = 0
+        for file in try MacAgentSource.appSourceFiles() {
+            total += MacAgentSource.count(of: "memoryDeletionStatusMessage = ", inText: try MacAgentSource.read(file))
+        }
+        #expect(total == 3, "memoryDeletionStatusMessage has \(total) writers; the prune assumes three")
+    }
+
+    /// **Each of the service's three doors is called exactly once in the app target, from the method
+    /// that owns it** (PR #117 review, F5). A fourth caller of `deleteAllLocalData()` — PR #110's F2
+    /// in a new place — failed nothing until now: the row's own scan pins only the button's action.
+    /// The door names are unambiguous by construction: `deleteSetAsideFilesOnly()` was renamed
+    /// beside `deleteStoreFilesOnly()` so this scan can tell it from the view model's
+    /// `deleteSetAsideFiles()`.
+    @Test
+    func everyDeletionDoorIsCalledOnceFromTheMethodThatOwnsIt() throws {
+        let doors: [(door: String, owner: String)] = [
+            (".deleteAllLocalData()", "func deleteLocalData() {"),
+            (".deleteStoreFilesOnly()", "func deleteMemory(in category: MemoryCategory) {"),
+            (".deleteSetAsideFilesOnly()", "func deleteSetAsideFiles() {")
+        ]
+        let viewModel = try MacAgentSource.read("AgentViewModel.swift")
+        var total: [String: Int] = [:]
+        for file in try MacAgentSource.appSourceFiles() {
+            let source = try MacAgentSource.read(file)
+            for (door, _) in doors {
+                total[door, default: 0] += MacAgentSource.count(of: door, inText: source)
+            }
+        }
+        for (door, owner) in doors {
+            #expect(total[door] == 1, "\(door) is called \(total[door] ?? 0) time(s) across Sources/MacAgent — one door, one caller")
+            let body = try MacAgentSource.braceBlock(of: viewModel, openedBy: owner)
+            #expect(MacAgentSource.count(of: door, inText: body) == 1, "\(door) is not called from \(owner)")
+        }
+    }
+
     /// **A file the control cannot delete stays counted and is named, rather than vanishing from
     /// the line because the control was pressed.** The Memory page's sentence about it is still
     /// true, so that stays too.
@@ -1884,8 +2092,10 @@ struct MemoryCommandCenterTests {
 
         #expect(fixture.viewModel.setAsideFilesSummary == before)
         let message = try #require(fixture.viewModel.localDataDeletionStatusMessage)
-        #expect(message.hasPrefix("Could not delete the files Sonny could not read:"))
-        #expect(message.contains("output-locations.json.unreadable-"))
+        // The sentence is composed from the error's fields — nothing deleted, one failed — and never
+        // carries the wipe's "local data files" (PR #117 review, F4).
+        #expect(message.hasPrefix("Could not delete the file Sonny could not read: output-locations.json.unreadable-"))
+        #expect(!message.contains("local data file"))
         #expect(fixture.viewModel.errorMessage == message)
         #expect(fixture.viewModel.setAsideFilesFromLastDelete.count == 1)
         #expect(try #require(fixture.viewModel.memoryDeletionStatusMessage).contains("still on your Mac"))
@@ -1928,8 +2138,48 @@ struct MemoryCommandCenterTests {
                 == "The files Sonny could not read were already gone."
         )
         #expect(
-            MemoryDeletionCopy.setAsideFilesFailure("x")
+            MemoryDeletionCopy.setAsideFilesFailure(describing: "x")
                 == "Could not delete the files Sonny could not read: x"
+        )
+        // F4: composed from the error's fields — what failed, how many went first — and never the
+        // wipe's "local data files".
+        let reason = ["You don't have permission."]
+        #expect(
+            MemoryDeletionCopy.setAsideFilesFailure(LocalDataDeletionError(
+                result: LocalDataDeletionResult(deletedFileCount: 0, missingFileCount: 0, failedFilePaths: ["/x/a.json.unreadable-1"]),
+                underlyingDescriptions: reason
+            )) == "Could not delete the file Sonny could not read: a.json.unreadable-1. (You don't have permission.)"
+        )
+        #expect(
+            MemoryDeletionCopy.setAsideFilesFailure(LocalDataDeletionError(
+                result: LocalDataDeletionResult(deletedFileCount: 1, missingFileCount: 0, failedFilePaths: ["/x/b.json.unreadable-2"]),
+                underlyingDescriptions: reason
+            )) == "Could not delete 1 of the 2 files Sonny could not read: b.json.unreadable-2. (You don't have permission.)"
+        )
+        #expect(
+            MemoryDeletionCopy.setAsideFilesFailure(LocalDataDeletionError(
+                result: LocalDataDeletionResult(deletedFileCount: 0, missingFileCount: 0, failedFilePaths: ["/x/a.json.unreadable-1", "/x/b.json.unreadable-2"]),
+                underlyingDescriptions: []
+            )) == "Could not delete the 2 files Sonny could not read: a.json.unreadable-1, b.json.unreadable-2."
+        )
+        #expect(MemoryDeletionCopy.setAsideFilesRunGuard == "Stop the current run before deleting the files Sonny could not read.")
+        // F1: the per-row report follows the record it is derived from.
+        let kept = [URL(fileURLWithPath: "/x/a"), URL(fileURLWithPath: "/x/b")]
+        #expect(
+            MemoryDeletionCopy.perRowDeleteReport(LastPerRowDelete(category: .taskHistory, deletedFileCount: 2, keptFileURLs: kept, failure: nil))
+                == "Task history starts over. The 2 files Sonny could not read are still on your Mac."
+        )
+        #expect(
+            MemoryDeletionCopy.perRowDeleteReport(LastPerRowDelete(category: .taskHistory, deletedFileCount: 2, keptFileURLs: [kept[0]], failure: nil))
+                == "Task history starts over. The file Sonny could not read is still on your Mac."
+        )
+        #expect(
+            MemoryDeletionCopy.perRowDeleteReport(LastPerRowDelete(category: .taskHistory, deletedFileCount: 3, keptFileURLs: [], failure: nil))
+                == "Deleted task history — 3 files."
+        )
+        #expect(
+            MemoryDeletionCopy.perRowDeleteReport(LastPerRowDelete(category: .taskHistory, deletedFileCount: 0, keptFileURLs: kept, failure: "boom"))
+                == "Could not delete task history: boom"
         )
         // Finder's unit — decimal, not binary — pinned against a formatter built independently,
         // which holds in any locale where a literal "1.5 MB" would not; and the two styles are
@@ -1967,8 +2217,9 @@ struct MemoryCommandCenterTests {
         #expect(MacAgentSource.count(of: "viewModel.deleteSetAsideFiles()", inText: row) == 1)
         #expect(MacAgentSource.count(of: "viewModel.deleteLocalData()", inText: row) == 0)
         #expect(MacAgentSource.count(of: "viewModel.deleteSetAsideFiles()", inText: page) == 1)
-        // The wipe's own control is still there beside it, disabled during a run as it always was.
-        #expect(page.contains(".disabled(viewModel.isRunning)"))
+        // Both controls disable under the wipe's condition — the wipe's as it always was, the row's by
+        // founder decision (PR #117 review, F3) — so the view-model guard is the backstop.
+        #expect(MacAgentSource.count(of: ".disabled(viewModel.isRunning)", inText: page) == 2)
 
         let onAppear = try MacAgentSource.braceBlock(of: page, openedBy: ".onAppear {")
         #expect(onAppear.contains("viewModel.refreshSetAsideFiles()"))
