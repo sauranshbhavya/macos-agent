@@ -164,6 +164,7 @@ private func makeViewModel(root: URL, plannerSelection: String?) throws -> Agent
         browserOpener: HermeticBrowserOpener(),
         appOpener: HermeticAppOpener(),
         fileOpener: HermeticFileOpener(),
+        finderRevealer: hermeticFinderRevealer,
         mediaOpener: HermeticMediaOpener(),
         runningAppSwitcher: HermeticRunningAppSwitcher(),
         shortcutInvoker: HermeticShortcutInvoker(),

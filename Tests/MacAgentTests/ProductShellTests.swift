@@ -649,7 +649,11 @@ struct ProductShellTests {
             // now belong to a different task.
             "activeResumableTask",
             "pendingResumableContinuation",
-            "dismissedResumeOfferIDs"
+            "dismissedResumeOfferIDs",
+            // SONNY-239's Reveal in Finder control renders off this. The wipe's own sweep has just
+            // deleted the files it names, so a surviving list would offer to show the user files
+            // that are gone.
+            "setAsideFilesFromLastDelete"
         ]
 
         // Not assigned by the wipe, but rewritten by the four `refresh…` calls it ends with — from
@@ -667,7 +671,13 @@ struct ProductShellTests {
             "clipboardHistoryEnabled",    // refreshClipboardHistoryNotice()
             "clipboardHistoryTimer",      // ditto, via start/stopClipboardHistoryMonitoring()
             "localStorageLoadFailures",   // record/clearLocalStorageLoadFailure, inside all four
-            "localStorageNotice"          // ditto, via refreshLocalStorageNotice()
+            "localStorageNotice",         // ditto, via refreshLocalStorageNotice()
+            // Reloaded by `refreshStoreReadability()`, which `refreshMemoryRowsAfterRun()` calls —
+            // and the wipe reaches it the same way the four refreshes above reach the rest
+            // (SONNY-239). It matters that it does: the wipe deletes the file a row was marked
+            // unreadable for, so a set that survived would leave that row saying "Can't be read"
+            // about a file that no longer exists.
+            "unreadableStores"
         ]
 
         // Deliberately untouched, in four groups.
@@ -683,7 +693,7 @@ struct ProductShellTests {
             "zipArchiver", "shortcutRunHistoryStore", "taskHistoryStore", "taskPlanDetailStore",
             "clipboardHistorySettingsStore", "approvedAppStore", "outputLocationStore",
             "resumableTaskStore",
-            "clipboardHistoryMonitor",
+            "clipboardHistoryMonitor", "finderRevealer",
             "localDataDeletionService", "memorySettingsStore", "memoryPolicyProvider",
             "priorTaskContextStore", "taskUsageRecorder", "plannerProviderRegistry",
             "plannerSelection", "userDefaults", "whitelist", "routineScheduleTimer", "wakeObserver",
@@ -3117,6 +3127,7 @@ private func makeProductShellFixture(
         browserOpener: browserOpener,
         appOpener: appOpener,
         fileOpener: fileOpener,
+        finderRevealer: hermeticFinderRevealer,
         mediaOpener: HermeticMediaOpener(),
         runningAppSwitcher: HermeticRunningAppSwitcher(),
         shortcutInvoker: HermeticShortcutInvoker(),
@@ -3279,6 +3290,20 @@ final class HermeticAppOpener: AppOpening {
     func open(bundleIdentifier: String) async throws {
         openedBundleIDs.append(bundleIdentifier)
     }
+}
+
+/// The inert stand-in for `AgentViewModel`'s `finderRevealer`, beside the other hermetic seams and
+/// for the same reason: the live one calls `NSWorkspace.activateFileViewerSelecting`, so a fixture
+/// that reached it would steal focus and open Finder windows in the middle of a suite run
+/// (SONNY-239). The parameter is undefaulted, per SONNY-240's rule applied to something that is not
+/// a store, so the compiler asks every fixture — and this is what all fourteen of them answer.
+///
+/// A function rather than a type, because the seam is a closure: `MemoryCommandCenterTests` needs
+/// to record what was revealed and has `MemoryFixtureFinderRevealer` for that, and every other
+/// fixture only needs the call to go nowhere.
+@MainActor
+func hermeticFinderRevealer(_ urls: [URL]) {
+    _ = urls
 }
 
 @MainActor
