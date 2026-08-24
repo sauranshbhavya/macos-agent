@@ -193,7 +193,17 @@ struct SecretTextDetector {
 
     private func oneTimeCodeMatches(in text: String) -> [SecretTextMatch] {
         var results: [SecretTextMatch] = []
-        let contextual = /(?i)(?:code|otp|2fa|passcode|verification|authenticator|one[ -]?time)\b\D{0,20}?(\d{6,8})\b/
+        // The context word must begin a word, and "begin" is "not preceded by a letter of any
+        // script" rather than `\b` (PR #116 review, F2). Without it a *suffix* was a context word:
+        // `Barcode 123456` matched on `code`, and once the fold landed, an all-caps Cyrillic word
+        // folded into one — the Russian word for "view", U+041F U+0420 U+041E U+0421 U+041C U+041E
+        // U+0422 U+0420, folds to `…MOTP`, so with `: 123456` after it the line matched at 0.85,
+        // above the threshold. `[^\p{L}]` rather than `\b` because an underscore is a word
+        // character: `otp_code=123456` and `verification_code: 483291` are how forms and JSON label
+        // the field, and `\b` would drop both. An unfolded letter (U+0416, which has no Latin twin)
+        // is a letter too, so a look-alike glued to a Cyrillic word cannot fake the start of one
+        // either. (Code points rather than pasted letters, per the conventions file.)
+        let contextual = /(?i)(?:^|[^\p{L}])(?:code|otp|2fa|passcode|verification|authenticator|one[ -]?time)\b\D{0,20}?(\d{6,8})\b/
         for match in text.matches(of: contextual) {
             let value = match.output.1
             results.append(SecretTextMatch(

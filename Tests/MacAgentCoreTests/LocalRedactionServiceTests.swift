@@ -352,6 +352,75 @@ struct LocalRedactionTextTests {
         #expect(code.report.map(\.detectionClass) == [.oneTimeCode])
     }
 
+    /// PR #116's blocker, proved against the detector rather than read off the table (F1): the
+    /// capital-I look-alikes — U+0406, the Ukrainian capital I a uk-UA-capable recognizer can type
+    /// for a Latin `I`; U+04C0 CYRILLIC LETTER PALOCHKA; U+0196 LATIN CAPITAL LETTER IOTA — fold to
+    /// `I`, so `AKIA` and `AIza` still self-identify and the blob rule still sees an uppercase
+    /// letter. Before the fix all three folded to `l` and none of these matched.
+    @Test
+    func capitalLookAlikesOfIRestoreTheCaseSensitivePatterns() {
+        for capital in ["\u{0406}", "\u{04C0}", "\u{0196}"] {
+            let aws = textService().redactText("AK\(capital)A\(capital)OSFODNN7EXAMPLE")
+            #expect(aws.maskedText == "•••••", Comment(rawValue: capital))
+            #expect(aws.report == [
+                RedactionReportEntry(detectionClass: .apiKey, count: 1, locationCategory: .text, confidence: 0.95, belowConfidenceThreshold: false)
+            ], Comment(rawValue: capital))
+        }
+
+        let google = textService().redactText("A\u{0406}zaSyA1B2C3D4E5F6G7H8I9J0K1L2M3N4O5P6Q")
+        #expect(google.maskedText == "•••••")
+        #expect(google.report.map(\.confidence) == [0.95])
+
+        // Thirty-one lowercase alphanumerics plus one Ukrainian capital I: the only uppercase letter
+        // the blob rule can see is the folded one.
+        let blob = textService().redactText("zx9kq2mp8vl4nr7tyw3ea5sd1fg6hj0\u{0406}")
+        #expect(blob.maskedText == "•••••")
+        #expect(blob.report == [
+            RedactionReportEntry(detectionClass: .apiKey, count: 1, locationCategory: .text, confidence: 0.5, belowConfidenceThreshold: true)
+        ])
+    }
+
+    /// The false positive the fold created and the guard that ends it (PR #116 review, F2): an
+    /// all-caps Cyrillic word whose look-alikes fold into an OTP context word as a *suffix* — the
+    /// Russian word for "view", U+041F U+0420 U+041E U+0421 U+041C U+041E U+0422 U+0420, folds to
+    /// `…MOTP` — followed by six digits matched at 0.85 and was masked.
+    /// A context word now has to begin a word, where "begin" is "not preceded by a letter of any
+    /// script": the two Cyrillic headings match nothing, `Barcode 123456` no longer matches on its
+    /// suffix either, and the snake_case labels forms and JSON use still do — that is why the guard
+    /// is `[^\p{L}]` and not `\b`, which would have dropped them.
+    @Test
+    func aFoldedCapitalWordEndingInAContextWordIsNotAOneTimeCodeContext() {
+        let headings = [
+            "\u{041F}\u{0420}\u{041E}\u{0421}\u{041C}\u{041E}\u{0422}\u{0420}: 123456",
+            "\u{041E}\u{0421}\u{041C}\u{041E}\u{0422}\u{0420} 123456",
+            "Barcode 123456"
+        ]
+        for heading in headings {
+            let payload = textService().redactText(heading)
+            #expect(payload.report.isEmpty, Comment(rawValue: heading))
+            #expect(Array((payload.maskedText ?? "").unicodeScalars) == Array(heading.unicodeScalars), Comment(rawValue: heading))
+        }
+
+        for labeled in ["otp_code=123456", "verification_code: 483291", "code: 123456", "Your verification code is 482913"] {
+            let payload = textService().redactText(labeled)
+            #expect(payload.report.map(\.detectionClass) == [.oneTimeCode], Comment(rawValue: labeled))
+            #expect(payload.maskedText?.hasSuffix("•••••") == true, Comment(rawValue: labeled))
+        }
+    }
+
+    /// The byte-offset trap, with the folded text itself carrying wider-than-ASCII scalars ahead of
+    /// the secret (PR #116 review, F4): U+0416 and U+4E2D have no Latin twin, so they survive the
+    /// fold as two and three UTF-8 bytes, and an ordinal computed from a byte offset in the *folded* text would
+    /// land on the wrong original scalar. `lookAlikesAheadOfASecretDoNotShiftWhatIsMasked` cannot
+    /// catch that — its folded text is pure ASCII, so bytes and scalars coincide there.
+    @Test
+    func unfoldableScalarsAheadOfASecretDoNotShiftWhatIsMasked() {
+        let payload = textService().redactText("\u{0416}\u{0416} \u{4E2D} p\u{0430}ssword: hunter2")
+
+        #expect(Array((payload.maskedText ?? "").unicodeScalars) == Array("\u{0416}\u{0416} \u{4E2D} p\u{0430}ssword: •••••".unicodeScalars))
+        #expect(payload.report.map(\.detectionClass) == [.passwordField])
+    }
+
     /// The false-positive side of the founder's decision, held as a test: ordinary screen text in
     /// the scripts the fold reaches — Russian, Ukrainian, Japanese with fullwidth Latin — folds
     /// letters and matches nothing, and comes back scalar-for-scalar as it went in. The output is
