@@ -372,6 +372,13 @@ struct VisionSessionRunTests {
                 whitelist: PathWhitelist(roots: [root])
             ),
             resumableTaskStore: ResumableTaskStore(fileURL: root.appendingPathComponent("resumable-tasks.json")),
+            clipboardHistoryMonitor: ClipboardHistoryMonitor(
+                reader: HermeticPasteboardReader(),
+                store: ClipboardHistoryStore(fileURL: root.appendingPathComponent("clipboard-history.json")),
+                settingsStore: ClipboardHistorySettingsStore(
+                    fileURL: root.appendingPathComponent("clipboard-history-settings.json")
+                )
+            ),
             localDataDeletionService: LocalDataDeletionService(fileURLs: []),
             priorTaskContextStore: PriorTaskContextStore(),
             taskUsageRecorder: TaskUsageRecorder(),
