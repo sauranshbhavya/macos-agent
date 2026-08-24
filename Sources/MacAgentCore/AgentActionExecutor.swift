@@ -329,11 +329,48 @@ public final class AgentActionExecutor {
     /// here honest and arrive at their surfaces (panel or ran-without-asking trace) unedited. The
     /// `scopeVerdict` roll-up is data for the surfaces and the future vision cage, not a gate.
     public func assessRisk(plan: AgentPlan, scope: TaskWorkspaceScope) throws -> CapabilityRiskAssessment {
-        let resolvedPlan = try resolveDefaultOutputs(in: plan)
+        try assessRisk(plan: plan, scope: scope, namedByEnclosingPlan: .none)
+    }
+
+    /// The whole of `assessRisk`, plus the destinations the plans enclosing this one already name.
+    ///
+    /// **Here for the same reason `execute` has it, and it is the half that keeps the tier-3 gate
+    /// honest** (SONNY-220). A nested routine's generated destination is bumped at execution time
+    /// away from what the outer plan names; if assessment does not apply the same bump it computes a
+    /// *different* path, and the adapters' "output already exists" escalation — which is a
+    /// `fileExists` check on the resolved path — then asks about a file the run will not touch while
+    /// staying silent about the one it will overwrite. Measured before this was threaded, at
+    /// `98b4668` plus the execute-side fix: with the bumped name already on disk, both orderings of
+    /// the collision plan assessed `tier2` with **no** escalations, and the run then overwrote that
+    /// file. That gap arrived with SONNY-190 rather than with this ticket — it is visible on `main`
+    /// in the ordering SONNY-190 fixed — but this ticket creates the second ordering that reaches it,
+    /// so closing it here is part of the fix rather than adjacent to it.
+    ///
+    /// The two seeds agree by construction because both are computed from the *same* resolved plan:
+    /// `AgentRunner` prepares once and hands that plan to assessment and to execution alike, and
+    /// `executeChain` derives its set from the plan it was given. What still differs is the claims
+    /// half — execution also seeds from what earlier units really wrote, assessment has nothing to
+    /// seed from because nothing has run — so a capability whose writes are not its steps'
+    /// `outputPath`s (docx conversion, whose destinations are per-document) can still bump further at
+    /// execution than at assessment. That residual predates this ticket and is the preview/assessment
+    /// agreement question SONNY-218 owns, not the data-loss one this ticket closes.
+    private func assessRisk(
+        plan: AgentPlan,
+        scope: TaskWorkspaceScope,
+        namedByEnclosingPlan: PlannedDestinations
+    ) throws -> CapabilityRiskAssessment {
+        let resolvedPlan = try resolveDefaultOutputs(in: plan, namedByEnclosingPlan: namedByEnclosingPlan)
         // The same scope goes into the nested-plan closure, so a `run_routine` step's stored steps
         // are evaluated under the boundary its caller is bound by. Without it, a routine is a
         // laundering hole: its steps would escape the workspace the task naming it is inside.
-        let context = capabilityContext(scope: scope)
+        //
+        // The nested closure is handed this plan's own destinations on top of whatever its caller
+        // named, exactly as `executeChain` does — assessment walks the whole plan in one call rather
+        // than segment by segment, so the set is complete here without an accumulator.
+        let context = capabilityContext(
+            namedByEnclosingPlan: namedByEnclosingPlan.union(PlannedDestinations(namedBy: resolvedPlan)),
+            scope: scope
+        )
 
         var assessments: [CapabilityRiskAssessment] = []
         var metadata: [CapabilityMetadata] = []
@@ -638,66 +675,97 @@ public final class AgentActionExecutor {
         claimedEarlierInThisRun: RunClaims = .none,
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
-        let resolvedPlan = try resolveDefaultOutputs(in: plan, claimedEarlierInThisRun: claimedEarlierInThisRun)
+        // Every top-level run starts naming nothing: a plan's own destinations are added by
+        // `executeChain` once they have been resolved, and only a *nested* plan is ever handed a
+        // non-empty set. `PlannedDestinations` is deliberately not part of this public signature —
+        // it is executor-internal plumbing, and the one thing it must never become is something an
+        // adapter or a caller can hand in, since a set of intentions arriving from outside is
+        // indistinguishable here from the run's own.
+        try await execute(
+            plan: plan,
+            preferredBrowser: preferredBrowser,
+            claimedEarlierInThisRun: claimedEarlierInThisRun,
+            namedByEnclosingPlan: .none,
+            log: log
+        )
+    }
+
+    /// The whole of `execute`, plus the destinations the plans enclosing this one already name.
+    ///
+    /// `namedByEnclosingPlan` is **not defaulted**, on purpose: every internal call site states what
+    /// the plan around it has named, and a new one that forgets is a compile error rather than a
+    /// silent `.none` — which is the exact failure this ticket exists to fix, one level up.
+    private func execute(
+        plan: AgentPlan,
+        preferredBrowser: MacApp?,
+        claimedEarlierInThisRun: RunClaims,
+        namedByEnclosingPlan: PlannedDestinations,
+        log: @escaping (AgentPhase, String) -> Void
+    ) async throws -> AgentRunResult {
+        let resolvedPlan = try resolveDefaultOutputs(
+            in: plan,
+            claimedEarlierInThisRun: claimedEarlierInThisRun,
+            namedByEnclosingPlan: namedByEnclosingPlan
+        )
         let workflow = try workflow(in: resolvedPlan)
 
         switch workflow {
         case .clarify:
             throw AgentExecutionError.missingClarificationQuestion
         case .largestFiles:
-            return try await executeCapability(for: .scanSelectLargestFiles, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeCapability(for: .scanSelectLargestFiles, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .docx:
-            return try await executeCapability(for: .scanDocx, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeCapability(for: .scanDocx, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .hackerNews:
-            return try await executeCapability(for: .openHackerNews, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeCapability(for: .openHackerNews, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .webResearch:
-            return try await executeCapability(for: .webToMarkdown, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeCapability(for: .webToMarkdown, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .openApp:
-            return try await executeCapability(for: .openApp, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeCapability(for: .openApp, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .openAppSearchURL:
-            return try await executeCapability(for: .openAppSearchURL, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeCapability(for: .openAppSearchURL, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .openURL:
-            return try await executeCapability(for: .openURL, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeCapability(for: .openURL, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .openGeneratedArtifact:
-            return try await executeCapability(for: .openGeneratedArtifact, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeCapability(for: .openGeneratedArtifact, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .createLocalDraft:
-            return try await executeCapability(for: .createLocalDraft, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeCapability(for: .createLocalDraft, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .calculator:
-            return try await executeCapability(for: .calculateUtility, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeCapability(for: .calculateUtility, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .clipboardHistory:
-            return try await executeCapability(for: .lookupClipboardHistory, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeCapability(for: .lookupClipboardHistory, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .snippetSave:
-            return try await executeCapability(for: .saveSnippet, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeCapability(for: .saveSnippet, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .snippetExpansion:
-            return try await executeCapability(for: .expandSnippet, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeCapability(for: .expandSnippet, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .runningAppSwitch:
-            return try await executeCapability(for: .switchRunningApp, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeCapability(for: .switchRunningApp, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .recentArtifacts:
-            return try await executeCapability(for: .lookupRecentArtifacts, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeCapability(for: .lookupRecentArtifacts, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .mediaOpen:
-            return try await executeCapability(for: .playMedia, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeCapability(for: .playMedia, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .finderSelection:
-            return try await executeCapability(for: .getFinderSelection, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeCapability(for: .getFinderSelection, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .revealInFinder:
-            return try await executeCapability(for: .revealInFinder, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeCapability(for: .revealInFinder, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .permissionReadiness:
-            return try await executeCapability(for: .showPermissionReadiness, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeCapability(for: .showPermissionReadiness, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .saveRoutine:
-            return try await executeCapability(for: .saveRoutine, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeCapability(for: .saveRoutine, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .runRoutine:
-            return try await executeCapability(for: .runRoutine, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeCapability(for: .runRoutine, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .createWorkspace:
-            return try await executeCapability(for: .createWorkspace, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeCapability(for: .createWorkspace, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .editWorkspace:
-            return try await executeCapability(for: .editWorkspace, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeCapability(for: .editWorkspace, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .openWorkspace:
-            return try await executeCapability(for: .openWorkspace, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeCapability(for: .openWorkspace, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .invokeShortcut:
-            return try await executeCapability(for: .invokeShortcut, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeCapability(for: .invokeShortcut, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .visionSession:
-            return try await executeCapability(for: .visionSession, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeCapability(for: .visionSession, plan: resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         case .chain:
-            return try await executeChain(resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, log: log)
+            return try await executeChain(resolvedPlan, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimedEarlierInThisRun, namedByEnclosingPlan: namedByEnclosingPlan, log: log)
         }
     }
 
@@ -879,7 +947,8 @@ public final class AgentActionExecutor {
     /// clarification.
     private func resolveDefaultOutputs(
         in plan: AgentPlan,
-        claimedEarlierInThisRun: RunClaims = .none
+        claimedEarlierInThisRun: RunClaims = .none,
+        namedByEnclosingPlan: PlannedDestinations = .none
     ) throws -> AgentPlan {
         _ = try workflow(in: plan)
 
@@ -903,7 +972,62 @@ public final class AgentActionExecutor {
         // question — which is filled in when — a property of one type instead of a parameter, and
         // the parameter is what makes it answerable: at the moment a nested plan resolves, every
         // outer unit before it has executed and recorded its writes, and none after it has.
+        //
+        // **And seeded a second time from what the outer plan already *names*, which is the half
+        // the claims cannot supply** (SONNY-220). The claims answer for units that have already run;
+        // the outer plan's own destinations are decided at `prepare`, before anything runs, and they
+        // never move afterwards — a step arriving at `execute` with an `outputPath` has
+        // `hasOwnOutputPath` true and is deliberately never regenerated or bumped. So the claims
+        // alone fix exactly one ordering. `[create_local_draft, run_routine]` is safe because the
+        // outer draft has executed and claimed by the time the routine resolves; the *same two steps
+        // reversed* were not, because the routine resolves first and nothing it can see mentions the
+        // outer plan's name — measured, three runs out of three on the real clock at `98b4668`, one
+        // file left holding the outer plan's text with the routine's document destroyed, and
+        // `previews.writes` naming the same path twice so nothing in the report showed it.
+        //
+        // Which of the two moves is the right question, and the answer is not symmetric: the outer
+        // plan named its destination at `prepare` and the user approved a panel saying so, so the
+        // prepared plan's names are what `aChainWritesOnlyFilesThePreparedPlanAlreadyNamed` holds
+        // this executor to. The nested plan resolves later, so the nested plan is the one that moves.
+        //
+        // **Both halves are load-bearing, and neither may be dropped.** The plan-intent half is what
+        // fixes the reverse ordering above. The claims half is what protects a shape the plan-intent
+        // half is structurally blind to: **a chain of two or more sibling `run_routine` steps whose
+        // routines can generate colliding defaults.** A `run_routine` step carries no `outputPath`,
+        // so `PlannedDestinations(namedBy:)` built from such a plan is empty with respect to
+        // everything the nested routines will generate, and the only thing between the second
+        // routine's draft and the first routine's file is what `executeChain` recorded after the
+        // first segment really ran. `segmentPlans(in:)`' repeat rule cuts the second `run_routine`
+        // into its own unit, so the plan classifies as `.chain`, and
+        // `StoredRoutine.forbiddenStepOperations` forbids a `run_routine` *inside* a saved routine
+        // rather than two of them at the outer level — nothing blocks this plan.
+        //
+        // **Recorded because this comment previously said the opposite** (PR #96 review, F1). It
+        // claimed the claims half "covers a population that today is empty", on the strength of a
+        // mutation battery at `e3dee83` where dropping it left the whole suite passing. The battery
+        // was right and the inference was wrong: nothing in the suite exercised the sibling-routine
+        // shape, so the mutant killed a document nothing was watching.
+        // `twoSiblingRoutinesThatEachDraftKeepBothDocuments` is that shape, and the same mutant is
+        // now killed by it (`scripts/mutate`, 1 mutant, 1 killed, stamped at `24fa0ba`). **A green
+        // suite under a mutant is a statement about the suite, not about the code.**
+        //
+        // The two halves still answer different questions and overlap rather than nest. Of the eight
+        // adapters that produce `ActionPreview.writes` — `git grep -l 'writes:' Sources/MacAgentCore |
+        // grep CapabilityAdapter` at `24fa0ba`, which prints 8 — **three** write exactly the
+        // `outputPath` their own `resolveDefaultOutputs` pinned, so `namedByEnclosingPlan` holds
+        // those paths too: `CreateLocalDraftCapabilityAdapter`, `LargestFilesZipCapabilityAdapter`,
+        // `WebResearchMarkdownCapabilityAdapter`. The other **five** write somewhere no step's
+        // `outputPath` names: `DocxConversionCapabilityAdapter`, whose per-document PDFs sit inside
+        // the output *folder* its step names, and `CreateWorkspaceCapabilityAdapter`,
+        // `EditWorkspaceCapabilityAdapter`, `SaveRoutineCapabilityAdapter` and
+        // `SnippetSaveCapabilityAdapter`, which write their stores' own JSON files. (That split read
+        // "five" and "three" until PR #96's review transposed it back — the member list was right and
+        // the two count words were not.) Those five cannot collide with a generated default —
+        // `draft-<slug>-<stamp>.md`, `web-research-<stamp>.md`, `largest-files-<stamp>.zip` or a
+        // Shortcut's output can equal neither a `.pdf` nor a store file — which is why the claims
+        // half's reachable contribution is the *nested* one above rather than a docx one.
         var claimedOutputPaths: Set<String> = claimedEarlierInThisRun.destinations
+            .union(namedByEnclosingPlan.paths)
 
         for unit in try segmentPlans(in: plan) {
             // Which steps arrived with a destination of their own, captured *before* resolution:
@@ -1132,6 +1256,7 @@ public final class AgentActionExecutor {
         plan: AgentPlan,
         preferredBrowser: MacApp?,
         claimedEarlierInThisRun: RunClaims = .none,
+        namedByEnclosingPlan: PlannedDestinations,
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
         try await capabilityRegistry
@@ -1141,6 +1266,7 @@ public final class AgentActionExecutor {
                 context: capabilityContext(
                     preferredBrowser: preferredBrowser,
                     claimedEarlierInThisRun: claimedEarlierInThisRun,
+                    namedByEnclosingPlan: namedByEnclosingPlan,
                     scope: .unscoped
                 ),
                 log: log
@@ -1443,6 +1569,7 @@ public final class AgentActionExecutor {
     private func capabilityContext(
         preferredBrowser: MacApp? = nil,
         claimedEarlierInThisRun: RunClaims = .none,
+        namedByEnclosingPlan: PlannedDestinations = .none,
         scope: TaskWorkspaceScope
     ) -> CapabilityExecutionContext {
         CapabilityExecutionContext(
@@ -1484,7 +1611,11 @@ public final class AgentActionExecutor {
                 guard let self else {
                     throw AgentExecutionError.invalidPlan("Executor is unavailable for nested risk assessment.")
                 }
-                return try self.assessRisk(plan: plan, scope: nestedScope)
+                return try self.assessRisk(
+                    plan: plan,
+                    scope: nestedScope,
+                    namedByEnclosingPlan: namedByEnclosingPlan
+                )
             },
             // **The nested plan inherits this context's claims** (SONNY-163). Both closures used to
             // call through with no `RunClaims`, so a routine run as a unit of a chain started from
@@ -1530,6 +1661,7 @@ public final class AgentActionExecutor {
                     plan: plan,
                     preferredBrowser: nestedBrowser,
                     claimedEarlierInThisRun: claimedEarlierInThisRun,
+                    namedByEnclosingPlan: namedByEnclosingPlan,
                     log: log
                 )
             },
@@ -1581,6 +1713,7 @@ public final class AgentActionExecutor {
         _ plan: AgentPlan,
         preferredBrowser: MacApp?,
         claimedEarlierInThisRun: RunClaims = .none,
+        namedByEnclosingPlan: PlannedDestinations,
         log: @escaping (AgentPhase, String) -> Void
     ) async throws -> AgentRunResult {
         var summaries: [String] = []
@@ -1592,10 +1725,43 @@ public final class AgentActionExecutor {
         // two sets rather than one. Accumulated from the previews each unit actually produced rather
         // than through a second return channel.
         var claimed = claimedEarlierInThisRun
+        // And what this chain's *whole* plan already names, added to whatever the plans enclosing it
+        // named (SONNY-220). `plan` here is always resolved — `execute` resolves before dispatching
+        // to this function — so every generated default has its final name by now, and a unit that
+        // has not run yet is as visible as one that has.
+        //
+        // **This is the half `claimed` cannot cover, and it is why it is computed here rather than
+        // inside `execute`.** A segment sees only its own steps, so a `[run_routine]` segment asked
+        // to name its destinations names none; the outer draft it must not collide with lives in a
+        // *different* segment of the same chain. Whole-plan is the only altitude at which that fact
+        // exists.
+        //
+        // The whole plan's set is handed to every segment, its own destinations included, and that
+        // costs nothing: a resolved step carries an `outputPath`, so `hasOwnOutputPath` is true and
+        // the bump below never applies to it. What it buys is that the set means one thing — "what
+        // this run's plan names" — rather than a per-segment subtraction whose correctness would
+        // depend on the segmentation staying exactly as it is.
+        //
+        // The union with `namedByEnclosingPlan` is **live, not defensive** (PR #96 review, F3). This
+        // comment used to say the parameter "is always `.none` here" on the grounds that a chain
+        // segment is never itself a chain — true, and not the only way to arrive: a *stored routine*
+        // of more than one workflow, say `[open_url, create_local_draft]`, classifies as `.chain`
+        // too, so `executeNestedPlan` re-enters `execute` and reaches this function a second time
+        // carrying the outer plan's destinations. The union is what keeps them from being dropped on
+        // that path. Behaviour is the same either way today — the nested draft is already bumped
+        // before that call — but a comment claiming a live path is dead is an invitation to delete
+        // it, which is the same defect this function's seed comment carries a correction for.
+        let namedByThisRun = namedByEnclosingPlan.union(PlannedDestinations(namedBy: plan))
 
         for segment in try chainSegments(in: plan) {
             let resolved = resolvePreviousArtifactPathIfNeeded(in: segment, previousArtifactPath: previousArtifactPath)
-            let result = try await execute(plan: resolved, preferredBrowser: preferredBrowser, claimedEarlierInThisRun: claimed, log: log)
+            let result = try await execute(
+                plan: resolved,
+                preferredBrowser: preferredBrowser,
+                claimedEarlierInThisRun: claimed,
+                namedByEnclosingPlan: namedByThisRun,
+                log: log
+            )
             for written in result.previews.flatMap(\.writes) {
                 claimed.recordWrite(written)
             }

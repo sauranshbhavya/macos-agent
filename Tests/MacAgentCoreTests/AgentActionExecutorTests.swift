@@ -1691,6 +1691,299 @@ struct AgentActionExecutorTests {
         #expect(written.allSatisfy { FileManager.default.fileExists(atPath: $0) })
     }
 
+    // MARK: - SONNY-220: the ordering SONNY-190 did not fix
+
+    /// The routine's own document is destroyed and only the outer plan's stem survives — the same
+    /// step in the same folder as the outer draft, one file left where the user asked for two.
+    private func collidingDraftRoutineFixture(root: URL) throws -> RoutineStore {
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        try routineStore.save(
+            StoredRoutine(
+                name: "Notes",
+                steps: [
+                    AgentStep(
+                        id: "nested-draft",
+                        operation: .createLocalDraft,
+                        description: "Create note",
+                        draftTitle: "Note",
+                        draftContent: "From the routine."
+                    )
+                ]
+            )
+        )
+        return routineStore
+    }
+
+    private func outerDraftStep(title: String = "Note", body: String = "From the outer plan.") -> AgentStep {
+        AgentStep(
+            id: "outer-draft",
+            operation: .createLocalDraft,
+            description: "Create note",
+            draftTitle: title,
+            draftContent: body
+        )
+    }
+
+    private var runNotesRoutineStep: AgentStep {
+        AgentStep(id: "run", operation: .runRoutine, description: "Run routine", routineName: "Notes")
+    }
+
+    /// **Both orderings of the same two steps, in one test, because that is the shape whose absence
+    /// let half the bug survive** (SONNY-220).
+    ///
+    /// SONNY-190 fixed `[create_local_draft, run_routine]` by seeding the nested resolve from the
+    /// run's `RunClaims` — what earlier units have already written. That can only ever fix the
+    /// ordering where the outer step runs *first*. Reversed, the routine resolves before anything has
+    /// executed, the claims are empty, and the outer plan's destination — pinned at `prepare`, and
+    /// never re-derived afterwards because a step carrying an `outputPath` is deliberately not
+    /// bumped — is invisible to it. Measured on the real clock at `98b4668`, three runs out of three:
+    /// `[run_routine, create_local_draft]` produced **one** file holding the outer plan's text, with
+    /// the routine's document gone, while `previews.writes` named that one path twice so nothing in
+    /// the run's report showed it.
+    ///
+    /// A test per ordering would not have caught it and did not: `aNestedRoutinesGeneratedDraftDoesNotOverwriteTheOuterPlansOwn`
+    /// is exactly the forward half and passes on a tree where the reverse half destroys a file. So
+    /// both orderings are asserted here, against the same fixture, in one test — neither can be fixed
+    /// while the other is broken without this failing.
+    ///
+    /// A fixed clock, so the collision is forced rather than probable, and the assertions are on the
+    /// documents' **contents**: a fix that bumped the name and wrote the same text into both files
+    /// satisfies every count.
+    @Test
+    func neitherOrderingOfADraftAndADraftingRoutineLosesADocument() async throws {
+        let orderings: [(String, [AgentStep])] = [
+            ("outer draft then routine", [outerDraftStep(), runNotesRoutineStep]),
+            ("routine then outer draft", [runNotesRoutineStep, outerDraftStep()])
+        ]
+
+        for (label, steps) in orderings {
+            let root = try makeDirectory()
+            defer { try? FileManager.default.removeItem(at: root) }
+            // One second for the whole run, so both defaults resolve to the same name unbumped.
+            let stamp = Date(timeIntervalSince1970: 1_800_000_000)
+            let executor = makeExecutor(
+                root: root,
+                routineStore: try collidingDraftRoutineFixture(root: root),
+                now: { stamp }
+            )
+            let prepared = try executor.prepare(
+                plan: AgentPlan(summary: "Draft a note and run the Notes routine.", requiresConfirmation: true, steps: steps)
+            )
+            let result = try await executor.execute(plan: prepared.plan) { _, _ in }
+            let texts = try FileManager.default.contentsOfDirectory(atPath: root.path)
+                .filter { $0.hasPrefix("draft-") }
+                .sorted()
+                .map { try String(contentsOf: root.appendingPathComponent($0), encoding: .utf8) }
+            let writes = result.previews.flatMap(\.writes)
+
+            #expect(texts.count == 2, "\(label): one document was overwritten by the other")
+            #expect(texts.contains { $0.contains("From the outer plan.") }, "\(label): the outer plan's draft is gone")
+            #expect(texts.contains { $0.contains("From the routine.") }, "\(label): the routine's draft is gone")
+            // The run's own report has to name two distinct files, which is how this stayed
+            // invisible: `writes` named one path twice and a reader counting them saw two.
+            #expect(writes.count == 2, "\(label)")
+            #expect(Set(writes).count == 2, "\(label): the run reported the same path twice")
+            #expect(writes.allSatisfy { FileManager.default.fileExists(atPath: $0) }, "\(label)")
+        }
+    }
+
+    /// **The over-correction half: a routine whose destination nothing else claims keeps it.**
+    ///
+    /// The fix widens the set a nested resolve disambiguates against, and the failure mode of
+    /// widening it too far is silent in the opposite direction — a routine's file renamed to `-2` for
+    /// no reason, or refused outright as "already exists", for a document nothing was competing
+    /// with. Both orderings again, and asserted on the exact filenames rather than on a count, since
+    /// a spurious bump still produces the right number of files.
+    ///
+    /// Two shapes: the routine as the only step of the plan, where nothing is named at all, and the
+    /// reversed collision plan with the two drafts titled differently, where destinations are named
+    /// but do not collide.
+    @Test
+    func aNestedRoutinesDraftKeepsItsOwnNameWhenNothingElseNamesIt() async throws {
+        let stamp = Date(timeIntervalSince1970: 1_800_000_000)
+        let suffix = Timestamp.fileSafe(stamp)
+
+        func drafts(in root: URL) throws -> [String] {
+            try FileManager.default.contentsOfDirectory(atPath: root.path)
+                .filter { $0.hasPrefix("draft-") }
+                .sorted()
+        }
+
+        // The routine alone: no other step, so nothing whatsoever is named.
+        let alone = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: alone) }
+        let aloneExecutor = makeExecutor(
+            root: alone,
+            routineStore: try collidingDraftRoutineFixture(root: alone),
+            now: { stamp }
+        )
+        let alonePrepared = try aloneExecutor.prepare(
+            plan: AgentPlan(summary: "Run the Notes routine.", requiresConfirmation: true, steps: [runNotesRoutineStep])
+        )
+        _ = try await aloneExecutor.execute(plan: alonePrepared.plan) { _, _ in }
+        #expect(try drafts(in: alone) == ["draft-note-\(suffix).md"])
+        #expect(
+            try String(contentsOf: alone.appendingPathComponent("draft-note-\(suffix).md"), encoding: .utf8)
+                .contains("From the routine.")
+        )
+
+        // Reversed ordering, different titles: the outer plan names a destination, and it is not the
+        // routine's, so neither may move.
+        let apart = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: apart) }
+        let apartExecutor = makeExecutor(
+            root: apart,
+            routineStore: try collidingDraftRoutineFixture(root: apart),
+            now: { stamp }
+        )
+        let apartPrepared = try apartExecutor.prepare(
+            plan: AgentPlan(
+                summary: "Run the Notes routine and draft a standup.",
+                requiresConfirmation: true,
+                steps: [runNotesRoutineStep, outerDraftStep(title: "Standup", body: "From the outer plan.")]
+            )
+        )
+        _ = try await apartExecutor.execute(plan: apartPrepared.plan) { _, _ in }
+        #expect(try drafts(in: apart) == ["draft-note-\(suffix).md", "draft-standup-\(suffix).md"])
+    }
+
+    /// **The approval panel names the file the run will really overwrite, in both orderings.**
+    ///
+    /// The bump is deliberately blind to the filesystem — that is what leaves the adapters' tier-3
+    /// "output already exists" escalation something to say — so the escalation is the *only* warning
+    /// a user gets before a nested routine writes over a file that predates the run. It is computed
+    /// from the resolved path, which means risk assessment has to apply the same bump execution does.
+    ///
+    /// Before this ticket it did not: assessment resolved a nested plan against an empty set, so with
+    /// the bumped name already on disk both orderings assessed `tier2` with no escalations at all,
+    /// and the run then overwrote that file in silence. Measured at `98b4668` plus the execute-side
+    /// fix alone. That gap arrived with SONNY-190 and is visible on `main` in the ordering SONNY-190
+    /// fixed; this ticket creates the second ordering that reaches it.
+    ///
+    /// Asserted end to end rather than on the tier alone: the same run is executed, and the file the
+    /// escalation named is the file whose contents were replaced. A warning about one path while the
+    /// run destroys another is the failure this is guarding, and a tier check cannot see it.
+    @Test
+    func theApprovalEscalationNamesTheFileANestedRoutineWillOverwrite() async throws {
+        let stamp = Date(timeIntervalSince1970: 1_800_000_000)
+        let bumpedName = "draft-note-\(Timestamp.fileSafe(stamp))-2.md"
+
+        let orderings: [(String, [AgentStep])] = [
+            ("outer draft then routine", [outerDraftStep(), runNotesRoutineStep]),
+            ("routine then outer draft", [runNotesRoutineStep, outerDraftStep()])
+        ]
+
+        for (label, steps) in orderings {
+            let root = try makeDirectory()
+            defer { try? FileManager.default.removeItem(at: root) }
+            let executor = makeExecutor(
+                root: root,
+                routineStore: try collidingDraftRoutineFixture(root: root),
+                now: { stamp }
+            )
+            let bumped = root.appendingPathComponent(bumpedName)
+            try write("A document from last week.", to: bumped)
+
+            let prepared = try executor.prepare(
+                plan: AgentPlan(summary: "Draft a note and run the Notes routine.", requiresConfirmation: true, steps: steps)
+            )
+            let assessment = try executor.assessRisk(plan: prepared.plan, scope: .unscoped)
+
+            #expect(assessment.effectiveTier == .tier3, "\(label)")
+            #expect(
+                assessment.escalations.contains { $0.reason == "Draft output already exists at \(bumped.path)." },
+                "\(label): nothing warned about the file the run overwrites"
+            )
+
+            _ = try await executor.execute(plan: prepared.plan) { _, _ in }
+            #expect(
+                try String(contentsOf: bumped, encoding: .utf8).contains("From the routine."),
+                "\(label): the escalation named a path the run did not write"
+            )
+        }
+    }
+
+    /// **Two sibling routines, and the shape that makes the *claims* half of the resolver seed
+    /// load-bearing** (SONNY-220, PR #96 review F1).
+    ///
+    /// This branch's own fix seeds `resolveDefaultOutputs` from two places: what the run's plan
+    /// already *names* (`PlannedDestinations`) and what earlier units have already *written*
+    /// (`RunClaims`). A mutation battery dropped the second and the whole suite still passed, and
+    /// this branch first recorded that as the claims half covering "a population that today is
+    /// empty". **That was false, and this test is the counter-example the review built.**
+    ///
+    /// A plan of two `run_routine` steps naming two different saved routines is ordinary and
+    /// nothing blocks it: `segmentPlans(in:)`' repeat rule cuts the second one into its own unit,
+    /// `workflow(in:)` therefore classifies the plan `.chain`, and
+    /// `StoredRoutine.forbiddenStepOperations` forbids a `run_routine` *inside* a saved routine
+    /// rather than two of them at the outer level. A `run_routine` step carries no `outputPath`, so
+    /// the plan-intent half is **empty** here with respect to anything the nested routines generate
+    /// — the only thing standing between the second routine's draft and the first routine's file is
+    /// the claims half, filled in by `executeChain`'s `claimed.recordWrite(written)` after the first
+    /// segment really runs.
+    ///
+    /// Measured both ways rather than argued: on the shipped tree this passes, and against the
+    /// mutant that removes the claims half it fails with real data loss — one file survives holding
+    /// only the second routine's text, `written.count` still reports 2, and `Set(written).count`
+    /// collapses to 1. That is the silent-overwrite signature SONNY-190 and SONNY-220 both exist to
+    /// close, reached through a third door.
+    ///
+    /// A frozen clock so both defaults resolve to the same name, and the assertions are on the
+    /// documents' contents: a fix that bumped the name and wrote the same text into both files
+    /// satisfies every count.
+    @Test
+    func twoSiblingRoutinesThatEachDraftKeepBothDocuments() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        for (name, body) in [("Morning", "From the first routine."), ("Evening", "From the second routine.")] {
+            try routineStore.save(
+                StoredRoutine(
+                    name: name,
+                    steps: [
+                        AgentStep(
+                            id: "nested-draft",
+                            operation: .createLocalDraft,
+                            description: "Create note",
+                            // The same title in both, so both generate the identical default name.
+                            draftTitle: "Note",
+                            draftContent: body
+                        )
+                    ]
+                )
+            )
+        }
+        let stamp = Date(timeIntervalSince1970: 1_800_000_000)
+        let executor = makeExecutor(root: root, routineStore: routineStore, now: { stamp })
+        let plan = AgentPlan(
+            summary: "Run the Morning routine and then the Evening routine.",
+            requiresConfirmation: true,
+            steps: [
+                AgentStep(id: "run-first", operation: .runRoutine, description: "Run routine", routineName: "Morning"),
+                AgentStep(id: "run-second", operation: .runRoutine, description: "Run routine", routineName: "Evening")
+            ]
+        )
+
+        let prepared = try executor.prepare(plan: plan)
+        // The plan really is a chain of two units — otherwise the second routine would never run and
+        // this would assert nothing about the collision it exists for.
+        #expect(prepared.plan.steps.count == 2)
+        let result = try await executor.execute(plan: prepared.plan) { _, _ in }
+
+        let texts = try FileManager.default.contentsOfDirectory(atPath: root.path)
+            .filter { $0.hasPrefix("draft-") }
+            .sorted()
+            .map { try String(contentsOf: root.appendingPathComponent($0), encoding: .utf8) }
+        #expect(texts.count == 2, "one routine's document was overwritten by the other's")
+        #expect(texts.contains { $0.contains("From the first routine.") }, "the first routine's draft is gone")
+        #expect(texts.contains { $0.contains("From the second routine.") }, "the second routine's draft is gone")
+
+        let written = result.previews.flatMap(\.writes)
+        #expect(written.count == 2)
+        #expect(Set(written).count == 2, "the run reported the same path twice")
+        #expect(written.allSatisfy { FileManager.default.fileExists(atPath: $0) })
+    }
+
     // MARK: - SONNY-28: two documents never convert onto one PDF
     //
     // `FileInventory.docxFiles` derives each destination from the document's *basename* and
