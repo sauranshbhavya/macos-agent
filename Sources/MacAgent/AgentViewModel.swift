@@ -744,6 +744,12 @@ final class AgentViewModel: ObservableObject {
             workspaceStore: WorkspaceStore(),
             snippetStore: SnippetStore(),
             recentArtifactStore: RecentArtifactStore(),
+            // The real thing, named here for the same reason the thirteen store locations are: this
+            // is the one place the shipping app asks for something that reaches the machine
+            // (SONNY-239). It sits in this list rather than defaulting on the initializer because a
+            // default nobody writes is a default nobody can see — SONNY-240's whole argument,
+            // applied to a parameter that opens Finder rather than one that writes a file.
+            finderRevealer: { NSWorkspace.shared.activateFileViewerSelecting($0) },
             shortcutRunHistoryStore: ShortcutRunHistoryStore(),
             taskHistoryStore: TaskHistoryStore(),
             taskPlanDetailStore: TaskPlanDetailStore(),
@@ -805,9 +811,17 @@ final class AgentViewModel: ObservableObject {
         // Injected rather than called directly, in the shape `ScreenAccessOnboarding` already uses
         // for its `settingsOpener` (SONNY-239, founder decision 2026-08-23). The one existing reveal
         // in this class called `NSWorkspace` inline and was therefore untestable; giving it a seam
-        // makes the new control testable and the old one testable as a side effect. A test that
-        // reached the live implementation would open Finder on the developer's machine.
-        finderRevealer: @escaping ([URL]) -> Void = { NSWorkspace.shared.activateFileViewerSelecting($0) },
+        // makes the new control testable and the old one testable as a side effect.
+        //
+        // **Undefaulted, for SONNY-240's reason applied to something that is not a store.** It
+        // landed with `= { NSWorkspace.shared.activateFileViewerSelecting($0) }`, which is a default
+        // that reaches the developer's own machine and is invisible at every call site that predates
+        // it — the exact shape SONNY-240 removed from the twelve stores beside it. Nothing here
+        // writes or deletes, so the damage is smaller: a suite run that reached it would steal focus
+        // and open Finder windows mid-test. The argument for keeping the default was that it is not
+        // a store; the argument against is that "a test that predates the parameter cannot know to
+        // pass it" does not care what the parameter is for.
+        finderRevealer: @escaping ([URL]) -> Void,
         mediaOpener: any MediaOpening = NativeMediaOpener(),
         runningAppSwitcher: any RunningAppSwitching = WorkspaceRunningAppSwitcher(),
         shortcutInvoker: any ShortcutInvoking = ProcessShortcutInvoker(),

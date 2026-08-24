@@ -890,6 +890,7 @@ private func makeViewModel(
         browserOpener: HermeticBrowserOpener(),
         appOpener: HermeticAppOpener(),
         fileOpener: HermeticFileOpener(),
+        finderRevealer: hermeticFinderRevealer,
         mediaOpener: HermeticMediaOpener(),
         runningAppSwitcher: HermeticRunningAppSwitcher(),
         shortcutInvoker: HermeticShortcutInvoker(),
