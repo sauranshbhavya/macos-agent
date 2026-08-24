@@ -921,6 +921,42 @@ struct LocalRedactionLiveVisionTests {
         #expect(ImageFixtures.isWhite(ImageFixtures.rgb(inPNG: redacted, x: 1400, yFromTop: 860)))
     }
 
+    /// SONNY-272, half two, the half only the founder can run: the false-positive cost of lowering
+    /// the high-entropy floor from 32 to 28, measured on **real captures** — a folder of PNG
+    /// screenshots named by `SONNY_CAPTURE_CORPUS` — through the real recognizer and the product
+    /// detector as shipped, with the floor unchanged. Skipped, visibly, when the variable is unset:
+    /// no agent session can take those captures (Screen Recording is the founder's permission), so
+    /// the measurement is one command rather than one session:
+    ///
+    ///     SONNY_CAPTURE_CORPUS=~/Desktop/captures <CLAUDE.md's flagged test command> \
+    ///         --filter theHighEntropyFloorsCostOnRealCaptures
+    ///
+    /// then read the `HIGH-ENTROPY-FLOOR` lines. Nothing recognized is ever printed — names, lengths
+    /// and counts only — because the log is going to be pasted into a ticket. In this suite rather
+    /// than its own because it drives the shared recognizer once per capture, and this suite is the
+    /// one that is serialized for that reason (PR #113 review, F5).
+    @Test(.enabled(
+        if: HighEntropyFloorMeasurement.captureCorpusDirectory != nil,
+        "Set SONNY_CAPTURE_CORPUS to a folder of PNG captures to measure the floor's cost on them."
+    ))
+    func theHighEntropyFloorsCostOnRealCapturesIsMeasuredWithoutChangingIt() async throws {
+        let directory = try #require(HighEntropyFloorMeasurement.captureCorpusDirectory)
+        let captures = try HighEntropyFloorMeasurement.pngCaptures(in: directory)
+        try #require(!captures.isEmpty, "no .png directly inside \(directory.path) — a measurement over nothing is not one")
+
+        var totals = HighEntropyFloorMeasurement.Totals()
+        for url in captures {
+            let (data, width, height) = try HighEntropyFloorMeasurement.pngPixels(at: url)
+            let observations = try await VisionImageTextRecognizer()
+                .recognizeText(inPNGData: data, pixelWidth: width, pixelHeight: height)
+            let cost = try HighEntropyFloorMeasurement.cost(of: observations)
+            print(cost.line(name: url.lastPathComponent))
+            #expect(cost.probeAgreesWithProduct, Comment(rawValue: url.lastPathComponent))
+            totals.add(cost)
+        }
+        print(totals.summary(label: directory.lastPathComponent))
+        #expect(totals.captures == captures.count)
+    }
 }
 
 /// One realistic capture size, and the screenful of text it carries.
