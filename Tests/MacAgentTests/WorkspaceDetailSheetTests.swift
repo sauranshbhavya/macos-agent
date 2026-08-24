@@ -1360,6 +1360,9 @@ private func makeSheetTestViewModel(root: URL, workspaceStore: WorkspaceStore) t
         ),
         taskHistoryStore: TaskHistoryStore(fileURL: root.appendingPathComponent("task-history.json")),
         taskPlanDetailStore: TaskPlanDetailStore(fileURL: root.appendingPathComponent("task-plan-details.json")),
+        visionSessionJournalStore: VisionSessionJournalStore(
+            fileURL: root.appendingPathComponent("vision-sessions.json")
+        ),
         clipboardHistorySettingsStore: ClipboardHistorySettingsStore(
             fileURL: root.appendingPathComponent("clipboard-history-settings.json")
         ),

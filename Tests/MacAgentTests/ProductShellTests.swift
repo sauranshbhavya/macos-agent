@@ -626,6 +626,12 @@ struct ProductShellTests {
             "clarificationAnswer",
             "clarificationAutoExecute",
             "clarificationWorkspaceBinding",
+            // The request a clarification pause is holding on behalf of the task that asked
+            // (SONNY-248). Cleared with the question it belongs to and for the same reason: the
+            // pause is over, and the user's own text from a task that no longer has a record is the
+            // kind of leftover this wipe exists to remove. `clarificationOrigin` is in group 4 below
+            // rather than here, which is where it already was.
+            "clarificationSubmittedCommand",
             "activeTaskScope",
             "ranWithoutAskingTrace",
             "explicitWorkspaceBinding",
@@ -3234,6 +3240,28 @@ private final class ProductShellPasteboardReader: PasteboardReading {
 // These record rather than merely swallow, so a test that wants to assert what a run actually
 // opened can, and so a fixture that silently stopped being injected would show up as an empty
 // recording rather than as a browser window.
+
+/// A pasteboard that is always empty and never changes.
+///
+/// **Here because six fixtures had no pasteboard seam at all**
+/// (SONNY-240). `ClipboardHistoryMonitor`'s own defaults are the real `clipboard-history.json` and
+/// the real `NSPasteboard`, so a fixture that let `clipboardHistoryMonitor:` default had a monitor
+/// that would have copied the developer's actual clipboard into the developer's actual store file,
+/// under the deterministic test key the packaged app cannot read. That parameter is required now, so
+/// this is what the six of them pass. `private` copies of this already exist in five files, each
+/// serving a suite that asserts on what the reader returned; this one is for a fixture that only
+/// needs the monitor to be inert.
+final class HermeticPasteboardReader: PasteboardReading {
+    var changeCount = 0
+
+    func typeIdentifiers() -> [String] {
+        []
+    }
+
+    func stringValue() -> String? {
+        nil
+    }
+}
 
 @MainActor
 final class HermeticBrowserOpener: BrowserOpening {
