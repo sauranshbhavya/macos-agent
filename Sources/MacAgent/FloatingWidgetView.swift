@@ -178,7 +178,7 @@ struct FloatingWidgetView: View {
         // was, since there's no more large drop shadow needing room to fade out.
         .padding(16)
         .onAppear {
-            pillFocused = true
+            focusComposerIfItTakesInput()
             scheduleAutoDismissIfNeeded()
         }
         .onChange(of: widgetStateKey) { _, _ in
@@ -203,7 +203,7 @@ struct FloatingWidgetView: View {
             if isCompact {
                 expandFromCompact()
             } else {
-                pillFocused = true
+                focusComposerIfItTakesInput()
                 scheduleAutoDismissIfNeeded()
             }
         }
@@ -359,8 +359,22 @@ struct FloatingWidgetView: View {
 
     private func expandFromCompact() {
         isCompact = false
-        pillFocused = true
+        focusComposerIfItTakesInput()
         scheduleAutoDismissIfNeeded()
+    }
+
+    /// Puts the caret in the composer, but only when the composer is the field that can use it
+    /// (SONNY-247).
+    ///
+    /// **All three callers used to write `pillFocused = true` unconditionally**, which is the wrong
+    /// half of the founder's report. While a question is parked on the user the composer is
+    /// `.disabled`, so a keystroke aimed at it reaches nothing at all — and the field that *is* live
+    /// is the clarification panel's, a few pixels above, which claims the caret for itself the moment
+    /// its question arrives. Writing `false` here rather than skipping the assignment is deliberate:
+    /// the widget being re-opened onto a pending question must not leave the caret parked in a dead
+    /// field just because it was there before.
+    private func focusComposerIfItTakesInput() {
+        pillFocused = ComposerPresentation.acceptsInput(composerState)
     }
 
     private var styledPanel: some View {
@@ -441,14 +455,66 @@ struct FloatingWidgetView: View {
         }
     }
 
-    private var isTaskInFlight: Bool {
-        viewModel.isRunning
-            || viewModel.isAwaitingApproval
-            || viewModel.clarificationQuestion != nil
-            || viewModel.visionCapturePreview != nil
+    /// Which of the composer's three states the app is in — and, with it, what the field says while
+    /// it is not taking input (SONNY-247).
+    ///
+    /// **The seven conditions `isTaskInFlight` covers are classified here rather than merged.** They
+    /// were merged, and the cost was a composer that kept its idle placeholder in all seven, stopped
+    /// responding, and swallowed a paste — reported twice in one day as a hung app. What the user
+    /// should do differs between them, so what the composer says has to differ too;
+    /// `ComposerPresentation.State` is where each case's reasoning lives.
+    ///
+    /// **The union is exactly the old disjunction, term for term.** Nothing was added or dropped,
+    /// which is what lets `isTaskInFlight` below be derived from this rather than computed a second
+    /// time. `everyConditionTheComposerDisablesOnIsClassified` holds the population so an eighth
+    /// cannot arrive unclassified, and `theWidgetsOwnPrecedenceIsWhatMakesTheComposersClassificationTrue`
+    /// holds the ordering the branches below depend on.
+    ///
+    /// **The branch order mirrors `state`'s, and that mirroring is the whole correctness argument**
+    /// (PR #107 review, F1). The first version asked `hasVisibleWidgetPanel`, which answers "is a
+    /// panel visible" — and then concluded "is *that* panel visible", which is a different question
+    /// and was false. `state` above returns the *first* branch that matches, so the panel a user is
+    /// actually looking at is whichever question outranks the rest; a condition may therefore only
+    /// be called `.waitingOnYou` once every branch that outranks it has been ruled out. That is what
+    /// the ordering here does, rather than a sentence claiming it.
+    private var composerState: ComposerPresentation.State {
+        // These three outrank `.controlling` in `state`, so each really does put its own question on
+        // screen whatever else is happening.
+        if viewModel.visionCapturePreview != nil
             || viewModel.visionDelegationRequest != nil
-            || viewModel.visionSessionPause != nil
-            || viewModel.visionSessionProgress != nil
+            || viewModel.visionSessionPause != nil {
+            return .waitingOnYou
+        }
+        // **Before the two below it, because `.controlling` outranks both `.permission` and
+        // `.clarification`.** A screen-control session sets `visionSessionProgress` at the top of
+        // every iteration and clears it only when the session ends, so from iteration 1 the panel on
+        // screen is the controlling HUD — the app, the step count, Pause and Stop — and it carries
+        // no question. An approval raised mid-session is pending underneath it and renders in the
+        // widget nowhere at all; that is SONNY-255, it predates this classification and is not fixed
+        // here. What is fixed here is the composer no longer saying "answer above" over a panel with
+        // nothing in it to answer.
+        if viewModel.visionSessionProgress != nil {
+            return .working
+        }
+        // No session is live, so `.permission` and then `.clarification` are the branches that win
+        // and each puts its own control above this field.
+        if viewModel.isAwaitingApproval || viewModel.clarificationQuestion != nil {
+            return .waitingOnYou
+        }
+        // A run in flight with nothing here to type into, and no guaranteed panel either: the
+        // running branch of `hasVisibleWidgetPanel` is origin-gated, so a run a Command Center row
+        // action started shows nothing in the widget at all.
+        if viewModel.isRunning {
+            return .working
+        }
+        return .ready
+    }
+
+    /// Unchanged in value, derived rather than restated. Every existing reader — the field's
+    /// `.disabled`, the three chips' clear affordances, `dontSaveButton`, the Start button, the
+    /// pill's trailing inset — keeps exactly the behaviour it had.
+    private var isTaskInFlight: Bool {
+        !ComposerPresentation.acceptsInput(composerState)
     }
 
     private func submit() {
@@ -628,14 +694,19 @@ struct FloatingWidgetView: View {
 
     private var composerFieldRow: some View {
         HStack(spacing: 10) {
+            // Dimmed while the field takes nothing (SONNY-247). This glyph is the composer's "type
+            // here" affordance, so turning it down is the composer withdrawing the invitation — the
+            // placeholder beside it carries the actual sentence, and stays at full `textMuted` so
+            // that the one thing able to explain a dead click is the one thing not dimmed.
             Image(systemName: "wand.and.stars.inverse")
                 .font(WidgetType.icon)
-                .foregroundStyle(.white.opacity(0.61))
+                .foregroundStyle(.white.opacity(isTaskInFlight ? 0.28 : 0.61))
 
             TextField(
                 "",
                 text: $viewModel.command,
-                prompt: Text("Let Sonny take it from here\u{2026}").foregroundStyle(WidgetTheme.textMuted)
+                prompt: Text(ComposerPresentation.prompt(for: composerState))
+                    .foregroundStyle(WidgetTheme.textMuted)
             )
             .textFieldStyle(.plain)
             .font(WidgetType.pillQuery)
@@ -1455,6 +1526,16 @@ private struct WidgetClarificationPanel: View {
     let onSubmit: () -> Void
     let onCancel: () -> Void
 
+    /// **The caret goes where the typing can actually land** (SONNY-247).
+    ///
+    /// This panel has always had the only live text field on the widget while a question is parked,
+    /// and it never asked for the caret — the composer below did, unconditionally, and then refused
+    /// every keystroke and every paste because it is `.disabled` in exactly this state. The founder
+    /// reported that twice in one day as the widget being unable to type or paste. Claiming focus
+    /// here is the half of the fix that makes the other half rarely matter: the first key pressed
+    /// after a question appears goes into the answer.
+    @FocusState private var answerFocused: Bool
+
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
             WidgetExistingStepRows(plan: plan, stepStatuses: stepStatuses)
@@ -1499,6 +1580,7 @@ private struct WidgetClarificationPanel: View {
                     .textFieldStyle(.plain)
                     .font(WidgetType.pillQuery)
                     .foregroundStyle(WidgetTheme.textFull)
+                    .focused($answerFocused)
                     .onSubmit(onSubmit)
 
                     Button(action: onSubmit) {
@@ -1516,6 +1598,16 @@ private struct WidgetClarificationPanel: View {
                 .background(Capsule().fill(Color.white.opacity(0.06)))
                 .overlay(Capsule().stroke(WidgetTheme.hairline.opacity(0.4), lineWidth: 0.5))
             }
+        }
+        .onAppear {
+            answerFocused = true
+        }
+        // A run may ask more than one question, and SwiftUI keeps this view's identity across them —
+        // so `onAppear` fires once and the second question would arrive with the caret still sitting
+        // in the answer the user has just sent. The panel appearing and a new question arriving are
+        // two different events and both need the caret.
+        .onChange(of: question) { _, _ in
+            answerFocused = true
         }
     }
 }
@@ -1569,6 +1661,40 @@ private struct WidgetResultPanel: View {
 /// the same footing `WidgetCaptureReviewPanel` is on, and a candidate for the whole-product UI pass
 /// for the same reason. Its shape is `WidgetCaptureReviewPanel`'s: a sentence, then a right-aligned
 /// pair of controls with the affirmative one tinted.
+///
+/// **The controls are a tick and a cross, and this panel alone diverges that way** (founder,
+/// 2026-08-23, SONNY-244 — "only tick and cross would be fine"). The panels beside it keep their
+/// words on purpose rather than following: this one asks a yes/no question about a single thing, and
+/// a glyph can carry yes and no. `WidgetCaptureReviewPanel` ("Send" / "Don't send"),
+/// `WidgetDelegationReviewPanel` ("Use tools" / "Keep clicking") and `WidgetSessionPausedPanel`
+/// ("Resume" / "End") each offer two *different actions*, and "Keep clicking" is not the negation of
+/// anything — a cross there would say something the button does not. So the divergence is stated
+/// rather than propagated.
+///
+/// **What the words cost, and the honest state of where they went.** `.accessibilityLabel` keeps the
+/// full sentence naming the task, which matters *more* once the button shows no text at all, and
+/// that one is solid. `.help` carries the founder's own word — "Continue", "Not now" — on hover, and
+/// **that one may simply not fire**: `micHintPointerEnteredMic` in this same file records `.help()`
+/// as having been "confirmed unreliable here too, not just assumed", which is why the mic's hint is
+/// a real layout row rather than a tooltip. **Two** other `.help` calls in this file predate that
+/// finding and were left in place — the compact capsule's "Open Sonny" and the clarification
+/// panel's cancel — and these two join them on the same footing: free if it works, nothing lost if
+/// it does not. (Two, not the three this said before PR #107's F3. A plain search answers four,
+/// because two of the hits are doc-comment mentions of `.help()` rather than calls; the live count
+/// at the branch point is `git grep -n "help(" -- Sources/MacAgent/FloatingWidgetView.swift` at
+/// `961b9c2` with the comment-prefixed lines dropped, which is 2. SONNY-251 counts 4 for the
+/// current head, being those two plus these two, and the two figures agree.) **So the plain reading is that a sighted user loses the words**, which
+/// is the founder's decision costing what it costs rather than a gap papered over with a mechanism
+/// that might not run. The manual item asks specifically whether the tooltip appears at all; a real
+/// hover row like the mic's is the remedy if it does not, and that is a design change, not a fix.
+///
+/// **The cross is "not now" and nothing else, and the residual ambiguity is real.** It calls the
+/// same `onDismiss` the labelled button called — the record is untouched, the offer returns at the
+/// next launch. A cross does also read as "close this panel", and *closing* is genuinely a different,
+/// weaker action here: letting the widget collapse leaves the offer unanswered and it comes straight
+/// back. Nothing in a 23pt glyph can distinguish the two, and with the tooltip in doubt the VoiceOver
+/// label is the only mitigation that certainly runs — so "does the cross read as an answer" is a
+/// question only the founder's manual pass can settle.
 private struct WidgetResumeOfferPanel: View {
     let command: String
     let onContinue: () -> Void
@@ -1576,35 +1702,57 @@ private struct WidgetResumeOfferPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
+            // **The reserved height is the fix, not the stack** (SONNY-244) — see
+            // `ResumeOfferPresentation.reservedMessageHeight` for why the controls were being drawn
+            // on top of this sentence intermittently, and why making the stack taller would have
+            // aimed at the wrong thing. `lineLimit` and the reservation are one mechanism and have
+            // to move together: the cap is what makes the reservation sufficient.
             Text(ResumeOfferPresentation.message(command: command))
                 .font(WidgetType.caption)
                 .foregroundStyle(WidgetTheme.textFull)
+                .lineLimit(ResumeOfferPresentation.messageLineLimit)
                 .fixedSize(horizontal: false, vertical: true)
+                .frame(minHeight: ResumeOfferPresentation.reservedMessageHeight)
 
             HStack(spacing: 8) {
                 Spacer(minLength: 8)
 
+                // 23x23 on the neutral circular fill, and a 10pt bold `xmark`: this is
+                // `WidgetClarificationPanel`'s own cancel control, glyph for glyph, which is itself
+                // `WidgetPermissionPanel`'s Deny. No new component and no new System B token.
                 Button(action: onDismiss) {
-                    Text(ResumeOfferPresentation.dismissLabel)
-                        .font(WidgetType.captionMedium)
+                    Image(systemName: "xmark")
+                        .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(WidgetTheme.textFull)
                 }
                 .buttonStyle(.plain)
-                .padding(.horizontal, 10)
-                .frame(height: 23)
+                .frame(width: 23, height: 23)
                 .widgetCircularBackground()
                 .accessibilityLabel(ResumeOfferPresentation.dismissAccessibilityLabel(command: command))
+                .help(ResumeOfferPresentation.dismissLabel)
 
+                // The affirmative stays the tinted one, which is the whole of what tells "carry on"
+                // apart from "leave it" now that neither carries a word.
+                //
+                // **The 11pt is borrowed from a submit arrow, not from a checkmark** (PR #107, F4).
+                // `WidgetClarificationPanel`'s tinted control is an `arrow.up` that sends the answer
+                // — this comment used to call it a "Send", which is a text button in
+                // `WidgetCaptureReviewPanel` and a different thing — so what was copied is a size
+                // and a treatment, 11pt bold white on `primaryAction`, rather than a matching glyph.
+                // The file's only existing `xmark`/`checkmark` pair is `WidgetPermissionPanel`'s
+                // Deny and Allow, and that pair is 10pt for **both**. Whether these two read as the
+                // same size is a founder call at manual-test time, not a session's, so the sizes
+                // stand and the manual row asks the question.
                 Button(action: onContinue) {
-                    Text(ResumeOfferPresentation.continueLabel)
-                        .font(WidgetType.captionMedium)
+                    Image(systemName: "checkmark")
+                        .font(.system(size: 11, weight: .bold))
                         .foregroundStyle(.white)
                 }
                 .buttonStyle(.plain)
-                .padding(.horizontal, 10)
-                .frame(height: 23)
+                .frame(width: 23, height: 23)
                 .widgetCircularBackground(tint: WidgetTheme.primaryAction)
                 .accessibilityLabel(ResumeOfferPresentation.continueAccessibilityLabel(command: command))
+                .help(ResumeOfferPresentation.continueLabel)
             }
         }
     }

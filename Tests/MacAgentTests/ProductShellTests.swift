@@ -116,6 +116,15 @@ struct ProductShellTests {
     ///   `observeWidgetPresentationRequests()` having been installed first — an ordering dependency
     ///   for no user-visible gain.
     ///
+    /// **The focus half is now conditional, and that is the same decision rather than a weakening of
+    /// it** (SONNY-247). Both call sites moved from a bare `pillFocused = true` to
+    /// `focusComposerIfItTakesInput()`, which gives the caret to the composer only when the composer
+    /// can use it. While a question is parked the composer is `.disabled`, so the old unconditional
+    /// write aimed the caret at a field that refuses every keystroke and every paste — the founder's
+    /// report, twice in one day — while the live field sat in the panel above. What this test holds
+    /// is unchanged: a click still reaches a view that does *both* halves. Whether the guard itself
+    /// is right is held by `WidgetComposerStateTests`.
+    ///
     /// **Read rather than run, and this is the case that best shows why the tool exists.** Neither
     /// line can execute in a test process: `SonnyNotificationService.init?` returns nil without
     /// bundle identity, and `applicationDidFinishLaunching` registers a real `NSStatusItem`, a
@@ -148,7 +157,7 @@ struct ProductShellTests {
             to: ".onChange(of: isMicHintSlotFree)"
         )
         #expect(onChange.contains("expandFromCompact()"))
-        #expect(onChange.contains("pillFocused = true"))
+        #expect(onChange.contains("focusComposerIfItTakesInput()"))
     }
 
     @Test
