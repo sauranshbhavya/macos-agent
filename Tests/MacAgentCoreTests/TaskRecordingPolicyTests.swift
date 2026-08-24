@@ -21,16 +21,19 @@ struct TaskRecordingPolicyTests {
     }
 
     /// Named explicitly as well, so a reclassification that silently changes what the switch reaches
-    /// fails here and not only in the classification's own test. The withheld six are the founder's
+    /// fails here and not only in the classification's own test. The withheld seven are the founder's
     /// five plus row E's plan details (SONNY-147), a trace for the same reason the row it hangs off
-    /// is; the kept five gained row J's approved-apps store, an `.artifact` because a grant is the
-    /// user's own answer rather than a record of what happened (SONNY-140).
+    /// is, and row 13's output locations (SONNY-209), a trace because nobody asked Sonny to remember
+    /// which folder a file went into; the kept five gained row J's approved-apps store, an
+    /// `.artifact` because a grant is the user's own answer rather than a record of what happened
+    /// (SONNY-140).
     @Test
-    func theWithheldStoresAreTheSixTracesAndTheKeptOnesAreTheFiveOthers() {
+    func theWithheldStoresAreTheSevenTracesAndTheKeptOnesAreTheFiveOthers() {
         let withheld = Set(LocalStore.allCases.filter { !TaskRecordingPolicy.suppressTraces.allowsWriting(to: $0) })
         #expect(withheld == [
             .clipboardHistory,
             .recentArtifacts,
+            .outputLocations,
             .shortcutRunHistory,
             .taskHistory,
             .taskPlanDetails,
