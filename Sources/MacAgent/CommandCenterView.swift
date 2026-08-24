@@ -4579,10 +4579,48 @@ enum MemoryDeletionCopy {
         return "Deleted \(setAsideFilesTitle(fileCount: deletedFileCount))."
     }
 
-    /// What the Data page reports when the control could not take everything it was asked for.
-    /// `detail` is `LocalDataDeletionError`'s own sentence, which names the file that survived.
-    static func setAsideFilesFailure(_ detail: String) -> String {
+    /// What the Data page reports when the control could not take everything it was asked for,
+    /// composed from the error's own fields rather than from its sentence (PR #117 review, F4).
+    ///
+    /// `LocalDataDeletionError.errorDescription` is the wipe's — "Deleted 0 local data files, but 1
+    /// could not be deleted and still hold data" — and the wipe's noun is wrong here: to the user
+    /// these are the files Sonny could not read, and this is the one place they are counted in
+    /// those words. Starts with "Could not delete" whatever the split, because
+    /// `LocalDataDeletionStatusMessage` reads a leading "Deleted" as success and a partial removal
+    /// is not one.
+    static func setAsideFilesFailure(_ error: LocalDataDeletionError) -> String {
+        let failedNames = error.result.failedFilePaths.map { URL(fileURLWithPath: $0).lastPathComponent }
+        let attempted = error.result.deletedFileCount + failedNames.count
+        let which = error.result.deletedFileCount == 0
+            ? theFilesSonnyCouldNotRead(failedNames.count)
+            : "\(failedNames.count) of \(theFilesSonnyCouldNotRead(attempted))"
+        let detail = error.underlyingDescriptions.first.map { " (\($0))" } ?? ""
+        return "Could not delete \(which): \(failedNames.joined(separator: ", ")).\(detail)"
+    }
+
+    /// The same report for an error that is not the service's own — the door only throws
+    /// `LocalDataDeletionError`, but `throws` promises nothing, and a sentence is owed either way.
+    static func setAsideFilesFailure(describing detail: String) -> String {
         "Could not delete the files Sonny could not read: \(detail)"
+    }
+
+    /// What the control says when pressed during a run. The wipe's sentence with the wipe's noun
+    /// swapped for these files' — same page, same guard, same shape (PR #117 review, F3).
+    static let setAsideFilesRunGuard = "Stop the current run before deleting the files Sonny could not read."
+
+    /// What the Memory page reports after a per-row Delete, derived from the record of that press —
+    /// at the press, and again when Settings' narrower control or the whole wipe prunes the files it
+    /// kept (PR #117 review, F1). A failure sentence names the step that failed and is unchanged by
+    /// what happens to the kept files afterwards; an outcome sentence counts them, so it follows.
+    static func perRowDeleteReport(_ delete: LastPerRowDelete) -> String {
+        if let failure = delete.failure {
+            return "Could not delete \(delete.category.title.lowercased()): \(failure)"
+        }
+        return outcome(
+            for: delete.category,
+            deletedFileCount: delete.deletedFileCount,
+            keptFileCount: delete.keptFileURLs.count
+        )
     }
 
     /// The sheet's title when the row's file will not read.
@@ -5558,6 +5596,10 @@ private struct SettingsDataPage: View {
                                 Label("Delete", systemImage: "trash")
                             }
                             .buttonStyle(SonnyButtonStyle(tone: .danger, width: 96))
+                            // The wipe's condition, one row up, by founder decision (PR #117
+                            // review, F3): a delete that can fail mid-run reports its failure on
+                            // `errorMessage`, which outranks the task's result once the run ends.
+                            .disabled(viewModel.isRunning)
                             .help("Delete the files Sonny could not read")
                             .accessibilityLabel(
                                 MemoryDeletionCopy.setAsideFilesDeleteAccessibilityLabel(

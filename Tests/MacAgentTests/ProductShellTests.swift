@@ -650,10 +650,11 @@ struct ProductShellTests {
             "activeResumableTask",
             "pendingResumableContinuation",
             "dismissedResumeOfferIDs",
-            // SONNY-239's Reveal in Finder control renders off this. The wipe's own sweep has just
-            // deleted the files it names, so a surviving list would offer to show the user files
-            // that are gone.
-            "setAsideFilesFromLastDelete"
+            // SONNY-239's Reveal in Finder control renders off this record — the list of kept files
+            // it holds, and the row and count its sentence is derived from (PR #117 review, F1). The
+            // wipe's own sweep has just deleted the files it names, so a surviving record would offer
+            // to show the user files that are gone.
+            "lastPerRowDelete"
         ]
 
         // Not assigned by the wipe, but rewritten by the four `refresh…` calls it ends with — from

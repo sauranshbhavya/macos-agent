@@ -296,6 +296,12 @@ struct LocalDataQuarantineTests {
         // The row's gate is the count, never the size: a zero-byte file that would not read is set
         // aside like any other and is still a file the control removes.
         #expect(!SetAsideFilesSummary(fileCount: 1, byteCount: 0).isEmpty)
+
+        // `fileURLs` is caller-supplied, and a store handed in twice must list its files once — the
+        // property the count relies on, held rather than asserted in prose (PR #117 review, R9).
+        let handedOneTwice = LocalDataDeletionService(fileURLs: [layout.outputLocations] + layout.storeFileURLs)
+        #expect(handedOneTwice.setAsideFiles() == layout.setAside)
+        #expect(handedOneTwice.setAsideFilesSummary() == service.setAsideFilesSummary())
     }
 
     /// Nothing set aside — the ordinary state — is `.none`, whether the stores have live files, no
@@ -327,7 +333,7 @@ struct LocalDataQuarantineTests {
         let layout = try Self.setAsideLayout(at: root)
         let service = LocalDataDeletionService(fileURLs: layout.storeFileURLs)
 
-        let result = try service.deleteSetAsideFiles()
+        let result = try service.deleteSetAsideFilesOnly()
 
         #expect(result == LocalDataDeletionResult(deletedFileCount: 4, missingFileCount: 0))
         for setAside in layout.setAside {
