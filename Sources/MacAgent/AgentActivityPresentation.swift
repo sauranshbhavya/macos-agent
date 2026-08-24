@@ -251,6 +251,85 @@ enum ClarificationPresentation {
     static let canceledSummary = "Canceled. No action was taken."
 }
 
+/// What the widget's composer says while it is not taking a command (SONNY-247).
+///
+/// **The behaviour this describes is correct and is not what was broken.** The composer is disabled
+/// whenever a task occupies the app, and it should be: starting a second task while one is parked on
+/// your answer is not something the product allows, and the answer has its own field a few pixels
+/// above. What was broken is that none of that was visible — the field kept the idle placeholder,
+/// stopped responding, and swallowed a paste, which is indistinguishable from a hung app. The
+/// founder reported it twice in one day, once as "I cannot type inside the floating widget nor
+/// copy-paste anything" and once as "when a clarification question is asked, the typing bar doesn't
+/// work".
+///
+/// **Three states, not one, and the split is the point.** `FloatingWidgetView.isTaskInFlight` is a
+/// disjunction over seven conditions, and treating them alike is what produced a placeholder that
+/// was wrong in every one of them. A question parked on you, with the control that answers it right
+/// there, is a different situation from a run in flight with nothing here to type into, and they get
+/// different sentences.
+///
+/// Nothing here explains how anything works, per the founder's rule of 2026-08-14. Each line is the
+/// composer describing its own state or naming where to act — not a sentence about the feature.
+enum ComposerPresentation {
+    /// What the composer is doing. `FloatingWidgetView.composerState` maps the view model onto this,
+    /// and derives its `isTaskInFlight` back out of it, so the gate that disables the field and the
+    /// sentence that explains why can never disagree.
+    enum State: CaseIterable {
+        /// Nothing is in the way. The field takes a command and the Start button is there.
+        case ready
+
+        /// A question is parked on the user, and the control that answers it is the one in the panel
+        /// above this composer.
+        ///
+        /// **"Above" is load-bearing, and what makes it true is a branch order, not a predicate**
+        /// (PR #107 review, F1). The first version of this argued from
+        /// `AgentViewModel.hasVisibleWidgetPanel` — which answers "is a panel visible" — and then
+        /// concluded "is *that* panel visible". Those are different questions and the second was
+        /// false: `FloatingWidgetView.state` returns the first branch that matches, and a live
+        /// screen-control session outranks both the approval and the clarification there, so an
+        /// approval raised mid-session left the widget showing the controlling HUD — the app, the
+        /// step count, Pause and Stop — while this composer said "answer above" over a panel with
+        /// no question in it. The classification now rules out every branch that outranks a
+        /// condition before calling it `.waitingOnYou`, so the sentence is carried by the ordering
+        /// rather than by a claim about it.
+        ///
+        /// **That an approval during a screen-control session reaches no widget surface at all is a
+        /// separate, pre-existing defect** — SONNY-255, filed high — and nothing here fixes it or
+        /// implies otherwise. This case only stops the composer pointing at a panel that cannot
+        /// answer.
+        case waitingOnYou
+
+        /// A run is in flight and there is nothing here for the user to type into.
+        ///
+        /// Deliberately *not* folded into `waitingOnYou`, for two separate reasons. The running
+        /// branch of `hasVisibleWidgetPanel` is origin-gated, so a run a Command Center row action
+        /// started shows no widget panel at all and a sentence pointing "above" would point at
+        /// nothing. And a live screen-control session lands here even while something is pending
+        /// underneath it, because the panel it puts on screen is a progress HUD rather than a
+        /// question — see `waitingOnYou` above.
+        case working
+    }
+
+    /// The field's placeholder, which is the only thing on this surface that can say why a click
+    /// achieved nothing.
+    static func prompt(for state: State) -> String {
+        switch state {
+        case .ready:
+            return "Let Sonny take it from here\u{2026}"
+        case .waitingOnYou:
+            return "Answer above first\u{2026}"
+        case .working:
+            return "Sonny is working\u{2026}"
+        }
+    }
+
+    /// Whether the field takes input. The one place this question is answered, so a control added to
+    /// the composer later cannot invent its own idea of "in flight".
+    static func acceptsInput(_ state: State) -> Bool {
+        state == .ready
+    }
+}
+
 /// The armed-follow-up chip and the action that arms it (row E, SONNY-150).
 ///
 /// Copy approved by the founder on 2026-08-21, with the alternatives put beside it: the chip states
@@ -344,11 +423,86 @@ enum TaskRecordingPresentation {
 /// and belongs in the Memory row that lists it, which is where `MemoryEntryPresentation` puts it;
 /// the offer is a question with two answers.
 enum ResumeOfferPresentation {
+    /// The affirmative's word. **Its tooltip since SONNY-244, not its visible text** — the founder's
+    /// decision of 2026-08-23 made the two controls a tick and a cross. It is not the VoiceOver name;
+    /// that is `continueAccessibilityLabel`, which names the task an icon no longer can. Whether a
+    /// tooltip in the floating widget fires at all is genuinely in doubt — `WidgetResumeOfferPanel`
+    /// carries the finding and what it means for these two words.
     static let continueLabel = "Continue"
     /// "Not now", not "Dismiss": the record is not being deleted and the offer comes back at the
     /// next launch, so a label that sounded final would over-promise in the direction that loses the
-    /// user's work.
+    /// user's work. The cross's tooltip since SONNY-244, on the same footing as `continueLabel`.
     static let dismissLabel = "Not now"
+
+    /// The width the message is actually drawn at: the panel's fixed 472pt less `styledPanel`'s
+    /// 18pt of padding a side.
+    ///
+    /// **Here rather than in the view because the layout it feeds is a measured fact, not a taste**
+    /// (SONNY-244). `theMessageNeverDrawsTallerThanThePanelReservesForIt` re-derives the numbers
+    /// below from real font metrics, and it can only do that if they are reachable from a test.
+    static let panelContentWidth: CGFloat = 436
+
+    /// `WidgetType.caption` is SF Pro Regular 13, whose line height is 16pt
+    /// (`NSLayoutManager().defaultLineHeight(for: .systemFont(ofSize: 13))` → 16.0, asserted by that
+    /// same test rather than trusted from this comment).
+    static let messageLineHeight: CGFloat = 16
+
+    /// The most lines the message may draw, and therefore the most it can ever be tall.
+    ///
+    /// **Two, because a truncated command lands within a whisker of the one-versus-two-line
+    /// boundary and essentially always crosses it.** `maximumCommandCharacters` squeezes every long
+    /// command into the same band: measured at 13pt, the founder's two reported messages are 530.5pt
+    /// and 531.4pt on one line against 436pt of width, and a third realistic one is 524.7pt. So the
+    /// panel is permanently balanced on that edge — every one of them wraps to two lines with about
+    /// 95pt on the second.
+    ///
+    /// **A third line arrives two different ways, and a count of characters is not either of them**
+    /// (PR #107 review, F5 and its re-check). This first said "a 60-character word with no space in
+    /// it", then "a run wider than two 436pt lines hold". Both were wrong, and the second is
+    /// disproved by its own examples — two 436pt lines hold 872pt and not one of the three crossings
+    /// below reaches it. The two real mechanisms:
+    ///
+    /// - **No break opportunity inside the quoted phrase.** A command with no space in it makes the
+    ///   whole quoted phrase one unbreakable run, because an opening quote binds to the word after
+    ///   it and a closing quote and period bind to the word before. Once that run exceeds a
+    ///   *single* 436pt line it cannot share line one with the lead-in and cannot fit on line two
+    ///   either, so it takes a line of its own and spills onto a third. Measured at 13pt, the run
+    ///   crosses 436 between `W` x33 (425.75pt) and `W` x34 (438.25pt), and between `w` x42
+    ///   (432.40pt) and `w` x43 (442.39pt) — one threshold, two different character counts, which
+    ///   is the whole reason a count cannot express this.
+    /// - **Packing, where nothing is unbreakable at all.** CJK breaks between characters, so no run
+    ///   is ever too wide; the message crosses because whole-character breaks leave part of each
+    ///   line unused. 54 of them need three lines at a message width of 871.21pt — *under* the
+    ///   872pt two lines nominally hold, which is the clearest statement of why "wider than two
+    ///   lines" was never the property.
+    ///
+    /// This cap tail-truncates all of them rather than letting the panel grow, and
+    /// `aThirdLineArrivesTwoWaysAndTheCapCoversBoth` holds both mechanisms with a control one
+    /// character under each Latin crossing.
+    static let messageLineLimit = 2
+
+    /// The height the panel holds open for the message, whatever it turns out to measure.
+    ///
+    /// **This is the whole of SONNY-244's layout fix, and it is a fix to a measurement rather than
+    /// to a stack.** The founder saw the offer's controls drawn on top of the message's second line,
+    /// intermittently — the same view at the same message length laid out both ways minutes apart —
+    /// which is what a `Text` measured at one width and drawn at another looks like once
+    /// `.fixedSize(horizontal: false, vertical: true)` is on it: that modifier is precisely what
+    /// turns "this text got less height than it needs" from a truncation into an overflow onto
+    /// whatever sits below. And a mis-measure is *cheap* here for the reason `messageLineLimit`
+    /// gives. The widget's own outer content is 568pt wide — a 472pt pill, 12pt, and two 36pt
+    /// circular buttons 12pt apart — which leaves **532pt** inside this panel's 18pt padding, and
+    /// 532pt clears all three real messages on one line: 530.5, 531.4 and 524.7, the tightest of
+    /// them by **0.6pt**. Whether SwiftUI ever measures at that width is not something reading the
+    /// source can settle; that the panel sits two thirds of a point from flipping is.
+    /// `everyTruncatedMessageSitsWithinAWhiskerOfTheOneLineBoundary` re-derives the comparison from
+    /// live font metrics — it asserts the relationship rather than these three figures, which are
+    /// what that same measurement printed.
+    ///
+    /// Reserving the two lines makes the message's slot a constant the stack can compute without
+    /// measuring anything, so the controls below it are placed at the same offset in every pass.
+    /// `minHeight` rather than `height` so a future font that needs more still gets it.
+    static let reservedMessageHeight: CGFloat = messageLineHeight * CGFloat(messageLineLimit)
 
     static func message(command: String) -> String {
         "You were partway through \u{201C}\(truncatedCommand(command))\u{201D}."

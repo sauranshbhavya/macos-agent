@@ -402,6 +402,50 @@ which.
 - [x] Question text + inline answer field render cleanly — **confirmed 2026-07-24**
 - [x] Return key or the up-arrow button submits and resumes the task — **confirmed 2026-07-24**
 - [x] Empty/whitespace-only answer correctly leaves the submit button disabled — **confirmed 2026-07-24**
+- [ ] **(new 2026-08-23, SONNY-247)** The caret lands in the answer field on its own when the
+      question appears — type immediately, without clicking anything first, and the letters go into
+      the answer
+- [ ] **(new 2026-08-23, SONNY-247)** The main composer at the bottom now reads "Answer above
+      first…" instead of "Let Sonny take it from here…", and its wand glyph is dimmer. Click it,
+      try to type, then copy something and try ⌘V into it — it still takes nothing, which is
+      correct, but it should now look and read as deliberate rather than as a hung app. **This is
+      the whole of what the ticket changed** — the composer was always disabled here, it just never
+      said so, and the founder reported it twice on 2026-08-23
+- [ ] **(new 2026-08-23, SONNY-247)** While an ordinary run is in flight (no question), the same
+      composer reads "Sonny is working…" — a different sentence, because there is nothing above to
+      answer
+- [ ] **(new 2026-08-23, SONNY-247, from PR #107's review)** During a **screen-control** session the
+      composer also reads "Sonny is working…", not "Answer above first…", for the whole session —
+      including if Sonny asks for an approval part-way through it. That is deliberate: the panel
+      above is the controlling HUD (app, step count, Pause, Stop) and it carries no question, so
+      pointing at it would be a lie. **Separately and not fixed here: an approval raised during a
+      screen-control session reaches no widget surface at all** — that is SONNY-255, it predates
+      this work, and if you hit it the run will appear to stall with only Pause and Stop available
+
+### 3d-bis. Unfinished-task offer (row 13, SONNY-210; layout and controls SONNY-244 — no wireframe)
+Start something long and multi-step, then quit Sonny before it finishes — "summarize
+https://news.ycombinator.com and save it as a markdown file on my desktop" is the founder's own
+case. Relaunch and open the widget.
+- [ ] **(new 2026-08-23, SONNY-244)** The offer reads "You were partway through "…"." with a **tick
+      and a cross** below it, right-aligned, the tick tinted and the cross plain. No text buttons.
+      **Say whether the two glyphs read as the same size** — the tick is 11pt and the cross 10pt,
+      while the only other pair of these two glyphs in the app (the permission panel's Allow and
+      Deny) is 10pt for both. Left as-is deliberately: it is your call, not a session's
+- [ ] **(new 2026-08-23, SONNY-244)** **The controls sit below the message, never on top of it** —
+      this is the defect. Use a command long enough that the message wraps to two lines, and check
+      it more than once: it rendered correctly some of the time on the broken build, so a single
+      good look proves nothing. Try it both ways — open the widget from the menu-bar icon and from
+      the Ctrl-Opt-Space hotkey — and with a short command as well as a long one
+- [ ] **(new 2026-08-23, SONNY-244)** Hover the tick and then the cross and **say whether a tooltip
+      appears at all** — it should read "Continue" and "Not now". This one is genuinely in doubt:
+      `FloatingWidgetView` records `.help()` as confirmed unreliable in this widget, which is why the
+      mic's hint is a real row rather than a tooltip, so these two words may simply not be reachable
+      for a sighted user. If no tooltip appears, the tick and cross carry no words at all and that
+      needs a decision
+- [ ] **(new 2026-08-23, SONNY-244)** The cross leaves the task alone — it is still listed under
+      Command Center → Memory → Unfinished tasks, and the offer comes back at the next launch.
+      **Say if the cross reads as "close this panel" rather than as an answer** — that ambiguity is
+      known and unresolved, and your read of it is what decides whether it stays
 
 ### 3e. Result — `6-FloatingWidgetResultOutput.png`
 Use one command that produces a real file (zip largest files, docx conversion) and one that doesn't
@@ -551,9 +595,11 @@ it feels confusing in practice, not just whether it's "technically correct."
       dispatch can't be covered by the automated suite, so this row is the real verification
 - [ ] **(new 2026-07-30)** ⌘Q quits the app from anywhere — it was equally menu-routed and equally
       broken; the status-item menu's Quit only ever dispatched while that dropdown was open
-- [ ] **(new 2026-07-30, fix re-test)** Widget idle state: the Start button now sits 8pt from the
-      pill's trailing edge, matching its 8pt top/bottom insets — confirm it reads even, and that
-      the in-flight state (button hidden, field disabled) looks unchanged from before
+- [ ] **(new 2026-07-30, fix re-test; second half superseded 2026-08-23 by SONNY-247)** Widget idle
+      state: the Start button now sits 8pt from the pill's trailing edge, matching its 8pt
+      top/bottom insets — confirm it reads even. **The in-flight state is no longer meant to look
+      unchanged from before**, which is what this row used to ask: the placeholder now names the
+      state and the wand glyph dims. Check it against §3d's rows instead of against memory
 - [ ] **(new 2026-07-30, fix re-test)** With a workspace saved as "hehe" and no routine by that
       name, "run hehe" asks "…but you do have a workspace called \"hehe\" — did you mean to open
       that?" instead of listing routine names; same cross-reference in the reverse direction
