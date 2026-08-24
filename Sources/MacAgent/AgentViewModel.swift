@@ -65,6 +65,13 @@ final class AgentViewModel: ObservableObject {
     @Published private(set) var clipboardHistoryItems: [ClipboardHistoryItem] = []
     @Published private(set) var approvedApps: [ApprovedApp] = []
     @Published private(set) var outputLocations: [OutputLocation] = []
+    /// Runs that began and did not finish (row 13, SONNY-210), newest activity first.
+    ///
+    /// Published rather than read on demand because two surfaces render it and they must agree: the
+    /// Memory section's "Unfinished tasks" row and the floating widget's own offer to carry one on.
+    /// Reloaded from the store after every write this view model makes to it, so the offer can never
+    /// name a record the file no longer holds.
+    @Published private(set) var resumableTasks: [ResumableTask] = []
     /// Outcome of the Memory section's per-type Delete, rendered by the same
     /// `LocalDataDeletionStatusMessage` view Settings' whole-wipe uses. Separate from
     /// `localDataDeletionStatusMessage` so a per-type delete does not post its result onto the
@@ -309,6 +316,9 @@ final class AgentViewModel: ObservableObject {
     /// Row 13's common output locations (SONNY-209) — which folders this Mac's work comes out into.
     /// Injected like every other store so a test writes to its own file rather than the user's.
     private let outputLocationStore: OutputLocationStore
+    /// Row 13's unfinished runs (SONNY-210). Injected like every other store so a test writes to its
+    /// own file rather than the user's.
+    private let resumableTaskStore: ResumableTaskStore
     private let clipboardHistoryMonitor: ClipboardHistoryMonitor
     private let localDataDeletionService: LocalDataDeletionService
     private let memorySettingsStore: MemorySettingsStore
@@ -430,6 +440,72 @@ final class AgentViewModel: ObservableObject {
     private var isPushToTalkHotKeyDown = false
     private var pendingCommandForPriorTaskContext: String?
     private var pendingTaskHistoryStartedAt: Date?
+    /// The unfinished-run record this task is checkpointing into, or `nil` when it has none —
+    /// because memory is off for it, because "Don't save this task" is on, because the plan was too
+    /// large to keep, or because the run never reached a plan (row 13, SONNY-210).
+    ///
+    /// Held whole rather than as an id: the unit-progress callback appends to `completedStepIDs`,
+    /// `executePreparedRun` reads `chainedArtifactPath` to seed a resumed chain, and a settle needs
+    /// the id. One slot answers all three, and the alternative — an id plus a re-read per unit — is
+    /// a decrypt on the hot path to recover something this object already had.
+    private var activeResumableTask: ResumableTask?
+    /// The record the **next dispatch** carries on, or `nil` when that dispatch is a task of its
+    /// own (row 13, SONNY-210; the second kind added by PR #105 review F1).
+    ///
+    /// **Spent by `start()` itself, before its own guards**, and handed to `performStart` as a
+    /// parameter rather than read back off this property. That is deliberate: an arm that survives a
+    /// *refused* dispatch would be inherited by the next unrelated one, which would then overwrite a
+    /// record it has nothing to do with. Read once, cleared once, and the lifetime is one call.
+    private var pendingResumableContinuation: ResumableTaskContinuation?
+
+    /// What a dispatch inherits from a record that is already in flight.
+    ///
+    /// **Two kinds, because two doors mean different things by "the same task".** A *resume* picks
+    /// up what is left of an interrupted run, so it inherits the file an earlier unit produced. A
+    /// *restart* runs the same task again from the top — an answered clarification, or a retry after
+    /// a failure — so there is no earlier unit and nothing to carry from one.
+    ///
+    /// Both inherit the id and the start time, which is what keeps one user-intent task to one
+    /// record: `aTaskInterruptedTwiceStaysOneRecordWithItsOriginalStartTime` asserts it for the
+    /// resume door and `anAnsweredClarificationKeepsOneRecordRatherThanOrphaningTheFirst` for the
+    /// restart door.
+    private struct ResumableTaskContinuation {
+        let id: String
+        let startedAt: Date
+        /// The file an already-finished unit produced. `nil` for a restart, which has none.
+        let chainedArtifactPath: String?
+
+        /// Carrying on with what is left of an interrupted run.
+        static func resuming(_ task: ResumableTask) -> ResumableTaskContinuation {
+            ResumableTaskContinuation(
+                id: task.id,
+                startedAt: task.startedAt,
+                chainedArtifactPath: task.chainedArtifactPath
+            )
+        }
+
+        /// Running the same task again from the top.
+        static func restarting(_ task: ResumableTask) -> ResumableTaskContinuation {
+            ResumableTaskContinuation(id: task.id, startedAt: task.startedAt, chainedArtifactPath: nil)
+        }
+    }
+
+    /// Offers the user has waved away in this app session.
+    ///
+    /// **Session-scoped on purpose, and it is not a delete.** The founder's lifecycle is that a
+    /// record lives until its task completes, the user deletes it, or it goes idle; "not now" is
+    /// none of those. So dismissing takes the offer off the widget without touching the record,
+    /// which stays visible and deletable under Memory and comes back at the next launch — and the
+    /// idle expiry is what ends it if the user never answers either way.
+    ///
+    /// **`@Published`, and that is a fix rather than decoration** (PR #105 review F2). It was a
+    /// plain `private var`, so `dismissResumeOffer()` mutated it, `resumeOffer` went `nil`, and
+    /// `objectWillChange` fired zero times — SwiftUI never re-evaluated `FloatingWidgetView.state`
+    /// and the panel stayed on screen. The user pressed "Not now" and watched nothing happen until
+    /// the six-second collapse took the whole widget instead. **Every input to `resumeOffer` must
+    /// publish**; the other one, `resumableTasks`, already does, and
+    /// `dismissingTheOfferPublishesSoTheWidgetRepaints` holds this one.
+    @Published private var dismissedResumeOfferIDs: Set<String> = []
     private var preserveUsageForNextStart = false
     private var localStorageLoadFailures: [LocalStorageLoadFailureSource: String] = [:]
     /// Last clipboard-poll failure text, so a repeating 1s failure is reported once, not 60×/min.
@@ -446,6 +522,7 @@ final class AgentViewModel: ObservableObject {
         case recentArtifacts
         case approvedApps
         case outputLocations
+        case resumableTasks
 
         var label: String {
             switch self {
@@ -473,6 +550,11 @@ final class AgentViewModel: ObservableObject {
                 // Named for what a person would notice going wrong — Sonny stops offering the folder
                 // they always save into — rather than for the file.
                 return "where your outputs usually go"
+            case .resumableTasks:
+                // Named for what the user would notice if it will not read: Sonny stops offering to
+                // carry on with what they were partway through. "Resumable tasks" is the type's
+                // name, not theirs.
+                return "unfinished tasks"
             }
         }
     }
@@ -541,6 +623,7 @@ final class AgentViewModel: ObservableObject {
         // question against different roots than the run that produced the file — right in
         // production, quietly wrong for any test that injects a whitelist and leaves the store alone.
         outputLocationStore: OutputLocationStore? = nil,
+        resumableTaskStore: ResumableTaskStore = ResumableTaskStore(),
         clipboardHistoryMonitor: ClipboardHistoryMonitor? = nil,
         localDataDeletionService: LocalDataDeletionService = LocalDataDeletionService(),
         memoryPolicyProvider: any MemoryPolicyProviding = UnmanagedMemoryPolicyProvider(),
@@ -585,6 +668,7 @@ final class AgentViewModel: ObservableObject {
         self.clipboardHistorySettingsStore = clipboardHistorySettingsStore
         self.approvedAppStore = approvedAppStore
         self.outputLocationStore = outputLocationStore ?? OutputLocationStore(whitelist: whitelist)
+        self.resumableTaskStore = resumableTaskStore
         self.clipboardHistoryMonitor = clipboardHistoryMonitor
             ?? ClipboardHistoryMonitor(settingsStore: clipboardHistorySettingsStore)
         self.localDataDeletionService = localDataDeletionService
@@ -989,7 +1073,76 @@ final class AgentViewModel: ObservableObject {
         if !finalSummary.isEmpty {
             return activeTaskOrigin == .widget
         }
+        // Row 13's offer to carry on with an unfinished run (SONNY-210) — **last, and above nothing
+        // but the idle state.** Every branch above describes the task the user is doing *now*: a
+        // question waiting on them, a run in flight, the outcome of the one that just ended. This
+        // describes a task from before, so it yields to all of them.
+        //
+        // That placement is the deliberate answer to the hazard CLAUDE.md records about this
+        // surface. The widget picks `.failure` ahead of `.result`, and the cost of getting that
+        // precedence wrong has been paid twice: a bookkeeping write failure routed to `errorMessage`
+        // replaced the result of a task that had actually succeeded. A fifth thing competing here
+        // must not be able to do the same, and the only way to guarantee it cannot is to put it
+        // below every state that reports the current task — including `.failure`, so that a run
+        // which failed partway shows *why* it failed rather than an offer to try again with the
+        // reason hidden. The offer is still there the moment that outcome clears.
+        if resumeOffer != nil {
+            return true
+        }
         return false
+    }
+
+    /// The unfinished run the widget offers to carry on with, or `nil` when there is none to offer.
+    ///
+    /// **`!isTaskInFlight`, not `!isRunning`.** A run paused at an approval or an unanswered
+    /// clarification is still the user's live task, and it is exactly the state whose own record is
+    /// sitting in `resumableTasks` — so without the wider guard Sonny would offer to continue the
+    /// task whose question is on screen. `isTaskInFlight` is the three-term superset this file
+    /// already uses for that.
+    ///
+    /// Newest activity first, which is `ResumableTaskStore.loadAll`'s order: the thing they were
+    /// doing most recently is the thing to raise.
+    ///
+    /// `mayBeOfferedForResume` filters two things: a record with nothing left to do, which a settled
+    /// record never is and a hand-written one can be; and a record whose remaining work contains
+    /// something Sonny must not do twice on its own (PR #105 review F5) — a Shortcut, a routine, a
+    /// screen session. Those stay listed under Memory, where the user can see and delete them; what
+    /// is withheld is Sonny volunteering to finish them.
+    ///
+    /// **The Memory switch gates this read as well as the write, and the asymmetry with the Memory
+    /// list is the whole decision** (founder, 2026-08-22, from PR #105's review F9). With
+    /// "Unfinished tasks" off Sonny raises no offer — *including* for records written before the
+    /// switch was flipped — while the records themselves are untouched: still on disk, still listed
+    /// under Memory, still deletable, and the offer returns the moment the switch does.
+    ///
+    /// The two surfaces differ because of who initiates. **Listing an existing record under Memory
+    /// is the user going to look**, and it has to show them, or a store they switched off becomes
+    /// one they cannot clear. **Raising a panel on the widget is Sonny initiating, unasked, from
+    /// memory the user has just said to stop keeping** — and a switch that is off while the product
+    /// still proactively acts on what it recorded reads as a switch that did not work.
+    ///
+    /// **Exactly this one guard, and deliberately not a rule.** Nothing about what is written, what
+    /// is stored, what Memory lists or what deletion does changes, and this is not generalised into
+    /// "a memory switch gates every read path": it is about a *proactive* surface, and the next
+    /// store that grows one is decided on its own terms.
+    ///
+    /// `isMemoryCategoryEnabled(_:)` rather than `allowsRecording(to:)`, on two counts. It is the
+    /// effective answer the row's own switch displays, so the panel and the control cannot disagree
+    /// — which is the founder's framing above. And it leaves out `taskRecordingPolicy`, which has no
+    /// business here: "Don't save this task" is a per-run composer switch about the run being
+    /// composed, not a standing statement about records already on disk. It reads `memorySettings`,
+    /// which is `@Published`, so flipping the switch republishes and the widget re-evaluates — the
+    /// rule F2 cost this branch to learn, that every input to this property must publish.
+    var resumeOffer: ResumableTask? {
+        guard !isTaskInFlight else {
+            return nil
+        }
+        guard isMemoryCategoryEnabled(.resumableTasks) else {
+            return nil
+        }
+        return resumableTasks.first {
+            $0.mayBeOfferedForResume && !dismissedResumeOfferIDs.contains($0.id)
+        }
     }
 
     var voiceButtonTitle: String {
@@ -1038,6 +1191,13 @@ final class AgentViewModel: ObservableObject {
         // different claims, and for what happened to the second, stronger reason SONNY-81 gave.
         prebuiltPlanSource: PreparedPlanSource = .directUserAction
     ) {
+        // **Spent here, before every guard below** (PR #105 review F1). A dispatch either carries on
+        // the record in flight or is a task of its own, and which it is was decided by the caller —
+        // so the arm is read once and cleared once, and a *refused* dispatch drops it rather than
+        // leaving it for the next, unrelated one to inherit.
+        let continuation = pendingResumableContinuation
+        pendingResumableContinuation = nil
+
         if isAwaitingApproval {
             approvePendingRun()
             return
@@ -1091,7 +1251,8 @@ final class AgentViewModel: ObservableObject {
                 autoExecute: autoExecute,
                 origin: origin,
                 prebuiltPlan: prebuiltPlan,
-                prebuiltPlanSource: prebuiltPlanSource
+                prebuiltPlanSource: prebuiltPlanSource,
+                continuing: continuation
             )
         }
     }
@@ -1111,7 +1272,8 @@ final class AgentViewModel: ObservableObject {
         autoExecute: Bool,
         origin: TaskOrigin,
         prebuiltPlan: AgentPlan? = nil,
-        prebuiltPlanSource: PreparedPlanSource = .directUserAction
+        prebuiltPlanSource: PreparedPlanSource = .directUserAction,
+        continuing: ResumableTaskContinuation? = nil
     ) async {
         activeTaskOrigin = origin
         // Submitting anything is an acknowledgement of whatever was on screen — this one line covers
@@ -1137,6 +1299,21 @@ final class AgentViewModel: ObservableObject {
         pendingCommandForPriorTaskContext = nil
         pendingTaskHistoryStartedAt = nil
         plannerFallbackNotice = nil
+        // **The handle on the previous run's checkpoint, dropped — and dropping it is not the same
+        // as abandoning the record** (corrected by PR #105 review F1).
+        //
+        // What this line used to claim: that the worst a missed settle could leave behind is "one
+        // stale entry under Memory". That was wrong, and the wrongness was the bug. The same
+        // published list `resumableTasks` is what `resumeOffer` reads, so a record left behind here
+        // is a live **offer** — Sonny volunteering to carry on with something that has finished.
+        //
+        // What is correct is the rule this line enforces: a run appends units only to its own
+        // record. Whether the record it is dropping should have been *carried* is `continuing`'s
+        // question, decided by the caller, and there are exactly three doors that say yes —
+        // `continueResumableTask`, `submitClarification` and `retryLastCommand`. Every other
+        // dispatch is a different task, and leaving that record on disk is the founder's lifecycle
+        // rather than a leak: an unfinished task survives the user doing something else.
+        activeResumableTask = nil
 
         if preserveUsageForNextStart {
             preserveUsageForNextStart = false
@@ -1296,6 +1473,19 @@ final class AgentViewModel: ObservableObject {
             // workspace-card dispatch resolves without needing the explicit binding at all.
             activeTaskScope = resolveTaskScope(command: submittedCommand, plan: prepared.plan)
             lastAssessedScope = activeTaskScope
+
+            // **The one place a run becomes resumable, and it is deliberately before the gate**
+            // (SONNY-210). The founder's first shape is a task Sonny is partway through when the
+            // user walks away — "asks something or the laptop closes" — and the asking half is a
+            // clarification or an approval, which is a pause this function returns on a few lines
+            // below. A checkpoint written after the gate would cover the laptop and miss the
+            // question. Written here, both are one rule with one write site.
+            beginResumableTask(
+                command: submittedCommand,
+                plan: prepared.plan,
+                startedAt: taskHistoryStartedAt,
+                continuing: continuing
+            )
 
             if let question = prepared.clarificationQuestion {
                 clarificationQuestion = question
@@ -1792,6 +1982,12 @@ final class AgentViewModel: ObservableObject {
         if case .scoped(let scope) = lastAssessedScope {
             retryBinding = scope.workspaceName
         }
+        // **The second restart door, and it has F1's shape too** (found by the re-enumeration that
+        // finding asked for, not by the finding itself). A failed run's record is kept, and
+        // `activeResumableTask` still points at it — so a retry that minted a new id would leave the
+        // failed attempt behind as a live offer even after the retry succeeded. Continuing it keeps
+        // one record for one task, which is the same invariant the other two doors hold.
+        armRestartOfTaskInFlight()
         dispatch(command: lastCommand, origin: origin, workspaceBinding: retryBinding)
     }
 
@@ -1830,7 +2026,12 @@ final class AgentViewModel: ObservableObject {
     ///   open on a refusal rather than hiding the fact that nothing happened.
     @discardableResult
     func runTaskAgain(_ record: CompletedTaskRecord) -> Bool {
-        dispatch(
+        // **The fourth continuation door** (PR #105 re-check, F1). Running a failed task again from
+        // its own row is the same task starting over, so it continues that task's record rather than
+        // minting a second one and leaving the first as a live offer for something the user has just
+        // re-run to completion.
+        armRestartOfRecordedTask(record)
+        let started = dispatch(
             command: record.command,
             // Stated rather than defaulted, per `.claude/rules/macagent-ui-conventions.md`: a new
             // task-submitting entry point passes its own real origin. This one is pressed in
@@ -1843,6 +2044,15 @@ final class AgentViewModel: ObservableObject {
             // unscoped rather than erroring or binding to an empty boundary.
             workspaceBinding: record.workspaceName
         )
+        // **`dispatch` can refuse before `start()` ever runs** — its `isAwaitingApproval` guard
+        // returns without calling it — and this door has no in-flight guard of its own, unlike
+        // `retryLastCommand`. So the arm is dropped here rather than left for the next, unrelated
+        // dispatch to spend. Same reason and same shape as `continueResumableTask`'s.
+        guard started else {
+            pendingResumableContinuation = nil
+            return false
+        }
+        return true
     }
 
     /// Reopens a past task into the widget so the user can say the next thing about it (row E,
@@ -1984,6 +2194,11 @@ final class AgentViewModel: ObservableObject {
         clarificationWorkspaceBinding = nil
         clarificationQuestion = nil
         clarificationAnswer = ""
+        // **Answering a question continues the task that asked it** (PR #105 review F1). Without
+        // this the answered run minted a second record, settled only that one, and left the paused
+        // run's record on disk for the full idle period — so after the task finished, Sonny offered
+        // to carry on with it and Continue re-asked a question the user had already answered.
+        armRestartOfTaskInFlight()
         start(autoExecute: shouldAutoExecute, origin: shouldUseOrigin, workspaceBinding: shouldUseBinding)
     }
 
@@ -2492,6 +2707,10 @@ final class AgentViewModel: ObservableObject {
             // disagree with the behaviour the list is describing.
             try outputLocationStore.loadAll()
         }
+        // Its own function rather than a fifth `loadMemoryEntries` line, because the widget's offer
+        // needs this list at launch without Command Center ever opening — `AppDelegate` calls it
+        // directly — and the write path calls it after every save and delete.
+        refreshResumableTasks()
     }
 
     /// Empties the list on failure rather than leaving it stale, the same choice
@@ -2540,6 +2759,8 @@ final class AgentViewModel: ObservableObject {
             return approvedApps.count
         case .outputLocations:
             return outputLocations.count
+        case .resumableTasks:
+            return resumableTasks.count
         }
     }
 
@@ -2640,8 +2861,8 @@ final class AgentViewModel: ObservableObject {
     /// Every file this category's contents live in, resolved through the stores this view model was
     /// actually constructed with.
     ///
-    /// The inner switch is exhaustive over `LocalStore` with no `default`, so a twelfth store cannot
-    /// be added without someone deciding which injected instance answers for it here.
+    /// The inner switch is exhaustive over `LocalStore` with no `default`, so a fourteenth store
+    /// cannot be added without someone deciding which injected instance answers for it here.
     private func memoryStoreFileURLs(for category: MemoryCategory) -> [URL] {
         category.stores.map { store in
             switch store {
@@ -2669,6 +2890,8 @@ final class AgentViewModel: ObservableObject {
                 return clipboardHistorySettingsStore.fileURL
             case .outputLocations:
                 return outputLocationStore.fileURL
+            case .resumableTasks:
+                return resumableTaskStore.fileURL
             }
         }
     }
@@ -2744,6 +2967,11 @@ final class AgentViewModel: ObservableObject {
             // `lastUsedAt`, not `firstUsedAt`: every other row's "newest" line means the most recent
             // thing recorded, and a folder's most recent record is the last time work landed in it.
             return outputLocations.map(\.lastUsedAt).max()
+        case .resumableTasks:
+            // `updatedAt`, not `startedAt`: this row's "newest" line has to mean the same thing every
+            // other row's does — when Sonny last recorded something here — and for this store that is
+            // the last unit that finished, not the moment the task began.
+            return resumableTasks.map(\.updatedAt).max()
         }
     }
 
@@ -2774,6 +3002,9 @@ final class AgentViewModel: ObservableObject {
         case .outputLocations:
             guard outputLocations.indices.contains(index) else { return }
             forgetOutputLocation(outputLocations[index])
+        case .resumableTasks:
+            guard resumableTasks.indices.contains(index) else { return }
+            deleteResumableTask(resumableTasks[index])
         case .routines, .workspaces, .taskHistory:
             return
         }
@@ -3194,14 +3425,22 @@ final class AgentViewModel: ObservableObject {
         // gone. `deleteLocalData` writes its own message into `localDataDeletionStatusMessage`
         // straight after this returns, so the two never contradict each other.
         memoryDeletionStatusMessage = nil
+        // Row 13's two in-memory slots (SONNY-210). The wipe has just erased the file both describe:
+        // a surviving checkpoint would write its task straight back on the next unit boundary, and a
+        // surviving dismissal set would silently suppress an offer for a record whose id can only
+        // now belong to a different task.
+        activeResumableTask = nil
+        pendingResumableContinuation = nil
+        dismissedResumeOfferIDs = []
         priorTaskContextStore.clear()
         taskUsageRecorder.reset()
         logStore.reset()
         refreshSavedItems()
         refreshTaskHistory()
-        // The lists the Memory section renders itself. Without this the wipe empties their files and
-        // leaves the page showing every entry it just erased — the same staleness the three calls
-        // around it exist to prevent, on the surface that shows the most of it.
+        // The lists the Memory section renders itself, unfinished tasks included. Without this the
+        // wipe empties their files and leaves the page showing every entry it just erased — the same
+        // staleness the three calls around it exist to prevent, on the surface that shows the most
+        // of it.
         refreshMemoryEntries()
         refreshClipboardHistoryNotice()
     }
@@ -3837,7 +4076,17 @@ final class AgentViewModel: ObservableObject {
             // `nil`, matching the prompt this execution is running under. `execute` re-derives the
             // requirement, so a standing here and none there would refuse to run the very session
             // the user had just approved.
-            context: approvalContext(visionTarget: nil)
+            context: approvalContext(visionTarget: nil),
+            // Row 13's progress channel (SONNY-210). Both halves are `nil`-by-default on the
+            // executor and are supplied only here, on the foreground path — the scheduled path
+            // passes neither, for the reason `beginResumableTask` records.
+            //
+            // The closure fires on the main actor from inside `executeChain`, which is
+            // `@MainActor` like this type, and it is weak so that a view model torn down mid-run
+            // cannot be resurrected by an executor still unwinding.
+            onUnitCompleted: { [weak self] unit in
+                self?.recordResumableTaskUnit(unit)
+            }
         )
         markAllSteps(.complete)
         // The task itself succeeded; a bookkeeping failure is a storage notice, not a task error.
@@ -4098,6 +4347,22 @@ final class AgentViewModel: ObservableObject {
         result: StoredTaskResult,
         plan: AgentPlan?
     ) -> String? {
+        // **Row 13's settle, first and above every guard below** (SONNY-210).
+        //
+        // *Why here.* This is the one function every foreground outcome passes through carrying its
+        // own status — both `recordPriorTaskContext` overloads end in it, and those two are called
+        // from every terminal and every pause in `performStart`, in `performApproval`, and from all
+        // three of `cancelCurrentRun`'s exits. A settle attached to those call sites instead would
+        // be a dozen places to remember, which is precisely the write-path enumeration this
+        // repository has paid for twice.
+        //
+        // *Why above the guards.* Both of them would drop a settle that has to happen. The status
+        // guard refuses `.prepared`, which is the preview-only exit — terminal, and its record must
+        // go. The memory guard refuses a suppressed or memory-disabled run, and a run whose *record*
+        // is withheld must still clear a record an earlier run left; a settle that inherited that
+        // guard would leave Sonny offering to continue a task that had already finished.
+        settleResumableTask(for: status)
+
         guard [.completed, .failed, .canceled].contains(status),
               let startedAt else {
             return nil
@@ -4132,7 +4397,15 @@ final class AgentViewModel: ObservableObject {
             // What the run produced, on every terminal exit for the same reason (SONNY-147): a
             // failed run's text is the one a user most wants to read back, and a cancelled run
             // still says "Canceled." rather than nothing.
-            result: result
+            result: result,
+            // **The link to this task's unfinished-run record, read *after* the settle above** — so
+            // it is the id of a record that survived, and `nil` whenever there is nothing to carry
+            // on with. A completed or cancelled run had its record deleted three lines up and
+            // therefore writes no link; a failed run kept its record and writes one, which is what
+            // lets `runTaskAgain` recognise this row's task after a relaunch (PR #105 re-check, F1's
+            // fourth door). The ordering is load-bearing: read before the settle, every row would
+            // claim a link to a record that was about to be deleted.
+            resumableTaskID: activeResumableTask?.id
         )
 
         do {
@@ -4221,6 +4494,341 @@ final class AgentViewModel: ObservableObject {
             recordLocalStorageWriteFailure("Sonny could not save this task's plan: \(error.localizedDescription)")
             logStore.append(.observe, "Could not record this task's plan: \(error.localizedDescription)")
         }
+    }
+
+    // MARK: - Unfinished tasks (row 13, SONNY-210)
+
+    /// Checkpoints the run that is about to happen, so that an interruption leaves something to
+    /// carry on from.
+    ///
+    /// **Written before anything runs, which is the whole mechanism.** A record created at the end
+    /// of a run could only ever describe runs that reached an end, and the case this exists for is
+    /// the one that does not: the laptop closes, the app is quit, the process dies. So the record
+    /// goes down first and is *removed* when the run finishes — which makes "a record still on disk"
+    /// mean "this run never finished", with no code needed at the moment of the interruption, where
+    /// there is none to run.
+    ///
+    /// **Both memory switches, because a foreground run passes through the composer.** This is not
+    /// the scheduled path's question — see below — so it asks `allowsRecording(to:)`, the conjunction
+    /// of "Don't save this task" and the standing Memory switches. The store is classified `.trace`,
+    /// so a suppressed run writes nothing here and therefore raises no offer, which is the switch
+    /// keeping its promise rather than an omission.
+    ///
+    /// **A scheduled routine writes no record here at all, and that is a decision** rather than a
+    /// path nobody wired. Two reasons, either sufficient:
+    ///
+    /// - `performScheduledRun`'s own contract is that "every property that surface UI reads as *your
+    ///   last task* is deliberately untouched here", because the user did nothing and nothing they
+    ///   are looking at should change. This offer is exactly such a surface — a proactive panel that
+    ///   raises itself the next time they open the widget — and a task they never started must not
+    ///   be what interrupts them. It is the same argument `recordScheduledTaskHistory` already makes
+    ///   for keeping a background run out of `PriorTaskContext`.
+    /// - There would be nothing to resume *from*. A scheduled run prepares the one-step
+    ///   `run_routine` plan `RunRoutineCapabilityAdapter.plan(forRoutineNamed:)` builds, so it has
+    ///   exactly one unit; the routine's own steps run as a nested plan, which reports nothing by
+    ///   construction. "Continue" could only mean "run the whole routine again", which is what the
+    ///   next occurrence already does.
+    ///
+    /// The consequence, stated so nobody has to re-derive it: a scheduled routine that fails partway
+    /// reports itself through `scheduledRunNotice` and its paused schedule, exactly as before, and
+    /// never through this offer. `aScheduledRoutineRunLeavesNoUnfinishedTaskRecord` pins it.
+    ///
+    /// - Parameter continuing: what this run inherits from a record already in flight, when the
+    ///   dispatch said it is carrying one on. Its id and `startedAt` are kept so a task interrupted
+    ///   twice stays one entry that began when the user first asked for it; its
+    ///   `chainedArtifactPath` is carried only by a *resume*, which is rejoining a chain a finished
+    ///   unit had already fed.
+    private func beginResumableTask(
+        command: String,
+        plan: AgentPlan,
+        startedAt: Date,
+        continuing: ResumableTaskContinuation?
+    ) {
+        guard allowsRecording(to: .resumableTasks) else {
+            return
+        }
+        let now = Date()
+        let task = ResumableTask(
+            id: continuing?.id ?? UUID().uuidString,
+            command: command,
+            plan: plan,
+            // Empty, always. A resumed run's plan *is* the remainder, so its finished steps are the
+            // ones that are no longer in it — carrying the old ids forward would subtract them
+            // twice. A restart has done nothing yet either.
+            completedStepIDs: [],
+            chainedArtifactPath: continuing?.chainedArtifactPath,
+            startedAt: continuing?.startedAt ?? startedAt,
+            updatedAt: now,
+            // The value a record keeps when nothing ever settles it, which is the honest description
+            // of an interruption: there is no code running at the moment the lid closes to write
+            // anything more specific. A run that *fails* is stamped `.failed` by the settle.
+            stopReason: .interrupted
+        )
+        activeResumableTask = task
+        writeResumableTask(task, describing: "could not save what this task was partway through")
+    }
+
+    /// Records that another unit of this run's plan finished.
+    ///
+    /// Asked through `allowsRecording(to:)` again rather than inferred from a checkpoint existing.
+    /// The reach of a suppression is a rule read off `LocalStore.kind`, and this repository's
+    /// standing habit — `recordTaskPlanDetail` and `recordScheduledTaskPlanDetail` both do it — is
+    /// that a store relying on a sibling's guard is the one store the rule does not cover.
+    ///
+    /// **Only one of the two terms can change mid-run, and the other is kept anyway.** The Memory
+    /// switches are standing preferences the user can turn off from Command Center while a run is in
+    /// flight, so that term is live. `taskRecordingPolicy` is not: "Don't save this task" is a
+    /// pre-dispatch toggle (`dontSaveButton` renders only when `!isTaskInFlight`), and a suppressed
+    /// run has no checkpoint for this function to append to in the first place — the guard's own
+    /// first term returns.
+    ///
+    /// So a mutant swapping this for `allowsScheduledRecording(to:)` — the memory switches alone —
+    /// **survives the suite, and it is an equivalent mutant rather than a coverage gap** (SONNY-210's
+    /// battery, M3 at `e0d4c78`). It is recorded rather than closed with a test that drives this
+    /// function directly: such a test would assert a state the app cannot reach, and the conjunction
+    /// is kept because it fails closed and because a per-site subtraction of a term is exactly the
+    /// shape `allowsRecording(to:)` exists to stop anyone writing.
+    private func recordResumableTaskUnit(_ unit: CompletedRunUnit) {
+        guard var task = activeResumableTask, allowsRecording(to: .resumableTasks) else {
+            return
+        }
+        task.completedStepIDs.append(contentsOf: unit.stepIDs)
+        task.chainedArtifactPath = unit.chainedArtifactPath
+        task.updatedAt = Date()
+        activeResumableTask = task
+        writeResumableTask(task, describing: "could not save how far this task got")
+    }
+
+    /// Ends this run's checkpoint the way its outcome requires.
+    ///
+    /// Three answers, and the middle one is the feature:
+    ///
+    /// - **Completed, cancelled, or preview-only — deleted.** The task is over. Cancelling counts as
+    ///   over because the user pressed stop; offering to continue what they just stopped would be
+    ///   the product arguing with them.
+    /// - **Failed — kept, and stamped `.failed`.** This is the founder's second shape: an error at
+    ///   step 7 of 10, picked up from 7 rather than restarted. The steps that finished are still
+    ///   finished, so the record keeps them and the offer resumes from there.
+    /// - **Approval or clarification needed — untouched.** Not a terminal state. The record stays
+    ///   exactly as it is, which is what makes a question the user walks away from resumable after a
+    ///   relaunch.
+    ///
+    /// A policy refusal arrives here as `.failed`, so it is kept, and continuing it will be refused
+    /// again with the same message. That is a true description of the state — the task really is
+    /// unfinished — and the alternative is a settle that reads the summary text to guess at a cause.
+    private func settleResumableTask(for status: PriorTaskOutcomeStatus) {
+        guard let task = activeResumableTask else {
+            return
+        }
+        switch status {
+        case .approvalNeeded, .clarificationNeeded:
+            return
+        case .failed:
+            var failed = task
+            failed.stopReason = .failed
+            failed.updatedAt = Date()
+            activeResumableTask = failed
+            writeResumableTask(failed, describing: "could not save where this task stopped")
+        case .completed, .canceled, .prepared, .dryRun:
+            activeResumableTask = nil
+            do {
+                try resumableTaskStore.delete(id: task.id)
+            } catch {
+                recordLocalStorageWriteFailure(
+                    "Sonny could not clear the record of a task that has now finished: \(error.localizedDescription)"
+                )
+                logStore.append(.observe, "Could not clear an unfinished-task record: \(error.localizedDescription)")
+            }
+            refreshResumableTasks()
+        }
+    }
+
+    /// The one writer, so that the failure channel and the refresh are decided once.
+    ///
+    /// **`recordLocalStorageWriteFailure`, never `errorMessage`.** Every write through here is a
+    /// task's own bookkeeping rather than something the user pressed a control for, and CLAUDE.md's
+    /// rule is exact about the difference: `errorMessage` means "the thing you asked for did not
+    /// happen", and the widget picks `.failure` ahead of `.result` — so a bookkeeping failure routed
+    /// there would replace the result of a task that ran and succeeded. That defect has arrived
+    /// through two other doors already (PR #89's F4 and SONNY-201); this is a third door and it does
+    /// not repeat it.
+    ///
+    /// A refused plan (`ResumableTaskStoreError.planTooLarge`) reports through the same channel and
+    /// leaves `activeResumableTask` set. That is deliberate: the run carries on, the later unit
+    /// writes retry the same refusal and say so at most once more per unit, and what is lost is the
+    /// offer rather than the task.
+    private func writeResumableTask(_ task: ResumableTask, describing what: String) {
+        do {
+            try resumableTaskStore.save(task)
+        } catch {
+            recordLocalStorageWriteFailure("Sonny \(what): \(error.localizedDescription)")
+            logStore.append(.observe, "Could not record an unfinished task: \(error.localizedDescription)")
+        }
+        refreshResumableTasks()
+    }
+
+    /// Re-reads the unfinished-task list.
+    ///
+    /// Called after every write this view model makes and at launch, so the widget's offer and the
+    /// Memory row are both describing the file rather than a memory of it. A load failure empties
+    /// the list and raises the load-failure banner, the same choice `refreshTaskHistory` and
+    /// `loadMemoryEntries` make: a surface still offering to continue a task whose file will not
+    /// decrypt is the surface contradicting itself.
+    func refreshResumableTasks() {
+        do {
+            resumableTasks = try resumableTaskStore.loadAll()
+            clearLocalStorageLoadFailure(.resumableTasks)
+        } catch {
+            resumableTasks = []
+            recordLocalStorageLoadFailure(.resumableTasks, error: error)
+        }
+    }
+
+    /// Carries on with what is left of an unfinished run — the widget offer's Continue.
+    ///
+    /// **It dispatches the remaining steps through the ordinary path, and that is the safety
+    /// argument.** `prebuiltPlan` replaces planning only: the run rejoins at `prepare`, so the
+    /// assessment, the approval gate, the prompt, the trace events and the history row are the ones
+    /// an equivalent typed command would have produced. Nothing here is a way past a gate — a
+    /// resumed plan is re-assessed from scratch against the world as it is now, which is what makes
+    /// re-running an interrupted unit safe to offer at all.
+    ///
+    /// `.resumedTask` rather than `.directUserAction`: these steps came from wherever the original
+    /// run's did, and claiming a stronger origin than that is the one thing `PreparedPlanSource`
+    /// exists to prevent.
+    ///
+    /// - Returns: whether the dispatch was accepted, so the caller can tell a refusal apart from a
+    ///   start rather than re-deriving `canSubmit`'s rule.
+    @discardableResult
+    func continueResumableTask(_ task: ResumableTask) -> Bool {
+        // **The same gate the offer is filtered by, asked again here** (PR #105 review F5). The
+        // widget never renders Continue for a record that must not be repeated silently, so this is
+        // the belt: `mayBeOfferedForResume` is the whole rule, and a second entry point added later
+        // cannot route around it by holding a `ResumableTask` from somewhere else.
+        guard task.mayBeOfferedForResume else {
+            logStore.append(.observe, "Not continued: finishing this task could repeat something Sonny must not do twice.")
+            return false
+        }
+        // Armed for this dispatch only. `start()` spends it before its own guards and drops it if
+        // the dispatch is refused, so it can never be inherited by a later, unrelated run.
+        pendingResumableContinuation = .resuming(task)
+        let started = dispatch(
+            command: task.command,
+            // The offer lives on the widget and nowhere else, so `.widget` is the true answer and
+            // `dispatch`'s default happening to differ is exactly why it is stated
+            // (`.claude/rules/macagent-ui-conventions.md`: a new task-submitting entry point passes
+            // its own real origin).
+            origin: .widget,
+            // **The file the earlier attempt wrote, written into the plan before it is
+            // dispatched** — not handed to the executor at run time, which was tried and is wrong:
+            // `AgentRunner.prepare` previews every step and rejects a bare `open_generated_artifact`
+            // long before execution, so a value supplied later cannot be seen by the gate that runs
+            // first. Baking it also keeps the assessment honest, since the file being opened is part
+            // of what gets assessed. A no-op for every remainder that does not begin with such a
+            // step, and `ChainedArtifactCarry` is the one place that rule lives.
+            prebuiltPlan: ChainedArtifactCarry.applying(
+                task.chainedArtifactPath,
+                toLeadingStepOf: task.remainingPlan()
+            ),
+            prebuiltPlanSource: .resumedTask
+        )
+        guard started else {
+            pendingResumableContinuation = nil
+            return false
+        }
+        // **Continuing does not dismiss, and that is deliberate.** The obvious extra line here would
+        // mark the offer answered so it cannot reappear — and it would be wrong for the case that
+        // matters: a resumed run that fails *again* would then have no offer for the rest of the
+        // session, even though the task is still unfinished and the record is still on disk. Nothing
+        // needs it, either. While the run is live `resumeOffer` is silent on `!isTaskInFlight`; if it
+        // succeeds the record is deleted; if it fails, the widget shows the failure, which outranks
+        // the offer until the user has read it.
+        return true
+    }
+
+    /// Arms the **next** dispatch to continue the unfinished-run record a *history row* names, when
+    /// it names one (PR #105 re-check, F1's fourth door).
+    ///
+    /// **Why this cannot be `armRestartOfTaskInFlight()`, which is the whole of the design here.**
+    /// That helper arms whatever `activeResumableTask` holds, and it is sound for the two doors it
+    /// serves because each of those is *by construction* the run that just paused or just failed.
+    /// This door is neither: it takes an arbitrary historical record off the Tasks page, and it can
+    /// run after a relaunch, when `activeResumableTask` is `nil` while the record and its row both
+    /// survive on disk. Arming blindly there would merge two different tasks into one record — the
+    /// opposite defect — and arming from the in-memory handle would simply do nothing after a
+    /// relaunch, which is the case the user is most likely to be in.
+    ///
+    /// So the answer is durable and exact: `CompletedTaskRecord.resumableTaskID`, written when the
+    /// row was, matched against the published list this view model loads at launch.
+    ///
+    /// **What it does not cover, stated rather than left to be found.** A row written before that
+    /// field existed carries `nil` and re-runs as a fresh task — nothing can invent the link after
+    /// the fact, and the natural key that could approximate it is the `(command, startedAt)` pair
+    /// `CompletedTaskRecord.id` exists because it collides. A record already deleted from Memory or
+    /// past its idle period is not found either, which is correct: there is nothing to carry on
+    /// with. And a *scheduled* run's row never carries a link, because that path writes no resumable
+    /// record at all.
+    ///
+    /// A no-op in every one of those cases, so the caller does not have to ask.
+    private func armRestartOfRecordedTask(_ record: CompletedTaskRecord) {
+        guard let linked = record.resumableTaskID,
+              let task = resumableTasks.first(where: { $0.id == linked }) else {
+            return
+        }
+        pendingResumableContinuation = .restarting(task)
+    }
+
+    /// Arms the **next** dispatch to run the task in flight again from the top rather than as a
+    /// task of its own (PR #105 review F1).
+    ///
+    /// **The two doors that need it, and why they are exactly two.** A third continuation door,
+    /// `runTaskAgain`, needs the *record-matched* helper above instead — see it for why the
+    /// in-flight handle cannot express what that door is doing. `performStart` drops its handle
+    /// on the outstanding checkpoint at the top of every run, which is right for a run that is a
+    /// different task and wrong for a run that is the same one continuing. Three dispatches are the
+    /// same task: `continueResumableTask`, which arms `.resuming` because it carries a finished
+    /// unit's file with it; and these two, which arm `.restarting` because nothing has finished yet
+    /// — an answered clarification never executed a step, and a retry starts the command over.
+    ///
+    /// A no-op when there is no checkpoint — memory off, the record deleted, or a run that never
+    /// reached a plan — so the caller does not have to ask.
+    ///
+    /// `everyDispatchEntryPointDecidesWhetherItContinuesTheTaskInFlight` enumerates the doors and
+    /// fails when a new one arrives unclassified. The name deliberately avoids the substring
+    /// `start(`: that scan counts call sites of `start(...)` textually, and a helper whose own name
+    /// ended in `Restart(` was three false positives in the population it pins.
+    private func armRestartOfTaskInFlight() {
+        guard let task = activeResumableTask else {
+            return
+        }
+        pendingResumableContinuation = .restarting(task)
+    }
+
+    /// Takes the offer off the widget without forgetting the task — see `dismissedResumeOfferIDs`
+    /// for why those are different things.
+    func dismissResumeOffer() {
+        guard let offer = resumeOffer else {
+            return
+        }
+        dismissedResumeOfferIDs.insert(offer.id)
+    }
+
+    /// Forgets one unfinished task. The Memory sheet's per-entry delete.
+    func deleteResumableTask(_ task: ResumableTask) {
+        performMemoryEntryDelete(named: "unfinished task") {
+            try resumableTaskStore.delete(id: task.id)
+        }
+        // **The in-memory checkpoint goes with the record, and this path has no `!isRunning` guard
+        // to lean on** (PR #105 review F8; this comment used to claim one). `deleteMemory(in:)`
+        // guards on `!isRunning, !isAwaitingApproval`; `deleteMemoryEntry(in:at:)` and
+        // `performMemoryEntryDelete` do not, so a per-entry delete really can land while a run is
+        // paused at an approval. That is why the clear is unconditional rather than a tidy-up:
+        // without it the paused run's next unit boundary — or its failure settle — writes the
+        // deleted record straight back.
+        if activeResumableTask?.id == task.id {
+            activeResumableTask = nil
+        }
+        refreshResumableTasks()
     }
 
     // MARK: - Routine scheduling
