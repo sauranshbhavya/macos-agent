@@ -161,6 +161,242 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/restricted-content-false-positive
+Status: complete — SONNY-245 Done; PR #108 open, fresh-session review complete (cycle 1, F1–F8), fix
+round coordinator-verified, awaiting the founder's manual pass and merge
+Date: 2026-08-23
+Tickets: **SONNY-245** (web research refuses any page whose HTML merely mentions captcha, paywall or a login wall — Wikipedia included). One ticket, one session, one branch, cut from `main` at `961b9c2`. Found in the founder's manual pass of 2026-08-23, item A4, and reproduced against the live page before the ticket was written.
+Reviewed by: fresh session, PR #108 cycle 1, 2026-08-23 — eight findings, all addressed; the fix round
+was verified directly by the coordinator rather than by a third-cycle reviewer session, per
+`WORKFLOW.md` step 7's rule for a round confined to records.
+
+**This entry sits newest-first under `## Entries`, and it did not when it was written.** It was
+appended at the end of the file, which is where the previous entry was; the file's real convention is
+newest-first directly under the heading, and the rebase onto `origin/main` at `cf3fa76` moved it
+there. Worth one line because the same mistake is sitting in this file right now — the
+`fix/folder-name-possessives` entry, dated 2026-08-23, is at the very bottom below a 2026-08-21 one.
+Left alone deliberately: it belongs to another branch, and moving another session's record is not this
+one's to do.
+
+Files changed (across `a4c8347`, `928874c`, plus this entry's commits — SHAs are post-rebase):
+- `Sources/MacAgentCore/RestrictedContentDetector.swift` (new — the whole rule, its two limits, the corpus each was calibrated against, and the errors it knowingly accepts)
+- `Sources/MacAgentCore/WebResearchService.swift` (`PublicWebPageLoader.restrictedContentReason(in:)` deleted and `validate` routed to the detector; `WebResearchError.allSourcesFailed`'s single-source wording)
+- `Tests/Fixtures/WebResearch/` (new — four pages saved verbatim, plus a README recording each one's URL, headers, status, byte count and the single redaction)
+- Tests: `RestrictedContentDetectorTests` (new, 14 tests), `WebResearchServiceTests` (+1)
+
+Tests: **1872 in 135 suites, exit 0 at `ec4393c`** via the flagged command. Net **+15 tests** (`git diff 961b9c2..ec4393c -- Tests/ | grep -c '^+    @Test'` = 15). Nothing was removed and no existing assertion changed — the one pre-existing test that covers this area, `publicWebPageLoaderRejectsLoginCaptchaAndPaywallPages`, still passes untouched, which is itself the point made below about what a hand-written fixture can and cannot see. **`scripts/warnings`: 0 warnings at `ec4393c` (clean)**, every file in `Sources/` and `Tests/` compiled. `server/scripts/check-secrets.sh tracked`: clean, 395 files, exit 0 at `ec4393c` — run rather than assumed, because this branch adds 2.6 MB of third-party HTML to a scanner that reads every tracked file.
+
+**Mutation battery at `85fa481`: 8 mutants, 8 killed, none survived** (`scripts/mutate`, which stamps its own SHA). The two that matter most are the ones a fix like this could plausibly get wrong in either direction. **M1 restores the old rule exactly** — any phrase anywhere in the raw markup refuses the page — and is killed by 9 tests, the Wikipedia fixture among them, so the defect cannot come back unnoticed. **M3 deletes the markup stage**, which is the false-accept direction the ticket warns about, and is killed by 4, including the Zillow block page: a rule that reads only what a reader sees fails this suite rather than passing it quietly. **M2** (visible-text stage deleted) is killed by 5, **M5** (the markup limit raised to the interstitial one) by 3, **M7** (visible text taken as the raw markup) by 10, and **M8** (the single-source wording left ungrammatical) by 2. **M4** (interstitial limit raised tenfold) and **M6** (both limits compared inclusively) are each killed by exactly one test, and by the same one — `aPhraseAReaderCanSeeCountsUpToTheInterstitialLimitAndNotBeyondIt`, the synthetic boundary case. That is the right tool for a limit's edge, and it is worth knowing it is the only thing holding it.
+
+**The battery could not be re-run at `ec4393c`, and the reason is not this branch's.** Two consecutive runs died on the *baseline* — the unmutated tree — at `asyncProcessRunnerCancelsRunningProcess()`, the `AsyncProcessRunner`/`NSTask` cancellation flake this changelog already records as unresolved at line 2990. The ordinary suite passes at that commit (1872 in 135, exit 0), and `scripts/mutate --help` names exactly this condition: a battery loads the machine harder than an ordinary run, which is what a timing-sensitive test needs to fail. **What makes the battery at `85fa481` still the right evidence for the shipped code is that nothing executable changed after it**: `git diff 85fa481..ec4393c -- Sources/` is 13 changed lines and every one of them is a `///` comment (`git diff 85fa481..ec4393c -- Sources/ | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' | grep -vE '^[+-][[:space:]]*///' | wc -l` → 0). Filed as **SONNY-252**, because the consequence has changed since line 2990 was written: a flake that used to cost a rerun now costs a whole battery, and — the direction that actually matters — `scripts/mutate --help`'s own warning is that a flake landing during a *mutant* rather than the baseline reads as a kill, recording a guard that does not exist.
+
+What changed for the user: `summarize https://en.wikipedia.org/wiki/Machine_learning and save it as Markdown` works. So does any other article that happens to mention a CAPTCHA, a paywall or a login wall — a Nature paper, a New York Times page, an article *about* CAPTCHAs — where before Sonny refused it and blamed the site for a wall that was not there. Sonny still refuses a real wall and still says which kind it is. And when a single URL fails, the message reads "The source could not be retrieved, so no note was written." followed by the reason, instead of "None of the 1 source could be retrieved … First failure:".
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**The evidence was wrong, not the refusal, and the refusal is untouched.** The seven phrases are the same seven, the noun each maps to is the same noun, and `WebResearchError.restrictedContent` is thrown from the same line of `validate`. What changed is what counts as proof that a page is a wall. The old rule lowercased the whole raw HTML — script bodies, HTML comments, CSS class names, `href` values, analytics payloads — and refused on the first substring it found anywhere in it.
+
+**Reading only the visible text, which is the obvious fix and the one the ticket names first, would have disarmed the check almost completely.** 48 live pages were fetched on 2026-08-23 with the headers `URLSessionWebPageFetcher` sends, and their visible text measured through the detector's own `visibleText`. **Not one page in the corpus said any of the seven phrases to a reader except ScienceDirect's gate** — not the articles, and not the walls. Zillow's block page shows 0 characters, Indeed's 0, G2's 43, Facebook's 0, Pinterest's 0; every one of them draws its message with JavaScript Sonny does not run, and the only trace in what the server sent is `captcha` in a `<script src>`. A visible-text-only rule serves all of them. That is precisely the false-accept trade the ticket asks not to make silently, so it was not made: **markup evidence is kept, and corroborated instead.**
+
+**The rule is: a wall phrase is evidence only on a page that has nothing else to show.** A wall is a page whose entire purpose is the wall, so it has no article on it; an article that discusses CAPTCHAs is still an article. Two stages, because the two kinds of evidence are not equally strong. What the page *says to a reader* is direct, so it counts on any page short enough to be an interstitial — under 2 000 characters. What the page's *markup mentions* is circumstantial, so it counts only when the page shows a reader essentially nothing — under 200 characters.
+
+**Both limits were calibrated against the corpus rather than chosen.** Genuine walls: zillow 0, indeed 0, facebook 0, pinterest 0, g2 43, wsj 43, barrons 43, etsy 43, yelp 43, sciencedirect 526, bloomberg 657, linkedin 703, medium 720, instagram 792, glassdoor 3 884. Innocent pages the old rule refused: target 2 502, walmart 3 117, scribd 4 212, ticketmaster 4 442, nytimes 6 119, newyorker 7 770, seekingalpha 12 179, harpers 13 232, nature 38 469, wikipedia 130 932. The markup limit sits an order of magnitude below the innocent floor deliberately: the pages it protects are the ones a corpus of popular sites cannot see — a small blog post whose comment form loads `recaptcha.js` — and where the corpus is silent the limit errs toward serving the page, which is the direction this ticket exists to correct.
+
+**The corroboration is a character count and not "did the extractor find an article", and that was the first design.** It is worse: `SwiftSoupReadableWebExtractor` throws `noReadableContent` on expedia and chegg, pages carrying 107 857 and 70 114 characters of visible text. Keying markup evidence to the extractor's verdict would license a refusal on a page with a hundred thousand characters on it — the failure this ticket is about, reintroduced through the fix.
+
+**Which errors this chooses, written into the type's own documentation rather than left to be found.** Gone: every false refusal driven by markup on a page that has an article, which is the whole reported class. Knowingly accepted: a login wall that renders its own form and chrome, where the only trace of a gate is a reCAPTCHA script — Instagram at 792 visible characters and LinkedIn's feed at 703 are the measured examples, both above the markup limit, both refused by the old rule and served by this one. Neither says any of the seven phrases to a reader; what Sonny does with such a page is write a thin note from a sign-in screen, which is a poor note rather than a wall bypassed. Also knowingly accepted: a paywall serving a teaser, which has an article on it and clears both limits. **The boundary does not rest on this check alone**, which is why narrowing it is affordable: of the fifteen pages in the corpus classed as genuine walls, four answered HTTP 200 — Facebook, Pinterest, Instagram, LinkedIn — and the other eleven answered 401 or 403, so `badHTTPStatus` refuses those eleven before this code runs at all; and a wall that renders nothing still yields no article, so the extractor throws `noReadableContent`.
+
+**Four real pages are saved verbatim, because a hand-written string cannot separate the two rules — and the pre-existing test proves it.** `publicWebPageLoaderRejectsLoginCaptchaAndPaywallPages` passes against the tree that shipped the defect and against this one, unchanged, because `"<main><p>Please log in to continue reading this article.</p></main>"` is refused by both. That is not a bad test; it is a test of something the change did not alter. What separates the rules is *where in a real page* the word sits, and only a real page carries that. So `Tests/Fixtures/WebResearch/` holds the Wikipedia machine-learning article (1 146 835 bytes; `captcha` in a script config naming Wikipedia's own edit-form CAPTCHA, `subscription required` in the `title=` of the lock icon its citation templates print), Wikipedia's CAPTCHA article (331 832 bytes, which says the word to a reader 167 times), Zillow's PerimeterX block page (5 776 bytes, 0 visible characters, `captcha` 31 times in markup), and ScienceDirect's CAPTCHA gate (1 207 697 bytes, 523 visible characters, the phrase in the message itself). `theOldRuleRefusedEveryFixtureAndTheNewRuleRefusesOnlyTheTwoWalls` runs both rules over all four and asserts the full verdict map both ways, which is the assertion that would have failed before the change.
+
+**The CAPTCHA article was added second, and the reason is worth the next reader's attention.** With three fixtures the machine-learning article was carrying the ticket's central sentence — "a page *about* a thing is treated as a page *guarded by* it" — and it cannot: what serves that page is that its two matches are invisible to a reader, which is the *wrong mechanism to generalise from*. An article that really does discuss CAPTCHAs says the word in its own prose, so it carries visible-text evidence, and what serves it is `interstitialVisibleTextLimit`. That limit was held by one synthetic boundary test alone — the mutation battery says so exactly: M4 is killed by one test. It still is, because at 30 785 visible characters the fixture is nowhere near the boundary; a fixture proves the class, a synthetic case proves the edge, and neither substitutes for the other.
+
+**The ScienceDirect and Wikipedia fixtures are the pair the whole fix turns on:** 1.2 MB of markup that is a wall, beside 1.1 MB of markup that is an article. Page size decides nothing; what a page shows a reader decides everything.
+
+**A guard was written against a throw the library cannot produce, and only running the test without the guard found it.** `visibleText` removes `script, style, noscript, template, svg` before taking the body text, and an inline `<svg>` holding a `<style>` matches that selector twice — parent first, so the second removal acts on an orphan. This shipped for one build as `try?` per element, with a comment explaining that SwiftSoup's `remove()` throws on an orphaned node and that one `try` would abandon the loop, return `""`, and get an ordinary page judged on its markup. The reasoning was sound and the premise was false: SwiftSoup 2.13.5's `Node.remove()` is `try parentNode?.removeChild(self)`, optional-chained, so an orphan is a no-op. It was caught by reverting the guard and watching the test that was supposed to fail pass instead. The code is plain `try` now and the comment states the measured mechanism. **The general form is this repository's own rule about a comment that states a cleaner story than the code follows, arriving from the other direction — a comment that states a *worse* story than the library delivers is equally unverified, and it reads as diligence.**
+
+**A megabyte page is now parsed twice on the load path** — once by the detector for its visible text, once by the extractor for the article. Not addressed here: `ReadableWebExtracting.extract` takes HTML, so threading one parsed `Document` through both is a protocol change wider than this ticket, and the second parse sits beside a network fetch and a synthesis call to a model. Worth knowing rather than discovering.
+
+**The single-source wording lost its "First failure:" prefix, not just its plural.** With one source there is no second failure for the first to be distinguished from, so the reason follows the sentence directly. The plural branch is unchanged.
+
+Manual-test items the user still owes: `summarize https://en.wikipedia.org/wiki/Machine_learning and save it as Markdown` writes a note (this is the reported command, and the only one that closes the report); `summarize https://en.wikipedia.org/wiki/CAPTCHA` — a page whose visible prose is about CAPTCHAs throughout — also writes a note; a research command aimed at **`https://www.dropbox.com/login`** still refuses with a message naming a wall; and a command naming exactly one unreachable URL reads as a sentence in the widget. **The third item named `https://www.zillow.com/` when this entry was first written and could not have passed** (PR #108 review, F3): Zillow answers 403, so `badHTTPStatus` throws before the detector runs and the message is "Fetching … failed with HTTP 403" — exactly the generic failure the item said must not appear. Every property of the replacement was checked against the live site on 2026-08-23 before it was written down: robots.txt's `*` group carries no `Disallow: /login` and no bare `Disallow: /`, the page answers 200 `text/html` with no redirect, it renders 0 visible characters to a reader who does not run scripts, and its markup names `recaptcha` and `funcaptcha` — so it is refused by the *markup* stage, which is the stage that otherwise has no live demonstration at all. **Facebook and Pinterest, the review's own suggested replacements, do not work either**: both are 200 with 0 visible characters, but both `robots.txt` files say `User-agent: * / Disallow: /`, so Sonny refuses them one check earlier still.
+
+#### PR #108 review round, 2026-08-23 — records and two pins
+
+The review confirmed the fix's shape, the corpus, the fixtures and both limits, and blocked on
+documentation a future session would act on. Everything below except two tests is a correction to a
+claim; no production code changed in this round.
+
+**F1. "Gone: … that is the whole reported class" was false, and it was the load-bearing sentence.**
+A *short* article about a wall is still refused as one, because the corroboration is an absolute
+length. Confirmed against the live pages: `simonwillison.net/2006/Dec/19/botbouncer/` is HTTP 200
+with **1 080** visible characters, one sentence of which mentions a CAPTCHA service, and it is
+refused; `simonwillison.net/2026/Jun/16/captcha-on-at-least-one-ampersand/` is 200 with **2 136**,
+same blog, same template, same subject, and it is served. 136 characters apart, opposite verdicts.
+The bullet now says what shipped and points at **SONNY-256**, which holds the residual and the
+reviewer's ratio proposal. That fix was deliberately not attempted here, on the reviewer's
+recommendation and the coordinator's: it needs its own corpus and measuring round, and this branch's
+calibration is spent.
+
+**F2. The accepted-regression disclosure understated its own set, and one of its two examples was not
+an instance.** Instagram was named as a page Sonny "writes a thin note from" — it is not: at 792
+visible characters it clears this check and then the extractor throws `noReadableContent`, which this
+branch's own corpus table already recorded as `article: none`. Tumblr behaves the same way — 269
+visible characters on `tumblr.com/` measured here, 265 on the review's dashboard URL, different pages
+and the same outcome. The measured instances are **LinkedIn's feed** (200, 703 visible, 556 extracted)
+and **IEEE Xplore's home page** (200, 717 visible, 617 extracted), plus a **Scribd document page**
+(200, 2 075 visible, 271 extracted) the review measured.
+
+**The pixiv reading is a genuine two-URL split and is recorded as one**, because a later reader would
+otherwise try to reconcile it: the review measured a *pixiv artwork page* (200, 335 visible, no
+article); this session measured pixiv's *home page* (200, 599 visible, 424-character article, and
+**refused** — its footer carries Google's standard "This site is protected by reCAPTCHA" notice). Two
+correct readings of two different pages, each stated with its page.
+
+**ResearchGate is not that, and this entry got it wrong for a round.** The review grouped a
+ResearchGate publication page under HTTP 200 with a 302-character article. This session measured
+**403**, on two URLs, and then wrote that ResearchGate's "status is evidently not stable" to let both
+readings sit side by side — so both this entry and the type doc went on citing a page that answers 403
+as an example of a note being written. The reviewer has since **retracted it**: four consecutive 403s
+across the two sessions' fetch logs, no 200 ever measured. ResearchGate is dropped from both lists;
+the note-producing set is LinkedIn, IEEE Xplore and Scribd.
+
+**The lesson is written at the code, in `RestrictedContentDetector`'s own doc comment, because it will
+recur: a review is evidence, not authority.** This session measured the page correctly, deferred to
+the reviewer's number over its own, and then wrote a sentence whose only job was to let a correct
+measurement and a mislabel both be true. **When your own measurement disagrees with a reviewer's, the
+disagreement is the finding** — say so plainly and get it settled. Prose that reconciles two numbers
+builds a false record out of two people each being careful, and it reads exactly like diligence, which
+is why nothing in a review cycle catches it. The pixiv entry above is the shape this is *not*: two
+correct readings of two different URLs, each stated with its URL.
+
+**The sentence that mattered most in that block was "three independent checks fail closed on these
+pages, not one", and it was false for exactly the cases the block conceded.** LinkedIn passes the
+status check, is served by the detector, and yields a 556-character article: zero of the three fire.
+That sentence was the justification for narrowing the check, so it is corrected rather than softened.
+The honest characterisation, now in the code: **between 200 and 2 000 visible characters neither
+stage fires unless the page says one of the seven phrases to a reader**, and that band is where most
+real walls measured live — ScienceDirect 526, FT 565, Bloomberg 657, LinkedIn 703, IEEE 717, Medium
+720, Instagram 792, Telegraph 888, and, on the review's own URLs, a Tumblr dashboard at 265 and a
+pixiv artwork page at 335. **Being in the band is not the same as a note being written**, which is the
+distinction the Instagram correction turns on: a note is really produced from gate chrome for LinkedIn
+(556 characters extracted), IEEE Xplore (617) and a Scribd document page (271), while Instagram,
+Tumblr and the pixiv artwork page are served by the check and then yield nothing, the extractor
+throwing `noReadableContent`.
+
+**The boundary rule's home is `docs/sonny-major-release-spec.md:459` and `:916`** — "Do not bypass
+paywalls, CAPTCHAs, robots restrictions, or login walls" and "Sonny must not bypass paywalls,
+CAPTCHAs, login walls, or robots restrictions". SONNY-245's description attributes it to `CLAUDE.md`,
+which carries no such sentence (`grep -in 'captcha\|bot detection' CLAUDE.md` finds nothing). The
+detector's disclosure block now cites the two real lines; nothing in this branch had cited it at all.
+
+**F4. `interstitialVisibleTextLimit` is not a bound on real walls, and its own doc comment conceded
+the counterexample in a parenthetical while claiming otherwise in the sentence.** Glassdoor's wall
+speaks at 3 884 characters — 1.9× the limit — by repeating one short message in ten languages. It is
+harmless today for two reasons that are not this limit: its wording matches none of the seven
+phrases, and it answers 403. Cloudflare's common "Verifying you are human" likewise does not match
+`verify you are human`. What 2 000 actually sits above is every wall in the corpus that both speaks to
+a reader *and* says one of the phrases, which is one page.
+
+**The M4/M6 note in this entry was pessimistic, and the review's independent battery says so.** That
+note reported both limits as held by one synthetic test each and said it was "worth knowing it is the
+only thing holding it". The reviewer's own battery also killed the limits moved the *other* way —
+interstitial 2 000 → 1 200, markup 200 → 800, each by one test — so both constants are pinned in both
+directions, and the synthetic edge tests hardcode 1 999 and 199 in their `visibleTextLength`
+assertions, so neither can drift silently.
+
+**F5. Two mutants survived the suite, both on behaviour the code claimed and nothing held.**
+`locale: nil` → `.current` in `normalized`, and `let haystack = normalized(text)` → `text`. The second
+is the more serious: `visibleText` already normalises what it returns, so stage 1 keeps working
+without it and only **stage 2 — the one that catches every modern bot wall** — notices. Both are
+pinned now. `markupEvidenceIsFoldedAndCollapsedBeforeItIsSearched` drives the markup stage with a
+mixed-case vendor script (`ct.CAPTCHA-Delivery.com`) and a phrase broken across a line break.
+`phraseMatchingIsLocaleIndependent` is a source scan, because the property is not observable in this
+process: the test machine's locale is `en_IN`, where `.current` and `nil` agree. The hazard behind it
+is measured rather than supposed — three of the seven phrases contain the letter `i`, and
+`"PLEASE LOG IN".folding(options: [.caseInsensitive, .diacriticInsensitive], locale: Locale(identifier: "tr_TR"))`
+is `please log ın`, which does not contain `please log in`. Per `CLAUDE.md`'s rule that a source scan
+is only a guard once it has been shown to flag the defect it names, the test runs its predicate over
+the historical `.current` code first and asserts it flags line 2.
+
+**F6. The parse guard named a cause that does not exist — the same shape as the `try?` this branch
+already disclosed, arriving a second time.** `visibleText` began "An unparseable page yields `""`, so
+the markup stage applies to it — the fail-closed direction", which reads as a live behaviour for
+malformed input. It is not one: SwiftSoup's HTML parse is permissive by construction, and its three
+parse-path files carry no `throw` of their own (`grep -c 'throw ' Tokeniser.swift TreeBuilder.swift
+HtmlTreeBuilder.swift` in SwiftSoup 2.13.5 answers 0, 0, 0). What can throw there is twelve `Validate`
+calls inside `HtmlTreeBuilder`, and they are internal invariants rather than input checks — four of
+the seven `Validate.fail` messages read "Should not be reachable". The comment now says the `""` is a
+value the compiler asks for on a path this repository does not exercise. **Twice on one branch is the
+pattern worth naming**: a comment that makes the code sound more defensive than the library requires
+is as unverified as one that makes it sound cleverer, and both read as diligence.
+
+**F7. Nothing in the repository constructed a non-2xx `FetchedWebPage`, so `validate`'s ordering was
+unexercised** — while this branch's documentation leaned on it as the reason narrowing the detector is
+affordable. Pre-existing, and closed here rather than filed because it is one test and the argument is
+this branch's. `aWallThatAnswersWithAnErrorStatusIsRefusedOnTheStatusBeforeTheDetectorRuns` serves the
+Zillow fixture at the 403 it was really fetched with and asserts `badHTTPStatus`; its pair serves the
+identical bytes at 200 and asserts the wall's name. The two together pin *which* check speaks, not
+merely that something refuses.
+
+**F8. The ScienceDirect count was swapped between three records.** 523 is the fixture, 526 is the page
+as fetched, and the three-character difference is the IP redaction the fixtures README documents. The
+detector's corpus list said 523 and the README said 526; both are corrected, and the README now states
+which number belongs to which so the next reader does not re-swap them. The README also said "Four
+real pages" in one line and "All three were fetched" eleven lines later.
+
+Tests: **1875 in 135 suites, exit 0 at `795e022`** via the flagged command; **+3** on the round
+(`git diff ec4393c..795e022 -- Tests/ | grep -c '^+    @Test'` = 3). **`scripts/warnings`: 0 at
+`795e022` (clean)**, every file in `Sources/` and `Tests/` compiled.
+
+**Mutation battery at `795e022`: 3 mutants, 3 killed, none survived** — and two of the three kills
+need a caveat, because `scripts/mutate` counts *any* failing test as a killer and both caveats are
+the hazard its own `--help` names.
+
+- **N2** (markup searched unnormalised) is the clean one: killed by
+  `markupEvidenceIsFoldedAndCollapsedBeforeItIsSearched` and by nothing else, which is exactly the
+  claim — no other test in 1875 notices, because `visibleText` normalises what it returns and stage 1
+  never sees the difference.
+- **N1** (folding with `locale: .current` again) is reported as killed by 2 tests. One is
+  `phraseMatchingIsLocaleIndependent`, the scan written for it. **The other is
+  `asyncProcessRunnerCancelsRunningProcess`, which is SONNY-252's flake, not a guard on anything
+  here.** It is a live instance of the thing that ticket is about, and it landed in the harmless
+  direction only because the real guard fired in the same run.
+- **N3** (the wall check moved ahead of the status check) is reported as killed by 48. **One of those
+  is a guard on the property**: `aWallThatAnswersWithAnErrorStatusIsRefusedOnTheStatusBeforeTheDetectorRuns`
+  recorded the exact mismatch — expected `.badHTTPStatus(403, "https://www.zillow.com/")`, got the
+  wall. The rest are dominated by 58 timeout issues in `VisionSessionRunTests`, whose deadline that
+  file documents as "a deadlock backstop, not a timing assertion". They appeared in no other mutant's
+  run (`grep -c "VisionSessionRunTests.swift:475" N1.log N2.log N3.log` → 0, 0, 58) and that run took
+  121s against a 75s baseline. **Why N3 perturbs that suite was not established**, so those failures
+  are recorded as unexplained rather than attributed: they are not evidence about the ordering, and
+  the honest count of tests holding it is one.
+
+#### Rebased onto `origin/main` at `cf3fa76`, 2026-08-23 — and every SHA above this line is pre-rebase
+
+The branch was cut from `961b9c2`; `main` moved to `cf3fa76` while it was open. **The SHAs cited
+above are not ancestors of this branch any more**, and their measurements are not reproducible at the
+rebased ones either — they were taken against the old base, and `main` has since added tests of its
+own. They are left as written because each one records a real run at a real tree; this section
+restates the figures at the head that will actually merge.
+
+One conflicting file, the changelog, reconstructed from both sides rather than by editing markers —
+`main`'s copy taken whole and this entry re-inserted into it, four times, once per commit that
+touches it. Verified afterwards rather than assumed: this entry's text is byte-identical across the
+rebase, all 86 of `main`'s entry headings survive with this one as the only addition, and the two
+`Sources/` files this branch owns are byte-identical to their pre-rebase state.
+
+**At the rebased head:**
+
+- **Tests: 1913 in 137 suites, exit 0** via the flagged command. **+18** `@Test` lines against the new
+  base (`git diff cf3fa76..HEAD -- Tests/ | grep -c '^+    @Test'` = 18 — 15 from the original work,
+  3 from the review round). The jump from 1875 is `main`'s own new tests arriving with the rebase.
+- **`scripts/warnings`: 0**, stamped `7380cce plus 1 uncommitted file(s)` — the uncommitted file being
+  this section, a `.md` no Swift compile reads. Every file in `Sources/` and `Tests/` recompiled.
+- **`server/scripts/check-secrets.sh tracked`: clean, 398 tracked files, exit 0.**
+- **The executable code has not moved since the review read it.** `git diff f9c99aa..HEAD` over this
+  branch's two `Sources/` files is 104 changed lines, of which **0** are not `///` comments
+  (`… | grep -E '^[+-]' | grep -vE '^(\+\+\+|---)' | grep -vE '^[+-][[:space:]]*///' | wc -l` → 0).
+  Everything since the review is a record.
 ### Branch: fix/widget-composer-and-resume-panel
 Status: complete
 Date: 2026-08-23
