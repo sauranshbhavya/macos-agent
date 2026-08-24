@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { Config } from "../src/config.js";
+import { TEST_JWT_CONFIG } from "./support/tokens.js";
 
 const config = (overrides: Partial<Config> = {}): Config => ({
   environment: "local",
@@ -10,7 +11,7 @@ const config = (overrides: Partial<Config> = {}): Config => ({
   databaseUrl: undefined,
   logLevel: "fatal",
   trustProxy: false,
-  rateLimitSalt: "test-salt", allowUnauthenticatedAccountDelete: false,
+  rateLimitSalt: "test-salt", ...TEST_JWT_CONFIG,
   credentials: [],
   ...overrides,
 });
