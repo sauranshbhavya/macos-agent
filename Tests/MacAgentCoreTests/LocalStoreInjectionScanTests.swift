@@ -516,6 +516,40 @@ struct LocalStoreInjectionScanTests {
         }
     }
 
+    /// **The one construction really does hand the shipping app the live Finder reveal.**
+    ///
+    /// Written because a mutant that replaced it with `{ _ in }` was reported killed by exactly one
+    /// test — and that test was `asyncProcessRunnerCancelsRunningProcess`, SONNY-224's load flake.
+    /// By this repository's own discriminator that is a survivor, not a kill (SONNY-239's rebase
+    /// onto this branch). The line cannot be reached from a test: `atItsRealStoreLocations()` builds
+    /// the real `~/Library` stores, and `noTestSourceAsksForTheRealStoreLocations` forbids calling
+    /// it — so a scan is the only instrument left, which is the same answer
+    /// `onlyMainAsksForTheRealStoreLocations` reaches for the same reason.
+    ///
+    /// **The same gap covers the thirteen store constructions beside it and is not closed here.**
+    /// `routineStore: RoutineStore()` could become a temp store with the whole suite green, for
+    /// exactly this reason. Generalising this check to every argument of that one call is available
+    /// and belongs to whoever owns that suite; recording the gap is better than quietly benefiting
+    /// from the fact that nobody has mutated those lines yet.
+    @Test
+    func theRealStoreFactoryHandsTheAppTheLiveFinderReveal() throws {
+        let source = try String(contentsOf: Self.viewModelSource, encoding: .utf8)
+        let code = TestSourceTree.codeLines(of: source).map(\.text).joined(separator: "\n")
+
+        let calls = Self.constructions(of: "AgentViewModel", in: code)
+        #expect(calls.count == 1, "AgentViewModel.swift constructs the type \(calls.count) times")
+        let factoryCall = try #require(calls.first)
+
+        // The live implementation, named in the argument the app actually passes.
+        #expect(
+            factoryCall.contains("activateFileViewerSelecting"),
+            """
+            \(Self.realStoreFactoryName)() no longer hands the app a real Finder reveal, so the product's Reveal in Finder control would do nothing and no test could see it — the line is unreachable from a test by construction. The name is interpolated rather than spelled, because this file is itself swept for that literal.
+            """
+        )
+        #expect(factoryCall.contains("finderRevealer:"), "the argument is not passed by that label any more")
+    }
+
     /// The same door from the other side: no test may ask for the real locations either.
     ///
     /// Scanned across every test target, because a helper in the support target would be the least
