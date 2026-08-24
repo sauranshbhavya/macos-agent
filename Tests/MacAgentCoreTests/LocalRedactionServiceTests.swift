@@ -553,12 +553,13 @@ struct LocalRedactionImageTests {
 
 /// **Serialized, because every test in here drives the real on-device recognizer** (PR #113 review,
 /// F5). Widening the realistic-size case into seven took this suite from three concurrent
-/// `VNRecognizeTextRequest`s to ten, and at ten the test process **stalls**: measured at `064f387`
-/// plus the F5 change, thirteen test cases print `started.` and the process then sits at 0% CPU
-/// with no further output and never finishes — reproduced twice, killed by hand both times. Each
-/// case on its own is fast (the seven parameterized ones together pass in 1.97 s), so it is the
-/// concurrency and not any one size. `.serialized` runs this suite's tests one at a time; the suite
-/// still runs in parallel with the other 141, so the latency test below still measures under load.
+/// `VNRecognizeTextRequest`s to ten, and at ten the test process **stalls**. Re-proved at `176f186`
+/// by deleting this one attribute and running `--filter LocalRedactionLiveVisionTests`: the run
+/// **did not finish within 100 s** and the test process sat at **0% CPU** throughout, against
+/// **3.389 s** for the same filtered run with the attribute in place. Each case on its own is fast —
+/// the seven parameterized ones together pass in 1.97 s — so it is the concurrency and not any one
+/// size. `.serialized` runs this suite's tests one at a time; the suite still runs in parallel with
+/// the other 141, so the latency test below still measures under load.
 @Suite(.serialized)
 struct LocalRedactionLiveVisionTests {
     @Test
