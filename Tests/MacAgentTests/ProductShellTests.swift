@@ -155,12 +155,15 @@ struct ProductShellTests {
     func commandCenterDestinationsKeepTheLockedSidebarOrder() {
         // Settings is no longer a sidebar destination (2026-07-18) — it moved to its own dialog,
         // opened from the bottom account row. See `SettingsDialogView`.
+        // Memory joined the list last (SONNY-208), below Workspaces: the four above it are the
+        // places work happens, and Memory is what those four leave behind.
         #expect(
             CommandCenterDestination.allCases == [
                 .tasks,
                 .insights,
                 .routines,
-                .workspaces
+                .workspaces,
+                .memory
             ]
         )
     }
@@ -622,18 +625,23 @@ struct ProductShellTests {
             "runner",
             "pendingCommandForPriorTaskContext",
             "pendingTaskHistoryStartedAt",
-            "preserveUsageForNextStart"
+            "preserveUsageForNextStart",
+            "memoryDeletionStatusMessage"
         ]
 
-        // Not assigned by the wipe, but rewritten by the three `refresh…` calls it ends with — from
+        // Not assigned by the wipe, but rewritten by the four `refresh…` calls it ends with — from
         // stores whose files the deletion has just emptied, so they come back as the empty truth
         // rather than as stale values. Covered, by a different mechanism.
         let reloadedByTheWipe: Set<String> = [
             "savedRoutines",              // refreshSavedItems()
             "savedWorkspaces",            // refreshSavedItems()
+            "savedSnippets",              // refreshMemoryEntries()
+            "recentArtifacts",            // ditto
+            "clipboardHistoryItems",      // ditto
+            "approvedApps",               // ditto
             "clipboardHistoryEnabled",    // refreshClipboardHistoryNotice()
             "clipboardHistoryTimer",      // ditto, via start/stopClipboardHistoryMonitoring()
-            "localStorageLoadFailures",   // record/clearLocalStorageLoadFailure, inside all three
+            "localStorageLoadFailures",   // record/clearLocalStorageLoadFailure, inside all four
             "localStorageNotice"          // ditto, via refreshLocalStorageNotice()
         ]
 
@@ -649,7 +657,7 @@ struct ProductShellTests {
             "runningAppSwitcher", "shortcutInvoker", "finderContextReader", "documentConverter",
             "zipArchiver", "shortcutRunHistoryStore", "taskHistoryStore", "taskPlanDetailStore",
             "clipboardHistorySettingsStore", "approvedAppStore", "clipboardHistoryMonitor",
-            "localDataDeletionService",
+            "localDataDeletionService", "memorySettingsStore", "memoryPolicyProvider",
             "priorTaskContextStore", "taskUsageRecorder", "plannerProviderRegistry",
             "plannerSelection", "userDefaults", "whitelist", "routineScheduleTimer", "wakeObserver",
 
@@ -663,6 +671,12 @@ struct ProductShellTests {
             "voiceHotKeyStatus", "voiceHotKeyReady", "permissionItems", "clipboardHistoryPollFailure",
             "hasCompletedFirstApproval", "widgetPresentationRequest", "scheduledRunNotice",
             "plannerFallbackNotice",
+            // `memorySettings` sits here for the sharpest version of the group's reason: a wipe
+            // that switched memory back on would re-enable recording for the user who reached for
+            // the most privacy-minded control in the app. It lives in `UserDefaults`, which the
+            // wipe does not touch, so "off" survives it — and the in-memory copy must survive it
+            // too or the surface would disagree with the store until the next refresh.
+            "memorySettings",
 
             // 4. Live-interaction state that cannot be stale when the wipe runs, plus the two slots
             // whose whole purpose is outliving a task. `deleteLocalData` guards on `!isRunning`, so

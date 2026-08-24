@@ -135,6 +135,14 @@ public struct SaveRoutineCapabilityAdapter: CapabilityAdapter {
     ) async throws -> AgentRunResult {
         let previews = try preview(plan: plan, context: context)
         let spec = try routineSaveSpec(plan, context: context)
+        // Routine memory switched off refuses out loud rather than saving anyway or dropping the
+        // save quietly (SONNY-208). Asked here rather than in `preview`/`assessRisk` on purpose: the
+        // approval panel still describes truthfully what a save *would* do, and only the write is
+        // refused — a plan that silently lost a step between assessment and execution is the shape
+        // this repository's risk engine exists to prevent.
+        guard context.allowsRecording(to: .routines) else {
+            throw MemoryDisabledError(category: .routines)
+        }
         log(.act, "Saving routine \(spec.routine.name)")
         try context.routineStore.save(spec.routine)
         log(.summarize, "Saved routine")

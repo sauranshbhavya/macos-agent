@@ -77,6 +77,22 @@ public struct ClipboardHistoryStore: @unchecked Sendable {
         return item
     }
 
+    /// Forgets one copied item.
+    ///
+    /// Added for Command Center's Memory section (SONNY-208), through the same `loadAll`/`write`
+    /// pair `record` uses. A missing id is a no-op, not an error.
+    ///
+    /// `now` is threaded for the same reason `record` threads `copiedAt` — see
+    /// `RecentArtifactStore.delete(id:now:)`, which has the identical shape and the identical cap.
+    public func delete(id: UUID, now: Date = Date()) throws {
+        let items = try loadAll(now: now)
+        let remaining = items.filter { $0.id != id }
+        guard remaining.count != items.count else {
+            return
+        }
+        try write(remaining)
+    }
+
     public func loadAll(now: Date = Date()) throws -> [ClipboardHistoryItem] {
         guard fileManager.fileExists(atPath: fileURL.path) else {
             return []
@@ -236,6 +252,18 @@ public final class ClipboardHistoryMonitor {
         self.settingsStore = settingsStore
         self.now = now
     }
+
+    /// The store this monitor records into.
+    ///
+    /// **Exposed rather than injected a second time, and the difference is hermeticity** (SONNY-208).
+    /// Command Center's Memory section has to read and delete clipboard entries, and `AgentViewModel`
+    /// holds the monitor but not the store. Giving the view model its own `ClipboardHistoryStore`
+    /// init parameter would mean a *defaulted* one resolving to the real
+    /// `~/Library/Application Support/Sonny/clipboard-history.json`, which every existing test
+    /// fixture would silently pick up — the exact trap the fixture's own comments record for the
+    /// vision journal. Reading it back off the already-injected monitor cannot diverge from what
+    /// recording writes.
+    public var historyStore: ClipboardHistoryStore { store }
 
     /// Probes the backing history file so the UI can report a corrupt store once. `poll()` only
     /// touches the store when the clipboard actually changes, so corruption would otherwise stay
