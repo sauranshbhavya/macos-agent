@@ -58,9 +58,15 @@ enum HighEntropyFloorMeasurement {
         /// product already paints for another reason, which is not an extra and is not listed.
         var extraTokenLengths: [Int]
         var classesAtProductFloor: [SecretDetectionClass: Int]
-        /// Every blob the probe finds at the product floor overlaps a product match. False means the
-        /// copy of the rule above has drifted from the product's, and the numbers beside it are not
-        /// a measurement of anything.
+        /// The probe's blob rule at the product floor and the product's own blob matches — the
+        /// 0.5-confidence class, the only one the floor governs — cover each other: every probed
+        /// range overlaps a product match, **and** every product match at 0.5 overlaps a probed
+        /// range. Either side moving its floor without the other makes this false — a product floor
+        /// lowered to 28 produces 0.5 matches the probe at 32 does not find, and a probe floor raised
+        /// above the product's finds nothing where the product still does —
+        /// `theDriftGuardFiresWhenEitherSideMovesItsFloor` shows both (PR #116 review, F3). False means
+        /// the copy of the rule has drifted from the product's, and the numbers beside it are not a
+        /// measurement of anything.
         var probeAgreesWithProduct: Bool
 
         /// One log line, content-free.
@@ -75,7 +81,14 @@ enum HighEntropyFloorMeasurement {
 
     /// The cost of one capture, from its recognized lines, joined with newlines exactly as
     /// `redactCapture` joins them so that cross-line matches and word boundaries behave identically.
-    static func cost(ofLines lines: [String]) throws -> CaptureCost {
+    ///
+    /// The floors are parameters so that the drift guard can be shown to fire; every real
+    /// measurement leaves them at their defaults.
+    static func cost(
+        ofLines lines: [String],
+        productFloor: Int = HighEntropyFloorMeasurement.productFloor,
+        candidateFloor: Int = HighEntropyFloorMeasurement.candidateFloor
+    ) throws -> CaptureCost {
         var joined = ""
         var lineRanges: [Range<String.Index>] = []
         for (index, line) in lines.enumerated() {
@@ -94,7 +107,18 @@ enum HighEntropyFloorMeasurement {
         let folded = LatinConfusables.fold(joined)
         let probeAtProduct = try blobRanges(in: folded.text, floor: productFloor).map(folded.originalRange(of:))
         let probeAtCandidate = try blobRanges(in: folded.text, floor: candidateFloor).map(folded.originalRange(of:))
-        let agrees = probeAtProduct.allSatisfy { probed in product.contains { $0.range.overlaps(probed) } }
+        let everyProbedRangeIsPainted = probeAtProduct.allSatisfy { probed in
+            product.contains { $0.range.overlaps(probed) }
+        }
+        // An api-key match at 0.5 is the blob rule and nothing else — the vendor and label patterns
+        // sit at 0.95 and 0.9. The class matters as much as the confidence: an out-of-range SSN shape
+        // is also 0.5, and holding it to the probe reported a disagreement on a Swift test file that
+        // carried one. A blob coalesced into a higher-confidence match is that match now and is not
+        // held to the probe.
+        let everyProductBlobIsProbed = product
+            .filter { $0.detectionClass == .apiKey && $0.confidence == 0.5 }
+            .allSatisfy { blob in probeAtProduct.contains { $0.overlaps(blob.range) } }
+        let agrees = everyProbedRangeIsPainted && everyProductBlobIsProbed
 
         let extras = probeAtCandidate.filter { probed in !product.contains { $0.range.overlaps(probed) } }
         let extraLengths = extras.map { joined[$0].unicodeScalars.count }

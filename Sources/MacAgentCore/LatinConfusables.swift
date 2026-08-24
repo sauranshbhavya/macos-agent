@@ -33,20 +33,30 @@ import Foundation
 /// (5) the source lies in a block of a script Vision's accurate recognizer can emit — the scripts
 /// its supported recognition languages are written in on macOS 25.5.0 (Latin outside ASCII,
 /// Cyrillic, Arabic, Thai, Han, Kana, Hangul; `VNRecognizeTextRequest.supportedRecognitionLanguages()`
-/// lists thirty languages and no Greek one). The fifty-two fullwidth Latin letters fold too, by
-/// arithmetic rather than from the table: each is its ASCII letter by Unicode's compatibility
-/// decomposition, which is a definition rather than a resemblance, and UTS #39 covers only
-/// thirty-two of them and sends fullwidth `I` to `l`. ``table`` is generated, not hand-written —
-/// the block below is what `scripts/confusables-table <confusables.txt> --write` produces, and
-/// `--check` says whether it still is — and ``LatinConfusablesTests`` holds every clause of the rule
-/// a test can hold, in both directions.
+/// lists thirty languages and no Greek one); and (6) an uppercase source that UTS #39 sends to `l`
+/// folds to `I` instead (PR #116 review, F1). That sixth clause exists because UTS #39 is a spoofing
+/// table: it merges `I`, `l` and `1` into one confusable class with the prototype `l`, which throws
+/// away the case the recognizer preserved when it emitted a *capital* — U+0406 CYRILLIC CAPITAL
+/// LETTER BYELORUSSIAN-UKRAINIAN I is what Vision types for a Latin `I` on a Ukrainian-capable
+/// recognizer, and `AKIA`, `AIza` and the blob rule's uppercase check all need it back as `I`. The
+/// three entries it moves are U+0196, U+0406 and U+04C0; it is the only class where the prototype's
+/// case disagrees with the glyph's — the two capitals that map to `b` (U+0184, U+042C) look like a
+/// lowercase b and stay. The fifty-two fullwidth Latin letters fold too, by arithmetic rather than
+/// from the table: each is its ASCII letter by Unicode's compatibility decomposition, which is a
+/// definition rather than a resemblance, and UTS #39 covers only thirty-one of them and sends
+/// fullwidth `I` to `l`. ``table`` is generated, not hand-written — the block below is what
+/// `scripts/confusables-table <confusables.txt> --write` produces, and `--check` says whether it
+/// still is. Rule 4 reads general categories from the generating Python's Unicode database, which
+/// is older than the data file (the generated header names it); the generator refuses to run while
+/// that database leaves any candidate unassigned, and ``LatinConfusablesTests`` re-checks rule 4 with
+/// the platform's own tables and holds every other clause a test can hold, in both directions.
 ///
 /// **What it deliberately does not fold**, so the next reader does not mistake a gap for an
 /// oversight. ASCII look-alikes of each other — `0` for `O`, `1` for `l`, `5` for `S`, the `5k-`
 /// flavour SONNY-260 also measured — because every one of those is ordinary text and folding them
 /// would paint it; that flavour stays open and is not approved. Digits of other scripts that UTS #39
 /// maps to letters (Arabic-Indic one to `l`, Thai zero to `o`): a digit stays a digit. Multi-scalar
-/// targets (U+0133 LATIN SMALL LIGATURE IJ to `ij`, U+044B CYRILLIC SMALL LETTER YERU to `bl`) —
+/// targets (U+0133 LATIN SMALL LIGATURE IJ to `ij`, U+042B CYRILLIC CAPITAL LETTER YERU to `bl`) —
 /// the fold is scalar-for-scalar so that ranges map back by ordinal. Scripts Vision cannot produce — Greek, the mathematical alphanumerics,
 /// Cherokee, Armenian and the rest of the table — because a fold that reached them would be
 /// describing adversarial text, which is the boundary's problem and not this one. And the two
@@ -87,11 +97,26 @@ enum LatinConfusables {
 
         /// The original string's index for an index of ``text``. Any index at a scalar boundary of
         /// ``text`` maps; a regex match's bounds always are.
+        ///
+        /// An index of some *other* string is a programming error, and the preconditions name it
+        /// where they can (PR #116 review, F4): one that lies past the folded text's end fails here
+        /// with a message rather than inside `distance` with `String index is out of bounds`. One that
+        /// happens to fall inside the folded text's length cannot be told from a genuine index and
+        /// maps to the wrong scalar — which is why the detector maps ranges it found in ``text`` and
+        /// nothing else.
         func originalIndex(of index: String.Index) -> String.Index {
             guard let originalScalarIndices else {
                 return index
             }
+            precondition(
+                index >= text.startIndex && index <= text.endIndex,
+                "LatinConfusables.Folded.originalIndex(of:) takes an index of the folded text; this one lies outside it"
+            )
             let ordinal = text.unicodeScalars.distance(from: text.unicodeScalars.startIndex, to: index)
+            precondition(
+                ordinal < originalScalarIndices.count,
+                "LatinConfusables.Folded.originalIndex(of:) has no original index for scalar ordinal \(ordinal)"
+            )
             return originalScalarIndices[ordinal]
         }
     }
@@ -136,6 +161,7 @@ enum LatinConfusables {
 
     // BEGIN generated by scripts/confusables-table — do not edit by hand
     // Unicode 17.0.0 confusables.txt dated 2025-07-22; 98 entries.
+    // Rule 4's general categories came from the generating Python's Unicode 13.0.0 database (0 of 107 in-block candidates unassigned there); LatinConfusablesTests re-checks rule 4 with the platform's own.
     static let table: [UInt32: UInt8] = [
         0x00FE: 0x70, // LATIN SMALL LETTER THORN -> p
         0x0131: 0x69, // LATIN SMALL LETTER DOTLESS I -> i
@@ -143,7 +169,7 @@ enum LatinConfusables {
         0x0184: 0x62, // LATIN CAPITAL LETTER TONE SIX -> b
         0x018D: 0x67, // LATIN SMALL LETTER TURNED DELTA -> g
         0x0192: 0x66, // LATIN SMALL LETTER F WITH HOOK -> f
-        0x0196: 0x6C, // LATIN CAPITAL LETTER IOTA -> l
+        0x0196: 0x49, // LATIN CAPITAL LETTER IOTA -> I
         0x01A6: 0x52, // LATIN LETTER YR -> R
         0x01BD: 0x73, // LATIN SMALL LETTER TONE FIVE -> s
         0x01BF: 0x70, // LATIN LETTER WYNN -> p
@@ -157,7 +183,7 @@ enum LatinConfusables {
         0x028B: 0x75, // LATIN SMALL LETTER V WITH HOOK -> u
         0x028F: 0x79, // LATIN LETTER SMALL CAPITAL Y -> y
         0x0405: 0x53, // CYRILLIC CAPITAL LETTER DZE -> S
-        0x0406: 0x6C, // CYRILLIC CAPITAL LETTER BYELORUSSIAN-UKRAINIAN I -> l
+        0x0406: 0x49, // CYRILLIC CAPITAL LETTER BYELORUSSIAN-UKRAINIAN I -> I
         0x0408: 0x4A, // CYRILLIC CAPITAL LETTER JE -> J
         0x0410: 0x41, // CYRILLIC CAPITAL LETTER A -> A
         0x0412: 0x42, // CYRILLIC CAPITAL LETTER VE -> B
@@ -191,7 +217,7 @@ enum LatinConfusables {
         0x04AF: 0x79, // CYRILLIC SMALL LETTER STRAIGHT U -> y
         0x04BB: 0x68, // CYRILLIC SMALL LETTER SHHA -> h
         0x04BD: 0x65, // CYRILLIC SMALL LETTER ABKHASIAN CHE -> e
-        0x04C0: 0x6C, // CYRILLIC LETTER PALOCHKA -> l
+        0x04C0: 0x49, // CYRILLIC LETTER PALOCHKA -> I
         0x04CF: 0x6C, // CYRILLIC SMALL LETTER PALOCHKA -> l
         0x0501: 0x64, // CYRILLIC SMALL LETTER KOMI DE -> d
         0x050C: 0x47, // CYRILLIC CAPITAL LETTER KOMI SJE -> G

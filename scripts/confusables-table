@@ -30,11 +30,29 @@ of — change one and the other, and `LatinConfusablesTests` holds the parts of 
        produce them, and a table that folded them would be describing adversarial text, which is
        the untrusted-content boundary's problem and deliberately not this one.
 
+    6. an uppercase source (general category Lu) that UTS #39 sends to `l` folds to `I` instead
+       (PR #116 review, F1). UTS #39 merges I, l and 1 into one confusable class whose prototype is
+       `l` — it is a spoofing table, and for spoofing the three are the same — which throws away
+       the case the recognizer preserved when it emitted a capital letter. Three entries: U+0196
+       LATIN CAPITAL LETTER IOTA, U+0406 CYRILLIC CAPITAL LETTER BYELORUSSIAN-UKRAINIAN I and
+       U+04C0 CYRILLIC LETTER PALOCHKA. It is the only class where the prototype's case disagrees
+       with the glyph's: the two capitals that map to `b` (U+0184, U+042C) look like a lowercase b.
+
   The fullwidth Latin letters (U+FF21-U+FF3A, U+FF41-U+FF5A), which CJK text writes Latin in, are
   NOT taken from UTS #39 and are not in this table: `LatinConfusables.fold` folds all fifty-two by
   arithmetic, because each one is its ASCII letter by Unicode's compatibility decomposition — a
-  definition, not a look-alike judgement — and UTS #39 covers only thirty-two of them and sends
+  definition, not a look-alike judgement — and UTS #39 covers only thirty-one of them and sends
   fullwidth I to `l`. Everything else in the Halfwidth and Fullwidth Forms block is left alone.
+
+  Rule 4 reads a scalar's general category from the running Python's Unicode database, which is
+  older than the data file on every Python this repository has met (13.0.0 against 17.0.0). That
+  can only matter for a candidate the older database has not assigned yet — its category reads as
+  Cn and rule 4 would drop it silently — so the script counts those and REFUSES to emit a table
+  while any exist, prints the database version it used in every mode, and records it in the
+  generated header; `LatinConfusablesTests` re-checks rule 4 with the platform's own Unicode
+  tables, which is the check that actually holds. `--check` compares the entries and the data
+  file's version and ignores the provenance line, so a different Python does not read as a
+  different table.
 """
 import re
 import sys
@@ -114,7 +132,10 @@ def parse(path):
 
 
 def select(entries):
+    """Rows (source, target, block) plus the count of in-block candidates rule 4 was asked about."""
     rows = []
+    candidates = 0
+    unassigned = []
     for source, targets in entries:
         if source < 0x80:  # 1
             continue
@@ -123,19 +144,40 @@ def select(entries):
         target = targets[0]
         if not (0x41 <= target <= 0x5A or 0x61 <= target <= 0x7A):  # 3
             continue
-        if not unicodedata.category(chr(source)).startswith("L"):  # 4
-            continue
         block = block_of(source)
-        if block is None:  # 5
+        if block is None:  # 5, checked ahead of 4 so the candidate count is the in-block population
             continue
+        candidates += 1
+        category = unicodedata.category(chr(source))
+        if category == "Cn":
+            unassigned.append(source)
+            continue
+        if not category.startswith("L"):  # 4
+            continue
+        if target == 0x6C and category == "Lu":  # 6
+            target = 0x49
         rows.append((source, target, block))
+    if unassigned:
+        listed = ", ".join(f"U+{cp:04X}" for cp in unassigned)
+        sys.exit(f"refusing: this Python's Unicode database ({unicodedata.unidata_version}) has not assigned "
+                 f"{len(unassigned)} candidate scalar(s) the data file knows — {listed} — so rule 4 cannot be "
+                 f"evaluated for them; run with a newer Python")
     rows.sort()
-    return rows
+    return rows, candidates
 
 
-def render(version, date, rows):
+PROVENANCE_PREFIX = "    // Rule 4's general categories came from the generating Python's Unicode "
+
+
+def provenance(candidates):
+    return (f"{PROVENANCE_PREFIX}{unicodedata.unidata_version} database (0 of {candidates} in-block "
+            "candidates unassigned there); LatinConfusablesTests re-checks rule 4 with the platform's own.")
+
+
+def render(version, date, rows, candidates):
     lines = [BEGIN,
              f"    // Unicode {version} confusables.txt dated {date}; {len(rows)} entries.",
+             provenance(candidates),
              "    static let table: [UInt32: UInt8] = ["]
     for source, target, block in rows:
         name = unicodedata.name(chr(source), "?")
@@ -150,7 +192,11 @@ def main(argv):
         print(__doc__)
         return 0
     version, date, entries = parse(argv[1])
-    block = render(version, date, select(entries))
+    rows, candidates = select(entries)
+    block = render(version, date, rows, candidates)
+    print(f"confusables-table: rule 4 evaluated with Unicode {unicodedata.unidata_version} "
+          f"(Python {sys.version.split()[0]}); {candidates} in-block candidates, {len(rows)} entries",
+          file=sys.stderr)
     mode = argv[2] if len(argv) > 2 else None
     if mode is None:
         print(block)
@@ -161,7 +207,8 @@ def main(argv):
         sys.exit(f"{SWIFT_FILE} carries no generated block to replace")
     updated = pattern.sub(lambda _: block, source, count=1)
     if mode == "--check":
-        if updated == source:
+        without_provenance = re.compile(re.escape(PROVENANCE_PREFIX) + r"[^\n]*\n")
+        if without_provenance.sub("", updated) == without_provenance.sub("", source):
             print(f"{SWIFT_FILE.name}: generated block matches {argv[1]} ({version})")
             return 0
         print(f"{SWIFT_FILE.name}: generated block differs from {argv[1]} ({version})")

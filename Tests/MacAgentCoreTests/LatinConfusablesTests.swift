@@ -23,6 +23,20 @@ struct LatinConfusablesTests {
         #expect(LatinConfusables.fold(Self.scalar(0x0131)) == "i")
     }
 
+    /// Rule 6: a capital that looks like a capital I folds to `I`, not to the `l` UTS #39 names as
+    /// the prototype of its merged I/l/1 class — the recognizer said "capital", and `AKIA` needs it
+    /// back as one (PR #116 review, F1). The lowercase and caseless members of the same class still
+    /// fold to `l`, and the dotted Cyrillic small i to `i`.
+    @Test
+    func capitalLookAlikesOfIFoldToCapitalIAndTheOthersToL() {
+        #expect(LatinConfusables.fold(Self.scalar(0x0406)) == "I")
+        #expect(LatinConfusables.fold(Self.scalar(0x04C0)) == "I")
+        #expect(LatinConfusables.fold(Self.scalar(0x0196)) == "I")
+        #expect(LatinConfusables.fold(Self.scalar(0x04CF)) == "l")
+        #expect(LatinConfusables.fold(Self.scalar(0x01C0)) == "l")
+        #expect(LatinConfusables.fold(Self.scalar(0x0456)) == "i")
+    }
+
     /// Rule 1 from the other side: nothing in ASCII ever folds — not `0` to `O`, not `1` to `l`, not
     /// `5` to `S`. That is the `5k-` flavour, and it is not approved.
     @Test
@@ -83,6 +97,10 @@ struct LatinConfusablesTests {
             }
             #expect(blocks.contains { $0.contains(source) }, "\(name) is outside every block Vision can emit")
             #expect(LatinConfusables.fold(scalar) == Unicode.Scalar(target), Comment(rawValue: name))
+            // Rule 6, structurally: no capital in the table folds to a lowercase l.
+            if scalar.properties.generalCategory == .uppercaseLetter {
+                #expect(target != UInt8(ascii: "l"), "\(name) is a capital folding to l")
+            }
         }
     }
 
@@ -99,6 +117,7 @@ struct LatinConfusablesTests {
         #expect(LatinConfusables.table[0x0131] == UInt8(ascii: "i"))
         #expect(LatinConfusables.table[0x0430] == UInt8(ascii: "a"))
         #expect(LatinConfusables.table[0x04CF] == UInt8(ascii: "l"))
+        #expect(LatinConfusables.table[0x0406] == UInt8(ascii: "I"))
         #expect(LatinConfusables.table[0xFEEB] == UInt8(ascii: "o"))
     }
 

@@ -88,6 +88,61 @@ struct HighEntropyFloorMeasurementTests {
         #expect(cost.line(name: "fixture.png") == "HIGH-ENTROPY-FLOOR capture=fixture.png lines=4 painted@32=1 painted@28=2 extra28=[30] classes@32=[password_field:1] probeAgrees=true")
     }
 
+    /// The drift guard can be false, in both directions (PR #116 review, F3): the probe's floor
+    /// lowered below the product's finds a 30-character token the product does not paint, and the
+    /// probe's floor raised above the product's finds nothing where the product paints a 32. At the
+    /// defaults the same lines agree. Totals count each disagreement.
+    @Test
+    func theDriftGuardFiresWhenEitherSideMovesItsFloor() throws {
+        let lines = ["x \(Self.token30)", "y \(Self.token32)"]
+
+        let probeBelowProduct = try HighEntropyFloorMeasurement.cost(ofLines: lines, productFloor: 28)
+        #expect(!probeBelowProduct.probeAgreesWithProduct)
+
+        let probeAboveProduct = try HighEntropyFloorMeasurement.cost(ofLines: lines, productFloor: 40)
+        #expect(!probeAboveProduct.probeAgreesWithProduct)
+
+        let atTheDefaults = try HighEntropyFloorMeasurement.cost(ofLines: lines)
+        #expect(atTheDefaults.probeAgreesWithProduct)
+
+        var totals = HighEntropyFloorMeasurement.Totals()
+        totals.add(probeBelowProduct)
+        totals.add(atTheDefaults)
+        totals.add(probeAboveProduct)
+        #expect(totals.disagreements == 2)
+        #expect(totals.summary(label: "drift").hasSuffix("disagreements=2"))
+    }
+
+    /// The reverse direction holds the product's *blob* matches to the probe and nothing else: an
+    /// out-of-range SSN shape is also reported at 0.5, and the first two-way guard counted one as a
+    /// disagreement on a Swift test file in the corpus. Painted, yes; the probe's business, no.
+    @Test
+    func anotherClassAtTheBlobsConfidenceDoesNotTripTheDriftGuard() throws {
+        let cost = try HighEntropyFloorMeasurement.cost(ofLines: ["applicant 000-12-3456 on file"])
+
+        #expect(cost.classesAtProductFloor == [.socialSecurityNumber: 1])
+        #expect(cost.paintedAtProductFloor == 1)
+        #expect(cost.probeAgreesWithProduct)
+    }
+
+    /// A match spanning lines paints every line it touches, not the one it starts in — the
+    /// private-key block is the one class whose match is multi-line by design.
+    @Test
+    func aMatchSpanningLinesCountsEveryLineItTouches() throws {
+        let cost = try HighEntropyFloorMeasurement.cost(ofLines: [
+            "-----BEGIN PRIVATE KEY-----",
+            "MIIEvQ",
+            "-----END PRIVATE KEY-----",
+            "clean"
+        ])
+
+        #expect(cost.lines == 4)
+        #expect(cost.paintedAtProductFloor == 3)
+        #expect(cost.paintedAtCandidateFloor == 3)
+        #expect(cost.classesAtProductFloor == [.privateKey: 1])
+        #expect(cost.probeAgreesWithProduct)
+    }
+
     @Test
     func totalsAccumulateAcrossCapturesAndSummariseWithoutContent() throws {
         var totals = HighEntropyFloorMeasurement.Totals()
