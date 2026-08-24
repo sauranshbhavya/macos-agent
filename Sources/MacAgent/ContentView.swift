@@ -2,9 +2,13 @@ import AppKit
 import MacAgentCore
 import SwiftUI
 
-/// Shared between the Command Center's `SettingsSecurityAccessPage` and `SettingsDataPage` — both
-/// surfaces call the same `viewModel.deleteLocalData()` action with identical copy, only the
-/// surrounding row layout differs per surface.
+/// The one-line result under a delete control, shared by the Command Center surfaces that have
+/// one: Settings' Data page, where it reports the whole wipe and, since SONNY-266, the narrower
+/// control beside it on the same slot, and the Memory page, where it reports a per-row Delete off
+/// its own channel. Success is read off the "Deleted" prefix, so any outcome copy that means
+/// success starts with that word and any that does not, does not. (This comment named
+/// `SettingsSecurityAccessPage` as a second host until SONNY-266; the wipe moved off that page on
+/// 2026-07-18 and the Memory page took the second seat with SONNY-208.)
 struct LocalDataDeletionStatusMessage: View {
     let message: String?
 

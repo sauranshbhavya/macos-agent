@@ -677,7 +677,13 @@ struct ProductShellTests {
             // (SONNY-239). It matters that it does: the wipe deletes the file a row was marked
             // unreadable for, so a set that survived would leave that row saying "Can't be read"
             // about a file that no longer exists.
-            "unreadableStores"
+            "unreadableStores",
+            // Re-listed by `refreshSetAsideFiles()`, which `deleteLocalData` calls after either of
+            // its branches (SONNY-266). The wipe sweeps the set-aside files itself, so the Data
+            // page's line has to go to nothing when it succeeds — and has to keep counting the file
+            // it could not remove when it does not, which is why that reload sits outside the
+            // success path rather than among the refreshes above.
+            "setAsideFilesSummary"
         ]
 
         // Deliberately untouched, in four groups.

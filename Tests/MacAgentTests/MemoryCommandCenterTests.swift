@@ -1667,6 +1667,313 @@ struct MemoryCommandCenterTests {
         #expect(LocalDataQuarantine().quarantinedSiblings(of: fixture.outputLocationStore.fileURL).isEmpty)
     }
 
+    // MARK: - SONNY-266: the set-aside files have a line and a control on Settings' Data page
+
+    /// **The per-row Delete that keeps a file is the one press that adds to Settings' count, and the
+    /// count follows that press rather than waiting for the Data page to appear.** The user was told
+    /// the file was kept and never how many or how much space; this is the number and the size.
+    @Test
+    func aPerRowDeleteThatKeepsAFileIsCountedAndSizedForTheDataPage() throws {
+        let fixture = try makeMemoryFixture(wipesRealStoreFiles: true)
+        defer { fixture.cleanUp() }
+        #expect(fixture.viewModel.setAsideFilesSummary == .none)
+        let original = try fixture.writeUnreadableFile(at: fixture.outputLocationStore.fileURL)
+        fixture.memoryPageAppears()
+
+        fixture.viewModel.deleteMemory(in: .outputLocations)
+
+        #expect(
+            fixture.viewModel.setAsideFilesSummary
+                == SetAsideFilesSummary(fileCount: 1, byteCount: Int64(original.count))
+        )
+        #expect(!fixture.viewModel.setAsideFilesSummary.isEmpty)
+    }
+
+    /// A file set aside before this launch — by a previous run of the app, or moved there by hand —
+    /// is found by looking, which is what the Data page's appearance does.
+    @Test
+    func theDataPageFindsAFileSetAsideBeforeThisLaunch() throws {
+        let fixture = try makeMemoryFixture(wipesRealStoreFiles: true)
+        defer { fixture.cleanUp() }
+        let bytes = Data("from a previous launch".utf8)
+        try bytes.write(to: fixture.snippetStore.fileURL, options: .atomic)
+        _ = try LocalDataQuarantine().moveAside(fixture.snippetStore.fileURL)
+        #expect(fixture.viewModel.setAsideFilesSummary == .none, "nothing has looked yet")
+
+        fixture.viewModel.refreshSetAsideFiles()
+
+        #expect(
+            fixture.viewModel.setAsideFilesSummary
+                == SetAsideFilesSummary(fileCount: 1, byteCount: Int64(bytes.count))
+        )
+    }
+
+    /// **The control removes exactly the set-aside files, reports it on the Data page's own slot,
+    /// and leaves every live store alone** — the one that was set aside and is in use again, and one
+    /// that was never broken.
+    @Test
+    func deletingTheSetAsideFilesFromSettingsRemovesThemAndLeavesEveryStoreAlone() throws {
+        let fixture = try makeMemoryFixture(wipesRealStoreFiles: true)
+        defer { fixture.cleanUp() }
+        try fixture.writeUnreadableFile(at: fixture.outputLocationStore.fileURL)
+        fixture.memoryPageAppears()
+        fixture.viewModel.deleteMemory(in: .outputLocations)
+        let reports = try fixture.makeOutputFolder("Reports")
+        try fixture.outputLocationStore.recordOutputs(atPaths: [reports.appendingPathComponent("a.md").path])
+        try fixture.routineStore.save(
+            StoredRoutine(
+                name: "Morning",
+                steps: [
+                    AgentStep(
+                        id: "calc",
+                        operation: .calculateUtility,
+                        description: "Calculate 1 + 1.",
+                        searchQuery: "1 + 1"
+                    )
+                ]
+            )
+        )
+        #expect(fixture.viewModel.setAsideFilesSummary.fileCount == 1)
+
+        fixture.viewModel.deleteSetAsideFiles()
+
+        #expect(LocalDataQuarantine().quarantinedSiblings(of: fixture.outputLocationStore.fileURL).isEmpty)
+        #expect(fixture.viewModel.setAsideFilesSummary == .none)
+        #expect(try fixture.outputLocationStore.loadAll().count == 1, "the live store was touched")
+        #expect(try fixture.routineStore.loadAll().count == 1, "an unrelated store was touched")
+        #expect(fixture.viewModel.localDataDeletionStatusMessage == "Deleted 1 file Sonny could not read.")
+        #expect(fixture.viewModel.errorMessage == nil)
+    }
+
+    /// **The Memory page's sentence about a kept file, and the Reveal control beside it, go when the
+    /// file does.** "The file Sonny could not read is still on your Mac." was true until this press;
+    /// a control offering to show a file that is gone is the same stale surface the wipe already
+    /// clears.
+    @Test
+    func deletingTheSetAsideFilesRetiresTheMemoryPagesSentenceAboutThem() throws {
+        let fixture = try makeMemoryFixture(wipesRealStoreFiles: true)
+        defer { fixture.cleanUp() }
+        try fixture.writeUnreadableFile(at: fixture.outputLocationStore.fileURL)
+        fixture.memoryPageAppears()
+        fixture.viewModel.deleteMemory(in: .outputLocations)
+        #expect(fixture.viewModel.setAsideFilesFromLastDelete.count == 1)
+        #expect(try #require(fixture.viewModel.memoryDeletionStatusMessage).contains("still on your Mac"))
+
+        fixture.viewModel.deleteSetAsideFiles()
+
+        #expect(fixture.viewModel.setAsideFilesFromLastDelete.isEmpty)
+        #expect(fixture.viewModel.memoryDeletionStatusMessage == nil)
+    }
+
+    /// And a sentence about a delete that kept nothing is still true after this press, so it stays —
+    /// the retirement above is evidence-based, not a blanket clear.
+    @Test
+    func deletingTheSetAsideFilesLeavesAReadableDeletesSentenceStanding() throws {
+        let fixture = try makeMemoryFixture(wipesRealStoreFiles: true)
+        defer { fixture.cleanUp() }
+        // Set aside earlier, from a store other than the one about to be deleted for the ordinary
+        // reason.
+        try Data("kept".utf8).write(to: fixture.snippetStore.fileURL, options: .atomic)
+        _ = try LocalDataQuarantine().moveAside(fixture.snippetStore.fileURL)
+        let reports = try fixture.makeOutputFolder("Reports")
+        try fixture.outputLocationStore.recordOutputs(atPaths: [reports.appendingPathComponent("a.md").path])
+        fixture.memoryPageAppears()
+        fixture.viewModel.deleteMemory(in: .outputLocations)
+        #expect(fixture.viewModel.memoryDeletionStatusMessage == "Deleted output locations — 1 file.")
+        #expect(fixture.viewModel.setAsideFilesSummary.fileCount == 1)
+
+        fixture.viewModel.deleteSetAsideFiles()
+
+        #expect(fixture.viewModel.memoryDeletionStatusMessage == "Deleted output locations — 1 file.")
+        #expect(fixture.viewModel.setAsideFilesSummary == .none)
+    }
+
+    /// The whole wipe sweeps these files itself, so the line goes to nothing with it.
+    @Test
+    func theWholeWipeBringsTheDataPagesCountToNothing() throws {
+        let fixture = try makeMemoryFixture(wipesRealStoreFiles: true)
+        defer { fixture.cleanUp() }
+        try fixture.writeUnreadableFile(at: fixture.outputLocationStore.fileURL)
+        fixture.memoryPageAppears()
+        fixture.viewModel.deleteMemory(in: .outputLocations)
+        #expect(fixture.viewModel.setAsideFilesSummary.fileCount == 1)
+
+        fixture.viewModel.deleteLocalData()
+
+        #expect(fixture.viewModel.setAsideFilesSummary == .none)
+    }
+
+    /// **No run guard on the control, and that is a decision with an enumerated reason rather than
+    /// an omission.** The only writer of a set-aside file is `deleteMemory(in:)`, which refuses while
+    /// a task runs, and a run's bookkeeping writes to live store files and never to a suffixed name
+    /// — so the population this deletes cannot change under a run. Both halves are asserted: the
+    /// delete goes through, and the one writer really does refuse.
+    @Test
+    func theSetAsideFilesCanBeDeletedWhileATaskIsRunning() throws {
+        let fixture = try makeMemoryFixture(wipesRealStoreFiles: true)
+        defer { fixture.cleanUp() }
+        try fixture.writeUnreadableFile(at: fixture.outputLocationStore.fileURL)
+        fixture.memoryPageAppears()
+        fixture.viewModel.deleteMemory(in: .outputLocations)
+        fixture.viewModel.isRunning = true
+        defer { fixture.viewModel.isRunning = false }
+
+        fixture.viewModel.deleteSetAsideFiles()
+
+        #expect(fixture.viewModel.setAsideFilesSummary == .none)
+        #expect(fixture.viewModel.localDataDeletionStatusMessage == "Deleted 1 file Sonny could not read.")
+
+        // The premise: nothing can add to this population while a task runs.
+        try fixture.writeUnreadableFile(at: fixture.snippetStore.fileURL)
+        fixture.viewModel.deleteMemory(in: .snippets)
+        #expect(LocalDataQuarantine().quarantinedSiblings(of: fixture.snippetStore.fileURL).isEmpty)
+        #expect(fixture.viewModel.errorMessage?.contains("Finish or stop the current task") == true)
+    }
+
+    /// Nothing was there by the time the control was pressed — the files went by hand, or with the
+    /// wipe in another window. The line says so rather than reporting "Deleted 0 files".
+    @Test
+    func pressingTheControlAfterTheFilesAlreadyWentSaysSo() throws {
+        let fixture = try makeMemoryFixture(wipesRealStoreFiles: true)
+        defer { fixture.cleanUp() }
+        try fixture.writeUnreadableFile(at: fixture.outputLocationStore.fileURL)
+        fixture.memoryPageAppears()
+        fixture.viewModel.deleteMemory(in: .outputLocations)
+        let setAside = try #require(
+            LocalDataQuarantine().quarantinedSiblings(of: fixture.outputLocationStore.fileURL).first
+        )
+        try FileManager.default.removeItem(at: setAside)
+
+        fixture.viewModel.deleteSetAsideFiles()
+
+        #expect(
+            fixture.viewModel.localDataDeletionStatusMessage
+                == "The files Sonny could not read were already gone."
+        )
+        #expect(fixture.viewModel.setAsideFilesSummary == .none)
+        #expect(fixture.viewModel.errorMessage == nil)
+        // The Memory page's sentence was about a file that is gone, whoever removed it.
+        #expect(fixture.viewModel.setAsideFilesFromLastDelete.isEmpty)
+        #expect(fixture.viewModel.memoryDeletionStatusMessage == nil)
+    }
+
+    /// **A file the control cannot delete stays counted and is named, rather than vanishing from
+    /// the line because the control was pressed.** The Memory page's sentence about it is still
+    /// true, so that stays too.
+    ///
+    /// Locking the directory is what makes the unlink fail, so this needs the unprivileged gate.
+    @Test(.requiresUnprivilegedProcess)
+    func aSetAsideFileTheControlCannotDeleteStaysOnTheLineAndIsNamed() throws {
+        let fixture = try makeMemoryFixture(wipesRealStoreFiles: true)
+        defer {
+            try? FileManager.default.setAttributes([.posixPermissions: 0o700], ofItemAtPath: fixture.root.path)
+            fixture.cleanUp()
+        }
+        try fixture.writeUnreadableFile(at: fixture.outputLocationStore.fileURL)
+        fixture.memoryPageAppears()
+        fixture.viewModel.deleteMemory(in: .outputLocations)
+        let before = fixture.viewModel.setAsideFilesSummary
+        #expect(before.fileCount == 1)
+        // Read and execute stay, so the listing and the size still work; only the unlink is refused.
+        try FileManager.default.setAttributes(
+            [.posixPermissions: 0o500],
+            ofItemAtPath: fixture.root.path
+        )
+
+        fixture.viewModel.deleteSetAsideFiles()
+
+        #expect(fixture.viewModel.setAsideFilesSummary == before)
+        let message = try #require(fixture.viewModel.localDataDeletionStatusMessage)
+        #expect(message.hasPrefix("Could not delete the files Sonny could not read:"))
+        #expect(message.contains("output-locations.json.unreadable-"))
+        #expect(fixture.viewModel.errorMessage == message)
+        #expect(fixture.viewModel.setAsideFilesFromLastDelete.count == 1)
+        #expect(try #require(fixture.viewModel.memoryDeletionStatusMessage).contains("still on your Mac"))
+    }
+
+    /// The copy, singular and plural, and the size in Finder's unit. Every sentence is on
+    /// `MemoryDeletionCopy` because a view body is where a swapped branch leaves the suite green.
+    @Test
+    func theSetAsideCopyAgreesWithItselfOnOneFileAndOnSeveral() {
+        #expect(MemoryDeletionCopy.setAsideFilesTitle(fileCount: 1) == "1 file Sonny could not read")
+        #expect(MemoryDeletionCopy.setAsideFilesTitle(fileCount: 3) == "3 files Sonny could not read")
+        #expect(
+            MemoryDeletionCopy.setAsideFilesConfirmationTitle(fileCount: 1)
+                == "Delete the file Sonny could not read?"
+        )
+        #expect(
+            MemoryDeletionCopy.setAsideFilesConfirmationTitle(fileCount: 3)
+                == "Delete the 3 files Sonny could not read?"
+        )
+        #expect(
+            MemoryDeletionCopy.setAsideFilesConfirmation(fileCount: 1)
+                == "This deletes the file Sonny could not read. Everything else stays."
+        )
+        #expect(
+            MemoryDeletionCopy.setAsideFilesConfirmation(fileCount: 3)
+                == "This deletes the 3 files Sonny could not read. Everything else stays."
+        )
+        #expect(
+            MemoryDeletionCopy.setAsideFilesDeleteAccessibilityLabel(fileCount: 1)
+                == "Delete the file Sonny could not read"
+        )
+        #expect(
+            MemoryDeletionCopy.setAsideFilesDeleteAccessibilityLabel(fileCount: 3)
+                == "Delete the 3 files Sonny could not read"
+        )
+        #expect(MemoryDeletionCopy.setAsideFilesOutcome(deletedFileCount: 1) == "Deleted 1 file Sonny could not read.")
+        #expect(MemoryDeletionCopy.setAsideFilesOutcome(deletedFileCount: 2) == "Deleted 2 files Sonny could not read.")
+        #expect(
+            MemoryDeletionCopy.setAsideFilesOutcome(deletedFileCount: 0)
+                == "The files Sonny could not read were already gone."
+        )
+        #expect(
+            MemoryDeletionCopy.setAsideFilesFailure("x")
+                == "Could not delete the files Sonny could not read: x"
+        )
+        // Finder's unit — decimal, not binary — pinned against a formatter built independently,
+        // which holds in any locale where a literal "1.5 MB" would not; and the two styles are
+        // checked to differ at this size, so the first assertion cannot pass vacuously.
+        #expect(
+            MemoryDeletionCopy.setAsideFilesDetail(byteCount: 1_500_000)
+                == ByteCountFormatter.string(fromByteCount: 1_500_000, countStyle: .file)
+        )
+        #expect(
+            ByteCountFormatter.string(fromByteCount: 1_500_000, countStyle: .file)
+                != ByteCountFormatter.string(fromByteCount: 1_500_000, countStyle: .memory)
+        )
+    }
+
+    /// The Data page's wiring no assertion can reach, in the shape `MacAgentSource` exists for: the
+    /// row is gated on the summary's own `isEmpty` rather than a count spelled out in the view, its
+    /// words are `MemoryDeletionCopy`'s, its control's action is the narrower delete and not the
+    /// wipe's — counted on both sides, so a swap is a red test — and the page re-lists when it
+    /// appears.
+    @Test
+    func theDataPagesSetAsideRowIsPinnedWhereNoAssertionCanReach() throws {
+        let view = try MacAgentSource.read("CommandCenterView.swift")
+        let page = try MacAgentSource.braceBlock(of: view, openedBy: "private struct SettingsDataPage: View {")
+
+        let row = try MacAgentSource.braceBlock(of: page, openedBy: "if !viewModel.setAsideFilesSummary.isEmpty {")
+        for words in [
+            "MemoryDeletionCopy.setAsideFilesTitle(",
+            "MemoryDeletionCopy.setAsideFilesDetail(",
+            "MemoryDeletionCopy.setAsideFilesConfirmationTitle(",
+            "MemoryDeletionCopy.setAsideFilesConfirmation(",
+            "MemoryDeletionCopy.setAsideFilesDeleteAccessibilityLabel("
+        ] {
+            #expect(row.contains(words), "\(words)")
+        }
+        #expect(MacAgentSource.count(of: "viewModel.deleteSetAsideFiles()", inText: row) == 1)
+        #expect(MacAgentSource.count(of: "viewModel.deleteLocalData()", inText: row) == 0)
+        #expect(MacAgentSource.count(of: "viewModel.deleteSetAsideFiles()", inText: page) == 1)
+        // The wipe's own control is still there beside it, disabled during a run as it always was.
+        #expect(page.contains(".disabled(viewModel.isRunning)"))
+
+        let onAppear = try MacAgentSource.braceBlock(of: page, openedBy: ".onAppear {")
+        #expect(onAppear.contains("viewModel.refreshSetAsideFiles()"))
+    }
+
     /// **F3 — the whole wipe must not leave a row saying "Can't be read" about a file it just deleted.**
     ///
     /// `clearInMemoryLocalDataState`'s four refreshes reach ten of the eleven load-failure sources.
@@ -3110,8 +3417,9 @@ private func makeMemoryFixture(reusing fixture: MemoryFixture) throws -> MemoryF
 private func makeMemoryFixture(
     policyProvider: any MemoryPolicyProviding = UnmanagedMemoryPolicyProvider(),
     /// `LocalDataDeletionService(fileURLs: [])` is the hermetic default every other fixture uses, so
-    /// `deleteLocalData()` deletes nothing. The one test about the wipe emptying the Memory lists
-    /// needs it to delete for real, over this fixture's own directory and nothing else.
+    /// `deleteLocalData()` deletes nothing and, since SONNY-266, `setAsideFilesSummary` counts
+    /// nothing. The tests about the wipe emptying the Memory lists, and the ones about Settings'
+    /// set-aside line, need it pointed at this fixture's own directory and nothing else.
     wipesRealStoreFiles: Bool = false
 ) throws -> MemoryFixture {
     let suiteName = "MemoryCommandCenterTests-\(UUID().uuidString)"
