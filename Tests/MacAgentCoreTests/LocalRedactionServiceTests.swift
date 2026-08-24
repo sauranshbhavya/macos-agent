@@ -287,6 +287,89 @@ struct LocalRedactionTextTests {
         let decoded = try JSONDecoder().decode(RedactionReportEntry.self, from: JSONEncoder().encode(entry))
         #expect(decoded == entry)
     }
+
+    // MARK: Look-alike folding (SONNY-272)
+
+    /// The reading SONNY-260 measured at 820 px, verbatim as scalars: the `a` of `api` as U+0430,
+    /// the `A` of `Abc` as U+0410, the `o` of `Mno` as U+043E, the final `r` as U+0131. Unfolded,
+    /// every api-key pattern misses it — the label pattern never sees `api`, and the dotless i at
+    /// the end is a word character the closing `\b` cannot land before. Folded, the vendor pattern
+    /// and the label pattern both match, and the mask lands on the caller's own scalars: the label
+    /// keeps its U+0430, because the output is never the folded text.
+    @Test
+    func theLookAlikeReadingSONNY260MeasuredIsMaskedAsAnAPIKey() {
+        let reading = "\u{0430}pi_key=sk-\u{0410}bc123Def456Ghi789JklMn\u{043E}012Pq\u{0131}"
+        let payload = textService().redactText(reading)
+
+        #expect(Array((payload.maskedText ?? "").unicodeScalars) == Array("\u{0430}pi_key=•••••".unicodeScalars))
+        #expect(payload.report == [
+            RedactionReportEntry(detectionClass: .apiKey, count: 1, locationCategory: .text, confidence: 0.95, belowConfidenceThreshold: false)
+        ])
+    }
+
+    /// A look-alike inside the vendor prefix itself — U+0455 CYRILLIC SMALL LETTER DZE for the `s`
+    /// of `sk-` — is the other place one substituted letter defeats the self-identifying pattern.
+    @Test
+    func aLookAlikeInsideAVendorPrefixStillMatchesIt() {
+        let payload = textService().redactText("Use \u{0455}k-Ab12Cd34Ef56Gh78Ij90 for the staging calls")
+
+        #expect(payload.maskedText == "Use ••••• for the staging calls")
+        #expect(payload.report == [
+            RedactionReportEntry(detectionClass: .apiKey, count: 1, locationCategory: .text, confidence: 0.95, belowConfidenceThreshold: false)
+        ])
+    }
+
+    /// Three Cyrillic letters ahead of the secret are six UTF-8 bytes in the caller's text and three
+    /// in the folded one. A range carried back by byte offset would mask the wrong scalars; a range
+    /// carried back by scalar ordinal masks the value and nothing else.
+    @Test
+    func lookAlikesAheadOfASecretDoNotShiftWhatIsMasked() {
+        let payload = textService().redactText("\u{043E}\u{043E}\u{043E} password: hunter2")
+
+        #expect(Array((payload.maskedText ?? "").unicodeScalars) == Array("\u{043E}\u{043E}\u{043E} password: •••••".unicodeScalars))
+        #expect(payload.report.map(\.detectionClass) == [.passwordField])
+    }
+
+    /// The fold is document-wide, not an api-key special case: every class's exact pattern sees the
+    /// folded text, and every class's mask lands on the caller's scalars. One look-alike per class —
+    /// U+0435 in `Bearer`, U+0430 in `password`, U+0415 in `BEGIN`, U+043E in `code`.
+    @Test
+    func everyClassMatchesThroughTheFoldAndMasksTheCallersOwnScalars() {
+        let bearer = textService().redactText("B\u{0435}arer abcDEF123456789012345")
+        #expect(Array((bearer.maskedText ?? "").unicodeScalars) == Array("B\u{0435}arer •••••".unicodeScalars))
+        #expect(bearer.report.map(\.detectionClass) == [.accessToken])
+
+        let password = textService().redactText("p\u{0430}ssword: hunter2")
+        #expect(Array((password.maskedText ?? "").unicodeScalars) == Array("p\u{0430}ssword: •••••".unicodeScalars))
+        #expect(password.report.map(\.detectionClass) == [.passwordField])
+
+        let privateKey = textService().redactText("-----B\u{0415}GIN PRIVATE KEY-----\nMIIEvQ\n-----END PRIVATE KEY-----")
+        #expect(privateKey.maskedText == "•••••")
+        #expect(privateKey.report.map(\.detectionClass) == [.privateKey])
+
+        let code = textService().redactText("c\u{043E}de: 483291")
+        #expect(Array((code.maskedText ?? "").unicodeScalars) == Array("c\u{043E}de: •••••".unicodeScalars))
+        #expect(code.report.map(\.detectionClass) == [.oneTimeCode])
+    }
+
+    /// The false-positive side of the founder's decision, held as a test: ordinary screen text in
+    /// the scripts the fold reaches — Russian, Ukrainian, Japanese with fullwidth Latin — folds
+    /// letters and matches nothing, and comes back scalar-for-scalar as it went in. The output is
+    /// never the folded text, so a Cyrillic word is not rewritten into Latin look-alikes on the way
+    /// through a clean screen.
+    @Test
+    func ordinaryTextInOtherScriptsIsNotMistakenForASecretAndIsNeverRewritten() {
+        let screens = [
+            "\u{041F}\u{0430}\u{0440}\u{043E}\u{043B}\u{044C} \u{0441}\u{043E}\u{0445}\u{0440}\u{0430}\u{043D}\u{0451}\u{043D} \u{0432} \u{043D}\u{0430}\u{0441}\u{0442}\u{0440}\u{043E}\u{0439}\u{043A}\u{0430}\u{0445} \u{0430}\u{043A}\u{043A}\u{0430}\u{0443}\u{043D}\u{0442}\u{0430}",
+            "\u{041A}\u{043B}\u{044E}\u{0447} \u{0434}\u{043E}\u{0441}\u{0442}\u{0443}\u{043F}\u{0443}: \u{0437}\u{0431}\u{0435}\u{0440}\u{0435}\u{0436}\u{0435}\u{043D}\u{043E} \u{0456} \u{043F}\u{0435}\u{0440}\u{0435}\u{0432}\u{0456}\u{0440}\u{0435}\u{043D}\u{043E}",
+            "\u{FF21}\u{FF22}\u{FF23}\u{5546}\u{4E8B}\u{306E}\u{FF29}\u{FF24}\u{306F}\u{FF11}\u{FF12}\u{FF13}\u{FF14}"
+        ]
+        for screen in screens {
+            let payload = textService().redactText(screen)
+            #expect(payload.report.isEmpty, Comment(rawValue: screen))
+            #expect(Array((payload.maskedText ?? "").unicodeScalars) == Array(screen.unicodeScalars), Comment(rawValue: screen))
+        }
+    }
 }
 
 // MARK: - Image redaction
@@ -547,6 +630,39 @@ struct LocalRedactionImageTests {
         #expect(ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: 5, yFromTop: 5)))
         #expect(ImageFixtures.isWhite(ImageFixtures.rgb(inPNG: redacted, x: 5, yFromTop: 295)))
     }
+
+    /// The capture path end to end with a fake recognizer that reads like the real one did at 820 px
+    /// (SONNY-260): a Cyrillic prose line first, so the joined document carries wider scalars ahead
+    /// of the secret, then the measured look-alike reading of the key. The key's observation is
+    /// painted, the prose line is not, and the report says api key. This is the join-then-map path
+    /// the text tests cannot reach: `redactCapture` matches over one joined document and paints by
+    /// overlapping the match's range with each observation's, so a range mapped back wrongly would
+    /// paint the wrong line or none.
+    @Test
+    func anObservationTheRecognizerReadWithLookAlikesIsPaintedAndReported() async throws {
+        let png = ImageFixtures.solidWhitePNG(width: 600, height: 200)
+        let recognizer = FakeTextRecognizer(observations: [
+            RecognizedTextObservation(
+                string: "\u{0421}\u{043E}\u{0445}\u{0440}\u{0430}\u{043D}\u{0438}\u{0442}\u{044C} \u{043D}\u{0430}\u{0441}\u{0442}\u{0440}\u{043E}\u{0439}\u{043A}\u{0438}",
+                boundingBox: CGRect(x: 20, y: 30, width: 300, height: 24)
+            ),
+            RecognizedTextObservation(
+                string: "\u{0430}pi_key=sk-\u{0410}bc123Def456Ghi789JklMn\u{043E}012Pq\u{0131}",
+                boundingBox: CGRect(x: 20, y: 100, width: 520, height: 24)
+            )
+        ])
+        let service = LocalRedactionService(textRecognizer: recognizer)
+
+        let payload = try await service.redactCapture(capture(png: png, width: 600, height: 200))
+
+        let redacted = try #require(payload.redactedImageData)
+        #expect(ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: 280, yFromTop: 112)))
+        #expect(ImageFixtures.isWhite(ImageFixtures.rgb(inPNG: redacted, x: 170, yFromTop: 42)))
+        #expect(ImageFixtures.isWhite(ImageFixtures.rgb(inPNG: redacted, x: 580, yFromTop: 10)))
+        #expect(payload.report == [
+            RedactionReportEntry(detectionClass: .apiKey, count: 1, locationCategory: .imageRegion, confidence: 0.95, belowConfidenceThreshold: false)
+        ])
+    }
 }
 
 // MARK: - Live Vision pipeline
@@ -804,6 +920,7 @@ struct LocalRedactionLiveVisionTests {
         // Untouched where nothing was planted: the far right of the capture holds no text at all.
         #expect(ImageFixtures.isWhite(ImageFixtures.rgb(inPNG: redacted, x: 1400, yFromTop: 860)))
     }
+
 }
 
 /// One realistic capture size, and the screenful of text it carries.
