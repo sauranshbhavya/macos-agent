@@ -204,16 +204,27 @@ public struct PriorTaskContext: Codable, Equatable, Sendable {
     /// model-authored summary in the product, its text is a closing rationale the model writes
     /// freely, and the vision prompt actively asks the model to describe what it saw, so multi-line
     /// model output is the ordinary case rather than the exotic one.
+    /// **It matched by extended grapheme cluster, which is a way of not matching at all** (SONNY-222).
+    /// `String.replacingOccurrences(of:with:)` compares clusters: append U+0301 COMBINING ACUTE
+    /// ACCENT to `TRUSTED_PRIOR_TASK_CONTEXT_END`'s final `D` and that letter becomes a different
+    /// `Character`, so the search found nothing and a near-verbatim closing delimiter reached the
+    /// planner unescaped, on its own line, inside the one segment the planner's system prompt calls
+    /// authoritative. This is the same defect SONNY-222 was filed for in
+    /// `UntrustedContentBoundary.escape`, in the second file that had it; the ticket's sweep is what
+    /// found it here, and `UntrustedContentBoundary.neutralizingDelimiters` is the one matcher both
+    /// now use. Escaping this block's delimiters here rather than in that type is deliberate: they
+    /// are this file's, and the *matching* is what was shared, not the vocabulary.
+    ///
+    /// **Folding still runs first, and cannot rebuild a delimiter the way the attribute fold could**
+    /// (SONNY-219's hazard, checked rather than assumed). That fold replaces separators with `_`,
+    /// which is a delimiter character, so `TRUSTED_PRIOR TASK_CONTEXT_END` would become a delimiter
+    /// after it. This one replaces line-break runs with the two literal characters `\n`, and neither
+    /// `\` nor lowercase `n` appears in either delimiter, so nothing it emits can complete one.
     private static func escapeForPlanner(_ value: String) -> String {
-        foldingLineBreaks(in: value)
-            .replacingOccurrences(
-                of: "TRUSTED_PRIOR_TASK_CONTEXT_BEGIN",
-                with: "[escaped prior-task delimiter: TRUSTED_PRIOR_TASK_CONTEXT_BEGIN]"
-            )
-            .replacingOccurrences(
-                of: "TRUSTED_PRIOR_TASK_CONTEXT_END",
-                with: "[escaped prior-task delimiter: TRUSTED_PRIOR_TASK_CONTEXT_END]"
-            )
+        UntrustedContentBoundary.neutralizingDelimiters(
+            in: foldingLineBreaks(in: value),
+            delimiters: ["TRUSTED_PRIOR_TASK_CONTEXT_BEGIN", "TRUSTED_PRIOR_TASK_CONTEXT_END"]
+        ) { "[escaped prior-task delimiter: \($0)]" }
     }
 
     /// Every run of line-break characters, replaced by the two literal characters `\n`.
