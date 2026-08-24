@@ -1,6 +1,10 @@
+import { randomUUID } from "node:crypto";
+import Fastify from "fastify";
 import { describe, expect, it } from "vitest";
 import { buildApp, DEFAULT_BODY_LIMIT_BYTES } from "../src/app.js";
+import { registerErrorHandlers } from "../src/errors.js";
 import type { Config } from "../src/config.js";
+import { TEST_JWT_CONFIG } from "./support/tokens.js";
 
 const config: Config = {
   environment: "local",
@@ -10,7 +14,7 @@ const config: Config = {
   databaseUrl: undefined,
   logLevel: "fatal",
   trustProxy: false,
-  rateLimitSalt: "test-salt", allowUnauthenticatedAccountDelete: false,
+  rateLimitSalt: "test-salt", ...TEST_JWT_CONFIG,
   credentials: [],
 };
 
@@ -98,7 +102,27 @@ describe("error responses use the contract's envelope, not the framework's", () 
   });
 
   it("an unexpected throw becomes server.error and never leaks the thrown message", async () => {
-    const app = buildApp(config);
+    // **Built from `registerErrorHandlers` directly rather than from `buildApp`, and the route is
+    // back at `/v1/boom`** (PR #104's adversarial review, F10). The history is worth keeping because
+    // it is two lessons rather than one. This test originally registered `/v1/boom` on a `buildApp`
+    // instance; SONNY-203's deny-by-default gate then refused the request before the handler ran,
+    // which is the gate working exactly as designed — a route added without a thought about
+    // authentication is refused rather than served. Moving the route to `/v1/meta` got it past the
+    // gate and created a second problem: `/v1/meta` is a real contract route with a real owner
+    // (SONNY-155), so the moment that ticket registers it inside `buildApp` this file adds a second
+    // handler on the same path and Fastify throws `FST_ERR_DUPLICATED_ROUTE` at `ready()` — handing
+    // that ticket a failure it did not cause.
+    //
+    // What this test is actually about is `registerErrorHandlers`, which is the same function
+    // `buildApp` installs. Building the instance around that one function keeps the subject, keeps
+    // the route name honest, squats on nobody's path, and needs no token.
+    // `genReqId` is `buildApp`'s, repeated here for one reason: `expectContractEnvelope` asserts the
+    // request id is a UUID, and a bare Fastify instance would hand it the `req-1` counter. That the
+    // real `buildApp` mints UUIDs is pinned separately, against the real thing, by health.test.ts's
+    // "mints a UUID request id, not a per-process counter" — so nothing is lost by not re-proving it
+    // here, and the envelope assertion stays whole.
+    const app = Fastify({ logger: false, genReqId: () => randomUUID() });
+    registerErrorHandlers(app);
     app.get("/v1/boom", async () => {
       throw new Error("connection string postgres://postgres:postgres@localhost:5432/db failed");
     });

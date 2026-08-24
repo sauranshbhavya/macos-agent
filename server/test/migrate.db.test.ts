@@ -241,6 +241,35 @@ describeDb("migrations against a real Postgres", () => {
     await client.query("TRUNCATE sonny.sign_in_code_issue");
   });
 
+  it("indexes supabase_user_id, which the auth gate reads on every protected request", async () => {
+    // **0010, and the reason it is this branch's rather than a later one's** (PR #104's adversarial
+    // review, F4). `accountForSupabaseUser` filters on `i.supabase_user_id`, and SONNY-203 moved
+    // that read from `POST /v1/auth/refresh` — about once an hour per user — to every request to
+    // every protected route. Unindexed, that was a sequential scan of `sonny.identity` before any
+    // handler started.
+    //
+    // Measured on this branch at 20,000 identities, with `EXPLAIN (ANALYZE, BUFFERS)` over the exact
+    // query: **without** the index, `Seq Scan on identity`, `Rows Removed by Filter: 19999`,
+    // `Execution Time: 5.889 ms`, 200 executions averaging 2.532 ms; **with** it, `Index Scan using
+    // identity_supabase_user_idx`, `Buffers: shared hit=6`, `Execution Time: 0.023 ms`. The
+    // migration was applied, rolled back and re-applied, and the plan flipped both ways with it.
+    //
+    // Existence rather than the plan is asserted here on purpose: a plan test needs tens of
+    // thousands of seeded rows to be meaningful, because Postgres correctly sequential-scans a small
+    // table whatever indexes exist — so it would either be slow or vacuous. This fails if anyone
+    // drops the index, which is the regression worth catching.
+    const { rows } = await client.query<{ indexdef: string }>(
+      "SELECT indexdef FROM pg_indexes WHERE schemaname = $1 AND indexname = $2",
+      ["sonny", "identity_supabase_user_idx"],
+    );
+    expect(rows).toHaveLength(1);
+    expect(rows[0]!.indexdef).toContain("supabase_user_id");
+    // NOT unique: the identity model deliberately lets several identities name one Supabase user,
+    // which is what makes two `auth.users` rows resolve to one account. A unique index here would
+    // refuse the writes the model exists to allow.
+    expect(rows[0]!.indexdef).not.toContain("UNIQUE");
+  });
+
   it("keeps its ledger outside public, where Supabase would expose it over HTTP", async () => {
     await up(client);
     const { rows } = await client.query(
