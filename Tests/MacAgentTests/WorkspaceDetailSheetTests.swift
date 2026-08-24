@@ -211,7 +211,7 @@ struct WorkspaceDetailSheetTests {
         #expect(entry.value == outside)
         let reason = try #require(scope.inertEntries.first?.reason)
         #expect(entry.inertNote == "Not in effect — \(reason)")
-        #expect(entry.inertNote?.contains("outside the writable whitelist") == true)
+        #expect(entry.inertNote?.contains("is not one of the folders Sonny can use") == true)
         // The live dimension beside it is unaffected.
         #expect(presentation.apps.isRestricted)
         #expect(presentation.apps.entries[0].inertNote == nil)

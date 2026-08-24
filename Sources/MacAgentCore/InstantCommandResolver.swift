@@ -95,8 +95,15 @@ public struct InstantCommandResolver: Sendable {
         case open(String?)
     }
 
+    /// **Candidates, not a name** (PR #106 review, F3). Original first, article-stripped second.
+    /// This path used to discard the original, so "run my standup shortcut" could only ever find a
+    /// Shortcut called `Standup` and never one called `My Standup` — a hazard that predates
+    /// SONNY-242 for `my`/`the` and that SONNY-242 widened to `our`/`your` when it merged the
+    /// article lists. Keeping both is the shape `launchCandidates` already uses for routines and
+    /// workspaces, and it closes the pre-existing half as well as the widened one. Empty means
+    /// the user named no Shortcut at all.
     private struct ShortcutLaunchRequest {
-        var name: String
+        var nameCandidates: [String]
         var input: String?
     }
 
@@ -307,7 +314,7 @@ public struct InstantCommandResolver: Sendable {
         }
 
         do {
-            let resolvedName = try shortcutCatalog.resolveShortcutName(request.name)
+            let resolvedName = try resolvedShortcutName(from: request.nameCandidates)
             return .plan(invokeShortcutPlan(name: resolvedName, input: request.input))
         } catch ShortcutsBridgeError.missingShortcutName {
             return .clarify(shortcutClarificationPlan(question: "Which Shortcut should I run?"))
@@ -319,12 +326,30 @@ public struct InstantCommandResolver: Sendable {
         }
     }
 
+    /// The first candidate the catalog recognises, or the **last** candidate's error.
+    ///
+    /// Last, deliberately: the candidates run original-then-stripped, so surfacing the last error
+    /// leaves every existing clarification string byte-identical — "I could not find a Shortcut
+    /// named standup", not "…named my standup". The only behaviour that changes is a name that
+    /// used to be unfindable now being found.
+    private func resolvedShortcutName(from candidates: [String]) throws -> String {
+        var lastError: Error = ShortcutsBridgeError.missingShortcutName
+        for candidate in candidates {
+            do {
+                return try shortcutCatalog.resolveShortcutName(candidate)
+            } catch {
+                lastError = error
+            }
+        }
+        throw lastError
+    }
+
     private func shortcutLaunchRequest(in command: String) -> ShortcutLaunchRequest? {
         let lowered = command.lowercased()
         let explicitPrefixes = ["run shortcut", "invoke shortcut", "shortcut"]
         for prefix in explicitPrefixes {
             if lowered == prefix {
-                return ShortcutLaunchRequest(name: "", input: nil)
+                return ShortcutLaunchRequest(nameCandidates: [], input: nil)
             }
             if lowered.hasPrefix("\(prefix) ") {
                 return shortcutRequest(from: String(command.dropFirst(prefix.count)))
@@ -342,19 +367,25 @@ public struct InstantCommandResolver: Sendable {
         return nil
     }
 
+    /// The article is stripped **after** the input clause and the "shortcut" suffix come off, not
+    /// before, so that both candidates are built from the same finished name. Reordered with the
+    /// candidate change above; the primary candidate is what the old single-name code produced,
+    /// with the article back on the front.
     private func shortcutRequest(from rawValue: String) -> ShortcutLaunchRequest {
-        var value = strippedLaunchArticle(rawValue)
+        var value = rawValue
         var input: String?
         if let range = value.range(of: " with input ", options: [.caseInsensitive]) {
             input = String(value[range.upperBound...])
                 .trimmingCharacters(in: .whitespacesAndNewlines)
             value = String(value[..<range.lowerBound])
         }
+        value = value.trimmingCharacters(in: .whitespacesAndNewlines)
         if value.lowercased().hasSuffix(" shortcut") {
             value = String(value.dropLast(" shortcut".count))
         }
+        let name = value.trimmingCharacters(in: .whitespacesAndNewlines)
         return ShortcutLaunchRequest(
-            name: value.trimmingCharacters(in: .whitespacesAndNewlines),
+            nameCandidates: uniqueLaunchCandidates([name, strippedLaunchArticle(name)]),
             input: input?.isEmpty == true ? nil : input
         )
     }
@@ -428,8 +459,27 @@ public struct InstantCommandResolver: Sendable {
         guard residue.lowercased().hasSuffix(" app") else {
             return residue
         }
-        return edgePunctuationTrimmed(strippedLaunchArticle(String(residue.dropLast(" app".count))))
+        return edgePunctuationTrimmed(
+            SpokenName.withoutLeadingArticle(
+                String(residue.dropLast(" app".count)),
+                from: Self.strippableRunningAppArticles
+            )
+        )
     }
+
+    /// The articles `runningAppCandidate` may strip: the ones its own plausibility guard would
+    /// otherwise reject (PR #106 review, F3).
+    ///
+    /// **Derived, not chosen.** A plan carries one `appName`, so this is the one article site that
+    /// cannot keep the original beside the stripped one — every word it strips is a word an app can
+    /// no longer be called. SONNY-242 merged the article lists and widened this site from two words
+    /// to four without noticing, so "switch to our standup app in the workspace X" stopped being
+    /// able to reach an app called `Our Standup` and would silently activate a `Standup` if one were
+    /// running. The intersection restores the two-word behaviour *and* says why it is two: the strip
+    /// exists only to undo `runningAppLeadingStopWords`, which is what rejects "the code app". A stop
+    /// word added there later becomes strippable here without anyone remembering to come back.
+    private static let strippableRunningAppArticles = SpokenName.leadingArticles
+        .filter(runningAppLeadingStopWords.contains)
 
     /// Punctuation and whitespace at either end of a candidate, removed before it is judged or
     /// matched. Interior punctuation is left alone: "zoom.us" is a real bundle-ish name and
@@ -444,13 +494,16 @@ public struct InstantCommandResolver: Sendable {
     /// commands whose object plausibly names an app. "focus on writing my essay" or
     /// "activate dark mode" must fall through to the planner instead of dead-ending on
     /// running-app matching.
+    /// Hoisted out of `looksLikeRunningAppName` so `runningAppCandidate` can derive its strippable
+    /// article set from it rather than hold a constant that drifts away (PR #106 review, F3).
+    private static let runningAppLeadingStopWords: Set<String> = ["on", "to", "in", "at", "the", "a", "an", "my"]
+
     private func looksLikeRunningAppName(_ remainder: String) -> Bool {
         let words = remainder.split(separator: " ")
         guard !words.isEmpty, words.count <= 3 else {
             return false
         }
-        let leadingStopWords: Set<String> = ["on", "to", "in", "at", "the", "a", "an", "my"]
-        if leadingStopWords.contains(words[0].lowercased()) {
+        if Self.runningAppLeadingStopWords.contains(words[0].lowercased()) {
             return false
         }
         return words.last?.lowercased() != "mode"
@@ -819,12 +872,12 @@ public struct InstantCommandResolver: Sendable {
         )
     }
 
+    /// The list this used to hold literally now lives in `SpokenName`, which
+    /// `SpokenPath.normalized` reads too (SONNY-242). It was `["my ", "the "]` here and nowhere
+    /// else, so a folder phrase the planner emitted — "my Desktop" — reached `PathWhitelist` with
+    /// the possessive still on it and resolved to `~/my Desktop`. One list, two callers.
     private func strippedLaunchArticle(_ candidate: String) -> String {
-        let trimmed = candidate.trimmingCharacters(in: .whitespacesAndNewlines)
-        for article in ["my ", "the "] where trimmed.lowercased().hasPrefix(article) {
-            return String(trimmed.dropFirst(article.count))
-        }
-        return trimmed
+        SpokenName.withoutLeadingArticle(candidate)
     }
 
     private func normalizedLaunchName(_ value: String) -> String {
