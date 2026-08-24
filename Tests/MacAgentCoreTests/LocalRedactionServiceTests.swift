@@ -573,6 +573,34 @@ struct LocalRedactionLiveVisionTests {
         #expect(ImageFixtures.isWhite(ImageFixtures.rgb(inPNG: redacted, x: 880, yFromTop: 190)))
     }
 
+    /// **The ceiling is a tripwire for a pathological regression, not a latency budget** — and the
+    /// difference is what SONNY-224 came here to fix. At `.seconds(5)` this was a bet on how busy the
+    /// machine was, and it was losing: measured with the flagged suite at `961b9c2`, this same call
+    /// took **1465 ms** on an idle run, **4422 ms** and **4644 ms** with an ordinary parallel suite
+    /// around it, and **11742 ms** with a cold `swift build` beside it (`grep REDACTION-LATENCY-MS`
+    /// over four consecutive runs). The middle two are inside a 5 s ceiling by 7%, which is not a
+    /// margin; the last one is over it. Under a mutation battery that failure is worse than a red
+    /// suite — `scripts/mutate` reads any failing test as the mutant being caught, so a wall-clock
+    /// loss here is recorded as coverage that does not exist.
+    ///
+    /// Sixty seconds keeps every claim this test actually makes. The claim is not "redaction is
+    /// fast" — the real number is printed below and belongs in the record with its SHA — it is that
+    /// a regression turning a second and a half into a minute fails loudly. That still fails, with
+    /// five times the headroom over the worst load yet measured here, and no dependence on what else
+    /// the machine is doing.
+    ///
+    /// The content expectations are new with the same change. Timing a call that is never checked to
+    /// have done anything is a benchmark rather than a test, and a mutant that made `redactCapture`
+    /// return early would have passed this the whole time — faster. Writing them is also what turned
+    /// up **SONNY-260**: the fixture plants two secrets and the label below says two, and the real
+    /// recognizer finds one. So the card is asserted and the key is not, which is the true statement
+    /// rather than the tidy one.
+    ///
+    /// One of those expectations was `redactedImageData != nil`, which asserted nothing at all —
+    /// `redactCapture` builds its payload from `EncodedVisionCapture.data`, a non-optional, so it
+    /// was true by construction on every path that reached it while its own comment claimed it
+    /// proved painted pixels (PR #112 review, F5). It is a pixel check now, on coordinates that were
+    /// measured rather than guessed.
     @Test
     func redactionLatencyIsBoundedOnARepresentativeCapture() async throws {
         let png = ImageFixtures.renderedTextPNG(
@@ -589,7 +617,7 @@ struct LocalRedactionLiveVisionTests {
 
         let clock = ContinuousClock()
         let start = clock.now
-        _ = try await service.redactCapture(capture(png: png, width: 800, height: 600))
+        let payload = try await service.redactCapture(capture(png: png, width: 800, height: 600))
         let elapsed = clock.now - start
 
         let milliseconds = Double(elapsed.components.seconds) * 1000
@@ -597,7 +625,33 @@ struct LocalRedactionLiveVisionTests {
         print("REDACTION-LATENCY-MS: \(Int(milliseconds.rounded())) (800x600, 4 lines, 2 secrets)")
         // Bounded, not fast: the ceiling exists so a pathological regression fails loudly.
         // The real number for the record is printed above and recorded with its SHA.
-        #expect(elapsed < .seconds(5))
+        #expect(elapsed < .seconds(60))
+
+        // The work the number above is a measurement of actually happened: a planted secret was
+        // classified, and the pixels came back painted. The card and not the key, deliberately —
+        // the real recognizer finds only the card on this fixture, and why that is is SONNY-260.
+        #expect(payload.report.contains { $0.detectionClass == .creditCardNumber })
+
+        // Painted, read off the pixels. Row 360 runs through the middle of the box the real
+        // recognizer puts over the card line — measured at x 38...505, y 344...375 — so every probe
+        // below sits at least fifteen pixels inside it in either direction, rather than on an edge a
+        // Vision update could move by three. Probing the *unredacted* fixture at the same points is
+        // what makes the black mean painted rather than "the glyphs were already dark there": at
+        // that row the rendered text inks 64 of the 468 pixels the box covers, so five out of five
+        // is something only the paint can produce. Five reads rather than a sweep — every read
+        // decodes the PNG again.
+        let redacted = try #require(payload.redactedImageData)
+        let probes = [60, 150, 270, 390, 490]
+        let paintedBlack = probes
+            .filter { ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: redacted, x: $0, yFromTop: 360)) }
+            .count
+        let fixtureBlack = probes
+            .filter { ImageFixtures.isBlack(ImageFixtures.rgb(inPNG: png, x: $0, yFromTop: 360)) }
+            .count
+        #expect(paintedBlack == probes.count)
+        #expect(fixtureBlack < probes.count)
+        // A box, not the whole capture: an all-black image would satisfy the line above.
+        #expect(ImageFixtures.isWhite(ImageFixtures.rgb(inPNG: redacted, x: 10, yFromTop: 10)))
     }
 }
 

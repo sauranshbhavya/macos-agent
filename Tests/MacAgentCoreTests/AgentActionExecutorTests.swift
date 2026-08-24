@@ -35,13 +35,64 @@ struct AgentActionExecutorTests {
         #expect(FileManager.default.fileExists(atPath: output.path))
     }
 
+    /// **Cancelling a process that is genuinely running**, with the wall clock no longer a party to
+    /// it (SONNY-224).
+    ///
+    /// The version this replaces slept 100 ms and then cancelled a `/bin/sleep 5`. That is two bets,
+    /// and only the second one mattered. The lower bet — that the child has launched by 100 ms — was
+    /// always safe, because `ProcessBox` handles a cancel arriving at any point relative to launch
+    /// and `asyncProcessRunnerCancelledBeforeLaunchDoesNotCrash` below is the test for that half.
+    /// **The upper bet is the one that failed: the cancel had to land inside the child's five-second
+    /// life, or the run finished on its own and returned a result instead of throwing.** The two
+    /// resumptions that decided it — the unstructured `Task`'s first step, and the test's own step
+    /// after the sleep — were both queued on the main actor, and this suite is `@MainActor`, so a
+    /// busy machine delayed both by however long it delayed anything, independently. Measured with a
+    /// probe on this ticket at `961b9c2`, four consecutive flagged runs with a cold `swift build`
+    /// beside the last three: that gap was 39 ms and 48 ms on the two runs that passed, and
+    /// **8781 ms and 14474 ms on the two that failed** — both past `/bin/sleep 5`, both landing on
+    /// the "expected cancellation to throw" branch, which is exactly what PR #109's R9 was reported
+    /// killed by.
+    ///
+    /// So the bets are gone rather than widened. The child announces its own launch and then cannot
+    /// exit by itself inside any plausible run, which means:
+    ///
+    /// - the cancel provably reaches a *running* process, rather than passing when it happened to;
+    /// - the window is **bounded rather than eliminated**, and the bound is 300 s: nothing closes it
+    ///   but the cancel, except the child's own sleep running out. That is the honest wording, and
+    ///   the absolute this replaces — "there is no window to miss" — was contradicted two paragraphs
+    ///   below by the sentence explaining what the 300 s is for (PR #112 review, F7). The worst
+    ///   main-actor delay ever measured here is 14.5 s, so the margin is twentyfold; it is still a
+    ///   margin;
+    /// - the wait from the child's own launch signal to `cancel()` is one main-actor turn with no
+    ///   suspension in it, rather than a 100 ms sleep whose resumption the machine gets to choose.
+    ///
+    /// **What this does not assert, stated rather than implied: that cancelling *terminated* the
+    /// child.** It asserts the error, as it always has. A runner that set `cancelled` but never sent
+    /// the signal would still throw `CancellationError` here — after the child's own 300 s ran out,
+    /// which is why that number is a bound on the pathological case and not just a large one. The old
+    /// `/bin/sleep 5` had the same hole and closed it in five seconds instead of five minutes.
+    /// Filed as SONNY-259 rather than smuggled in here.
     @Test
     func asyncProcessRunnerCancelsRunningProcess() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let launched = root.appendingPathComponent("launched")
+
+        // `exec`, so the shell is *replaced* by the long sleep rather than parenting it: one process
+        // holds the pipe, and the terminate the runner sends reaches it directly. Without `exec` the
+        // shell dies and its child keeps the pipe's write end open until it exits on its own, which
+        // puts a wait back into a test whose whole point is not having one.
+        //
+        // The path arrives as `$1` rather than interpolated into the script text, so a temp
+        // directory with a space in it stays one argument.
         let task = Task {
-            try await AsyncProcessRunner.run(executablePath: "/bin/sleep", arguments: ["5"])
+            try await AsyncProcessRunner.run(
+                executablePath: "/bin/sh",
+                arguments: ["-c", "printf running > \"$1\"; exec sleep 300", "sonny-cancel-test", launched.path]
+            )
         }
 
-        try await Task.sleep(nanoseconds: 100_000_000)
+        try await waitForLaunchSignal(at: launched)
         task.cancel()
 
         do {
@@ -51,6 +102,31 @@ struct AgentActionExecutorTests {
             return
         } catch {
             Issue.record("Expected CancellationError, got \(error).")
+        }
+    }
+
+    /// Waits for the child's own signal that it is running — a poll on a real fact, not a sleep on a
+    /// guess. However long the machine takes to get the child started, the loop is still waiting when
+    /// it does.
+    ///
+    /// **The deadline is a hang backstop and never a timing assertion.** It can be reached only if
+    /// the child never ran at all, which is a real failure; it is not a threshold the loop races. Five
+    /// minutes is deliberately far past anything scheduling delay can produce — the worst main-actor
+    /// delay measured on this ticket was 14.5 s, and a machine that starved this one poll for five
+    /// minutes would have taken the rest of the suite down with it long before.
+    private func waitForLaunchSignal(at url: URL, backstop: TimeInterval = 300) async throws {
+        let deadline = Date(timeIntervalSinceNow: backstop)
+        while !FileManager.default.fileExists(atPath: url.path) {
+            if Date() > deadline {
+                Issue.record("""
+                    the child process never signalled that it had launched, after \(Int(backstop))s. \
+                    This deadline is a deadlock backstop, not a timing assertion — at this length it \
+                    should only fire when /bin/sh could not be started at all, not when the machine \
+                    is busy. Treat it as a real failure and look for why the process never ran.
+                    """)
+                return
+            }
+            try await Task.sleep(for: .milliseconds(2))
         }
     }
 
