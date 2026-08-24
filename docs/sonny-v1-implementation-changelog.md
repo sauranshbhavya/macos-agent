@@ -162,12 +162,12 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 ## Entries
 
 ### Branch: fix/cancellation-test-cannot-manufacture-a-kill
-Status: complete — SONNY-224 Done; PR #112 open, one fresh-session review round done and answered in full
-Date: 2026-08-23
+Status: complete — SONNY-224 Done; PR #112 open, one fresh-session review round answered in full, plus the founder's decision to close the seam that round had recorded
+Date: 2026-08-23 to 2026-08-24
 Tickets: **SONNY-224** (a flaky cancellation test that manufactured a mutation kill). One ticket, one session, one branch, cut from `main` at `961b9c2`. Filed 2026-08-22 as an annoyance and raised to urgent on 2026-08-23 when PR #109's reviewer found it had *invented* a kill. Its two duplicates, SONNY-250 and SONNY-252, were folded in and cancelled.
-Reviewed by: a fresh session at `194693b` (PR #112) — seven findings and three recorded residuals, three of them the branch's own mechanism failing. All ten are fixed here by the founder's decision to merge whole rather than split the deterministic test fix out ahead of the mechanism; the round is written up at the end of this entry.
+Reviewed by: a fresh session at the branch head that preceded this round (PR #112) — seven findings and three recorded residuals, three of them the branch's own mechanism failing. All ten are fixed here by the founder's decision to merge whole rather than split the deterministic test fix out ahead of the mechanism; the round is written up at the end of this entry.
 
-Files changed (in `7b8a410` plus this entry's commit):
+Files changed (the first implementation commit, plus this entry):
 - `Tests/MacAgentCoreTests/AgentActionExecutorTests.swift` (`asyncProcessRunnerCancelsRunningProcess` rewritten; `waitForLaunchSignal` added)
 - `Tests/MacAgentCoreTests/LocalRedactionServiceTests.swift` (`redactionLatencyIsBoundedOnARepresentativeCapture`: the ceiling moves 5 s → 60 s, two content expectations added)
 - `Tests/MacAgentCoreTests/UntrustedFailureDeclarationTests.swift` (new, 2 tests)
@@ -175,17 +175,17 @@ Files changed (in `7b8a410` plus this entry's commit):
 - `scripts/mutate-untrusted-failures` (new)
 - `CLAUDE.md` (the mutate paragraph, and a new gotcha on wall-clock bets in tests)
 
-Files changed again in the review round (`f0cdfda`, `ab3aead`, `180bbe9`, `53a7988`, `e3923ee` and `7c8b055`, SHAs as of the final rebase onto `main` at `2f22076`, plus the two Markdown-only commits that record it):
+Files changed again in the review round and in the seam fix below, across three implementation commits plus the Markdown-only ones that record them (`git log --oneline origin/main..HEAD` on the branch names all twelve; they are not cited by SHA here, for the reason at the end of this entry):
 - `scripts/mutate` (`ALWAYS_TRUSTED`; per-issue classification; the anchored block boundary; the non-blank signature guard; 17 more selftest checks and its fixtures reshaped to swift-testing's own line prefixes; `--help`)
 - `scripts/mutate-untrusted-failures` (a `>>> sites` count on every record; the per-issue and merge limits stated; the withdrawn figures replaced)
 - `Tests/MacAgentCoreTests/UntrustedFailureDeclarationTests.swift` (2 tests → 4; no expectation quotes a declaration or takes the scanned tree as an operand)
 - `Tests/MacAgentCoreTests/LocalRedactionServiceTests.swift` (the tautological expectation replaced by a measured pixel check)
 - `Tests/MacAgentCoreTests/AgentActionExecutorTests.swift`, `CLAUDE.md`, this entry (the bounded-not-eliminated correction)
-- `scripts/mutate` and `CLAUDE.md` again, in `7c8b055` (the unreachable arm below, and the `try #require` gotcha it forced a rewrite of)
+- `scripts/mutate` and `CLAUDE.md` again, in the seam fix (the unreachable arm below, and the `try #require` gotcha it forced a rewrite of)
 
-Tests: **1859 in 135 suites, exit 0 at `7b8a410`**, from the two mutation-battery baselines that ran against that commit; and **20 consecutive green runs of the flagged command over the tree that became it** — runs 13–20 at a machine load average of 14–17 on ten cores, with two cold `swift build`s running beside them. (The only edit between the last of those runs and the commit was two `**` removed from `scripts/mutate --help`, which no Swift target compiles.) Net **+2 tests**. **`scripts/warnings`: 0 warnings, exit 0**, measured at `961b9c2 plus 5 uncommitted file(s)` — that is byte-identical to `7b8a410` apart from those two `**` — every file in `Sources/` and `Tests/` compiled. **`scripts/mutate selftest`: exit 0, 138 checks** (`grep -c '    PASS'` over its output).
+Tests, restated at the head this will merge at rather than carried across four rebases — the note at the end of this entry is why: **2022 in 142 suites, exit 0 at `714606f`** via the flagged command, **+4 tests and +1 suite** over `origin/main` at `ee84994` with nothing removed. **`scripts/warnings`: 0 warnings, exit 0** at `714606f`, every file in `Sources/` and `Tests/` compiled. **`scripts/mutate selftest`: exit 0, 164 checks.** One figure here is not a measurement of a tree and so survives every rebase intact: the rewritten cancellation test was run **20 consecutive times green** under the flagged command while the fix was being made, runs 13–20 at a machine load average of 14–17 on ten cores with two cold `swift build`s beside them. That is the evidence the fix is deterministic, and it is a property of the test rather than of the commit it sat on.
 
-**Mutation battery at `bdee146`: 2 mutants, 2 killed, 0 survived, 0 unattributed, exit 0** (`scripts/mutate`, which stamps its own SHA; report in `.build/mutate/bdee146-20260823T165236`). **M1 deletes `if box.isCancelled { throw CancellationError() }` after the drain and is KILLED by exactly one test — `asyncProcessRunnerCancelsRunningProcess()`.** That is precisely R9's shape and the point of running it: the same one-test report line, now backed by a test that cannot lose a race, and reproduced at `7b8a410` before these docs were written as well. M2 turns `cancel()`'s `cancelled = true` into `cancelled = false` and is killed by two, the before-launch test joining it — and it took **1015 s**, for the reason in the battery-cost note below.
+**Mutation battery, restated at `714606f`: 2 mutants, 2 killed, 0 survived, 0 unattributed, exit 0** (`scripts/mutate`, which stamps its own SHA; report in `.build/mutate/714606f-20260824T002551`). It has been re-run at every rebase rather than carried, and the result has been the same each time. **M1 deletes `if box.isCancelled { throw CancellationError() }` after the drain and is KILLED by exactly one test — `asyncProcessRunnerCancelsRunningProcess()`, in 23 s.** That is precisely R9's shape and the point of running it: the same one-test report line, now backed by a test that cannot lose a race. M2 turns `cancel()`'s `cancelled = true` into `cancelled = false` and is killed by two, the before-launch test joining it, in 1016 s — the battery-cost note below is why.
 
 What changed for the user: nothing. This is a test and a harness.
 
@@ -229,7 +229,7 @@ Both resumptions are queued on the main actor — the suite is `@MainActor`, so 
 
 #### PR #112's review round — seven findings and three residuals, all fixed in this branch
 
-A fresh session reviewed the branch at `194693b` and found seven things, three of which are this
+A fresh session reviewed the branch at the head it had then and found seven things, three of which are this
 branch's own thesis failing: a mechanism built to stop a battery inventing a kill could be switched
 off, could throw a real kill away, and could still invent one. The founder's decision the same day
 was to fix all of it here and merge whole rather than splitting the deterministic test fix out ahead
@@ -326,7 +326,7 @@ all-black image from satisfying the first. Proved by making the service paint an
 text does not ink, so a three-pixel change in Vision's bounding box would have failed the test for a
 reason having nothing to do with redaction.
 
-**F6: one of the eight selftest checks added by `cba7734` was vacuous.** It looked for
+**F6: one of the eight selftest checks the first round added was vacuous.** It looked for
 `UNATTRIBUTED — the suite went red`, which the per-mutant line also begins with, so it never reached
 the summary — deleting the entire summary block from a copy left the selftest at exit 0 with no FAIL
 line. It now matches summary-only text and the summary's own counter, and deleting that block fails
@@ -335,7 +335,7 @@ the selftest.
 **F7: "there is no window to miss" is bounded, not eliminated.** The cancelled child `exec`s a 300 s
 sleep, so nothing closes the window but the cancel *or that sleep running out* — which two of the
 three documents saying the absolute already contradicted in the next clause. Corrected at all three
-sites in the tree; `7b8a410`'s commit body carries the same phrase and is pushed history, so this
+sites in the tree; the first implementation commit's body carries the same phrase and was pushed, so this
 paragraph is where that stands corrected. The fix itself is sound and unchanged: 300 s against a
 worst measured main-actor delay of 14.5 s is twentyfold, and a margin is what it is.
 
@@ -364,15 +364,20 @@ remembering to subtract anything, because a failure that carries no information 
 declared, excluded from the count, and printed under its own heading. That entry stays as written —
 it was true at its SHA — and this paragraph is the pointer a reader needs to know it no longer is.
 
-**A note on the SHAs, because three rebases moved them.** This branch was rebased onto `main` at
-`31c2aed`, then at `896035d`, then at `2f22076`, each time after measurements had been taken — twice
-because `main` moved while a battery was running. So the commits this entry's earlier paragraphs name
-— `7b8a410` and `bdee146` — are now `cba7734` and `70cbaf8`, and `194693b`, the commit PR #112 read,
-is now `b34a8f8`. The figures those paragraphs carry were measured on the pre-rebase trees and are
-left as they were measured. Everything in this section is re-measured at `6d4fc9b`, on top of
-`2f22076`, and the last rebase was taken rather than skipped because `2f22076` edits
-`AgentActionExecutorTests.swift`, which is both a file this branch edits and the file the battery's
-mutants are killed from.
+**Why every figure here is restated at the merge head and none is translated.** This branch has been
+rebased four times — onto `31c2aed`, `896035d`, `2f22076` and `ee84994`. Three were asked for; the
+one onto `2f22076` was this session's own call, because `main` moved while one of these batteries was
+running and a figure left at the older base would have described a tree nobody would merge. An earlier draft of
+this entry answered that with a mapping from each pre-rebase SHA to its replacement, and that is the
+wrong repair. A rebased-away SHA does not dangle: it stays in the object store, `git show` prints a
+commit for it, and a mapping therefore hands a reader a number that is confidently attached to a
+tree outside this history. Measured on the draft this replaces: **13 of the SHAs this entry cited
+still resolved while naming commits that are not ancestors of the branch** — running
+`git merge-base --is-ancestor <sha> HEAD` over every backticked SHA in the entry answered no for
+thirteen of the seventeen distinct ones. So a number is re-measured at the head that will merge, or it is not
+carried; the SHAs that stay are `main`'s, which are ancestors and do resolve into this history. The
+one figure kept from before is the twenty consecutive green runs above, which is a statement about a
+test rather than about a tree.
 
 **The seam the reviewer recorded is closed too, by the founder's decision rather than by this
 session's judgment.** `KILLED — the run failed but named no test` was unreachable: `failing_tests`
@@ -400,29 +405,26 @@ which test caught the mutant is unrecoverable from that run, and every test that
 the process died went unrun as well. One trapped subscript still costs the whole mutant's evidence
 rather than its own. The gotcha now says that, where it used to say the harness dies without an error.
 
-**Verification of this round, all at `6d4fc9b`, which is the branch rebased onto `main` at `2f22076`
-with nothing uncommitted, and one Markdown-only commit below it.** The flagged suite: **exit 0,
-1968 tests in 141 suites** (18.4 s), which is **+4 tests and +1 suite** over `origin/main` at
-`2f22076`, with nothing removed — the whole of `UntrustedFailureDeclarationTests`. Over
-`git diff origin/main...HEAD -- Tests`, piped to `grep -cE '^\+ +@Test'` that is 4 and to
-`grep -cE '^- +@Test'` it is 0. **`scripts/warnings`: 0 warnings, exit 0**, header stamped
-`6d4fc9b (clean)`, 107 s, every file in `Sources/` and `Tests/` compiled, so that is the whole
-population of the tree rather than of whatever was edited last. **`scripts/mutate selftest`: exit 0,
-164 checks** (`grep -c` for the PASS lines over its output), against the 138 PR #112's reviewer
-counted — twenty-six new across the two rounds, covering F1, F2, F3, the empty-signature residual,
-the site count, the summary block F6 had left unwatched, and the trapped-run arm. Reverting
-`issue_re` to the plain form still fails exactly 3 checks, and putting the `grep -v` back fails 7.
+**Verification, all at `714606f`, which is the branch rebased onto `main` at `ee84994` with nothing
+uncommitted and one Markdown-only commit below it.** The flagged suite: **exit 0, 2022 tests in 142
+suites** (18.0 s), **+4 tests and +1 suite** over `origin/main`, with nothing removed — the whole of
+`UntrustedFailureDeclarationTests`. Over `git diff origin/main...HEAD -- Tests`, piped to
+`grep -cE '^\+ +@Test'` that is 4 and to `grep -cE '^- +@Test'` it is 0. **`scripts/warnings`: 0
+warnings, exit 0**, header stamped `714606f (clean)`, 97 s, every file in `Sources/` and `Tests/`
+compiled, so that is the whole population of the tree rather than of whatever was edited last.
+**`scripts/mutate selftest`: exit 0, 164 checks** (`grep -c` for the PASS lines over its output),
+against the 138 PR #112's reviewer counted — twenty-six new across the two rounds, covering F1, F2, F3,
+the empty-signature residual, the site count, the summary block F6 had left unwatched, and the
+trapped-run arm. Reverting `issue_re` to the plain form still fails exactly 3 checks, and putting the
+`grep -v` back fails 7.
 
-**Mutation battery at `6d4fc9b`: 2 mutants, 2 killed, 0 survived, 0 unattributed, exit 0**
-(`scripts/mutate`, which stamps its own SHA; report in `.build/mutate/6d4fc9b-20260823T224453`).
+**Mutation battery at `714606f`: 2 mutants, 2 killed, 0 survived, 0 unattributed, exit 0**
+(`scripts/mutate`, which stamps its own SHA; report in `.build/mutate/714606f-20260824T002551`).
 Re-run rather than carried over, for the reason that keeps applying: the thing this work changes is
-the battery. **M1 deletes the post-drain `if box.isCancelled { throw CancellationError() }` and is
-KILLED by exactly one test — `asyncProcessRunnerCancelsRunningProcess()`, in 23 s.** M2 turns
-`cancel()`'s `cancelled = true` into `cancelled = false` and is killed by two, the before-launch
-test joining it, in 1017 s — the battery-cost note above is why. The point of running it is the
-shape of M1's report line: one test, named, which is exactly what PR #109's R9 printed — and it is
-now backed by a test that cannot lose a race, under a harness that would say UNATTRIBUTED if it
-could not attribute the failure, and would say so out loud if it could not name one at all.
+the battery. **M1 is KILLED by exactly one test — `asyncProcessRunnerCancelsRunningProcess()`, in
+23 s**, which is the shape PR #109's R9 printed, now backed by a test that cannot lose a race under a
+harness that would say UNATTRIBUTED if it could not attribute the failure and would say so out loud
+if it could not name one at all. M2 is killed by two, the before-launch test joining it, in 1016 s.
 
 Manual-test items the user still owes: none. Nothing user-visible changed.
 
