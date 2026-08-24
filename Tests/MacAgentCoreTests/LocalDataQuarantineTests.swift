@@ -275,6 +275,123 @@ struct LocalDataQuarantineTests {
         #expect(FileManager.default.fileExists(atPath: neighbour.path))
     }
 
+    // MARK: - Settings' narrower control (SONNY-266)
+
+    /// **The line Settings shows and the files its control removes are one listing.**
+    ///
+    /// Two stores, one of them set aside twice; a third set aside once and never rewritten; two live
+    /// files that read; and a neighbour that merely shares a prefix. The listing is exactly the four
+    /// set-aside files, in the service's store order and then name order, and the summary is their
+    /// count and the sum of their sizes — sizes chosen so a dropped or doubled file changes the total.
+    @Test
+    func theListingCountsEverySetAsideFileAndSumsTheirBytes() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let layout = try Self.setAsideLayout(at: root)
+        let service = LocalDataDeletionService(fileURLs: layout.storeFileURLs)
+
+        #expect(service.setAsideFiles() == layout.setAside)
+        #expect(service.setAsideFilesSummary() == SetAsideFilesSummary(fileCount: 4, byteCount: layout.setAsideByteCount))
+        #expect(!service.setAsideFilesSummary().isEmpty)
+        // The row's gate is the count, never the size: a zero-byte file that would not read is set
+        // aside like any other and is still a file the control removes.
+        #expect(!SetAsideFilesSummary(fileCount: 1, byteCount: 0).isEmpty)
+    }
+
+    /// Nothing set aside — the ordinary state — is `.none`, whether the stores have live files, no
+    /// files, or no directory at all. The Data page's row is gated on exactly this.
+    @Test
+    func theSummaryIsEmptyWhenNothingHasBeenSetAside() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let live = root.appendingPathComponent("routines.json")
+        try Data("live".utf8).write(to: live, options: .atomic)
+        let absent = root.appendingPathComponent("snippets.json")
+        let unlistable = root.appendingPathComponent("never-made/workspaces.json")
+
+        let service = LocalDataDeletionService(fileURLs: [live, absent, unlistable])
+
+        #expect(service.setAsideFiles().isEmpty)
+        #expect(service.setAsideFilesSummary() == .none)
+        #expect(service.setAsideFilesSummary().isEmpty)
+    }
+
+    /// **The narrower door takes every set-aside file and nothing else.** Every live store file is
+    /// still there with its bytes, the prefix-sharing neighbour is untouched, a store whose own file
+    /// was never rewritten still has none, and `missingFileCount` is zero because this door never
+    /// asks about store files. Then the listing is empty, which is what the Data page's row reads.
+    @Test
+    func deletingTheSetAsideFilesLeavesEveryStoreFileAndEveryNeighbourWhereItIs() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let layout = try Self.setAsideLayout(at: root)
+        let service = LocalDataDeletionService(fileURLs: layout.storeFileURLs)
+
+        let result = try service.deleteSetAsideFiles()
+
+        #expect(result == LocalDataDeletionResult(deletedFileCount: 4, missingFileCount: 0))
+        for setAside in layout.setAside {
+            #expect(!FileManager.default.fileExists(atPath: setAside.path), "\(setAside.lastPathComponent)")
+        }
+        #expect(try String(decoding: Data(contentsOf: layout.outputLocations), as: UTF8.self) == "live output locations")
+        #expect(try String(decoding: Data(contentsOf: layout.taskHistory), as: UTF8.self) == "live task history")
+        #expect(!FileManager.default.fileExists(atPath: layout.snippets.path), "the door created a store file")
+        #expect(try String(decoding: Data(contentsOf: layout.neighbour), as: UTF8.self) == "not ours")
+        #expect(service.setAsideFiles().isEmpty)
+        #expect(service.setAsideFilesSummary() == .none)
+    }
+
+    /// The directory SONNY-266's two tests above share: `output-locations.json` set aside twice and
+    /// live again, `task-history.json` set aside once and live again, `snippets.json` set aside once
+    /// and never rewritten, and a `.backup` neighbour of the first that no door may touch.
+    ///
+    /// Returns the set-aside files in the order `setAsideFiles()` promises — store order, then name
+    /// order within a store — and the byte total a summary over them has to report.
+    private static func setAsideLayout(at root: URL) throws -> (
+        storeFileURLs: [URL],
+        outputLocations: URL,
+        taskHistory: URL,
+        snippets: URL,
+        neighbour: URL,
+        setAside: [URL],
+        setAsideByteCount: Int64
+    ) {
+        let quarantine = LocalDataQuarantine()
+        let outputLocations = root.appendingPathComponent("output-locations.json")
+        let taskHistory = root.appendingPathComponent("task-history.json")
+        let snippets = root.appendingPathComponent("snippets.json")
+        let neighbour = root.appendingPathComponent("output-locations.json.backup")
+        let earlier = Date(timeIntervalSince1970: 1_787_510_531)
+        let later = Date(timeIntervalSince1970: 1_787_596_931)
+
+        // Five, seven, eleven and thirteen bytes: no two the same, so every file is visible in the
+        // total on its own.
+        try Data("first".utf8).write(to: outputLocations, options: .atomic)
+        let firstAside = try quarantine.moveAside(outputLocations, at: earlier)
+        try Data("second!".utf8).write(to: outputLocations, options: .atomic)
+        let secondAside = try quarantine.moveAside(outputLocations, at: later)
+        try Data("live output locations".utf8).write(to: outputLocations, options: .atomic)
+
+        try Data("task record".utf8).write(to: taskHistory, options: .atomic)
+        let taskAside = try quarantine.moveAside(taskHistory, at: earlier)
+        try Data("live task history".utf8).write(to: taskHistory, options: .atomic)
+
+        try Data("snippet bytes".utf8).write(to: snippets, options: .atomic)
+        let snippetAside = try quarantine.moveAside(snippets, at: earlier)
+
+        try Data("not ours".utf8).write(to: neighbour, options: .atomic)
+
+        return (
+            storeFileURLs: [outputLocations, taskHistory, snippets],
+            outputLocations: outputLocations,
+            taskHistory: taskHistory,
+            snippets: snippets,
+            neighbour: neighbour,
+            setAside: [firstAside, secondAside, taskAside, snippetAside],
+            setAsideByteCount: 5 + 7 + 11 + 13
+        )
+    }
+
     // MARK: - Fixtures
 
     /// One store, built at `root`, plus the read door a load failure surfaces through.

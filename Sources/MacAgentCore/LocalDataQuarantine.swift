@@ -64,11 +64,14 @@ public struct LocalDataQuarantineError: Error, LocalizedError, Equatable {
 /// cleared through its own doors — every one of them loads first — so a recovery built inside a
 /// store would be a recovery that cannot run.
 ///
-/// **This is not `Delete Local Data`'s behaviour and must not become it.** Settings' whole wipe is
-/// the one place the user asks for destruction, and `LocalDataDeletionService.deleteAllLocalData()`
-/// deletes what this leaves behind so a privacy wipe stays true. Command Center's per-row Delete
-/// calls `deleteStoreFilesOnly()` instead and leaves set-aside files alone — **for one round of this
-/// branch it called the wipe's door**, so an ordinary press on a row that had since recovered
+/// **This is not `Delete Local Data`'s behaviour and must not become it.** Settings is the one place
+/// the user asks for destruction: its whole wipe, `LocalDataDeletionService.deleteAllLocalData()`,
+/// deletes what this leaves behind so a privacy wipe stays true, and since SONNY-266 its Data page
+/// also counts and sizes what this has set aside and removes exactly that, through
+/// `deleteSetAsideFiles()`. Nothing else prunes, caps or ages these files out, by founder decision
+/// (2026-08-24): deleting them is precisely what this type exists to avoid. Command Center's per-row
+/// Delete calls `deleteStoreFilesOnly()` instead and leaves set-aside files alone — **for one round
+/// of this branch it called the wipe's door**, so an ordinary press on a row that had since recovered
 /// destroyed the file an earlier press promised to keep, which is this paragraph being false in the
 /// code beneath it (PR #110 review, F2).
 public struct LocalDataQuarantine: @unchecked Sendable {
@@ -128,7 +131,9 @@ public struct LocalDataQuarantine: @unchecked Sendable {
     ///
     /// Returns an empty array when the directory cannot be listed, which is the same answer as
     /// "nothing has been set aside" on purpose: this feeds a delete, and a listing failure must not
-    /// become an exception that stops a wipe from removing the files it *can* see.
+    /// become an exception that stops a wipe from removing the files it *can* see. It also feeds
+    /// the count Settings' Data page shows (SONNY-266), where the same answer is the honest one — a
+    /// directory that cannot be listed has nothing the control could remove.
     public func quarantinedSiblings(of fileURL: URL) -> [URL] {
         let directory = fileURL.deletingLastPathComponent()
         let prefix = fileURL.lastPathComponent + Self.filenameSuffix

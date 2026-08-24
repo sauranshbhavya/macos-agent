@@ -102,6 +102,16 @@ final class AgentViewModel: ObservableObject {
     /// Published because the Reveal in Finder control renders off it, and cleared by every delete
     /// that keeps nothing — so the control cannot outlive the message it sits beside.
     @Published private(set) var setAsideFilesFromLastDelete: [URL] = []
+    /// How many files are set aside across the thirteen stores and how much space they hold — the
+    /// line Settings' Data page shows, with the control that removes them (SONNY-266, founder
+    /// decision 2026-08-24).
+    ///
+    /// Published rather than computed, for the reason `unreadableStores` gives: a view body cannot
+    /// list a directory. Refreshed at the moments that change it — the Data page appearing, a
+    /// per-row Delete that keeps a file, the whole wipe, and the control itself — and read from the
+    /// same `LocalDataDeletionService` the control deletes through, so the count the user sees and
+    /// the files the press removes are one listing.
+    @Published private(set) var setAsideFilesSummary: SetAsideFilesSummary = .none
     @Published var priorTaskContext: PriorTaskContext?
     @Published var taskUsageSummary: TaskUsageSummary = .empty
     @Published var taskHistoryRecords: [CompletedTaskRecord] = []
@@ -2947,6 +2957,59 @@ final class AgentViewModel: ObservableObject {
             localDataDeletionStatusMessage = message
             setError(message)
         }
+        // After either branch, because the failure branch is the one where this count matters: a
+        // wipe that could not remove a set-aside file leaves it on disk, and the Data page's line
+        // has to say so rather than go quiet because the wipe was pressed.
+        refreshSetAsideFiles()
+    }
+
+    // MARK: - Set-aside files (SONNY-266)
+
+    /// Re-lists the files set aside from every store and republishes `setAsideFilesSummary`.
+    ///
+    /// Called from the Data page's `onAppear` — a file set aside on a previous launch, or moved
+    /// there by hand, is only ever found by looking — and by the three things in this view model
+    /// that change the population: `deleteMemory(in:)`, which adds to it, and `deleteLocalData()`
+    /// and `deleteSetAsideFiles()`, which empty it.
+    func refreshSetAsideFiles() {
+        setAsideFilesSummary = localDataDeletionService.setAsideFilesSummary()
+    }
+
+    /// Deletes every file set aside from a store, and nothing else — Settings' narrower control
+    /// (SONNY-266, founder decision 2026-08-24).
+    ///
+    /// **No run guard, on purpose, and the reason is enumerated rather than assumed.** The only
+    /// writer of a set-aside file is `deleteMemory(in:)` — the one caller of
+    /// `LocalDataQuarantine.moveAsideAll` in `Sources/` — and it refuses while a task is running or
+    /// awaiting approval; a run's own bookkeeping writes to the live store files, never to a
+    /// suffixed name. So the population this deletes cannot change under a run, and a guard here
+    /// would refuse the user for a collision that cannot happen.
+    ///
+    /// Reports on `localDataDeletionStatusMessage`, the Data page's own slot, which is where the
+    /// control sits. A failure also goes to `errorMessage`, as the whole wipe's does: this is a
+    /// write the user pressed a control for, and the thing they asked for did not happen.
+    func deleteSetAsideFiles() {
+        do {
+            let result = try localDataDeletionService.deleteSetAsideFiles()
+            localDataDeletionStatusMessage = MemoryDeletionCopy.setAsideFilesOutcome(
+                deletedFileCount: result.deletedFileCount
+            )
+            errorMessage = nil
+        } catch {
+            let message = MemoryDeletionCopy.setAsideFilesFailure(error.localizedDescription)
+            localDataDeletionStatusMessage = message
+            setError(message)
+        }
+        // The Memory page's last per-row result may still say the file it kept "is still on your
+        // Mac", with a Reveal in Finder control beside it pointing at that file. Evidence rather than
+        // assumption, and after either branch: if any file that sentence is about is gone, the
+        // sentence and the control go with it, and a message about a delete that kept nothing —
+        // still true — stays.
+        if setAsideFilesFromLastDelete.contains(where: { !FileManager.default.fileExists(atPath: $0.path) }) {
+            setAsideFilesFromLastDelete = []
+            memoryDeletionStatusMessage = nil
+        }
+        refreshSetAsideFiles()
     }
 
     // MARK: - Memory (SONNY-208)
@@ -3177,6 +3240,9 @@ final class AgentViewModel: ObservableObject {
             LocalStorageLoadFailureSource.allCases.filter { $0.memoryCategory == category }
         )
         refreshMemorySurfaces()
+        // This is the one press that adds to what Settings' Data page counts (SONNY-266), so the
+        // line is re-listed here rather than waiting for that page to appear.
+        refreshSetAsideFiles()
     }
 
     /// Re-reads every store and republishes `unreadableStores`.
