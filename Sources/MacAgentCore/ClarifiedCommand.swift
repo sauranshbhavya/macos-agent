@@ -56,6 +56,48 @@ public enum ClarifiedCommand {
         return "\(trimmedRequest)\n\n\(exchange)"
     }
 
+    /// The plain command a clarification answer completes, for a question the instant resolver
+    /// asked (SONNY-281).
+    ///
+    /// **The resolver's questions are raised on a bare prefix, and the answer is the rest of the
+    /// command.** `=` asks what to calculate; `calc`, `switch to`, `run shortcut` and `snippet save`
+    /// each ask for the thing that would have followed them. The user answered the operand the
+    /// resolver was missing, so the command they meant is the prefix with the answer after it —
+    /// `= 2 + 2` — and that is a plain command: dispatched through the same door typed text goes
+    /// through, resolved by the same rule, and carrying no exchange for a label to strip or a retry
+    /// to re-ask. `composed` is the other shape, for a question the planner asked, where the answer
+    /// means whatever the planner's question made it mean and only the planner can apply it.
+    ///
+    /// **An answer that restates the request is the whole command.** The question tells a user what
+    /// the command looks like — "Use the format snippet save ;trigger = expansion." says so in as
+    /// many words — so an answer that begins with the request is the user writing the command out,
+    /// not asking for the request twice: `calc` answered `calc 2 + 2` runs `calc 2 + 2`, not
+    /// `calc calc 2 + 2`. Case-insensitive, because the resolver's own prefixes are.
+    ///
+    /// **This composes; it does not decide.** Whether the completed command is what the user meant
+    /// is not a property of the string — "I could not find a Shortcut named Foo. Which Shortcut
+    /// should I run?" wants a replacement, and `run shortcut Foo Send Report` completes nothing. The
+    /// caller asks the resolver whether the completion resolves to a plan and falls back to
+    /// `composed` when it does not; `AgentViewModel.submitClarification` is where that is decided
+    /// and where the reasons are.
+    ///
+    /// Degrades the way `composed` does: an empty request is the answer alone, and an empty answer
+    /// is the request alone — never a dangling space.
+    public static func completed(request: String, answer: String) -> String {
+        let trimmedRequest = request.trimmingCharacters(in: .whitespacesAndNewlines)
+        let trimmedAnswer = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedAnswer.isEmpty else {
+            return trimmedRequest
+        }
+        // The restatement rule, and it is also what makes an empty request the answer alone: every
+        // string begins with the empty one, so a separate emptiness check would be a second rule
+        // saying the same thing.
+        guard !trimmedAnswer.lowercased().hasPrefix(trimmedRequest.lowercased()) else {
+            return trimmedAnswer
+        }
+        return "\(trimmedRequest) \(trimmedAnswer)"
+    }
+
     /// Whether this command carries a clarification exchange.
     ///
     /// **Asked by the dispatch path so that a clarified command never goes back through
@@ -63,7 +105,12 @@ public enum ClarifiedCommand {
     /// with a question still carries that prefix once the request is restored to the front — so `=`,
     /// clarified and answered, would resolve again as a calculator expression whose expression is
     /// the transcript of the conversation about it. The resolver already had its turn on this
-    /// command and asked for more; the more is a planner's to read.
+    /// command and asked for more; the more is a planner's to read — **unless the resolver is the
+    /// one that asked** (SONNY-281). Then the answer is offered back to it first, as the rest of the
+    /// command it was missing, and it is only an answer that does not complete the command that is
+    /// composed into an exchange at all: see `completed(request:answer:)` and
+    /// `AgentViewModel.submitClarification`. A command that carries an exchange and reaches the
+    /// dispatch path is therefore one the resolver either did not ask about or could not complete.
     ///
     /// **Here a false positive is cheap, which is not true of `request(in:)` below** — the two used
     /// to share one sentence about failing "in the safe direction", and only this half of it was
