@@ -1280,7 +1280,10 @@ final class AgentViewModel: ObservableObject {
     /// one ticket later). A slot that cannot go stale is worth more here than a saved property read.
     ///
     /// Read-only on purpose: row C will consume this, and nothing may set it. The only writer is
-    /// `AgentRunner.prepare`.
+    /// `AgentRunner.prepare`. `submitClarification` reads it at a clarification pause to decide
+    /// whether the answer completes a command the resolver asked about or joins an exchange for the
+    /// planner (SONNY-281) — a reader, and one that leans on the lifetime stated above: the pause
+    /// returns out of `performStart` with `preparedRun` still set.
     var activeTaskPlanSource: PreparedPlanSource? {
         preparedRun?.source
     }
@@ -1688,7 +1691,10 @@ final class AgentViewModel: ObservableObject {
             // The resolver has already had its turn on this command and asked for more; reading the
             // more is a planner's job. Reachable through the answer and through a retry of the
             // answered run alike, which is why the term is a property of the command rather than of
-            // this dispatch.
+            // this dispatch. **When the resolver asked, it gets the answer first** (SONNY-281):
+            // `submitClarification` completes the command with the answer and dispatches the plain
+            // result, so a command carrying an exchange that reaches this line is one the resolver
+            // either did not ask about or could not complete.
             } else if !ClarifiedCommand.carriesExchange(submittedCommand),
                       let resolution = makeInstantCommandResolver().resolve(command: submittedCommand) {
                 runner = AgentRunner(
@@ -2449,8 +2455,9 @@ final class AgentViewModel: ObservableObject {
     }
 
     /// Submits the clarification answer as a **new** run, not a resume: this appends the Q&A to
-    /// the command and calls `start()`, which clears `plan`/`stepStatuses`/`preparedRun` and
-    /// re-plans from scratch. (Approval is the real resume — it reuses the existing prepared
+    /// the command — or, for a question the instant resolver asked, completes the command with the
+    /// answer (SONNY-281, `locallyCompletedCommand`) — and calls `start()`, which clears
+    /// `plan`/`stepStatuses`/`preparedRun` and re-plans from scratch. (Approval is the real resume — it reuses the existing prepared
     /// run.) The auto-execute flag and origin are carried across the pause deliberately so the
     /// continuation behaves like the task the user actually started.
     func submitClarification() {
@@ -2472,16 +2479,29 @@ final class AgentViewModel: ObservableObject {
         // by a real run, and the composition degrades to the Q&A alone — which is precisely what
         // this produced for *every* clarification before the fix.
         //
-        // **Request + Q&A, rather than the answer substituted into the request.** Substituting means
-        // rewriting the user's own sentence: a planner's job, and a fragile string edit here. It
-        // also discards that Sonny asked and what it asked, which leaves a second question nothing
-        // to build on. Appending keeps the request whole and accumulates in the order the exchange
-        // happened, so a task clarified twice reaches the planner as the request and both pairs.
-        command = ClarifiedCommand.composed(
-            request: clarificationSubmittedCommand ?? "",
-            question: question,
-            answer: answer
-        )
+        // **Request + Q&A, rather than the answer substituted into the request — for a question the
+        // planner asked.** Substituting means rewriting the user's own sentence: a planner's job, and
+        // a fragile string edit here. It also discards that Sonny asked and what it asked, which
+        // leaves a second question nothing to build on. Appending keeps the request whole and
+        // accumulates in the order the exchange happened, so a task clarified twice reaches the
+        // planner as the request and both pairs.
+        //
+        // **For a question the resolver asked, the answer is the rest of the command** (SONNY-281).
+        // The resolver's questions are raised on a bare prefix — `=` asks what to calculate — and
+        // the planner cannot act on the answer: it has no calculator, and every other answer would
+        // reach it as prose about a command it never saw the resolver's reading of. So the resolver
+        // gets the answer first, as the command it was missing an operand for, and the plain result
+        // goes through the same door typed text does. `locallyCompletedCommand` has the three
+        // conditions and what each one is for.
+        if let completed = locallyCompletedCommand(request: clarificationSubmittedCommand, answer: answer) {
+            command = completed
+        } else {
+            command = ClarifiedCommand.composed(
+                request: clarificationSubmittedCommand ?? "",
+                question: question,
+                answer: answer
+            )
+        }
         let shouldAutoExecute = clarificationAutoExecute
         let shouldUseOrigin = clarificationOrigin
         let shouldUseBinding = clarificationWorkspaceBinding
@@ -2497,6 +2517,60 @@ final class AgentViewModel: ObservableObject {
         // to carry on with it and Continue re-asked a question the user had already answered.
         armRestartOfTaskInFlight()
         start(autoExecute: shouldAutoExecute, origin: shouldUseOrigin, workspaceBinding: shouldUseBinding)
+    }
+
+    /// The plain command a clarification answer completes, or `nil` when the answer is the
+    /// planner's to read (SONNY-281).
+    ///
+    /// **Who asked decides which door the answer goes through.** The founder typed `=`, was asked
+    /// what to calculate, answered `2 + 2`, and was told calculation is not supported by the
+    /// registered local tools — which is true of the planner, and the planner is who got the answer.
+    /// SONNY-248 made every clarified command skip `InstantCommandResolver`, correctly for the case
+    /// it was looking at: a request restored to the front of an exchange re-matched the resolver's
+    /// own prefix and would have calculated the transcript. But the resolver raises questions of
+    /// its own, on a bare prefix, and the planner cannot act on those answers —
+    /// `CalculatorCapabilityAdapter` registers no planner tool at all, so a calculation that reaches
+    /// the planner is refused by design, and every other answer arrives as prose about a command the
+    /// planner never saw the resolver's reading of. The two prompts were captured rather than
+    /// reasoned about (`ClarificationAnswerRoutingTests`): typed directly, `2 + 2` never reaches a
+    /// planner; answered, it reached one as the whole exchange.
+    ///
+    /// **Three conditions, and all three are needed.**
+    ///
+    /// 1. The paused run's plan came from the resolver — `activeTaskPlanSource == .instantResolver`,
+    ///    read off `preparedRun`, which the pause leaves in place and the next `performStart` clears.
+    ///    A question the *planner* asked is never completed, even when the completion would resolve:
+    ///    "morning" asked about by the planner and answered "routine" is a saved routine's exact name
+    ///    if one is called that, and a bare saved name is an instant command. Running it would act
+    ///    on a guess about what the planner's question meant; the planner reads the exchange instead.
+    /// 2. A real run raised the question, so there is a request to complete. A question set with no
+    ///    run behind it has none and degrades to the exchange alone, exactly as `composed` does.
+    /// 3. The completed command resolves to a **plan**. Not every resolver question asks for the
+    ///    rest of the command: "I could not find a Shortcut named Foo. Which Shortcut should I run?"
+    ///    wants a replacement, and `run shortcut Foo Send Report` names no Shortcut either — the
+    ///    resolver answers that with the same question again, and a `.clarify` is refused here so the
+    ///    exchange goes to the planner, where the question gets read. The executor's own questions on
+    ///    a resolver plan (a routine deleted between resolution and preparation) fall out the same
+    ///    way. The resolver runs again on the completed command inside `performStart`; the answer is
+    ///    the same because resolution is deterministic over the same stores, and this call is a
+    ///    routing decision rather than a hand-off.
+    ///
+    /// **What it does not close, stated rather than found later.** `snippet save foo` — a body
+    /// with no `=` — asks for the format, and an answer of `;foo = bar` completes to
+    /// `snippet save foo ;foo = bar`, whose trigger parses as `foo ;foo`. That plan requires
+    /// confirmation, so the trigger is shown before anything is saved, and an answer that writes
+    /// the whole command out (`snippet save ;foo = bar`) is taken as the whole command by
+    /// `ClarifiedCommand.completed`; a partial answer to a partial request is the one shape neither
+    /// covers.
+    private func locallyCompletedCommand(request: String?, answer: String) -> String? {
+        guard activeTaskPlanSource == .instantResolver, let request else {
+            return nil
+        }
+        let completed = ClarifiedCommand.completed(request: request, answer: answer)
+        guard case .plan? = makeInstantCommandResolver().resolve(command: completed) else {
+            return nil
+        }
+        return completed
     }
 
     /// - Parameter origin: Which surface's mic button this is.

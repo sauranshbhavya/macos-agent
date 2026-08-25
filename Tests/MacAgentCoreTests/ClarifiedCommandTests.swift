@@ -277,4 +277,41 @@ struct ClarifiedCommandTests {
         #expect(!ClarifiedCommand.carriesExchange(straddled))
         #expect(ClarifiedCommand.request(in: straddled) == straddled)
     }
+
+    /// **The other composition** (SONNY-281): for a question the instant resolver asked, the answer
+    /// is the rest of the command, and the result is a plain command rather than an exchange.
+    @Test
+    func aCompletedCommandIsTheRequestThenTheAnswer() {
+        #expect(ClarifiedCommand.completed(request: "=", answer: "2 + 2") == "= 2 + 2")
+        #expect(ClarifiedCommand.completed(request: "  calc\n", answer: " 2 + 2 ") == "calc 2 + 2")
+        #expect(ClarifiedCommand.completed(request: "switch to", answer: "Safari") == "switch to Safari")
+        // A plain command: nothing for a label to strip, and the request is the whole of it.
+        let completed = ClarifiedCommand.completed(request: "=", answer: "2 + 2")
+        #expect(!ClarifiedCommand.carriesExchange(completed))
+        #expect(ClarifiedCommand.request(in: completed) == completed)
+    }
+
+    /// An answer that begins with the request is the user writing the command out, not asking for
+    /// the request twice — and the resolver's prefixes are case-insensitive, so this is too.
+    @Test
+    func anAnswerThatRestatesTheRequestIsTheWholeCommand() {
+        #expect(ClarifiedCommand.completed(request: "calc", answer: "calc 2 + 2") == "calc 2 + 2")
+        #expect(ClarifiedCommand.completed(request: "calc", answer: "Calc 2 + 2") == "Calc 2 + 2")
+        #expect(ClarifiedCommand.completed(request: "=", answer: "= 2 + 2") == "= 2 + 2")
+        #expect(
+            ClarifiedCommand.completed(request: "snippet save", answer: "Snippet save ;sig = hello")
+                == "Snippet save ;sig = hello"
+        )
+        // The request has to be at the front; appearing later is not a restatement.
+        #expect(ClarifiedCommand.completed(request: "calc", answer: "2 + 2 calc") == "calc 2 + 2 calc")
+    }
+
+    /// Degrades the way `composed` does: no request, the answer alone; no answer, the request alone
+    /// — never a dangling space either way.
+    @Test
+    func completingWithoutARequestOrWithoutAnAnswerIsTheOtherHalfAlone() {
+        #expect(ClarifiedCommand.completed(request: "", answer: "2 + 2") == "2 + 2")
+        #expect(ClarifiedCommand.completed(request: "  \n", answer: "2 + 2") == "2 + 2")
+        #expect(ClarifiedCommand.completed(request: "=", answer: "   ") == "=")
+    }
 }
