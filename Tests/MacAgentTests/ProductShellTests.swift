@@ -117,13 +117,14 @@ struct ProductShellTests {
     ///   for no user-visible gain.
     ///
     /// **The focus half is now conditional, and that is the same decision rather than a weakening of
-    /// it** (SONNY-247). Both call sites moved from a bare `pillFocused = true` to
-    /// `focusComposerIfItTakesInput()`, which gives the caret to the composer only when the composer
-    /// can use it. While a question is parked the composer is `.disabled`, so the old unconditional
-    /// write aimed the caret at a field that refuses every keystroke and every paste — the founder's
-    /// report, twice in one day — while the live field sat in the panel above. What this test holds
-    /// is unchanged: a click still reaches a view that does *both* halves. Whether the guard itself
-    /// is right is held by `WidgetComposerStateTests`.
+    /// it** (SONNY-247). Both call sites moved from a bare `pillFocused = true` to a helper that
+    /// gives the caret to the composer only when the composer can use it. While a question is parked
+    /// the composer is `.disabled`, so the old unconditional write aimed the caret at a field that
+    /// refuses every keystroke and every paste — the founder's report, twice in one day — while the
+    /// live field sat in the panel above. SONNY-283 then made the helper `focusTheFieldThatTakesInput()`,
+    /// which knows about *both* fields, because a summon during a question had nothing to focus and
+    /// the hotkey did nothing. What this test holds is unchanged: a click still reaches a view that
+    /// does *both* halves. Whether the rule itself is right is held by `WidgetComposerStateTests`.
     ///
     /// **Read rather than run, and this is the case that best shows why the tool exists.** Neither
     /// line can execute in a test process: `SonnyNotificationService.init?` returns nil without
@@ -157,7 +158,7 @@ struct ProductShellTests {
             to: ".onChange(of: isMicHintSlotFree)"
         )
         #expect(onChange.contains("expandFromCompact()"))
-        #expect(onChange.contains("focusComposerIfItTakesInput()"))
+        #expect(onChange.contains("focusTheFieldThatTakesInput()"))
     }
 
     @Test
@@ -645,11 +646,12 @@ struct ProductShellTests {
             // Row 13's three in-memory slots (SONNY-210). The wipe erases the file all three
             // describe: a surviving checkpoint would write its task straight back on the next unit
             // boundary, a surviving arm would let a dispatch continue a record that no longer
-            // exists, and a surviving dismissal set would suppress an offer for an id that can only
-            // now belong to a different task.
+            // exists, and a surviving decline set would suppress an offer for an id that can only
+            // now belong to a different task. (The set is the in-session half of a decline since
+            // SONNY-282; the persisted half is on the record, in the file the wipe erases.)
             "activeResumableTask",
             "pendingResumableContinuation",
-            "dismissedResumeOfferIDs",
+            "declinedResumeOfferIDs",
             // SONNY-239's Reveal in Finder control renders off this record — the list of kept files
             // it holds, and the row and count its sentence is derived from (PR #117 review, F1). The
             // wipe's own sweep has just deleted the files it names, so a surviving record would offer
@@ -738,7 +740,10 @@ struct ProductShellTests {
             "command", "lastCommand", "isRunning", "activeTaskOrigin", "lastAssessedScope",
             "taskRecordingPolicy",
             "isPreparingVoiceRecording", "isRecordingVoice", "isTranscribingVoice",
-            "isPushToTalkHotKeyDown", "voiceRecordingOrigin", "clarificationOrigin",
+            // `voiceRecordingPurpose` sits beside `voiceRecordingOrigin` for the same reason: both
+            // describe the recording in progress, written at its start and read at its end, and
+            // the wipe guards on `!isRunning` with no recording able to outlive a task (SONNY-283).
+            "isPushToTalkHotKeyDown", "voiceRecordingOrigin", "voiceRecordingPurpose", "clarificationOrigin",
             "scheduledRunDisplayCommand",
 
             // 5. Row I's vision-session state, all four slots of it. Same reasoning as the
@@ -1403,6 +1408,133 @@ struct ProductShellTests {
         try await waitForViewModelToBecomeIdle(viewModel)
 
         #expect(viewModel.clarificationQuestion == question)
+    }
+
+    /// **SONNY-283 — a transcript recorded as an answer lands in the answer field, and nothing
+    /// runs.** Founder decision 2026-08-25: the mic and the push-to-talk hotkey both feed the answer
+    /// field while a question is pending. "Feed", not "send": the question is still waiting
+    /// afterwards, the composer's own text is untouched, and no dispatch happened — the user reads
+    /// what was heard and presses Return.
+    ///
+    /// Driven through `deliverTranscript`, the router the real transcription completion calls, with
+    /// the purpose the recording would have been started with. The question is a real one, raised
+    /// by a real run through the instant resolver, so the field being fed is the one the panel
+    /// draws.
+    @Test
+    func aTranscriptRecordedAsAnAnswerLandsInTheAnswerFieldAndRunsNothing() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        viewModel.command = "="
+        viewModel.start(origin: .widget, fromComposer: true)
+        try await waitForViewModelToBecomeIdle(viewModel)
+        let question = try #require(viewModel.clarificationQuestion)
+        #expect(viewModel.clarificationAnswer.isEmpty)
+
+        viewModel.deliverTranscript("2 + 2", recordedFor: .clarificationAnswer, origin: .widget)
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.clarificationAnswer == "2 + 2")
+        #expect(viewModel.clarificationQuestion == question, "feeding the field is not sending it")
+        #expect(viewModel.lastCommand == "=", "nothing was dispatched — the last command is still the one that asked")
+        #expect(viewModel.command.isEmpty, "the composer is not where a spoken answer goes")
+        #expect(viewModel.errorMessage == nil)
+
+        // Appended at the caret, the way dictation lands: a half-typed answer keeps its half, and
+        // exactly one space separates the two whatever whitespace either side carried.
+        viewModel.clarificationAnswer = "the"
+        viewModel.deliverTranscript("Downloads folder", recordedFor: .clarificationAnswer, origin: .widget)
+        #expect(viewModel.clarificationAnswer == "the Downloads folder")
+        viewModel.clarificationAnswer = "the "
+        viewModel.deliverTranscript("  Downloads folder \n", recordedFor: .clarificationAnswer, origin: .widget)
+        #expect(viewModel.clarificationAnswer == "the Downloads folder")
+        // An empty transcript changes nothing.
+        viewModel.deliverTranscript("   ", recordedFor: .clarificationAnswer, origin: .widget)
+        #expect(viewModel.clarificationAnswer == "the Downloads folder")
+        #expect(viewModel.clarificationQuestion == question)
+    }
+
+    /// **The purpose is decided when the recording starts, and a mismatch at delivery is refused
+    /// in both directions** (SONNY-283). An answer whose question has gone must not run as a
+    /// command — voice commands auto-execute, and a folder name spoken in reply is not a task — and
+    /// a command spoken before a question arrived must not land in that question's answer field.
+    /// Each half ships with its control in the same fixture: the matching purpose does go through.
+    @Test
+    func aTranscriptDeliveredForAPurposeTheStateNoLongerMatchesIsRefusedBothWays() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        // A command recorded before the question arrived: refused, and the answer field stays empty.
+        viewModel.command = "="
+        viewModel.start(origin: .widget, fromComposer: true)
+        try await waitForViewModelToBecomeIdle(viewModel)
+        let question = try #require(viewModel.clarificationQuestion)
+
+        viewModel.deliverTranscript("= 2 + 2", recordedFor: .command, origin: .widget)
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.clarificationQuestion == question, "the paused question survives")
+        #expect(viewModel.clarificationAnswer.isEmpty, "a command is not an answer to a question the user had not seen")
+        #expect(viewModel.lastCommand == "=", "and it did not run")
+
+        // An answer recorded while the question stood, arriving after it was cancelled: dropped.
+        viewModel.cancelCurrentRun()
+        #expect(viewModel.clarificationQuestion == nil)
+
+        viewModel.deliverTranscript("= 2 + 2", recordedFor: .clarificationAnswer, origin: .widget)
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.lastCommand == "=", "an orphaned answer never runs as a command")
+        #expect(viewModel.clarificationAnswer.isEmpty)
+        #expect(viewModel.clarificationQuestion == nil)
+
+        // The control: the same transcript, recorded as a command, with no question in the way,
+        // runs — so the refusals above are about the mismatch and not about the fixture.
+        viewModel.deliverTranscript("= 2 + 2", recordedFor: .command, origin: .widget)
+        try await waitForViewModelToBecomeIdle(viewModel)
+        #expect(viewModel.lastCommand == "= 2 + 2")
+    }
+
+    /// **The live completion routes through the purpose captured at recording start, and decides
+    /// nothing itself** (SONNY-283). The completion cannot run in a test process — it needs a real
+    /// transcriber and an API key — so the wiring from the captured value to the router is read
+    /// rather than run, in the shape the rest of this file uses for AppKit-bound paths.
+    @Test
+    func theTranscriptionCompletionDeliversThroughThePurposeCapturedAtRecordingStart() throws {
+        let source = try MacAgentSource.read("AgentViewModel.swift")
+
+        let completion = try MacAgentSource.braceBlock(
+            of: source,
+            openedBy: "private func stopVoiceRecordingAndTranscribe() {"
+        )
+        #expect(
+            MacAgentSource.count(
+                of: "deliverTranscript(result.text, recordedFor: voiceRecordingPurpose, origin: voiceRecordingOrigin)",
+                inText: completion
+            ) == 1
+        )
+        #expect(MacAgentSource.count(of: "dispatchTranscribedCommand(", inText: completion) == 0)
+        #expect(MacAgentSource.count(of: "clarificationAnswer", inText: completion) == 0, "the completion routes; it does not decide")
+
+        // Written exactly once, at the start of a recording, from whether a question stood at that
+        // moment. (The declaration carries a type annotation, so it does not match this text.)
+        let start = try MacAgentSource.braceBlock(
+            of: source,
+            openedBy: "private func startVoiceRecording(trigger: VoiceRecordingTrigger, origin: TaskOrigin) {"
+        )
+        #expect(
+            MacAgentSource.count(
+                of: "voiceRecordingPurpose = .forRecordingStarted(whileClarificationPending: clarificationQuestion != nil)",
+                inText: start
+            ) == 1
+        )
+        #expect(MacAgentSource.count(of: "voiceRecordingPurpose = ", inText: source) == 1)
+
+        // And the router is the only caller of the answer path, so nothing can feed the field with
+        // a transcript whose purpose was never decided.
+        #expect(MacAgentSource.count(of: "answerClarificationWithTranscript(", inText: source) == 2, "the declaration and its one caller")
     }
 
     /// R1 — deleting a workspace kills an arm naming it, so the chip can never promise a boundary

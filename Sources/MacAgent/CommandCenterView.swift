@@ -4715,6 +4715,10 @@ struct MemoryEntryPresentation: Identifiable, Equatable {
     let id: String
     let title: String
     let detail: String
+    /// Whether the row offers to carry the item on — true only for an unfinished task Sonny may
+    /// finish on its own (SONNY-282). Every other type of entry is a record with nothing to
+    /// continue, and the row shows Delete alone, as it always has.
+    var canContinue: Bool = false
 
     /// The four list-backed types, rendered from the arrays `AgentViewModel` publishes.
     ///
@@ -4779,7 +4783,13 @@ struct MemoryEntryPresentation: Identifiable, Equatable {
                 MemoryEntryPresentation(
                     id: task.id,
                     title: singleLine(task.command),
-                    detail: unfinishedTaskDetail(task, now: now)
+                    detail: unfinishedTaskDetail(task, now: now),
+                    // The same rule the widget's offer is filtered by, minus the decline: a task
+                    // whose remainder Sonny must not repeat on its own gets no Continue here either,
+                    // because `continueResumableTask` would refuse it and a button that does nothing
+                    // is the shape SONNY-282 exists to remove. A *declined* task does get one — that
+                    // is the door the decision needs (`AgentViewModel.continueUnfinishedTask(at:)`).
+                    canContinue: task.mayBeOfferedForResume
                 )
             }
         case .routines, .workspaces, .taskHistory:
@@ -4787,13 +4797,16 @@ struct MemoryEntryPresentation: Identifiable, Equatable {
         }
     }
 
-    /// "Stopped by an error · 2 of 5 steps left · 3:04 PM".
+    /// "Stopped by an error · 2 of 5 steps left · 3:04 PM", or with "· Declined" before the time for
+    /// a task the widget has been told to stop offering.
     ///
     /// The stop reason is here rather than in the widget's offer because the offer's copy is the
     /// founder's, verbatim, and because this is where it changes a decision: someone reading the list
     /// is choosing whether to carry on, and "Sonny hit an error" and "you closed the lid" are
     /// different answers. It is data about what happened, not an explanation of how the feature
-    /// works, which is the line the 2026-08-14 rule draws.
+    /// works, which is the line the 2026-08-14 rule draws. **"Declined" is on the same side of that
+    /// line** (SONNY-282): it is the state the user put the task in by pressing the widget's cross,
+    /// and the one fact that explains why the widget is not offering a task this list still shows.
     private static func unfinishedTaskDetail(_ task: ResumableTask, now: Date) -> String {
         let reason: String
         switch task.stopReason {
@@ -4805,7 +4818,8 @@ struct MemoryEntryPresentation: Identifiable, Equatable {
         let left = task.remainingSteps.count
         let total = task.plan.steps.count
         let steps = "\(left) of \(total) step\(total == 1 ? "" : "s") left"
-        return "\(reason) · \(steps) · \(TaskHistoryDateFormatter.relativeTimestamp(for: task.updatedAt, now: now))"
+        let declined = task.isDeclined ? "Declined · " : ""
+        return "\(reason) · \(steps) · \(declined)\(TaskHistoryDateFormatter.relativeTimestamp(for: task.updatedAt, now: now))"
     }
 
     /// Collapses newlines so a multi-line clipboard entry or snippet expansion occupies one row
@@ -4889,6 +4903,19 @@ private struct MemoryEntriesSheet: View {
                             MemoryEntryRow(
                                 entry: entry,
                                 isLast: index == entries.count - 1,
+                                // Disabled rather than hidden while a task is in flight, like the
+                                // task-detail sheet's Run again: the row keeps its shape and the
+                                // press is refused by `dispatch` anyway, so this is the user's
+                                // experience of that refusal rather than a second copy of the rule.
+                                canContinueNow: !viewModel.isTaskInFlight,
+                                continueTask: {
+                                    // Closes on a real start and stays open on a refusal — the same
+                                    // rule the task-detail sheet applies around `runTaskAgain`, so a
+                                    // sheet never hides the fact that nothing happened.
+                                    if viewModel.continueUnfinishedTask(at: index) {
+                                        isPresented = false
+                                    }
+                                },
                                 delete: {
                                     pendingDeletion = PendingEntryDeletion(
                                         id: entry.id,
@@ -4950,6 +4977,9 @@ private struct MemoryEntriesSheet: View {
 private struct MemoryEntryRow: View {
     let entry: MemoryEntryPresentation
     let isLast: Bool
+    /// Whether a Continue press would be accepted right now — false while a task is in flight.
+    let canContinueNow: Bool
+    let continueTask: () -> Void
     let delete: () -> Void
 
     var body: some View {
@@ -4967,6 +4997,17 @@ private struct MemoryEntryRow: View {
                 }
 
                 Spacer(minLength: 14)
+
+                // The unfinished-task row's Continue (SONNY-282): the same 23pt row-action style as
+                // the Delete beside it, in the neutral tone the workspace card's non-destructive
+                // actions use, and the word the widget's tick carries as its tooltip. It is the one
+                // way to pick up a task the widget has been told to stop offering.
+                if entry.canContinue {
+                    Button(ResumeOfferPresentation.continueLabel, action: continueTask)
+                        .buttonStyle(CommandCenterRowActionStyle(tone: .neutral))
+                        .disabled(!canContinueNow)
+                        .accessibilityLabel(ResumeOfferPresentation.continueAccessibilityLabel(command: entry.title))
+                }
 
                 Button("Delete", action: delete)
                     .buttonStyle(CommandCenterRowActionStyle(tone: .danger))

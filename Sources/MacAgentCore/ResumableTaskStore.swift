@@ -81,6 +81,26 @@ public struct ResumableTask: Codable, Equatable, Sendable, Identifiable {
     /// `ResumableTaskStore.loadAll(now:)` to drop a record nobody came back to.
     public var updatedAt: Date
     public var stopReason: ResumableTaskStopReason
+    /// When the user told the widget to stop offering this task, or `nil` while they have not
+    /// (SONNY-282, founder decision 2026-08-25).
+    ///
+    /// **A declined flag rather than a deletion, and the difference is the whole decision.** The
+    /// widget's cross used to mean "not now": the offer came back at the next launch, and the next,
+    /// until the task was resumed or deleted from Command Center — the founder pressed it three
+    /// times across three relaunches expecting an effect it never had. Deleting on the cross was
+    /// considered and rejected, so that no control in the widget can lose work irreversibly. So the
+    /// cross now writes this, the offer filters on it, and the record itself is untouched: still
+    /// listed under Memory's Unfinished tasks, still deletable there, and still resumable from there.
+    ///
+    /// **It does not touch `updatedAt`, deliberately.** Declining is "stop asking me", not activity
+    /// on the task; bumping the idle clock would give a declined task a fresh fortnight and move it to
+    /// the top of the Memory list, when the founder's lifecycle — completes, deleted, or goes idle —
+    /// is exactly what should still end it.
+    ///
+    /// A date rather than a flag for the same reason the record's other lifecycle facts are dates:
+    /// it answers "when" as well as "whether" at no extra cost, and a file written before this field
+    /// existed decodes as never declined.
+    public var declinedAt: Date?
 
     /// The longest `command` this keeps, in characters. Display-only text, so trimming it is safe in
     /// the way trimming the plan is not.
@@ -94,7 +114,8 @@ public struct ResumableTask: Codable, Equatable, Sendable, Identifiable {
         chainedArtifactPath: String? = nil,
         startedAt: Date,
         updatedAt: Date,
-        stopReason: ResumableTaskStopReason = .interrupted
+        stopReason: ResumableTaskStopReason = .interrupted,
+        declinedAt: Date? = nil
     ) {
         self.id = id
         self.command = Self.cappedCommand(command)
@@ -108,6 +129,7 @@ public struct ResumableTask: Codable, Equatable, Sendable, Identifiable {
         self.startedAt = startedAt
         self.updatedAt = updatedAt
         self.stopReason = stopReason
+        self.declinedAt = declinedAt
     }
 
     private enum CodingKeys: String, CodingKey {
@@ -119,6 +141,7 @@ public struct ResumableTask: Codable, Equatable, Sendable, Identifiable {
         case startedAt
         case updatedAt
         case stopReason
+        case declinedAt
     }
 
     /// Written out rather than synthesized so a decoded record runs through the same command cap and
@@ -134,9 +157,17 @@ public struct ResumableTask: Codable, Equatable, Sendable, Identifiable {
             chainedArtifactPath: try container.decodeIfPresent(String.self, forKey: .chainedArtifactPath),
             startedAt: try container.decode(Date.self, forKey: .startedAt),
             updatedAt: try container.decode(Date.self, forKey: .updatedAt),
-            stopReason: try container.decode(ResumableTaskStopReason.self, forKey: .stopReason)
+            stopReason: try container.decode(ResumableTaskStopReason.self, forKey: .stopReason),
+            // `decodeIfPresent`, so every record written before SONNY-282 reads as never declined
+            // rather than failing to decode — which would take the whole file, and every other
+            // unfinished task in it, down with it.
+            declinedAt: try container.decodeIfPresent(Date.self, forKey: .declinedAt)
         )
     }
+
+    /// Whether the user has told the widget to stop offering this task. The offer reads this; the
+    /// Memory list and `mayBeOfferedForResume` deliberately do not — see `declinedAt`.
+    public var isDeclined: Bool { declinedAt != nil }
 
     /// The steps this run has not finished, in plan order.
     public var remainingSteps: [AgentStep] {
@@ -167,6 +198,12 @@ public struct ResumableTask: Codable, Equatable, Sendable, Identifiable {
     /// remaining work contains a Shortcut is never offered even when the Shortcut is not the part
     /// that would repeat; the benefit is that the answer cannot be wrong in the direction that
     /// double-sends. Stated so nobody widens it by accident.
+    ///
+    /// **`isDeclined` is deliberately not a term here** (SONNY-282). This is the *safety* rule — what
+    /// Sonny may do on its own — and it gates both the widget's offer and every Continue, including
+    /// the one under Memory. A decline is the user's *preference* about the widget's offer alone, so
+    /// it is a second filter on that offer and on nothing else: a declined task is one the user can
+    /// still choose to continue from Memory, which is the founder's whole reason for keeping it.
     public var mayBeOfferedForResume: Bool {
         isResumable && remainingSteps.allSatisfy { $0.operation.resumeRepeatSafety == .safeToRepeat }
     }

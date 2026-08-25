@@ -54,7 +54,15 @@ private enum WidgetState {
 
 struct FloatingWidgetView: View {
     @ObservedObject var viewModel: AgentViewModel
-    @FocusState private var pillFocused: Bool
+    /// Which of the widget's two text fields has the caret, or `nil` (SONNY-283).
+    ///
+    /// **Owned here, for both fields, rather than one `Bool` per field.** The composer used to own
+    /// `pillFocused` and the clarification panel its own `answerFocused`, and the push-to-talk
+    /// hotkey's presentation request could reach only the first — which correctly refused to focus
+    /// a disabled composer while a question was parked, and then had nothing else to focus. The
+    /// panel takes a binding to this, so every summon goes through one helper that knows about
+    /// both fields; `WidgetInputField.takingInput` is the rule.
+    @FocusState private var focusedField: WidgetInputField?
     /// Per Wispr Flow's own "shrink the bubble when not in use" behavior — collapses to a tiny
     /// icon-only capsule after a period with nothing needing attention, so the widget doesn't sit
     /// on screen as a constant visual barrier. Only meaningful while `isCollapsible` (see below);
@@ -178,7 +186,7 @@ struct FloatingWidgetView: View {
         // was, since there's no more large drop shadow needing room to fade out.
         .padding(16)
         .onAppear {
-            focusComposerIfItTakesInput()
+            focusTheFieldThatTakesInput()
             scheduleAutoDismissIfNeeded()
         }
         .onChange(of: widgetStateKey) { _, _ in
@@ -203,7 +211,7 @@ struct FloatingWidgetView: View {
             if isCompact {
                 expandFromCompact()
             } else {
-                focusComposerIfItTakesInput()
+                focusTheFieldThatTakesInput()
                 scheduleAutoDismissIfNeeded()
             }
         }
@@ -359,22 +367,39 @@ struct FloatingWidgetView: View {
 
     private func expandFromCompact() {
         isCompact = false
-        focusComposerIfItTakesInput()
+        focusTheFieldThatTakesInput()
         scheduleAutoDismissIfNeeded()
     }
 
-    /// Puts the caret in the composer, but only when the composer is the field that can use it
-    /// (SONNY-247).
+    /// Puts the caret in whichever field can use it — the composer, the clarification panel's
+    /// answer field, or neither (SONNY-247, SONNY-283).
     ///
     /// **All three callers used to write `pillFocused = true` unconditionally**, which is the wrong
-    /// half of the founder's report. While a question is parked on the user the composer is
-    /// `.disabled`, so a keystroke aimed at it reaches nothing at all — and the field that *is* live
-    /// is the clarification panel's, a few pixels above, which claims the caret for itself the moment
-    /// its question arrives. Writing `false` here rather than skipping the assignment is deliberate:
-    /// the widget being re-opened onto a pending question must not leave the caret parked in a dead
-    /// field just because it was there before.
-    private func focusComposerIfItTakesInput() {
-        pillFocused = ComposerPresentation.acceptsInput(composerState)
+    /// half of the founder's report (SONNY-247). While a question is parked on the user the
+    /// composer is `.disabled`, so a keystroke aimed at it reaches nothing at all — and the field
+    /// that *is* live is the clarification panel's, a few pixels above. The first fix made this
+    /// helper decline to focus the dead composer, and left the answer field to claim the caret for
+    /// itself when its question arrived. That was right for the keyboard and silent for the hotkey:
+    /// Ctrl-Opt-Space with a question pending reached this helper, which correctly set nothing, and
+    /// so the hotkey did nothing (SONNY-283). Now the helper knows both fields, and a summon during
+    /// a clarification lands the caret in the answer. Writing `nil` for the other states rather than
+    /// skipping the assignment is still deliberate: the widget being re-opened onto an approval
+    /// must not leave the caret parked in a field that has since gone dead.
+    private func focusTheFieldThatTakesInput() {
+        focusedField = WidgetInputField.takingInput(
+            clarificationPanelShowing: isShowingClarificationPanel,
+            composer: composerState
+        )
+    }
+
+    /// Whether the panel on screen is the clarification panel — read off `state`, the same
+    /// precedence that decides what is drawn, so the caret can never be aimed at a field that
+    /// another panel has outranked.
+    private var isShowingClarificationPanel: Bool {
+        if case .clarification = state {
+            return true
+        }
+        return false
     }
 
     private var styledPanel: some View {
@@ -712,7 +737,7 @@ struct FloatingWidgetView: View {
             .font(WidgetType.pillQuery)
             .foregroundStyle(WidgetTheme.textFull)
             .disabled(isTaskInFlight)
-            .focused($pillFocused)
+            .focused($focusedField, equals: .composer)
             .submitLabel(.go)
             .onSubmit(submit)
 
@@ -946,6 +971,7 @@ private extension FloatingWidgetView {
                 stepStatuses: viewModel.stepStatuses,
                 question: question,
                 answer: $viewModel.clarificationAnswer,
+                focusedField: $focusedField,
                 onSubmit: { viewModel.submitClarification() },
                 // The same app-wide entry point the permission panel's Deny above uses, not a
                 // clarification-specific method (SONNY-166). `CommandCenterAttentionPanel`'s own
@@ -989,8 +1015,12 @@ private extension FloatingWidgetView {
         case .resumeOffer(let task):
             WidgetResumeOfferPanel(
                 command: task.command,
-                onContinue: { viewModel.continueResumableTask(task) },
-                onDismiss: { viewModel.dismissResumeOffer() }
+                // `.widget`, stated: the offer's Continue is pressed here, and `hasVisibleWidgetPanel`
+                // shows the resumed run's progress in this widget only for a `.widget` origin
+                // (`.claude/rules/macagent-ui-conventions.md`). The Memory sheet's Continue says
+                // `.commandCenter` for the same reason.
+                onContinue: { viewModel.continueResumableTask(task, origin: .widget) },
+                onDecline: { viewModel.declineResumeOffer() }
             )
         case .result(let summary, let suggestion):
             WidgetResultPanel(
@@ -1523,10 +1553,8 @@ private struct WidgetClarificationPanel: View {
     let stepStatuses: [String: AgentStepStatus]
     let question: String
     @Binding var answer: String
-    let onSubmit: () -> Void
-    let onCancel: () -> Void
-
-    /// **The caret goes where the typing can actually land** (SONNY-247).
+    /// **The caret goes where the typing can actually land** (SONNY-247), and the widget owns the
+    /// caret (SONNY-283).
     ///
     /// This panel has always had the only live text field on the widget while a question is parked,
     /// and it never asked for the caret — the composer below did, unconditionally, and then refused
@@ -1534,7 +1562,14 @@ private struct WidgetClarificationPanel: View {
     /// reported that twice in one day as the widget being unable to type or paste. Claiming focus
     /// here is the half of the fix that makes the other half rarely matter: the first key pressed
     /// after a question appears goes into the answer.
-    @FocusState private var answerFocused: Bool
+    ///
+    /// A binding to `FloatingWidgetView`'s one `FocusState` rather than a `Bool` of this panel's
+    /// own, because the push-to-talk hotkey's summon is handled by the widget and has to be able to
+    /// reach this field — with a private `Bool` here it could not, and the hotkey did nothing while a
+    /// question was pending.
+    @FocusState.Binding var focusedField: WidgetInputField?
+    let onSubmit: () -> Void
+    let onCancel: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1580,7 +1615,7 @@ private struct WidgetClarificationPanel: View {
                     .textFieldStyle(.plain)
                     .font(WidgetType.pillQuery)
                     .foregroundStyle(WidgetTheme.textFull)
-                    .focused($answerFocused)
+                    .focused($focusedField, equals: .clarificationAnswer)
                     .onSubmit(onSubmit)
 
                     Button(action: onSubmit) {
@@ -1600,14 +1635,14 @@ private struct WidgetClarificationPanel: View {
             }
         }
         .onAppear {
-            answerFocused = true
+            focusedField = .clarificationAnswer
         }
         // A run may ask more than one question, and SwiftUI keeps this view's identity across them —
         // so `onAppear` fires once and the second question would arrive with the caret still sitting
         // in the answer the user has just sent. The panel appearing and a new question arriving are
         // two different events and both need the caret.
         .onChange(of: question) { _, _ in
-            answerFocused = true
+            focusedField = .clarificationAnswer
         }
     }
 }
@@ -1648,7 +1683,7 @@ private struct WidgetResultPanel: View {
 
 // MARK: - Resume offer (row 13, SONNY-210 — no wireframe)
 
-/// "You were partway through X." — Continue, or not now.
+/// "You were partway through X." — Continue, or don't ask again.
 ///
 /// **System B throughout, and only System B.** This is the floating widget, so it is
 /// `WidgetTheme`/`WidgetType` and the circular-background controls the panels around it already use;
@@ -1673,7 +1708,7 @@ private struct WidgetResultPanel: View {
 ///
 /// **What the words cost, and the honest state of where they went.** `.accessibilityLabel` keeps the
 /// full sentence naming the task, which matters *more* once the button shows no text at all, and
-/// that one is solid. `.help` carries the founder's own word — "Continue", "Not now" — on hover, and
+/// that one is solid. `.help` carries the words — "Continue", "Don't ask again" — on hover, and
 /// **that one may simply not fire**: `micHintPointerEnteredMic` in this same file records `.help()`
 /// as having been "confirmed unreliable here too, not just assumed", which is why the mic's hint is
 /// a real layout row rather than a tooltip. **Two** other `.help` calls in this file predate that
@@ -1688,17 +1723,22 @@ private struct WidgetResultPanel: View {
 /// that might not run. The manual item asks specifically whether the tooltip appears at all; a real
 /// hover row like the mic's is the remedy if it does not, and that is a design change, not a fix.
 ///
-/// **The cross is "not now" and nothing else, and the residual ambiguity is real.** It calls the
-/// same `onDismiss` the labelled button called — the record is untouched, the offer returns at the
-/// next launch. A cross does also read as "close this panel", and *closing* is genuinely a different,
-/// weaker action here: letting the widget collapse leaves the offer unanswered and it comes straight
-/// back. Nothing in a 23pt glyph can distinguish the two, and with the tooltip in doubt the VoiceOver
-/// label is the only mitigation that certainly runs — so "does the cross read as an answer" is a
-/// question only the founder's manual pass can settle.
+/// **The cross means "don't ask again", and the ambiguity the previous paragraph here worried about
+/// was settled by the founder's manual pass — against the design** (SONNY-282, decision 2026-08-25).
+/// It used to mean "not now": the record untouched, the offer back at the next launch. The paragraph
+/// that stood here said a cross also reads as "close this panel", that nothing in a 23pt glyph could
+/// tell the two apart, and that only the manual pass could say whether the cross read as an answer.
+/// It did not. The founder pressed it, relaunched, pressed it, relaunched, pressed it again and
+/// stopped to ask what was broken — a control pressed three times expecting an effect it never has
+/// is a defect whatever its tooltip says. So the behaviour moved to the glyph's conventional
+/// meaning: `onDecline` writes `ResumableTask.declinedAt`, the offer never returns for that task,
+/// and the record is *not* deleted — deleting on the cross was considered and rejected so that no
+/// control in the widget can lose work irreversibly. The task stays under Memory → Unfinished
+/// tasks, which now has a Continue of its own beside Delete.
 private struct WidgetResumeOfferPanel: View {
     let command: String
     let onContinue: () -> Void
-    let onDismiss: () -> Void
+    let onDecline: () -> Void
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
@@ -1720,7 +1760,7 @@ private struct WidgetResumeOfferPanel: View {
                 // 23x23 on the neutral circular fill, and a 10pt bold `xmark`: this is
                 // `WidgetClarificationPanel`'s own cancel control, glyph for glyph, which is itself
                 // `WidgetPermissionPanel`'s Deny. No new component and no new System B token.
-                Button(action: onDismiss) {
+                Button(action: onDecline) {
                     Image(systemName: "xmark")
                         .font(.system(size: 10, weight: .bold))
                         .foregroundStyle(WidgetTheme.textFull)
@@ -1728,8 +1768,8 @@ private struct WidgetResumeOfferPanel: View {
                 .buttonStyle(.plain)
                 .frame(width: 23, height: 23)
                 .widgetCircularBackground()
-                .accessibilityLabel(ResumeOfferPresentation.dismissAccessibilityLabel(command: command))
-                .help(ResumeOfferPresentation.dismissLabel)
+                .accessibilityLabel(ResumeOfferPresentation.declineAccessibilityLabel(command: command))
+                .help(ResumeOfferPresentation.declineLabel)
 
                 // The affirmative stays the tinted one, which is the whole of what tells "carry on"
                 // apart from "leave it" now that neither carries a word.
