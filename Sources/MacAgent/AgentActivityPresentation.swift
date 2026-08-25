@@ -330,6 +330,46 @@ enum ComposerPresentation {
     }
 }
 
+/// The floating widget's text fields — the ones a caret can be in — and the rule for which of them
+/// gets it (SONNY-283).
+///
+/// **One value for the whole widget rather than a `Bool` per field.** The composer and the
+/// clarification panel's answer field used to each own a `@FocusState` of their own, so "put the
+/// caret where typing can land" was two decisions in two views held together by a convention: the
+/// composer's helper wrote `false` while a question was parked, and the panel claimed the caret on
+/// appear. That covered the keyboard. It did not cover the push-to-talk hotkey, whose presentation
+/// request reached only the composer's helper — which correctly declined to focus a disabled field
+/// and then had nothing else to focus, so the hotkey did nothing while a question was pending. With
+/// the widget owning one `FocusState<WidgetInputField?>`, every summon asks `takingInput` and the
+/// answer field is reachable from the same place the composer is.
+enum WidgetInputField: Equatable {
+    /// The composer pill at the bottom of the widget.
+    case composer
+    /// The clarification panel's answer field, rendered only while a question is parked.
+    case clarificationAnswer
+
+    /// Where the caret belongs, or `nil` when nothing on the widget takes typing.
+    ///
+    /// The clarification panel wins outright: while it is on screen the composer is `.disabled`
+    /// (`ComposerPresentation.State.waitingOnYou`), so the two arguments never both say yes, and
+    /// asking about the panel first keeps the caret out of a dead field even if they did. The
+    /// composer takes it only in the one state that accepts input. Everything else — an approval, a
+    /// run in flight, a screen-control session — leaves the caret nowhere, which is what those
+    /// panels' own controls need.
+    static func takingInput(
+        clarificationPanelShowing: Bool,
+        composer: ComposerPresentation.State
+    ) -> WidgetInputField? {
+        if clarificationPanelShowing {
+            return .clarificationAnswer
+        }
+        if ComposerPresentation.acceptsInput(composer) {
+            return .composer
+        }
+        return nil
+    }
+}
+
 /// The armed-follow-up chip and the action that arms it (row E, SONNY-150).
 ///
 /// Copy approved by the founder on 2026-08-21, with the alternatives put beside it: the chip states
@@ -429,10 +469,17 @@ enum ResumeOfferPresentation {
     /// tooltip in the floating widget fires at all is genuinely in doubt — `WidgetResumeOfferPanel`
     /// carries the finding and what it means for these two words.
     static let continueLabel = "Continue"
-    /// "Not now", not "Dismiss": the record is not being deleted and the offer comes back at the
-    /// next launch, so a label that sounded final would over-promise in the direction that loses the
-    /// user's work. The cross's tooltip since SONNY-244, on the same footing as `continueLabel`.
-    static let dismissLabel = "Not now"
+    /// The cross's tooltip, on the same footing as `continueLabel`.
+    ///
+    /// **"Don't ask again", because that is now what the cross does** (SONNY-282, founder decision
+    /// 2026-08-25). It read "Not now" while the offer came back at every launch, and the words were
+    /// accurate — the founder pressed the cross three times across three relaunches anyway, because
+    /// a × carries "close this, and be done with it" whatever its tooltip says. The behaviour moved
+    /// to match the glyph rather than the other way round: the cross stops the offer for good and
+    /// deletes nothing, so the task is still listed under Memory, where it can be continued or
+    /// deleted. macOS's own phrase for exactly this control is "Don't ask again", and the label says
+    /// no more than that — where the task went is data on the Memory row, not a sentence here.
+    static let declineLabel = "Don't ask again"
 
     /// The width the message is actually drawn at: the panel's fixed 472pt less `styledPanel`'s
     /// 18pt of padding a side.
@@ -512,8 +559,11 @@ enum ResumeOfferPresentation {
         "Continue \u{201C}\(truncatedCommand(command))\u{201D}"
     }
 
-    static func dismissAccessibilityLabel(command: String) -> String {
-        "Not now — leave \u{201C}\(truncatedCommand(command))\u{201D} unfinished"
+    /// The cross's VoiceOver name. Names the task, because a 10pt glyph cannot, and promises exactly
+    /// what the control does — no more, since "it stays under Unfinished tasks" would be the
+    /// explanatory sentence the 2026-08-14 rule keeps out of the product.
+    static func declineAccessibilityLabel(command: String) -> String {
+        "Don't ask again about \u{201C}\(truncatedCommand(command))\u{201D}"
     }
 
     /// The panel is a fixed 472pt wide and a command is whatever the user typed, so this squeezes

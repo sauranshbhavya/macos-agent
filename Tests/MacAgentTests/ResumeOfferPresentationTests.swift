@@ -17,6 +17,12 @@ struct ResumeOfferPresentationTests {
 
     /// The founder's own sentence, 2026-08-22: "you were partway through X, continue?" — the message
     /// is the first half and the button label is the second.
+    ///
+    /// **The cross's word changed with its behaviour** (SONNY-282, founder decision 2026-08-25). It
+    /// read "Not now" while the offer came back at every launch, which was accurate and did not
+    /// help: the founder pressed it three times across three relaunches expecting it to stop. The
+    /// cross now stops the offer for good and deletes nothing, and the tooltip says exactly that
+    /// much — where the task went is data on the Memory row, not a sentence here.
     @Test
     func theOfferNamesTheTaskAndTheButtonIsTheQuestionsAnswer() {
         #expect(
@@ -24,7 +30,17 @@ struct ResumeOfferPresentationTests {
                 == "You were partway through \u{201C}Zip my three largest files\u{201D}."
         )
         #expect(ResumeOfferPresentation.continueLabel == "Continue")
-        #expect(ResumeOfferPresentation.dismissLabel == "Not now")
+        #expect(ResumeOfferPresentation.declineLabel == "Don't ask again")
+        #expect(
+            ResumeOfferPresentation.declineAccessibilityLabel(command: "Zip my three largest files")
+                == "Don't ask again about \u{201C}Zip my three largest files\u{201D}"
+        )
+        // The old word may not come back by accident: it promised a return the cross no longer makes.
+        #expect(!ResumeOfferPresentation.declineLabel.localizedCaseInsensitiveContains("not now"))
+        #expect(
+            !ResumeOfferPresentation.declineAccessibilityLabel(command: "Zip my files")
+                .localizedCaseInsensitiveContains("not now")
+        )
     }
 
     /// A long command is cut at a word boundary rather than mid-word, at this panel's own width.
@@ -69,9 +85,9 @@ struct ResumeOfferPresentationTests {
         let copy = [
             ResumeOfferPresentation.message(command: "Zip my files"),
             ResumeOfferPresentation.continueLabel,
-            ResumeOfferPresentation.dismissLabel,
+            ResumeOfferPresentation.declineLabel,
             ResumeOfferPresentation.continueAccessibilityLabel(command: "Zip my files"),
-            ResumeOfferPresentation.dismissAccessibilityLabel(command: "Zip my files")
+            ResumeOfferPresentation.declineAccessibilityLabel(command: "Zip my files")
         ]
         let explanatory = ["step", "resume", "because", "Sonny will", "so that", "this means", "automatically"]
         for sentence in copy {
@@ -162,7 +178,11 @@ struct ResumeOfferPresentationTests {
             ("retryLastCommand", "func retryLastCommand(origin: TaskOrigin = .widget) {", true),
             ("runTaskAgain", "func runTaskAgain(_ record: CompletedTaskRecord) -> Bool {", true),
             ("submitClarification", "func submitClarification() {", true),
-            ("continueResumableTask", "func continueResumableTask(_ task: ResumableTask) -> Bool {", true),
+            (
+                "continueResumableTask",
+                "func continueResumableTask(_ task: ResumableTask, origin: TaskOrigin) -> Bool {",
+                true
+            ),
             // A task of its own. Each leaves any outstanding record exactly where it is, which is
             // the founder's lifecycle rather than a leak: an unfinished task survives the user
             // doing something else.
@@ -253,20 +273,41 @@ struct ResumeOfferPresentationTests {
         #expect(read.lowerBound < show.lowerBound)
     }
 
-    /// **F6/M30: Continue starts a widget task, and the widget's own panel depends on it.**
-    /// `hasVisibleWidgetPanel` gates both its running and its result branch on
-    /// `activeTaskOrigin == .widget`, so a resumed run dispatched under any other origin shows
-    /// nothing while it runs and no result when it ends — from a button in the widget.
+    /// **F6/M30: Continue starts a task under the origin of the surface it was pressed on, and the
+    /// widget's own panel depends on it.** `hasVisibleWidgetPanel` gates both its running and its
+    /// result branch on `activeTaskOrigin == .widget`, so a resumed run dispatched from the widget
+    /// under any other origin shows nothing while it runs and no result when it ends — from a
+    /// button in the widget — and one dispatched from Command Center under `.widget` would move its
+    /// progress into the widget while Command Center kept showing its own.
+    ///
+    /// **Two doors since SONNY-282**, so the origin is a parameter the body passes through untouched
+    /// and each caller states its own: the widget's offer says `.widget`, the Memory sheet's row —
+    /// through `continueUnfinishedTask(at:)` — says `.commandCenter`. Counted at all three sites,
+    /// because a literal creeping back into the body would silently make one of the two callers a
+    /// liar.
     @Test
-    func theResumeDispatchStatesTheWidgetOrigin() throws {
+    func eachResumeDoorStatesItsOwnOrigin() throws {
         let viewModel = try MacAgentSource.read("AgentViewModel.swift")
         let continueBody = try MacAgentSource.braceBlock(
             of: viewModel,
-            openedBy: "func continueResumableTask(_ task: ResumableTask) -> Bool {"
+            openedBy: "func continueResumableTask(_ task: ResumableTask, origin: TaskOrigin) -> Bool {"
         )
-        #expect(MacAgentSource.count(of: "origin: .widget", inText: continueBody) == 1)
+        #expect(MacAgentSource.count(of: "origin: origin", inText: continueBody) == 1)
+        #expect(MacAgentSource.count(of: "origin: .widget", inText: continueBody) == 0)
         #expect(MacAgentSource.count(of: "origin: .commandCenter", inText: continueBody) == 0)
         #expect(MacAgentSource.count(of: "origin: .scheduled", inText: continueBody) == 0)
+
+        let memoryDoor = try MacAgentSource.braceBlock(
+            of: viewModel,
+            openedBy: "func continueUnfinishedTask(at index: Int) -> Bool {"
+        )
+        #expect(
+            MacAgentSource.count(of: "continueResumableTask(resumableTasks[index], origin: .commandCenter)", inText: memoryDoor) == 1
+        )
+
+        let widget = try MacAgentSource.read("FloatingWidgetView.swift")
+        #expect(MacAgentSource.count(of: "viewModel.continueResumableTask(task, origin: .widget)", inText: widget) == 1)
+        #expect(MacAgentSource.count(of: "continueResumableTask(", inText: widget) == 1, "the widget has exactly one Continue")
     }
 
     /// **F6/M28 and F1's clearing site.** A run appends units only to its own record, and the line
@@ -536,9 +577,9 @@ struct ResumeOfferPresentationTests {
 
     /// **An icon-only control names itself twice, and the two names are different on purpose.**
     ///
-    /// `.help` carries the founder's own word on hover — "Continue", "Not now" — which is the right
-    /// length for a tooltip over a 23pt circle. `.accessibilityLabel` keeps the full sentence naming
-    /// the task, which matters *more* once there is no visible text, not less: it is the only place
+    /// `.help` carries a word on hover — "Continue", "Don't ask again" — which is the right length
+    /// for a tooltip over a 23pt circle. `.accessibilityLabel` keeps the full sentence naming the
+    /// task, which matters *more* once there is no visible text, not less: it is the only place
     /// left that says which unfinished task the tick belongs to.
     ///
     /// Counted per token, both sides, so a swap is visible: wiring the cross's sentence onto the tick
@@ -551,7 +592,7 @@ struct ResumeOfferPresentationTests {
         )
 
         #expect(MacAgentSource.count(of: ".help(ResumeOfferPresentation.continueLabel)", inText: panel) == 1)
-        #expect(MacAgentSource.count(of: ".help(ResumeOfferPresentation.dismissLabel)", inText: panel) == 1)
+        #expect(MacAgentSource.count(of: ".help(ResumeOfferPresentation.declineLabel)", inText: panel) == 1)
         #expect(
             MacAgentSource.count(
                 of: ".accessibilityLabel(ResumeOfferPresentation.continueAccessibilityLabel(command: command))",
@@ -560,7 +601,7 @@ struct ResumeOfferPresentationTests {
         )
         #expect(
             MacAgentSource.count(
-                of: ".accessibilityLabel(ResumeOfferPresentation.dismissAccessibilityLabel(command: command))",
+                of: ".accessibilityLabel(ResumeOfferPresentation.declineAccessibilityLabel(command: command))",
                 inText: panel
             ) == 1
         )
@@ -568,25 +609,34 @@ struct ResumeOfferPresentationTests {
         // The sentences still name the task — the whole reason they are the VoiceOver name rather
         // than the tooltip.
         #expect(ResumeOfferPresentation.continueAccessibilityLabel(command: "Zip my files").contains("Zip my files"))
-        #expect(ResumeOfferPresentation.dismissAccessibilityLabel(command: "Zip my files").contains("Zip my files"))
+        #expect(ResumeOfferPresentation.declineAccessibilityLabel(command: "Zip my files").contains("Zip my files"))
     }
 
-    /// **The cross answers the offer; it does not merely close the panel.**
+    /// **The cross declines the offer for good; the tick continues** (SONNY-282).
     ///
-    /// A cross reads as "close", and closing is a genuinely different thing here: letting the widget
-    /// collapse leaves the offer unanswered and it returns on the next open, while "not now" marks it
-    /// answered for this session. The ambiguity is real and is recorded on the ticket rather than
-    /// designed away — what is held here is that the glyph is wired to the same closure the labelled
-    /// button was, so the two readings at least never differ in what actually happens.
+    /// This used to hold that the cross was wired to the same "not now" closure the labelled button
+    /// had been, and recorded the ambiguity — does a cross read as "close this panel" or as an
+    /// answer? — as a question for the founder's manual pass. The pass answered it: the founder
+    /// pressed the cross three times across three relaunches expecting the offer to stop. What is
+    /// held now is that the glyph is wired to `onDecline`, which the view hands
+    /// `declineResumeOffer()` — the persisted decline — and not to any closure that only hides the
+    /// panel for a session.
     @Test
-    func theCrossIsWiredToTheSameDismissTheLabelledButtonWas() throws {
+    func theCrossIsWiredToDeclineAndTheTickToContinue() throws {
+        let widget = try MacAgentSource.read("FloatingWidgetView.swift")
         let panel = try MacAgentSource.braceBlock(
-            of: MacAgentSource.read("FloatingWidgetView.swift"),
+            of: widget,
             openedBy: "private struct WidgetResumeOfferPanel: View {"
         )
 
-        #expect(MacAgentSource.count(of: "Button(action: onDismiss) {", inText: panel) == 1)
+        #expect(MacAgentSource.count(of: "Button(action: onDecline) {", inText: panel) == 1)
         #expect(MacAgentSource.count(of: "Button(action: onContinue) {", inText: panel) == 1)
+        #expect(MacAgentSource.count(of: "onDismiss", inText: panel) == 0, "the session-only closure is gone from this panel")
+
+        // The view hands the cross the persisted decline, and nothing else in the widget calls it.
+        #expect(MacAgentSource.count(of: "onDecline: { viewModel.declineResumeOffer() }", inText: widget) == 1)
+        #expect(MacAgentSource.count(of: "declineResumeOffer()", inText: widget) == 1)
+        #expect(MacAgentSource.count(of: "dismissResumeOffer", inText: widget) == 0)
     }
 
     /// **Where the offer sits in the widget's precedence, pinned by position.**

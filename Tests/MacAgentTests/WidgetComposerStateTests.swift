@@ -268,41 +268,95 @@ struct WidgetComposerStateTests {
 
     // MARK: - Where the caret goes
 
-    /// **The caret follows the live field** — the half of the fix that makes the other half rarely
-    /// matter.
+    /// **The caret follows the live field, and one owner decides which field that is** (SONNY-247,
+    /// then SONNY-283).
     ///
     /// While a question is parked, the only field that can take a keystroke is the clarification
     /// panel's, and it never asked for focus: the composer below claimed it unconditionally on
     /// appear, on the hotkey and on every expand, and then refused every keystroke and every paste
-    /// because it is `.disabled` in exactly that state. Both halves are pinned, because either alone
-    /// leaves the caret in the wrong place: the panel has to claim it, and the composer has to stop
-    /// taking it back.
+    /// because it is `.disabled` in exactly that state (SONNY-247). The first fix gave each field a
+    /// `Bool` of its own — the panel claimed the caret on appear, the composer's helper declined a
+    /// dead field — which fixed the keyboard and left the push-to-talk hotkey doing nothing: its
+    /// summon reached only the composer's helper, which rightly wrote `false` and had no other field
+    /// to offer (SONNY-283). So the widget owns one `FocusState<WidgetInputField?>`, the panel takes
+    /// a binding to it, and every summon asks `WidgetInputField.takingInput`. Every half is pinned,
+    /// because any one alone leaves the caret in the wrong place.
     @Test
-    func theClarificationPanelClaimsTheCaretAndTheComposerOnlyTakesItWhenItCanUseIt() throws {
+    func theWidgetOwnsTheCaretAndEverySummonAsksWhichFieldTakesIt() throws {
         let widget = try MacAgentSource.read("FloatingWidgetView.swift")
+
+        // One owner, and no field keeping a focus state of its own.
+        #expect(MacAgentSource.count(of: "@FocusState private var focusedField: WidgetInputField?", inText: widget) == 1)
+        #expect(MacAgentSource.count(of: "@FocusState private var", inText: widget) == 1)
+        #expect(MacAgentSource.count(of: "pillFocused", inText: widget) == 0)
+        #expect(MacAgentSource.count(of: "answerFocused", inText: widget) == 0)
+
+        // Two fields, each bound to that one state under its own case.
+        let composerRow = try MacAgentSource.braceBlock(of: widget, openedBy: "private var composerFieldRow: some View {")
+        #expect(MacAgentSource.count(of: ".focused($focusedField, equals: .composer)", inText: composerRow) == 1)
+
         let panel = try MacAgentSource.braceBlock(
             of: widget,
             openedBy: "private struct WidgetClarificationPanel: View {"
         )
-
-        #expect(MacAgentSource.count(of: "@FocusState private var answerFocused: Bool", inText: panel) == 1)
-        #expect(MacAgentSource.count(of: ".focused($answerFocused)", inText: panel) == 1)
+        #expect(MacAgentSource.count(of: "@FocusState.Binding var focusedField: WidgetInputField?", inText: panel) == 1)
+        #expect(MacAgentSource.count(of: ".focused($focusedField, equals: .clarificationAnswer)", inText: panel) == 1)
         // Two writers, and they are two events rather than one: the panel appearing, and a second
         // question arriving into a panel SwiftUI has kept the identity of.
-        #expect(MacAgentSource.count(of: "answerFocused = true", inText: panel) == 2)
+        #expect(MacAgentSource.count(of: "focusedField = .clarificationAnswer", inText: panel) == 2)
         #expect(MacAgentSource.count(of: ".onChange(of: question)", inText: panel) == 1)
+        // And the widget hands the panel its binding rather than a copy.
+        #expect(MacAgentSource.count(of: "focusedField: $focusedField", inText: widget) == 1)
 
-        // The composer's side: one guarded writer, and no unguarded one anywhere in the file.
-        let focusHelper = try MacAgentSource.braceBlock(
-            of: widget,
-            openedBy: "private func focusComposerIfItTakesInput() {"
-        )
-        #expect(
-            MacAgentSource.count(of: "pillFocused = ComposerPresentation.acceptsInput(composerState)", inText: focusHelper) == 1
-        )
-        #expect(MacAgentSource.count(of: "pillFocused = true", inText: widget) == 0)
+        // The summons' side: one helper, reading the rule off the same precedence that decides what
+        // is drawn, and no unguarded writer to either field anywhere in the file.
+        let helper = try MacAgentSource.braceBlock(of: widget, openedBy: "private func focusTheFieldThatTakesInput() {")
+        #expect(MacAgentSource.count(of: "focusedField = WidgetInputField.takingInput(", inText: helper) == 1)
+        #expect(MacAgentSource.count(of: "clarificationPanelShowing: isShowingClarificationPanel", inText: helper) == 1)
+        #expect(MacAgentSource.count(of: "composer: composerState", inText: helper) == 1)
+        #expect(MacAgentSource.count(of: "focusedField = .composer", inText: widget) == 0)
+        #expect(MacAgentSource.count(of: "focusedField = nil", inText: widget) == 0)
+        let showing = try MacAgentSource.braceBlock(of: widget, openedBy: "private var isShowingClarificationPanel: Bool {")
+        #expect(MacAgentSource.count(of: "if case .clarification = state", inText: showing) == 1)
         // Its three callers: first render, the hotkey/menu-bar presentation request, and the expand
-        // out of the compact capsule.
-        #expect(MacAgentSource.count(of: "focusComposerIfItTakesInput()", inText: widget) == 4, "declaration plus three callers")
+        // out of the compact capsule. The hotkey's is the one SONNY-283 was about.
+        #expect(MacAgentSource.count(of: "focusTheFieldThatTakesInput()", inText: widget) == 4, "declaration plus three callers")
+        let presentation = try MacAgentSource.region(
+            of: widget,
+            from: ".onChange(of: viewModel.widgetPresentationRequest) { _, _ in",
+            to: ".onChange(of: isMicHintSlotFree)"
+        )
+        #expect(MacAgentSource.count(of: "focusTheFieldThatTakesInput()", inText: presentation) == 1)
+    }
+
+    /// **The rule itself, off the view** (SONNY-283): a parked question's field wins outright, the
+    /// composer takes the caret only when it is free, and everything else leaves it nowhere.
+    ///
+    /// The last case is the manual item's "the caret still never jumps to the disabled composer",
+    /// stated as the function that decides it: with the clarification panel showing, no composer
+    /// state — not even `.ready`, which the two cannot produce together — puts the caret in the
+    /// composer.
+    @Test
+    func theCaretGoesToTheAnswerFieldWhileAQuestionIsParkedAndToTheComposerOnlyWhenItIsFree() {
+        #expect(WidgetInputField.takingInput(clarificationPanelShowing: true, composer: .waitingOnYou) == .clarificationAnswer)
+        #expect(WidgetInputField.takingInput(clarificationPanelShowing: false, composer: .ready) == .composer)
+        #expect(
+            WidgetInputField.takingInput(clarificationPanelShowing: false, composer: .waitingOnYou) == nil,
+            "an approval's panel has no field to type into"
+        )
+        #expect(WidgetInputField.takingInput(clarificationPanelShowing: false, composer: .working) == nil)
+
+        for state in ComposerPresentation.State.allCases {
+            #expect(
+                WidgetInputField.takingInput(clarificationPanelShowing: true, composer: state) == .clarificationAnswer,
+                "with a question parked the caret never reaches the composer, whatever the composer says (\(state))"
+            )
+        }
+        #expect(
+            ComposerPresentation.State.allCases
+                .filter { WidgetInputField.takingInput(clarificationPanelShowing: false, composer: $0) == .composer }
+                == [.ready],
+            "exactly one composer state takes the caret, and it is the one that accepts input"
+        )
     }
 }
