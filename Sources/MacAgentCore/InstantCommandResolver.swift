@@ -83,8 +83,14 @@ public struct InstantCommandResolver: Sendable {
             return .plan(snippetPlan(snippet))
         }
 
-        if looksLikeBareArithmetic(command) || looksLikeBareConversion(command) {
-            return .plan(calculatorPlan(expression: command))
+        // **A sum is allowed to end with `=`, and the rule that says so lives in the evaluator**
+        // (SONNY-281). This used to read the raw command against its own character set, and `=` was
+        // not in it — so `2 + 2` was answered here and `2 + 2 =` fell through to a planner with no
+        // calculator to offer, one character apart. The sum is read the way the evaluator will read
+        // it, and the plan carries that form so its own summary says `2 + 2` too.
+        let sum = CalculatorService.withoutTrailingEqualsOrQuestionMark(command)
+        if looksLikeBareArithmetic(sum) || looksLikeBareConversion(sum) {
+            return .plan(calculatorPlan(expression: sum))
         }
 
         return nil
@@ -550,6 +556,9 @@ public struct InstantCommandResolver: Sendable {
         return nil
     }
 
+    /// The expression after `calc`, `calculate` or a leading `=`, read the way the evaluator will
+    /// read it — a trailing `=` or `?` dropped along with the whitespace (SONNY-281) — so `= 2 + 2 =`
+    /// plans as `2 + 2`, and `= =` is the question rather than a plan to calculate `=`.
     private func prefixedCalculatorExpression(in command: String) -> String? {
         let lowered = command.lowercased()
         for prefix in ["calc", "calculate"] {
@@ -557,13 +566,13 @@ public struct InstantCommandResolver: Sendable {
                 return ""
             }
             if lowered.hasPrefix("\(prefix) ") {
-                return String(command.dropFirst(prefix.count))
-                    .trimmingCharacters(in: .whitespacesAndNewlines)
+                return CalculatorService.withoutTrailingEqualsOrQuestionMark(
+                    String(command.dropFirst(prefix.count))
+                )
             }
         }
         if command.hasPrefix("=") {
-            return String(command.dropFirst())
-                .trimmingCharacters(in: .whitespacesAndNewlines)
+            return CalculatorService.withoutTrailingEqualsOrQuestionMark(String(command.dropFirst()))
         }
         return nil
     }
