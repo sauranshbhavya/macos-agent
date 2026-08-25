@@ -40,19 +40,41 @@ struct SecretTextMatch: Equatable {
 /// sits above the service's default threshold; a match that is only *shaped* like a secret
 /// (high-entropy blob, Luhn-failing card shape, out-of-range SSN, unlabeled bullet run, spaced
 /// digit pair) sits below it and rides the fail-closed redact-and-flag path.
+///
+/// **Every pattern matches over look-alike-folded text** (SONNY-272). The recognizer can type a
+/// letter from another script in place of the one it saw — SONNY-260 measured U+0430 for the `a`
+/// of `api`, U+0410 for the `A` of `Abc`, U+043E for the `o` of `Mno` and U+0131 for a final `r`,
+/// all in one reading of one key — and every pattern here is exact, so one such letter costs the
+/// match. `matches(in:)` therefore folds the whole document once through ``LatinConfusables``
+/// before any class runs, and maps every range it found back into the caller's text before
+/// coalescing, so a match's `range` is always a range of the string the caller passed and
+/// ``mask(matches:in:)`` keeps every scalar the reader saw. The fold is document-wide rather than
+/// api-key-only because all seven classes are exact matches with the same exposure — `Bearer`,
+/// `eyJ`, `password`, `BEGIN … PRIVATE KEY` — and a per-class fold would be a second call to make
+/// the day one of them is next. What the fold does and deliberately does not reach is stated at
+/// `LatinConfusables`; the OCR flavours it cannot restore (a dropped leading `api`, `sk-` read as
+/// `5k-`) stay open, and spec §12.3 already calls this path best-effort for exactly that reason.
 struct SecretTextDetector {
     static let maskReplacement = "•••••"
 
     func matches(in text: String) -> [SecretTextMatch] {
+        let folded = LatinConfusables.fold(text)
         var found: [SecretTextMatch] = []
-        found += privateKeyMatches(in: text)
-        found += apiKeyMatches(in: text)
-        found += accessTokenMatches(in: text)
-        found += passwordFieldMatches(in: text)
-        found += oneTimeCodeMatches(in: text)
-        found += creditCardMatches(in: text)
-        found += ssnMatches(in: text)
-        return Self.coalesceOverlaps(found)
+        found += privateKeyMatches(in: folded.text)
+        found += apiKeyMatches(in: folded.text)
+        found += accessTokenMatches(in: folded.text)
+        found += passwordFieldMatches(in: folded.text)
+        found += oneTimeCodeMatches(in: folded.text)
+        found += creditCardMatches(in: folded.text)
+        found += ssnMatches(in: folded.text)
+        let inCallersText = found.map { match in
+            SecretTextMatch(
+                detectionClass: match.detectionClass,
+                range: folded.originalRange(of: match.range),
+                confidence: match.confidence
+            )
+        }
+        return Self.coalesceOverlaps(inCallersText)
     }
 
     /// Replaces every match with a fixed-width mask (never length-preserving — a mask that
@@ -171,7 +193,17 @@ struct SecretTextDetector {
 
     private func oneTimeCodeMatches(in text: String) -> [SecretTextMatch] {
         var results: [SecretTextMatch] = []
-        let contextual = /(?i)(?:code|otp|2fa|passcode|verification|authenticator|one[ -]?time)\b\D{0,20}?(\d{6,8})\b/
+        // The context word must begin a word, and "begin" is "not preceded by a letter of any
+        // script" rather than `\b` (PR #116 review, F2). Without it a *suffix* was a context word:
+        // `Barcode 123456` matched on `code`, and once the fold landed, an all-caps Cyrillic word
+        // folded into one — the Russian word for "view", U+041F U+0420 U+041E U+0421 U+041C U+041E
+        // U+0422 U+0420, folds to `…MOTP`, so with `: 123456` after it the line matched at 0.85,
+        // above the threshold. `[^\p{L}]` rather than `\b` because an underscore is a word
+        // character: `otp_code=123456` and `verification_code: 483291` are how forms and JSON label
+        // the field, and `\b` would drop both. An unfolded letter (U+0416, which has no Latin twin)
+        // is a letter too, so a look-alike glued to a Cyrillic word cannot fake the start of one
+        // either. (Code points rather than pasted letters, per the conventions file.)
+        let contextual = /(?i)(?:^|[^\p{L}])(?:code|otp|2fa|passcode|verification|authenticator|one[ -]?time)\b\D{0,20}?(\d{6,8})\b/
         for match in text.matches(of: contextual) {
             let value = match.output.1
             results.append(SecretTextMatch(
