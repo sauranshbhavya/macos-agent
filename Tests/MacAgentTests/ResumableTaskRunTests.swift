@@ -2011,7 +2011,7 @@ struct ClarificationAnswerRoutingTests {
         relaunched.refreshResumableTasks()
         let offer = try #require(relaunched.resumeOffer)
         #expect(offer.command == "=")
-        #expect(relaunched.continueResumableTask(offer))
+        #expect(relaunched.continueResumableTask(offer, origin: .widget))
         try await fixture.waitForIdle(relaunched)
         #expect(relaunched.clarificationQuestion == "What would you like me to calculate?")
         // The premise the first gate got wrong: this pause was raised by a resumed plan.
@@ -2084,6 +2084,58 @@ struct ClarificationAnswerRoutingTests {
         #expect(fixture.viewModel.lastCommand == "=2+2")
         #expect(fixture.viewModel.errorMessage == nil)
         #expect(fixture.planner.receivedCommands == [])
+    }
+
+    /// **A spoken answer to a question the resolver asked runs end to end: SONNY-283's routing into
+    /// SONNY-281's completion** (PR #119 review's rebase note — the gap neither branch's suite
+    /// covered, owed by the branch that merged second). The resolver asks what to calculate; the
+    /// transcript is recorded for *that* question, delivered to the answer field rather than
+    /// dispatched, Send comes back, and `submitClarification` hands the field's text to
+    /// `locallyCompletedCommand` — so the calculator answers it and the planner is never asked.
+    /// Both of #118's candidate readings are driven: spoken as the operand, the join `= 2 + 2`
+    /// prepares and runs; spoken as a restatement with the sign in it, the join `= = 2 + 2`
+    /// resolves and fails the dry run, so the answer is taken whole and runs.
+    @Test
+    func aSpokenAnswerToWhatToCalculateIsCompletedLocallyAndTheCalculatorAnswersIt() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+        fixture.planner.plan = fixture.draftThenOpenPlan
+
+        for spoken in ["2 + 2", "= 2 + 2"] {
+            fixture.viewModel.command = "="
+            fixture.viewModel.start(origin: .widget)
+            try await fixture.waitForIdle()
+            let question = try #require(fixture.viewModel.clarificationQuestion)
+            #expect(question == "What would you like me to calculate?")
+            #expect(fixture.viewModel.clarificationAnswer.isEmpty)
+
+            // The transcript, recorded for the resolver's own question and delivered through the
+            // router — fed, not sent.
+            fixture.viewModel.deliverTranscript(
+                spoken,
+                recordedFor: .clarificationAnswer(question: question),
+                origin: .widget
+            )
+            #expect(fixture.viewModel.clarificationAnswer == spoken, "\(spoken): landed in the field")
+            #expect(fixture.viewModel.clarificationQuestion == question, "\(spoken): not sent by landing")
+            #expect(fixture.viewModel.lastCommand == "=", "\(spoken): nothing dispatched by landing")
+            #expect(fixture.viewModel.canSendClarificationAnswer, "\(spoken): Send is live once the transcript is in")
+
+            fixture.viewModel.submitClarification()
+            try await fixture.waitForIdle()
+
+            #expect(fixture.viewModel.clarificationQuestion == nil, "\(spoken)")
+            #expect(fixture.viewModel.finalSummary == "2 + 2 = 4.", "\(spoken): the calculator answered")
+            #expect(fixture.viewModel.lastCommand == "= 2 + 2", "\(spoken): the completed command is what ran")
+            #expect(fixture.viewModel.errorMessage == nil, "\(spoken)")
+            #expect(fixture.viewModel.activeTaskOrigin == .widget, "\(spoken): the origin survived the pause")
+            // Captured, not inferred: the planner was never asked, so the answer went through
+            // SONNY-281's completion and not into an exchange.
+            #expect(fixture.planner.receivedCommands == [], "\(spoken)")
+            // The task finished, so the pause's record settled: nothing left to offer.
+            #expect(try fixture.resumableTaskStore.loadAll().isEmpty, "\(spoken)")
+            #expect(fixture.viewModel.resumeOffer == nil, "\(spoken)")
+        }
     }
 
     /// The snippet question asks for the body alone now, and the body joins onto the prefix: the
