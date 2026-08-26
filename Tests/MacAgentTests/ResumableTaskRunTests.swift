@@ -1539,8 +1539,11 @@ struct ClarificationKeepsTheRequestTests {
 /// like (`CalculatorService.withoutTrailingEqualsOrQuestionMark`), and an answer to a question the
 /// *resolver* asked first completes the command the resolver was missing (`ClarifiedCommand.completed`)
 /// — dispatched as a plain command, through the same door typed text goes through, when the
-/// resolver answers the completed command with a plan. A question the *planner* asked still goes to
-/// the planner with the request and the exchange, which `ClarificationKeepsTheRequestTests` holds.
+/// resolver answers the completed command with a plan and the executor's dry run prepares it. A
+/// question the *planner* asked still goes to the planner with the request and the exchange, which
+/// `ClarificationKeepsTheRequestTests` holds. PR #118's review moved the gate off the run's
+/// `PreparedPlanSource` and onto the question itself (F1, the Continue door) and put the joined
+/// reading ahead of the restatement (F2, the Writer case); both are pinned below.
 @Suite(.serialized)
 @MainActor
 struct ClarificationAnswerRoutingTests {
@@ -1607,8 +1610,6 @@ struct ClarificationAnswerRoutingTests {
         fixture.viewModel.start(origin: .widget)
         try await fixture.waitForIdle()
         #expect(fixture.viewModel.clarificationQuestion == "What would you like me to calculate?")
-        // The premise the routing reads: the resolver asked this one.
-        #expect(fixture.viewModel.activeTaskPlanSource == .instantResolver)
         #expect(fixture.planner.receivedCommands.isEmpty)
 
         fixture.viewModel.clarificationAnswer = "2 + 2"
@@ -1658,8 +1659,10 @@ struct ClarificationAnswerRoutingTests {
     }
 
     /// An answer that writes the whole command out is taken as the whole command. The resolver's
-    /// questions are raised on a bare prefix, so a user who answers `calc` with `calc 2 + 2` has
-    /// restated the prefix, not asked for `calc calc 2 + 2`.
+    /// questions are raised on a bare prefix, so a user who answers `calc` with `Calc 2 + 2` has
+    /// restated the prefix, not asked for `calc Calc 2 + 2` — which is tried first (PR #118 review
+    /// F2), resolves to a calculator plan, and fails the dry run's evaluation, so the answer alone
+    /// is what runs.
     @Test
     func anAnswerThatRestatesTheCommandIsTakenAsTheWholeCommand() async throws {
         let fixture = try makeFixture()
@@ -1697,7 +1700,6 @@ struct ClarificationAnswerRoutingTests {
         try await fixture.waitForIdle()
         let question = try #require(fixture.viewModel.clarificationQuestion)
         #expect(question.hasPrefix("I could not find a Shortcut named Foo."))
-        #expect(fixture.viewModel.activeTaskPlanSource == .instantResolver)
         #expect(fixture.planner.receivedCommands.isEmpty)
 
         fixture.viewModel.clarificationAnswer = "Send Report"
@@ -1715,8 +1717,9 @@ struct ClarificationAnswerRoutingTests {
     /// something local.** A routine saved as "morning routine", a request of "morning" the planner
     /// asked about, an answer of "routine": stitched together they name the routine exactly, and a
     /// bare saved name is an instant command. Running it would act on a guess about what a planner's
-    /// question meant. So the completion is offered only when the resolver asked — read off the
-    /// paused run's `PreparedPlanSource` — and this exchange reaches the planner whole.
+    /// question meant. So the completion is offered only when the resolver, asked again about the
+    /// request, raises the pending question — and it raises none about "morning" — so this exchange
+    /// reaches the planner whole.
     @Test
     func aPlannerQuestionIsNeverCompletedLocallyEvenWhenTheCompletionWouldResolve() async throws {
         let fixture = try makeFixture()
@@ -1738,7 +1741,8 @@ struct ClarificationAnswerRoutingTests {
         let question = "What would you like to do this morning?"
         try await fixture.run("morning", plan: fixture.clarifyingPlan(question: question))
         #expect(fixture.viewModel.clarificationQuestion == question)
-        #expect(fixture.viewModel.activeTaskPlanSource == .planner)
+        // The premise the gate reads: the resolver has no question of its own about "morning".
+        #expect(fixture.viewModel.makeInstantCommandResolver().resolve(command: "morning") == nil)
         #expect(fixture.planner.receivedCommands == ["morning"])
 
         fixture.planner.plan = fixture.draftThenOpenPlan
@@ -1752,6 +1756,183 @@ struct ClarificationAnswerRoutingTests {
         ])
         #expect(fixture.viewModel.plan?.steps.map(\.id) == ["draft", "url"])
     }
+    /// **The founder's repro, one door over** (PR #118 review, F1). Quit while Sonny is asking
+    /// what to calculate, relaunch, press Continue, answer `2 + 2`. The Continue door replays the
+    /// paused plan under `.resumedTask`, so a gate reading `activeTaskPlanSource == .instantResolver`
+    /// sent this answer down the planner path — the original refusal, reproduced at runtime. The
+    /// gate reads the question now: `=` resolved again asks exactly this, so the answer is the
+    /// resolver's whichever door re-asked it. The relaunch is built rather than simulated — a second
+    /// view model over the same store files, which is what the next launch is.
+    @Test
+    func answeringAfterQuitAndContinueStillCompletesTheCommandForTheResolver() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+        fixture.planner.plan = fixture.draftThenOpenPlan
+
+        fixture.viewModel.command = "="
+        fixture.viewModel.start(origin: .widget)
+        try await fixture.waitForIdle()
+        #expect(fixture.viewModel.clarificationQuestion == "What would you like me to calculate?")
+
+        // The quit: nothing is settled, so the record is still on disk for the next launch.
+        let relaunched = fixture.makeRelaunchedViewModel()
+        relaunched.refreshResumableTasks()
+        let offer = try #require(relaunched.resumeOffer)
+        #expect(offer.command == "=")
+        #expect(relaunched.continueResumableTask(offer))
+        try await fixture.waitForIdle(relaunched)
+        #expect(relaunched.clarificationQuestion == "What would you like me to calculate?")
+        // The premise the first gate got wrong: this pause was raised by a resumed plan.
+        #expect(relaunched.activeTaskPlanSource == .resumedTask)
+
+        relaunched.clarificationAnswer = "2 + 2"
+        relaunched.submitClarification()
+        try await fixture.waitForIdle(relaunched)
+
+        #expect(relaunched.finalSummary == "2 + 2 = 4.")
+        #expect(relaunched.lastCommand == "= 2 + 2")
+        #expect(fixture.planner.receivedCommands == [])
+    }
+
+    /// **An answer that merely begins with the request is read as the operand first** (PR #118
+    /// review, F2). `focus` answered `Focus Writer` passes a restatement test by coincidence, and
+    /// read that way Sonny switches to an app called Writer, which nobody named. Both apps are
+    /// running here, so the wrong reading would have worked — the join is tried first because it is
+    /// the reading that acts on what the user named, and it is taken when it prepares.
+    @Test
+    func anAnswerThatOnlyLooksLikeARestatementIsReadAsTheOperandFirst() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+        fixture.planner.plan = fixture.draftThenOpenPlan
+        fixture.runningAppSwitcher.apps = [
+            RunningApp(displayName: "Writer", bundleIdentifier: "com.example.writer", processIdentifier: 101),
+            RunningApp(displayName: "Focus Writer", bundleIdentifier: "com.example.focuswriter", processIdentifier: 102)
+        ]
+
+        fixture.viewModel.command = "focus"
+        fixture.viewModel.start(origin: .widget)
+        try await fixture.waitForIdle()
+        #expect(fixture.viewModel.clarificationQuestion == "Which running app should I switch to?")
+
+        fixture.viewModel.clarificationAnswer = "Focus Writer"
+        fixture.viewModel.submitClarification()
+        try await fixture.waitForIdle()
+
+        #expect(fixture.viewModel.lastCommand == "focus Focus Writer")
+        #expect(fixture.runningAppSwitcher.activated == ["com.example.focuswriter"])
+        #expect(fixture.planner.receivedCommands == [])
+    }
+
+    /// **The restatement is the fallback, and it is reached through `prepare`, not through
+    /// resolution** (PR #118 review, F2). `=` answered `=2+2` joins to `= =2+2`, which the resolver
+    /// happily plans — it builds a calculator plan for any non-empty expression — and which the
+    /// executor's dry run refuses, because previewing a calculation evaluates it. Only then is the
+    /// answer taken whole, and it answers 4. A check on resolution alone would have dispatched the
+    /// join and shown the user a parse error.
+    @Test
+    func anAnswerThatRestatesTheCommandIsTakenWholeWhenTheJoinResolvesButDoesNotPrepare() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+        fixture.planner.plan = fixture.draftThenOpenPlan
+
+        fixture.viewModel.command = "="
+        fixture.viewModel.start(origin: .widget)
+        try await fixture.waitForIdle()
+        // The premise: the join really does resolve, so resolution cannot be what rejects it.
+        guard case .plan? = fixture.viewModel.makeInstantCommandResolver().resolve(command: "= =2+2") else {
+            Issue.record("premise: \"= =2+2\" should resolve to a calculator plan")
+            return
+        }
+
+        fixture.viewModel.clarificationAnswer = "=2+2"
+        fixture.viewModel.submitClarification()
+        try await fixture.waitForIdle()
+
+        #expect(fixture.viewModel.finalSummary == "2+2 = 4.")
+        #expect(fixture.viewModel.lastCommand == "=2+2")
+        #expect(fixture.viewModel.errorMessage == nil)
+        #expect(fixture.planner.receivedCommands == [])
+    }
+
+    /// The snippet question asks for the body alone now, and the body joins onto the prefix: the
+    /// plan carries the trigger the user typed, and the save runs — a new snippet is tier 2, which
+    /// the consequence rule auto-runs.
+    @Test
+    func aSnippetBodyJoinsOntoItsPrefix() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+        fixture.planner.plan = fixture.draftThenOpenPlan
+
+        fixture.viewModel.command = "snippet save"
+        fixture.viewModel.start(origin: .widget)
+        try await fixture.waitForIdle()
+        #expect(fixture.viewModel.clarificationQuestion == "Use the format ;trigger = expansion.")
+
+        fixture.viewModel.clarificationAnswer = ";sig = Best, Sonny"
+        fixture.viewModel.submitClarification()
+        try await fixture.waitForIdle()
+
+        #expect(fixture.viewModel.finalSummary == "Saved snippet ;sig.")
+        #expect(fixture.viewModel.lastCommand == "snippet save ;sig = Best, Sonny")
+        #expect(fixture.viewModel.plan?.steps.first?.searchQuery == ";sig")
+        #expect(fixture.viewModel.plan?.steps.first?.draftContent == "Best, Sonny")
+        #expect(fixture.planner.receivedCommands == [])
+    }
+
+    /// **The stated residual, pinned so it is a record rather than a surprise.** A user who retypes
+    /// the whole command joins the prefix onto itself, and `snippet save snippet save ;sig = hello`
+    /// is a workable command — the store allows spaces in a trigger — so the join wins and a snippet
+    /// is **saved** under a trigger nobody meant, with no card first: a new snippet is tier 2 and the
+    /// consequence rule auto-runs it. (This test was first written expecting an approval pause, and
+    /// it is what showed there is none.) It is visible and deletable on the Memory page. The join has
+    /// to win this trade: the alternative is `anAnswerThatOnlyLooksLikeARestatementIsReadAsTheOperandFirst`,
+    /// a wrong action with nothing to delete, and nothing at the string level separates the two.
+    @Test
+    func retypingTheWholeSnippetCommandJoinsThePrefixOntoItselfAndSavesThatTrigger() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+        fixture.planner.plan = fixture.draftThenOpenPlan
+
+        fixture.viewModel.command = "snippet save"
+        fixture.viewModel.start(origin: .widget)
+        try await fixture.waitForIdle()
+
+        fixture.viewModel.clarificationAnswer = "snippet save ;sig = hello"
+        fixture.viewModel.submitClarification()
+        try await fixture.waitForIdle()
+
+        #expect(fixture.viewModel.finalSummary == "Saved snippet snippet save ;sig.")
+        #expect(fixture.viewModel.plan?.steps.first?.searchQuery == "snippet save ;sig")
+        #expect(fixture.planner.receivedCommands == [])
+    }
+
+    /// **The gate is the question, not the request alone.** A request the resolver would ask about,
+    /// paused under a different question, is not the resolver's to complete — the answer belongs to
+    /// whoever asked. **Stated plainly: the second question here is set by hand**, the same device
+    /// the clarification-gate suites use; what is pinned is that the pending question is compared,
+    /// not the reachability of the state that exposes it.
+    @Test
+    func aQuestionThatIsNotTheResolversForThisRequestIsNotCompleted() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+        fixture.planner.plan = fixture.draftThenOpenPlan
+
+        fixture.viewModel.command = "="
+        fixture.viewModel.start(origin: .widget)
+        try await fixture.waitForIdle()
+        #expect(fixture.viewModel.clarificationQuestion == "What would you like me to calculate?")
+
+        fixture.viewModel.clarificationQuestion = "Which of these did you mean?"
+        fixture.viewModel.clarificationAnswer = "2 + 2"
+        fixture.viewModel.submitClarification()
+        try await fixture.waitForIdle()
+
+        #expect(fixture.planner.receivedCommands == [
+            ClarifiedCommand.composed(request: "=", question: "Which of these did you mean?", answer: "2 + 2")
+        ])
+        #expect(fixture.viewModel.plan?.steps.map(\.id) == ["draft", "url"])
+    }
+
 }
 
 /// The widget's panel precedence, as a value a test can hold.
@@ -1839,6 +2020,16 @@ private struct OneShortcutForResumeTests: ShortcutCatalogProviding {
     func shortcutNames() throws -> [String] { ["Send Report"] }
 }
 
+/// Lists whatever a test says is running and records what was activated, never touching the real
+/// workspace (SONNY-281, PR #118 review F2): the Writer case needs two apps running whose names
+/// overlap, and `HermeticRunningAppSwitcher` lists none.
+private final class ListingRunningAppSwitcher: RunningAppSwitching {
+    var apps: [RunningApp] = []
+    private(set) var activated: [String] = []
+    func runningApps() -> [RunningApp] { apps }
+    func activate(bundleIdentifier: String) async throws { activated.append(bundleIdentifier) }
+}
+
 /// Fails the Shortcut unit so the run stops there — the interruption the offer is asked about. The
 /// Shortcut is never really run: this suite must not shell out to the developer's own Shortcuts.
 @MainActor
@@ -1861,6 +2052,7 @@ private final class ResumableFixture {
     let planner: ResumableFixturePlanner
     let browserOpener: FailableBrowserOpener
     let fileOpener: FailableFileOpener
+    let runningAppSwitcher: ListingRunningAppSwitcher
     let userDefaults: UserDefaults
     let suiteName: String
     /// Where the next draft unit writes. Reassigned between runs in a test that runs the same plan
@@ -1876,6 +2068,7 @@ private final class ResumableFixture {
         planner: ResumableFixturePlanner,
         browserOpener: FailableBrowserOpener,
         fileOpener: FailableFileOpener,
+        runningAppSwitcher: ListingRunningAppSwitcher,
         userDefaults: UserDefaults,
         suiteName: String,
         draftOutput: URL
@@ -1888,6 +2081,7 @@ private final class ResumableFixture {
         self.planner = planner
         self.browserOpener = browserOpener
         self.fileOpener = fileOpener
+        self.runningAppSwitcher = runningAppSwitcher
         self.userDefaults = userDefaults
         self.suiteName = suiteName
         self.draftOutput = draftOutput
@@ -2101,6 +2295,7 @@ private func makeFixture() throws -> ResumableFixture {
     let planner = ResumableFixturePlanner()
     let browserOpener = FailableBrowserOpener()
     let fileOpener = FailableFileOpener()
+    let runningAppSwitcher = ListingRunningAppSwitcher()
     let resumableTaskStore = ResumableTaskStore(
         fileURL: root.appendingPathComponent("resumable-tasks.json")
     )
@@ -2122,7 +2317,7 @@ private func makeFixture() throws -> ResumableFixture {
             fileOpener: fileOpener,
             finderRevealer: hermeticFinderRevealer,
             mediaOpener: HermeticMediaOpener(),
-            runningAppSwitcher: HermeticRunningAppSwitcher(),
+            runningAppSwitcher: runningAppSwitcher,
             shortcutInvoker: FailableShortcutInvoker(),
             finderContextReader: HermeticFinderContextReader(),
             documentConverter: HermeticDocumentConverter(),
@@ -2180,6 +2375,7 @@ private func makeFixture() throws -> ResumableFixture {
         planner: planner,
         browserOpener: browserOpener,
         fileOpener: fileOpener,
+        runningAppSwitcher: runningAppSwitcher,
         userDefaults: userDefaults,
         suiteName: suiteName,
         draftOutput: root.appendingPathComponent("notes.md")

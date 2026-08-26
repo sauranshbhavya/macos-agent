@@ -56,46 +56,51 @@ public enum ClarifiedCommand {
         return "\(trimmedRequest)\n\n\(exchange)"
     }
 
-    /// The plain command a clarification answer completes, for a question the instant resolver
-    /// asked (SONNY-281).
+    /// The commands a clarification answer may complete, in the order to try them, for a question
+    /// the instant resolver asked (SONNY-281; the order is PR #118 review F2).
     ///
     /// **The resolver's questions are raised on a bare prefix, and the answer is the rest of the
     /// command.** `=` asks what to calculate; `calc`, `switch to`, `run shortcut` and `snippet save`
-    /// each ask for the thing that would have followed them. The user answered the operand the
-    /// resolver was missing, so the command they meant is the prefix with the answer after it —
-    /// `= 2 + 2` — and that is a plain command: dispatched through the same door typed text goes
-    /// through, resolved by the same rule, and carrying no exchange for a label to strip or a retry
-    /// to re-ask. `composed` is the other shape, for a question the planner asked, where the answer
-    /// means whatever the planner's question made it mean and only the planner can apply it.
+    /// each ask for the thing that would have followed them. So the first candidate is the answer
+    /// joined to the request — `= 2 + 2`, `focus Focus Writer` — a plain command: dispatched through
+    /// the same door typed text goes through, resolved by the same rule, and carrying no exchange for
+    /// a label to strip or a retry to re-ask. `composed` is the other shape, for a question the
+    /// planner asked, where the answer means whatever the planner's question made it mean and only
+    /// the planner can apply it.
     ///
-    /// **An answer that restates the request is the whole command.** The question tells a user what
-    /// the command looks like — "Use the format snippet save ;trigger = expansion." says so in as
-    /// many words — so an answer that begins with the request is the user writing the command out,
-    /// not asking for the request twice: `calc` answered `calc 2 + 2` runs `calc 2 + 2`, not
-    /// `calc calc 2 + 2`. Case-insensitive, because the resolver's own prefixes are.
+    /// **Second, and only when the answer begins with the request: the answer alone.** A user who
+    /// answers `calc` with `calc 2 + 2` has written the command out, not asked for `calc calc 2 + 2`.
+    /// Case-insensitive, because the resolver's own prefixes are. **The join comes first because it is
+    /// the reading that acts on what the user named** (PR #118 review F2). A restatement test is a
+    /// prefix test and nothing more — `focus` answered `Focus Writer` passes it by coincidence, and
+    /// read as a restatement Sonny would switch to an app called Writer, which nobody named; read as
+    /// the operand, it names Focus Writer. No word-boundary rule separates the two, since
+    /// `Focus Writer` begins with `focus ` as surely as `calc 2 + 2` begins with `calc `. The join is
+    /// wrong only where it produces an unworkable command — `=` answered `= 2 + 2` joins to
+    /// `= = 2 + 2`, a sum of `=` — and the caller finds that out by resolving and preparing each
+    /// candidate in turn and taking the first that works (`AgentViewModel.locallyCompletedCommand`).
     ///
-    /// **This composes; it does not decide.** Whether the completed command is what the user meant
-    /// is not a property of the string — "I could not find a Shortcut named Foo. Which Shortcut
-    /// should I run?" wants a replacement, and `run shortcut Foo Send Report` completes nothing. The
-    /// caller asks the resolver whether the completion resolves to a plan and falls back to
-    /// `composed` when it does not; `AgentViewModel.submitClarification` is where that is decided
-    /// and where the reasons are.
+    /// **This composes; it does not decide.** Whether a candidate is what the user meant is not a
+    /// property of the string — "I could not find a Shortcut named Foo. Which Shortcut should I run?"
+    /// wants a replacement, and `run shortcut Foo Send Report` completes nothing; the caller asks the
+    /// resolver and the executor, and falls back to `composed` when no candidate works.
     ///
     /// Degrades the way `composed` does: an empty request is the answer alone, and an empty answer
     /// is the request alone — never a dangling space.
-    public static func completed(request: String, answer: String) -> String {
+    public static func completions(request: String, answer: String) -> [String] {
         let trimmedRequest = request.trimmingCharacters(in: .whitespacesAndNewlines)
         let trimmedAnswer = answer.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard !trimmedRequest.isEmpty else {
+            return [trimmedAnswer]
+        }
         guard !trimmedAnswer.isEmpty else {
-            return trimmedRequest
+            return [trimmedRequest]
         }
-        // The restatement rule, and it is also what makes an empty request the answer alone: every
-        // string begins with the empty one, so a separate emptiness check would be a second rule
-        // saying the same thing.
-        guard !trimmedAnswer.lowercased().hasPrefix(trimmedRequest.lowercased()) else {
-            return trimmedAnswer
+        var candidates = ["\(trimmedRequest) \(trimmedAnswer)"]
+        if trimmedAnswer.lowercased().hasPrefix(trimmedRequest.lowercased()) {
+            candidates.append(trimmedAnswer)
         }
-        return "\(trimmedRequest) \(trimmedAnswer)"
+        return candidates
     }
 
     /// Whether this command carries a clarification exchange.
@@ -108,7 +113,7 @@ public enum ClarifiedCommand {
     /// command and asked for more; the more is a planner's to read — **unless the resolver is the
     /// one that asked** (SONNY-281). Then the answer is offered back to it first, as the rest of the
     /// command it was missing, and it is only an answer that does not complete the command that is
-    /// composed into an exchange at all: see `completed(request:answer:)` and
+    /// composed into an exchange at all: see `completions(request:answer:)` and
     /// `AgentViewModel.submitClarification`. A command that carries an exchange and reaches the
     /// dispatch path is therefore one the resolver either did not ask about or could not complete.
     ///
