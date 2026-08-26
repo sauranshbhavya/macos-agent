@@ -2101,6 +2101,17 @@ struct ClarificationAnswerRoutingTests {
         defer { fixture.tearDown() }
         fixture.planner.plan = fixture.draftThenOpenPlan
 
+        // The premise the second reading rests on, pinned the way #118's own restatement test pins
+        // its own (`anAnswerThatRestatesTheCommandIsTakenWholeWhenTheJoinResolvesButDoesNotPrepare`,
+        // PR #119 re-check): the join `= = 2 + 2` really does resolve to a calculator plan, so what
+        // rejects it below is the executor's dry run and not resolution. Without this, a resolver
+        // that stopped planning the join would leave the assertions below green and the sentence
+        // above false.
+        guard case .plan? = fixture.viewModel.makeInstantCommandResolver().resolve(command: "= = 2 + 2") else {
+            Issue.record("premise: \"= = 2 + 2\" should resolve to a calculator plan")
+            return
+        }
+
         for spoken in ["2 + 2", "= 2 + 2"] {
             fixture.viewModel.command = "="
             fixture.viewModel.start(origin: .widget)
