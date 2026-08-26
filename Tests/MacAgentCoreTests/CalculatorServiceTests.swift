@@ -39,6 +39,45 @@ struct CalculatorServiceTests {
         #expect(try calculator.evaluate("Two Into Two").result == "4")
     }
 
+    /// The sign a person types at the end of a sum, and the question mark after it (SONNY-281).
+    @Test
+    func toleratesTheEqualsSignTypedAtTheEndOfASum() throws {
+        #expect(try calculator.evaluate("2 + 2 =").result == "4")
+        #expect(try calculator.evaluate("2 + 2 =").expression == "2 + 2")
+        #expect(try calculator.evaluate("2+2=?").result == "4")
+        #expect(try calculator.evaluate("2 + 2?").result == "4")
+        #expect(try calculator.evaluate("two plus two =").result == "4")
+        let bare = try calculator.evaluate("10 cm to in")
+        #expect(try calculator.evaluate("10 cm to in =").result == bare.result)
+    }
+
+    /// At the end only: an interior sign is a statement and fails as one, and a sign with nothing in
+    /// front of it is a missing expression rather than a sum of nothing.
+    @Test
+    func anEqualsSignAnywhereButTheEndIsStillRefused() throws {
+        #expect(throws: CalculatorError.invalidExpression("Unexpected token =.")) {
+            try calculator.evaluate("2 + 2 = 4")
+        }
+        #expect(throws: CalculatorError.missingExpression) {
+            try calculator.evaluate("=")
+        }
+        #expect(throws: CalculatorError.missingExpression) {
+            try calculator.evaluate(" = = ? ")
+        }
+    }
+
+    /// The rule is one function, read by the evaluator and by the resolver's bare-arithmetic rule —
+    /// a definition kept in one of the two leaves the other refusing input the first accepts.
+    @Test
+    func theTrailingSignRuleIsOneFunction() {
+        #expect(CalculatorService.withoutTrailingEqualsOrQuestionMark("2 + 2 =") == "2 + 2")
+        #expect(CalculatorService.withoutTrailingEqualsOrQuestionMark("  2 + 2 = ? ") == "2 + 2")
+        #expect(CalculatorService.withoutTrailingEqualsOrQuestionMark("2 + 2 = 4") == "2 + 2 = 4")
+        #expect(CalculatorService.withoutTrailingEqualsOrQuestionMark("==?") == "")
+        #expect(CalculatorService.withoutTrailingEqualsOrQuestionMark("2 + 2") == "2 + 2")
+        #expect(CalculatorService.withoutTrailingEqualsOrQuestionMark("2 + 2\n") == "2 + 2")
+    }
+
     @Test
     func spokenUnitConversionsAlsoNormalize() throws {
         let spoken = try calculator.evaluate("ten centimeters to inches")
