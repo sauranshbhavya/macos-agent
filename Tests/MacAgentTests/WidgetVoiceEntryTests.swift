@@ -168,6 +168,11 @@ struct WidgetVoiceEntryTests {
     /// The half the fix must not have broken. Each of these clears on its own, the user can do
     /// nothing about any of them, and a press during one is correctly swallowed — so the button
     /// stays disabled and nothing is said.
+    ///
+    /// **Four reasons, not five** (SONNY-283): "a clarification open" was the fifth and is no longer
+    /// transient at all — the founder decided voice answers a clarification, so a press during one
+    /// is the one the product most wants. `aPendingClarificationLeavesTheMicLiveAndVoiceUsable`
+    /// below holds the other direction.
     @Test
     func everyTransientReasonStillDisablesTheMicAndStaysSilent() throws {
         let root = try makeDirectory()
@@ -184,7 +189,6 @@ struct WidgetVoiceEntryTests {
                     )
                 }
             ),
-            ("a clarification open", { $0.clarificationQuestion = "Which folder?" }),
             ("the recorder starting up", { $0.isPreparingVoiceRecording = true }),
             ("a transcription in flight", { $0.isTranscribingVoice = true })
         ]
@@ -212,6 +216,45 @@ struct WidgetVoiceEntryTests {
             #expect(viewModel.isRecordingVoice == false, "\(reason) must not start recording")
             #expect(viewModel.isPreparingVoiceRecording == (reason == "the recorder starting up"))
         }
+    }
+
+    /// **SONNY-283: a parked clarification leaves the mic live and voice usable**, with the control
+    /// that the same fixture one line earlier refused for a transient reason — so this is a claim
+    /// about the clarification term and not about a fixture whose voice happens to be free.
+    ///
+    /// The founder found both the mic button and the push-to-talk hotkey inert while a question was
+    /// pending. The cause was this predicate: `clarificationQuestion != nil` was a term of
+    /// `isVoiceTransientlyBusy`, so the button was `.disabled` and the hotkey's `canUseVoice` guard
+    /// refused in silence — correctly silent for a transient reason, and wrong that this was one.
+    /// Nothing here presses the mic with voice available (see the note on the suite); what the
+    /// predicates say is the whole of what a press would consult.
+    @Test
+    func aPendingClarificationLeavesTheMicLiveAndVoiceUsable() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let viewModel = try makeViewModel(root: root)
+        viewModel.voiceConfigurationBlockerOverride = { nil }
+
+        // The control: a transient reason still refuses in this fixture.
+        viewModel.isTranscribingVoice = true
+        #expect(viewModel.isVoiceControlDisabled)
+        #expect(viewModel.canUseVoice == false)
+        viewModel.isTranscribingVoice = false
+
+        viewModel.clarificationQuestion = "Which folder?"
+
+        #expect(viewModel.isVoiceTransientlyBusy == false, "a question waiting on the user is not the app being busy")
+        #expect(viewModel.isVoiceControlDisabled == false, "the mic button must be pressable while a question is pending")
+        #expect(viewModel.canUseVoice, "the hotkey's guard must let a recording start while a question is pending")
+        // And a recording started now is for the answer field, not for a new task.
+        #expect(
+            AgentViewModel.VoiceRecordingPurpose.forRecordingStarted(clarificationQuestion: "Which folder?")
+                == .clarificationAnswer(question: "Which folder?")
+        )
+        #expect(
+            AgentViewModel.VoiceRecordingPurpose.forRecordingStarted(clarificationQuestion: nil)
+                == .command
+        )
     }
 
     /// The fix, stated as the property it actually is: a configuration failure refuses voice and
