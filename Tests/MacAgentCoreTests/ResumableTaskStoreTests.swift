@@ -231,6 +231,49 @@ struct ResumableTaskStoreTests {
         #expect(try store.loadAll(now: .fixture).map(\.completedStepIDs) == [["calc"]])
     }
 
+    /// **A decline survives the round trip, leaves the idle clock alone, and a file written before
+    /// the field existed reads as never declined** (SONNY-282).
+    ///
+    /// The third clause is the one that costs a user their data if it fails: `declinedAt` is decoded
+    /// with `decodeIfPresent`, and a required key would have made every pre-SONNY-282 file
+    /// undecodable — taking every unfinished task in it down with the one field.
+    @Test
+    func aDeclineRoundTripsAndAFileWithoutTheFieldReadsAsNeverDeclined() throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+        let store = makeStore(root: root)
+
+        var task = sample(command: "Zip my files")
+        #expect(!task.isDeclined)
+        #expect(task.declinedAt == nil)
+        task.declinedAt = Date(timeInterval: 60, since: .fixture)
+        try store.save(task, now: .fixture)
+
+        let loaded = try #require(try store.loadAll(now: .fixture).first)
+        #expect(loaded.isDeclined)
+        #expect(loaded.declinedAt == Date(timeInterval: 60, since: .fixture))
+        #expect(loaded.updatedAt == .fixture, "declining carries its own date and does not touch the idle clock")
+        #expect(loaded.stopReason == .interrupted)
+
+        // A file from before the field existed: the same shape
+        // `completedIdsThatNameNoStepAreDroppedOnConstructionAndOnDecode` writes, with no
+        // `declinedAt` key anywhere in it.
+        let legacyURL = root.appendingPathComponent("legacy-resumable-tasks.json")
+        let legacy = """
+        [{"id":"x","command":"Zip my files","plan":{"summary":"s","requiresConfirmation":false,\
+        "steps":[{"id":"calc","operation":"calculate_utility","description":"d"}]},\
+        "completedStepIDs":[],"startedAt":"2023-11-14T22:13:20Z",\
+        "updatedAt":"2023-11-14T22:13:20Z","stopReason":"interrupted"}]
+        """
+        try Data(legacy.utf8).write(to: legacyURL, options: .atomic)
+        let legacyStore = ResumableTaskStore(fileURL: legacyURL, encryption: testEncryption())
+
+        let old = try #require(try legacyStore.loadAll(now: .fixture).first)
+        #expect(!old.isDeclined)
+        #expect(old.declinedAt == nil)
+        #expect(old.isResumable, "and it is still a whole, resumable record")
+    }
+
     /// The command is display text, so it is trimmed — and trimmed on the way back in too, for the
     /// reason `StoredTaskPlanDetail` gives: a rule the decode path skips holds in one direction only.
     @Test

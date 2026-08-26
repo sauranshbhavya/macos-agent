@@ -508,6 +508,22 @@ final class AgentViewModel: ObservableObject {
     /// to match `toggleVoiceRecording(origin:)`'s own default, which is documented there as the
     /// direction that consumes no pending workspace-card binding.
     private var voiceRecordingOrigin: TaskOrigin = .commandCenter
+    /// What the in-progress recording is *for* — a command, or the answer to a parked clarification
+    /// — decided when the recording starts and read back when its transcript arrives (SONNY-283).
+    ///
+    /// **Decided at the start and not at the end, because the two can differ and the difference is
+    /// not safe to guess at.** A transcription takes a few seconds, and a question can be cancelled
+    /// or can arrive inside them. A transcript recorded *as an answer* whose question has since gone
+    /// must not run as a command — voice commands auto-execute, and "the Downloads folder" spoken in
+    /// reply to a question is not a task anybody asked for. A transcript recorded *as a command*
+    /// while a question has since arrived — a scheduled routine can raise one — must not land in the
+    /// answer field of a question the user never saw when they spoke. So the purpose is captured with
+    /// the origin, beside it, and `deliverTranscript` refuses both mismatches rather than routing on
+    /// the state it happens to find.
+    ///
+    /// The `.command` initial value is never observed, for the same reason `voiceRecordingOrigin`'s
+    /// is not.
+    private var voiceRecordingPurpose: VoiceRecordingPurpose = .command
     /// The last command text actually submitted for real execution — tracked on the shared view
     /// model (not as widget-local UI state) so both the widget's own retry button and a system
     /// notification's "Retry" action, which fires from outside SwiftUI entirely, can resubmit it.
@@ -569,22 +585,32 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
-    /// Offers the user has waved away in this app session.
+    /// Offers the user has declined in this app session — the in-memory half of a decline, beside
+    /// the persisted half on the record itself.
     ///
-    /// **Session-scoped on purpose, and it is not a delete.** The founder's lifecycle is that a
-    /// record lives until its task completes, the user deletes it, or it goes idle; "not now" is
-    /// none of those. So dismissing takes the offer off the widget without touching the record,
-    /// which stays visible and deletable under Memory and comes back at the next launch — and the
-    /// idle expiry is what ends it if the user never answers either way.
+    /// **This used to be the whole mechanism, and it was session-scoped on purpose: "not now"**
+    /// (SONNY-210). The founder's lifecycle is that a record lives until its task completes, the
+    /// user deletes it, or it goes idle, and a dismissal was none of those — so the offer came back
+    /// at the next launch, and the next, until the founder pressed the cross three times across
+    /// three relaunches and stopped testing to ask what was broken (SONNY-282). Nothing was; that
+    /// was the design, and the design was wrong. The cross now writes `ResumableTask.declinedAt`
+    /// through `declineResumeOffer()`, which is what survives a relaunch.
+    ///
+    /// **Why this set still exists.** It takes the offer off the widget the instant the cross is
+    /// pressed, whatever the disk says. The persisted write can fail — a full disk, a store that
+    /// will not encrypt — and a widget that kept re-raising the offer while `errorMessage` said the
+    /// decline could not be saved would loop the user through the same press. So the decline is
+    /// honoured for this session unconditionally, the error says it may return after a relaunch, and
+    /// the record on disk is the truth about the launches after that.
     ///
     /// **`@Published`, and that is a fix rather than decoration** (PR #105 review F2). It was a
-    /// plain `private var`, so `dismissResumeOffer()` mutated it, `resumeOffer` went `nil`, and
+    /// plain `private var`, so dismissing mutated it, `resumeOffer` went `nil`, and
     /// `objectWillChange` fired zero times — SwiftUI never re-evaluated `FloatingWidgetView.state`
-    /// and the panel stayed on screen. The user pressed "Not now" and watched nothing happen until
+    /// and the panel stayed on screen. The user pressed the cross and watched nothing happen until
     /// the six-second collapse took the whole widget instead. **Every input to `resumeOffer` must
     /// publish**; the other one, `resumableTasks`, already does, and
-    /// `dismissingTheOfferPublishesSoTheWidgetRepaints` holds this one.
-    @Published private var dismissedResumeOfferIDs: Set<String> = []
+    /// `decliningTheOfferPublishesSoTheWidgetRepaints` holds this one.
+    @Published private var declinedResumeOfferIDs: Set<String> = []
     private var preserveUsageForNextStart = false
     private let finderRevealer: ([URL]) -> Void
     private var localStorageLoadFailures: [LocalStorageLoadFailureSource: String] = [:]
@@ -704,6 +730,25 @@ final class AgentViewModel: ObservableObject {
     private enum VoiceRecordingTrigger {
         case button
         case hotKey
+    }
+
+    /// What a voice recording's transcript is delivered to (SONNY-283). Internal rather than
+    /// private so a test can drive `deliverTranscript` with each — the live path needs a real
+    /// transcriber and an API key to reach it.
+    enum VoiceRecordingPurpose: Equatable {
+        /// Dispatched as a task of its own, the way every voice command always has been.
+        case command
+        /// Placed in the clarification panel's answer field, for the user to send. Recorded while
+        /// *this* question was parked on them — the text is carried so delivery can check it is
+        /// still the question on screen, not merely that some question is (PR #119 review, F3): a
+        /// second question can arrive inside the transcription's round trip, and the answer to the
+        /// first must not land in the second one's field.
+        case clarificationAnswer(question: String)
+
+        /// The purpose a recording started now would have.
+        static func forRecordingStarted(clarificationQuestion: String?) -> VoiceRecordingPurpose {
+            clarificationQuestion.map { .clarificationAnswer(question: $0) } ?? .command
+        }
     }
 
     /// Which surface actually submitted the currently-relevant task — the shared `AgentViewModel`
@@ -1094,16 +1139,56 @@ final class AgentViewModel: ObservableObject {
     /// which is how this reached the assembled head with the voice half closed and the card half
     /// open.
     ///
-    /// It does not break the continuation: `submitClarification` clears `clarificationQuestion`
-    /// *before* re-entering `start`, so answering proceeds exactly as it did. And it is what makes
-    /// `performStart`'s unconditional `clarificationQuestion = nil` unreachable by bypass rather
-    /// than merely unreached — every path to it now passes this guard.
+    /// The clarification term does not break the continuation: `submitClarification` clears
+    /// `clarificationQuestion` *before* re-entering `start`, so *that* term passes for an answer.
+    /// **The `!isTranscribingVoice` term is a different matter, and `submitClarification` has to
+    /// honour it before it tears anything down** (PR #119 review, F1). Everything that function
+    /// clears — the question, the answer, the origin, the binding, the request — is cleared before
+    /// `start` runs this guard, and a refusal here puts none of it back: the pause is gone, nothing
+    /// runs, the composed Q&A sits in `command`, and the record of the task just abandoned is left
+    /// to be *offered*. That window used to need a transcription already in flight when a question
+    /// arrived; with voice answering a clarification it is the ordinary case — the user speaks,
+    /// the field already holds text, and Return lands inside the round trip. So
+    /// `canSendClarificationAnswer` refuses first, on the same terms, and both Send controls are
+    /// disabled off it. And it is what makes `performStart`'s unconditional
+    /// `clarificationQuestion = nil` unreachable by bypass rather than merely unreached — every path
+    /// to it now passes this guard.
     var canSubmit: Bool {
         if isAwaitingApproval {
             return !isRunning && preparedRun != nil && runner != nil
         }
         return !isRunning && clarificationQuestion == nil && !isTranscribingVoice
             && !command.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
+    }
+
+    /// Whether a voice recording, or the transcription of one, is in flight — the three flags the
+    /// widget already reads as one (`FloatingWidgetView.isVoiceActive`), stated here so the answer
+    /// gate and the view read the same thing.
+    var isVoiceInputInFlight: Bool {
+        isPreparingVoiceRecording || isRecordingVoice || isTranscribingVoice
+    }
+
+    /// Whether the clarification answer can be sent right now — the one predicate
+    /// `submitClarification` refuses on and both Send controls are disabled off, so the state and
+    /// the control cannot disagree (PR #119 review, F1).
+    ///
+    /// **All three voice terms, not only transcribing, and each for its own reason.**
+    /// *Transcribing* is the one that destroys state: `canSubmit` refuses the dispatch on it, and
+    /// by then the pause has been torn down (see `canSubmit`). *Recording* and *preparing* do not
+    /// reach that refusal — `canSubmit` has no term for either — so a Return during them would run
+    /// the continuation and the words the user is still speaking would arrive to a question that
+    /// has gone, and be dropped (F3's guard). Those words are part of *this* answer; the user
+    /// pressed Return with the mic live, which is not an instruction to discard them. And a
+    /// recording is a transcription a moment later, so allowing the send during one and refusing it
+    /// during the other would be the same press answered two ways a second apart. The mic's own
+    /// control follows the same rule from the other side: it stays pressable while recording so
+    /// the user can *stop*, which is the way to make the answer sendable.
+    ///
+    /// Silent, like every transient refusal: the transcript lands in a second and the field says
+    /// so, and neither panel shows `.failure` while a question stands anyway.
+    var canSendClarificationAnswer: Bool {
+        clarificationQuestion != nil && !isVoiceInputInFlight
+            && !clarificationAnswer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty
     }
 
     /// Whether `cancelCurrentRun()` would actually end something — true in exactly the states it
@@ -1224,20 +1309,19 @@ final class AgentViewModel: ObservableObject {
     /// **The transient half of voice readiness** — the app is busy, and refusing in silence is the
     /// correct answer. Nothing here is something the user could go and fix; each clears on its own.
     ///
-    /// `clarificationQuestion == nil` restores parity with the typed route, which `isTaskInFlight`
-    /// has always blocked during a clarification pause. Voice lacking the same term was asymmetry by
-    /// omission, and it was reachable: a clarification pause holds `activeTaskScope` (the same task
-    /// is resuming), so the chip shows the *paused* task's workspace while a card arm sits invisible
-    /// behind it — and both voice entry points dispatch with `origin: .widget`, so the transcription
-    /// completion consumed that arm. The task then ran scoped to a workspace the chip never named,
-    /// and the paused task's unanswered clarification was silently discarded by `performStart`'s
-    /// per-task reset.
-    ///
-    /// Voice answering a clarification is a real feature and this does not foreclose it; it is a
-    /// separate ticket, and the gate has to exist first.
+    /// **A parked clarification is no longer a term here** (SONNY-283, founder decision 2026-08-25:
+    /// voice answers a clarification). It was one, and for a real reason: a clarification pause
+    /// holds `activeTaskScope`, so the chip shows the *paused* task's workspace while a card arm
+    /// sits invisible behind it — and a transcript dispatched as a *command* during the pause
+    /// consumed that arm, ran scoped to a workspace the chip never named, and discarded the
+    /// unanswered question through `performStart`'s per-task reset. What made that reachable was
+    /// the transcript being *dispatched*. A recording started during a clarification is now recorded
+    /// for the answer field (`VoiceRecordingPurpose`), and `dispatchTranscribedCommand`'s own guard
+    /// still refuses a command transcript while a question stands — so the gate this term provided
+    /// moved to the delivery, where it can tell the two apart, and the mic and the hotkey are live
+    /// at the one moment the founder most wants to speak.
     var isVoiceTransientlyBusy: Bool {
-        clarificationQuestion != nil || isAwaitingApproval || isRunning
-            || isPreparingVoiceRecording || isTranscribingVoice
+        isAwaitingApproval || isRunning || isPreparingVoiceRecording || isTranscribingVoice
     }
 
     var canUseVoice: Bool {
@@ -1392,6 +1476,13 @@ final class AgentViewModel: ObservableObject {
     /// composed, not a standing statement about records already on disk. It reads `memorySettings`,
     /// which is `@Published`, so flipping the switch republishes and the widget re-evaluates — the
     /// rule F2 cost this branch to learn, that every input to this property must publish.
+    ///
+    /// **A declined record is skipped, not removed** (SONNY-282). `isDeclined` is read off the
+    /// record the store loaded, so a decline written at a previous launch is honoured at this one —
+    /// the whole of what the founder asked for — and the session set beside it is the same answer
+    /// for the launch the cross was pressed in, disk or no disk. Neither touches
+    /// `mayBeOfferedForResume`, the safety rule; a declined task is still one the user can continue
+    /// from Memory, and the next record after it is the one offered instead.
     var resumeOffer: ResumableTask? {
         guard !isTaskInFlight else {
             return nil
@@ -1400,7 +1491,7 @@ final class AgentViewModel: ObservableObject {
             return nil
         }
         return resumableTasks.first {
-            $0.mayBeOfferedForResume && !dismissedResumeOfferIDs.contains($0.id)
+            $0.mayBeOfferedForResume && !$0.isDeclined && !declinedResumeOfferIDs.contains($0.id)
         }
     }
 
@@ -2461,6 +2552,15 @@ final class AgentViewModel: ObservableObject {
     /// continuation behaves like the task the user actually started.
     func submitClarification() {
         guard let question = clarificationQuestion else {
+            return
+        }
+        // **Before anything is torn down** (PR #119 review, F1). Every line below this clears a
+        // piece of the pause and then calls `start()`, which refuses while a transcription is in
+        // flight — and puts nothing back. `canSendClarificationAnswer` is the rule and says why all
+        // three voice terms are in it; the Send controls are disabled off the same predicate, so
+        // this is reached only by Return on the field, and it refuses the same way the button does.
+        guard !isVoiceInputInFlight else {
+            logStore.append(.observe, "Answer not sent: voice input is still in flight.")
             return
         }
 
@@ -3701,6 +3801,23 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
+    /// Continues the unfinished task at `index` of the list the Memory sheet rendered — the second
+    /// door onto `continueResumableTask`, and the one that reaches a *declined* record (SONNY-282).
+    ///
+    /// **This door did not exist before SONNY-282, and the decision needs it to.** The sheet only
+    /// ever deleted; a task the widget had stopped offering could therefore be reached by nothing
+    /// but Delete, which would have made the cross a deletion with extra steps. The founder kept the
+    /// record precisely so it could be picked up again, and this is where.
+    ///
+    /// By position into the same published array, for the reason `deleteMemoryEntry(in:at:)` gives.
+    /// `.commandCenter`, because that is where the row is; the sheet closes on `true` and stays open
+    /// on a refusal, the way the task-detail sheet does around `runTaskAgain`.
+    @discardableResult
+    func continueUnfinishedTask(at index: Int) -> Bool {
+        guard resumableTasks.indices.contains(index) else { return false }
+        return continueResumableTask(resumableTasks[index], origin: .commandCenter)
+    }
+
     /// The four per-entry deletes' shared body.
     ///
     /// `errorMessage`, not `localStorageNotice`, and the distinction is the one CLAUDE.md's
@@ -4143,11 +4260,11 @@ final class AgentViewModel: ObservableObject {
         lastPerRowDelete = nil
         // Row 13's two in-memory slots (SONNY-210). The wipe has just erased the file both describe:
         // a surviving checkpoint would write its task straight back on the next unit boundary, and a
-        // surviving dismissal set would silently suppress an offer for a record whose id can only
+        // surviving decline set would silently suppress an offer for a record whose id can only
         // now belong to a different task.
         activeResumableTask = nil
         pendingResumableContinuation = nil
-        dismissedResumeOfferIDs = []
+        declinedResumeOfferIDs = []
         priorTaskContextStore.clear()
         taskUsageRecorder.reset()
         logStore.reset()
@@ -4472,6 +4589,10 @@ final class AgentViewModel: ObservableObject {
         }
 
         voiceRecordingOrigin = origin
+        // Captured now, beside the origin, and never re-derived — `voiceRecordingPurpose` says why
+        // the state at the transcript's arrival is the wrong thing to route on. The question's own
+        // text goes with it, so delivery can tell "the question is still open" from "a question is".
+        voiceRecordingPurpose = .forRecordingStarted(clarificationQuestion: clarificationQuestion)
         isPreparingVoiceRecording = true
 
         Task {
@@ -4497,19 +4618,40 @@ final class AgentViewModel: ObservableObject {
 
                 isPreparingVoiceRecording = false
                 isRecordingVoice = true
-                finalSummary = ""
                 errorMessage = nil
-                // A fresh recording is a fresh interaction — clear the *previous* task's leftovers
-                // now, not only once a real submission reaches `performStart`. Otherwise, if this
-                // new attempt fails before ever getting that far (e.g. transcription comes back
-                // with no text), the failure panel reuses `WidgetExistingStepRows` and renders the
-                // old, unrelated task's step rows above the new error — a real, reported bug.
-                plan = nil
-                stepStatuses = [:]
-                suggestions = []
-                let recordingMessage = trigger == .hotKey
-                    ? "Recording voice command from hotkey"
-                    : "Recording voice command"
+                switch voiceRecordingPurpose {
+                case .command:
+                    // A fresh recording is a fresh interaction — clear the *previous* task's
+                    // leftovers now, not only once a real submission reaches `performStart`.
+                    // Otherwise, if this new attempt fails before ever getting that far (e.g.
+                    // transcription comes back with no text), the failure panel reuses
+                    // `WidgetExistingStepRows` and renders the old, unrelated task's step rows
+                    // above the new error — a real, reported bug.
+                    finalSummary = ""
+                    plan = nil
+                    stepStatuses = [:]
+                    suggestions = []
+                case .clarificationAnswer:
+                    // **Nothing is cleared, because nothing here is a leftover** (SONNY-283). The
+                    // plan and its step statuses are the paused task's own, and the clarification
+                    // panel is drawing them above the question this recording answers — wiping
+                    // them would blank the panel the user is speaking into. The summary is that
+                    // pause's "Clarification needed" line, and neither this nor
+                    // `stopVoiceRecordingAndTranscribe` touches it, or the paused task's usage,
+                    // while the question is open (PR #119 review, F4).
+                    break
+                }
+                let recordingMessage: String
+                switch (voiceRecordingPurpose, trigger) {
+                case (.command, .hotKey):
+                    recordingMessage = "Recording voice command from hotkey"
+                case (.command, .button):
+                    recordingMessage = "Recording voice command"
+                case (.clarificationAnswer, .hotKey):
+                    recordingMessage = "Recording voice answer from hotkey"
+                case (.clarificationAnswer, .button):
+                    recordingMessage = "Recording voice answer"
+                }
                 logStore.append(.observe, recordingMessage)
             } catch {
                 isPreparingVoiceRecording = false
@@ -4532,11 +4674,25 @@ final class AgentViewModel: ObservableObject {
         }
 
         Task {
-            taskUsageRecorder.reset()
-            taskUsageSummary = .empty
+            switch voiceRecordingPurpose {
+            case .command:
+                // A command is a fresh task, and its transcription is the first cost of it: the
+                // recorder starts over here so the summary the run ends with is this task's alone.
+                taskUsageRecorder.reset()
+                taskUsageSummary = .empty
+                logStore.append(.act, "Transcribing voice command")
+            case .clarificationAnswer:
+                // **An answer belongs to the task that is paused, so nothing of that task's is
+                // reset** (PR #119 review, F4). The recorder keeps the pause's own cost and the
+                // transcription is added to it; `preserveUsageForNextStart` below then carries the
+                // whole of it into the answer's `start()`, so the continuation's usage line is the
+                // cost of the task the user asked for — the pause, the words, and the re-plan.
+                // (A *typed* answer's `start()` resets instead, which predates this branch and is
+                // left as it is.)
+                logStore.append(.act, "Transcribing voice answer")
+            }
             isTranscribingVoice = true
             errorMessage = nil
-            logStore.append(.act, "Transcribing voice command")
             defer {
                 publishTaskUsageSummary()
                 try? FileManager.default.removeItem(at: audioURL)
@@ -4549,7 +4705,12 @@ final class AgentViewModel: ObservableObject {
                 // through `dispatch`, which assigns it and clears it again if the dispatch is
                 // refused — writing it first would reinstate exactly the residue this round removes,
                 // for a transcription that completed into a clarification pause.
-                finalSummary = ""
+                if case .command = voiceRecordingPurpose {
+                    // The previous task's summary, cleared for a new one. An answer's paused task
+                    // keeps its "Clarification needed" line until the question is answered or
+                    // cancelled (F4 again).
+                    finalSummary = ""
+                }
                 isTranscribingVoice = false
                 preserveUsageForNextStart = true
                 // States only what is known here. "Sonny will act now" was written *before* the
@@ -4558,7 +4719,7 @@ final class AgentViewModel: ObservableObject {
                 // no error set, and this sentence as the last thing said about them. What happens
                 // next is `dispatch`'s to record, and it now does, on every door. (PR #40 review, F5.)
                 logStore.append(.observe, "Transcript ready.")
-                dispatchTranscribedCommand(result.text, origin: voiceRecordingOrigin)
+                deliverTranscript(result.text, recordedFor: voiceRecordingPurpose, origin: voiceRecordingOrigin)
             } catch {
                 isTranscribingVoice = false
                 // This is the bug that made the auto-clear timer feel broken: a failed
@@ -4572,8 +4733,74 @@ final class AgentViewModel: ObservableObject {
         }
     }
 
-    /// The dispatch a completed voice transcription issues — the one implementation, called by the
-    /// real completion above and driven directly by tests.
+    /// Where a finished transcript goes — the one router, called by the real completion above and
+    /// driven directly by tests (SONNY-283).
+    ///
+    /// Routes on the purpose the recording *started* with, never on the state it finds now;
+    /// `voiceRecordingPurpose` gives both mismatches and why each is refused rather than re-routed.
+    /// Internal rather than private for the reason `dispatchTranscribedCommand` is: the live path
+    /// needs a real transcriber and an API key to reach it, and this is the seam a test drives
+    /// instead.
+    func deliverTranscript(
+        _ transcript: String,
+        recordedFor purpose: VoiceRecordingPurpose,
+        origin: TaskOrigin
+    ) {
+        switch purpose {
+        case .command:
+            dispatchTranscribedCommand(transcript, origin: origin)
+        case .clarificationAnswer(let question):
+            answerClarificationWithTranscript(transcript, answering: question)
+        }
+    }
+
+    /// Puts a transcript recorded *as an answer* into the clarification panel's answer field, for
+    /// the user to send (SONNY-283, founder decision 2026-08-25: the mic and the hotkey both feed
+    /// the answer field).
+    ///
+    /// **Feeds the field; does not send it.** The decision's own words are "feed the answer field",
+    /// and its manual item is "confirm it lands in the answer field" — neither of which a transcript
+    /// that submitted itself could satisfy. It is also the safer shape: a voice command auto-executes
+    /// because a misheard command reaches a planner and a gate, but a misheard *answer* to "which
+    /// folder?" is one keystroke from running against the wrong folder, and the field it lands in
+    /// already has the caret, so sending is Return. Appended rather than replacing, the way dictation
+    /// lands at the caret in the founder's reference product (Wispr Flow): a user who typed "the"
+    /// and then spoke "Downloads folder" has "the Downloads folder", not the second half alone.
+    ///
+    /// **Dropped, with a log line, when the question it answers is no longer the one on screen** —
+    /// cancelled while the user was mid-sentence, answered by typing before the transcript came
+    /// back, or replaced by a second question inside the transcription's round trip (PR #119
+    /// review, F3: a guard that only asked whether *a* question was open let the answer to the
+    /// first land in the second one's field). Running it as a command instead is the
+    /// auto-executing dispatch `voiceRecordingPurpose` exists to rule out, and there is no field
+    /// that is rightly its.
+    private func answerClarificationWithTranscript(_ transcript: String, answering question: String) {
+        let spoken = transcript.trimmingCharacters(in: .whitespacesAndNewlines)
+        guard clarificationQuestion == question else {
+            // The transcription's usage was armed for the answer's own `start()`, which is not
+            // coming. Left armed, it would be billed to whatever unrelated task runs next.
+            preserveUsageForNextStart = false
+            logStore.append(.observe, "Voice answer discarded: the question it answered is no longer open.")
+            return
+        }
+        guard !spoken.isEmpty else {
+            logStore.append(.observe, "Voice answer was empty.")
+            return
+        }
+        let existing = clarificationAnswer
+        if existing.isEmpty {
+            clarificationAnswer = spoken
+        } else if existing.last?.isWhitespace == true {
+            clarificationAnswer = existing + spoken
+        } else {
+            clarificationAnswer = existing + " " + spoken
+        }
+        logStore.append(.observe, "Voice answer placed in the answer field.")
+    }
+
+    /// The dispatch a completed voice transcription issues for a *command* — the one
+    /// implementation, called through `deliverTranscript` by the real completion above and driven
+    /// directly by tests.
     ///
     /// Internal rather than private so it is reachable without a real transcriber and an API key,
     /// which is what the live path needs. It is a seam, not a reimplementation: there is exactly one
@@ -4583,7 +4810,11 @@ final class AgentViewModel: ObservableObject {
     /// **The guard is here as well as in `canUseVoice` for a reason, not by belt-and-braces habit.**
     /// `canUseVoice` gates the *entry* points — the mic button and push-to-talk — but a
     /// transcription already in flight when a clarification arrives would still land here. Refusing
-    /// at the dispatch makes the guarantee independent of that timing.
+    /// at the dispatch makes the guarantee independent of that timing. **It is the only guard now**
+    /// (SONNY-283): `isVoiceTransientlyBusy` dropped its clarification term so that a recording can
+    /// *start* during a question, and a recording started then is delivered to the answer field and
+    /// never here — so what reaches this guard is exactly the case it was written for, a command
+    /// recorded before the question arrived.
     func dispatchTranscribedCommand(_ transcript: String, origin: TaskOrigin = .widget) {
         guard clarificationQuestion == nil else {
             logStore.append(.observe, "Voice command ignored while a clarification is open.")
@@ -5468,6 +5699,17 @@ final class AgentViewModel: ObservableObject {
             // anything more specific. A run that *fails* is stamped `.failed` by the settle.
             stopReason: .interrupted
         )
+        // **A continuation spends a decline, here and nowhere else** (SONNY-282; PR #119 review,
+        // F2). The record above is written afresh with no `declinedAt`, so the disk now says "offer
+        // this if it stops again" — and the session set has to say the same, or the widget stays
+        // silent about it until the next launch. This is the one site every continuation door
+        // reaches — the offer's Continue and Memory's (`.resuming`), the failure panel's Retry and
+        // the Tasks row's Run again (`.restarting`) — which is why the remove is here rather than
+        // in whichever door happened to be written first. A task of its own (`continuing == nil`)
+        // has a fresh id and nothing to un-decline.
+        if let continuing {
+            declinedResumeOfferIDs.remove(continuing.id)
+        }
         activeResumableTask = task
         writeResumableTask(task, describing: "could not save what this task was partway through")
     }
@@ -5601,14 +5843,23 @@ final class AgentViewModel: ObservableObject {
     /// run's did, and claiming a stronger origin than that is the one thing `PreparedPlanSource`
     /// exists to prevent.
     ///
+    /// - Parameter origin: which surface's Continue this is. **Two doors as of SONNY-282**: the
+    ///   widget's offer passes `.widget`, and the Memory sheet's row passes `.commandCenter`, each
+    ///   stated at its call site per `.claude/rules/macagent-ui-conventions.md` — a task-submitting
+    ///   entry point passes its own real origin rather than inheriting a default. It matters here:
+    ///   `hasVisibleWidgetPanel` gates the widget's working and result panels on `.widget`, so a
+    ///   Continue pressed in Command Center that claimed `.widget` would move its progress into the
+    ///   widget while Command Center kept showing its own.
     /// - Returns: whether the dispatch was accepted, so the caller can tell a refusal apart from a
     ///   start rather than re-deriving `canSubmit`'s rule.
     @discardableResult
-    func continueResumableTask(_ task: ResumableTask) -> Bool {
-        // **The same gate the offer is filtered by, asked again here** (PR #105 review F5). The
-        // widget never renders Continue for a record that must not be repeated silently, so this is
-        // the belt: `mayBeOfferedForResume` is the whole rule, and a second entry point added later
-        // cannot route around it by holding a `ResumableTask` from somewhere else.
+    func continueResumableTask(_ task: ResumableTask, origin: TaskOrigin) -> Bool {
+        // **The same gate the offer is filtered by, asked again here** (PR #105 review F5). Neither
+        // surface renders Continue for a record that must not be repeated silently, so this is the
+        // belt: `mayBeOfferedForResume` is the whole rule, and a third entry point added later
+        // cannot route around it by holding a `ResumableTask` from somewhere else. A *declined*
+        // record passes it on purpose — declining withholds the widget's offer and nothing else, and
+        // continuing from Memory is exactly what the founder kept the record for (SONNY-282).
         guard task.mayBeOfferedForResume else {
             logStore.append(.observe, "Not continued: finishing this task could repeat something Sonny must not do twice.")
             return false
@@ -5618,11 +5869,7 @@ final class AgentViewModel: ObservableObject {
         pendingResumableContinuation = .resuming(task)
         let started = dispatch(
             command: task.command,
-            // The offer lives on the widget and nowhere else, so `.widget` is the true answer and
-            // `dispatch`'s default happening to differ is exactly why it is stated
-            // (`.claude/rules/macagent-ui-conventions.md`: a new task-submitting entry point passes
-            // its own real origin).
-            origin: .widget,
+            origin: origin,
             // **The file the earlier attempt wrote, written into the plan before it is
             // dispatched** — not handed to the executor at run time, which was tried and is wrong:
             // `AgentRunner.prepare` previews every step and rejects a bare `open_generated_artifact`
@@ -5640,13 +5887,20 @@ final class AgentViewModel: ObservableObject {
             pendingResumableContinuation = nil
             return false
         }
-        // **Continuing does not dismiss, and that is deliberate.** The obvious extra line here would
-        // mark the offer answered so it cannot reappear — and it would be wrong for the case that
-        // matters: a resumed run that fails *again* would then have no offer for the rest of the
-        // session, even though the task is still unfinished and the record is still on disk. Nothing
-        // needs it, either. While the run is live `resumeOffer` is silent on `!isTaskInFlight`; if it
-        // succeeds the record is deleted; if it fails, the widget shows the failure, which outranks
-        // the offer until the user has read it.
+        // **Continuing does not decline — it un-declines, and that is deliberate.** The obvious
+        // extra line here would mark the offer answered so it cannot reappear — and it would be
+        // wrong for the case that matters: a resumed run that fails *again* would then have no offer
+        // for the rest of the session, even though the task is still unfinished and the record is
+        // still on disk. Nothing needs it, either. While the run is live `resumeOffer` is silent on
+        // `!isTaskInFlight`; if it succeeds the record is deleted; if it fails, the widget shows the
+        // failure, which outranks the offer until the user has read it.
+        //
+        // The opposite line *is* needed (SONNY-282), and it lives in `beginResumableTask` rather
+        // than here (PR #119 review, F2): a task the user declined on the widget and then picked up
+        // — from Memory, from the failure panel's Retry, or from Run again on its Tasks row — is a
+        // task they have re-engaged with, and all three doors reach the one site that writes the
+        // record afresh with no `declinedAt`. The session set is un-declined there, so the disk
+        // and the widget cannot disagree whichever door was used.
         return true
     }
 
@@ -5708,13 +5962,43 @@ final class AgentViewModel: ObservableObject {
         pendingResumableContinuation = .restarting(task)
     }
 
-    /// Takes the offer off the widget without forgetting the task — see `dismissedResumeOfferIDs`
-    /// for why those are different things.
-    func dismissResumeOffer() {
+    /// The widget's cross: stops Sonny offering this task, for good, without forgetting it
+    /// (SONNY-282, founder decision 2026-08-25).
+    ///
+    /// Two writes, in this order. The session set first, so the widget repaints on this press even
+    /// if the disk refuses — `declinedResumeOfferIDs` says why that matters. Then `declinedAt` on
+    /// the record, which is what the next launch reads; `updatedAt` is left alone, because declining
+    /// is not activity on the task and must not buy it a fresh idle period.
+    ///
+    /// **`errorMessage`, not `recordLocalStorageWriteFailure`, on a failed write.** CLAUDE.md's
+    /// rule: a write the user pressed a control for is `errorMessage`, because the thing they asked
+    /// for did not happen — and it did not, in the one way that matters to them, which is that the
+    /// offer may come back after a relaunch. A task's own bookkeeping writes go to the other
+    /// channel; this is not one of those.
+    ///
+    /// The in-memory checkpoint is kept in step when it is the same record, for the reason
+    /// `deleteResumableTask` gives: a failed run leaves `activeResumableTask` pointing at its record,
+    /// and a later write from that handle would otherwise put an undeclined copy straight back.
+    func declineResumeOffer() {
         guard let offer = resumeOffer else {
             return
         }
-        dismissedResumeOfferIDs.insert(offer.id)
+        declinedResumeOfferIDs.insert(offer.id)
+
+        var declined = offer
+        declined.declinedAt = Date()
+        do {
+            try resumableTaskStore.save(declined)
+        } catch {
+            setError(
+                "Sonny could not save that you declined this task, so it may offer it again after a relaunch: \(error.localizedDescription)"
+            )
+            logStore.append(.observe, "Could not record a declined unfinished task: \(error.localizedDescription)")
+        }
+        if activeResumableTask?.id == offer.id {
+            activeResumableTask = declined
+        }
+        refreshResumableTasks()
     }
 
     /// Forgets one unfinished task. The Memory sheet's per-entry delete.

@@ -421,6 +421,28 @@ which.
       pointing at it would be a lie. **Separately and not fixed here: an approval raised during a
       screen-control session reaches no widget surface at all** — that is SONNY-255, it predates
       this work, and if you hit it the run will appear to stall with only Pause and Stop available
+- [ ] **(new 2026-08-25, SONNY-283)** With a question pending, press **Ctrl-Opt-Space** and let go
+      without speaking. The caret should be in the **answer field** — type a letter and it lands
+      there. Before this the hotkey did nothing at all in this state
+- [ ] **(new 2026-08-25, SONNY-283)** With a question pending, hold Ctrl-Opt-Space and **speak an
+      answer**, then release. The transcript should appear **in the answer field**, not in the main
+      composer, and nothing should run until you press Return or the up-arrow — speaking feeds the
+      field, it does not send it. Then do the same with the **mic button**, which used to be
+      present and inert here; it should now record, and the transcript should land in the same
+      field. If the field already has text when you speak, the transcript is appended after a
+      space, the way dictation lands at the caret
+- [ ] **(new 2026-08-25, SONNY-283 — must not regress)** In the same state, the caret still never
+      jumps into the disabled main composer — not on the hotkey, not on the menu-bar "New Task",
+      not on re-opening the widget from its collapsed capsule. And typing without clicking still
+      lands letters in the answer field, exactly as SONNY-247's row above says
+- [ ] **(new 2026-08-26, SONNY-283, from PR #119's review F1)** With a question pending, type half
+      an answer, then hold the hotkey and speak the rest — and press **Return while the mic is still
+      live, and again during the second or two after you release it** while the transcript is on its
+      way. Nothing should happen either time: the question stays, the typed half stays, the widget
+      does not show "Clarification needed" as a *result* and does not offer to resume the task, and
+      the main composer stays empty. The up-arrow Send (and Command Center's Send) should be greyed
+      out for the whole of that window and come back the moment the transcript lands. Then Return
+      sends. Before this fix that Return silently destroyed the question
 
 ### 3d-bis. Unfinished-task offer (row 13, SONNY-210; layout and controls SONNY-244 — no wireframe)
 Start something long and multi-step, then quit Sonny before it finishes — "summarize
@@ -436,16 +458,29 @@ case. Relaunch and open the widget.
       it more than once: it rendered correctly some of the time on the broken build, so a single
       good look proves nothing. Try it both ways — open the widget from the menu-bar icon and from
       the Ctrl-Opt-Space hotkey — and with a short command as well as a long one
-- [ ] **(new 2026-08-23, SONNY-244)** Hover the tick and then the cross and **say whether a tooltip
-      appears at all** — it should read "Continue" and "Not now". This one is genuinely in doubt:
-      `FloatingWidgetView` records `.help()` as confirmed unreliable in this widget, which is why the
-      mic's hint is a real row rather than a tooltip, so these two words may simply not be reachable
-      for a sighted user. If no tooltip appears, the tick and cross carry no words at all and that
-      needs a decision
-- [ ] **(new 2026-08-23, SONNY-244)** The cross leaves the task alone — it is still listed under
-      Command Center → Memory → Unfinished tasks, and the offer comes back at the next launch.
-      **Say if the cross reads as "close this panel" rather than as an answer** — that ambiguity is
-      known and unresolved, and your read of it is what decides whether it stays
+- [ ] **(new 2026-08-23, SONNY-244; words changed 2026-08-25, SONNY-282)** Hover the tick and then
+      the cross and **say whether a tooltip appears at all** — it should read "Continue" and "Don't
+      ask again". This one is genuinely in doubt: `FloatingWidgetView` records `.help()` as
+      confirmed unreliable in this widget, which is why the mic's hint is a real row rather than a
+      tooltip, so these two words may simply not be reachable for a sighted user. If no tooltip
+      appears, the tick and cross carry no words at all and that needs a decision
+- [ ] **(new 2026-08-25, SONNY-282 — replaces the 2026-08-23 row)** Press the cross **once**, then
+      quit and relaunch Sonny **several times**. The offer for that task must **never come back**.
+      This is the defect: you pressed it three times across three relaunches on 2026-08-25 and it
+      returned every time, because the cross meant "not now" by design. It now means "don't ask
+      again" for that one task. If another unfinished task is waiting, *that* one is offered next —
+      declining one does not silence the rest
+- [ ] **(new 2026-08-25, SONNY-282)** After the cross, open Command Center → Memory → Unfinished
+      tasks. The task is **still listed** — the cross deletes nothing — with "Declined" on its row
+      before the time, and the row now has a **Continue** button beside Delete. Continue from there
+      should run only what was left of the task, the same way the widget's tick does, and the row
+      goes away when it finishes. A row for a task Sonny must not finish on its own (one whose
+      remaining work runs a Shortcut, a routine or a screen session) has no Continue, only Delete —
+      that is deliberate and unchanged from SONNY-210
+- [ ] **(new 2026-08-25, SONNY-282)** Continue a declined task from Memory and make it stop again
+      (pull the network before it opens its page, or quit mid-run). The widget **offers it again**
+      — picking it up from Memory counts as re-engaging with it, so the decline is spent. Press the
+      cross again and it stays gone across relaunches as before
 
 ### 3e. Result — `6-FloatingWidgetResultOutput.png`
 Use one command that produces a real file (zip largest files, docx conversion) and one that doesn't

@@ -74,7 +74,7 @@ struct ResumableTaskRunTests {
         #expect(offer.remainingSteps.map(\.id) == ["url"])
 
         fixture.browserOpener.failure = nil
-        #expect(fixture.viewModel.continueResumableTask(offer))
+        #expect(fixture.viewModel.continueResumableTask(offer, origin: .widget))
         try await fixture.waitForIdle()
 
         // Only the remaining step ran.
@@ -104,7 +104,7 @@ struct ResumableTaskRunTests {
         let offer = try #require(fixture.viewModel.resumeOffer)
 
         fixture.browserOpener.failure = nil
-        #expect(fixture.viewModel.continueResumableTask(offer))
+        #expect(fixture.viewModel.continueResumableTask(offer, origin: .widget))
         try await fixture.waitForIdle()
 
         #expect(fixture.viewModel.activeTaskPlanSource == .resumedTask)
@@ -141,7 +141,7 @@ struct ResumableTaskRunTests {
         #expect(offer.startedAt == backdated.startedAt)
 
         // Fail again, so the record survives the resume and can be read back.
-        #expect(fixture.viewModel.continueResumableTask(offer))
+        #expect(fixture.viewModel.continueResumableTask(offer, origin: .widget))
         try await fixture.waitForIdle()
 
         let second = try #require(try fixture.resumableTaskStore.loadAll().first)
@@ -173,7 +173,7 @@ struct ResumableTaskRunTests {
 
         // Continue, and let it fail again — the second interruption.
         let offer = try #require(fixture.viewModel.resumeOffer)
-        #expect(fixture.viewModel.continueResumableTask(offer))
+        #expect(fixture.viewModel.continueResumableTask(offer, origin: .widget))
         try await fixture.waitForIdle()
 
         let second = try #require(try fixture.resumableTaskStore.loadAll().first)
@@ -182,7 +182,7 @@ struct ResumableTaskRunTests {
         // And the third attempt still works, which is what the carried value buys.
         fixture.fileOpener.failure = nil
         let secondOffer = try #require(fixture.viewModel.resumeOffer)
-        #expect(fixture.viewModel.continueResumableTask(secondOffer))
+        #expect(fixture.viewModel.continueResumableTask(secondOffer, origin: .widget))
         try await fixture.waitForIdle()
 
         #expect(fixture.viewModel.errorMessage == nil)
@@ -202,7 +202,7 @@ struct ResumableTaskRunTests {
         let offer = try #require(fixture.viewModel.resumeOffer)
 
         fixture.browserOpener.failure = nil
-        #expect(fixture.viewModel.continueResumableTask(offer))
+        #expect(fixture.viewModel.continueResumableTask(offer, origin: .widget))
         try await fixture.waitForIdle()
 
         #expect(fixture.viewModel.activeTaskOrigin == .widget)
@@ -275,7 +275,7 @@ struct ResumableTaskRunTests {
 
         fixture.fileOpener.failure = nil
         let offer = try #require(fixture.viewModel.resumeOffer)
-        #expect(fixture.viewModel.continueResumableTask(offer))
+        #expect(fixture.viewModel.continueResumableTask(offer, origin: .widget))
         try await fixture.waitForIdle()
 
         // The remaining step is a bare "open it" with no path, and it opened the right file — which
@@ -309,7 +309,7 @@ struct ResumableTaskRunTests {
         // history row at all.
         fixture.browserOpener.failure = nil
         let offer = try #require(fixture.viewModel.resumeOffer)
-        #expect(fixture.viewModel.continueResumableTask(offer))
+        #expect(fixture.viewModel.continueResumableTask(offer, origin: .widget))
         try await fixture.waitForIdle()
 
         #expect(fixture.viewModel.errorMessage == nil)
@@ -725,13 +725,14 @@ struct ResumableTaskRunTests {
         #expect(second.chainedArtifactPath == nil, "a restart has completed no unit, so it carries no file")
     }
 
-    /// **F2: "Not now" has to repaint the widget.**
+    /// **F2: the cross has to repaint the widget.**
     ///
-    /// `dismissedResumeOfferIDs` was a plain `private var`, so the model agreed the offer was gone
-    /// and nothing told the view: `objectWillChange` fired zero times and the panel sat there until
-    /// the six-second collapse took the whole widget instead of the offer.
+    /// `declinedResumeOfferIDs` (then `dismissedResumeOfferIDs`) was a plain `private var`, so the
+    /// model agreed the offer was gone and nothing told the view: `objectWillChange` fired zero
+    /// times and the panel sat there until the six-second collapse took the whole widget instead of
+    /// the offer.
     @Test
-    func dismissingTheOfferPublishesSoTheWidgetRepaints() async throws {
+    func decliningTheOfferPublishesSoTheWidgetRepaints() async throws {
         let fixture = try makeFixture()
         defer { fixture.tearDown() }
 
@@ -744,7 +745,7 @@ struct ResumableTaskRunTests {
         let subscription = fixture.viewModel.objectWillChange.sink { _ in publishedChanges += 1 }
         defer { subscription.cancel() }
 
-        fixture.viewModel.dismissResumeOffer()
+        fixture.viewModel.declineResumeOffer()
 
         #expect(publishedChanges > 0, "SwiftUI never re-evaluates the widget without a published change")
         #expect(fixture.viewModel.resumeOffer == nil)
@@ -774,7 +775,7 @@ struct ResumableTaskRunTests {
         #expect(fixture.viewModel.resumeOffer == nil, "Sonny does not volunteer to re-send")
         #expect(!fixture.viewModel.hasVisibleWidgetPanel)
         // And the belt: nothing can dispatch it even holding the record.
-        #expect(!fixture.viewModel.continueResumableTask(record))
+        #expect(!fixture.viewModel.continueResumableTask(record, origin: .widget))
 
         // The control, in the same fixture: the same interruption with a safe remaining step *is*
         // offered, so this is a claim about the Shortcut rather than about the fixture.
@@ -943,25 +944,256 @@ struct ResumableTaskRunTests {
         #expect(WidgetPanelPrecedence.of(fixture.viewModel) == .result)
     }
 
-    /// Dismissing is "not now", not a delete: the record survives, stays listed under Memory, and
-    /// comes back at the next launch.
+    /// **The cross stops the offer for good and deletes nothing** (SONNY-282, founder decision
+    /// 2026-08-25).
+    ///
+    /// The defect, as the founder met it: cross, relaunch, cross, relaunch, cross — the offer came
+    /// back every time, because a dismissal was session-scoped by design. So the assertion that
+    /// matters here is the one over three relaunches, each a fresh view model over the same file
+    /// with no session state at all. Everything the founder explicitly kept is asserted beside it:
+    /// the record is on disk, its idle clock is untouched (a decline is not activity on the task),
+    /// it is still listed under Memory with the state on its row, and the row still offers to
+    /// continue it.
     @Test
-    func dismissingTheOfferKeepsTheRecord() async throws {
+    func decliningTheOfferKeepsTheRecordAndTheOfferStaysGoneAcrossRelaunches() async throws {
         let fixture = try makeFixture()
         defer { fixture.tearDown() }
 
         fixture.browserOpener.failure = BrowserOutage()
         try await fixture.run("Write notes and open the page")
         fixture.viewModel.clearStaleTaskOutcome()
-        #expect(fixture.viewModel.resumeOffer != nil)
+        // Back-date the idle clock an hour, leaving the record inside its idle period, for the
+        // reason `aTaskInterruptedTwiceStaysOneRecordWithItsOriginalStartTime` gives: the store
+        // encodes dates at whole-second resolution, so a decline that *did* bump `updatedAt` inside
+        // the same second as the run's own write would be invisible to a same-value comparison.
+        let asWritten = try #require(try fixture.resumableTaskStore.loadAll().first)
+        var backdated = asWritten
+        backdated.updatedAt = asWritten.updatedAt.addingTimeInterval(-3_600)
+        try fixture.resumableTaskStore.save(backdated)
+        fixture.viewModel.refreshResumableTasks()
+        let offered = try #require(fixture.viewModel.resumeOffer)
+        #expect(!offered.isDeclined)
+        #expect(offered.updatedAt == backdated.updatedAt)
 
-        fixture.viewModel.dismissResumeOffer()
+        fixture.viewModel.declineResumeOffer()
 
+        // This launch.
         #expect(fixture.viewModel.resumeOffer == nil)
         #expect(!fixture.viewModel.hasVisibleWidgetPanel)
-        #expect(try fixture.resumableTaskStore.loadAll().count == 1)
-        #expect(fixture.viewModel.resumableTasks.count == 1)
+        #expect(fixture.viewModel.errorMessage == nil, "the write succeeded, so there is nothing to say")
+
+        // The record: kept, declined, otherwise exactly as it was.
+        let onDisk = try #require(try fixture.resumableTaskStore.loadAll().first)
+        #expect(onDisk.id == offered.id)
+        #expect(onDisk.isDeclined)
+        #expect(onDisk.updatedAt == backdated.updatedAt, "declining is not activity on the task and buys it no idle period")
+        #expect(onDisk.declinedAt.map { $0 > backdated.updatedAt } == true, "the decline carries its own, later, date")
+        #expect(onDisk.completedStepIDs == offered.completedStepIDs)
+        #expect(onDisk.stopReason == offered.stopReason)
+
+        // Memory: still listed, still counted, the state on the row, and a Continue beside Delete.
+        #expect(fixture.viewModel.resumableTasks.map(\.id) == [offered.id])
         #expect(MemoryRowPresentation.row(for: .resumableTasks, viewModel: fixture.viewModel).count == 1)
+        let entry = try #require(MemoryEntryPresentation.entries(for: .resumableTasks, viewModel: fixture.viewModel).first)
+        #expect(entry.detail.hasPrefix("Stopped by an error · 1 of 2 steps left · Declined · "))
+        #expect(entry.canContinue)
+
+        // The launches after it — the whole of what the founder asked for.
+        for launch in 1...3 {
+            let relaunched = fixture.makeRelaunchedViewModel()
+            relaunched.refreshResumableTasks()
+            #expect(relaunched.resumeOffer == nil, "launch \(launch): the offer must not return")
+            #expect(!relaunched.hasVisibleWidgetPanel, "launch \(launch)")
+            #expect(relaunched.resumableTasks.map(\.id) == [offered.id], "launch \(launch): the record is still there")
+        }
+    }
+
+    /// **A declined task is continued from Memory — the door the decision needs, and one that did
+    /// not exist before SONNY-282** (the sheet only deleted). It runs only what was left, the record
+    /// is cleared when it finishes, and the origin is Command Center's. The refusals beside it: an
+    /// index past the list, and a record Sonny must not finish on its own, whose row offers no
+    /// Continue at all.
+    @Test
+    func aDeclinedTaskIsContinuedFromMemoryAndRunsOnlyWhatWasLeft() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        fixture.browserOpener.failure = BrowserOutage()
+        try await fixture.run("Write notes and open the page")
+        fixture.viewModel.clearStaleTaskOutcome()
+        fixture.viewModel.declineResumeOffer()
+        #expect(fixture.viewModel.resumeOffer == nil)
+        #expect(try #require(try fixture.resumableTaskStore.loadAll().first).isDeclined)
+
+        // Out of range is a refusal, not a crash.
+        #expect(!fixture.viewModel.continueUnfinishedTask(at: 5))
+
+        fixture.browserOpener.failure = nil
+        #expect(fixture.viewModel.continueUnfinishedTask(at: 0))
+        try await fixture.waitForIdle()
+
+        #expect(fixture.viewModel.activeTaskOrigin == .commandCenter, "pressed in Command Center, so that is its origin")
+        #expect(fixture.viewModel.activeTaskPlanSource == .resumedTask)
+        #expect(fixture.viewModel.plan?.steps.map(\.id) == ["url"], "only the remaining step ran")
+        #expect(fixture.browserOpener.opened == ["https://example.com/page", "https://example.com/page"])
+        let written = try FileManager.default.contentsOfDirectory(atPath: fixture.root.path)
+            .filter { $0.hasPrefix("notes") }
+        #expect(written == ["notes.md"], "the finished unit did not run again")
+        #expect(try fixture.resumableTaskStore.loadAll().isEmpty, "finished, so the record is gone")
+        #expect(fixture.viewModel.resumeOffer == nil)
+
+        // The row's Continue follows the safety rule the offer does: a remainder Sonny must not
+        // repeat on its own gets no Continue, and the door refuses it if asked anyway.
+        try await fixture.run("Write it up and send it", plan: fixture.draftThenShortcutPlan)
+        let withheld = try #require(MemoryEntryPresentation.entries(for: .resumableTasks, viewModel: fixture.viewModel).first)
+        #expect(!withheld.canContinue)
+        #expect(!fixture.viewModel.continueUnfinishedTask(at: 0))
+    }
+
+    /// **A declined task the user picks up again and that stops again is offered again.** Declining
+    /// answers the offer for the task as it stood; continuing it from Memory is the user
+    /// re-engaging, and `beginResumableTask` writes the record afresh with no decline on it — so
+    /// the session set has to drop the id too, or the disk and the widget disagree until the next
+    /// launch. The control is the same task left alone, which stays declined.
+    @Test
+    func aDeclinedTaskContinuedAndInterruptedAgainIsOfferedAgain() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        fixture.browserOpener.failure = BrowserOutage()
+        try await fixture.run("Write notes and open the page")
+        fixture.viewModel.clearStaleTaskOutcome()
+        let offered = try #require(fixture.viewModel.resumeOffer)
+        fixture.viewModel.declineResumeOffer()
+        #expect(fixture.viewModel.resumeOffer == nil)
+
+        // Continued with the browser still down: the remaining unit fails again.
+        #expect(fixture.viewModel.continueUnfinishedTask(at: 0))
+        try await fixture.waitForIdle()
+        #expect(fixture.viewModel.errorMessage != nil, "the continued run really did fail again")
+        fixture.viewModel.clearStaleTaskOutcome()
+
+        let again = try #require(try fixture.resumableTaskStore.loadAll().first)
+        #expect(again.id == offered.id, "one task, one record")
+        #expect(!again.isDeclined, "re-engaging with the task starts its record afresh")
+        #expect(fixture.viewModel.resumeOffer?.id == offered.id, "and the widget offers it again this session")
+        #expect(fixture.viewModel.hasVisibleWidgetPanel)
+    }
+
+    /// **PR #119 review, F2 — the two restart doors spend the decline too, so this session's widget
+    /// and the disk agree whichever door was used.** `continueResumableTask` used to be the only
+    /// site that dropped the id from the session set, while `retryLastCommand` and `runTaskAgain`
+    /// reached `beginResumableTask` directly — which wrote the record back undeclined and left the
+    /// widget silent until the next launch. The remove now lives in `beginResumableTask`, the one
+    /// site that writes a record afresh. Tested through the two doors that were wrong, not the one
+    /// that already worked.
+    @Test
+    func aDeclinedTaskRetriedOrRunAgainAndFailingAgainIsOfferedAgainThisSession() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        fixture.browserOpener.failure = BrowserOutage()
+        try await fixture.run("Write notes and open the page")
+        fixture.viewModel.clearStaleTaskOutcome()
+        let offered = try #require(fixture.viewModel.resumeOffer)
+        fixture.viewModel.declineResumeOffer()
+        #expect(fixture.viewModel.resumeOffer == nil)
+
+        // The failure panel's Retry, with the browser still down.
+        fixture.draftOutput = fixture.root.appendingPathComponent("notes-retry.md")
+        fixture.planner.plan = fixture.draftThenOpenPlan
+        fixture.viewModel.retryLastCommand()
+        try await fixture.waitForIdle()
+        #expect(fixture.viewModel.errorMessage != nil, "the retry really did fail again")
+        fixture.viewModel.clearStaleTaskOutcome()
+
+        let afterRetry = try #require(try fixture.resumableTaskStore.loadAll().first)
+        #expect(afterRetry.id == offered.id, "one task, one record")
+        #expect(!afterRetry.isDeclined, "the disk says offer it")
+        #expect(fixture.viewModel.resumeOffer?.id == offered.id, "and so does this session — the defect was silence here")
+        #expect(fixture.viewModel.hasVisibleWidgetPanel)
+
+        // Decline again, then Run again from the task's own Tasks row.
+        fixture.viewModel.declineResumeOffer()
+        #expect(fixture.viewModel.resumeOffer == nil)
+        let row = try #require(fixture.viewModel.taskHistoryRecords.first)
+        #expect(row.resumableTaskID == offered.id, "the row links to the declined record")
+        fixture.draftOutput = fixture.root.appendingPathComponent("notes-again.md")
+        fixture.planner.plan = fixture.draftThenOpenPlan
+        #expect(fixture.viewModel.runTaskAgain(row))
+        try await fixture.waitForIdle()
+        #expect(fixture.viewModel.errorMessage != nil, "and failed again")
+        fixture.viewModel.clearStaleTaskOutcome()
+
+        let afterRunAgain = try #require(try fixture.resumableTaskStore.loadAll().first)
+        #expect(afterRunAgain.id == offered.id)
+        #expect(!afterRunAgain.isDeclined)
+        #expect(fixture.viewModel.resumeOffer?.id == offered.id)
+    }
+
+    /// **When the decline cannot be written, the offer still leaves for this session, the user is
+    /// told it may return, and it does return at the next launch** — the honest degradation, and
+    /// the reason the session set survives alongside the persisted flag. Made real by taking write
+    /// permission off the store's directory, so the atomic write fails where the product's would.
+    @Test
+    func aDeclineThatCannotBeSavedStillHidesTheOfferThisSessionAndSaysSo() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        fixture.browserOpener.failure = BrowserOutage()
+        try await fixture.run("Write notes and open the page")
+        fixture.viewModel.clearStaleTaskOutcome()
+        let offered = try #require(fixture.viewModel.resumeOffer)
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o555], ofItemAtPath: fixture.root.path)
+        defer { try? FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fixture.root.path) }
+
+        fixture.viewModel.declineResumeOffer()
+
+        #expect(fixture.viewModel.resumeOffer == nil, "the press is honoured for this session whatever the disk did")
+        let message = try #require(fixture.viewModel.errorMessage)
+        #expect(message.contains("could not save that you declined this task"))
+        #expect(message.contains("after a relaunch"))
+        #expect(!fixture.viewModel.errorIsPersistent, "a failed save is not a configuration problem")
+
+        try FileManager.default.setAttributes([.posixPermissions: 0o755], ofItemAtPath: fixture.root.path)
+        let onDisk = try #require(try fixture.resumableTaskStore.loadAll().first)
+        #expect(onDisk.id == offered.id)
+        #expect(!onDisk.isDeclined, "nothing reached the disk")
+
+        // And the consequence the message warned about is real: the next launch offers it.
+        let relaunched = fixture.makeRelaunchedViewModel()
+        relaunched.refreshResumableTasks()
+        #expect(relaunched.resumeOffer?.id == offered.id)
+    }
+
+    /// **Declining picks the next record, not no record.** Two unfinished tasks, the newer one
+    /// declined: the offer moves to the older one rather than going silent while an offerable task
+    /// sits on disk.
+    @Test
+    func decliningOneOfferMovesToTheNextUnfinishedTask() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        fixture.browserOpener.failure = BrowserOutage()
+        try await fixture.run("Write notes and open the page")
+        let first = try #require(try fixture.resumableTaskStore.loadAll().first)
+        // Age the first one so the second is unambiguously the newer, whatever the clock does.
+        var older = first
+        older.updatedAt = first.updatedAt.addingTimeInterval(-3_600)
+        try fixture.resumableTaskStore.save(older)
+
+        fixture.draftOutput = fixture.root.appendingPathComponent("notes-second.md")
+        try await fixture.run("Write different notes and open the page")
+        fixture.viewModel.clearStaleTaskOutcome()
+        let newer = try #require(fixture.viewModel.resumeOffer)
+        #expect(newer.command == "Write different notes and open the page")
+
+        fixture.viewModel.declineResumeOffer()
+
+        #expect(fixture.viewModel.resumeOffer?.id == first.id, "the older unfinished task is offered next")
+        #expect(fixture.viewModel.resumableTasks.count == 2, "both are still listed")
+        #expect(fixture.viewModel.resumableTasks.filter(\.isDeclined).map(\.id) == [newer.id])
     }
 
     /// A record past its idle period is neither offered nor listed. The control is the same record
@@ -1779,7 +2011,7 @@ struct ClarificationAnswerRoutingTests {
         relaunched.refreshResumableTasks()
         let offer = try #require(relaunched.resumeOffer)
         #expect(offer.command == "=")
-        #expect(relaunched.continueResumableTask(offer))
+        #expect(relaunched.continueResumableTask(offer, origin: .widget))
         try await fixture.waitForIdle(relaunched)
         #expect(relaunched.clarificationQuestion == "What would you like me to calculate?")
         // The premise the first gate got wrong: this pause was raised by a resumed plan.
@@ -1852,6 +2084,69 @@ struct ClarificationAnswerRoutingTests {
         #expect(fixture.viewModel.lastCommand == "=2+2")
         #expect(fixture.viewModel.errorMessage == nil)
         #expect(fixture.planner.receivedCommands == [])
+    }
+
+    /// **A spoken answer to a question the resolver asked runs end to end: SONNY-283's routing into
+    /// SONNY-281's completion** (PR #119 review's rebase note — the gap neither branch's suite
+    /// covered, owed by the branch that merged second). The resolver asks what to calculate; the
+    /// transcript is recorded for *that* question, delivered to the answer field rather than
+    /// dispatched, Send comes back, and `submitClarification` hands the field's text to
+    /// `locallyCompletedCommand` — so the calculator answers it and the planner is never asked.
+    /// Both of #118's candidate readings are driven: spoken as the operand, the join `= 2 + 2`
+    /// prepares and runs; spoken as a restatement with the sign in it, the join `= = 2 + 2`
+    /// resolves and fails the dry run, so the answer is taken whole and runs.
+    @Test
+    func aSpokenAnswerToWhatToCalculateIsCompletedLocallyAndTheCalculatorAnswersIt() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+        fixture.planner.plan = fixture.draftThenOpenPlan
+
+        // The premise the second reading rests on, pinned the way #118's own restatement test pins
+        // its own (`anAnswerThatRestatesTheCommandIsTakenWholeWhenTheJoinResolvesButDoesNotPrepare`,
+        // PR #119 re-check): the join `= = 2 + 2` really does resolve to a calculator plan, so what
+        // rejects it below is the executor's dry run and not resolution. Without this, a resolver
+        // that stopped planning the join would leave the assertions below green and the sentence
+        // above false.
+        guard case .plan? = fixture.viewModel.makeInstantCommandResolver().resolve(command: "= = 2 + 2") else {
+            Issue.record("premise: \"= = 2 + 2\" should resolve to a calculator plan")
+            return
+        }
+
+        for spoken in ["2 + 2", "= 2 + 2"] {
+            fixture.viewModel.command = "="
+            fixture.viewModel.start(origin: .widget)
+            try await fixture.waitForIdle()
+            let question = try #require(fixture.viewModel.clarificationQuestion)
+            #expect(question == "What would you like me to calculate?")
+            #expect(fixture.viewModel.clarificationAnswer.isEmpty)
+
+            // The transcript, recorded for the resolver's own question and delivered through the
+            // router — fed, not sent.
+            fixture.viewModel.deliverTranscript(
+                spoken,
+                recordedFor: .clarificationAnswer(question: question),
+                origin: .widget
+            )
+            #expect(fixture.viewModel.clarificationAnswer == spoken, "\(spoken): landed in the field")
+            #expect(fixture.viewModel.clarificationQuestion == question, "\(spoken): not sent by landing")
+            #expect(fixture.viewModel.lastCommand == "=", "\(spoken): nothing dispatched by landing")
+            #expect(fixture.viewModel.canSendClarificationAnswer, "\(spoken): Send is live once the transcript is in")
+
+            fixture.viewModel.submitClarification()
+            try await fixture.waitForIdle()
+
+            #expect(fixture.viewModel.clarificationQuestion == nil, "\(spoken)")
+            #expect(fixture.viewModel.finalSummary == "2 + 2 = 4.", "\(spoken): the calculator answered")
+            #expect(fixture.viewModel.lastCommand == "= 2 + 2", "\(spoken): the completed command is what ran")
+            #expect(fixture.viewModel.errorMessage == nil, "\(spoken)")
+            #expect(fixture.viewModel.activeTaskOrigin == .widget, "\(spoken): the origin survived the pause")
+            // Captured, not inferred: the planner was never asked, so the answer went through
+            // SONNY-281's completion and not into an exchange.
+            #expect(fixture.planner.receivedCommands == [], "\(spoken)")
+            // The task finished, so the pause's record settled: nothing left to offer.
+            #expect(try fixture.resumableTaskStore.loadAll().isEmpty, "\(spoken)")
+            #expect(fixture.viewModel.resumeOffer == nil, "\(spoken)")
+        }
     }
 
     /// The snippet question asks for the body alone now, and the body joins onto the prefix: the
