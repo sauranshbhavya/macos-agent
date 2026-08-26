@@ -1280,9 +1280,7 @@ final class AgentViewModel: ObservableObject {
     /// one ticket later). A slot that cannot go stale is worth more here than a saved property read.
     ///
     /// Read-only on purpose: row C will consume this, and nothing may set it. The only writer is
-    /// `AgentRunner.prepare`. (SONNY-281 briefly read it to decide whether a clarification answer
-    /// completes a resolver command, and PR #118's review found the Continue door replays a paused
-    /// plan as `.resumedTask` — so that decision is read off the question now, not off this.)
+    /// `AgentRunner.prepare`.
     var activeTaskPlanSource: PreparedPlanSource? {
         preparedRun?.source
     }
@@ -1690,10 +1688,7 @@ final class AgentViewModel: ObservableObject {
             // The resolver has already had its turn on this command and asked for more; reading the
             // more is a planner's job. Reachable through the answer and through a retry of the
             // answered run alike, which is why the term is a property of the command rather than of
-            // this dispatch. **When the resolver asked, it gets the answer first** (SONNY-281):
-            // `submitClarification` completes the command with the answer and dispatches the plain
-            // result, so a command carrying an exchange that reaches this line is one the resolver
-            // either did not ask about or could not complete.
+            // this dispatch.
             } else if !ClarifiedCommand.carriesExchange(submittedCommand),
                       let resolution = makeInstantCommandResolver().resolve(command: submittedCommand) {
                 runner = AgentRunner(
@@ -2454,9 +2449,8 @@ final class AgentViewModel: ObservableObject {
     }
 
     /// Submits the clarification answer as a **new** run, not a resume: this appends the Q&A to
-    /// the command — or, for a question the instant resolver asked, completes the command with the
-    /// answer (SONNY-281, `locallyCompletedCommand`) — and calls `start()`, which clears
-    /// `plan`/`stepStatuses`/`preparedRun` and re-plans from scratch. (Approval is the real resume — it reuses the existing prepared
+    /// the command and calls `start()`, which clears `plan`/`stepStatuses`/`preparedRun` and
+    /// re-plans from scratch. (Approval is the real resume — it reuses the existing prepared
     /// run.) The auto-execute flag and origin are carried across the pause deliberately so the
     /// continuation behaves like the task the user actually started.
     func submitClarification() {
@@ -2478,29 +2472,16 @@ final class AgentViewModel: ObservableObject {
         // by a real run, and the composition degrades to the Q&A alone — which is precisely what
         // this produced for *every* clarification before the fix.
         //
-        // **Request + Q&A, rather than the answer substituted into the request — for a question the
-        // planner asked.** Substituting means rewriting the user's own sentence: a planner's job, and
-        // a fragile string edit here. It also discards that Sonny asked and what it asked, which
-        // leaves a second question nothing to build on. Appending keeps the request whole and
-        // accumulates in the order the exchange happened, so a task clarified twice reaches the
-        // planner as the request and both pairs.
-        //
-        // **For a question the resolver asked, the answer is the rest of the command** (SONNY-281).
-        // The resolver's questions are raised on a bare prefix — `=` asks what to calculate — and
-        // the planner cannot act on the answer: it has no calculator, and every other answer would
-        // reach it as prose about a command it never saw the resolver's reading of. So the resolver
-        // gets the answer first, as the command it was missing an operand for, and the plain result
-        // goes through the same door typed text does. `locallyCompletedCommand` says how it knows the
-        // resolver asked and what makes a completion workable.
-        if let completed = locallyCompletedCommand(request: clarificationSubmittedCommand, answer: answer, question: question) {
-            command = completed
-        } else {
-            command = ClarifiedCommand.composed(
-                request: clarificationSubmittedCommand ?? "",
-                question: question,
-                answer: answer
-            )
-        }
+        // **Request + Q&A, rather than the answer substituted into the request.** Substituting means
+        // rewriting the user's own sentence: a planner's job, and a fragile string edit here. It
+        // also discards that Sonny asked and what it asked, which leaves a second question nothing
+        // to build on. Appending keeps the request whole and accumulates in the order the exchange
+        // happened, so a task clarified twice reaches the planner as the request and both pairs.
+        command = ClarifiedCommand.composed(
+            request: clarificationSubmittedCommand ?? "",
+            question: question,
+            answer: answer
+        )
         let shouldAutoExecute = clarificationAutoExecute
         let shouldUseOrigin = clarificationOrigin
         let shouldUseBinding = clarificationWorkspaceBinding
@@ -2516,118 +2497,6 @@ final class AgentViewModel: ObservableObject {
         // to carry on with it and Continue re-asked a question the user had already answered.
         armRestartOfTaskInFlight()
         start(autoExecute: shouldAutoExecute, origin: shouldUseOrigin, workspaceBinding: shouldUseBinding)
-    }
-
-    /// The plain command a clarification answer completes, or `nil` when the answer is the
-    /// planner's to read (SONNY-281).
-    ///
-    /// **Who asked decides which door the answer goes through, and the question is what says who
-    /// asked.** The founder typed `=`, was asked what to calculate, answered `2 + 2`, and was told
-    /// calculation is not supported by the registered local tools — which is true of the planner,
-    /// and the planner is who got the answer. SONNY-248 made every clarified command skip
-    /// `InstantCommandResolver`, correctly for the case it was looking at: a request restored to
-    /// the front of an exchange re-matched the resolver's own prefix and would have calculated the
-    /// transcript. But the resolver raises questions of its own, on a bare prefix, and the planner
-    /// cannot act on those answers — `CalculatorCapabilityAdapter` registers no planner tool at all,
-    /// so a calculation that reaches the planner is refused by design, and every other such answer
-    /// arrives as prose about a command the planner never saw the resolver's reading of. The two
-    /// prompts were captured rather than reasoned about (`ClarificationAnswerRoutingTests`): typed
-    /// directly, `2 + 2` never reaches a planner; answered, it reached one as the whole exchange.
-    ///
-    /// **"The resolver asked this" is read off the question, not off the run that raised it** (PR
-    /// #118 review, F1). The first version gated on `activeTaskPlanSource == .instantResolver`, and
-    /// the Continue door replays a paused plan under `.resumedTask`: quit while Sonny is asking what
-    /// to calculate, relaunch, press Continue, answer `2 + 2`, and the answer took the planner path
-    /// this exists to close — the founder's refusal one door over, reproduced at runtime. So the
-    /// request is resolved again here, and the answer is the resolver's to complete exactly when
-    /// that resolution is a `.clarify` carrying the pending question. That is a property of the
-    /// request and the question, true through every door that can re-ask one — the widget, Continue,
-    /// and the second Continue PR #119 adds under Memory — with nothing for a later door to remember.
-    /// A question with no run behind it has no request and degrades to the exchange alone, as
-    /// `composed` does; a question the *planner* asked is never completed, even when the completion
-    /// would resolve — "morning" asked about by the planner and answered "routine" names a saved
-    /// routine exactly, and a bare saved name is an instant command; running it would act on a guess
-    /// about what the planner's question meant.
-    ///
-    /// **Each candidate is tried in `ClarifiedCommand.completions`' order and the first workable one
-    /// is dispatched** (PR #118 review, F2 — the founder's direction). Workable means the resolver
-    /// answers it with a plan **and** the executor prepares that plan without throwing: resolution
-    /// alone is not a check, because the resolver builds a calculator plan for any non-empty
-    /// expression and a running-app plan for any name of the right shape, and only `prepare` —
-    /// the dry run every dispatch performs first — evaluates the sum and looks the app up among the
-    /// running ones. `=` answered `= 2 + 2` joins to `= = 2 + 2`, which resolves and does not
-    /// prepare, so the restatement `= 2 + 2` is taken and answers 4; `focus` answered `Focus Writer`
-    /// joins to `focus Focus Writer`, which resolves and prepares whenever that app is running, so
-    /// Sonny switches to the app the user named rather than to one called Writer. The dry run is
-    /// built with no vision environment: a resolver plan never carries a vision step, and the live
-    /// environment's construction assigns `visionUserPauseMonitor`, a side effect a routing decision
-    /// must not have. The resolver then runs once more on the chosen command inside `performStart`,
-    /// as the dispatch; the two agree because resolution is deterministic over the same stores.
-    ///
-    /// **When candidates resolved and none prepared, the first that resolved is dispatched — not
-    /// the exchange** (PR #118 re-check, R-b). `calc` answered `banana` joins to `calc banana`, which
-    /// resolves, does not evaluate, and has no restatement to fall back to; composing the exchange
-    /// there sent it to a planner with no calculator, which is this ticket's own symptom returning
-    /// one door over — "Calculation is unsupported" where typing `calc banana` gets the calculator's
-    /// own "Could not calculate that expression". The dispatch shows that real error, as the typed
-    /// command would. This acts only when nothing prepared, so it cannot reorder a candidate that
-    /// did: with Writer and Focus Writer both running the join prepares and still wins (F2). A
-    /// prepare that comes back with a clarification is not workable either (R-c). **That guard
-    /// decides something only when the Shortcuts catalog or a store changes between the resolver's
-    /// read and the executor's** — the two read the same sources with the same keys, the routine and
-    /// workspace stores through the same `normalized()` so they cannot deterministically disagree,
-    /// and the catalog through a process read that `InvokeShortcutCapabilityAdapter` repeats at
-    /// prepare. When it does decide, it is not "the candidate is dispatched either way" — that held
-    /// only for a sole or last resolved candidate, and this comment said it for one round: with a
-    /// join whose prepare clarifies and a restatement that prepares, the join is passed over and the
-    /// restatement runs (`aCandidateWhosePrepareClarifiesIsPassedOverForOneThatPrepares`, over a
-    /// catalog scripted to answer consecutive reads differently, which no fixture had done before).
-    ///
-    /// **What falls through, on purpose.** "I could not find a Shortcut named Foo. Which Shortcut
-    /// should I run?" wants a replacement, and `run shortcut Foo Send Report` resolves to the same
-    /// question again rather than to a plan — so nothing resolves and the exchange goes to the
-    /// planner, where a question that needs reading gets read. **Recorded, not closed (R-a, founder
-    /// decision 2026-08-26):** `focus` answered `Focus Writer` with only Writer running — the join
-    /// fails prepare, the restatement prepares, and Sonny switches to Writer, where typing
-    /// `focus Focus Writer` would say no running app matched. R-b does not reach it, since something
-    /// prepared; its neighbour with *neither* app running does change under R-b — the join is
-    /// dispatched and fails naming Focus Writer, where before the exchange went to the planner.
-    /// **What is stated as not closed:** a
-    /// snippet request that already carries part of its body — `snippet save ;sig`, asked for the
-    /// format — joins an operand answer onto that partial body, and a user who retypes the whole
-    /// command joins the prefix onto itself; either plan carries a trigger nobody meant, the store
-    /// allows a space in a trigger, and a new snippet is tier 2, which the consequence rule
-    /// auto-runs — so the snippet is **saved**, under a trigger the user can see and delete on the
-    /// Memory page, and no card is shown first. (The first version of this comment said it was
-    /// approval-gated; the test that pins it found otherwise.) Nothing at the string level tells the
-    /// two shapes apart — `Focus Writer` begins with `focus` exactly as `snippet save ;sig` begins
-    /// with `snippet save` — so the join wins the trade: the alternative is the Writer case above, a
-    /// wrong action with nothing to delete. The snippet question now asks for the body alone, so the
-    /// retype is a user overriding the format they were just given.
-    private func locallyCompletedCommand(request: String?, answer: String, question: String) -> String? {
-        guard let request else {
-            return nil
-        }
-        let resolver = makeInstantCommandResolver()
-        guard case .clarify(let asked)? = resolver.resolve(command: request),
-              asked.steps.first(where: { $0.operation == .clarify })?.question == question else {
-            return nil
-        }
-        let dryRun = makeExecutor(recordingPolicy: nil, visionSession: nil)
-        var firstResolved: String?
-        for candidate in ClarifiedCommand.completions(request: request, answer: answer) {
-            guard case .plan(let plan)? = resolver.resolve(command: candidate) else {
-                continue
-            }
-            if firstResolved == nil {
-                firstResolved = candidate
-            }
-            guard let prepared = try? dryRun.prepare(plan: plan), prepared.clarificationQuestion == nil else {
-                continue
-            }
-            return candidate
-        }
-        return firstResolved
     }
 
     /// - Parameter origin: Which surface's mic button this is.
@@ -4412,20 +4281,6 @@ final class AgentViewModel: ObservableObject {
     /// - Parameter recordingPolicy: defaulted to this run's policy. The scheduled path passes
     ///   `.record` explicitly — see `performScheduledRun`.
     func makeExecutor(recordingPolicy: TaskRecordingPolicy? = nil) -> AgentActionExecutor {
-        makeExecutor(
-            recordingPolicy: recordingPolicy,
-            visionSession: visionSessionEnvironment ?? makeLiveVisionEnvironment()
-        )
-    }
-
-    /// The executor with its vision environment named by the caller. `nil` is the dry-run form for
-    /// a resolver-built plan (SONNY-281, `locallyCompletedCommand`): a resolver plan never carries a
-    /// vision step, and `makeLiveVisionEnvironment()` assigns `visionUserPauseMonitor` on the way —
-    /// a side effect a routing decision must not have. Every run takes the overload above.
-    private func makeExecutor(
-        recordingPolicy: TaskRecordingPolicy?,
-        visionSession: VisionSessionEnvironment?
-    ) -> AgentActionExecutor {
         AgentActionExecutor(
             // A fresh executor per run, so this cannot leak into the next task.
             recordingPolicy: recordingPolicy ?? taskRecordingPolicy,
@@ -4461,7 +4316,7 @@ final class AgentViewModel: ObservableObject {
             // above. A vision session dispatched into an executor built that way fails loudly with
             // `visionUnavailable` rather than half-running; `visionSessionEnvironment` is an
             // injectable seam so a test supplies its own substrate and never touches the machine.
-            visionSession: visionSession
+            visionSession: visionSessionEnvironment ?? makeLiveVisionEnvironment()
         )
     }
 

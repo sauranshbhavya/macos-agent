@@ -37,7 +37,7 @@ public struct CalculatorService: Sendable {
     public init() {}
 
     public func evaluate(_ rawExpression: String) throws -> CalculatorEvaluation {
-        let trimmed = Self.withoutTrailingEqualsOrQuestionMark(rawExpression)
+        let trimmed = rawExpression.trimmingCharacters(in: .whitespacesAndNewlines)
         guard !trimmed.isEmpty else {
             throw CalculatorError.missingExpression
         }
@@ -53,29 +53,6 @@ public struct CalculatorService: Sendable {
             throw CalculatorError.invalidExpression("The result is not finite.")
         }
         return CalculatorEvaluation(expression: expression, result: Self.format(value))
-    }
-
-    /// The sign a person types at the end of a sum, and the question mark that may follow it —
-    /// `2 + 2 =`, `2+2=?`, `2 + 2?` — dropped along with the whitespace around them, so the sum reads
-    /// as the sum (SONNY-281). **This is what a sum is allowed to end with, stated once**: the
-    /// evaluator reads it here, and `InstantCommandResolver`'s bare-arithmetic rule reads it before
-    /// deciding a command is a sum at all, because a definition kept in one of those two places
-    /// leaves the other refusing input the first accepts — which was the founder's report, `2 + 2`
-    /// answered `4` and `2 + 2 =` refused, one character apart. The planner has no calculator to
-    /// offer (`CalculatorCapabilityAdapter.metadata.plannerTools` is empty), so any sum that falls
-    /// off this rule is refused rather than planned.
-    ///
-    /// **At the end only.** An interior `=` (`2 + 2 = 4`) is a statement rather than a sum, and it
-    /// is left to fail as one — the parser refuses it as an unexpected token, the same way it
-    /// refuses any other character it does not know. The sign alone, or a run of them, strips to
-    /// nothing and is refused as a missing expression, which is the honest answer to `=` reaching
-    /// the evaluator with nothing in front of it.
-    public static func withoutTrailingEqualsOrQuestionMark(_ expression: String) -> String {
-        var trimmed = Substring(expression)
-        while let last = trimmed.last, last == "=" || last == "?" || last.isWhitespace {
-            trimmed.removeLast()
-        }
-        return trimmed.trimmingCharacters(in: .whitespacesAndNewlines)
     }
 
     private func looksLikeConversion(_ expression: String) -> Bool {

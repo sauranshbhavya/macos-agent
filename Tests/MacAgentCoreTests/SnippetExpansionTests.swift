@@ -211,8 +211,7 @@ struct SnippetExpansionTests {
         }
 
         #expect(clarifyPlan.steps.map(\.operation) == [.clarify])
-        // The body alone, not the whole command: the answer joins onto the request (SONNY-281).
-        #expect(clarifyPlan.steps[0].question == "Use the format ;trigger = expansion.")
+        #expect(clarifyPlan.steps[0].question == "Use the format snippet save ;trigger = expansion.")
     }
 
     @Test
