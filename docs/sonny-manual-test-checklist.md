@@ -29,6 +29,18 @@ then; if that isn't what happened, the row has to say so.
 The **"New Task"** clause of §6's three-menu-item row is the worked example — confirmed 2026-07-24,
 found broken 2026-08-01, fixed by SONNY-8 (PR #20), re-confirmed 2026-08-03.
 
+## Where a manual item lives (convention, added 2026-08-26)
+
+**Every manual-test item a ticket produces is added to this file as an unchecked row before the
+ticket closes.** A PR note or a ticket comment may summarize them, but this file is the only place
+the founders test from — an item recorded anywhere else is an item they never see. Not
+hypothetical: SONNY-281's six items lived only in dated notes on PR #118 while the rows SONNY-282
+and SONNY-283 added the same days reached this file, and the gap surfaced only when the outgoing
+coordinator checked both branches' items against the file (2026-08-26; recovered into §3d by
+SONNY-292). A row names its ticket, and a row recovered late also names where it was recovered
+from. WORKFLOW.md's ticket-template bullet used to say items "aggregate into the PR's manual
+checklist" — the sentence SONNY-281's session followed exactly — and now names this file instead.
+
 ## Status tracker — read this first
 
 Updated 2026-07-21, end of the first real testing round. This is the live "what's the state of
@@ -446,6 +458,36 @@ which.
       the main composer stays empty. The up-arrow Send (and Command Center's Send) should be greyed
       out for the whole of that window and come back the moment the transcript lands. Then Return
       sends. Before this fix that Return silently destroyed the question
+- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's notes by SONNY-292)** Send `calc`
+      alone, then answer the what-would-you-like-to-calculate question with `banana`. Sonny's
+      **own** calculation error appears **instantly** — "Could not calculate that expression: …",
+      the same error `calc banana` typed directly gets — not the planner's "Calculation is
+      unsupported…" refusal after a network round-trip
+- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's notes by SONNY-292)** With an app
+      whose name starts with "Focus" running (Focus Writer is the fix's own example), send `focus`,
+      and answer the which-app question with the app's **full name** — `Focus Writer`. It switches
+      to that app, not to an app called "Writer". **Known, don't report (R-a, founder decision
+      2026-08-26, recorded on PR #118):** with only an app named "Writer" running and no "Focus …"
+      app, the same exchange still switches to Writer — pinned as a record so drift is seen,
+      deliberately not fixed
+- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's notes by SONNY-292)** With **no** app
+      whose name starts with "Focus" running, send `focus` and answer `Focus Writer`. It fails
+      instantly with "No running app matched Focus Writer." — it does not ask the planner
+- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's notes by SONNY-292)** Send `=` alone,
+      and answer the question with `=2+2` — an answer that itself starts with `=`. The answer is 4,
+      instantly
+- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's notes by SONNY-292)** Send
+      `snippet save` with nothing after it. The question reads "Use the format ;trigger =
+      expansion." Answer with the **body alone** — `;sig = Best, Sonny` — and the snippet saves
+      under `;sig`. **Known, don't report (stated residual on PR #118):** answering by retyping the
+      whole command instead saves a snippet under the junk trigger `snippet save ;sig` — tier 2
+      auto-runs under the consequence rule — visible and deletable on the Memory page
+- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's notes by SONNY-292)** Quit Sonny
+      while it is asking what to calculate (`=` alone raises the question; quit before answering).
+      Relaunch, take the widget's partway-through offer with the **tick** (or Continue from
+      Command Center → Memory → Unfinished tasks), and answer `2 + 2`. The answer is `2 + 2 = 4.`
+      — before the fix's review round this path sent the answer to the planner and it was refused,
+      because Continue replays the paused plan as a resumed task
 
 ### 3d-bis. Unfinished-task offer (row 13, SONNY-210; layout and controls SONNY-244 — no wireframe)
 Start something long and multi-step, then quit Sonny before it finishes — "summarize

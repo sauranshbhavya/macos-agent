@@ -79,8 +79,13 @@ write it so that session needs nothing else. Every ticket carries:
 - **Non-goals** — what this ticket deliberately does not do.
 - **Acceptance criteria** — checkable, not vibes.
 - **Required verification** — the exact commands (see step 5) plus any ticket-specific tests.
-- **Manual-test items** — what the user must check in the real app; these aggregate into
-  the PR's manual checklist.
+- **Manual-test items** — what the user must check in the real app. Before the ticket
+  closes, these are added to `docs/sonny-manual-test-checklist.md` as unchecked rows naming
+  the ticket; a PR note or ticket comment may summarize them, but the checklist file is the
+  only place the founders test from, and an item recorded anywhere else is an item they
+  never see. This bullet used to end "these aggregate into the PR's manual checklist", and
+  SONNY-281's session followed that sentence exactly — its six items sat in dated notes on
+  PR #118 until SONNY-292 recovered them (2026-08-26).
 - **Decisions carried from discussion** — anything that would otherwise live only in chat.
 
 Tickets are created with `scripts/plane create "<title>" <html-file> [priority]` after the
@@ -391,7 +396,8 @@ PR opens, so late failures need an explicit path, not improvisation:
   rule, close it again with a fresh closing comment. The original implementing session
   need not exist anymore — the ticket's comments are the handoff.
 
-Then: the user runs the aggregated manual checklist in the real packaged app, and merges — at
+Then: the user runs the aggregated manual items — the unchecked rows in
+`docs/sonny-manual-test-checklist.md` — in the real packaged app, and merges — at
 GitHub's control with "Create a merge commit", never the squash the page may offer first (§8).
 Delete the branch, remove the worktree if its session's sequence ends here (step 3's
 lifecycle rule — a session with tickets still ahead of it keeps the same one), confirm the
