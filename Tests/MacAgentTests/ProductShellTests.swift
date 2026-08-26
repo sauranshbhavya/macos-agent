@@ -1432,7 +1432,7 @@ struct ProductShellTests {
         let question = try #require(viewModel.clarificationQuestion)
         #expect(viewModel.clarificationAnswer.isEmpty)
 
-        viewModel.deliverTranscript("2 + 2", recordedFor: .clarificationAnswer, origin: .widget)
+        viewModel.deliverTranscript("2 + 2", recordedFor: .clarificationAnswer(question: question), origin: .widget)
         try await waitForViewModelToBecomeIdle(viewModel)
 
         #expect(viewModel.clarificationAnswer == "2 + 2")
@@ -1444,13 +1444,13 @@ struct ProductShellTests {
         // Appended at the caret, the way dictation lands: a half-typed answer keeps its half, and
         // exactly one space separates the two whatever whitespace either side carried.
         viewModel.clarificationAnswer = "the"
-        viewModel.deliverTranscript("Downloads folder", recordedFor: .clarificationAnswer, origin: .widget)
+        viewModel.deliverTranscript("Downloads folder", recordedFor: .clarificationAnswer(question: question), origin: .widget)
         #expect(viewModel.clarificationAnswer == "the Downloads folder")
         viewModel.clarificationAnswer = "the "
-        viewModel.deliverTranscript("  Downloads folder \n", recordedFor: .clarificationAnswer, origin: .widget)
+        viewModel.deliverTranscript("  Downloads folder \n", recordedFor: .clarificationAnswer(question: question), origin: .widget)
         #expect(viewModel.clarificationAnswer == "the Downloads folder")
         // An empty transcript changes nothing.
-        viewModel.deliverTranscript("   ", recordedFor: .clarificationAnswer, origin: .widget)
+        viewModel.deliverTranscript("   ", recordedFor: .clarificationAnswer(question: question), origin: .widget)
         #expect(viewModel.clarificationAnswer == "the Downloads folder")
         #expect(viewModel.clarificationQuestion == question)
     }
@@ -1483,7 +1483,7 @@ struct ProductShellTests {
         viewModel.cancelCurrentRun()
         #expect(viewModel.clarificationQuestion == nil)
 
-        viewModel.deliverTranscript("= 2 + 2", recordedFor: .clarificationAnswer, origin: .widget)
+        viewModel.deliverTranscript("= 2 + 2", recordedFor: .clarificationAnswer(question: question), origin: .widget)
         try await waitForViewModelToBecomeIdle(viewModel)
 
         #expect(viewModel.lastCommand == "=", "an orphaned answer never runs as a command")
@@ -1516,25 +1516,183 @@ struct ProductShellTests {
             ) == 1
         )
         #expect(MacAgentSource.count(of: "dispatchTranscribedCommand(", inText: completion) == 0)
-        #expect(MacAgentSource.count(of: "clarificationAnswer", inText: completion) == 0, "the completion routes; it does not decide")
+        #expect(MacAgentSource.count(of: "clarificationAnswer = ", inText: completion) == 0, "the completion routes; it does not decide")
 
-        // Written exactly once, at the start of a recording, from whether a question stood at that
-        // moment. (The declaration carries a type annotation, so it does not match this text.)
+        // Written exactly once, at the start of a recording, from the question standing at that
+        // moment — its text, not merely its presence (F3). (The declaration carries a type
+        // annotation, so it does not match this text.)
         let start = try MacAgentSource.braceBlock(
             of: source,
             openedBy: "private func startVoiceRecording(trigger: VoiceRecordingTrigger, origin: TaskOrigin) {"
         )
         #expect(
             MacAgentSource.count(
-                of: "voiceRecordingPurpose = .forRecordingStarted(whileClarificationPending: clarificationQuestion != nil)",
+                of: "voiceRecordingPurpose = .forRecordingStarted(clarificationQuestion: clarificationQuestion)",
                 inText: start
             ) == 1
         )
         #expect(MacAgentSource.count(of: "voiceRecordingPurpose = ", inText: source) == 1)
 
         // And the router is the only caller of the answer path, so nothing can feed the field with
-        // a transcript whose purpose was never decided.
+        // a transcript whose purpose was never decided — and the question travels with it.
         #expect(MacAgentSource.count(of: "answerClarificationWithTranscript(", inText: source) == 2, "the declaration and its one caller")
+        #expect(MacAgentSource.count(of: "answerClarificationWithTranscript(transcript, answering: question)", inText: source) == 1)
+
+        // **F4: an answer's transcription resets nothing of the paused task's.** The usage reset and
+        // the summary clear are the `.command` arm's alone, inside the completion.
+        let commandArm = try MacAgentSource.region(of: completion, from: "case .command:", to: "case .clarificationAnswer:")
+        #expect(MacAgentSource.count(of: "taskUsageRecorder.reset()", inText: commandArm) == 1)
+        #expect(MacAgentSource.count(of: "taskUsageSummary = .empty", inText: commandArm) == 1)
+        #expect(MacAgentSource.count(of: "\"Transcribing voice command\"", inText: commandArm) == 1)
+        #expect(MacAgentSource.count(of: "taskUsageRecorder.reset()", inText: completion) == 1, "no reset outside the command arm")
+        #expect(MacAgentSource.count(of: "taskUsageSummary = .empty", inText: completion) == 1)
+        let summaryClear = try MacAgentSource.region(
+            of: completion,
+            from: "if case .command = voiceRecordingPurpose {",
+            to: "isTranscribingVoice = false"
+        )
+        #expect(MacAgentSource.count(of: "finalSummary = \"\"", inText: summaryClear) == 1)
+        #expect(MacAgentSource.count(of: "finalSummary = \"\"", inText: completion) == 1, "the summary is cleared for a command and nowhere else")
+        #expect(MacAgentSource.count(of: "\"Transcribing voice answer\"", inText: completion) == 1)
+    }
+
+    /// **PR #119 review, F1 — Return while a spoken answer is still in flight keeps the question,
+    /// runs nothing, and the transcript then lands.** `submitClarification` used to clear the
+    /// question, the answer, the origin, the binding and the request, arm the restart, and *then*
+    /// call `start()`, which refused on `!isTranscribingVoice` — leaving nothing running, the
+    /// composed Q&A in the composer, the "Clarification needed" line as a result, and the task just
+    /// abandoned on offer. That window needed a transcription already in flight when a question
+    /// arrived; voice answering a clarification made it the ordinary case.
+    ///
+    /// All three voice flags, each in turn, because `canSendClarificationAnswer`'s doc says why all
+    /// three are in the guard and a test of one would let the other two drift out. Then the
+    /// control: the transcript lands, Send comes back, and Return sends.
+    @Test
+    func returnWhileVoiceInputIsInFlightKeepsTheQuestionAndTheTranscriptThenLands() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        viewModel.command = "="
+        viewModel.start(origin: .widget, fromComposer: true)
+        try await waitForViewModelToBecomeIdle(viewModel)
+        let question = try #require(viewModel.clarificationQuestion)
+        let summary = viewModel.finalSummary
+        let records = viewModel.resumableTasks.map(\.id)
+        viewModel.clarificationAnswer = "2 +"
+        #expect(viewModel.canSendClarificationAnswer, "precondition: with no voice in flight the answer is sendable")
+
+        let flags: [(name: String, set: (AgentViewModel, Bool) -> Void)] = [
+            ("transcribing", { $0.isTranscribingVoice = $1 }),
+            ("recording", { $0.isRecordingVoice = $1 }),
+            ("preparing", { $0.isPreparingVoiceRecording = $1 })
+        ]
+        for flag in flags {
+            flag.set(viewModel, true)
+            #expect(viewModel.isVoiceInputInFlight, "\(flag.name)")
+            #expect(!viewModel.canSendClarificationAnswer, "\(flag.name): Send must be off")
+
+            viewModel.submitClarification()
+            try await waitForViewModelToBecomeIdle(viewModel)
+
+            #expect(viewModel.clarificationQuestion == question, "\(flag.name): the pause survives Return")
+            #expect(viewModel.clarificationAnswer == "2 +", "\(flag.name): the typed half is kept")
+            #expect(viewModel.command.isEmpty, "\(flag.name): nothing composed into the composer")
+            #expect(viewModel.lastCommand == "=", "\(flag.name): nothing ran")
+            #expect(viewModel.finalSummary == summary, "\(flag.name): the pause's own line stands")
+            #expect(viewModel.resumableTasks.map(\.id) == records, "\(flag.name): no record minted")
+            #expect(viewModel.resumeOffer == nil, "\(flag.name): the task is not on offer while its question stands")
+            #expect(viewModel.errorMessage == nil, "\(flag.name): transient, so silent")
+            flag.set(viewModel, false)
+        }
+
+        // The control: the transcript lands in the field, Send comes back, and Return sends.
+        viewModel.deliverTranscript("2", recordedFor: .clarificationAnswer(question: question), origin: .widget)
+        #expect(viewModel.clarificationAnswer == "2 + 2")
+        #expect(viewModel.canSendClarificationAnswer)
+        viewModel.submitClarification()
+        try await waitForViewModelToBecomeIdle(viewModel)
+        #expect(viewModel.lastCommand != "=" && viewModel.lastCommand.contains("2 + 2"), "the answered run dispatched")
+    }
+
+    /// **PR #119 review, F3 — the answer to one question never lands in another's field.** The
+    /// guard used to ask whether *a* question was open; a second question can arrive inside the
+    /// transcription's round trip, so the purpose now carries the question's text and delivery
+    /// compares it. The control is the answer recorded for the second question, which does land.
+    @Test
+    func aTranscriptRecordedForOneQuestionIsDroppedWhenADifferentQuestionIsOpen() async throws {
+        let fixture = try makeProductShellFixture()
+        defer { try? FileManager.default.removeItem(at: fixture.root) }
+        let viewModel = fixture.viewModel
+
+        viewModel.command = "="
+        viewModel.start(origin: .widget, fromComposer: true)
+        try await waitForViewModelToBecomeIdle(viewModel)
+        let first = try #require(viewModel.clarificationQuestion)
+
+        // The first question goes and a different one takes its place before the transcript lands.
+        viewModel.cancelCurrentRun()
+        #expect(viewModel.clarificationQuestion == nil)
+        let second = "Which workspace did you mean?"
+        viewModel.clarificationQuestion = second
+        #expect(second != first)
+
+        viewModel.deliverTranscript("2 + 2", recordedFor: .clarificationAnswer(question: first), origin: .widget)
+        try await waitForViewModelToBecomeIdle(viewModel)
+
+        #expect(viewModel.clarificationAnswer.isEmpty, "the first question's answer must not land in the second's field")
+        #expect(viewModel.clarificationQuestion == second)
+        #expect(viewModel.lastCommand == "=", "and it did not run as a command either")
+
+        // The control: an answer recorded for the question that is open lands.
+        viewModel.deliverTranscript("Research", recordedFor: .clarificationAnswer(question: second), origin: .widget)
+        #expect(viewModel.clarificationAnswer == "Research")
+    }
+
+    /// **F1's wiring: the guard sits before anything is torn down, and both Send controls read the
+    /// predicate it refuses on.** A guard placed after the first clear would be the defect with a
+    /// log line; a Send button gated on the answer alone would be a live control for a press the
+    /// state refuses — which is the widget's SONNY-173 shape from the other direction.
+    @Test
+    func theAnswerGateSitsBeforeTheTeardownAndBothSendControlsReadIt() throws {
+        let source = try MacAgentSource.read("AgentViewModel.swift")
+        let submit = try MacAgentSource.braceBlock(of: source, openedBy: "func submitClarification() {")
+
+        #expect(MacAgentSource.count(of: "guard !isVoiceInputInFlight else {", inText: submit) == 1)
+        let gate = try #require(submit.range(of: "guard !isVoiceInputInFlight else {"))
+        for teardown in [
+            "clarificationQuestion = nil",
+            "clarificationAnswer = \"\"",
+            "clarificationSubmittedCommand = nil",
+            "armRestartOfTaskInFlight()",
+            "start(autoExecute:"
+        ] {
+            let site = try #require(submit.range(of: teardown), "not in submitClarification: \(teardown)")
+            #expect(gate.lowerBound < site.lowerBound, "the gate must come before \(teardown)")
+        }
+
+        // The predicate names all three voice terms, once each.
+        let inFlight = try MacAgentSource.braceBlock(of: source, openedBy: "var isVoiceInputInFlight: Bool {")
+        for term in ["isPreparingVoiceRecording", "isRecordingVoice", "isTranscribingVoice"] {
+            #expect(MacAgentSource.count(of: term, inText: inFlight) == 1, "\(term)")
+        }
+        let canSend = try MacAgentSource.braceBlock(of: source, openedBy: "var canSendClarificationAnswer: Bool {")
+        #expect(MacAgentSource.count(of: "!isVoiceInputInFlight", inText: canSend) == 1)
+
+        // Both Send controls, one predicate.
+        let widget = try MacAgentSource.read("FloatingWidgetView.swift")
+        let panel = try MacAgentSource.braceBlock(of: widget, openedBy: "private struct WidgetClarificationPanel: View {")
+        #expect(MacAgentSource.count(of: ".disabled(!canSend)", inText: panel) == 1)
+        #expect(MacAgentSource.count(of: ".disabled(answer.", inText: panel) == 0, "the answer-only gate is gone")
+        #expect(MacAgentSource.count(of: "canSend: viewModel.canSendClarificationAnswer", inText: widget) == 1)
+
+        let commandCenter = try MacAgentSource.read("CommandCenterView.swift")
+        let content = try MacAgentSource.braceBlock(
+            of: commandCenter,
+            openedBy: "private func clarificationContent(_ question: String) -> some View {"
+        )
+        #expect(MacAgentSource.count(of: ".disabled(!viewModel.canSendClarificationAnswer)", inText: content) == 1)
+        #expect(MacAgentSource.count(of: ".disabled(viewModel.clarificationAnswer", inText: content) == 0)
     }
 
     /// R1 — deleting a workspace kills an arm naming it, so the chip can never promise a boundary

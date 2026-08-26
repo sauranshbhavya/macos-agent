@@ -435,6 +435,14 @@ which.
       jumps into the disabled main composer — not on the hotkey, not on the menu-bar "New Task",
       not on re-opening the widget from its collapsed capsule. And typing without clicking still
       lands letters in the answer field, exactly as SONNY-247's row above says
+- [ ] **(new 2026-08-26, SONNY-283, from PR #119's review F1)** With a question pending, type half
+      an answer, then hold the hotkey and speak the rest — and press **Return while the mic is still
+      live, and again during the second or two after you release it** while the transcript is on its
+      way. Nothing should happen either time: the question stays, the typed half stays, the widget
+      does not show "Clarification needed" as a *result* and does not offer to resume the task, and
+      the main composer stays empty. The up-arrow Send (and Command Center's Send) should be greyed
+      out for the whole of that window and come back the moment the transcript lands. Then Return
+      sends. Before this fix that Return silently destroyed the question
 
 ### 3d-bis. Unfinished-task offer (row 13, SONNY-210; layout and controls SONNY-244 — no wireframe)
 Start something long and multi-step, then quit Sonny before it finishes — "summarize

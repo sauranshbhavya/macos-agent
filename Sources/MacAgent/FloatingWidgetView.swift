@@ -260,7 +260,9 @@ struct FloatingWidgetView: View {
     /// in flight) — omitting it from `isCollapsible` was a real bug: the widget auto-collapsed
     /// mid-recording, hiding the mic UI while it was actively listening.
     private var isVoiceActive: Bool {
-        viewModel.isPreparingVoiceRecording || viewModel.isRecordingVoice || viewModel.isTranscribingVoice
+        // The view model's own composite, so the collapse rule here and the answer gate
+        // (`canSendClarificationAnswer`) read one definition of "voice is in flight".
+        viewModel.isVoiceInputInFlight
     }
 
     /// Matches your own framing: compact only when "nothing is running or user is not using
@@ -972,6 +974,7 @@ private extension FloatingWidgetView {
                 question: question,
                 answer: $viewModel.clarificationAnswer,
                 focusedField: $focusedField,
+                canSend: viewModel.canSendClarificationAnswer,
                 onSubmit: { viewModel.submitClarification() },
                 // The same app-wide entry point the permission panel's Deny above uses, not a
                 // clarification-specific method (SONNY-166). `CommandCenterAttentionPanel`'s own
@@ -1568,6 +1571,12 @@ private struct WidgetClarificationPanel: View {
     /// reach this field — with a private `Bool` here it could not, and the hotkey did nothing while a
     /// question was pending.
     @FocusState.Binding var focusedField: WidgetInputField?
+    /// Whether Send is live — `AgentViewModel.canSendClarificationAnswer`, which is also what
+    /// `submitClarification` refuses on, so the control and the state cannot disagree (PR #119
+    /// review, F1). Off while the answer is empty, as before, and now also while a voice recording or
+    /// its transcription is in flight, because a send inside that window tore the pause down and put
+    /// nothing back.
+    let canSend: Bool
     let onSubmit: () -> Void
     let onCancel: () -> Void
 
@@ -1626,7 +1635,7 @@ private struct WidgetClarificationPanel: View {
                     .buttonStyle(.plain)
                     .frame(width: 23, height: 23)
                     .widgetCircularBackground(tint: WidgetTheme.primaryAction)
-                    .disabled(answer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+                    .disabled(!canSend)
                 }
                 .padding(.horizontal, 10)
                 .padding(.vertical, 6)
