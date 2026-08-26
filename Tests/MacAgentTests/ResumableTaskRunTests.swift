@@ -1933,6 +1933,89 @@ struct ClarificationAnswerRoutingTests {
         #expect(fixture.viewModel.plan?.steps.map(\.id) == ["draft", "url"])
     }
 
+    /// **A calculation that resolves and does not evaluate is dispatched, so the calculator's own
+    /// error shows** (PR #118 re-check, R-b). `calc` answered `banana` joins to `calc banana`, which
+    /// resolves and fails the dry run and has no restatement to fall back to; composing the exchange
+    /// there sent it to a planner with no calculator — this ticket's own symptom, one door over. The
+    /// honest answer is the one typing `calc banana` gets. Two inputs, because the class is every
+    /// expression the parser refuses, not one example.
+    @Test
+    func aCalculationThatResolvesButDoesNotEvaluateIsDispatchedSoTheCalculatorsOwnErrorShows() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+        fixture.planner.plan = fixture.draftThenOpenPlan
+
+        for (request, answer, expected) in [
+            ("calc", "banana", "calc banana"),
+            ("=", "2 +", "= 2 +")
+        ] {
+            fixture.viewModel.command = request
+            fixture.viewModel.start(origin: .widget)
+            try await fixture.waitForIdle()
+            #expect(fixture.viewModel.clarificationQuestion == "What would you like me to calculate?")
+
+            fixture.viewModel.clarificationAnswer = answer
+            fixture.viewModel.submitClarification()
+            try await fixture.waitForIdle()
+
+            #expect(fixture.viewModel.lastCommand == expected)
+            let error = try #require(fixture.viewModel.errorMessage)
+            #expect(error.hasPrefix("Could not calculate that expression"))
+            #expect(fixture.viewModel.clarificationQuestion == nil)
+        }
+        #expect(fixture.planner.receivedCommands == [])
+    }
+
+    /// **R-a's neighbour, which R-b does change — said rather than left to drift.** With neither
+    /// Writer nor Focus Writer running, the join and the restatement both resolve and neither
+    /// prepares, so the join is dispatched and fails naming the app the user named; before R-b the
+    /// exchange went to the planner. Same rule as the calculator case, same reason.
+    @Test
+    func withNeitherAppRunningTheJoinIsDispatchedAndFailsNamingTheAppTheUserNamed() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+        fixture.planner.plan = fixture.draftThenOpenPlan
+        fixture.runningAppSwitcher.apps = []
+
+        fixture.viewModel.command = "focus"
+        fixture.viewModel.start(origin: .widget)
+        try await fixture.waitForIdle()
+        fixture.viewModel.clarificationAnswer = "Focus Writer"
+        fixture.viewModel.submitClarification()
+        try await fixture.waitForIdle()
+
+        #expect(fixture.viewModel.lastCommand == "focus Focus Writer")
+        #expect(fixture.viewModel.errorMessage == "No running app matched Focus Writer.")
+        #expect(fixture.runningAppSwitcher.activated == [])
+        #expect(fixture.planner.receivedCommands == [])
+    }
+
+    /// **R-a, recorded and not closed (founder decision, 2026-08-26), pinned so any drift is seen.**
+    /// With only Writer running, the join `focus Focus Writer` fails prepare, the restatement
+    /// `Focus Writer` reads as `focus` + `Writer` and prepares, and Sonny switches to Writer — where
+    /// typing `focus Focus Writer` would say no running app matched. R-b does not reach this: a
+    /// candidate prepared. Closing it needs a per-operation preference this branch does not add.
+    @Test
+    func withOnlyWriterRunningTheRestatementPreparesAndSonnySwitchesToWriterAsRecorded() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+        fixture.planner.plan = fixture.draftThenOpenPlan
+        fixture.runningAppSwitcher.apps = [
+            RunningApp(displayName: "Writer", bundleIdentifier: "com.example.writer", processIdentifier: 101)
+        ]
+
+        fixture.viewModel.command = "focus"
+        fixture.viewModel.start(origin: .widget)
+        try await fixture.waitForIdle()
+        fixture.viewModel.clarificationAnswer = "Focus Writer"
+        fixture.viewModel.submitClarification()
+        try await fixture.waitForIdle()
+
+        #expect(fixture.viewModel.lastCommand == "Focus Writer")
+        #expect(fixture.runningAppSwitcher.activated == ["com.example.writer"])
+        #expect(fixture.planner.receivedCommands == [])
+    }
+
 }
 
 /// The widget's panel precedence, as a value a test can hold.
