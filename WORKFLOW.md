@@ -84,8 +84,9 @@ write it so that session needs nothing else. Every ticket carries:
   the ticket; a PR note or ticket comment may summarize them, but the checklist file is the
   only place the founders test from, and an item recorded anywhere else is an item they
   never see. This bullet used to end "these aggregate into the PR's manual checklist", and
-  SONNY-281's session followed that sentence exactly — its six items sat in dated notes on
-  PR #118 until SONNY-292 recovered them (2026-08-26).
+  SONNY-281's session followed that sentence exactly — its thirteen items sat on PR #118,
+  seven in the body and six more in its review rounds' dated notes, until SONNY-292
+  recovered them (2026-08-26).
 - **Decisions carried from discussion** — anything that would otherwise live only in chat.
 
 Tickets are created with `scripts/plane create "<title>" <html-file> [priority]` after the
