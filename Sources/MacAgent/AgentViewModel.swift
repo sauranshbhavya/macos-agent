@@ -2572,9 +2572,16 @@ final class AgentViewModel: ObservableObject {
     /// own "Could not calculate that expression". The dispatch shows that real error, as the typed
     /// command would. This acts only when nothing prepared, so it cannot reorder a candidate that
     /// did: with Writer and Focus Writer both running the join prepares and still wins (F2). A
-    /// prepare that comes back with a clarification is not workable either (R-c) — reachable only
-    /// when a store or the Shortcuts catalog changes between the resolver's read and the executor's,
-    /// and then the candidate is dispatched by this same rule and pauses on the executor's question.
+    /// prepare that comes back with a clarification is not workable either (R-c). **That guard
+    /// decides something only when the Shortcuts catalog or a store changes between the resolver's
+    /// read and the executor's** — the two read the same sources with the same keys, the routine and
+    /// workspace stores through the same `normalized()` so they cannot deterministically disagree,
+    /// and the catalog through a process read that `InvokeShortcutCapabilityAdapter` repeats at
+    /// prepare. When it does decide, it is not "the candidate is dispatched either way" — that held
+    /// only for a sole or last resolved candidate, and this comment said it for one round: with a
+    /// join whose prepare clarifies and a restatement that prepares, the join is passed over and the
+    /// restatement runs (`aCandidateWhosePrepareClarifiesIsPassedOverForOneThatPrepares`, over a
+    /// catalog scripted to answer consecutive reads differently, which no fixture had done before).
     ///
     /// **What falls through, on purpose.** "I could not find a Shortcut named Foo. Which Shortcut
     /// should I run?" wants a replacement, and `run shortcut Foo Send Report` resolves to the same
