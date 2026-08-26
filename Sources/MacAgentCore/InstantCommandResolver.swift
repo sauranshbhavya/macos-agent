@@ -763,6 +763,12 @@ public struct InstantCommandResolver: Sendable {
         )
     }
 
+    /// Asks for the body alone — `;trigger = expansion` — and not for the whole command, because the
+    /// answer completes the command it is asked about (SONNY-281, `ClarifiedCommand.completions`):
+    /// `snippet save` answered `;sig = hello` runs `snippet save ;sig = hello`. The question used to
+    /// spell out the prefix too, which was right while the answer went to a planner and wrong once it
+    /// joins onto the request — a user following that instruction to the letter produced a trigger
+    /// of `snippet save ;sig`.
     private func snippetSaveClarificationPlan() -> AgentPlan {
         AgentPlan(
             summary: "Clarification needed.",
@@ -772,7 +778,7 @@ public struct InstantCommandResolver: Sendable {
                     id: "clarify-snippet-save",
                     operation: .clarify,
                     description: "Ask for snippet trigger and expansion.",
-                    question: "Use the format snippet save ;trigger = expansion."
+                    question: "Use the format ;trigger = expansion."
                 )
             ]
         )
