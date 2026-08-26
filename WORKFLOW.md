@@ -376,7 +376,8 @@ PR opens, so late failures need an explicit path, not improvisation:
   rule, close it again with a fresh closing comment. The original implementing session
   need not exist anymore — the ticket's comments are the handoff.
 
-Then: the user runs the aggregated manual checklist in the real packaged app, and merges.
+Then: the user runs the aggregated manual checklist in the real packaged app, and merges — at
+GitHub's control with "Create a merge commit", never the squash the page may offer first (§8).
 Delete the branch, remove the worktree if its session's sequence ends here (step 3's
 lifecycle rule — a session with tickets still ahead of it keeps the same one), confirm the
 tickets' final states.
@@ -392,6 +393,16 @@ because the rewrite kept it: `git log --first-parent --merges --format='%h %s' 9
 prints the eighteen replacements in the order the originals merged.) Neither this file nor `CLAUDE.md`
 stated a strategy, so no session could have known which was intended — which is why it is
 stated here rather than left to be inferred from `git log`, the way it was found.
+
+**At GitHub's merge control that means "Create a merge commit" — never "Squash and merge", never
+"Rebase and merge".** All three are enabled on the repository
+(`gh api repos/{owner}/{repo} --jq '{allow_merge_commit,allow_squash_merge,allow_rebase_merge}'`
+→ each `true`, read 2026-08-26), so nothing greys the wrong ones out, and the control does not
+come up on the right one by itself: on 2026-08-25 it came up on Squash and merge and was pressed,
+which is how PR #118 landed as a squash and had to be reverted and re-merged — the last subsection
+of this section is that record. Rebase and merge is the other wrong answer, and the worse one: it
+keeps the commits but gives every one a new SHA as it lands, so every stamp the branch's entry
+carries goes non-ancestral at once, with nothing to revert.
 
 **The run is #96 through #109 and #111 — and also #87, which is easy to miss and is why the
 count is sixteen rather than fifteen.** #87 opened long before the others and merged late, so it
@@ -548,3 +559,70 @@ forward and never re-stamped. The check, once the entry has merged: `git merge-b
 <sha> origin/main` exits 0 for every SHA the entry cites, read with nothing between the command
 and `$?`. Before the merge, the reviewer runs the same check against the branch head under
 review (step 7, "Step 0"), and a rebase after that review re-runs it.
+
+### The squash of 2026-08-25: PR #118, PR #120, PR #121
+
+`main` between #116's merge (`140829b`) and #119's (`bb7857c`) does not read as one merge per
+pull request, and the reason is recorded here because the three GitHub pages it would otherwise
+be reconstructed from each hold a third of it:
+
+```
+git log --first-parent --format='%h  tree %t  %s' 140829b..c6bc2a2      (at bb7857c)
+
+c6bc2a2  tree c503515  Merge pull request #121 from sauranshbhardwaj/fix/clarified-command-reaches-the-planner-whole
+48f5fb7  tree 9686035  Revert "SONNY-281 — a clarified command reaches the resolver that asked, and …" (#120)
+dca98e1  tree c503515  SONNY-281 — a clarified command reaches the resolver that asked, and a sum may end with = (#118)
+```
+
+**What happened, in the order it happened** (times are the commits' own, −04:00; GitHub's
+`mergedAt` shows the same instants in UTC, dated 2026-08-26). PR #118 — SONNY-281, head
+`496fa0f`, ten commits above `140829b` (`git rev-list --count 140829b..496fa0f` → 10) — was
+merged at 23:05:33 with **Squash and merge**. That produced `dca98e1`: one commit with one
+parent, and the ten commits reachable from nothing on `main`. **GitHub records #118 as Merged
+with `dca98e1` as its merge commit, and will keep saying so** — the squash is what that pull
+request merged, and a revert does not reopen one. The squash was reverted 47 seconds later
+through **PR #120**, GitHub's own revert button; its one commit, `7ff2024`, was merged as
+`48f5fb7` by the same squash control (one parent, and the squash title's `(#120)` suffix), which
+for a single-commit revert changes nothing. The branch was then opened again as **PR #121** — the
+same head `496fa0f`, no new work, no rebase — and merged at 23:13:04 with a merge commit,
+`c6bc2a2`, whose second parent is `496fa0f`. The ten commits are on `main` intact, and every SHA
+SONNY-281's entry stamps passes the ancestry check.
+
+**What was verified before #121 was opened, re-run for this record at `bb7857c`.** The revert
+was complete: `git rev-parse 48f5fb7^{tree} 140829b^{tree}` prints
+`9686035726068d35736bae300ed8cd97a3f7998f` twice, and `git diff --stat 48f5fb7 140829b` prints
+nothing. The re-merge was proved clean before it ran: `git merge-tree --write-tree 48f5fb7
+496fa0f` exits 0 with no conflict section and prints `c5035151a546b85b8a8f42992b77b6783cc515da`,
+which is `git rev-parse 496fa0f^{tree}` — the merge could produce exactly the branch's content,
+and did: `git rev-parse c6bc2a2^{tree}` is the same hash. (#121's description writes the command
+as `git merge-tree --write-tree origin/main 496fa0f`; `origin/main` was `48f5fb7` when it ran.)
+One fact the checks imply is worth stating: `git rev-parse dca98e1^{tree}` is also `c503515…`.
+The squash lost no content. What it lost was the ten commits, and with them every SHA the entry
+had stamped — the second reason above, arriving exactly as written.
+
+**What it cost, and what was left alone.** Two commits on the mainline that are not merges —
+`git rev-list --first-parent --no-merges --count 20a180e..bb7857c` → 2, and they are `dca98e1`
+and `48f5fb7`, the only such commits since the rewrite. `git log --first-parent --merges` skips
+both, so a PR-merge count stays one per ticket, and `git bisect --first-parent` steps through
+them as a pair that together change nothing. `main` was not rewritten to remove them: a rewrite
+is what this section records doing once, for sixteen squashes whose replacements needed a
+repointing pass of their own (SONNY-271), and two commits that orphan nothing are not that case.
+Nothing needed repointing, because no figure is stamped at `dca98e1` —
+`git grep -n 'dca98e1' -- docs CLAUDE.md WORKFLOW.md` finds PR #119's entry, SONNY-281's Status
+line and this record, each naming it as history. And the three commits GitHub's control made —
+`dca98e1`, `48f5fb7`, `c6bc2a2` — carry the author email
+`66620598+sauranshbhardwaj@users.noreply.github.com` rather than `sbhardwaj1418@gmail.com`; the
+founder decided on 2026-08-26 to leave them as they are. That address is not a mark of the
+squash, and those three are not the population: it is what GitHub's web control stamps on every
+commit it makes — 96 on `main` at `bb7857c` (`git log --format='%ae' bb7857c | grep -c
+'users.noreply.github.com'` → 96, every one with `GitHub <noreply@github.com>` as committer,
+#119's own `bb7857c` among them) — while every commit made from the terminal carries the
+founder's address, the rewrite's eighteen merges included.
+
+**The rule for the person at the control**, since the decision at the top of this section says
+"merge commit" and the page offers three buttons: **Create a merge commit**, chosen by hand,
+every time — the page does not hold the rule, and on 2026-08-25 it came up on the squash. A
+squash is undone the way this record shows, with a revert and a re-merge, at the cost of two
+harmless commits; a rebase-and-merge cannot be undone that way at all, because there is nothing
+to revert — the commits land, each under a new SHA, and every stamp beneath the branch's entry
+goes non-ancestral in one step.
