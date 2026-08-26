@@ -2564,10 +2564,28 @@ final class AgentViewModel: ObservableObject {
     /// must not have. The resolver then runs once more on the chosen command inside `performStart`,
     /// as the dispatch; the two agree because resolution is deterministic over the same stores.
     ///
+    /// **When candidates resolved and none prepared, the first that resolved is dispatched — not
+    /// the exchange** (PR #118 re-check, R-b). `calc` answered `banana` joins to `calc banana`, which
+    /// resolves, does not evaluate, and has no restatement to fall back to; composing the exchange
+    /// there sent it to a planner with no calculator, which is this ticket's own symptom returning
+    /// one door over — "Calculation is unsupported" where typing `calc banana` gets the calculator's
+    /// own "Could not calculate that expression". The dispatch shows that real error, as the typed
+    /// command would. This acts only when nothing prepared, so it cannot reorder a candidate that
+    /// did: with Writer and Focus Writer both running the join prepares and still wins (F2). A
+    /// prepare that comes back with a clarification is not workable either (R-c) — reachable only
+    /// when a store or the Shortcuts catalog changes between the resolver's read and the executor's,
+    /// and then the candidate is dispatched by this same rule and pauses on the executor's question.
+    ///
     /// **What falls through, on purpose.** "I could not find a Shortcut named Foo. Which Shortcut
     /// should I run?" wants a replacement, and `run shortcut Foo Send Report` resolves to the same
-    /// question again rather than to a plan — so no candidate works and the exchange goes to the
-    /// planner, where a question that needs reading gets read. **What is stated as not closed:** a
+    /// question again rather than to a plan — so nothing resolves and the exchange goes to the
+    /// planner, where a question that needs reading gets read. **Recorded, not closed (R-a, founder
+    /// decision 2026-08-26):** `focus` answered `Focus Writer` with only Writer running — the join
+    /// fails prepare, the restatement prepares, and Sonny switches to Writer, where typing
+    /// `focus Focus Writer` would say no running app matched. R-b does not reach it, since something
+    /// prepared; its neighbour with *neither* app running does change under R-b — the join is
+    /// dispatched and fails naming Focus Writer, where before the exchange went to the planner.
+    /// **What is stated as not closed:** a
     /// snippet request that already carries part of its body — `snippet save ;sig`, asked for the
     /// format — joins an operand answer onto that partial body, and a user who retypes the whole
     /// command joins the prefix onto itself; either plan carries a trigger nobody meant, the store
@@ -2589,14 +2607,20 @@ final class AgentViewModel: ObservableObject {
             return nil
         }
         let dryRun = makeExecutor(recordingPolicy: nil, visionSession: nil)
+        var firstResolved: String?
         for candidate in ClarifiedCommand.completions(request: request, answer: answer) {
-            guard case .plan(let plan)? = resolver.resolve(command: candidate),
-                  (try? dryRun.prepare(plan: plan)) != nil else {
+            guard case .plan(let plan)? = resolver.resolve(command: candidate) else {
+                continue
+            }
+            if firstResolved == nil {
+                firstResolved = candidate
+            }
+            guard let prepared = try? dryRun.prepare(plan: plan), prepared.clarificationQuestion == nil else {
                 continue
             }
             return candidate
         }
-        return nil
+        return firstResolved
     }
 
     /// - Parameter origin: Which surface's mic button this is.
