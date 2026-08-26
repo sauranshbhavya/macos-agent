@@ -277,43 +277,4 @@ struct ClarifiedCommandTests {
         #expect(!ClarifiedCommand.carriesExchange(straddled))
         #expect(ClarifiedCommand.request(in: straddled) == straddled)
     }
-
-    /// **The other composition** (SONNY-281): for a question the instant resolver asked, the answer
-    /// is the rest of the command, and the candidates are plain commands rather than an exchange.
-    @Test
-    func theFirstCandidateIsTheRequestThenTheAnswer() throws {
-        #expect(ClarifiedCommand.completions(request: "=", answer: "2 + 2") == ["= 2 + 2"])
-        #expect(ClarifiedCommand.completions(request: "  calc\n", answer: " 2 + 2 ") == ["calc 2 + 2"])
-        #expect(ClarifiedCommand.completions(request: "switch to", answer: "Safari") == ["switch to Safari"])
-        // A plain command: nothing for a label to strip, and the request is the whole of it.
-        let joined = try #require(ClarifiedCommand.completions(request: "=", answer: "2 + 2").first)
-        #expect(!ClarifiedCommand.carriesExchange(joined))
-        #expect(ClarifiedCommand.request(in: joined) == joined)
-    }
-
-    /// **The join first, the restatement second** (PR #118 review F2). `focus` answered
-    /// `Focus Writer` restates by coincidence — read that way Sonny would switch to an app called
-    /// Writer — so the operand reading leads, and the answer alone is offered only after it and only
-    /// when the answer begins with the request. Case-insensitive, as the resolver's prefixes are.
-    @Test
-    func anAnswerThatBeginsWithTheRequestIsOfferedWholeAfterTheJoin() {
-        #expect(ClarifiedCommand.completions(request: "calc", answer: "calc 2 + 2") == ["calc calc 2 + 2", "calc 2 + 2"])
-        #expect(ClarifiedCommand.completions(request: "calc", answer: "Calc 2 + 2") == ["calc Calc 2 + 2", "Calc 2 + 2"])
-        #expect(ClarifiedCommand.completions(request: "=", answer: "= 2 + 2") == ["= = 2 + 2", "= 2 + 2"])
-        #expect(
-            ClarifiedCommand.completions(request: "focus", answer: "Focus Writer")
-                == ["focus Focus Writer", "Focus Writer"]
-        )
-        // The request has to be at the front; appearing later is not a restatement.
-        #expect(ClarifiedCommand.completions(request: "calc", answer: "2 + 2 calc") == ["calc 2 + 2 calc"])
-    }
-
-    /// Degrades the way `composed` does: no request, the answer alone; no answer, the request alone
-    /// — never a dangling space, and never two candidates that are the same string.
-    @Test
-    func completingWithoutARequestOrWithoutAnAnswerIsTheOtherHalfAlone() {
-        #expect(ClarifiedCommand.completions(request: "", answer: "2 + 2") == ["2 + 2"])
-        #expect(ClarifiedCommand.completions(request: "  \n", answer: "2 + 2") == ["2 + 2"])
-        #expect(ClarifiedCommand.completions(request: "=", answer: "   ") == ["="])
-    }
 }

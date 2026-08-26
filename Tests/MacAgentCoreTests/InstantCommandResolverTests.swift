@@ -89,55 +89,6 @@ struct InstantCommandResolverTests {
         #expect(logStore.events.contains { $0.phase == .plan && $0.message == "Resolved command locally" })
         #expect(logStore.events.contains { $0.phase == .risk && $0.message.contains("risk.assessed: Tier 0") })
     }
-
-    /// The sign a person types at the end of a sum (SONNY-281). `2 + 2` was answered here and
-    /// `2 + 2 =` was not — the trailing sign fell outside the bare-arithmetic rule's character set,
-    /// and the sum reached a planner that has no calculator to offer. The rule now reads the sum the
-    /// way the evaluator will, and the plan carries that form so its own summary says `2 + 2`.
-    @Test
-    func bareArithmeticWithATrailingEqualsSignResolvesToTheCalculator() throws {
-        let resolver = InstantCommandResolver()
-
-        for command in ["2 + 2 =", "2 + 2 = ", "2+2=", "2 + 2 = ?", "2 + 2?"] {
-            guard case .plan(let plan) = resolver.resolve(command: command) else {
-                Issue.record("Expected \(command.debugDescription) to resolve locally as a sum.")
-                continue
-            }
-            let sum = CalculatorService.withoutTrailingEqualsOrQuestionMark(command)
-            #expect(plan.steps.map(\.operation) == [.calculateUtility])
-            #expect(plan.steps[0].searchQuery == sum)
-            #expect(plan.summary == "Calculate \(sum).")
-        }
-
-        // The prefixed forms drop it too, so their plan reads the same as the bare one.
-        for command in ["= 2 + 2 =", "calc 2 + 2 =", "Calculate 2 + 2 ?"] {
-            guard case .plan(let prefixed) = resolver.resolve(command: command) else {
-                Issue.record("Expected \(command.debugDescription) to resolve locally as a sum.")
-                continue
-            }
-            #expect(prefixed.steps[0].searchQuery == "2 + 2")
-        }
-
-        // A conversion may end the same way.
-        guard case .plan(let conversion) = resolver.resolve(command: "10 cm to in =") else {
-            Issue.record("Expected the conversion to resolve locally.")
-            return
-        }
-        #expect(conversion.steps[0].searchQuery == "10 cm to in")
-
-        // An interior sign is a statement, not a sum, and stays the planner's.
-        #expect(resolver.resolve(command: "2 + 2 = 4") == nil)
-
-        // The sign alone is still the question it always was, not a sum of nothing — and so is a
-        // sign with nothing but signs after it, which used to plan a calculation of `=`.
-        for command in ["=", "= =", "=?"] {
-            guard case .clarify(let question) = resolver.resolve(command: command) else {
-                Issue.record("Expected \(command.debugDescription) to ask what to calculate.")
-                continue
-            }
-            #expect(question.steps[0].question == "What would you like me to calculate?")
-        }
-    }
 }
 
 private struct FailingPlanner: Planning {

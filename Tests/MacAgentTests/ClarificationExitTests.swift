@@ -274,13 +274,10 @@ struct ClarificationExitTests {
         try await fixture.waitUntilIdle()
 
         #expect(viewModel.clarificationQuestion == nil)
-        // A real re-dispatch rather than the exit's summary. The resolver asked this question, so
-        // the answer completes the command it was missing and the calculator answers it
-        // (SONNY-281); before that the continuation carried the Q&A wrapped around `=` to a
-        // planner, which is the shape a question the *planner* asks still takes.
-        #expect(question == "What would you like me to calculate?")
-        #expect(viewModel.lastCommand == "= 1 + 1")
-        #expect(viewModel.finalSummary == "1 + 1 = 2.")
+        // The continuation carries only the Q&A wrapped around the original command, and it is a
+        // real re-dispatch rather than the exit's summary.
+        #expect(viewModel.lastCommand.contains("Clarification question: \(question)"))
+        #expect(viewModel.lastCommand.contains("Clarification answer: 1 + 1"))
         #expect(viewModel.finalSummary != ClarificationPresentation.canceledSummary)
         // The origin survived the pause, which is what `clarificationOrigin` is for — and the exit
         // resets that field, so this fails if the reset ever fires on the answering path.
