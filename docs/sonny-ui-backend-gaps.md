@@ -111,16 +111,23 @@ notification fallback ~~isn't reachable and won't be made reachable by adding a 
 action being added** (SONNY-56 replaced the gate rather than the widget's permanence; struck
 2026-08-21 by SONNY-189) — that
 branch must give Command Center its own real, native surface for those three states rather than
-relying on the widget or on notifications. **Done, and marked 2026-08-21 by SONNY-183:** branch 10
-built `CommandCenterAttentionPanel` (`Sources/MacAgent/CommandCenterView.swift`), which renders all
-three states on the four pages that host `CommandCenterStorageNotice` and wires Deny/Allow to the
-same `cancelCurrentRun()`/`start()` entry points the widget uses. The unattended half of the premise
-was never real either — a scheduled routine cannot leave an approval pending, because
-`performScheduledRun` executes with `approvalDecision: .approved(.tier2)` and routes every
-`RiskApprovalError` to `pauseSchedule` (SONNY-31's notify-and-pause design, traced by SONNY-64 /
-PR #40's review). The clause above about the notification fallback was a separate claim, separately
-stale, and SONNY-189 struck it in the same branch. See `docs/sonny-ui-backend-roadmap.md`'s "Command
-Center's own missing permission/clarification/failure UI" entry for the specifics.
+relying on the widget or on notifications. **Done, and marked 2026-08-21 by SONNY-183:** branch
+10 built `CommandCenterAttentionPanel` (`Sources/MacAgent/CommandCenterView.swift`), which
+renders all three states on **every** Command Center page that hosts
+`CommandCenterStorageNotice`, and wires Deny/Allow to the same `cancelCurrentRun()`/`start()`
+entry points the widget uses. That is five pages at `126507c` (`git grep -c
+'CommandCenterStorageNotice(' -- Sources/MacAgent` → 5) and was four when this line was written —
+Memory arrived with SONNY-208 on 2026-08-22, and this said "the four pages" until SONNY-290
+corrected it on 2026-08-26.
+`MemoryCommandCenterTests.everyCommandCenterPageRendersTheSharedAttentionAndStorageSurfaces`
+walks `CommandCenterDestination.allCases`, so a sixth page fails the suite until it carries both.
+The unattended half of the premise was never real either — a scheduled routine cannot leave an
+approval pending, because `performScheduledRun` executes with `approvalDecision:
+.approved(.tier2)` and routes every `RiskApprovalError` to `pauseSchedule` (SONNY-31's
+notify-and-pause design, traced by SONNY-64 / PR #40's review). The clause above about the
+notification fallback was a separate claim, separately stale, and SONNY-189 struck it in the same
+branch. See `docs/sonny-ui-backend-roadmap.md`'s "Command Center's own missing
+permission/clarification/failure UI" entry for the specifics.
 
 ~~**Composited-position staleness, expanded beyond dragging:** the "not continuously tracked while
 dragging" note above is one instance of a broader gap — `FloatingWidgetWindowController.reposition()`
