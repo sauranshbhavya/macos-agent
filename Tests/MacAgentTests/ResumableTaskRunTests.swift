@@ -2016,6 +2016,45 @@ struct ClarificationAnswerRoutingTests {
         #expect(fixture.planner.receivedCommands == [])
     }
 
+    /// **R-c decides something, and this is the state in which it does** (PR #118 round-three
+    /// re-check). The dry run refuses a prepare that came back with a clarification, and that can
+    /// happen only when a source answers the resolver's read and the executor's read differently
+    /// inside one synchronous call. The routine and workspace stores cannot — they key by the same
+    /// `normalized()` the resolver uses — but the Shortcuts catalog is a process read that
+    /// `InvokeShortcutCapabilityAdapter.resolveDefaultOutputs` re-resolves, and this fixture's
+    /// catalog answers its first read `["Shortcut X", "X"]` and `["X"]` after. So the join
+    /// `shortcut Shortcut X` resolves on read 1, its prepare clarifies on read 2, and the restatement
+    /// `Shortcut X` resolves and prepares on reads 3 and 4 — the real code passes over the join and
+    /// dispatches the restatement, where a guard that took the clarifying prepare as workable would
+    /// dispatch the join and re-ask. "Dispatched either way" was true only of a sole or last
+    /// resolved candidate, which is why the mutant that removes the guard was first reported as
+    /// equivalent and is not.
+    @Test
+    func aCandidateWhosePrepareClarifiesIsPassedOverForOneThatPrepares() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+        fixture.planner.plan = fixture.draftThenOpenPlan
+        fixture.shortcutCatalog.firstAnswer = ["Shortcut X", "X"]
+        fixture.shortcutCatalog.thenAnswer = ["X"]
+
+        fixture.viewModel.command = "shortcut"
+        fixture.viewModel.start(origin: .widget)
+        try await fixture.waitForIdle()
+        #expect(fixture.viewModel.clarificationQuestion == "Which Shortcut should I run?")
+        // The premise: nothing so far has read the catalog, so the join's resolution is read 1.
+        #expect(fixture.shortcutCatalog.reads == 0)
+
+        fixture.viewModel.clarificationAnswer = "Shortcut X"
+        fixture.viewModel.submitClarification()
+        try await fixture.waitForIdle()
+
+        #expect(fixture.viewModel.lastCommand == "Shortcut X")
+        #expect(fixture.viewModel.clarificationQuestion == nil)
+        #expect(fixture.planner.receivedCommands == [])
+        // Read 1 fed the join's resolution, read 2 its clarifying prepare, 3 and 4 the restatement.
+        #expect(fixture.shortcutCatalog.reads >= 4)
+    }
+
 }
 
 /// The widget's panel precedence, as a value a test can hold.
@@ -2099,8 +2138,22 @@ private final class ResumableFixturePlanner: Planning {
 /// rather than being converted into a "which Shortcut did you mean?" clarification by
 /// `AgentActionExecutor.prepare`. Measured: with an empty catalog the stored plan is a one-step
 /// `clarify` and the test asserts nothing about a Shortcut at all.
-private struct OneShortcutForResumeTests: ShortcutCatalogProviding {
-    func shortcutNames() throws -> [String] { ["Send Report"] }
+///
+/// **And, when a test says so, a catalog that answers its first read differently from every read
+/// after** (SONNY-281, PR #118 round-three re-check): the one source `InvokeShortcutCapabilityAdapter`
+/// re-resolves at prepare, and so the one way a resolver plan's prepare can clarify inside a
+/// synchronous call. Counts its reads so a test can state which read fed which step.
+private final class ScriptedShortcutCatalog: ShortcutCatalogProviding, @unchecked Sendable {
+    var firstAnswer: [String]?
+    var thenAnswer: [String] = ["Send Report"]
+    private(set) var reads = 0
+    func shortcutNames() throws -> [String] {
+        reads += 1
+        if reads == 1, let firstAnswer {
+            return firstAnswer
+        }
+        return thenAnswer
+    }
 }
 
 /// Lists whatever a test says is running and records what was activated, never touching the real
@@ -2136,6 +2189,7 @@ private final class ResumableFixture {
     let browserOpener: FailableBrowserOpener
     let fileOpener: FailableFileOpener
     let runningAppSwitcher: ListingRunningAppSwitcher
+    let shortcutCatalog: ScriptedShortcutCatalog
     let userDefaults: UserDefaults
     let suiteName: String
     /// Where the next draft unit writes. Reassigned between runs in a test that runs the same plan
@@ -2152,6 +2206,7 @@ private final class ResumableFixture {
         browserOpener: FailableBrowserOpener,
         fileOpener: FailableFileOpener,
         runningAppSwitcher: ListingRunningAppSwitcher,
+        shortcutCatalog: ScriptedShortcutCatalog,
         userDefaults: UserDefaults,
         suiteName: String,
         draftOutput: URL
@@ -2165,6 +2220,7 @@ private final class ResumableFixture {
         self.browserOpener = browserOpener
         self.fileOpener = fileOpener
         self.runningAppSwitcher = runningAppSwitcher
+        self.shortcutCatalog = shortcutCatalog
         self.userDefaults = userDefaults
         self.suiteName = suiteName
         self.draftOutput = draftOutput
@@ -2379,6 +2435,7 @@ private func makeFixture() throws -> ResumableFixture {
     let browserOpener = FailableBrowserOpener()
     let fileOpener = FailableFileOpener()
     let runningAppSwitcher = ListingRunningAppSwitcher()
+    let shortcutCatalog = ScriptedShortcutCatalog()
     let resumableTaskStore = ResumableTaskStore(
         fileURL: root.appendingPathComponent("resumable-tasks.json")
     )
@@ -2392,7 +2449,7 @@ private func makeFixture() throws -> ResumableFixture {
             workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json")),
             snippetStore: SnippetStore(fileURL: root.appendingPathComponent("snippets.json")),
             recentArtifactStore: RecentArtifactStore(fileURL: root.appendingPathComponent("recent-artifacts.json")),
-            shortcutCatalog: OneShortcutForResumeTests(),
+            shortcutCatalog: shortcutCatalog,
             // Hermetic seams, defined in ProductShellTests.swift in this same target — except the browser,
             // which is this suite's own failure switch.
             browserOpener: browserOpener,
@@ -2459,6 +2516,7 @@ private func makeFixture() throws -> ResumableFixture {
         browserOpener: browserOpener,
         fileOpener: fileOpener,
         runningAppSwitcher: runningAppSwitcher,
+        shortcutCatalog: shortcutCatalog,
         userDefaults: userDefaults,
         suiteName: suiteName,
         draftOutput: root.appendingPathComponent("notes.md")
