@@ -29,6 +29,22 @@ then; if that isn't what happened, the row has to say so.
 The **"New Task"** clause of §6's three-menu-item row is the worked example — confirmed 2026-07-24,
 found broken 2026-08-01, fixed by SONNY-8 (PR #20), re-confirmed 2026-08-03.
 
+## Where a manual item lives (convention, added 2026-08-26)
+
+**Every manual-test item a ticket produces is added to this file as an unchecked row before the
+ticket closes.** A PR note or a ticket comment may summarize them, but this file is the only place
+the founders test from — an item recorded anywhere else is an item they never see. Not
+hypothetical: SONNY-281's **thirteen** items lived only on PR #118 — seven in its body, six more
+added by its review rounds' dated notes (the PR numbers them 1–7 and 8–13) — while the rows
+SONNY-282 and SONNY-283 added the same days reached this file. The gap surfaced only when the
+outgoing coordinator checked both branches' items against the file, and the first recovery pass
+then took the six and left the seven: recovering *the* items means the whole population, latest
+notes and original body alike (2026-08-26; all thirteen are now in §3d, the body's seven first,
+because those are the reported defect and the notes' six are the edges the review rounds found).
+A row names its ticket, and a row recovered late also names where it was recovered from.
+WORKFLOW.md's ticket-template bullet used to say items "aggregate into the PR's manual checklist" —
+the sentence SONNY-281's session followed exactly — and now names this file instead.
+
 ## Status tracker — read this first
 
 Updated 2026-07-21, end of the first real testing round. This is the live "what's the state of
@@ -446,6 +462,70 @@ which.
       the main composer stays empty. The up-arrow Send (and Command Center's Send) should be greyed
       out for the whole of that window and come back the moment the transcript lands. Then Return
       sends. Before this fix that Return silently destroyed the question
+- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's body by SONNY-292)** **Control.**
+      Send `2 + 2`. It answers `2 + 2 = 4.`, instantly. This path never reached the planner and
+      never broke — it is here so the rows under it have something to be read against
+- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's body by SONNY-292)** Send `2 + 2 =` —
+      the same sum with the `=` a person types at the end. It answers `2 + 2 = 4.`, **instantly**,
+      not "Calculation is unsupported by the registered local tools." after a network round-trip.
+      Then the same with `2+2=?`. This is the founder's original report
+- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's body by SONNY-292)** Send `=` alone.
+      Sonny asks "What would you like me to calculate?" — answer `2 + 2` and it answers
+      `2 + 2 = 4.` The **running label** and the **Tasks row** both read `= 2 + 2` — the request
+      and the answer joined, not `=` on its own and not `2 + 2` on its own
+- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's body by SONNY-292)** On the `= 2 + 2`
+      Tasks row the row above leaves behind, press **Run again**. It answers `2 + 2 = 4.` again and
+      asks **no question** — the row carries the completed command, so there is nothing left to
+      clarify. **Retry** after a failure takes the same path
+- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's body by SONNY-292)** Send `calc`
+      alone, then answer the what-would-you-like-to-calculate question with `calc 5 * 5` — an
+      answer that restates the command instead of continuing it. It answers `5 * 5 = 25.`
+- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's body by SONNY-292)** Send
+      `run shortcut Nonexistent` (any name you have no Shortcut for). Sonny asks which Shortcut to
+      run — answer with the **real name of a Shortcut you do have**. The planner takes the
+      exchange, so expect a round-trip rather than an instant answer. **The failure to catch is
+      the same question re-asked instantly**: that would mean the answer had been completed
+      locally into `run shortcut Nonexistent <name>`, which resolves to the same question again
+      rather than to a plan
+- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's body by SONNY-292)** Provoke a
+      **planner**-asked clarification — `zip my three largest files`, answered with the folder, is
+      the PR's own example — and check it proceeds on the request plus the answer exactly as
+      before. A question the planner asked is never completed locally, even when the answer would
+      resolve on its own, so this is the path that must be **unchanged**
+- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's notes by SONNY-292)** Send `calc`
+      alone, then answer the what-would-you-like-to-calculate question with `banana`. Sonny's
+      **own** calculation error appears **instantly** — "Could not calculate that expression: …",
+      the same error `calc banana` typed directly gets — not the planner's "Calculation is
+      unsupported…" refusal after a network round-trip
+- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's notes by SONNY-292)** With **both**
+      Focus Writer and Writer running, send `focus` and answer the which-app question with the
+      **full name** — `Focus Writer`. It switches to **Focus Writer**, not to an app called
+      "Writer". Both readings of that answer resolve only when both apps are running, so this is
+      the state that tells them apart; the pair the row needs is any app named `Focus <Something>`
+      alongside one named `<Something>`, and Focus Writer/Writer is the fix's own example.
+      **Known, don't report (R-a, founder decision 2026-08-26, recorded on PR #118):** with
+      **only** Writer running, the same exchange still switches to Writer — pinned as a record so
+      drift is seen, deliberately not fixed
+- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's notes by SONNY-292)** With **neither**
+      of that pair running — no "Focus Writer" and no "Writer" — send `focus` and answer
+      `Focus Writer`. It fails instantly with "No running app matched Focus Writer." and does not
+      ask the planner. **Check the precondition before reporting this one:** with Writer alone
+      running it switches to Writer, which is R-a in the row above and not a defect
+- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's notes by SONNY-292)** Send `=` alone,
+      and answer the question with `=2+2` — an answer that itself starts with `=`. The answer is 4,
+      instantly
+- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's notes by SONNY-292)** Send
+      `snippet save` with nothing after it. The question reads "Use the format ;trigger =
+      expansion." Answer with the **body alone** — `;sig = Best, Sonny` — and the snippet saves
+      under `;sig`. **Known, don't report (stated residual on PR #118):** answering by retyping the
+      whole command instead saves a snippet under the junk trigger `snippet save ;sig` — tier 2
+      auto-runs under the consequence rule — visible and deletable on the Memory page
+- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's notes by SONNY-292)** Quit Sonny
+      while it is asking what to calculate (`=` alone raises the question; quit before answering).
+      Relaunch, take the widget's partway-through offer with the **tick** (or Continue from
+      Command Center → Memory → Unfinished tasks), and answer `2 + 2`. The answer is `2 + 2 = 4.`
+      — before the fix's review round this path sent the answer to the planner and it was refused,
+      because Continue replays the paused plan as a resumed task
 
 ### 3d-bis. Unfinished-task offer (row 13, SONNY-210; layout and controls SONNY-244 — no wireframe)
 Start something long and multi-step, then quit Sonny before it finishes — "summarize
