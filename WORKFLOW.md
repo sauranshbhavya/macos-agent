@@ -11,6 +11,14 @@ discussion -> agreed plan -> Plane tickets -> claim ticket -> worktree -> implem
 -> verify -> commit -> close ticket -> PR -> fresh-session review -> manual test -> merge
 ```
 
+The repository is
+[exploringthroughbuilding/macos-agent](https://github.com/exploringthroughbuilding/macos-agent). It
+moved there from a personal account on 2026-08-26, after PR #123, when the founders' organisation
+took it over. A merge subject records the namespace that was current when the PR merged, not the one
+current now, so all 116 on `main` today still read `from sauranshbhardwaj/...`
+(`git log --first-parent --merges --format='%s' main | grep -c 'from sauranshbhardwaj/'` → 116 at
+`781fa4c`) — §8's log excerpt among them. None of those is stale, and none is anyone's to rewrite.
+
 The Plane project is [Sonny](https://app.plane.so/sonny/projects/c61e4035-d3a0-4089-a25a-1fb4f0aa813e/issues/).
 API behavior is documented in the [Plane API reference](https://developers.plane.so/api-reference/introduction).
 All Plane access goes through `scripts/plane` (run `scripts/plane help` for commands).
@@ -26,7 +34,7 @@ One-time setup, both required before this workflow's first use:
 
 ## Who does what
 
-One human (Sauransh) and one kind of agent (Claude Code CLI sessions). There is no
+Two humans (the founders) and one kind of agent (Claude Code CLI sessions). There is no
 implementer/reviewer agent rotation anymore. Instead:
 
 - **Implementing session** — one CLI session owns one ticket start to finish.
@@ -35,11 +43,14 @@ implementer/reviewer agent rotation anymore. Instead:
 - **Coordinating session** (*the coordinator*, in steps 4 and 5) — adjudicates a review's
   findings, writes the kickoff and fix prompts that launch other sessions, and records the
   decisions those carry; it never implements or reviews a branch itself.
-- **The user** — approves plans, approves ticket content (batched per branch at planning
-  time; sessions create their own discovery tickets per step 5, subject to user triage),
-  assigns every ticket, does all manual and visual verification in the real app (no agent
-  ever self-verifies GUI behavior — this rule survives from v1 verbatim), and performs
-  every merge. Agents never merge.
+- **The user** — whichever founder is running the work; the two are interchangeable in
+  every rule below, and no rule here distinguishes them. Approves plans, approves ticket
+  content (batched per branch at planning time; sessions create their own discovery
+  tickets per step 5, subject to user triage), assigns every ticket, does all manual and
+  visual verification in the real app (no agent ever self-verifies GUI behavior — this
+  rule survives from v1 verbatim), and performs every merge — either founder, depending on
+  who is working, with no rule against merging a branch you ran yourself. Agents never
+  merge.
 
 ## 1. Discussion and plan
 
@@ -229,8 +240,9 @@ changelog's per-branch decisions, `.claude/rules/`). The v1 rigor bar is unchang
 - Commits reference the ticket in the title (for example `fix(core): SONNY-12 ...`), follow
   the repo's commit format, and land on the ticket's branch. Standing authorization:
   implementing sessions commit and push to ticket branches without per-commit approval;
-  opening a PR is fine; **merging is the user's, always.** (Reviewing sessions are outside
-  this authorization entirely — step 7.)
+  opening a PR is fine; **merging is a founder's, always** — either of them, depending on
+  who is working, and never a session. (Reviewing sessions are outside this authorization
+  entirely — step 7.)
 - The standing authorization is repo policy; the Claude Code permission system still
   prompts per session. The user approves git prompts with "always allow" at session start
   so the authorization is real in practice. A session whose git call is denied by the
@@ -547,7 +559,7 @@ to expect.
 expected to fetch.** It resolves in the clone that made it and is not expected to resolve
 anywhere else. That has always been true; it was never written down, which is why its
 consequences read as a defect — 161 unresolvable citations looked like something the archive
-should have fixed, when the archive never held them. On the founder's Mac every worktree shares
+should have fixed, when the archive never held them. On a founder's Mac every worktree shares
 one object store, so a rebased-away head keeps resolving there for as long as that store lives;
 a fresh clone never sees it; neither is wrong. What a reader can rely on is the *ancestry* check
 in `CLAUDE.md`'s Claims and evidence: a SHA that `git merge-base --is-ancestor <sha> origin/main`
