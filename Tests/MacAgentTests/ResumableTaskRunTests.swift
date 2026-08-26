@@ -1080,6 +1080,57 @@ struct ResumableTaskRunTests {
         #expect(fixture.viewModel.hasVisibleWidgetPanel)
     }
 
+    /// **PR #119 review, F2 — the two restart doors spend the decline too, so this session's widget
+    /// and the disk agree whichever door was used.** `continueResumableTask` used to be the only
+    /// site that dropped the id from the session set, while `retryLastCommand` and `runTaskAgain`
+    /// reached `beginResumableTask` directly — which wrote the record back undeclined and left the
+    /// widget silent until the next launch. The remove now lives in `beginResumableTask`, the one
+    /// site that writes a record afresh. Tested through the two doors that were wrong, not the one
+    /// that already worked.
+    @Test
+    func aDeclinedTaskRetriedOrRunAgainAndFailingAgainIsOfferedAgainThisSession() async throws {
+        let fixture = try makeFixture()
+        defer { fixture.tearDown() }
+
+        fixture.browserOpener.failure = BrowserOutage()
+        try await fixture.run("Write notes and open the page")
+        fixture.viewModel.clearStaleTaskOutcome()
+        let offered = try #require(fixture.viewModel.resumeOffer)
+        fixture.viewModel.declineResumeOffer()
+        #expect(fixture.viewModel.resumeOffer == nil)
+
+        // The failure panel's Retry, with the browser still down.
+        fixture.draftOutput = fixture.root.appendingPathComponent("notes-retry.md")
+        fixture.planner.plan = fixture.draftThenOpenPlan
+        fixture.viewModel.retryLastCommand()
+        try await fixture.waitForIdle()
+        #expect(fixture.viewModel.errorMessage != nil, "the retry really did fail again")
+        fixture.viewModel.clearStaleTaskOutcome()
+
+        let afterRetry = try #require(try fixture.resumableTaskStore.loadAll().first)
+        #expect(afterRetry.id == offered.id, "one task, one record")
+        #expect(!afterRetry.isDeclined, "the disk says offer it")
+        #expect(fixture.viewModel.resumeOffer?.id == offered.id, "and so does this session — the defect was silence here")
+        #expect(fixture.viewModel.hasVisibleWidgetPanel)
+
+        // Decline again, then Run again from the task's own Tasks row.
+        fixture.viewModel.declineResumeOffer()
+        #expect(fixture.viewModel.resumeOffer == nil)
+        let row = try #require(fixture.viewModel.taskHistoryRecords.first)
+        #expect(row.resumableTaskID == offered.id, "the row links to the declined record")
+        fixture.draftOutput = fixture.root.appendingPathComponent("notes-again.md")
+        fixture.planner.plan = fixture.draftThenOpenPlan
+        #expect(fixture.viewModel.runTaskAgain(row))
+        try await fixture.waitForIdle()
+        #expect(fixture.viewModel.errorMessage != nil, "and failed again")
+        fixture.viewModel.clearStaleTaskOutcome()
+
+        let afterRunAgain = try #require(try fixture.resumableTaskStore.loadAll().first)
+        #expect(afterRunAgain.id == offered.id)
+        #expect(!afterRunAgain.isDeclined)
+        #expect(fixture.viewModel.resumeOffer?.id == offered.id)
+    }
+
     /// **When the decline cannot be written, the offer still leaves for this session, the user is
     /// told it may return, and it does return at the next launch** — the honest degradation, and
     /// the reason the session set survives alongside the persisted flag. Made real by taking write

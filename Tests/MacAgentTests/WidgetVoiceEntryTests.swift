@@ -248,11 +248,11 @@ struct WidgetVoiceEntryTests {
         #expect(viewModel.canUseVoice, "the hotkey's guard must let a recording start while a question is pending")
         // And a recording started now is for the answer field, not for a new task.
         #expect(
-            AgentViewModel.VoiceRecordingPurpose.forRecordingStarted(whileClarificationPending: true)
-                == .clarificationAnswer
+            AgentViewModel.VoiceRecordingPurpose.forRecordingStarted(clarificationQuestion: "Which folder?")
+                == .clarificationAnswer(question: "Which folder?")
         )
         #expect(
-            AgentViewModel.VoiceRecordingPurpose.forRecordingStarted(whileClarificationPending: false)
+            AgentViewModel.VoiceRecordingPurpose.forRecordingStarted(clarificationQuestion: nil)
                 == .command
         )
     }

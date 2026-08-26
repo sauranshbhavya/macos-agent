@@ -1018,7 +1018,10 @@ private struct CommandCenterAttentionPanel: View {
             // happened to be looking at is exactly what this panel's mirroring rule forbids.
             //
             // Never `.disabled`: the whole point is that this is the way out when the user has
-            // nothing to type. Send is still gated on a non-empty answer, as before.
+            // nothing to type. Send is gated on `canSendClarificationAnswer` — a non-empty answer,
+            // as before, and no voice input in flight (PR #119 review, F1) — the same predicate the
+            // widget's arrow and `submitClarification` itself read, so the two surfaces and the
+            // state cannot disagree.
             Button(ClarificationPresentation.cancelLabel) {
                 viewModel.cancelCurrentRun()
             }
@@ -1028,7 +1031,7 @@ private struct CommandCenterAttentionPanel: View {
                 viewModel.submitClarification()
             }
             .buttonStyle(CommandCenterRowActionStyle())
-            .disabled(viewModel.clarificationAnswer.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty)
+            .disabled(!viewModel.canSendClarificationAnswer)
         }
     }
 
