@@ -16,7 +16,9 @@ import Foundation
 /// superseded by the founder's consequence rule (2026-08-13), which gates on what an action *does*
 /// (destructive / affects-others / advisory), never on how its plan came to exist. What survives
 /// reading this value: dispatch (which planner path to take), the plan log line, the pending-arm
-/// rule, and the view model's confirmation copy.
+/// rule, and the view model's confirmation copy. (SONNY-281 briefly added a fifth reader — which
+/// door a clarification answer goes through — and PR #118's review removed it: the Continue door
+/// replays a paused plan as `.resumedTask`, so that decision reads the question instead.)
 public enum PreparedPlanSource: String, Equatable, Sendable {
     case planner
     case instantResolver = "instant_resolver"
