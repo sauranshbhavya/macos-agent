@@ -151,18 +151,22 @@ is no generic translation layer above `Planning`). The experiment's `CerebrasPla
 ### A2. The provider-architecture question is where this decision really lives
 
 The spike adds Cerebras as a *second hardcoded client-side branch* in `performStart`
-(`AgentViewModel.swift:662-666` at `58e8cf5`; the same function's pre-existing single-planner site is
-`:654` on `main` at `99f2fd2`, cited in §A1). The spec already has an opinion about exactly this
-shape. Two sections resolve v1 to the same answer. §9.4 (Model Routing) states it in full: "OpenAI
-ships as the primary provider (already integrated in the prototype), with Anthropic added as a second
-provider behind a provider-agnostic router interface from day one — even before a second provider is
-actually wired up, **so the backend never hardcodes one vendor's request/response shape the way the
-current prototype's `OpenAIPlanner` hardcodes OpenAI's Responses API shape**" (spec §9.4:1404). §16.5
-(Model Provider Proxy) restates it as the provider decision — "OpenAI ships first (already
-integrated), Anthropic added second, both behind a provider-agnostic router interface designed in
-from day one so the backend never hardcodes one vendor's API shape" (spec §16.5:2141) — and adds the
-proxy's own requirements: provider credentials never ship to the client, model routing controlled
-server-side. BYOK is explicitly skipped (§7.9).
+(`AgentViewModel.swift:662-666` at `58e8cf5`; the same function's pre-existing
+single-planner site is `:654` on `main` at `99f2fd2`, cited in §A1). The spec already has an
+opinion about exactly this shape. Two sections resolve v1 to the same answer. §9.4 (Model
+Routing) states it in full: "OpenAI ships as the primary provider (already integrated in the
+prototype), with Anthropic added as a second provider behind a provider-agnostic router
+interface from day one — even before a second provider is actually wired up, **so the
+backend never hardcodes one vendor's request/response shape the way the current prototype's
+`OpenAIPlanner` hardcodes OpenAI's Responses API shape**" (spec §9.4:1412 at `126507c` —
+unstamped and reading 1404, which is now a bullet in the same section's list, until
+SONNY-290 restamped it on 2026-08-26). §16.5 (Model Provider Proxy) restates it as the
+provider decision — "OpenAI ships first (already integrated), Anthropic added second, both
+behind a provider-agnostic router interface designed in from day one so the backend never
+hardcodes one vendor's API shape" (spec §16.5:2162 at `126507c` — unstamped and reading
+2141, which is now the `### 16.4 Billing` heading, until SONNY-290 restamped it on
+2026-08-26) — and adds the proxy's own requirements: provider credentials never ship to the
+client, model routing controlled server-side. BYOK is explicitly skipped (§7.9).
 
 Two things follow, and they pull in different directions:
 

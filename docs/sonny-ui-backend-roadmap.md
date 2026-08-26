@@ -142,20 +142,26 @@ records vs. ranked snippets).
 
 ## ~~Command Center's own missing permission/clarification/failure UI~~ — built in branch 10
 
-**Resolved (built 2026-07-27, marked here 2026-08-21 by SONNY-183).** `CommandCenterAttentionPanel`
-(`Sources/MacAgent/CommandCenterView.swift`) is the surface this entry says is missing. It renders
-`.permission`/`.clarification`/`.failure` on the four pages that host `CommandCenterStorageNotice`,
-self-gates on its own state, mirrors `FloatingWidgetView`'s precedence exactly so the two can never
-disagree, and wires Deny/Allow to the same `cancelCurrentRun()`/`start()` entry points. The one
-source of truth is `.claude/rules/macagent-ui-conventions.md`'s "Approval visibility" section, which
-also records the part of this entry's premise that was never real: a *scheduled* routine cannot
-leave an approval pending at all, because `performScheduledRun` executes with
-`approvalDecision: .approved(.tier2)` and routes every `RiskApprovalError` to `pauseSchedule`
-(SONNY-31's notify-and-pause design, traced by SONNY-64 / PR #40's review). So the hard prerequisite
-this entry names was both built and, in its unattended half, aimed at a reachability that did not
-exist. The rest of the entry is kept below as written, unmarked sentences included, because it is
-the record of why the surface was built. **The one thing below that is still wrong on its own terms
-is the notification-fallback claim, which SONNY-189 owns.**
+**Resolved (built 2026-07-27, marked here 2026-08-21 by SONNY-183).**
+`CommandCenterAttentionPanel` (`Sources/MacAgent/CommandCenterView.swift`) is the surface this
+entry says is missing. It renders `.permission`/`.clarification`/`.failure` on **every** Command
+Center page that hosts `CommandCenterStorageNotice` — five pages at `126507c` (`git grep -c
+'CommandCenterStorageNotice(' -- Sources/MacAgent` → 5), four when this line was written, since
+Memory arrived with SONNY-208 on 2026-08-22; it said "the four pages" until SONNY-290 corrected
+it on 2026-08-26, as `docs/sonny-ui-backend-gaps.md` did.
+`MemoryCommandCenterTests.everyCommandCenterPageRendersTheSharedAttentionAndStorageSurfaces`
+walks `CommandCenterDestination.allCases`, so a sixth page fails the suite until it carries both.
+The panel self-gates on its own state, mirrors `FloatingWidgetView`'s precedence exactly so the
+two can never disagree, and wires Deny/Allow to the same `cancelCurrentRun()`/`start()` entry
+points. The one source of truth is `.claude/rules/macagent-ui-conventions.md`'s "Approval
+visibility" section, which also records the part of this entry's premise that was never real: a
+*scheduled* routine cannot leave an approval pending at all, because `performScheduledRun`
+executes with `approvalDecision: .approved(.tier2)` and routes every `RiskApprovalError` to
+`pauseSchedule` (SONNY-31's notify-and-pause design, traced by SONNY-64 / PR #40's review). So
+the hard prerequisite this entry names was both built and, in its unattended half, aimed at a
+reachability that did not exist. The rest of the entry is kept below as written, unmarked
+sentences included, because it is the record of why the surface was built. **The one thing below
+that is still wrong on its own terms is the notification-fallback claim, which SONNY-189 owns.**
 
 **Backend:** not backend work itself, but directly relevant to any backend work that can trigger a
 task without the floating widget being the surface that's actually in front of the user —

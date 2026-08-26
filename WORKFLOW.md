@@ -54,9 +54,12 @@ One ticket = one independently verifiable outcome. The ticket is the implementat
 contract and the context handoff to a session that has never seen this conversation —
 write it so that session needs nothing else. Every ticket carries:
 
-- **Branch** — the first line of the description: the exact `feature/...` git branch this
-  ticket's work lands on. Sequential tickets may share a branch; tickets running in
-  parallel each get their own (git forbids one branch checked out in two worktrees).
+- **Branch** — the first line of the description: the exact git branch this ticket's work
+  lands on. Four prefixes are in use — `feature/`, `fix/`, `docs/` and `chore/`; this named
+  `feature/...` alone until SONNY-290 counted the merged population on 2026-08-26 (the count
+  and the command that produced it are in the changelog's second line). Sequential tickets
+  may share a branch; tickets running in parallel each get their own (git forbids one branch
+  checked out in two worktrees).
 - **Context and goal** — who experiences what, and the user-visible outcome.
 - **Scoped requirements** — concrete enough to implement without re-deriving decisions.
 - **Expected touched areas** — files/modules this work is expected to change.
@@ -419,9 +422,17 @@ this correctly, here and in the changelog's entry order.
   thousand-line squash.
 - **A squash orphans every SHA this repository cites.** `CLAUDE.md`'s *Claims and evidence*
   rule requires every measurement to carry the commit it was taken at, and the changelog alone
-  carries **501** distinct SHA-shaped strings
-  (`grep -o -E '\b[0-9a-f]{7,40}\b' docs/sonny-v1-implementation-changelog.md | sort -u | wc -l`
-  at `2ceb530`; that pattern also catches the odd tree hash, so read it as an upper bound).
+  carries **500** distinct SHA-shaped strings at `2ceb530`
+  (`git show 2ceb530:docs/sonny-v1-implementation-changelog.md | grep -o -E '\b[0-9a-f]{7,40}\b' | sort -u | wc -l`
+  → 500, and the same answer from perl and from python's `re`; that pattern also catches the odd tree
+  hash, so read it as an upper bound). **This said 501 until 2026-08-26 (SONNY-290), and the extra one
+  is worth keeping rather than quietly dropping**, because it is this section's own subject matter in
+  miniature. The figure was measured on a working tree, not on the commit it was stamped with: the same
+  command over the file as `4d4bfb6` committed it — the commit that *wrote this bullet*, six minutes
+  after `2ceb530` and directly on top of it — answers 501, and the one token separating the two sets is
+  the string `2ceb530` itself, which `4d4bfb6` added to the changelog's verification paragraph
+  (`comm -13` over the two sorted sets prints that token and nothing else). So both numbers were honest
+  readings of a real file, and the stamp named the tree that had one fewer.
   A squash makes each one non-ancestral the moment it merges — and `git show` still prints a
   commit for it, so it reads as checkable while proving nothing about `main`. A reader who
   checks it sees a real tree, stops, and has verified nothing. Merge commits keep those stamps
