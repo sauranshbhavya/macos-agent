@@ -83,14 +83,8 @@ public struct InstantCommandResolver: Sendable {
             return .plan(snippetPlan(snippet))
         }
 
-        // **A sum is allowed to end with `=`, and the rule that says so lives in the evaluator**
-        // (SONNY-281). This used to read the raw command against its own character set, and `=` was
-        // not in it — so `2 + 2` was answered here and `2 + 2 =` fell through to a planner with no
-        // calculator to offer, one character apart. The sum is read the way the evaluator will read
-        // it, and the plan carries that form so its own summary says `2 + 2` too.
-        let sum = CalculatorService.withoutTrailingEqualsOrQuestionMark(command)
-        if looksLikeBareArithmetic(sum) || looksLikeBareConversion(sum) {
-            return .plan(calculatorPlan(expression: sum))
+        if looksLikeBareArithmetic(command) || looksLikeBareConversion(command) {
+            return .plan(calculatorPlan(expression: command))
         }
 
         return nil
@@ -556,9 +550,6 @@ public struct InstantCommandResolver: Sendable {
         return nil
     }
 
-    /// The expression after `calc`, `calculate` or a leading `=`, read the way the evaluator will
-    /// read it — a trailing `=` or `?` dropped along with the whitespace (SONNY-281) — so `= 2 + 2 =`
-    /// plans as `2 + 2`, and `= =` is the question rather than a plan to calculate `=`.
     private func prefixedCalculatorExpression(in command: String) -> String? {
         let lowered = command.lowercased()
         for prefix in ["calc", "calculate"] {
@@ -566,13 +557,13 @@ public struct InstantCommandResolver: Sendable {
                 return ""
             }
             if lowered.hasPrefix("\(prefix) ") {
-                return CalculatorService.withoutTrailingEqualsOrQuestionMark(
-                    String(command.dropFirst(prefix.count))
-                )
+                return String(command.dropFirst(prefix.count))
+                    .trimmingCharacters(in: .whitespacesAndNewlines)
             }
         }
         if command.hasPrefix("=") {
-            return CalculatorService.withoutTrailingEqualsOrQuestionMark(String(command.dropFirst()))
+            return String(command.dropFirst())
+                .trimmingCharacters(in: .whitespacesAndNewlines)
         }
         return nil
     }
@@ -763,12 +754,6 @@ public struct InstantCommandResolver: Sendable {
         )
     }
 
-    /// Asks for the body alone — `;trigger = expansion` — and not for the whole command, because the
-    /// answer completes the command it is asked about (SONNY-281, `ClarifiedCommand.completions`):
-    /// `snippet save` answered `;sig = hello` runs `snippet save ;sig = hello`. The question used to
-    /// spell out the prefix too, which was right while the answer went to a planner and wrong once it
-    /// joins onto the request — a user following that instruction to the letter produced a trigger
-    /// of `snippet save ;sig`.
     private func snippetSaveClarificationPlan() -> AgentPlan {
         AgentPlan(
             summary: "Clarification needed.",
@@ -778,7 +763,7 @@ public struct InstantCommandResolver: Sendable {
                     id: "clarify-snippet-save",
                     operation: .clarify,
                     description: "Ask for snippet trigger and expansion.",
-                    question: "Use the format ;trigger = expansion."
+                    question: "Use the format snippet save ;trigger = expansion."
                 )
             ]
         )
