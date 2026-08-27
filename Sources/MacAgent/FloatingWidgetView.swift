@@ -9,10 +9,36 @@ import SwiftUI
 /// plan resume) — see docs/sonny-ui-backend-gaps.md. A failed row's coral treatment still renders
 /// for real inside `.working`/`.failure` via `AgentStepStatus.failed`; there is no separate real
 /// per-step-retry action to attach a button to, so `.failure` is the only true terminal error state.
-private enum WidgetState {
+///
+/// **Internal rather than private, so a test can read the state the widget resolved to** (SONNY-255).
+/// This precedence is the most consequential ordering in the app and it was, until that ticket, held
+/// by source scans alone — which pin where a branch sits in a file and cannot say what the widget
+/// does with a real view model in a real state. The defect they missed was exactly that gap:
+/// `.controlling` sat above `.permission`, so from a screen-control session's first iteration the
+/// approval it raised mid-loop was unreachable, and every scan of the file agreed the branch was
+/// where the file said it was. Nothing outside `FloatingWidgetView` and its tests reads this.
+enum WidgetState {
     case idle
     case working
     case clarification(String)
+    /// A risk approval is parked on the user.
+    ///
+    /// **Above `.controlling`, and that placement is this state's whole design** (SONNY-255). It
+    /// used to sit below, which made it unreachable for the entire length of a screen-control
+    /// session: `visionSessionProgress` is written at the top of every iteration and cleared only
+    /// when the session ends, so `.controlling` won from iteration 1 onward and a mid-loop approval
+    /// rendered in the widget nowhere at all — the panel on screen was the HUD, which carries no
+    /// question, while the loop sat waiting for an answer to one. Every mid-loop *action* approval
+    /// took that path (`VisionSessionRunner`'s per-action gate raises it after the iteration's
+    /// progress report), so it was the common case rather than an edge.
+    ///
+    /// It now sits with the three parked questions above it rather than under the progress line, and
+    /// the rule that puts it there is uniform: **a parked continuation outranks a progress report**.
+    /// `.captureReview`, `.delegationReview` and `.sessionPaused` are all suspended continuations
+    /// inside a live session and are all already above `.controlling` for that reason; this is the
+    /// fourth, and it was the one placed below the line by accident rather than by argument. The
+    /// HUD is not merely outranked here, it is *inaccurate*: its action line was written at the top
+    /// of this iteration and names looking at the app, not the action being asked about.
     case permission(RiskApprovalRequest)
     /// Safe mode is about to send a screenshot of an app, and is showing it first (row I, SONNY-92;
     /// founder decision 2, 2026-08-14).
@@ -32,6 +58,13 @@ private enum WidgetState {
     case sessionPaused(VisionSessionPause)
     /// Sonny is controlling an app right now (row I, SONNY-95). The HUD: what it is doing, in which
     /// app, with Pause and Stop always reachable.
+    ///
+    /// **Below every question a session can park, all four of them** (SONNY-255 added the fourth).
+    /// This describes a loop that is advancing; each of those describes a loop that has stopped and
+    /// is waiting on a human, and a progress line drawn over a waiting continuation is a widget
+    /// saying "working" about something that is not. Stop does not go with it: while an approval is
+    /// up, `WidgetPermissionPanel` carries the session's own Stop, so the emergency control for a
+    /// program driving the user's screen is on screen in both states.
     case controlling(VisionSessionProgress)
     case result(String, RunSuggestion?)
     case failure(String)
@@ -424,7 +457,11 @@ struct FloatingWidgetView: View {
         .help("Open Sonny")
     }
 
-    private var state: WidgetState {
+    /// Which panel the widget draws, and the order is the whole of it — the first branch that
+    /// matches wins, so every reader of this property is really reading its ordering.
+    ///
+    /// Not `private`: see `WidgetState`'s own doc comment for why a test reads this.
+    var state: WidgetState {
         if let preview = viewModel.visionCapturePreview {
             return .captureReview(preview)
         }
@@ -434,15 +471,27 @@ struct FloatingWidgetView: View {
         if let pause = viewModel.visionSessionPause {
             return .sessionPaused(pause)
         }
-        // Below the three parked questions and above `.working`: a question waiting on the user
+        // **The fourth parked question, and it belongs with the three above rather than under the
+        // progress line below** (SONNY-255). All four suspend the loop on a continuation nothing but
+        // the user resolves; a progress report describes a loop that is moving. Placed below
+        // `.controlling`, as it was until this ticket, it could never render during a session at
+        // all — `visionSessionProgress` is written at the top of every iteration and cleared only at
+        // session end, so the branch below won from iteration 1 and the question was on no widget
+        // surface while the run waited for it.
+        if let approvalRequest = viewModel.approvalRequest {
+            return .permission(approvalRequest)
+        }
+        // Below the four parked questions and above `.working`: a question waiting on the user
         // outranks a progress line, and a vision session's progress line outranks the generic
         // working panel, which would otherwise say "Sonny is working" while it moves the cursor.
         if let progress = viewModel.visionSessionProgress {
             return .controlling(progress)
         }
-        if let approvalRequest = viewModel.approvalRequest {
-            return .permission(approvalRequest)
-        }
+        // Below `.controlling`, and unlike the approval above it that is not an accident: a
+        // clarification is unreachable inside a session by construction. `clarificationQuestion` is
+        // written in exactly one place, `performStart`, and a delegated plan that needs one never
+        // reaches it — `runVisionDelegation` hands the question back to the model as a failed
+        // delegation rather than putting it to the user, so one question is on screen at a time.
         if let question = viewModel.clarificationQuestion {
             return .clarification(question)
         }
@@ -504,7 +553,18 @@ struct FloatingWidgetView: View {
     /// actually looking at is whichever question outranks the rest; a condition may therefore only
     /// be called `.waitingOnYou` once every branch that outranks it has been ruled out. That is what
     /// the ordering here does, rather than a sentence claiming it.
-    private var composerState: ComposerPresentation.State {
+    ///
+    /// **So when `state`'s order moves, this moves with it, and the reason a term sits where it does
+    /// is not the reason it used to be** (SONNY-255). The approval was ruled out *after* the live
+    /// session because it lost to the session in `state`; it now wins, so it is classified before
+    /// the session term and the sentence "answer above" is true of it in both cases. That is a
+    /// smaller claim than it looks: nothing here decides anything, it reads an ordering that lives
+    /// one property up, and the test named above is what stops the two drifting apart in silence.
+    ///
+    /// Not `private`, for the reason `WidgetState` gives: the mirroring is checkable in the file and
+    /// its *effect* — the sentence the user reads, in the state they are actually in — is not, so a
+    /// test reads this beside `state` and asserts the pair agree in a live run.
+    var composerState: ComposerPresentation.State {
         // These three outrank `.controlling` in `state`, so each really does put its own question on
         // screen whatever else is happening.
         if viewModel.visionCapturePreview != nil
@@ -512,20 +572,24 @@ struct FloatingWidgetView: View {
             || viewModel.visionSessionPause != nil {
             return .waitingOnYou
         }
-        // **Before the two below it, because `.controlling` outranks both `.permission` and
-        // `.clarification`.** A screen-control session sets `visionSessionProgress` at the top of
-        // every iteration and clears it only when the session ends, so from iteration 1 the panel on
-        // screen is the controlling HUD — the app, the step count, Pause and Stop — and it carries
-        // no question. An approval raised mid-session is pending underneath it and renders in the
-        // widget nowhere at all; that is SONNY-255, it predates this classification and is not fixed
-        // here. What is fixed here is the composer no longer saying "answer above" over a panel with
-        // nothing in it to answer.
+        // **Above the session line below it, because `.permission` outranks `.controlling`**
+        // (SONNY-255). It did not, and the branch order here recorded that: an approval raised
+        // mid-session was answerable on no widget surface, so calling it a question above this
+        // composer would have pointed at a panel that was not there. The approval now takes the
+        // panel whenever it is pending, session or no session, so it is a question in both cases and
+        // needs no session term ruled out first.
+        if viewModel.isAwaitingApproval {
+            return .waitingOnYou
+        }
+        // The HUD, which really does carry no question — and now says so about a smaller window than
+        // it used to: a live session with nothing parked on it.
         if viewModel.visionSessionProgress != nil {
             return .working
         }
-        // No session is live, so `.permission` and then `.clarification` are the branches that win
-        // and each puts its own control above this field.
-        if viewModel.isAwaitingApproval || viewModel.clarificationQuestion != nil {
+        // Below the session line, and correctly so: a clarification cannot be raised inside a
+        // session (`state`'s own branch says why), so reaching this means no session is live and
+        // `.clarification` is the branch that wins.
+        if viewModel.clarificationQuestion != nil {
             return .waitingOnYou
         }
         // A run in flight with nothing here to type into, and no guaranteed panel either: the
@@ -988,8 +1052,17 @@ private extension FloatingWidgetView {
                 request: request,
                 isFirstApproval: !viewModel.hasCompletedFirstApproval,
                 safeMode: viewModel.interactionMode == .safe,
+                // Non-nil exactly when a screen-control session is live under this question
+                // (SONNY-255), which is what turns the panel's refusal into the session's Stop.
+                sessionProgress: viewModel.visionSessionProgress,
                 onAllow: { viewModel.start() },
-                onDeny: { viewModel.cancelCurrentRun() }
+                onDeny: { viewModel.cancelCurrentRun() },
+                // The same call the HUD's own Stop makes, not a second stop path: it logs the press
+                // as an emergency stop and routes into `cancelCurrentRun`, which is also what
+                // `onDeny` above does. One implementation of "control was lost, for any reason" is
+                // §13.5's invariant, and a bespoke path here would be the one that forgets to
+                // release the mouse button.
+                onStop: { viewModel.emergencyStopVisionSession() }
             )
         case .captureReview(let preview):
             WidgetCaptureReviewPanel(
@@ -1161,8 +1234,19 @@ private struct WidgetPermissionPanel: View {
     /// steady-state panel is unchanged.
     let isFirstApproval: Bool
     let safeMode: Bool
+    /// The screen-control session this question was raised inside, or `nil` when the run is an
+    /// ordinary one (SONNY-255).
+    ///
+    /// **What it changes is the panel's context row and its refusal, not the question.** The
+    /// approval itself is the same `RiskApprovalRequest` every other approval is, raised by the same
+    /// method and answered by the same two entry points — a session does not get an approval surface
+    /// of its own. What a session does get is the two things the HUD this panel now outranks was
+    /// carrying: the statement that Sonny is controlling an app, and the way to stop it.
+    let sessionProgress: VisionSessionProgress?
     let onAllow: () -> Void
     let onDeny: () -> Void
+    /// Ends the screen-control session. Only reachable while `sessionProgress` is non-nil.
+    let onStop: () -> Void
 
     private var escalationReasons: String {
         request.assessment.escalations
@@ -1179,7 +1263,36 @@ private struct WidgetPermissionPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            WidgetExistingStepRows(plan: plan, stepStatuses: stepStatuses)
+            // **Inside a session this row replaces the step rows rather than joining them**
+            // (SONNY-255). The plan a screen-control run carries is the outer one, whose step is
+            // "control this app" — so the identity line says what those rows say and adds the step
+            // count and the way out. Two rows saying the same thing on a 472pt panel is how a panel
+            // stops being read.
+            //
+            // **What is deliberately not carried across from the HUD is its action line.** At the
+            // moment an approval is raised, `currentAction` still holds what the iteration reported
+            // when it began — "Looking at Safari" — because the loop's next progress report comes
+            // *after* the approval returns. Rendering it here would put a stale sentence directly
+            // above an accurate one about the same moment.
+            if let sessionProgress {
+                HStack(spacing: 8) {
+                    WidgetSessionIdentityLine(appDisplayName: sessionProgress.appDisplayName)
+
+                    Spacer(minLength: 8)
+
+                    Text("Step \(sessionProgress.iteration) of \(sessionProgress.maximumIterations)")
+                        .font(WidgetType.captionSmall)
+                        .foregroundStyle(WidgetTheme.textMuted)
+                        .lineLimit(1)
+
+                    WidgetSessionStopButton(
+                        appDisplayName: sessionProgress.appDisplayName,
+                        action: onStop
+                    )
+                }
+            } else {
+                WidgetExistingStepRows(plan: plan, stepStatuses: stepStatuses)
+            }
 
             ForEach(Array(firstRunExplainerLines.enumerated()), id: \.offset) { _, line in
                 Text(line)
@@ -1205,10 +1318,18 @@ private struct WidgetPermissionPanel: View {
             //
             // Applied to every escalation reason rather than only the scope ones, decided in the
             // same pass: no escalation is an error — each one explains why approval is being asked —
-            // so the failure colour was wrong for all of them. It also leaves `errorGlyph` used
-            // exclusively by genuine error states (the failed-step glyph at :430 and the
-            // storage-failure notice at :754), which is what makes "visually distinguishable from
-            // Sonny's error states" a checkable property rather than a claim.
+            // so the failure colour was wrong for all of them.
+            //
+            // **The checkable property that leaves behind, restated because its original wording had
+            // gone stale twice over.** It said `errorGlyph` was used "exclusively by genuine error
+            // states", naming two sites by line number; both numbers had moved, and row I had since
+            // added a site that is not an error state at all — the control that stops a session. The
+            // property worth holding is narrower and has never been false: **nothing that asks the
+            // user a question is drawn in the failure colour.** Red is the failed-step glyph, the
+            // notice strip's default tint, and `WidgetSessionStopButton` — which is one site serving
+            // both the HUD and, since SONNY-255, this panel. Three code sites in this file
+            // (`git grep -cE '^[^/]*WidgetTheme\.errorGlyph' -- Sources/MacAgent/FloatingWidgetView.swift`
+            // → 3 — the leading-slash exclusion is what keeps prose like the line above out of it).
             if !escalationReasons.isEmpty {
                 Text(escalationReasons)
                     .font(WidgetType.captionSmall)
@@ -1242,14 +1363,31 @@ private struct WidgetPermissionPanel: View {
 
                 Spacer(minLength: 8)
 
-                Button(action: onDeny) {
-                    Image(systemName: "xmark")
-                        .font(.system(size: 10, weight: .bold))
-                        .foregroundStyle(WidgetTheme.textFull)
+                // **One refusal, never two** (SONNY-255). Outside a session this cross is the panel's
+                // Deny and the only way to say no. Inside one, `cancelCurrentRun` — which is what it
+                // calls — ends the whole session rather than declining a step, which is exactly what
+                // the labelled Stop in the row above does; two controls with one effect on the
+                // surface a program driving the user's screen asks from is the worst place in the
+                // app for that ambiguity, and an icon-only cross reading as "skip this step" while
+                // it ends the session is the surprise `cancelCurrentRun`'s own doc comment calls the
+                // most expensive one this product can produce. So the refusal moves to the row that
+                // says what it does, and nothing is lost: it is the same call, on the same press
+                // count, with a word on it.
+                //
+                // When SONNY-80's standing note lands — a labelled "deny this step" that resumes the
+                // continuation without cancelling — it comes back here as a genuinely *different*
+                // control beside that Stop, which is the shape `VisionSessionRunner`'s approval arm
+                // already anticipates.
+                if sessionProgress == nil {
+                    Button(action: onDeny) {
+                        Image(systemName: "xmark")
+                            .font(.system(size: 10, weight: .bold))
+                            .foregroundStyle(WidgetTheme.textFull)
+                    }
+                    .buttonStyle(.plain)
+                    .frame(width: 23, height: 23)
+                    .widgetCircularBackground()
                 }
-                .buttonStyle(.plain)
-                .frame(width: 23, height: 23)
-                .widgetCircularBackground()
 
                 Button(action: onAllow) {
                     Image(systemName: "checkmark")
@@ -1463,12 +1601,71 @@ private struct WidgetSessionPausedPanel: View {
     }
 }
 
+// MARK: - What a live session says and how it is stopped, wherever the panel is
+
+/// "Sonny is controlling <app>" — the statement row I requires a session to be making at all times.
+///
+/// **One copy, two panels** (SONNY-255). It began inside `WidgetControllingPanel` and moved out when
+/// `WidgetPermissionPanel` had to make the same statement, because while a question is parked the HUD
+/// is not the panel on screen and the requirement is about the session rather than about one panel.
+/// A second hand-written copy of this sentence is how two surfaces start describing one session
+/// differently.
+private struct WidgetSessionIdentityLine: View {
+    let appDisplayName: String
+
+    var body: some View {
+        HStack(spacing: 8) {
+            // Amber, not the failure red: this is Sonny doing something unusual, not something
+            // going wrong — the same distinction the approval panel's escalation line draws.
+            Image(systemName: "cursorarrow.rays")
+                .font(.system(size: 12))
+                .foregroundStyle(WidgetTheme.secondaryCircular)
+
+            (Text("Sonny is controlling ").font(WidgetType.caption)
+                + Text(appDisplayName).font(WidgetType.captionMedium))
+                .foregroundStyle(WidgetTheme.textFull)
+                .lineLimit(1)
+        }
+    }
+}
+
+/// The control that ends a screen-control session, wherever the session's panel happens to be.
+///
+/// **Shared for the same reason the line above is** (SONNY-255): the emergency control for a program
+/// driving the user's screen has one label, one colour and one VoiceOver name, whether it is sitting
+/// in the HUD or in the approval panel that outranks it. Its action is the caller's, and both callers
+/// pass the same one — `emergencyStopVisionSession`, which routes into `cancelCurrentRun` like every
+/// other stop in the product.
+private struct WidgetSessionStopButton: View {
+    let appDisplayName: String
+    let action: () -> Void
+
+    var body: some View {
+        Button(action: action) {
+            Text("Stop")
+                .font(WidgetType.captionMedium)
+                .foregroundStyle(.white)
+        }
+        .buttonStyle(.plain)
+        .padding(.horizontal, 10)
+        .frame(height: 23)
+        .widgetCircularBackground(tint: WidgetTheme.errorGlyph)
+        .accessibilityLabel("Stop Sonny controlling \(appDisplayName)")
+    }
+}
+
 /// **The HUD: power without covertness.**
 ///
 /// While Sonny controls an app it says so, says which app, says what it is doing right now, and puts
 /// Pause and Stop where the user can reach them. That is the whole requirement, and it is a product
 /// requirement rather than a courtesy: a program moving someone's cursor with no visible statement of
 /// what it is doing is the shape this feature must never take.
+///
+/// **This panel is not the only place that requirement is met** (SONNY-255). Four states outrank it,
+/// each of them a question the session has parked on the user, and while one of those is on screen
+/// this panel is not. The three Safe-mode ones each name the app in their own copy; the approval one
+/// renders `WidgetSessionIdentityLine` and `WidgetSessionStopButton` above the question, so the
+/// statement and the way out survive the panel being outranked.
 ///
 /// **No wireframe** — the founder put row I's UI on session judgment on 2026-08-14, with a dedicated
 /// whole-product UI/UX pass before release. Built to System B's tokens and to the panels around it,
@@ -1480,18 +1677,7 @@ private struct WidgetControllingPanel: View {
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            HStack(spacing: 8) {
-                // Amber, not the failure red: this is Sonny doing something unusual, not something
-                // going wrong — the same distinction the approval panel's escalation line draws.
-                Image(systemName: "cursorarrow.rays")
-                    .font(.system(size: 12))
-                    .foregroundStyle(WidgetTheme.secondaryCircular)
-
-                (Text("Sonny is controlling ").font(WidgetType.caption)
-                    + Text(progress.appDisplayName).font(WidgetType.captionMedium))
-                    .foregroundStyle(WidgetTheme.textFull)
-                    .lineLimit(1)
-            }
+            WidgetSessionIdentityLine(appDisplayName: progress.appDisplayName)
 
             Text(progress.currentAction)
                 .font(WidgetType.captionSmall)
@@ -1517,16 +1703,14 @@ private struct WidgetControllingPanel: View {
                 .widgetCircularBackground()
                 .accessibilityLabel("Pause Sonny controlling \(progress.appDisplayName)")
 
-                Button(action: onStop) {
-                    Text("Stop")
-                        .font(WidgetType.captionMedium)
-                        .foregroundStyle(.white)
-                }
-                .buttonStyle(.plain)
-                .padding(.horizontal, 10)
-                .frame(height: 23)
-                .widgetCircularBackground(tint: WidgetTheme.errorGlyph)
-                .accessibilityLabel("Stop Sonny controlling \(progress.appDisplayName)")
+                // **Pause does not travel to the approval panel with the Stop, and that is the one
+                // thing this ticket left behind on purpose** (SONNY-255). `pauseVisionSession` sets
+                // the attention monitor's flag, which the loop reads at the *top of its next
+                // iteration* — so pressing it while an approval is parked freezes nothing, because
+                // the loop is already frozen on the continuation. It would take effect only after
+                // the user answered the question, which is a control that appears to do nothing and
+                // then acts later.
+                WidgetSessionStopButton(appDisplayName: progress.appDisplayName, action: onStop)
             }
 
             // The hotkey, said once and quietly. During a session the pointer is not the user's to
