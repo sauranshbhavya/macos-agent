@@ -277,7 +277,7 @@ Mac App Store should be considered later, possibly as a constrained "Sonny Lite,
 
 ## 4. Current Prototype Baseline
 
-The existing prototype already proves the product direction. The list below was verified line-by-line against the code during the v1.2 review (see §4.1 for the honest gap table) — earlier drafts of this section described the prototype as more general than the code actually is.
+The existing prototype already proves the product direction. The list below was verified line-by-line against the code during the v1.2 review of 2026-07-03 (see §4.1 for the honest gap table), and it is that day's snapshot rather than a running description of the tree — earlier drafts of this section described the prototype as more general than the code actually is.
 
 - Swift/AppKit/SwiftUI menu-bar app.
 - Product name: Sonny.
@@ -304,7 +304,7 @@ The existing prototype already proves the product direction. The list below was 
 
 This baseline should be treated as a prototype, not as the public-release architecture. Future implementation must preserve what works while replacing prototype assumptions with production systems: hosted auth, agent traces, capability registry, richer permission model, screen context, Power Mode, backend, subscriptions, and enterprise foundations.
 
-Prototype limitations to resolve before the major release:
+Prototype limitations to resolve before the major release, as the 2026-07-03 audit found them. Each is a finding of that date, not a statement about the tree today. Only the storage finding has been re-checked against the tree since (SONNY-289, 2026-08-26) and it carries the result inline; a bullet with no such note has not been re-checked, which is not the same as having been found still open — SONNY-296 is where the other six get their re-check, and updates this sentence when they do:
 
 - Hacker News is a special-case web workflow; it should become a general web/source-to-Markdown capability.
 - Music only opens provider results; it should attempt real playback through first-party provider APIs where available.
@@ -312,7 +312,7 @@ Prototype limitations to resolve before the major release:
 - The menu-bar popover is a strong cockpit, but account, settings, history, stats, privacy, and Power Mode controls need a full Mac app surface.
 - Existing local tools are still too prototype-shaped; they need more generic schemas, reusable adapters, and capability-style naming before the hosted runtime work starts.
 - Safety today is a single `dryRun` boolean, not the tiered risk/approval model described in §11. This needs to exist before Power Mode is built, not after (§11.1A, §21.0A).
-- Local storage (routines/workspaces) is plain JSON with no encryption, and no Keychain usage exists anywhere in the codebase. Secrets currently come from environment variables only (§15.4, §16.5).
+- Local storage (routines/workspaces) was plain JSON with no encryption, and no Keychain usage existed anywhere in the codebase. **Closed 2026-07-09 in `14402be`**, which encrypted every local JSON store and put the key in the Keychain; §15.4's status note is the account of it, with the commands. The environment-variable half stands: secrets still come from environment variables only (§16.5).
 
 ### 4.1 Verified Implementation Status (v1.2 Audit, 2026-07-03)
 
@@ -501,7 +501,7 @@ Important constraint:
 
 ### 4A.4 Real Music Playback Strategy
 
-Current prototype behavior opens Apple Music or Spotify results but does not reliably play the requested track. The pre-major-release pass should convert this into a provider-aware media capability with graceful fallbacks, implemented as an adapter under §4A.0.
+Prototype behavior at the 2026-07-03 audit opened Apple Music or Spotify results but did not reliably play the requested track — that sentence is the audit's finding of that date and has not been re-checked against the tree since (SONNY-296). The pre-major-release pass should convert this into a provider-aware media capability with graceful fallbacks, implemented as an adapter under §4A.0.
 
 Target command:
 
@@ -2065,7 +2065,11 @@ Requirements:
 - Do not store raw API credentials in plain files.
 - Provide local data deletion.
 
-Status note (v1.2): the current prototype stores routines/workspaces as plain unencrypted JSON and uses zero Keychain calls anywhere, reading API keys only from environment variables (§4.1). This must be corrected as part of productionizing the local storage layer (Workstream A).
+Status note (v1.2 observation, superseded 2026-07-09): the v1.2 audit (§4.1) recorded routines and workspaces as plain unencrypted JSON with zero Keychain calls anywhere, and asked for that to be corrected while productionizing the local storage layer (Workstream A). **It was true when written and stopped being true on 2026-07-09**, in `14402be`, which added `LocalStorageEncryption` — CryptoKit `AES.GCM` behind a `SONNYENC1` file header, keyed by a 256-bit key the Keychain holds under service `com.sonny.local-storage` — and retrofitted it into every local JSON store the repository had, `RoutineStore` and `WorkspaceStore` among them. Both take that key on their read and write doors (`AutomationStores.swift`, four call sites: `git grep -cE 'encryption\.(encode|decode)\(' d5eafc7 -- Sources/MacAgentCore/AutomationStores.swift` → 4). Every local store on disk now goes through that one shared pattern — thirteen of them at `d5eafc7` (`git show d5eafc7:Sources/MacAgentCore/LocalStoreClassification.swift | sed -n '/^public enum LocalStore: CaseIterable/,/^$/p' | grep -c '^    case '` → 13). A file written before the retrofit carries no header, decodes once as legacy plaintext, and is rewritten encrypted on its next successful load, so "encrypted at rest" describes the steady state rather than every byte on every disk at every instant.
+
+Keychain calls are not zero either. `KeychainSecretStore` is the only file in `Sources` that makes one, and it makes four — `SecItemCopyMatching`, `SecItemUpdate`, `SecItemAdd`, `SecItemDelete` (`git grep -coE 'SecItem(Add|Update|Delete|CopyMatching)\(' d5eafc7 -- Sources/MacAgentCore/KeychainSecretStore.swift` → 4, and the same pattern listing files rather than counting — `git grep -lE 'SecItem(Add|Update|Delete|CopyMatching)\(' d5eafc7 -- Sources` → that one path and no other). Count the bare token instead and the answer is 7 (`git grep -c SecItem d5eafc7 -- Sources/MacAgentCore/KeychainSecretStore.swift` → 7), three of those being `errSecItemNotFound` in status handling rather than a call — which is the figure the ticket that corrected this note carried, and it is a line count over a substring, not a count of Keychain calls.
+
+What the note got right and is still right about is its last clause: model-provider API keys are still read from environment variables. §16.5 is where that half lives, with the six credential-carrying call sites enumerated, and it is owed work rather than history.
 
 ### 15.5 Backend Security
 
