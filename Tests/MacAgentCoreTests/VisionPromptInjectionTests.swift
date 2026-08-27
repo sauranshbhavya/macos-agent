@@ -123,6 +123,41 @@ struct VisionPromptInjectionTests {
         }
     }
 
+    /// **Every corpus entry, in the window title and in a history entry, leaves the observed block
+    /// exactly three lines** — the shape `Window title:`, the header, one `- ` entry.
+    ///
+    /// **The three line-break-carrying entries were inert until this test existed** (PR #130 review,
+    /// F4). SONNY-226 appended them — CR, U+2028 and NEL forging a history header and an approval
+    /// that never happened — and claimed in its closing comment that they exercised the fold. Nothing
+    /// asserted on them: `observedContentCannotForgeADelimiterAndEscapeItsWrapper` counts delimiters,
+    /// which those entries contain none of, and the rest of the corpus tests read the trusted segment
+    /// or the decision path. A corpus entry that no assertion can fail on is a comment.
+    ///
+    /// Line-break **scalars**, not `"\n"` — a split on line feed cannot see the CR entry at all,
+    /// which is the whole reason those three are in the corpus.
+    @Test
+    func noCorpusEntryAddsALineToTheObservedBlock() {
+        for attack in Self.attackStrings {
+            for (position, block) in [
+                ("window title", VisionSessionPromptBuilder.observedBlock(
+                    windowTitle: attack,
+                    history: ["iteration 1: clicked New"]
+                )),
+                ("history entry", VisionSessionPromptBuilder.observedBlock(
+                    windowTitle: "A window",
+                    history: ["iteration 1: \(attack)"]
+                ))
+            ] {
+                let lines = scalarLines(of: block)
+                #expect(lines.count == 3, "\(position): \(lines.count) lines for \(attackLabel(attack))")
+                #expect(
+                    lines.filter { $0 == "What has happened so far, oldest first:" }.count == 1,
+                    "\(position): a forged header for \(attackLabel(attack))"
+                )
+            }
+        }
+    }
+
     /// The window title is observed content too — it is read off the screen exactly like the pixels
     /// are, and an app can name its own window.
     @Test

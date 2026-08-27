@@ -106,11 +106,15 @@ public enum VisionSessionPromptBuilder {
     /// every user, to close a latent hole. A wrapper around the name is heavier still and buys nothing
     /// a fold does not.
     ///
-    /// **Fold first, then escape.** A line break is deliberately *not* stepped over by
-    /// `isIgnorableInsideADelimiter` — two lines cannot forge one boundary line — so `escape` on its own
-    /// would leave a break sitting inside a near-delimiter untouched; folding first puts the whole
-    /// token back on one line where `escape` can see it. The reverse hazard does not exist here: this
-    /// fold emits `\` and lowercase `n`, neither of which appears in any delimiter, so unlike
+    /// **Fold first, then escape — a convention, not a necessity, and this paragraph used to claim
+    /// otherwise** (PR #130 review, F2). It said folding "puts the whole token back on one line where
+    /// `escape` can see it". **False:** `escape` deliberately does not step over a line break, because
+    /// two lines cannot forge one boundary line, so a break-split delimiter matches nothing before the
+    /// fold — and the fold substitutes `\` and lowercase `n`, which `escape` does not step over
+    /// either, so it matches nothing after. The order is `PriorTaskContext`'s, kept so every caller
+    /// reads the same way; the two orders are scalar-identical over the corpus
+    /// `foldingBeforeEscapingAndAfterItAgreeOnEveryCorpusValue` measures. What *is* true and is why
+    /// the fold is safe here at all: it emits two characters that appear in no delimiter, so unlike
     /// `escapeAttribute`'s `_` it can never *rebuild* one.
     ///
     /// **This is the only string interpolated into `systemRules` or `responseContract`, and that is a

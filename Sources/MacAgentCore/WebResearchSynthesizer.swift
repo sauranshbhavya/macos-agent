@@ -328,13 +328,19 @@ public enum WebResearchPromptBuilder {
     /// `escapeObserved`, plus the line-break fold every value that sits **on a line of this block**
     /// needs (SONNY-226).
     ///
-    /// Folded first, then escaped, for the reason
-    /// `UntrustedContentBoundary.foldingLineBreaks` gives: a line break is deliberately not stepped
-    /// over when a delimiter is matched, so `escape` alone leaves one sitting inside a near-delimiter
-    /// untouched, and folding first puts that token back on one line where `escape` can see it. The
-    /// reverse hazard — a fold *completing* a delimiter, which is what makes `escapeAttribute`'s
-    /// ordering load-bearing — cannot arise, because this fold emits `\` and lowercase `n` and neither
-    /// appears in any delimiter.
+    /// Folded first, then escaped, **by convention rather than by necessity — the reason given here
+    /// before was false** (PR #130 review, F2). It said folding "puts that token back on one line
+    /// where `escape` can see it"; a break-split delimiter matches nothing either way, since `escape`
+    /// steps over neither a line break nor the `\` and `n` the fold puts in its place. The two orders
+    /// are scalar-identical over the corpus `foldingBeforeEscapingAndAfterItAgreeOnEveryCorpusValue`
+    /// measures. What is true: the reverse hazard — a fold *completing* a delimiter, which is what
+    /// makes `escapeAttribute`'s ordering load-bearing — cannot arise here, because this fold emits
+    /// `\` and lowercase `n` and neither appears in any delimiter.
+    ///
+    /// **The escape is not decoration on top of the fold, and a mutant proved nothing held it**
+    /// (PR #130 review, F1). Reducing this function to the fold alone left the whole suite green;
+    /// `everyWebFieldIsStillNeutralisedAfterTheFold` and
+    /// `everyWebResearchFieldNeutralisesAForgedDelimiter` are what fail now.
     private static func escapeObservedField(_ value: String) -> String {
         UntrustedContentBoundary.escape(UntrustedContentBoundary.foldingLineBreaks(in: value))
     }
