@@ -438,7 +438,7 @@ Use any tier-2 command from §2's table, submitted from the widget.
       see `docs/sonny-founder-design-decisions.md`'s "Approval panel — first-run moment" section for
       why and what's still open there.
 
-#### 3c-bis. An approval raised *during* a screen-control session (new 2026-08-26, SONNY-255)
+### 3c-bis. An approval raised *during* a screen-control session (new 2026-08-26, SONNY-255)
 
 Start a screen-control session in Normal mode against an app the other rows use (Safari is easiest)
 and steer it at a control it will treat as destructive or as affecting others — a Delete, a Send.
@@ -465,9 +465,19 @@ the approval reached no widget surface at all, so the run looked like it had sta
       panel — Stop is the only refusal, because pressing the cross here ends the whole session and an
       icon-only cross reads as "skip this step". Then run an ordinary tier-2 command with no screen
       control: the ✗ is back, and §3c's Deny row above behaves exactly as it always did
-- [ ] **(new 2026-08-26, SONNY-255)** With the mid-session approval up, open Command Center. Its own
-      attention panel shows the same question with Deny/Allow, and answering it **there** clears the
-      widget's panel too — one approval, two surfaces, never two answers
+- [ ] **(new 2026-08-26, SONNY-255; rewritten 2026-08-27 after PR #132's review F1 changed what this
+      row is checking)** With the mid-session approval up, open Command Center. Its attention panel
+      shows the same question, and mid-session its buttons are **Stop and Allow** — *not* Deny and
+      Allow, which is what it showed until F1. Above them it names the session the same way the
+      widget does: "Sonny is controlling Safari" and the step count. Answering it **there** clears
+      the widget's panel too — one approval, two surfaces, never two answers
+- [ ] **(new 2026-08-27, PR #132 review F1)** Press **Stop** on Command Center's panel. It must end
+      the session exactly as the widget's Stop does — the action under question never happens, the
+      widget's panel clears, and the task reads "Canceled." The word is the whole of what changed:
+      that button did the identical thing when it said "Deny", which is why it stopped saying it
+- [ ] **(new 2026-08-27, PR #132 review F1)** With an ordinary tier-2 approval and **no** screen
+      control, open Command Center: its panel says **Deny and Allow** again, with no session row
+      above it. Deny cancels the run as it always did
 
 ### 3d. Clarification (no wireframe — best-effort, extra scrutiny warranted)
 Provoke a follow-up question with an intentionally underspecified command — e.g. "open my

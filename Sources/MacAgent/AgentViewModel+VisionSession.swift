@@ -114,10 +114,21 @@ extension AgentViewModel: VisionSessionInteracting {
 
     /// Take `Ctrl-Opt-Esc` for the duration of the session.
     ///
-    /// A failure here is recorded and swallowed rather than surfaced: the hotkey is one of three
-    /// ways to stop a session (the HUD's Stop and the widget's existing cancel are the others), and
-    /// refusing to run because a convenience shortcut was already taken by another app would be a
-    /// worse product than running without it.
+    /// A failure here is recorded and swallowed rather than surfaced: the hotkey is one of four
+    /// ways to stop a session, and refusing to run because a convenience shortcut was already taken
+    /// by another app would be a worse product than running without it.
+    ///
+    /// **The other three are the Stop controls, enumerated rather than described, because this count
+    /// has been wrong once already** (PR #132 review, F5). It said three ways and named "the HUD's
+    /// Stop and the widget's existing cancel" — a set that stopped being the set when SONNY-255 gave
+    /// the widget's approval panel its own Stop and PR #132's F1 gave Command Center's one, and whose
+    /// second member is now hidden during a session precisely because it ended one while reading as a
+    /// per-step decline. The population is one grep, and it is the whole of it because every door is
+    /// the same call: `git grep -n emergencyStopVisionSession'()' -- Sources | grep -v 'func '` → 4
+    /// lines, of which one is the closure below and three are controls —
+    /// `WidgetControllingPanel`'s Stop and `WidgetPermissionPanel`'s in `FloatingWidgetView`, and
+    /// `CommandCenterAttentionPanel`'s in `CommandCenterView`. Hotkey plus three controls is the
+    /// four. Every one ends in `cancelCurrentRun`, which is the point of the paragraph below.
     func registerEmergencyStopHotKey() {
         guard visionEmergencyStopHotKey == nil else {
             return
@@ -153,7 +164,15 @@ extension AgentViewModel: VisionSessionInteracting {
         visionUserPauseMonitor?.pause()
     }
 
-    /// The emergency stop, from the hotkey or from the HUD.
+    /// The emergency stop, from the hotkey or from any of the three Stop controls that call it.
+    ///
+    /// **Three, and this line named one of them until PR #132's review (F5).** They are the HUD's
+    /// Stop, the widget's approval panel's Stop (SONNY-255, which is the panel that outranks the HUD
+    /// while a question is parked), and Command Center's approval panel's Stop (PR #132's F1). The
+    /// last two exist because on both surfaces the refusal that was there before ended the whole
+    /// session while reading as a per-step decline — an icon-only cross in the widget, a button
+    /// labelled "Deny" in Command Center — and the fix on each was to give the call a word that
+    /// says what it does rather than to change what it does.
     ///
     /// **Deliberately the same call as every other stop.** §13.5's invariant is one implementation
     /// of "control was lost, for any reason", and a bespoke emergency path would be the second stop

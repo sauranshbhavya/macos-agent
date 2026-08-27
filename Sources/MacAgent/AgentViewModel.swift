@@ -1379,8 +1379,9 @@ final class AgentViewModel: ObservableObject {
     /// failure state (shown regardless of which surface submitted the task), or a working/result
     /// state for a task the widget itself submitted. Single source of truth for both
     /// `FloatingWidgetView`'s own panel rendering and its `isMicHintSlotFree` gate. Mirrors
-    /// `FloatingWidgetView`'s private `state`/`showsPanel` precedence exactly — keep both in sync if
-    /// either changes.
+    /// `FloatingWidgetView`'s `state`/`showsPanel` precedence exactly — keep both in sync if either
+    /// changes. (That property stopped being `private` in SONNY-255, so a test could read the panel
+    /// the widget resolved to; this sentence went on calling it private until PR #132's review, F4.)
     ///
     /// **Two stale claims removed here, both on 2026-08-21.** This said the widget was "the only
     /// place either is actionable at all": `CommandCenterAttentionPanel` has rendered those three
