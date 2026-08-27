@@ -175,8 +175,8 @@ describe("SupabaseAuthProvider — the requests it makes", () => {
   });
 
   it("sends the service-role key only to the admin surface, never on a user's behalf", async () => {
-    // The service-role key bypasses every policy in the project. Four of the five reachable calls
-    // must not carry it; the admin delete must.
+    // The service-role key bypasses every policy in the project. Of the four calls below, the three
+    // made on a user's behalf must not carry it and the admin delete must.
     const { provider, calls } = providerAnswering((request) =>
       // `/admin/users/{id}` and `/user` both answer a bare user object; the session-minting routes
       // answer the token response, whose user is nested.
