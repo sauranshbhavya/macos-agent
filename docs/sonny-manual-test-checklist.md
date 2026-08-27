@@ -1014,18 +1014,30 @@ without which the items cannot be run at all.
    builds the image, runs it, and verifies `/v1/health` serves that build. **That is the one
    command, and there is no second hand-run step** (new 2026-08-27, SONNY-306): it also forwards
    the gateway's own credentials out of the shell you run it from — `SUPABASE_JWT_SECRET`,
-   `SUPABASE_JWT_ISSUER`, `SUPABASE_JWT_AUDIENCE`, `DATABASE_URL` and `RATE_LIMIT_SALT` — each one
-   only when you have exported it, naming any it did not find and refusing nothing. Export them in
-   that terminal first if you have them; the script never asks for one, stores one or prints one.
-   **But four of the rows below still cannot be run.** The command ends by asking the container
-   what `POST /v1/auth/email/start` answers and printing it, and today that is a **404** however
-   many credentials were forwarded — `server.ts` mounts no auth route and no real mail adapter
-   exists, so there is nothing for the credentials to reach. When you see that 404 line it is this
-   deployment working as it currently is, **not a defect to report**. Four of the sign-in rows below
-   need a live gateway and stay unrunnable until SONNY-307 lands, named rather than counted so the
-   list checks itself: signing in with a real address, the relaunch headline check, sign-out, and
-   the wrong/expired/reused-code one. The three that need only the app can be run today — the two
-   pointed at a host which does not answer, and the narrow-window layout one.
+   `SUPABASE_JWT_ISSUER`, `SUPABASE_JWT_AUDIENCE`, `SUPABASE_ANON_KEY`,
+   `SUPABASE_SERVICE_ROLE_KEY`, `DATABASE_URL` and `RATE_LIMIT_SALT` — each one only when you have
+   exported it, naming any it did not find. Export them in that terminal first; the script never
+   asks for one, stores one or prints one.
+
+   **The command now ends with `==> auth routes are mounted` when you export all seven** (updated
+   2026-08-27, SONNY-307), and that line is the thing to read before starting: it is the container
+   telling you it will actually serve a sign-in. Export none of the four `SUPABASE_` names and it
+   says `auth routes are NOT mounted` and answers 404 — health-only, correct, and not a defect.
+   Export *some* of them and the container **refuses to start** and names what is missing, which is
+   also correct: a half-configured gateway would answer 404 to every sign-in while looking healthy.
+
+   **What still has to come from outside this repository, and it is the only thing left.** The four
+   rows below need a real Supabase project: its JWT secret, issuer, anon key and service-role key,
+   and a Postgres the container can reach with this repository's migrations applied
+   (`npm run migrate -- up`). **No such project exists yet** — that is founder-owned setup, recorded
+   on SONNY-307, and it is the whole of what stands between these rows and being runnable. The code
+   is in place and measured end to end against the container: the route answers, reaches Postgres,
+   calls Supabase, and is refused only because the project name in the test configuration does not
+   resolve. **The code that mails you is Supabase's, not ours** — so when the project exists,
+   whether the mail arrives is a Supabase project setting (its SMTP), not a change here.
+
+   The three rows that need only the app can be run today — the two pointed at a host which does
+   not answer, and the narrow-window layout one.
 2. The debug build has to be pointed at it. `defaults write com.sonny.MacAgent SonnyBackendBaseURL
    http://127.0.0.1:8080` — a `defaults` value rather than an environment variable **because the
    relaunch in item 2 loses an environment variable**: `/usr/bin/open -n` starts the new process
@@ -1038,14 +1050,28 @@ a bare `swift run` has no bundle identity and several of these paths need one �
 row, which is a Terminal check of the setup in item 1 above.** Sign-in is opened from the
 bottom-left account row → **Sign in**.
 
-- [ ] **(new 2026-08-27, SONNY-306) — Terminal, not the app.** Run `cd server && ./scripts/deploy.sh
-      local` twice from the same terminal: once with none of the five variables exported, and once
-      with whichever of them you actually hold exported first. Both runs must end with `==> ok —
-      serving <sha>`. The first must say `forwarding 0 of 5` and then list all five names on the
-      `not set here` line; the second must say `forwarding N of 5` and list only the ones you left
-      out. **No run may print a credential's value anywhere** — that is the row's real subject, so
-      read the output rather than skimming it. Both runs also end with the `auth routes are NOT
-      mounted` line and a 404, which is correct today and is SONNY-307's to change.
+- [ ] **(new 2026-08-27, SONNY-306; updated 2026-08-27, SONNY-307) — Terminal, not the app.** Run
+      `cd server && ./scripts/deploy.sh local` twice from the same terminal: once with none of the
+      seven variables exported, and once with whichever of them you actually hold exported first.
+      Both runs must end with `==> ok — serving <sha>`. The first must say `forwarding 0 of 7` and
+      then list all seven names on the `not set here` line; the second must say `forwarding N of 7`
+      and list only the ones you left out. **No run may print a credential's value anywhere** —
+      that is the row's real subject, so read the output rather than skimming it. The first run ends
+      with `auth routes are NOT mounted`; the second ends with `auth routes are mounted` if you
+      exported all seven, and otherwise refuses to start naming what is missing.
+
+- [ ] **(new 2026-08-27, SONNY-307) — Terminal, not the app. Needs no Supabase project.** With all
+      seven exported (placeholder values are fine — this row is about the wiring, not about a real
+      sign-in), run `./scripts/deploy.sh local`, then
+      `curl -s -X POST http://localhost:8080/v1/auth/email/start -H 'Content-Type: application/json'
+      -d '{"email":"you@example.com"}'`. It must answer **200** with a `request_id` and
+      `expires_in: 600` — the sign-in route running for real. Then `docker logs
+      sonny-gateway-local` and read the last few lines: they must contain
+      `"auth":"mounted"` on the `gateway listening` line, and **no credential value, no email
+      address and no `supabase.co` URL anywhere**. With a placeholder project name you will also see
+      one `sign-in code send failed` line naming only an error type — that is the adapter reporting
+      it could not reach a project that does not exist, and the 200 you got is the contract's
+      deliberate uniform answer, not a failure to report.
 
 - [ ] **(new 2026-08-26, SONNY-128)** Sign in with a real address: type it, press **Send code**,
       read the code out of the mail, type it, press **Sign in**. The dialog's title becomes
