@@ -3,6 +3,33 @@ import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
 
+/// Web-research synthesis, **against Sonny's own backend** (SONNY-130).
+///
+/// **Every test in the environment-key version of this file has a successor here.** The other three
+/// migrated suites carry this table and this one did not, which PR #139's F6 caught: the branch's
+/// own changelog claimed a table "in each suite's own header" while one of the four had none, so
+/// the claim was checkable and false.
+///
+/// | before | after |
+/// |---|---|
+/// | `webResearchNoteSchemaIsStrict` | same name — a schema test, untouched by the move |
+/// | `webResearchNoteDecoderRejectsUnexpectedKeys` | same name — the strict decoder stayed client-side |
+/// | `openAIWebResearchSynthesizerRecordsReportedResponsesUsage` | `synthesizerRecordsTheUsageTheBackendReported` |
+/// | `observedContentNeutralizesDelimitersHiddenInsideURLsWithoutCorruptingThem` | same name |
+/// | `redTeamObservedContentCannotChangeTrustedAgentPlanOrInstructionMessage` | same name |
+/// | `observedContentWrappingFormatIsStable` | same name |
+///
+/// **One renamed, four untouched, and one added.** The rename is the usage test: `model` is now the
+/// route's name rather than a model identifier (§4.2), and the request goes to Sonny's gateway, so
+/// "records reported *responses* usage" named a provider's payload shape that no longer reaches
+/// this client. The four prompt and schema tests did not move at all, which is the point — the
+/// wrapping row I depends on is client-side and stayed there. The added one,
+/// `theTrustedAndObservedMessagesReachTheWireSeparatelyAndInOrder`, is what the move made necessary:
+/// the boundary now crosses a network hop, so that it survives as *separate ordered messages* is a
+/// property worth asserting on the bytes.
+///
+/// One assertion inside a kept test did change and is argued at the line: `prompt.requestBody(model:)`
+/// became `prompt.messages`, because the provider envelope around the text is the server's to build.
 @Suite
 struct WebResearchSynthesizerTests {
     @Test

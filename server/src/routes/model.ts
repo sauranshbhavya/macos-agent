@@ -6,7 +6,6 @@ import {
   ProviderRejected,
   ProviderTimedOut,
   ProviderUnavailable,
-  UpstreamRequestTooLarge,
   type ModelProviders,
   type SearchResultItem,
   type UpstreamUsage,
@@ -98,13 +97,9 @@ function sendUpstreamFailure(
   reply: FastifyReply,
   error: unknown,
 ): FastifyReply {
-  if (error instanceof UpstreamRequestTooLarge) {
-    return reply.status(413).send(
-      errorBody("request.too_large", "Request body exceeds the limit for this route.", request.id, {
-        retryable: false,
-      }),
-    );
-  }
+  // **No `request.too_large` arm here** (PR #139, F11). Every oversize body on these four routes is
+  // refused before a handler runs — by `bodyLimit`, or by the multipart parser's own `fileSize` —
+  // and `errors.ts` maps Fastify's 413 onto §7.2's code. An arm here would be unreachable.
   if (error instanceof ProviderTimedOut) {
     request.log.info({ err: error }, "upstream timed out");
     return reply.status(504).send(
@@ -194,9 +189,14 @@ function parseJSON(value: string): unknown {
  *
  * `502 provider.unavailable` rather than a 500: from the caller's side that is exactly what it is —
  * the thing Sonny needed could not be reached — and it is the code §7.2 gives a client the right
- * behaviour for. The deployment-shaped version of this failure is caught earlier, at startup, by
- * `buildApp` refusing to mount a route with no adapter; this branch exists for the type system
- * rather than for a state a running server should reach.
+ * behaviour for.
+ *
+ * **This branch is reachable, and this comment said it was not** (PR #139, F4). It claimed the
+ * deployment-shaped failure is caught at startup by `buildApp` refusing to mount an adapterless
+ * route; `buildApp` does no such thing and deliberately mounts all four unconditionally. A
+ * deployment holding one credential and not another really does reach this, which is why it answers
+ * a code the client knows what to do with — and why `answers 502 provider.unavailable when this
+ * deployment holds no credential for the route` is a behavioural test rather than a note.
  */
 function noProvider(request: FastifyRequest, reply: FastifyReply): FastifyReply {
   request.log.error({ url: request.url }, "route reached with no configured provider adapter");
@@ -276,13 +276,18 @@ export function registerModelRoutes(app: FastifyInstance, providers: ModelProvid
   /**
    * `POST /v1/transcriptions` — §4.4's two-part multipart body.
    *
-   * **The audio's byte ceiling is enforced twice on this side**, and the two are not redundant.
-   * `bodyLimit` bounds the whole request before it is buffered, which is what stops a hostile or
-   * broken client from making this process hold an unbounded body — but a `413` from it is
-   * Fastify's, mapped by `errors.ts` to a message that names the whole request. The explicit check
-   * below is what makes an oversized *recording* diagnosable as one. Both are backstops: SONNY-130's
-   * real cap is a duration, it is enforced on the Mac before a byte is sent, and `model/limits.ts`
-   * says why the two sides measure different units.
+   * **The audio's byte ceiling is enforced ahead of this handler, twice, and neither is here** (PR
+   * #139, F11). `bodyLimit` bounds the whole request before it is buffered, and `@fastify/multipart`
+   * bounds the file part while it streams. A third check on the *part* at the same number could
+   * never fire: a part cannot be larger than the request that carries it, so `bodyLimit` refuses
+   * first by construction. This route had one anyway, with a comment calling the pair "not
+   * redundant"; the check is gone and `UpstreamRequestTooLarge` with it, because a guard nothing can
+   * reach is worse than no guard — it reads as protection while contributing none.
+   *
+   * What a caller actually gets is unchanged and is what the tests assert: Fastify's 413, mapped by
+   * `errors.ts` to §7.2's `request.too_large`. Both are backstops anyway — SONNY-130's real cap is a
+   * duration, enforced on the Mac before a byte is sent, and `model/limits.ts` says why the two
+   * sides measure different units.
    */
   app.post(
     "/v1/transcriptions",
@@ -334,13 +339,6 @@ export function registerModelRoutes(app: FastifyInstance, providers: ModelProvid
       if (!parsedMeta.success) return invalid(request, reply, "The meta part failed validation.");
       if (audio === undefined || audio.byteLength === 0) {
         return invalid(request, reply, "The audio part is required and must not be empty.");
-      }
-      if (audio.byteLength > BODY_LIMIT_BYTES.transcriptions) {
-        return sendUpstreamFailure(
-          request,
-          reply,
-          new UpstreamRequestTooLarge(BODY_LIMIT_BYTES.transcriptions, audio.byteLength),
-        );
       }
 
       const recording = audio;

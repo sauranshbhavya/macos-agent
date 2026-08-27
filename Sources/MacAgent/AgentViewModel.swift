@@ -4639,10 +4639,6 @@ final class AgentViewModel: ObservableObject {
         )
     }
 
-    /// The executor with its vision environment named by the caller. `nil` is the dry-run form for
-    /// a resolver-built plan (SONNY-281, `locallyCompletedCommand`): a resolver plan never carries a
-    /// vision step, and `makeLiveVisionEnvironment()` assigns `visionUserPauseMonitor` on the way —
-    /// a side effect a routing decision must not have. Every run takes the overload above.
     /// §2.4's two fields for one run: this run's `task_id`, and whether the backend may keep its
     /// content.
     ///
@@ -4674,6 +4670,10 @@ final class AgentViewModel: ObservableObject {
         taskUsageSummary = .empty
     }
 
+    /// The executor with its vision environment named by the caller. `nil` is the dry-run form for
+    /// a resolver-built plan (SONNY-281, `locallyCompletedCommand`): a resolver plan never carries a
+    /// vision step, and `makeLiveVisionEnvironment()` assigns `visionUserPauseMonitor` on the way —
+    /// a side effect a routing decision must not have. Every run takes the overload above.
     private func makeExecutor(
         recordingPolicy: TaskRecordingPolicy?,
         visionSession: VisionSessionEnvironment?

@@ -238,14 +238,45 @@ public enum SonnyBackendCopy {
     /// Functional, not explanatory (founder, 2026-08-14): what happened and what to do next, and
     /// nothing about servers, tokens, providers or how any of it works.
     public static func sentence(for error: SonnyBackendError) -> String {
+        // **Three codes are answered here rather than through `SignInFailure`, because a retry
+        // cannot help and the shared sentence tells the user to try one** (PR #139, F7). §9.3 lists
+        // all three as not retryable — "retrying any of these produces the identical failure and
+        // burns a round trip" — and every one of them is reachable on these four routes while none
+        // is reachable on the three unauthenticated sign-in routes `SignInFailure` was written for.
+        // `request.invalid` in particular is what this server answers a missing `retention` with.
+        //
+        // The mapping is not wrong for sign-in; it is right there and wrong here, which is why this
+        // is an interception rather than an edit to `SignInFailure`.
+        if case .api(let api) = error {
+            switch api.code {
+            case .providerRejected:
+                // §7.2 case 5b's own words: "Told Sonny could not do this one. A retry would fail
+                // identically." So the sentence says what happened and stops.
+                return "Sonny couldn't do this one."
+            case .requestInvalid:
+                // The request was malformed — Sonny's fault, not the user's, and nothing they can
+                // act on. Saying so plainly beats inviting a retry that fails the same way.
+                return "Sonny couldn't send this one."
+            case .requestTooLarge:
+                return "That was too big for Sonny to send in one go."
+            default:
+                break
+            }
+        }
         switch SignInFailure(error) {
         case .offline:
             return "You're offline. Everything Sonny does on this Mac still works."
         case .backendUnreachable, .unexpected, .emailInvalid, .codeIncorrect, .codeExpired,
              .codeAlreadyUsed:
-            // The four code cases cannot arise on these routes — they are `email/verify`'s — and a
-            // failure this build does not recognise is not something to guess at in front of a
-            // user. All of them get the one sentence that is true of every one of them.
+            // **What is left in this arm really is unreachable-or-unknown, and the previous version
+            // of this comment was wrong about which** (PR #139, F7). It said the four code cases
+            // "cannot arise on these routes" and named `.emailInvalid` among them — but
+            // `SignInFailure` maps `request.invalid` to `.emailInvalid`, and `request.invalid` is
+            // exactly what this server answers a missing `retention` with, so it arose constantly.
+            // It is unreachable *now*, because the interception above takes `request.invalid` first;
+            // the three `authCode*` cases are unreachable because these routes never return those
+            // codes. What remains is a backend that could not be reached and a code this build does
+            // not recognise, and "try again" is honest for both.
             return "Sonny couldn't finish this one. Try again."
         case .tooManyAttempts:
             return "Too many requests just now. Try again shortly."

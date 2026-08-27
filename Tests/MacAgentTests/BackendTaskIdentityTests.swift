@@ -53,6 +53,107 @@ struct BackendTaskIdentityTests {
         #expect(Set(viewModel.taskHistoryRecords.compactMap(\.id)) == Set(ids))
     }
 
+    /// **The scheduled path's own §5.1 join, pinned on the wire** (PR #139, F1).
+    ///
+    /// The foreground path is pinned by the two tests above. This one was held by nothing: the
+    /// scheduled tests read `record.id`, but only as a lookup key into the plan-detail store, which
+    /// works whatever the id is — and `CompletedTaskRecord.id` defaults to a fresh `UUID()` **per
+    /// call**, so both ways of breaking this produce a perfectly valid-looking row. The reviewer
+    /// measured both mutants surviving the whole suite.
+    ///
+    /// So this asserts the thing the id is *for*, rather than that it exists. A scheduled routine
+    /// whose one step is a web search reaches the backend through the executor, so the `task_id` on
+    /// that request and the `id` on the row the run writes can be compared directly — which is the
+    /// join `DELETE /v1/tasks/{task_id}` needs and the only thing that makes the field worth
+    /// carrying.
+    ///
+    /// **Both mutants die here, and each dies on its own assertion.** Deleting `id: currentTaskID`
+    /// from the record (`AgentViewModel.recordScheduledTaskHistory`) gives the row a fresh UUID, so
+    /// it stops matching the wire's `task_id`. Deleting the mint at the top of `performScheduledRun`
+    /// leaves the scheduled run carrying the *previous* task's id, so the two rows stop differing —
+    /// which is the real harm, two tasks' content filed under one key, rather than a missing field.
+    ///
+    /// The search answers with **no results** on purpose: `web_to_markdown` then fails at
+    /// `WebResearchError.noSearchResults` before any page is fetched, so nothing here touches the
+    /// network. `AgentViewModel` passes no `webPageLoader`, so a result that resolved would have
+    /// been fetched for real.
+    @Test
+    func aScheduledRunsRequestAndItsRowAreFiledUnderOneTaskIDOfItsOwn() async throws {
+        let root = try makeDirectory()
+        defer { try? FileManager.default.removeItem(at: root) }
+
+        let backend = SignedInBackendFixture()
+        let searches = RecordedBackendRequests()
+        backend.register { request in
+            searches.append(request)
+            return .reply(
+                statusCode: 200,
+                headers: ["Content-Type": "application/json"],
+                body: Data(#"{"request_id":"req_sched","results":[]}"#.utf8)
+            )
+        }
+        defer { backend.unregister() }
+
+        let routineStore = RoutineStore(fileURL: root.appendingPathComponent("routines.json"))
+        let taskHistoryStore = TaskHistoryStore(fileURL: root.appendingPathComponent("task-history.json"))
+        let seen = CapturedTaskContexts()
+        let viewModel = try makeViewModel(
+            root: root,
+            capturing: seen,
+            routineStore: routineStore,
+            taskHistoryStore: taskHistoryStore,
+            backendClient: backend.client
+        )
+
+        var calendar = Calendar(identifier: .gregorian)
+        calendar.timeZone = try #require(TimeZone(identifier: "America/New_York"))
+        let nineAM = try #require(
+            calendar.date(from: DateComponents(year: 2026, month: 7, day: 15, hour: 9, minute: 0))
+        )
+        var schedule = RoutineSchedule(cadence: .daily, hour: 9, minute: 0, unattendedTrusted: true)
+        schedule.setEnabled(true, now: nineAM.addingTimeInterval(-24 * 60 * 60))
+        try routineStore.save(StoredRoutine(
+            name: "Morning",
+            steps: [
+                AgentStep(
+                    id: "research",
+                    operation: .webToMarkdown,
+                    description: "Research something.",
+                    outputPath: root.appendingPathComponent("note.md").path,
+                    searchQuery: "swift concurrency"
+                )
+            ],
+            schedule: schedule
+        ))
+
+        // A foreground task first, so the scheduled run has a previous id to be confused with. This
+        // is the ordinary case — a user runs a command, then a routine fires — and it is what makes
+        // "the scheduled run minted its own" a statement about two real rows rather than about a
+        // captured variable.
+        try await run(viewModel, command: "a foreground command with no resolver pattern")
+        let foregroundID = try #require(viewModel.taskHistoryRecords.first?.id)
+
+        viewModel.checkScheduledRoutines(now: nineAM.addingTimeInterval(3_600))
+        while viewModel.isRunning {
+            try await Task.sleep(nanoseconds: 10_000_000)
+        }
+
+        let scheduledRow = try #require(
+            try taskHistoryStore.loadAll().first { $0.trigger == .scheduled }
+        )
+        let scheduledID = try #require(scheduledRow.id)
+
+        // The request the scheduled run actually made, and the row it actually wrote, under one key.
+        let sent = try searches.only
+        #expect(sent.path == "/v1/search")
+        #expect(sent.json["task_id"] as? String == scheduledID)
+        // A scheduled run is not the user's, so it never carries "Don't save this task".
+        #expect(sent.json["retention"] as? String == "standard")
+        // And it is its own task, not the one before it.
+        #expect(scheduledID != foregroundID)
+        #expect(viewModel.currentTaskID == scheduledID)
+    }
+
     @Test
     func aRunStartedWithDontSaveThisTaskSendsRetentionNone() async throws {
         // §10.1: `"none"` is what the app sends for a run started with "Don't save this task" on.
@@ -205,7 +306,13 @@ private func makeRegistry(capturing seen: CapturedTaskContexts) -> PlannerProvid
 }
 
 @MainActor
-private func makeViewModel(root: URL, capturing seen: CapturedTaskContexts) throws -> AgentViewModel {
+private func makeViewModel(
+    root: URL,
+    capturing seen: CapturedTaskContexts,
+    routineStore: RoutineStore? = nil,
+    taskHistoryStore: TaskHistoryStore? = nil,
+    backendClient: SonnyBackendClient? = nil
+) throws -> AgentViewModel {
     let suiteName = "BackendTaskIdentityTests-\(UUID().uuidString)"
     let userDefaults = try #require(UserDefaults(suiteName: suiteName))
     userDefaults.removePersistentDomain(forName: suiteName)
@@ -213,7 +320,8 @@ private func makeViewModel(root: URL, capturing seen: CapturedTaskContexts) thro
         keyManager: FixedIdentityKeyManager(bytes: Data(repeating: 0x3C, count: 32))
     )
     return AgentViewModel(
-        routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json"), encryption: encryption),
+        routineStore: routineStore
+            ?? RoutineStore(fileURL: root.appendingPathComponent("routines.json"), encryption: encryption),
         workspaceStore: WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"), encryption: encryption),
         snippetStore: SnippetStore(fileURL: root.appendingPathComponent("snippets.json"), encryption: encryption),
         recentArtifactStore: RecentArtifactStore(
@@ -235,10 +343,11 @@ private func makeViewModel(root: URL, capturing seen: CapturedTaskContexts) thro
             fileURL: root.appendingPathComponent("shortcut-run-history.json"),
             encryption: encryption
         ),
-        taskHistoryStore: TaskHistoryStore(
-            fileURL: root.appendingPathComponent("task-history.json"),
-            encryption: encryption
-        ),
+        taskHistoryStore: taskHistoryStore
+            ?? TaskHistoryStore(
+                fileURL: root.appendingPathComponent("task-history.json"),
+                encryption: encryption
+            ),
         taskPlanDetailStore: TaskPlanDetailStore(
             fileURL: root.appendingPathComponent("task-plan-details.json"),
             encryption: encryption
@@ -278,12 +387,16 @@ private func makeViewModel(root: URL, capturing seen: CapturedTaskContexts) thro
         // SONNY-130: undefaulted like the stores, and for a worse reason — this client holds the
         // Keychain session every packaged build on this Mac shares. Hermetic: no environment, so
         // every request fails before a URL is built, and an in-memory Keychain of its own.
-        backendClient: makeHermeticBackendClient(),
+        backendClient: backendClient ?? makeHermeticBackendClient(),
         priorTaskContextStore: PriorTaskContextStore(),
         taskUsageRecorder: TaskUsageRecorder(),
         plannerProviderRegistry: makeRegistry(capturing: seen),
         plannerSelection: nil,
-        userDefaults: userDefaults
+        userDefaults: userDefaults,
+        // Scoped to this test's own directory, the way five other fixtures in this target do it —
+        // so the scheduled test's `web_to_markdown` step resolves an output path that passes
+        // validation without any of these tests naming the founder's real Desktop.
+        whitelist: PathWhitelist(roots: [root])
     )
 }
 
