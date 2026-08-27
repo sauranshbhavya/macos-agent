@@ -1,4 +1,5 @@
-import type { Config } from "../../src/config.js";
+import { providers, type Config } from "../../src/config.js";
+import { DEFAULT_ROUTE_CHAINS, UNVERIFIED_DATA_POLICY } from "../../src/model/provider-router.js";
 import { TEST_SUPABASE_CONFIG } from "./tokens.js";
 
 /**
@@ -45,6 +46,17 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     searchBaseUrl: "https://search.invalid",
     visionBaseUrl: "https://vision.invalid/v1",
     visionModel: "test-vision-model",
+    anthropicBaseUrl: "https://anthropic.invalid/v1",
+    anthropicTextModel: "test-anthropic-model",
+    anthropicMaxOutputTokens: 4096,
+    cerebrasBaseUrl: "https://cerebras.invalid/v1",
+    cerebrasTextModel: "test-cerebras-model",
+    // The shipped defaults, so a test that says nothing about routing gets the routing a
+    // deployment that says nothing about routing gets. A test that cares overrides `routeChains`.
+    routeChains: DEFAULT_ROUTE_CHAINS,
+    dataPolicies: Object.fromEntries(
+      providers.map((provider) => [provider, UNVERIFIED_DATA_POLICY]),
+    ) as Config["dataPolicies"],
     credentials: [],
     ...overrides,
   };

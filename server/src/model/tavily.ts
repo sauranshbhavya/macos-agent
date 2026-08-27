@@ -2,6 +2,7 @@ import {
   upstreamStatusError,
   upstreamTransportError,
   type SearchRequest,
+  type SearchResult,
   type SearchResultItem,
 } from "./upstream.js";
 
@@ -38,7 +39,7 @@ function isWebURL(value: unknown): value is string {
 
 export function makeTavilySearchAdapter(
   settings: TavilySettings,
-): (request: SearchRequest) => Promise<readonly SearchResultItem[]> {
+): (request: SearchRequest) => Promise<SearchResult> {
   const key = settings.keys[0];
   if (key === undefined) throw new Error("search adapter constructed with no credential");
   const base = settings.baseUrl.endsWith("/") ? settings.baseUrl.slice(0, -1) : settings.baseUrl;
@@ -67,7 +68,7 @@ export function makeTavilySearchAdapter(
     // did before this route existed: a search that finds nothing is an ordinary outcome the
     // research step already handles, and turning it into an error would fail a whole task over
     // telemetry-grade malformation.
-    if (!Array.isArray(results)) return [];
+    if (!Array.isArray(results)) return { items: [] };
 
     const items: SearchResultItem[] = [];
     for (const entry of results) {
@@ -83,6 +84,9 @@ export function makeTavilySearchAdapter(
         snippet: typeof snippet === "string" ? snippet : null,
       });
     }
-    return items;
+    // `{ items }` rather than the bare array it used to be (SONNY-132): the router adds `served` to
+    // whatever an adapter returns, and an intersection of an array type with an object is a shape
+    // nobody should have to read. `upstream.ts`'s `SearchResult` carries the reasoning.
+    return { items };
   };
 }
