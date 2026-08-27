@@ -443,8 +443,15 @@ public enum UntrustedContentBoundary {
     ///
     /// **What it costs, stated rather than hidden:** an app whose display name contains a ZWJ emoji
     /// sequence reaches the `source=` attribute with the joiners folded — `Family 👨‍👩‍👧 Sharing`
-    /// becomes `Family_👨_👩_👧_Sharing`. The same prompt carries the unfolded name in
-    /// `VisionSessionPromptBuilder.systemRules`, so nothing the model needs is lost.
+    /// becomes `Family_👨_👩_👧_Sharing`. **The same prompt still carries the joiners in
+    /// `VisionSessionPromptBuilder.systemRules`, so nothing the model needs is lost — but this
+    /// sentence used to say "the unfolded name", and SONNY-231 made that stale on the day it shipped**
+    /// (PR #130 review, F5). That copy is folded now too. The argument survives intact because the two
+    /// folds take different sets: this one takes `.whitespacesAndNewlines` unioned with
+    /// `.controlCharacters`, which is where the joiners go; ``foldingLineBreaks`` takes
+    /// `CharacterSet.newlines` and nothing else, and a ZWJ is not a line break. Had SONNY-231 been
+    /// fixed by calling `escapeAttribute` instead — the obvious one-line swap it declined — this
+    /// paragraph's mitigation would have been deleted by that change without anyone noticing.
     private static let separators = CharacterSet.whitespacesAndNewlines.union(.controlCharacters)
 
     /// Every character in ``separators`` replaced by `_`, one for one.
@@ -493,20 +500,50 @@ public enum UntrustedContentBoundary {
     /// let a payload of nothing but newlines expand a capped string rather than shrink it. A run is a
     /// paragraph break as far as a field is concerned, and one marker says so.
     ///
-    /// **It cannot rebuild a delimiter, which is why callers may fold before escaping.**
-    /// `foldingSeparators` emits `_`, a delimiter character, so `UNTRUSTED_OBSERVED CONTENT_END`
-    /// becomes a real delimiter after it — the hazard that makes ``escapeAttribute``'s fold-escape-fold
-    /// ordering load-bearing. This one emits `\` and lowercase `n`, and neither appears in any
-    /// delimiter, so nothing it produces can complete one. Callers fold first, so that a break hidden
-    /// *inside* a near-delimiter is gone before `escape` looks — a line break is deliberately not
-    /// stepped over by `isIgnorableInsideADelimiter`, so `escape` alone would leave it whole.
+    /// **It cannot rebuild a delimiter, and unlike ``escapeAttribute`` its ordering against `escape`
+    /// is a convention rather than a load-bearing property.** `foldingSeparators` emits `_`, a
+    /// delimiter character, so `UNTRUSTED_OBSERVED CONTENT_END` becomes a real delimiter after it —
+    /// which is what makes that function's fold-escape-fold ordering load-bearing. This one emits `\`
+    /// and lowercase `n`, and neither appears in any delimiter, so nothing it produces can complete
+    /// one.
+    ///
+    /// **The reason callers fold first is consistency with `PriorTaskContext`, not necessity, and the
+    /// sentence that used to sit here claimed otherwise** (PR #130 review, F2). It said folding first
+    /// puts a break hidden *inside* a near-delimiter back where `escape` can see it. **That is false.**
+    /// `escape` does not step over a line break — deliberately, since two lines cannot forge one
+    /// boundary line — so `UNTRUSTED_OBSERVED_CONTENT_E` + LF + `ND` matches nothing; the fold then
+    /// substitutes `\` and lowercase `n`, which `escape` does not step over either, so it still
+    /// matches nothing. The fold swaps one non-match for another. Measured:
+    /// `escape(foldingLineBreaks(in: split))` is `UNTRUSTED_OBSERVED_CONTENT_E\nND` with no
+    /// `[escaped delimiter: …]` in it, and the branch's own
+    /// `aBreakSplitDelimiterIsANearMissBeforeTheFoldAndStaysOneAfter` had been asserting exactly that
+    /// while five records said the opposite.
+    ///
+    /// **The two orders agree.** Over every delimiter split at every interior position by LF and by
+    /// CRLF, plus hand-written cases — **265 values**, a size derived from the four delimiters'
+    /// lengths rather than written down — `escape(fold(v))` and `fold(escape(v))` are
+    /// scalar-identical, with 0 disagreements
+    /// (`foldingBeforeEscapingAndAfterItAgreeOnEveryCorpusValue`). A corpus is not a proof, and that
+    /// test says so in its own words; what it establishes is that no caller is relying on an ordering
+    /// property this function does not have.
     ///
     /// **What it costs, stated rather than hidden:** a genuine paragraph inside a folded field reaches
     /// the model as one line with `\n` where the breaks were. **And what it does not promise:** a value
     /// that already contained the two literal characters `\n` as text is now indistinguishable from a
-    /// folded break. Neither reads as a structural line, so nothing here depends on telling them apart;
-    /// the ambiguity is cosmetic and is not closed by escaping backslashes, which would double every
-    /// one in a Windows path a model is meant to read back.
+    /// folded break. Neither reads as a structural line, so nothing here depends on telling them apart,
+    /// and it is not closed by escaping backslashes, which would double every one in a Windows path a
+    /// model is meant to read back.
+    ///
+    /// **That ambiguity was called "cosmetic" here and it is not quite** (PR #130 review, F7).
+    /// `VisionSessionPromptBuilder.responseContract` tells the model, in the same prompt, that "a
+    /// trailing `\n` is delivered as a real Return keypress" — the same two characters this fold
+    /// injects into attacker-influenced fields of that prompt. So a folded break in a window title or a
+    /// history entry is text a model has been given a reason to read as a keystroke. **What bounds it
+    /// is not the fold**: a `type` action's text is the model's own to compose either way, and what it
+    /// submits is gated by `VisionConsequenceClassifier` and the approval it earns, which read the
+    /// action rather than the prompt. **What is not knowable from here** is whether the collision
+    /// changes what a model does, because that needs a model call and no test in this repository makes
+    /// one. Recorded as an open edge rather than dismissed.
     static func foldingLineBreaks(in value: String) -> String {
         guard value.rangeOfCharacter(from: .newlines) != nil else {
             return value
