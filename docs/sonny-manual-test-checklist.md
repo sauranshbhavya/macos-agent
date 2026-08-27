@@ -662,11 +662,19 @@ case. Relaunch and open the widget.
       that a tooltip appears on each is what was
       observed; *what* the two say is not a manual finding but the code's own constants,
       `ResumeOfferPresentation.continueLabel` and `declineLabel`, "Continue" and "Don't ask again"
-      (`Sources/MacAgent/AgentActivityPresentation.swift:471` and `:482` at `5339640`). What is now
-      stale is the source's reading rather than this row — `WidgetResumeOfferPanel`'s doc comment
-      still says the tooltip "may simply not fire" and that "the plain reading is that a sighted
-      user loses the words". That file was outside what SONNY-294 could touch; correcting it is
-      SONNY-295
+      (`Sources/MacAgent/AgentActivityPresentation.swift:471` and `:482` at `5339640`). What was
+      stale was the source's reading rather than this row — `WidgetResumeOfferPanel`'s doc comment
+      still said the tooltip "may simply not fire" and that "the plain reading is that a sighted
+      user loses the words". That file was outside what SONNY-294 could touch; **SONNY-295 corrected
+      it on 2026-08-27**, in that panel's doc comment and in `ResumeOfferPresentation.continueLabel`'s,
+      which carried the same doubt in a second file. The mic button's own claim is left standing on
+      purpose: it is a different control, and one hover here says nothing about it
+- [ ] **(new 2026-08-27, SONNY-295)** The two **other** tooltips in the widget have never been
+      hovered by anyone, and one pass answers them: hover the **compact capsule** (the small pill
+      Sonny shrinks to when idle) — it should say **"Open Sonny"** — and, with a follow-up question
+      on screen, hover the clarification panel's **cancel** control. Say for each whether a tooltip
+      appears. These two predate the finding above and were left in place on a "free if it works"
+      footing; nothing depends on them, so this is filling in the record rather than checking a fix
 - [x] **(new 2026-08-25, SONNY-282 — replaces the 2026-08-23 row)** Press the cross **once**, then
       quit and relaunch Sonny **several times**. The offer for that task must **never come back**.
       This is the defect: you pressed it three times across three relaunches on 2026-08-25 and it
