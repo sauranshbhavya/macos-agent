@@ -220,59 +220,37 @@ public struct PriorTaskContext: Codable, Equatable, Sendable {
     /// which is a delimiter character, so `TRUSTED_PRIOR TASK_CONTEXT_END` would become a delimiter
     /// after it. This one replaces line-break runs with the two literal characters `\n`, and neither
     /// `\` nor lowercase `n` appears in either delimiter, so nothing it emits can complete one.
-    private static func escapeForPlanner(_ value: String) -> String {
-        UntrustedContentBoundary.neutralizingDelimiters(
-            in: foldingLineBreaks(in: value),
-            delimiters: ["TRUSTED_PRIOR_TASK_CONTEXT_BEGIN", "TRUSTED_PRIOR_TASK_CONTEXT_END"]
-        ) { "[escaped prior-task delimiter: \($0)]" }
-    }
-
-    /// Every run of line-break characters, replaced by the two literal characters `\n`.
     ///
-    /// **Inside `escapeForPlanner` rather than in the template, and that placement is the fix rather
-    /// than an implementation detail.** Three shapes were available. Indenting continuation lines so
-    /// a value's second line cannot read as a field keeps paragraph structure, but it has to be
-    /// applied per line at the template — which is exactly the per-field-by-hand discipline that let
-    /// two of four fields go unescaped in the first place, and a fifth field added later without the
-    /// indent treatment would be a fresh hole. Neutralising the field *labels* is narrower still and
-    /// worst of the three: it is a list that must be kept in sync with the block's own format.
+    /// **The fold itself lives on `UntrustedContentBoundary` now (SONNY-226), and what stays here is
+    /// the part that is this block's own.** It was private to this file, `ClarifiedCommand` grew a
+    /// second private copy of the same rule (PR #109's re-check), and SONNY-226 needed a third caller —
+    /// three homes for one invariant, which is the shape SONNY-262 was filed to end. The invariant is
+    /// the *character set*: `CharacterSet.newlines` rather than `\n`, so LF, VT, FF, CR, CRLF, NEL and
+    /// U+2028/U+2029 are all folded, and narrowing any one copy would silently restore that copy's own
+    /// defect. `UntrustedContentBoundary.foldingLineBreaks` carries that set, the run-collapsing, and
+    /// the reasoning worked out here — including why the marker is the two literal characters `\n`
+    /// rather than a separator character that could rebuild a delimiter. `ClarifiedCommand`'s copy is
+    /// still its own and is what SONNY-262 has left to do.
+    ///
+    /// **Why the fold is inside `escapeForPlanner` rather than in the template, which is the placement
+    /// decision and not an implementation detail** (SONNY-198). Three shapes were available. Indenting
+    /// continuation lines so a value's second line cannot read as a field keeps paragraph structure, but
+    /// it has to be applied per line at the template — which is exactly the per-field-by-hand discipline
+    /// that let two of four fields go unescaped in the first place, and a fifth field added later
+    /// without the indent treatment would be a fresh hole. Neutralising the field *labels* is narrower
+    /// still and worst of the three: it is a list that must be kept in sync with the block's own format.
     /// Folding here covers all four interpolated fields by construction, and a field added later is
     /// covered the moment it is escaped at all — which is the property the doc comment above already
     /// claims and now actually has.
     ///
-    /// **The character set is `CharacterSet.newlines`, deliberately wider than `\n`.** It covers LF,
-    /// VT, FF, CR, CRLF, NEL (U+0085) and the Unicode line and paragraph separators (U+2028, U+2029).
-    /// A prompt is JSON-serialised UTF-8, so every one of those survives the wire intact and any of
-    /// them can begin a new line where it is rendered; escaping only `\n` would leave six ways in.
-    ///
-    /// **Runs collapse to one marker rather than one marker per character**, which bounds what an
-    /// attacker can do to the prompt's length: `StoredTaskResult.capped` caps the stored text, and a
-    /// per-character replacement would let a payload of nothing but newlines expand rather than
-    /// shrink. A run is a paragraph break as far as this block is concerned, and one marker says so.
-    ///
-    /// **What it costs, stated rather than hidden:** a genuine paragraph in a model-authored summary
-    /// reaches the planner as one line with `\n` where the breaks were. That is the whole price, and
-    /// these summaries are one to three sentences. **And what it does not promise:** a value that
-    /// already contained the two literal characters `\n` as text is now indistinguishable from a
-    /// folded line break. Neither reads as a field line, so nothing about the boundary depends on
-    /// telling them apart; the ambiguity is cosmetic and is not closed by escaping backslashes,
-    /// which would double every one in a Windows path the planner is meant to read back.
-    private static func foldingLineBreaks(in value: String) -> String {
-        guard value.rangeOfCharacter(from: .newlines) != nil else {
-            return value
-        }
-        return value
-            .components(separatedBy: .newlines)
-            .reduce(into: [String]()) { folded, piece in
-                // An empty piece is the gap between two adjacent break characters — a run. Dropping
-                // it here is what makes the run collapse to a single marker; `CRLF` produces exactly
-                // one such gap, so it folds to one marker rather than two.
-                if piece.isEmpty, !folded.isEmpty {
-                    return
-                }
-                folded.append(piece)
-            }
-            .joined(separator: #"\n"#)
+    /// **What it costs this block, stated rather than hidden:** a genuine paragraph in a model-authored
+    /// summary reaches the planner as one line with `\n` where the breaks were. That is the whole
+    /// price, and these summaries are one to three sentences.
+    private static func escapeForPlanner(_ value: String) -> String {
+        UntrustedContentBoundary.neutralizingDelimiters(
+            in: UntrustedContentBoundary.foldingLineBreaks(in: value),
+            delimiters: ["TRUSTED_PRIOR_TASK_CONTEXT_BEGIN", "TRUSTED_PRIOR_TASK_CONTEXT_END"]
+        ) { "[escaped prior-task delimiter: \($0)]" }
     }
 }
 
