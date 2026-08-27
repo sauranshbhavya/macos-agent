@@ -91,6 +91,24 @@ export interface AuthProvider {
    */
   signOutAllForUser(supabaseUserId: string): Promise<void>;
 
-  /** Remove the provider-side user. Our account row is closed separately. */
+  /**
+   * Remove the provider-side user. Our account row is closed separately.
+   *
+   * **This is the one method on this interface that can raise something other than the two errors
+   * above** (SONNY-307; PR #137 review, N4, which found the exception documented at the adapter and
+   * not at the seam a caller reads first). The Supabase adapter needs `SUPABASE_SERVICE_ROLE_KEY`
+   * for it, that variable is deliberately **not required at startup** — nothing calls this method,
+   * and requiring the project's most dangerous credential to use none of it is a standing risk
+   * bought for nothing — and so an adapter built without one throws
+   * `ServiceRoleKeyNotConfigured` (exported from `auth/supabase.ts`) before it sends anything.
+   *
+   * **It is deliberately neither `ProviderRejected` nor `ProviderUnavailable`**: both of those are
+   * statements about what the *provider* did, and this is a statement about how this deployment is
+   * configured. `ProviderUnavailable` would send an operator hunting a Supabase outage that is not
+   * happening; `ProviderRejected` is what `revocation.ts` reads as "the provider says this is
+   * already done", which would stamp a revocation that never occurred. **Catch it by type**, and
+   * whichever ticket lands the first caller adds the variable back to the required set and to
+   * `deploy.sh`'s passthrough in the same change.
+   */
   deleteUser(supabaseUserId: string): Promise<void>;
 }

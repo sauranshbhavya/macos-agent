@@ -216,7 +216,11 @@ collect_passthrough() {
 # was for.
 #
 # So the two branches now mean what they say: a 404 here is a container that was given none of the
-# three Supabase names, and anything else is a container serving sign-in. A container given SOME of
+# three *trigger* names, and anything else is a container serving sign-in. **The 404 branch used to
+# say "the three SUPABASE_ names" while the `not set here` line above it listed four** (PR #137
+# review, N5): `PASSTHROUGH` carries four `SUPABASE_`-prefixed names and only three of them are the
+# switch, `SUPABASE_JWT_AUDIENCE` being defaulted and therefore no signal of intent. A founder
+# reading the two lines together had to derive that, so the branch now names the three. A container given SOME of
 # them never reaches this probe at all -- it exits 78 at startup and `verify` fails first.
 #
 # **The body is `{}` deliberately.** Once the route exists, `startBody` rejects that before anything
@@ -228,8 +232,9 @@ probe_auth_mount() {  # probe_auth_mount <base-url>
     -H 'Content-Type: application/json' -d '{}' 2>/dev/null)
   if [[ "$code" == "404" ]]; then
     echo "==> auth routes are NOT mounted — POST /v1/auth/email/start answers 404. Health-only is"
-    echo "    this deployment's honest state, not a defect. Since SONNY-307 this means the three"
-    echo "    SUPABASE_ names were not set in the launching shell; set them to mount sign-in."
+    echo "    this deployment's honest state, not a defect. Since SONNY-307 this means none of"
+    echo "    SUPABASE_JWT_SECRET, SUPABASE_JWT_ISSUER or SUPABASE_ANON_KEY was set in the"
+    echo "    launching shell — those three are the switch. Set them to mount sign-in."
   elif [[ -z "$code" ]]; then
     echo "==> auth routes could not be probed — no response from ${url}/v1/auth/email/start"
   else
