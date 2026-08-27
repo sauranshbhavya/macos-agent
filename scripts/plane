@@ -8,14 +8,33 @@ readonly PLANE_PROJECT_ID="c61e4035-d3a0-4089-a25a-1fb4f0aa813e"
 readonly PLANE_PROJECT_URL="https://app.plane.so/sonny/projects/${PLANE_PROJECT_ID}/issues/"
 readonly KEYCHAIN_SERVICE="sonny-plane-api-key"
 
-# One request payload at a time; the EXIT trap owns cleanup so no failure path leaks it.
+# `list` walks the whole project rather than printing whichever page the API answered first.
+# Plane's work-item listing is cursor-paginated, and a single page printed on its own looks
+# exactly like a complete answer: nothing in it says "100 of 287". That is how this board was
+# read as 53 open items for a week when it held 82, with SONNY-106 — the living definition of
+# v1 — sitting past the cut (SONNY-287).
+readonly PLANE_PAGE_SIZE=100
+# The API allows 60 requests a minute (see usage). A second between pages keeps a whole-board
+# walk far inside that however far the board grows; the selftest sets it to 0 against its own
+# local server, which has no rate limit to respect.
+readonly PLANE_PAGE_PAUSE_SECONDS="${PLANE_PAGE_PAUSE_SECONDS:-1}"
+# Backstop against an API that never stops advertising another page: 200 pages is 20,000 work
+# items, far past any real board, so reaching it means something is wrong rather than large.
+readonly PLANE_MAX_PAGES=200
+
+# One request payload and one scratch directory at a time; the EXIT trap owns cleanup so no
+# failure path leaks either.
 PAYLOAD_FILE=""
-cleanup_payload() {
+SCRATCH_DIR=""
+cleanup_temporaries() {
   if [[ -n "$PAYLOAD_FILE" ]]; then
     rm -f "$PAYLOAD_FILE"
   fi
+  if [[ -n "$SCRATCH_DIR" ]]; then
+    rm -rf -- "$SCRATCH_DIR"
+  fi
 }
-trap cleanup_payload EXIT
+trap cleanup_temporaries EXIT
 
 usage() {
   cat <<'EOF'
@@ -24,7 +43,8 @@ Usage: scripts/plane <command> [arguments]
 Commands:
   auth                              Store an API key in macOS Keychain
   project                           Get the configured Plane project
-  list                              List the newest 100 work items
+  list [<state>]                    List every work item in the project, newest first,
+                                    optionally only those in one state
   pull <UUID|KEY|URL>               Fetch one work item
   create <title> <html-file> [priority]
                                     Create a work item (default priority: medium)
@@ -38,11 +58,30 @@ Commands:
   module-create <name>              Create a module
   module-add <module> <UUID|KEY|URL>
                                     Add a work item to a module (module by name or UUID)
+  selftest                          Prove list's pagination and filtering against a fake API
   url                               Print the configured Plane project URL
+
+list follows the API's cursor to the end of the project and prints one object:
+
+  total_count  how many work items the API says the project holds
+  fetched      how many were actually retrieved, counted distinctly by id
+  pages        how many pages were requested
+  complete     whether every item was reached — false is the honest answer, not an error
+  filter       the state selector given, or null
+  count        how many items are in results (equal to fetched when unfiltered)
+  results      the work items themselves, newest first
+
+It exits 2 — never 0 — when fetched and total_count disagree or a page could not be reached, so
+a partial listing cannot be mistaken for the whole board. A filtered listing still reports the
+board's own total_count and fetched, so "82 open" can never be read as "the project has 82".
+
+<state> is a workflow state name or a state group, matched case-insensitively against
+`scripts/plane states`, plus one synthetic selector: `open`, every state whose group is neither
+completed nor cancelled. A group that covers several states matches all of them.
 
 Authentication uses PLANE_API_KEY when set, then macOS Keychain. API keys are
 secrets and must not be committed to this repository. The API allows 60 requests
-per minute — pace batch loops accordingly.
+per minute — pace batch loops accordingly, which is why list sleeps between pages.
 EOF
 }
 
@@ -147,6 +186,183 @@ resolve_id() {
   else
     pull_raw "$reference" | jq -er '.id'
   fi
+}
+
+# Prints {"ids": [...], "names": [...]} for a state selector, or dies naming what would have
+# worked. Resolving happens before any work-item page is fetched, so a mistyped selector costs
+# one request rather than a whole walk of the board.
+resolve_state_filter() {
+  local selector="$1" states resolved matched
+  states="$(api_request GET "$(project_path)/states/?per_page=100")"
+  resolved="$(jq -c --arg selector "$selector" '
+    ($selector | ascii_downcase) as $wanted
+    | [ .results[]
+        | select(
+            if $wanted == "open" then
+              (.group | ascii_downcase) != "completed" and (.group | ascii_downcase) != "cancelled"
+            else
+              (.name | ascii_downcase) == $wanted or (.group | ascii_downcase) == $wanted
+            end
+          )
+      ]
+    | {ids: [.[].id], names: [.[].name]}
+  ' <<<"$states")"
+  matched="$(jq -r '.ids | length' <<<"$resolved")"
+  if [[ "$matched" == "0" ]]; then
+    local available
+    available="$(jq -r '[.results[].name] + [.results[].group] | unique | join(", ")' <<<"$states")"
+    die "no workflow state matched: ${selector} (try: open, ${available})"
+  fi
+  printf '%s' "$resolved"
+}
+
+# Walks every page of the project's work items. Returns 0 only when the walk reached the end and
+# the count it retrieved matches the count the API declared; 2 when it did not, with the reason
+# on stderr and the shortfall visible in the JSON body itself.
+list_items() {
+  local selector="${1:-}"
+  local filter_ids='[]' filter_names='null'
+  if [[ -n "$selector" ]]; then
+    local resolved
+    # Checked rather than assigned bare: `die` inside a command substitution exits the subshell
+    # it runs in, not this script, so an unmatched selector would otherwise print its error and
+    # then go on to walk the whole board with an empty filter.
+    if ! resolved="$(resolve_state_filter "$selector")"; then
+      return 1
+    fi
+    filter_ids="$(jq -c '.ids' <<<"$resolved")"
+    filter_names="$(jq -c '.names' <<<"$resolved")"
+  fi
+
+  SCRATCH_DIR="$(mktemp -d)" || die "could not create a scratch directory"
+  local cursor="" pages=0 declared_total="" incomplete=0 note=""
+  while :; do
+    local page_number=$((pages + 1))
+    local path body_file has_next next_cursor
+    path="$(project_path)/work-items/?per_page=${PLANE_PAGE_SIZE}&order_by=-created_at"
+    if [[ -n "$cursor" ]]; then
+      path+="&cursor=${cursor}"
+    fi
+    # Zero-padded, because the combine below globs these back in name order and page-10 would
+    # otherwise sort before page-2.
+    body_file="$(printf '%s/page-%03d.json' "$SCRATCH_DIR" "$page_number")"
+    if ! api_request GET "$path" >"$body_file"; then
+      # --fail-with-body puts the API's own error body on stdout, which here is the page file.
+      # Print it before dropping the file, or all the caller is left with is curl's terse
+      # one-liner, which never says which field or permission the API objected to.
+      if [[ -s "$body_file" ]]; then
+        cat "$body_file" >&2
+        printf '\n' >&2
+      fi
+      rm -f "$body_file"
+      incomplete=1
+      note="page ${page_number} could not be fetched (the error above is the API's)"
+      break
+    fi
+    pages="$page_number"
+    if [[ -z "$declared_total" ]]; then
+      declared_total="$(jq -r '.total_count // 0' "$body_file")"
+    fi
+    has_next="$(jq -r '.next_page_results // false' "$body_file")"
+    next_cursor="$(jq -r '.next_cursor // ""' "$body_file")"
+    if [[ "$has_next" != "true" ]]; then
+      break
+    fi
+    if [[ -z "$next_cursor" ]]; then
+      incomplete=1
+      note="the API advertised another page but returned no cursor to reach it"
+      break
+    fi
+    if [[ "$next_cursor" == "$cursor" ]]; then
+      incomplete=1
+      note="the API returned the same cursor twice (${cursor}); stopping rather than looping"
+      break
+    fi
+    if (( pages >= PLANE_MAX_PAGES )); then
+      incomplete=1
+      note="stopped at the ${PLANE_MAX_PAGES}-page backstop after ${pages} pages"
+      break
+    fi
+    cursor="$next_cursor"
+    sleep "$PLANE_PAGE_PAUSE_SECONDS"
+  done
+
+  if (( pages == 0 )); then
+    die "could not fetch the first page of work items — nothing was listed"
+  fi
+  [[ -n "$declared_total" ]] || declared_total=0
+
+  local combined="${SCRATCH_DIR}/combined.json"
+  local shown="${SCRATCH_DIR}/shown.json"
+  # Distinct by id, order preserved. An item that appears on two pages means the board grew under
+  # the walk — offsets are absolute, so a work item created mid-walk shifts every later page by
+  # one — and counting it twice would hide that from the reconciliation below. jq's unique_by is
+  # no use here: it sorts, which would throw away the newest-first order the API returned.
+  jq -s '
+    def distinct_by_id:
+      reduce .[] as $item ({seen: {}, items: []};
+        if .seen[$item.id] then . else .seen[$item.id] = true | .items += [$item] end)
+      | .items;
+    [.[].results[]] | distinct_by_id
+  ' "${SCRATCH_DIR}"/page-*.json >"$combined"
+
+  if [[ -n "$selector" ]]; then
+    # Filtering on the state id rather than state_group, so that a custom state sharing a group
+    # with another one — Blocked and Todo are both `unstarted` here — is selectable by name.
+    jq --argjson ids "$filter_ids" \
+      '[.[] | select(.state as $state | $ids | index($state) != null)]' "$combined" >"$shown"
+  else
+    cp "$combined" "$shown"
+  fi
+
+  local fetched shown_count complete
+  fetched="$(jq 'length' "$combined")"
+  shown_count="$(jq 'length' "$shown")"
+  if (( incomplete == 0 )) && [[ "$fetched" == "$declared_total" ]]; then
+    complete=true
+  else
+    complete=false
+  fi
+
+  jq -n \
+    --argjson total_count "$declared_total" \
+    --argjson fetched "$fetched" \
+    --argjson pages "$pages" \
+    --argjson complete "$complete" \
+    --arg selector "$selector" \
+    --argjson filter_states "$filter_names" \
+    --slurpfile results "$shown" \
+    '{
+      total_count: $total_count,
+      fetched: $fetched,
+      pages: $pages,
+      complete: $complete,
+      filter: (if $selector == "" then null else $selector end),
+      filter_states: $filter_states,
+      count: ($results[0] | length),
+      results: $results[0]
+    }'
+
+  if [[ "$complete" == "true" ]]; then
+    if [[ -n "$selector" ]]; then
+      printf 'plane: %s of %s work items over %s page(s); filter "%s" (%s) matched %s.\n' \
+        "$fetched" "$declared_total" "$pages" "$selector" \
+        "$(jq -r 'join(", ")' <<<"$filter_names")" "$shown_count" >&2
+    else
+      printf 'plane: %s of %s work items over %s page(s).\n' \
+        "$fetched" "$declared_total" "$pages" >&2
+    fi
+    return 0
+  fi
+
+  printf 'plane: INCOMPLETE — fetched %s work item(s) over %s page(s); the API reports %s.\n' \
+    "$fetched" "$pages" "$declared_total" >&2
+  if [[ -n "$note" ]]; then
+    printf 'plane: %s\n' "$note" >&2
+  fi
+  printf 'plane: the listing above is not the whole project. Re-run; a board that changed while\n' >&2
+  printf 'plane: it was being read reconciles on the next attempt, anything else does not.\n' >&2
+  return 2
 }
 
 create_item() {
@@ -263,6 +479,329 @@ add_to_module() {
   printf '%s\n' "$response"
 }
 
+# ---------------------------------------------------------------------------------------------
+# selftest — the proof that list cannot report a partial board as a whole one.
+#
+# It stands up a fake Plane API on localhost and runs this same script against it through
+# PLANE_BASE_URL. That matters more than convenience: the defect this guards against is silent
+# by construction — a truncated listing is byte-for-byte the shape of a complete one — so the
+# only thing that can catch a regression is a board large enough to paginate and an assertion on
+# what comes back. It needs no API key and touches no real board, so a reviewer can run it.
+# ---------------------------------------------------------------------------------------------
+
+ST_FAILURES=0
+ST_CHECKS=0
+ST_ROOT=""
+ST_SERVER_PID=""
+ST_BASE_URL=""
+ST_REQUEST_LOG=""
+ST_OUT=""
+ST_ERR=""
+ST_STATUS=0
+# 287 items over pages of 100 is what the real board held on 2026-08-26: three pages, the last
+# one short, and a remainder that is not a multiple of the six-state cycle below — so the
+# per-state counts asserted further down are not all equal and an off-by-one page shows up.
+readonly ST_TOTAL=287
+
+st_pass() { ST_CHECKS=$((ST_CHECKS + 1)); printf '    PASS  %s\n' "$1"; }
+
+st_fail() {
+  ST_CHECKS=$((ST_CHECKS + 1))
+  printf '    FAIL  %s\n' "$1"
+  printf '          %s\n' "$2"
+  ST_FAILURES=$((ST_FAILURES + 1))
+}
+
+st_eq() {
+  if [[ "$2" == "$3" ]]; then st_pass "$1"; else st_fail "$1" "expected [$3], got [$2]"; fi
+}
+
+st_contains() {
+  case "$2" in
+    *"$3"*) st_pass "$1" ;;
+    *) st_fail "$1" "expected output to contain [$3]" ;;
+  esac
+}
+
+st_absent() {
+  case "$2" in
+    *"$3"*) st_fail "$1" "expected output NOT to contain [$3]" ;;
+    *) st_pass "$1" ;;
+  esac
+}
+
+st_json() { jq -r "$1" "$ST_OUT"; }
+
+st_stop_server() {
+  if [[ -n "$ST_SERVER_PID" ]]; then
+    kill "$ST_SERVER_PID" 2>/dev/null || true
+    wait "$ST_SERVER_PID" 2>/dev/null || true
+    ST_SERVER_PID=""
+  fi
+}
+
+selftest_cleanup() {
+  st_stop_server
+  if [[ -n "$ST_ROOT" && -d "$ST_ROOT" ]]; then
+    rm -rf -- "$ST_ROOT"
+  fi
+}
+
+st_start_server() {
+  local mode="$1" total="${2:-$ST_TOTAL}"
+  st_stop_server
+  ST_REQUEST_LOG="${ST_ROOT}/requests.log"
+  local port_file="${ST_ROOT}/port"
+  rm -f "$port_file" "$ST_REQUEST_LOG"
+  : >"$ST_REQUEST_LOG"
+  python3 "${ST_ROOT}/fake_api.py" "$mode" "$total" "$port_file" "$ST_REQUEST_LOG" &
+  ST_SERVER_PID=$!
+  local waited=0
+  while [[ ! -s "$port_file" ]]; do
+    sleep 0.1
+    waited=$((waited + 1))
+    if (( waited > 100 )); then
+      die "selftest: the fake API did not report a port within 10 seconds"
+    fi
+  done
+  ST_BASE_URL="http://127.0.0.1:$(cat "$port_file")"
+}
+
+# Runs this script against the fake API, capturing stdout, stderr and the exit code separately —
+# the JSON body and the warning are different claims and the checks assert on each.
+st_run() {
+  ST_OUT="${ST_ROOT}/out.json"
+  ST_ERR="${ST_ROOT}/out.err"
+  set +e
+  # Through `env`, not a bare assignment prefix: these three are readonly in this shell already,
+  # and bash refuses to reassign a readonly variable even for the duration of one command.
+  env PLANE_BASE_URL="$ST_BASE_URL" PLANE_API_KEY="selftest" PLANE_PAGE_PAUSE_SECONDS=0 \
+    "$SELF" "$@" >"$ST_OUT" 2>"$ST_ERR"
+  ST_STATUS=$?
+  set -e
+}
+
+st_write_fake_api() {
+  cat >"${ST_ROOT}/fake_api.py" <<'PYTHON_FAKE_API'
+import json
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+from urllib.parse import urlparse, parse_qs
+
+MODE = sys.argv[1]
+TOTAL = int(sys.argv[2])
+PORT_FILE = sys.argv[3]
+LOG_FILE = sys.argv[4]
+
+# The real project's six states, including two that share the `unstarted` group — the case that
+# makes filtering on state id rather than state_group necessary.
+STATES = [
+    {"id": "state-backlog", "name": "Backlog", "group": "backlog"},
+    {"id": "state-todo", "name": "Todo", "group": "unstarted"},
+    {"id": "state-progress", "name": "In Progress", "group": "started"},
+    {"id": "state-done", "name": "Done", "group": "completed"},
+    {"id": "state-cancelled", "name": "Cancelled", "group": "cancelled"},
+    {"id": "state-blocked", "name": "Blocked", "group": "unstarted"},
+]
+
+ITEMS = []
+for index in range(TOTAL):
+    state = STATES[index % len(STATES)]
+    ITEMS.append({
+        "id": "item-%04d" % index,
+        "sequence_id": index,
+        "name": "work item %d" % index,
+        "state": state["id"],
+        "state_group": state["group"],
+    })
+
+
+class Handler(BaseHTTPRequestHandler):
+    def log_message(self, *args):
+        pass
+
+    def _send(self, payload):
+        body = json.dumps(payload).encode("utf-8")
+        self.send_response(200)
+        self.send_header("Content-Type", "application/json")
+        self.send_header("Content-Length", str(len(body)))
+        self.end_headers()
+        self.wfile.write(body)
+
+    def do_GET(self):
+        parsed = urlparse(self.path)
+        with open(LOG_FILE, "a") as log:
+            log.write(parsed.path + "\n")
+        query = parse_qs(parsed.query)
+
+        if parsed.path.endswith("/states/"):
+            self._send({
+                "total_count": len(STATES),
+                "count": len(STATES),
+                "next_page_results": False,
+                "next_cursor": "100:1:0",
+                "results": STATES,
+            })
+            return
+        if not parsed.path.endswith("/work-items/"):
+            self._send({"total_count": 0, "count": 0, "next_page_results": False, "results": []})
+            return
+
+        per_page = int(query.get("per_page", ["100"])[0])
+        cursor = query.get("cursor", [""])[0]
+        page = int(cursor.split(":")[1]) if cursor else 0
+        order_by = query.get("order_by", ["-created_at"])[0]
+        ordered = list(reversed(ITEMS)) if order_by.startswith("-") else list(ITEMS)
+        start = page * per_page
+        chunk = ordered[start:start + per_page]
+
+        declared = TOTAL + 13 if MODE == "shortfall" else TOTAL
+        has_next = start + per_page < len(ordered)
+        next_cursor = "%d:%d:0" % (per_page, page + 1)
+        if MODE == "stuck":
+            has_next = True
+            next_cursor = "%d:1:0" % per_page
+        elif MODE == "nocursor":
+            has_next = True
+            next_cursor = ""
+
+        self._send({
+            "total_count": declared,
+            "count": len(chunk),
+            "total_pages": (len(ordered) + per_page - 1) // per_page,
+            "next_page_results": has_next,
+            "next_cursor": next_cursor,
+            "prev_cursor": "%d:%d:0" % (per_page, page - 1),
+            "results": chunk,
+        })
+
+
+server = HTTPServer(("127.0.0.1", 0), Handler)
+with open(PORT_FILE, "w") as handle:
+    handle.write(str(server.server_address[1]))
+server.serve_forever()
+PYTHON_FAKE_API
+}
+
+selftest() {
+  require_command python3
+  trap 'selftest_cleanup; cleanup_temporaries' EXIT
+
+  ST_ROOT="$(mktemp -d "${TMPDIR:-/tmp}/plane-selftest.XXXXXX")"
+  st_write_fake_api
+  printf 'plane selftest\n\n'
+
+  printf '  a %s-item board is listed whole, not one page of it\n' "$ST_TOTAL"
+  st_start_server whole
+  st_run list
+  st_eq "exits 0" "$ST_STATUS" "0"
+  st_eq "fetched every item" "$(st_json '.fetched')" "$ST_TOTAL"
+  st_eq "reports the board's own total" "$(st_json '.total_count')" "$ST_TOTAL"
+  st_eq "over three pages" "$(st_json '.pages')" "3"
+  st_eq "says so" "$(st_json '.complete')" "true"
+  st_eq "returns them all" "$(st_json '.count')" "$ST_TOTAL"
+  st_eq "with no duplicates across page boundaries" \
+        "$(st_json '[.results[].id] | unique | length')" "$ST_TOTAL"
+  st_eq "newest first, as before" "$(st_json '.results[0].sequence_id')" "$((ST_TOTAL - 1))"
+  st_eq "through to the oldest on the last page" "$(st_json '.results[-1].sequence_id')" "0"
+  st_contains "and the count is stated on stderr" "$(cat "$ST_ERR")" "${ST_TOTAL} of ${ST_TOTAL}"
+  st_absent "with no warning, because there is nothing to warn about" "$(cat "$ST_ERR")" "INCOMPLETE"
+
+  printf '\n  THE ONE THAT MATTERS: a short answer says it is short, and never exits 0\n'
+  # The API declares 300 and serves 287. Nothing in a page can reveal this; only the walk's own
+  # reconciliation against total_count can, which is the whole reason list does one.
+  st_start_server shortfall
+  st_run list
+  st_eq "exits 2, not 0" "$ST_STATUS" "2"
+  st_eq "the body says it is incomplete" "$(st_json '.complete')" "false"
+  st_eq "and carries what was retrieved" "$(st_json '.fetched')" "$ST_TOTAL"
+  st_eq "beside what the API claims" "$(st_json '.total_count')" "$((ST_TOTAL + 13))"
+  st_contains "stderr names both numbers" "$(cat "$ST_ERR")" \
+              "fetched ${ST_TOTAL} work item(s) over 3 page(s); the API reports $((ST_TOTAL + 13))"
+  st_contains "and says what it means" "$(cat "$ST_ERR")" "not the whole project"
+
+  printf '\n  a board that is exactly one page is one page, not one page and a phantom\n'
+  # The off-by-one that would show up as a second, empty page — or as an exit 2 on a board that
+  # is perfectly fine — lives at exactly per_page items.
+  st_start_server whole "$PLANE_PAGE_SIZE"
+  st_run list
+  st_eq "exits 0" "$ST_STATUS" "0"
+  st_eq "one page" "$(st_json '.pages')" "1"
+  st_eq "every item" "$(st_json '.fetched')" "$PLANE_PAGE_SIZE"
+  st_eq "and it says so" "$(st_json '.complete')" "true"
+
+  printf '\n  an empty board lists as empty rather than as a failure\n'
+  st_start_server whole 0
+  st_run list
+  st_eq "exits 0" "$ST_STATUS" "0"
+  st_eq "no items" "$(st_json '.count')" "0"
+  st_eq "nothing withheld" "$(st_json '.fetched')" "0"
+  st_eq "complete, because it is" "$(st_json '.complete')" "true"
+  st_eq "results is an empty list, not null" "$(st_json '.results | type')" "array"
+
+  printf '\n  a cursor that never advances is stopped rather than followed forever\n'
+  st_start_server stuck
+  st_run list
+  st_eq "exits 2" "$ST_STATUS" "2"
+  st_eq "after two pages, not two hundred" "$(st_json '.pages')" "2"
+  st_contains "and names the repeated cursor" "$(cat "$ST_ERR")" "same cursor twice (100:1:0)"
+
+  printf '\n  a promised page with no cursor to reach it is reported, not skipped past\n'
+  st_start_server nocursor
+  st_run list
+  st_eq "exits 2" "$ST_STATUS" "2"
+  st_eq "after the one page it could fetch" "$(st_json '.pages')" "1"
+  st_contains "and says why it stopped" "$(cat "$ST_ERR")" "no cursor to reach it"
+
+  printf '\n  the state filter answers "what is open" over the whole board\n'
+  # Items cycle the six states in order, so of 287: 48 each in states 0-4 and 47 in state 5.
+  # `open` is every state that is neither completed nor cancelled — Backlog, Todo, In Progress
+  # and Blocked — so 48 + 48 + 48 + 47 = 191.
+  st_start_server whole
+  st_run list open
+  st_eq "exits 0" "$ST_STATUS" "0"
+  st_eq "matched the open items" "$(st_json '.count')" "191"
+  st_eq "over the whole board, not one page" "$(st_json '.fetched')" "$ST_TOTAL"
+  st_eq "which it still reports" "$(st_json '.total_count')" "$ST_TOTAL"
+  st_eq "naming the states it resolved to" \
+        "$(st_json '.filter_states | join(", ")')" "Backlog, Todo, In Progress, Blocked"
+  st_eq "and nothing completed or cancelled is in them" \
+        "$(st_json '[.results[] | select(.state_group == "completed" or .state_group == "cancelled")] | length')" "0"
+
+  printf '\n  a state name selects one state, and a group selects every state in it\n'
+  st_run list "in progress"
+  st_eq "In Progress, by name and case-insensitively" "$(st_json '.count')" "48"
+  st_eq "and every one of them really is in it" \
+        "$(st_json '[.results[] | select(.state == "state-progress")] | length')" "48"
+  st_run list unstarted
+  st_eq "the unstarted group is Todo and Blocked together" "$(st_json '.count')" "95"
+  st_eq "which is two states, not one" "$(st_json '.filter_states | length')" "2"
+  st_run list backlog
+  st_eq "a name and a group that coincide match once, not twice" "$(st_json '.count')" "48"
+
+  printf '\n  an unknown state costs one request, not a walk of the board\n'
+  st_start_server whole
+  st_run list nonsense
+  st_eq "exits 1" "$ST_STATUS" "1"
+  st_contains "names the selector" "$(cat "$ST_ERR")" "no workflow state matched: nonsense"
+  st_contains "and says what would have worked" "$(cat "$ST_ERR")" "open, Backlog"
+  st_eq "the states endpoint was asked" "$(grep -c '/states/$' "$ST_REQUEST_LOG" || true)" "1"
+  st_eq "and no work-item page was" "$(grep -c '/work-items/$' "$ST_REQUEST_LOG" || true)" "0"
+
+  printf '\n'
+  if [[ "$ST_FAILURES" -eq 0 ]]; then
+    printf 'plane selftest: %s checks, 0 failures — every guard fired.\n' "$ST_CHECKS"
+    return 0
+  fi
+  printf 'plane selftest: %s checks, %s failure(s).\n' "$ST_CHECKS" "$ST_FAILURES" >&2
+  return 1
+}
+
+# ---------------------------------------------------------------------------------------------
+
+SELF="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/$(basename "${BASH_SOURCE[0]}")"
+readonly SELF
+
 main() {
   require_command curl
   require_command jq
@@ -277,8 +816,11 @@ main() {
       pretty_request GET "$(project_path)/"
       ;;
     list)
-      [[ $# -eq 1 ]] || die "list takes no arguments"
-      pretty_request GET "$(project_path)/work-items/?per_page=100&order_by=-created_at"
+      [[ $# -le 2 ]] || die "usage: scripts/plane list [<state>]"
+      # Called bare, deliberately. `set -e` carries an incomplete listing's 2 out as this
+      # script's exit code, and — unlike `|| status=$?` — it leaves `set -e` in force inside
+      # list_items, where a `||` on the call would have suppressed it for the whole function.
+      list_items "${2:-}"
       ;;
     pull)
       [[ $# -eq 2 ]] || die "usage: scripts/plane pull <UUID|KEY|URL>"
@@ -319,6 +861,10 @@ main() {
     module-add)
       [[ $# -eq 3 ]] || die "usage: scripts/plane module-add <module> <UUID|KEY|URL>"
       add_to_module "$2" "$3"
+      ;;
+    selftest)
+      [[ $# -eq 1 ]] || die "selftest takes no arguments"
+      selftest
       ;;
     url)
       [[ $# -eq 1 ]] || die "url takes no arguments"
