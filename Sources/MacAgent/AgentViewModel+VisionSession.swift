@@ -185,9 +185,23 @@ extension AgentViewModel: VisionSessionInteracting {
     /// A mid-loop approval, on the same surface every other approval uses.
     ///
     /// Writes the real `approvalRequest`, so the floating widget's permission card and Command
-    /// Center's attention panel both render it with no special case — which is the point. A vision
-    /// approval that looked different from every other approval would be a second approval surface,
-    /// and the user learns one.
+    /// Center's attention panel both render it. A vision approval that looked different from every
+    /// other approval would be a second approval surface, and the user learns one.
+    ///
+    /// **That sentence was an intention rather than a description until SONNY-255, and the half that
+    /// was false is worth keeping written down.** Command Center rendered it from the start. The
+    /// widget did not, for the whole life of every session: `FloatingWidgetView.state` is an ordered
+    /// chain and `.controlling` sat above `.permission`, while `visionSessionProgress` is written at
+    /// the top of each iteration and cleared only at session end — so from iteration 1 the widget
+    /// showed the HUD, which carries no question, and the run waited on an answer the user could
+    /// give only by finding the other surface. This comment claimed the opposite and was the reason
+    /// nobody re-derived it. `.permission` now outranks `.controlling`.
+    ///
+    /// **"With no special case" is what the fix had to give up, and only in one direction.** The
+    /// request, the method and both answering entry points are still exactly the ordinary ones — no
+    /// surface is taught what a vision approval is. What the widget's panel does read is
+    /// `visionSessionProgress`, so that a question raised inside a session still says which app is
+    /// being controlled and still offers the Stop the HUD it outranks was carrying.
     ///
     /// The cancellation handler mirrors `requestClarification`'s exactly. It is load-bearing rather
     /// than defensive: the guard is what makes a cancellation racing a real answer a no-op instead of

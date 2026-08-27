@@ -2568,7 +2568,7 @@ struct ProductShellTests {
         // the scan shape this target already uses.
         let widgetState = try MacAgentSource.braceBlock(
             of: try MacAgentSource.read("FloatingWidgetView.swift"),
-            openedBy: "private var state: WidgetState {"
+            openedBy: "var state: WidgetState {"
         )
         let failureArm = try #require(widgetState.range(of: "return .failure("))
         let resultArm = try #require(widgetState.range(of: "return .result("))

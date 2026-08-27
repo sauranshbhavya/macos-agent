@@ -293,10 +293,12 @@ enum ComposerPresentation {
         /// condition before calling it `.waitingOnYou`, so the sentence is carried by the ordering
         /// rather than by a claim about it.
         ///
-        /// **That an approval during a screen-control session reaches no widget surface at all is a
-        /// separate, pre-existing defect** — SONNY-255, filed high — and nothing here fixes it or
-        /// implies otherwise. This case only stops the composer pointing at a panel that cannot
-        /// answer.
+        /// **The example above is history now, and the ordering it describes has moved** —
+        /// SONNY-255 put `.permission` above `.controlling`, because an approval raised inside a
+        /// session was a question the widget rendered nowhere at all. So an approval is
+        /// `.waitingOnYou` whether or not a session is live, and the composer points at a panel that
+        /// really is on screen in both cases. What has not changed is the argument: this case is
+        /// carried by a branch order rather than by a predicate, and the order is `state`'s.
         case waitingOnYou
 
         /// A run is in flight and there is nothing here for the user to type into.
@@ -304,9 +306,14 @@ enum ComposerPresentation {
         /// Deliberately *not* folded into `waitingOnYou`, for two separate reasons. The running
         /// branch of `hasVisibleWidgetPanel` is origin-gated, so a run a Command Center row action
         /// started shows no widget panel at all and a sentence pointing "above" would point at
-        /// nothing. And a live screen-control session lands here even while something is pending
-        /// underneath it, because the panel it puts on screen is a progress HUD rather than a
-        /// question — see `waitingOnYou` above.
+        /// nothing. And a live screen-control session lands here, because the panel it puts on
+        /// screen is a progress HUD rather than a question.
+        ///
+        /// **The second reason covers a narrower window than it used to** (SONNY-255). It read "even
+        /// while something is pending underneath it", which was true and was a defect: what was
+        /// pending was an approval the widget rendered on no surface. An approval now takes the
+        /// panel, so a session lands here only while nothing is parked on the user — which is the
+        /// state this case is meant to describe.
         case working
     }
 
