@@ -485,16 +485,32 @@ the approval reached no widget surface at all, so the run looked like it had sta
 The HUD used to be gated on the run having been started *from the widget*, so a screen session
 started anywhere else drove the screen with the widget showing nothing at all — no statement of what
 Sonny was controlling, no Pause, no Stop. The emergency hotkey (Ctrl-Opt-Esc) still worked; nothing
-on screen said so. Both rows are about the same panel, from the two doors.
+on screen said so. Both rows are about the same panel, reached by the one door that reaches it.
+
+**Two things that are not failures, said first so neither reads as one** (PR #140 review, F5 —
+both rows over-claimed in the direction that manufactures a false failure report):
+
+- **The HUD yields to a question.** While one is parked — an approval, and in Safe mode the capture
+  review or a delegation — the panel on screen is that question and not the HUD, and that is
+  correct: since SONNY-255 those panels carry the session's identity line and its step count
+  themselves, so the session is still named. The HUD returns the moment you answer.
+- **Run again re-asks the planner rather than replaying the first run**, so the second run may
+  resolve to something that is not a screen session at all. If nothing controls anything, that is
+  the planner's answer and not this fix. Retry with a command that is plainly screen-shaped — "in
+  Safari, open the Bookmarks sidebar" — and check the HUD on that one.
 
 - [ ] **(new 2026-08-27, SONNY-299)** Run one screen-control task from the widget and let it finish.
-      Then open **Command Center → Tasks**, open that task's row, and press **Run again**. The widget
-      must show the HUD for the whole of the second session — **"Sonny is controlling Safari"**, the
-      action line, the step count, **Pause** and **Stop** — exactly as it does for a session you
-      started by typing into the widget. Before this fix the second session showed nothing at all
-- [ ] **(new 2026-08-27, SONNY-299)** During that second session, press the HUD's **Pause**, then
-      resume, then let it finish. The controls have to actually work from this door too, not merely
-      be drawn — this is the same panel, reached by a route it was never reachable from before
+      Then open **Command Center → Tasks**, open that task's row, and press **Run again**. Whenever
+      the second session is running with nothing parked on it, the widget must show the HUD —
+      **"Sonny is controlling Safari"**, the action line, the step count, **Pause** and **Stop** —
+      exactly as it does for a session you started by typing into the widget. Before this fix the
+      second session showed nothing at all: the ordinary pill, or the collapsed capsule
+- [ ] **(new 2026-08-27, SONNY-299)** During that second session press the HUD's **Pause**. The
+      widget swaps to the **paused panel** — "Sonny paused controlling Safari…", with **Resume** and
+      **End** — which is where Resume lives; the HUD itself carries Pause and Stop only. Press
+      **Resume** and let the session finish. The controls have to actually work from this door, not
+      merely be drawn. Pause takes effect at the top of the next step rather than instantly, so the
+      HUD staying up for a moment before the paused panel appears is the design and not a lag
 
 ### 3c-quater. Safe mode's capture review says "Step 1 of 12" (new 2026-08-27, SONNY-303)
 

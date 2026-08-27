@@ -1458,8 +1458,10 @@ struct VisionSessionRunTests {
     /// `VisionCapturePreview` carried `iteration` and no cap, so the panel interpolated the app's
     /// display name where the second half belongs and Safe mode's pre-send review read as nonsense.
     /// The cap is a field on the type now, taken from `containment.limits.maximumIterations` at the
-    /// one construction site, which is the same value the progress report three lines above it
-    /// carries — so the two panels cannot come to disagree about how long the session is.
+    /// one construction site, which is the same value that iteration's own
+    /// `visionSessionDidProgress` call carries — so the two panels cannot come to disagree about how
+    /// long the session is. (This said "three lines above it" of a call eighteen lines above it; a
+    /// distance drifts and a symbol does not — PR #140 review, F3.)
     ///
     /// Asserted at the **second** iteration, and with a cap that is neither the iteration nor the
     /// fixture's default, because "Step 2 of 8" is the sentence the founder's decision names and

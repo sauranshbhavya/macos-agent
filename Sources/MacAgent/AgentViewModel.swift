@@ -1376,9 +1376,10 @@ final class AgentViewModel: ObservableObject {
     }
 
     /// Whether the floating widget currently has real content to show — one of row I's parked
-    /// Safe-mode questions, a permission/clarification/failure state, or a live screen-control
-    /// session (all of those regardless of which surface submitted the task), or a working/result
-    /// state for a task the widget itself submitted. Single source of truth for both
+    /// Safe-mode questions, a permission/clarification/failure state, a live screen-control session,
+    /// or row 13's offer to carry on with an unfinished run (all of those regardless of which
+    /// surface submitted the task), or a working/result state for a task the widget itself
+    /// submitted. Single source of truth for both
     /// `FloatingWidgetView`'s own panel rendering and its `isMicHintSlotFree` gate. Mirrors
     /// `FloatingWidgetView`'s `state`/`showsPanel` precedence exactly — keep both in sync if either
     /// changes. (That property stopped being `private` in SONNY-255, so a test could read the panel
@@ -1391,7 +1392,11 @@ final class AgentViewModel: ObservableObject {
     /// the panel gate could refuse. The opening sentence is written out branch by branch for the
     /// same reason: it used to name the permission, clarification, failure, working and result
     /// states and stop, saying nothing about row I's parked questions or row 13's resume offer, and
-    /// the branch that was missing was one it had never mentioned.
+    /// the branch that was missing was one it had never mentioned. **The rewrite then dropped the
+    /// resume offer from its own enumeration and had to be completed** (PR #140 review, F2) — the
+    /// same class of omission, in the sentence written to fix it, which is worth leaving on the
+    /// record rather than quietly repairing: an enumeration is only as good as the moment someone
+    /// last counted it against the branches below.
     ///
     /// **Two stale claims removed here, both on 2026-08-21.** This said the widget was "the only
     /// place either is actionable at all": `CommandCenterAttentionPanel` has rendered those three
@@ -1424,7 +1429,15 @@ final class AgentViewModel: ObservableObject {
         // resolved to `.controlling` and the HUD that would have drawn it was never on screen.
         // Reachable rather than theoretical — `runTaskAgain` dispatches `origin: .commandCenter` and
         // a screen task run again from its Command Center row really does re-plan into a fresh
-        // session, and `continueResumableTask(_:origin:)` from the Memory sheet is a second door.
+        // session. **That is the only reachable door today, and this said there was a second one**
+        // (PR #140 review, F1). It named `continueResumableTask(_:origin:)` from the Memory sheet,
+        // which is precisely the door that is closed: `.visionSession` is `.mustNotRepeatSilently`,
+        // `mayBeOfferedForResume` requires *every* remaining step to be `.safeToRepeat`, the Memory
+        // row's Continue is gated on that same property, and `continueResumableTask` asks it again
+        // as a belt and refuses with a log line. So no `ResumableTask` carrying a screen session can
+        // reach a dispatch through it at all. The claim came verbatim from SONNY-299's description
+        // and was the one adjacent claim not re-derived from the code — which is the reachability
+        // half of this repository's enumerate-before-you-subtract rule, and it fails the same way.
         //
         // **Unconditional is the answer here, not an origin gate left off.** The gate below exists
         // because a Command-Center-origin *working* run already reports itself in
