@@ -97,10 +97,12 @@ interface ClaimState {
   readonly accountScope: string;
   readonly key: string;
   /**
-   * The stored `Sonny-Request-Id` when this response is a replay, `undefined` when it is not.
+   * `replayed` is what tells `onSend` not to store what `preHandler` just read back.
    *
-   * Doing double duty deliberately: its presence is what tells `onSend` not to store what
-   * `preHandler` just read back, and its value is what that hook re-stamps on the way out.
+   * **`replayedRequestId` is a separate field rather than the same one doing double duty**, because
+   * a stored response can legitimately carry no request id — a row written before that column was
+   * populated, or one whose original response had none — and a replay of it is still a replay.
+   * Collapsing the two would make such a row store itself again under a second key's worth of work.
    */
   readonly replayedRequestId: string | undefined;
   readonly replayed: boolean;
