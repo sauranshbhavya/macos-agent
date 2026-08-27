@@ -67,7 +67,7 @@ PLATFORM="${DEPLOY_PLATFORM:-linux/arm64}"
 #
 # **RATE_LIMIT_SALT is on the list and belongs to neither Supabase nor mail**, stated rather than
 # smuggled in. `requireRateLimitSalt` refuses to start wherever the auth routes are mounted, so a
-# container carrying the four Supabase names and not that one cannot serve a sign-in at all -- which
+# container carrying the three Supabase names and not that one cannot serve a sign-in at all -- which
 # is the outcome the single command exists for.
 #
 # **Provider credentials arrived on SONNY-130**, at the extension point the sentence that used to
@@ -102,26 +102,36 @@ PLATFORM="${DEPLOY_PLATFORM:-linux/arm64}"
 # container is *for*. What this script guarantees is narrower and is the part it controls: nothing
 # it reads, logs or leaves behind on the Mac carries a value.
 #
-# **Two names were added by SONNY-307 and the mail paragraph above still stands.** That ticket built
-# the concrete `AuthProvider` and wired `server.ts`, and it grew `config.ts` by exactly two names --
-# `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY`, the credentials for *calling* the project as
-# opposed to verifying its tokens. It grew it by **no mail name**, and that is now measured rather
-# than pending: Supabase's own mailer sends the sign-in code, the gateway neither mints it nor
-# receives it, and the production sending domain is configured as Supabase's custom SMTP inside the
-# Supabase project. So `grep -cE '(RESEND|SMTP|MAIL)[A-Z_]*' src/config.ts` still prints 0, and the
-# sentence above about adding them "when mail names land in config.ts" is now a sentence about
-# something that is not expected to happen.
+# **One name was added by SONNY-307 and the mail paragraph above still stands.** That ticket built
+# the concrete `AuthProvider` and wired `server.ts`, and it grew this list by exactly one name --
+# `SUPABASE_ANON_KEY`, the credential for *calling* the project as opposed to verifying its tokens.
+# It grew it by **no mail name**, and that is now measured rather than pending: Supabase's own mailer
+# sends the sign-in code, the gateway neither mints it nor receives it, and the production sending
+# domain is configured as Supabase's custom SMTP inside the Supabase project. So
+# `grep -cE '(RESEND|SMTP|MAIL)[A-Z_]*' src/config.ts` still prints 0, and the sentence above about
+# adding them "when mail names land in config.ts" is now a sentence about something that is not
+# expected to happen.
+#
+# **`SUPABASE_SERVICE_ROLE_KEY` is deliberately absent, and it is the one name here whose absence is
+# a decision rather than an omission** (founder decision of 2026-08-27, option (c), at PR #137's
+# review). `config.ts` reads it, so by this list's own tracking rule it would belong -- but it is the
+# project's most dangerous credential and **nothing calls the one method that uses it**, `deleteUser`.
+# Forwarding it would put that key inside a container that cannot spend it, which is a standing risk
+# bought for nothing. **The ticket that lands a caller (SONNY-196's, likely) adds the name here and to
+# the required set in the same change.** A founder who wants it in a local container today can still
+# `docker run -e SUPABASE_SERVICE_ROLE_KEY` by hand; the adapter takes it whenever it is present.
 #
 # **Setting some of these and not others now refuses to start**, which is a change SONNY-307 made
-# deliberately and is worth knowing before reading the probe below. Four Supabase names are the
-# switch: none set is health-only, all set mounts sign-in, and a partial set exits 78 naming what is
-# missing rather than serving a gateway that answers 404 to every sign-in while looking healthy.
+# deliberately and is worth knowing before reading the probe below. Three Supabase names are the
+# switch -- `SUPABASE_JWT_SECRET`, `SUPABASE_JWT_ISSUER`, `SUPABASE_ANON_KEY`: none set is
+# health-only, all set (plus `DATABASE_URL` and `RATE_LIMIT_SALT`) mounts sign-in, and a partial set
+# exits 78 naming what is missing rather than serving a gateway that answers 404 to every sign-in
+# while looking healthy.
 PASSTHROUGH=(
   SUPABASE_JWT_SECRET
   SUPABASE_JWT_ISSUER
   SUPABASE_JWT_AUDIENCE
   SUPABASE_ANON_KEY
-  SUPABASE_SERVICE_ROLE_KEY
   DATABASE_URL
   RATE_LIMIT_SALT
   # SONNY-130's two. See the block above for why these two and not the other three.
@@ -206,7 +216,7 @@ collect_passthrough() {
 # was for.
 #
 # So the two branches now mean what they say: a 404 here is a container that was given none of the
-# four Supabase names, and anything else is a container serving sign-in. A container given SOME of
+# three Supabase names, and anything else is a container serving sign-in. A container given SOME of
 # them never reaches this probe at all -- it exits 78 at startup and `verify` fails first.
 #
 # **The body is `{}` deliberately.** Once the route exists, `startBody` rejects that before anything
@@ -218,7 +228,7 @@ probe_auth_mount() {  # probe_auth_mount <base-url>
     -H 'Content-Type: application/json' -d '{}' 2>/dev/null)
   if [[ "$code" == "404" ]]; then
     echo "==> auth routes are NOT mounted — POST /v1/auth/email/start answers 404. Health-only is"
-    echo "    this deployment's honest state, not a defect. Since SONNY-307 this means the four"
+    echo "    this deployment's honest state, not a defect. Since SONNY-307 this means the three"
     echo "    SUPABASE_ names were not set in the launching shell; set them to mount sign-in."
   elif [[ -z "$code" ]]; then
     echo "==> auth routes could not be probed — no response from ${url}/v1/auth/email/start"

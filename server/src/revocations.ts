@@ -16,12 +16,19 @@ import { owedRevocationCount } from "./auth/revocation.js";
  * that is down for longer than one request, because the account is closed by then and no caller can
  * reach the route again — that is the shape of the defect this whole mechanism is for.
  *
- * **What this command does NOT do today, stated plainly: it does not revoke.** `drainOwedRevocations`
- * is written, exported and tested, and it needs an `AuthProvider` to call. **No concrete adapter
- * exists** — `provider.ts` is a seam with a test fake behind it, blocked on the same founder-owned
- * Resend/Supabase work as the rest of this ticket. So today this reports the debt and exits 1 when
- * there is any, which is a real operational signal a deployment can alert on. Wiring the drain to a
- * schedule is one call, and it belongs to the ticket that lands the adapter.
+ * **What this command does NOT do today: it does not revoke — and the reason changed with SONNY-307**
+ * (PR #137 review, F2). This paragraph used to say no concrete adapter existed and that the block was
+ * the founder's Resend domain. Both are now wrong: `src/auth/supabase.ts` is a real adapter, and
+ * Resend was never the blocker for anything here.
+ *
+ * What actually blocks it is one method. `drainOwedRevocations` calls `signOutAllForUser`, and the
+ * operation that needs — revoke every session of user X, given X's id and no token of theirs — **is
+ * not in Supabase Auth's API at all**: `/logout` derives the user from the caller's own bearer token,
+ * and the whole `/admin/*` surface carries no session route. So the adapter raises
+ * `ProviderUnavailable` there, on purpose, and the debt stays owed rather than being stamped as done.
+ * **SONNY-313 holds the two ways to close it and the choice is a founder's.** Meanwhile this reports
+ * the debt and exits 1 when there is any, which is a real operational signal a deployment can alert
+ * on. Wiring the drain to a schedule is one call and belongs to whichever ticket that decision lands.
  */
 export interface OwedByAccount {
   readonly accountId: string;
@@ -61,9 +68,21 @@ async function main(): Promise<void> {
     for (const row of await owedByAccount(client)) {
       process.stdout.write(`  account ${row.accountId}  ${row.identities} identity/identities\n`);
     }
+    // **This said "needs a real AuthProvider adapter, which does not exist yet" until SONNY-307**,
+    // which is the branch that wrote one — an operator reading this would have gone off to build
+    // something that was already in the tree beside it (PR #137 review, F2). The adapter exists; the
+    // reason these cannot be drained is narrower and is a property of Supabase, so the operator is
+    // pointed at the decision that unblocks it rather than at work already done.
     process.stdout.write(
       "\nThese accounts are closed and their provider-side sessions may still be live.\n" +
-        "Draining them needs a real AuthProvider adapter, which does not exist yet.\n",
+        "The Supabase adapter exists (src/auth/supabase.ts) and cannot drain these: Supabase Auth\n" +
+        "exposes no endpoint that revokes a user's sessions from their id alone, so\n" +
+        "signOutAllForUser fails and the debt is kept rather than written off.\n" +
+        "SONNY-313 holds the two ways to close it, and the choice is a founder's:\n" +
+        "  (a) delete the provider-side user, which takes its sessions with it, or\n" +
+        "  (b) have the gateway mint a token for that user and sign it out globally.\n" +
+        "Until one is chosen this count is expected to grow, and it is a real signal: every\n" +
+        "line above is an account someone closed whose provider-side sessions are still live.\n",
     );
     process.exitCode = 1;
   } finally {

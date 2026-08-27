@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import { authWiringFrom, intendsAuth } from "../src/auth/deps.js";
-import { SupabaseAuthProvider } from "../src/auth/supabase.js";
+import { ServiceRoleKeyNotConfigured, SupabaseAuthProvider } from "../src/auth/supabase.js";
 import { ConfigError, loadConfig, type Config } from "../src/config.js";
 
 /** `fetch`'s first parameter, named without `RequestInfo` — the lib here is ES2023, not DOM. */
@@ -37,6 +37,10 @@ const anon = "an-anon-key";
 const issuer = "https://project-ref.supabase.co/auth/v1";
 const database = "postgres://postgres:postgres@localhost:55433/postgres";
 
+/**
+ * A complete sign-in environment — **and it deliberately carries no `SUPABASE_SERVICE_ROLE_KEY`**,
+ * so every shape test below runs the configuration a real deployment is now expected to have.
+ */
 const AUTH_ENV = {
   SONNY_ENV: "local",
   DATABASE_URL: database,
@@ -44,16 +48,16 @@ const AUTH_ENV = {
   SUPABASE_JWT_SECRET: secret,
   SUPABASE_JWT_ISSUER: issuer,
   SUPABASE_ANON_KEY: anon,
-  SUPABASE_SERVICE_ROLE_KEY: serviceRole,
 } as NodeJS.ProcessEnv;
 
-/** Every name whose presence says "this deployment means to serve sign-in". */
-const INTENT_NAMES = [
-  "SUPABASE_JWT_SECRET",
-  "SUPABASE_JWT_ISSUER",
-  "SUPABASE_ANON_KEY",
-  "SUPABASE_SERVICE_ROLE_KEY",
-] as const;
+/**
+ * Every name whose presence says "this deployment means to serve sign-in".
+ *
+ * **`SUPABASE_SERVICE_ROLE_KEY` was a fourth and is deliberately not one** (founder decision
+ * 2026-08-27, option (c)) — `theServiceRoleKeyIsNotRequired` below is the suite's statement of that,
+ * in both directions.
+ */
+const INTENT_NAMES = ["SUPABASE_JWT_SECRET", "SUPABASE_JWT_ISSUER", "SUPABASE_ANON_KEY"] as const;
 
 function envWithout(...names: string[]): NodeJS.ProcessEnv {
   const env = { ...AUTH_ENV };
@@ -159,13 +163,23 @@ describe("a half-configured sign-in refuses at startup", () => {
       }
     })();
     expect(error).toBeInstanceOf(ConfigError);
-    for (const name of ["SUPABASE_JWT_SECRET", "SUPABASE_JWT_ISSUER", "SUPABASE_SERVICE_ROLE_KEY"]) {
+    for (const name of [
+      "SUPABASE_JWT_SECRET",
+      "SUPABASE_JWT_ISSUER",
+      "DATABASE_URL",
+      "RATE_LIMIT_SALT",
+    ]) {
       expect(error!.message).toContain(name);
     }
-    expect(error!.message).toContain("DATABASE_URL");
-    expect(error!.message).toContain("RATE_LIMIT_SALT");
+    // The count is asserted, not just the names: a message that listed a fifth would still contain
+    // all four of the above.
+    expect(error!.message).toContain("4 variables are missing");
     // The one that IS set is not listed as missing.
     expect(error!.message).not.toContain("SUPABASE_ANON_KEY,");
+    // **And the one that is no longer required is not listed either** (founder decision 2026-08-27,
+    // option (c)). This is the assertion that fails if it is put back into AUTH_INTENT or
+    // AUTH_ALSO_REQUIRED, which is the whole point of naming it here.
+    expect(error!.message).not.toContain("SUPABASE_SERVICE_ROLE_KEY");
   });
 
   it("never echoes a value into the message it prints at startup", () => {
@@ -193,30 +207,60 @@ describe("a half-configured sign-in refuses at startup", () => {
 });
 
 describe("what the wiring hands the adapter", () => {
-  it("points the adapter at the issuer, so calling and verifying cannot name two projects", async () => {
-    // One variable for both. Configured apart, the gateway would mint tokens at project A and verify
-    // them against project B — which presents as every request answering 401 with nothing in the
-    // logs to say why.
+  it("points the adapter it built at the issuer, so calling and verifying cannot name two projects", async () => {
+    // **This test drives `wiring.deps.provider` — the provider `authWiringFrom` actually built — and
+    // the first version did not** (PR #137 review, F1). It constructed a *second*
+    // `SupabaseAuthProvider` with the URL hardcoded and asserted about that, so `deps.ts` could have
+    // passed any string at all and this suite would still have been green. The mutant that proves
+    // the difference is one line: replace `authUrl: policy.issuer` in `deps.ts` with a literal and
+    // the old test passes while this one fails.
+    //
+    // Reaching the real provider means stubbing the global `fetch` *before* `authWiringFrom` runs,
+    // because the adapter captures `config.fetch ?? globalThis.fetch` at construction. That is the
+    // only seam here, and it is deliberately not a test-only parameter on `authWiringFrom`: a
+    // production function growing an argument no production caller passes is how the thing under
+    // test stops being the thing that ships.
+    //
+    // One variable for both is what makes it matter. Configured apart, the gateway mints tokens at
+    // project A and verifies them against project B — which presents as every request answering 401
+    // with nothing in the logs to say why.
     const calls: string[] = [];
-    const config: Config = {
-      ...loadConfig(AUTH_ENV),
-      supabaseJwtIssuer: "https://other-ref.supabase.co/auth/v1",
-    };
-    const wiring = authWiringFrom(config)!;
-    // Reach the URL the only way the seam exposes: make a call and see where it went.
-    const provider = new SupabaseAuthProvider({
-      authUrl: "https://other-ref.supabase.co/auth/v1",
-      anonKey: "k",
-      serviceRoleKey: "s",
-      fetch: (async (input: FetchInput) => {
-        calls.push(String(input));
-        return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
-      }) as unknown as typeof globalThis.fetch,
-    });
-    await provider.sendEmailCode("a@example.com");
-    expect(calls[0]).toContain("other-ref.supabase.co/auth/v1/otp");
-    expect(wiring.deps.provider).toBeInstanceOf(SupabaseAuthProvider);
-    await wiring.close();
+    const real = globalThis.fetch;
+    globalThis.fetch = (async (input: FetchInput) => {
+      calls.push(String(input));
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof globalThis.fetch;
+    try {
+      const wiring = authWiringFrom({
+        ...loadConfig(AUTH_ENV),
+        supabaseJwtIssuer: "https://other-ref.supabase.co/auth/v1",
+      })!;
+      await wiring.deps.provider.sendEmailCode("a@example.com");
+      expect(calls).toEqual(["https://other-ref.supabase.co/auth/v1/otp"]);
+      await wiring.close();
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+
+  it("hands the adapter the anon key, and no bearer, on the call that starts a sign-in", async () => {
+    // The other half of what `deps.ts` passes. Without it the wiring could hand the adapter an empty
+    // string for `anonKey` and only a live Supabase project would notice.
+    const seen: Record<string, string>[] = [];
+    const real = globalThis.fetch;
+    globalThis.fetch = (async (_input: FetchInput, init?: RequestInit) => {
+      seen.push((init?.headers ?? {}) as Record<string, string>);
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof globalThis.fetch;
+    try {
+      const wiring = authWiringFrom(loadConfig(AUTH_ENV))!;
+      await wiring.deps.provider.sendEmailCode("a@example.com");
+      expect(seen[0]!["apikey"]).toBe(anon);
+      expect(seen[0]!["authorization"]).toBeUndefined();
+      await wiring.close();
+    } finally {
+      globalThis.fetch = real;
+    }
   });
 
   it("supplies a withConnection and leaves `now` to the route's own default", async () => {
@@ -224,6 +268,70 @@ describe("what the wiring hands the adapter", () => {
     expect(typeof wiring.deps.withConnection).toBe("function");
     expect(wiring.deps.now).toBeUndefined();
     await wiring.close();
+  });
+
+  it("theServiceRoleKeyIsNotRequired — a full sign-in environment without one still mounts", async () => {
+    // **Founder decision of 2026-08-27, option (c).** It is the project's most dangerous credential
+    // and exactly one method uses it — `deleteUser` — which nothing calls today, so requiring it
+    // made every sign-in deployment hold a key it could not spend. AUTH_ENV deliberately omits it,
+    // so every other test in this file exercises this path too; this one says so by name.
+    const wiring = authWiringFrom(loadConfig(AUTH_ENV));
+    expect(wiring).toBeDefined();
+    await wiring!.close();
+  });
+
+  it("theServiceRoleKeyIsNotATrigger — setting only it leaves a health-only gateway", () => {
+    // The other direction, and the one a presence check gets wrong. It was a fourth AUTH_INTENT
+    // name; if it still were, this environment would refuse to start instead of serving health.
+    const config = loadConfig({ SONNY_ENV: "local", SUPABASE_SERVICE_ROLE_KEY: serviceRole });
+    expect(intendsAuth(config)).toBe(false);
+    expect(authWiringFrom(config)).toBeUndefined();
+  });
+
+  it("still forwards the service-role key to the adapter when one is set", async () => {
+    // Not required is not the same as not used. A deployment that sets it must still reach the admin
+    // surface, or `deleteUser` would be dead code the moment SONNY-196 lands a caller.
+    const seen: Record<string, string>[] = [];
+    const real = globalThis.fetch;
+    globalThis.fetch = (async (_input: FetchInput, init?: RequestInit) => {
+      seen.push((init?.headers ?? {}) as Record<string, string>);
+      return new Response("{}", { status: 200, headers: { "content-type": "application/json" } });
+    }) as unknown as typeof globalThis.fetch;
+    try {
+      const wiring = authWiringFrom(
+        loadConfig({ ...AUTH_ENV, SUPABASE_SERVICE_ROLE_KEY: serviceRole }),
+      )!;
+      await wiring.deps.provider.deleteUser("11111111-2222-3333-4444-555555555555");
+      expect(seen[0]!["apikey"]).toBe(serviceRole);
+      await wiring.close();
+    } finally {
+      globalThis.fetch = real;
+    }
+  });
+
+  it("fails deleteUser at its own call site when no service-role key was configured", async () => {
+    // The cost of not requiring it, paid where it is cheapest to diagnose. Not `ProviderUnavailable`
+    // — that would send an operator hunting a Supabase outage that is not happening — and not
+    // `ProviderRejected`, which `revocation.ts` reads as "already done". No request is sent.
+    let called = false;
+    const real = globalThis.fetch;
+    globalThis.fetch = (async () => {
+      called = true;
+      return new Response("{}", { status: 200 });
+    }) as unknown as typeof globalThis.fetch;
+    try {
+      const wiring = authWiringFrom(loadConfig(AUTH_ENV))!;
+      const error = await wiring.deps.provider
+        .deleteUser("11111111-2222-3333-4444-555555555555")
+        .then(() => undefined)
+        .catch((thrown: unknown) => thrown as Error);
+      expect(error).toBeInstanceOf(ServiceRoleKeyNotConfigured);
+      expect(error!.message).toContain("SUPABASE_SERVICE_ROLE_KEY");
+      expect(called).toBe(false);
+      await wiring.close();
+    } finally {
+      globalThis.fetch = real;
+    }
   });
 
   it("closes the pool idempotently, so a second signal cannot fail the shutdown", async () => {
