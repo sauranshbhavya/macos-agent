@@ -1375,13 +1375,23 @@ final class AgentViewModel: ObservableObject {
         isRunning || isAwaitingApproval ? 1 : 0
     }
 
-    /// Whether the floating widget currently has real content to show — a permission/clarification/
-    /// failure state (shown regardless of which surface submitted the task), or a working/result
+    /// Whether the floating widget currently has real content to show — one of row I's parked
+    /// Safe-mode questions, a permission/clarification/failure state, or a live screen-control
+    /// session (all of those regardless of which surface submitted the task), or a working/result
     /// state for a task the widget itself submitted. Single source of truth for both
     /// `FloatingWidgetView`'s own panel rendering and its `isMicHintSlotFree` gate. Mirrors
     /// `FloatingWidgetView`'s `state`/`showsPanel` precedence exactly — keep both in sync if either
     /// changes. (That property stopped being `private` in SONNY-255, so a test could read the panel
     /// the widget resolved to; this sentence went on calling it private until PR #132's review, F4.)
+    ///
+    /// **"Mirrors exactly" was a requirement this property did not meet until SONNY-299.** `state`
+    /// has had a `.controlling` branch since row I and this had no session term at all, so a screen
+    /// session started anywhere but the widget fell through to the origin-gated running branch and
+    /// the widget rendered nothing — the one state whose entire purpose is to be seen was the one
+    /// the panel gate could refuse. The opening sentence is written out branch by branch for the
+    /// same reason: it used to name the permission, clarification, failure, working and result
+    /// states and stop, saying nothing about row I's parked questions or row 13's resume offer, and
+    /// the branch that was missing was one it had never mentioned.
     ///
     /// **Two stale claims removed here, both on 2026-08-21.** This said the widget was "the only
     /// place either is actionable at all": `CommandCenterAttentionPanel` has rendered those three
@@ -1396,13 +1406,46 @@ final class AgentViewModel: ObservableObject {
     /// first, the widget composited in while still idle, and an idle+composited render drew
     /// literally nothing (no compact capsule, no pill), with no way to click back into it.
     var hasVisibleWidgetPanel: Bool {
-        // Row I's two Safe-mode questions, first for the same reason the three below them are
-        // unconditional: each is a parked continuation waiting on a human, and a session whose
-        // question the widget declined to render would simply hang.
+        // Row I's two Safe-mode questions, first for the same reason the permission, clarification
+        // and failure branches below them are unconditional: each is a parked continuation waiting
+        // on a human, and a session whose question the widget declined to render would simply hang.
+        // (Named rather than counted since SONNY-299 put a fourth unconditional branch between them
+        // and those three.)
         if visionCapturePreview != nil || visionDelegationRequest != nil || visionSessionPause != nil {
             return true
         }
         if approvalRequest != nil {
+            return true
+        }
+        // **A live screen-control session, unconditionally — below the parked questions and above
+        // the origin-gated running branch, which is where `state` puts `.controlling`** (SONNY-299).
+        // This term did not exist at all, so a session started anywhere but the widget fell through
+        // to that branch, was answered `activeTaskOrigin == .widget`, and rendered nothing: `state`
+        // resolved to `.controlling` and the HUD that would have drawn it was never on screen.
+        // Reachable rather than theoretical — `runTaskAgain` dispatches `origin: .commandCenter` and
+        // a screen task run again from its Command Center row really does re-plan into a fresh
+        // session, and `continueResumableTask(_:origin:)` from the Memory sheet is a second door.
+        //
+        // **Unconditional is the answer here, not an origin gate left off.** The gate below exists
+        // because a Command-Center-origin *working* run already reports itself in
+        // `CommandCenterRunningIndicator`, so a widget progress panel would be a second one. The HUD
+        // is not that kind of progress: `WidgetControllingPanel`'s own doc comment calls it a
+        // product requirement rather than a courtesy — a program moving someone's cursor with no
+        // visible statement of what it is doing is the shape this feature must never take — and the
+        // running indicator is a compact line that names no app and carries neither Pause nor Stop.
+        // There is no second HUD for this one to duplicate; `CommandCenterAttentionPanel`
+        // deliberately has none (`.claude/rules/macagent-ui-conventions.md`).
+        //
+        // So `.scheduled` gets no term of its own, and why is worth stating rather than leaving to
+        // be re-derived: unattended screen control is refused three independent ways —
+        // `StoredRoutine.forbiddenStepOperations` rejects `.visionSession` at the routine store's
+        // write door, `performScheduledRun`'s explicit belt checks the routine's steps, its nested
+        // steps and the prepared plan and pauses the schedule, and its fixed `.approved(.tier2)`
+        // ceiling cannot satisfy a tier-3 vision assessment. A `.scheduled` session is unreachable
+        // today; were one of those three ever to move, rendering the HUD is the answer this term
+        // should give anyway, which is why it is written to cover every origin rather than to
+        // enumerate the two that can reach it.
+        if visionSessionProgress != nil {
             return true
         }
         if clarificationQuestion != nil {

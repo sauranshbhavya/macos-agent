@@ -479,6 +479,22 @@ the approval reached no widget surface at all, so the run looked like it had sta
       control, open Command Center: its panel says **Deny and Allow** again, with no session row
       above it. Deny cancels the run as it always did
 
+### 3c-ter. A screen-control session the widget did not start (new 2026-08-27, SONNY-299)
+
+The HUD used to be gated on the run having been started *from the widget*, so a screen session
+started anywhere else drove the screen with the widget showing nothing at all — no statement of what
+Sonny was controlling, no Pause, no Stop. The emergency hotkey (Ctrl-Opt-Esc) still worked; nothing
+on screen said so. Both rows are about the same panel, from the two doors.
+
+- [ ] **(new 2026-08-27, SONNY-299)** Run one screen-control task from the widget and let it finish.
+      Then open **Command Center → Tasks**, open that task's row, and press **Run again**. The widget
+      must show the HUD for the whole of the second session — **"Sonny is controlling Safari"**, the
+      action line, the step count, **Pause** and **Stop** — exactly as it does for a session you
+      started by typing into the widget. Before this fix the second session showed nothing at all
+- [ ] **(new 2026-08-27, SONNY-299)** During that second session, press the HUD's **Pause**, then
+      resume, then let it finish. The controls have to actually work from this door too, not merely
+      be drawn — this is the same panel, reached by a route it was never reachable from before
+
 ### 3d. Clarification (no wireframe — best-effort, extra scrutiny warranted)
 Provoke a follow-up question with an intentionally underspecified command — e.g. "open my
 workspace" when you have 2+ saved workspaces and don't name one, or "zip my files" without saying
