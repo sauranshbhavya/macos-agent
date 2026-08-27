@@ -43,6 +43,8 @@ export function testConfig(overrides: Partial<Config> = {}): Config {
     openAITextModel: "test-text-model",
     openAITranscriptionModel: "test-transcription-model",
     searchBaseUrl: "https://search.invalid",
+    visionBaseUrl: "https://vision.invalid/v1",
+    visionModel: "test-vision-model",
     credentials: [],
     ...overrides,
   };

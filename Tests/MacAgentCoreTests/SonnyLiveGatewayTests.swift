@@ -1,7 +1,18 @@
+import CoreGraphics
 import Foundation
 import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
+
+/// The live suite's own recognizer, finding nothing — a window with no secrets on it.
+///
+/// Its own type rather than a shared one because this file is the only opt-in suite in the target
+/// and must not depend on a fixture another suite could change out from under it.
+private struct LiveCheckSilentRecognizer: ImageTextRecognizing {
+    func recognizeText(inPNGData pngData: Data, pixelWidth: Int, pixelHeight: Int) async throws -> [RecognizedTextObservation] {
+        []
+    }
+}
 
 /// The one suite that talks to a **real gateway** instead of a `URLProtocol` stub.
 ///
@@ -116,8 +127,8 @@ struct SonnyLiveGatewayTests {
         }
     }
 
-    /// **The four model routes SONNY-130 moved, driven through their real clients against a real
-    /// gateway.** This is the half a `URLProtocol` stub cannot cover — that the bodies these clients
+    /// **The five model routes SONNY-130 and SONNY-131 moved, driven through their real clients
+    /// against a real gateway.** This is the half a `URLProtocol` stub cannot cover — that the bodies these clients
     /// build are ones the server parses, and that the server's own envelope maps back — and it is
     /// what SONNY-192's staging run will exercise with the variable pointed at staging.
     ///
@@ -136,7 +147,7 @@ struct SonnyLiveGatewayTests {
     /// code out of a mailbox.
     @Test
     @MainActor
-    func theFourModelRoutesReachTheRealGatewayAndTheirAnswersMapBack() async throws {
+    func theFiveModelRoutesReachTheRealGatewayAndTheirAnswersMapBack() async throws {
         // **A fresh client per route, and that is not tidiness.** §7.2 case 1b makes the client
         // clear its Keychain entry on `auth.unauthenticated`, so the first route's 401 signs this
         // fabricated session out and every route after it would fail with `notSignedIn` before
@@ -165,6 +176,12 @@ struct SonnyLiveGatewayTests {
                 }
                 record(route, backend, acceptable)
             } catch let error as TavilySearchError {
+                guard case .backend(let backend) = error else {
+                    Issue.record("\(route): expected a backend failure, got \(error)")
+                    return
+                }
+                record(route, backend, acceptable)
+            } catch let error as VisionModelClientError {
                 guard case .backend(let backend) = error else {
                     Issue.record("\(route): expected a backend failure, got \(error)")
                     return
@@ -203,6 +220,33 @@ struct SonnyLiveGatewayTests {
             _ = try await OpenAITranscriber(client: Self.makeSignedInClient(), taskContext: context)
                 .transcribe(audioFileURL: url, recordedDuration: 2)
         }
+        // **The payload is a real redacted capture, not a hand-built one**, because it cannot be
+        // anything else: `RedactedPayload`'s initializer is `fileprivate` to
+        // `LocalRedactionService.swift`, so the only way to obtain one is to run a capture through
+        // the real service. That is the structural non-bypass doing its job in a test as well as in
+        // production — and it means what reaches the gateway here is genuinely the shape a session
+        // sends, base64 and dimensions included.
+        await check("/v1/screen/analyze") {
+            let capture = CapturedWindowImage(
+                pngData: ImageFixtures.whiteOverBlackPNG(width: 200, height: 150),
+                pixelWidth: 200,
+                pixelHeight: 150,
+                bundleIdentifier: "com.example.live",
+                windowTitle: "Live check",
+                windowID: 1,
+                windowFrame: CGRect(x: 0, y: 0, width: 200, height: 150)
+            )
+            let payload = try await LocalRedactionService(textRecognizer: LiveCheckSilentRecognizer())
+                .redactCapture(capture)
+            _ = try await SonnyVisionModelClient(
+                client: Self.makeSignedInClient(),
+                taskContext: context
+            ).decide(
+                prompt: "Decide the next action.",
+                payload: payload,
+                session: VisionSessionRequestContext(sessionID: "live-check-session", iteration: 1)
+            )
+        }
     }
 
     private func record(
@@ -228,6 +272,9 @@ struct SonnyLiveGatewayTests {
     /// what SONNY-192's staging run will do. It is an environment variable rather than a sign-in
     /// because no agent session can read a code out of a mailbox, and a founder pointing this at
     /// staging already has a session in hand.
+    ///
+    /// (The four became five when SONNY-131 added the vision route; the paragraph above is otherwise
+    /// SONNY-130's and unchanged.)
     private static func makeSignedInClient() -> SonnyBackendClient {
         let store = KeychainAccountTokenStore(secretStore: InMemoryKeychainSecretStore())
         try? store.saveTokens(SonnyAccountTokens(

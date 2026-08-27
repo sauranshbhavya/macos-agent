@@ -997,18 +997,25 @@ describe("the numbers this ticket is held to", () => {
       synthesize: 4_194_304,
       transcriptions: 10_485_760,
       search: 1_048_576,
+      // SONNY-131's row. The table is asserted whole, so a fifth route has to be written here as
+      // well as beside its own route — which is the point of asserting it whole. Its derivation
+      // from the client's image ceiling is `test/screen.test.ts`', because that is where the
+      // ceiling's own behaviour lives.
+      screenAnalyze: 4_200_000,
     });
   });
 
   it("carries §12's deadlines, and the ordering that makes them a rule", () => {
-    // **Four of §12's eight numbers, and the invariant that ties them to the other four** (PR #139,
-    // F2). Nothing read `DEADLINE_MS` before this: a mutant moving any of them survived the whole
-    // suite, because the values reach `withDeadlines` and nothing else looks at them.
+    // **Five of §12's ten numbers, and the invariant that ties them to the other five** (PR #139,
+    // F2; the fifth row is SONNY-131's). Nothing read `DEADLINE_MS` before this: a mutant moving any
+    // of them survived the whole suite, because the values reach `withDeadlines` and nothing else
+    // looks at them.
     expect(DEADLINE_MS).toEqual({
       plan: { upstream: 60_000, total: 75_000 },
       synthesize: { upstream: 90_000, total: 105_000 },
       transcriptions: { upstream: 60_000, total: 75_000 },
       search: { upstream: 20_000, total: 25_000 },
+      screenAnalyze: { upstream: 90_000, total: 105_000 },
     });
     // **The invariant is the ordering, not a fixed gap** — a first draft of this test asserted
     // fifteen seconds on every row and went red on `search`, whose margin is five. §12's table has
@@ -1019,7 +1026,7 @@ describe("the numbers this ticket is held to", () => {
       expect(deadlines.upstream, route).toBeGreaterThan(0);
       expect(deadlines.total, route).toBeGreaterThan(deadlines.upstream);
     }
-    // The other four numbers live in `SonnyBackendTimeouts` on the Swift side, each above the
+    // The other five numbers live in `SonnyBackendTimeouts` on the Swift side, each above the
     // matching `total` here. `ModelRouteNumbersTests` asserts them against these same literals, so
     // the two halves of §12's table cannot move independently without one of the two failing.
   });

@@ -1219,6 +1219,47 @@ provider key.
       id is the whole guarantee, visible in one line: the second request returned the first one's
       stored response instead of calling a provider again. Then change one word inside the body and
       send it a third time with the same key: it must answer `409` with `idempotency.conflict`.
+### Screen control behind the backend (new 2026-08-28, SONNY-131)
+
+**The fifth and last credential-bearing route.** Screen control now runs through Sonny's own gateway
+under your sign-in, with no `OPENCODE_API_KEY` anywhere — that variable is read by nothing, and the
+app no longer has a "screen control is not configured" state at all.
+
+**Setup is the section above's, plus one variable.** The same gateway, the same
+`SonnyBackendBaseURL` default, the same Finder launch with no provider key exported — and
+`./scripts/deploy.sh local` now also forwards `VISION_API_KEY`, which is the credential this route
+needs. **These rows cannot be run until SONNY-307's successor gives you a container that mounts
+authenticated routes**, exactly as the section above says of its own; without one every row here
+answers 401.
+
+- [ ] **(new 2026-08-28, SONNY-131) — the headline check.** Packaged `.app` from Finder, no
+      environment variables at all. Run a real screen-control task through several iterations — a
+      goal needing three or four clicks on small controls. It should behave exactly as it did
+      before. **Nothing on your Mac holds a vision key now**, so if it works, the credential has
+      moved.
+- [ ] **(new 2026-08-28, SONNY-131)** Run one on the **largest display available**, with heavy
+      content on screen (a photo library, a paused video, a map). It must not fail with *"The window
+      screenshot is N bytes…"*. That message appearing at all is worth reporting with the number it
+      quotes: the ceiling is now the same number on both sides of the network, so seeing it means
+      the two have come apart.
+- [ ] **(new 2026-08-28, SONNY-131)** Switch to **Safe mode** and start a session. The capture-review
+      panel must still appear before each send, showing the screenshot. The bytes now travel base64
+      inside JSON rather than as a `data:` URL, and this is the one place a shape change would show
+      as a blank frame.
+- [ ] **(new 2026-08-28, SONNY-131)** Put something secret-shaped on screen (an `sk-`-prefixed string
+      in a text editor is enough) and start a Safe-mode session. The preview must show a solid black
+      rectangle over it, hard-edged, no ghosting. **Redaction is upstream of everything this ticket
+      touched and must be exactly as it was** — this row is the check that says so.
+- [ ] **(new 2026-08-28, SONNY-131)** Stop a session mid-run with the **emergency stop**. It must
+      stop immediately, and what you are told must read as a stop rather than as a failure — no
+      *"Sonny couldn't finish this one. Try again."*. (That sentence really did appear here during
+      this ticket, on a stop that reached a request already in flight, and the fix is the reason this
+      row exists.)
+- [ ] **(new 2026-08-28, SONNY-131)** After a session, open **Tasks** and check its usage line.
+      Screen control has never appeared there before — this ticket is what makes it visible — so what
+      you should see is a screen-control entry with a call count. **Token numbers may be absent and
+      that is correct**: the gateway sends none unless the provider reported some, deliberately,
+      because an estimate built from the prompt text alone would leave out the image.
 
 ### Web research — topic/search commands (new 2026-07-30, Tavily provider)
 
