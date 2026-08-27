@@ -859,7 +859,8 @@ describe("the screen route's numbers", () => {
     // client's own ceiling allows on purpose — every byte above that eliminates hosts for nothing.
     const headroom = BODY_LIMIT_BYTES.screenAnalyze - base64Length(MAXIMUM_IMAGE_BYTES);
     expect(headroom).toBe(200_000);
-    // 4,673 characters was SONNY-114's measured prompt at `e260575`; the headroom is far above it.
+    // 4,673 characters was SONNY-114's measured prompt; the headroom is far above it. The SHA that
+    // figure was taken at is in `limits.ts`, beside the note on why it is deliberately non-ancestral.
     expect(headroom).toBeGreaterThan(4_673 * 10);
   });
 
