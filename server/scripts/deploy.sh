@@ -78,17 +78,40 @@ PLATFORM="${DEPLOY_PLATFORM:-linux/arm64}"
 # outside its `if (auth)` — so a container started without these serves them and answers
 # `502 provider.unavailable`, which is honest and is not what a manual pass wants.
 #
-# The other three provider names in `config.ts` — `ANTHROPIC_API_KEY`, `CEREBRAS_API_KEY`,
-# `VISION_API_KEY` — are **not** here, because no route reads them yet: the vision route is
-# SONNY-131's and the provider router is SONNY-132's. Same rule as mail above, one row down.
+# **SONNY-132 added two of the three names that sentence held open, and left the third.** The
+# sentence said `ANTHROPIC_API_KEY`, `CEREBRAS_API_KEY` and `VISION_API_KEY` were absent because no
+# route read them. The provider router now reads two: `ANTHROPIC_API_KEY` serves `/v1/plan` and
+# `/v1/research/synthesize` as the shipped failover candidate, and `CEREBRAS_API_KEY` serves them
+# whenever a `MODEL_ROUTE_*` chain names it. `VISION_API_KEY` stays absent for the original reason —
+# `/v1/screen/analyze` is SONNY-131's and no route reads it yet.
 #
-# **The endpoint and model settings SONNY-130 also added are deliberately not here either** —
-# `OPENAI_BASE_URL`, `OPENAI_TEXT_MODEL`, `OPENAI_TRANSCRIPTION_MODEL`, `SEARCH_BASE_URL`. Every one
-# has a real default matching what the Mac app compiled in before the gateway existed, so a
-# container that forwards none of them behaves correctly, and this list is for values a container
-# cannot invent. Pointing a local run at a stub instead of at a vendor is done by editing this array
-# for that run, and the count and absent-name lines below both derive from its length, so nothing
-# else needs touching.
+# **A container given no Anthropic key is not broken.** The chain drops an entry it has no credential
+# for, so a local run with only `OPENAI_API_KEY` behaves exactly as it did before the router existed.
+# Forwarding the name costs nothing when it is unset, and is what makes a founder's failover check a
+# matter of exporting one variable.
+#
+# **The endpoint, model and routing settings are deliberately not here** — `OPENAI_BASE_URL`,
+# `OPENAI_TEXT_MODEL`, `OPENAI_TRANSCRIPTION_MODEL`, `SEARCH_BASE_URL`, `ANTHROPIC_BASE_URL`,
+# `ANTHROPIC_TEXT_MODEL`, `ANTHROPIC_MAX_OUTPUT_TOKENS`, `CEREBRAS_BASE_URL`, `CEREBRAS_TEXT_MODEL`,
+# the four `MODEL_ROUTE_*` and the ten per-provider retention/training names. Every one has a real
+# default, so a container that forwards none of them behaves correctly, and this list is for values a
+# container cannot invent. **The rule this list tracks is "a credential `config.ts` reads", not
+# "every name `config.ts` reads"** — stated because the router grew that file by nine schema names
+# in one ticket and none of them is a credential
+# (`git show main:server/src/config.ts | grep -oE '^  [A-Z_]+:' | tr -d ' :' | sort > /tmp/a`,
+# the same over the working tree into `/tmp/b`, then `comm -13 /tmp/a /tmp/b | wc -l` -> 9), plus the
+# ten per-provider retention/training names, which `providerDataPolicies` reads straight off the
+# environment rather than through the schema and which that grep therefore never sees. Pointing a
+# local run at a stub instead of at a vendor, or trying a different chain, is done by adding that
+# name to this array for that run; the count and absent-name lines below both derive from its
+# length, so nothing else needs touching.
+#
+# **The paragraph above stamped at `f65e72e` says "eleven names ... the five that remain are these",
+# and both halves are that tree's rather than this one's.** Re-measured on the working tree: the
+# schema holds **26** names (`grep -oE '^  [A-Z_]+:' src/config.ts | tr -d ' :' | sort | wc -l`
+# -> 26) and this array holds **10**. The historical figure is left as it was written, per this
+# repository's rule about dated records, rather than edited to agree with a tree it was not taken
+# on.
 #
 # **No value is read, stored, defaulted, printed or written down here.** `docker run -e NAME` with
 # no `=` is Docker's own pass-from-the-environment form: the value never reaches a variable in this
@@ -134,13 +157,17 @@ PASSTHROUGH=(
   SUPABASE_ANON_KEY
   DATABASE_URL
   RATE_LIMIT_SALT
-  # SONNY-130's two. See the block above for why these two and not the other three.
+  # SONNY-130's two, and SONNY-132's two. See the block above for why these four and not VISION_API_KEY.
   OPENAI_API_KEY
   TAVILY_API_KEY
   # SONNY-131's one, on the same rule: `POST /v1/screen/analyze` is mounted by a running container
   # whatever the environment holds, so a container without this serves `502 provider.unavailable`.
-  # The other two provider names -- ANTHROPIC and CEREBRAS -- stay off, because no route reads them.
   VISION_API_KEY
+  # SONNY-132's two. The sentence that stood here said ANTHROPIC and CEREBRAS "stay off, because no
+  # route reads them"; the provider router reads both, so both are forwarded. A container given
+  # neither is unchanged -- a chain entry with no credential is not a candidate.
+  ANTHROPIC_API_KEY
+  CEREBRAS_API_KEY
 )
 
 # Filled by `collect_passthrough`. Declared here, empty, because `set -u` plus bash 3.2 --

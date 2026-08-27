@@ -9,7 +9,7 @@ import { postgresKeyStore, type KeyStore } from "./idempotency/store.js";
 import { registerAuth, type AuthDeps } from "./routes/auth.js";
 import fastifyMultipart from "@fastify/multipart";
 import { BODY_LIMIT_BYTES } from "./model/limits.js";
-import { modelProvidersFrom } from "./model/providers.js";
+import { describeRouting, modelProvidersFrom } from "./model/providers.js";
 import { registerModelRoutes } from "./routes/model.js";
 import { visionProviderFrom } from "./model/vision.js";
 import { registerScreenRoutes } from "./routes/screen.js";
@@ -240,12 +240,28 @@ export function buildApp(
   /**
    * `POST /v1/screen/analyze` (SONNY-131), mounted on the same terms and for the same reasons.
    *
-   * Its provider comes from `model/vision.ts` rather than from `modelProvidersFrom` above, and that
-   * is a lane boundary rather than a design preference — `model/providers.ts` belongs to SONNY-132's
-   * branch, running in parallel, and the two collapse when that one lands. The route reads no
-   * `ModelProviders` field, so nothing here changes shape when it does.
+   * Its provider comes from `model/vision.ts` rather than from `modelProvidersFrom` above.
+   *
+   * **That was written as a lane boundary that would end when SONNY-132 landed — "the two collapse
+   * when that one lands" — and SONNY-132 has now landed without collapsing them.** Nothing forced
+   * the collapse: this route reads no `ModelProviders` field, exactly as that comment predicted, so
+   * the provider router grew `plan`, `synthesize`, `transcriptions` and `search` chains and left
+   * this route untouched. Collapsing it is a real and probably worthwhile change — a
+   * `MODEL_ROUTE_SCREEN_ANALYZE` chain would give the vision route the same failover and the same
+   * per-provider retention policy the other four now have, which is precisely what SONNY-110 needs
+   * of it — but the vision route and `VisionModelClient` are on SONNY-132's never-touch list, so it
+   * is not that branch's to take. Whoever owns it next starts here.
    */
   registerScreenRoutes(app, visionProviderFrom(config));
+
+  // **What this deployment's routing actually resolved to, printed once** (SONNY-132). Which
+  // provider serves which route is configuration now, and per-provider retention/training terms are
+  // configuration that nothing routes on until SONNY-110 answers — so both are said out loud at
+  // startup, where an operator can see what the container was told rather than inferring it from
+  // which requests succeed. `describeRouting` carries provider names, policy words and a boolean
+  // per credential, and never a key. It describes the four routes the router owns; the vision route
+  // above is not among them, for the reason its own comment gives.
+  app.log.info(describeRouting(config), "model routing");
 
   if (auth) {
     requireRateLimitSalt(config);

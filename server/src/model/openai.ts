@@ -1,6 +1,8 @@
 import {
+  estimatedTextUsage,
   estimateTextTokens,
   ProviderRejected,
+  reportedTokenUsage,
   upstreamStatusError,
   upstreamTransportError,
   type TextRequest,
@@ -57,32 +59,13 @@ function endpoint(settings: OpenAISettings, path: string): string {
 }
 
 /**
- * `usage` from a Responses API reply, or `null` when it said nothing.
- *
- * Tolerant on purpose: usage is telemetry read beside the answer, and a provider that changes the
- * block's shape must not turn a good plan into a failed request. The same tolerance the Mac's
- * `AIUsagePayloadParser` has, for the same reason.
+ * **The local `reportedTokenUsage` that stood here is now `upstream.ts`'s** (SONNY-132). It read
+ * `input_tokens` / `output_tokens` / `total_tokens`; the shared one reads those plus Chat
+ * Completions' `prompt_tokens` / `completion_tokens`, which is the dialect Cerebras speaks, and is
+ * the same alias set `AIUsagePayloadParser.tokenCounts` on the Mac already accepts. Three
+ * near-identical readers was three places for one of them to stop matching a provider's block.
+ * Its tolerance is unchanged and its reasoning moved with it.
  */
-function reportedTokenUsage(body: unknown): UpstreamUsage | null {
-  if (typeof body !== "object" || body === null) return null;
-  const usage = (body as { usage?: unknown }).usage;
-  if (typeof usage !== "object" || usage === null) return null;
-  const read = (name: string): number | null => {
-    const value = (usage as Record<string, unknown>)[name];
-    return typeof value === "number" && Number.isFinite(value) ? value : null;
-  };
-  const inputTokens = read("input_tokens");
-  const outputTokens = read("output_tokens");
-  const totalTokens = read("total_tokens");
-  if (inputTokens === null && outputTokens === null && totalTokens === null) return null;
-  return {
-    inputTokens,
-    outputTokens,
-    totalTokens,
-    audioDurationSeconds: null,
-    source: "reported",
-  };
-}
 
 /**
  * The model's text out of a Responses API reply.
@@ -171,23 +154,9 @@ export function makeOpenAITextAdapter(
       throw new ProviderRejected("openai answered without text output");
     }
 
-    const reported = reportedTokenUsage(parsed);
-    if (reported !== null) return { outputText: text, usage: reported };
-
-    const inputTokens = request.messages.reduce(
-      (sum, message) => sum + estimateTextTokens(message.text),
-      0,
-    );
-    const outputTokens = estimateTextTokens(text);
     return {
       outputText: text,
-      usage: {
-        inputTokens,
-        outputTokens,
-        totalTokens: inputTokens + outputTokens,
-        audioDurationSeconds: null,
-        source: "estimated",
-      },
+      usage: reportedTokenUsage(parsed) ?? estimatedTextUsage(request.messages, text),
     };
   };
 }
