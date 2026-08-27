@@ -255,6 +255,47 @@ rather than a `primary`/`secondary` pair: with two named fields, retiring the pr
 two variables at once, and a deploy that catches them half-applied has either a duplicated key or
 none. `test/config.test.ts` walks all three steps and asserts a usable key at every one.
 
+## The four model routes (SONNY-130)
+
+`POST /v1/plan`, `POST /v1/research/synthesize`, `POST /v1/transcriptions` and `POST /v1/search`.
+All four are authenticated — they are covered by *not* appearing in `PUBLIC_ROUTES`, which is what
+deny-by-default means — and all four hold the provider credential here so the Mac app never sees
+one. `docs/sonny-backend-api-contract.md` §4.2–§4.4 is the wire shape; what belongs here is the
+operational half.
+
+**Which provider serves which route is one function**, `modelProvidersFrom` in
+`src/model/providers.ts`, reading the endpoints and model identifiers from the environment. That is
+what makes SONNY-110's move to a paid zero-retention route a redeploy: nothing in the Mac app names
+a provider, a model or an endpoint, so changing any of the three never needs an app release.
+
+**A route whose provider has no credential answers `502 provider.unavailable`, not `404`.** The
+route table does not change shape with the environment, because a 404 tells the client "no such
+route" — which it does not retry and cannot explain — when the truth is a deployment missing a key.
+
+**Two numbers are pinned on both sides and must move together.** `src/model/limits.ts` holds
+contract §6.1's per-route body limits and §12's deadlines; `SonnyBackendTimeouts` in
+`Sources/MacAgentCore/SonnyBackendClient.swift` holds the client timeouts, each above this server's
+total deadline for the same route — by fifteen seconds on the three long routes and by five on
+`search`, which is §12's table rather than one constant. The *ordering* is the governing rule — the
+client's timeout is always longer than the server's — so a slow route surfaces as this server's
+typed `504 provider.timeout` rather than as the client's opaque transport timeout, which it cannot
+tell apart from a dead network.
+
+**The audio limit is enforced in different units on each side, on purpose.** The Mac caps a
+*recording* at `VoiceRecordingLimit.maximumDurationSeconds` (180 s) and refuses before a byte is
+sent; this server caps *bytes* at §6.1's 10 MiB. The Mac is the side holding the recorder, so it is
+the only side that knows a duration honestly — a client-supplied one would be a client-trust
+decision on the field that decides the bill, which §2.4.1 forbids in general. At this recorder's
+bitrate, 180 s is roughly 2 MB, so the client's cap binds an order of magnitude before this one:
+the byte ceiling is the backstop for a client that is not ours, or is broken.
+
+**`retention` is validated and not yet honoured, and that is stated rather than implied.** §2.4.2
+makes an omitted `retention` a loud `400` rather than a quiet guess in either direction, and these
+routes enforce that. What they do not do is store anything at all — there is no content store yet,
+and SONNY-134 builds it along with §10.1's rule that retention is enforced where the storing
+happens rather than at the call site. Claiming the guarantee now would be claiming a promise nothing
+keeps.
+
 ## Deploying
 
 `./scripts/deploy.sh local` is real and works end to end: it builds the image with the current git
@@ -264,8 +305,10 @@ so a deploy that appeared to succeed while something older kept serving is a fai
 **It forwards the gateway's own credentials from the launching shell** (SONNY-306, founder
 decision 2026-08-27), so a credentialed local container is this one command rather than a hand-run
 `docker run`. The list is `SUPABASE_JWT_SECRET`, `SUPABASE_JWT_ISSUER`, `SUPABASE_JWT_AUDIENCE`,
-`DATABASE_URL` and `RATE_LIMIT_SALT`; it tracks `src/config.ts`, which is the only thing that
-decides what the gateway reads, and the script's own comment carries the command that re-derives it.
+`DATABASE_URL`, `RATE_LIMIT_SALT` and — added by SONNY-130 at the extension point SONNY-306 left —
+`OPENAI_API_KEY` and `TAVILY_API_KEY`, the two credentials the four model routes need. It tracks
+`src/config.ts`, which is the only thing that decides what the gateway reads, and the script's own
+comment carries the command that re-derives it.
 Each is forwarded with `docker run -e NAME` — no `=`, so no value is read by the script or printed
 by it — and only when it is set to something non-empty. Nothing is refused when one is missing: the
 absent ones are named, by name only, and the container starts anyway.
@@ -281,6 +324,22 @@ with no `auth` argument and no concrete `AuthProvider` adapter exists — so the
 deploymind cannot receive a deploy yet, and neither Oracle nor AWS exists. The script builds the
 image, says plainly what did not happen, and lists the four things a real target needs. It does not
 pretend. **The first real remote deploy is owed and is recorded on SONNY-126.**
+
+**The four model routes still answer `401` against that container**, and the reason is the one the
+subsection above names rather than a missing credential: `src/server.ts` supplies no `AuthDeps`, so
+the gate refuses every protected route on a process with no way to authenticate anyone. SONNY-307 is
+what makes the forwarded credentials matter; until it lands, forwarding more of them changes
+nothing a caller can see.
+
+**The passthrough carries seven names, and SONNY-130 added two of them** — `OPENAI_API_KEY` and
+`TAVILY_API_KEY`, the credentials the four model routes need. It stops there on purpose, and the
+block above the array in `deploy.sh` carries the same reasoning: `ANTHROPIC_API_KEY`,
+`CEREBRAS_API_KEY` and `VISION_API_KEY` are excluded because no route reads them yet, and
+`OPENAI_BASE_URL`, `OPENAI_TEXT_MODEL`, `OPENAI_TRANSCRIPTION_MODEL` and `SEARCH_BASE_URL` are
+excluded because each has a real default and this list is for values a container cannot invent.
+Pointing a local run at a stub instead of at a vendor — which is how SONNY-130 demonstrated all four
+routes end to end with no vendor key anywhere — is done by editing the array for that run, and both
+the count and the absent-name lines derive from its length, so nothing else needs touching.
 
 ## `GET /v1/health`
 

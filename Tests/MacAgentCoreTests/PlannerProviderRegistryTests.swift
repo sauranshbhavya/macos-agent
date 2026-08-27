@@ -1,4 +1,5 @@
 import Foundation
+import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
 
@@ -15,28 +16,33 @@ struct PlannerProviderRegistryTests {
     /// SONNY-85 pinned OpenAI as the sole provider; SONNY-86 extends the shipped set with the
     /// Cerebras A/B alternate. What must never drift: OpenAI is the default (no flip logic —
     /// resolving no selection lands on it), and the set is exactly these two.
+    ///
+    /// `PlannerProviderRegistry.default` is a function of the backend client since SONNY-130: the
+    /// shipped default provider plans through Sonny's backend, and there is one client per process.
     @Test
     func shippedRegistryOffersOpenAIAsDefaultWithCerebrasAsTheAlternate() {
-        let registry = PlannerProviderRegistry.default
+        let registry = PlannerProviderRegistry.default(client: makeHermeticBackendClient())
         #expect(registry.defaultProvider.id == "openai")
         #expect(registry.defaultProvider.displayName == "OpenAI")
         #expect(registry.providers.map(\.id) == ["openai", "cerebras"])
         #expect(registry.resolve(selection: nil).provider.id == "openai")
-        #expect(OpenAIPlanner.provider.id == OpenAIPlanner.providerID)
+        #expect(OpenAIPlanner.provider(client: makeHermeticBackendClient()).id == OpenAIPlanner.providerID)
         #expect(CerebrasPlanner.provider.id == CerebrasPlanner.providerID)
         #expect(CerebrasPlanner.provider.displayName == "Cerebras")
     }
 
     @Test
     func shippedRegistryHonorsTheCerebrasSelectionWithoutANotice() {
-        let resolution = PlannerProviderRegistry.default.resolve(selection: "cerebras")
+        let resolution = PlannerProviderRegistry.default(client: makeHermeticBackendClient())
+            .resolve(selection: "cerebras")
         #expect(resolution.provider.id == "cerebras")
         #expect(resolution.fallbackNotice == nil)
     }
 
     @Test
     func shippedRegistryUnknownSelectionCarriesThePinnedNoticeCopy() {
-        let resolution = PlannerProviderRegistry.default.resolve(selection: "gpt6")
+        let resolution = PlannerProviderRegistry.default(client: makeHermeticBackendClient())
+            .resolve(selection: "gpt6")
         #expect(resolution.provider.id == "openai")
         #expect(resolution.fallbackNotice
             == "Sonny doesn't have a planner called “gpt6”, so it used OpenAI instead. Available planners: openai, cerebras.")
@@ -89,7 +95,7 @@ struct PlannerProviderRegistryTests {
             PlannerProvider(id: "alternate", displayName: "Alternate") { _ in alternatePlanner }
         )
 
-        let selected = try registry.makePlanner(selection: "alternate", usageRecorder: NoopTaskUsageRecorder.shared)
+        let selected = try registry.makePlanner(selection: "alternate", taskContext: Self.taskContext, usageRecorder: NoopTaskUsageRecorder.shared)
 
         #expect(selected.planner as? StubPlanner === alternatePlanner)
         #expect(selected.provider.id == "alternate")
@@ -103,7 +109,7 @@ struct PlannerProviderRegistryTests {
             defaultProvider: PlannerProvider(id: "primary", displayName: "Primary") { _ in defaultPlanner }
         )
 
-        let selected = try registry.makePlanner(selection: nil, usageRecorder: NoopTaskUsageRecorder.shared)
+        let selected = try registry.makePlanner(selection: nil, taskContext: Self.taskContext, usageRecorder: NoopTaskUsageRecorder.shared)
 
         #expect(selected.planner as? StubPlanner === defaultPlanner)
         #expect(selected.provider.id == "primary")
@@ -118,7 +124,7 @@ struct PlannerProviderRegistryTests {
         )
         registry.register(stubProvider(id: "alternate", displayName: "Alternate"))
 
-        let selected = try registry.makePlanner(selection: "mystery", usageRecorder: NoopTaskUsageRecorder.shared)
+        let selected = try registry.makePlanner(selection: "mystery", taskContext: Self.taskContext, usageRecorder: NoopTaskUsageRecorder.shared)
 
         #expect(selected.planner as? StubPlanner === defaultPlanner)
         #expect(selected.provider.id == "primary")
@@ -141,7 +147,7 @@ struct PlannerProviderRegistryTests {
             }
         )
 
-        let selected = try registry.makePlanner(selection: "alternate", usageRecorder: NoopTaskUsageRecorder.shared)
+        let selected = try registry.makePlanner(selection: "alternate", taskContext: Self.taskContext, usageRecorder: NoopTaskUsageRecorder.shared)
 
         #expect(selected.planner as? StubPlanner === defaultPlanner)
         #expect(selected.provider.id == "primary")
@@ -161,7 +167,7 @@ struct PlannerProviderRegistryTests {
         )
 
         #expect(throws: StubProviderError.keyMissing) {
-            _ = try registry.makePlanner(selection: nil, usageRecorder: NoopTaskUsageRecorder.shared)
+            _ = try registry.makePlanner(selection: nil, taskContext: Self.taskContext, usageRecorder: NoopTaskUsageRecorder.shared)
         }
     }
 
@@ -178,12 +184,16 @@ struct PlannerProviderRegistryTests {
         )
         let recorder = TaskUsageRecorder()
 
-        _ = try registry.makePlanner(selection: nil, usageRecorder: recorder)
+        _ = try registry.makePlanner(selection: nil, taskContext: Self.taskContext, usageRecorder: recorder)
 
         #expect(received.identifier == ObjectIdentifier(recorder))
     }
 
     // MARK: - Helpers
+
+    /// Every provider in this suite is a stub that ignores it — the point of handing it to all of
+    /// them is that the registry does not have to know which shape a provider is.
+    private static let taskContext = BackendTaskContext(taskID: "task-registry-1", retention: .standard)
 
     private func makeRegistry() -> PlannerProviderRegistry {
         var registry = PlannerProviderRegistry(defaultProvider: stubProvider(id: "primary", displayName: "Primary"))

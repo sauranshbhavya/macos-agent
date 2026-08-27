@@ -1,5 +1,6 @@
 import Foundation
 import Testing
+import MacAgentTestSupport
 @testable import MacAgent
 import MacAgentCore
 
@@ -137,6 +138,10 @@ private func makeViewModel(root: URL) throws -> AgentViewModel {
             )
         ),
         localDataDeletionService: LocalDataDeletionService(fileURLs: []),
+        // SONNY-130: undefaulted like the stores, and for a worse reason — this client holds the
+        // Keychain session every packaged build on this Mac shares. Hermetic: no environment, so
+        // every request fails before a URL is built, and an in-memory Keychain of its own.
+        backendClient: makeHermeticBackendClient(),
         priorTaskContextStore: PriorTaskContextStore(),
         taskUsageRecorder: TaskUsageRecorder(),
         userDefaults: userDefaults

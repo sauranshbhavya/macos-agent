@@ -16,9 +16,9 @@ func makeHermeticAccountModel(
     environment: SonnyBackendEnvironment? = nil,
     session: URLSession? = nil
 ) -> SonnyAccountModel {
-    SonnyAccountModel(service: SonnyAccountService(client: SonnyBackendClient(
+    SonnyAccountModel(client: makeHermeticBackendClient(
         environment: environment,
-        tokenStore: KeychainAccountTokenStore(secretStore: keychain),
-        session: session ?? URLSession(configuration: .ephemeral)
-    )))
+        keychain: keychain,
+        session: session
+    ))
 }

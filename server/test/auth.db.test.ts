@@ -9,7 +9,8 @@ import {
 import { ProviderRejected, ProviderUnavailable, type AuthProvider, type VerifiedSession } from "../src/auth/provider.js";
 import { drainOwedRevocations, owedRevocationCount } from "../src/auth/revocation.js";
 import { normalizeEmail } from "../src/auth/identity.js";
-import { TEST_JWT_CONFIG, accessTokenFor } from "./support/tokens.js";
+import { accessTokenFor } from "./support/tokens.js";
+import { testConfig } from "./support/config.js";
 import { up } from "../src/db/migrate.js";
 
 const url = process.env["DATABASE_URL"];
@@ -32,11 +33,7 @@ const withConnection = async <T,>(fn: (c: pg.Client) => Promise<T>): Promise<T> 
   }
 };
 
-const config: Config = {
-  environment: "local", port: 0, host: "127.0.0.1", buildId: "t",
-  databaseUrl: url, logLevel: "fatal", trustProxy: false,
-  rateLimitSalt: "test-salt", ...TEST_JWT_CONFIG, credentials: [],
-};
+const config: Config = testConfig({ databaseUrl: url });
 
 /** A provider that records what it was asked and answers however the test needs. */
 class FakeProvider implements AuthProvider {

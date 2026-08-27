@@ -70,9 +70,25 @@ PLATFORM="${DEPLOY_PLATFORM:-linux/arm64}"
 # container carrying the four Supabase names and not that one cannot serve a sign-in at all -- which
 # is the outcome the single command exists for.
 #
-# Provider credentials (`OPENAI_API_KEY` and the four beside it) are deliberately **not** here. They
-# belong to the routes SONNY-130 is building, that ticket is growing `config.ts` while this one is
-# written, and its branch is where they are added if it needs them.
+# **Provider credentials arrived on SONNY-130**, at the extension point the sentence that used to
+# stand here left open: it said they belong to the routes that ticket was building and that its
+# branch is where they are added if it needs them. It needs two. `OPENAI_API_KEY` serves `/v1/plan`,
+# `/v1/research/synthesize` and `/v1/transcriptions`; `TAVILY_API_KEY` serves `/v1/search`. Unlike
+# the auth routes, those four **are** mounted by a running container — `app.ts` registers them
+# outside its `if (auth)` — so a container started without these serves them and answers
+# `502 provider.unavailable`, which is honest and is not what a manual pass wants.
+#
+# The other three provider names in `config.ts` — `ANTHROPIC_API_KEY`, `CEREBRAS_API_KEY`,
+# `VISION_API_KEY` — are **not** here, because no route reads them yet: the vision route is
+# SONNY-131's and the provider router is SONNY-132's. Same rule as mail above, one row down.
+#
+# **The endpoint and model settings SONNY-130 also added are deliberately not here either** —
+# `OPENAI_BASE_URL`, `OPENAI_TEXT_MODEL`, `OPENAI_TRANSCRIPTION_MODEL`, `SEARCH_BASE_URL`. Every one
+# has a real default matching what the Mac app compiled in before the gateway existed, so a
+# container that forwards none of them behaves correctly, and this list is for values a container
+# cannot invent. Pointing a local run at a stub instead of at a vendor is done by editing this array
+# for that run, and the count and absent-name lines below both derive from its length, so nothing
+# else needs touching.
 #
 # **No value is read, stored, defaulted, printed or written down here.** `docker run -e NAME` with
 # no `=` is Docker's own pass-from-the-environment form: the value never reaches a variable in this
@@ -91,6 +107,9 @@ PASSTHROUGH=(
   SUPABASE_JWT_AUDIENCE
   DATABASE_URL
   RATE_LIMIT_SALT
+  # SONNY-130's two. See the block above for why these two and not the other three.
+  OPENAI_API_KEY
+  TAVILY_API_KEY
 )
 
 # Filled by `collect_passthrough`. Declared here, empty, because `set -u` plus bash 3.2 --

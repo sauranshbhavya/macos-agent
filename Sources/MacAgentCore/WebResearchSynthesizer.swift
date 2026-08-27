@@ -89,36 +89,45 @@ public enum WebResearchNoteDecoder {
 }
 
 public enum WebResearchNoteSchema {
+    /// §4.2's `response_schema_name` for this route. Never rendered.
+    public static let name = "web_research_note"
+
+    /// The bare JSON Schema, separated from the provider wrapper — `AgentPlanSchema.schema()` has
+    /// the reasoning, and it applies identically here (SONNY-130).
+    public static func schema() -> [String: Any] {
+        [
+            "type": "object",
+            "additionalProperties": false,
+            "required": ["title", "summary", "keyPoints", "citations"],
+            "properties": [
+                "title": [
+                    "type": "string",
+                    "description": "Concise title for the generated research note."
+                ],
+                "summary": [
+                    "type": "string",
+                    "description": "Short neutral summary grounded only in the supplied observed content."
+                ],
+                "keyPoints": [
+                    "type": "array",
+                    "description": "Important points from the supplied sources.",
+                    "items": ["type": "string"]
+                ],
+                "citations": [
+                    "type": "array",
+                    "description": "Short source-backed citation notes or quotes from the supplied sources.",
+                    "items": ["type": "string"]
+                ]
+            ]
+        ]
+    }
+
     public static func responseFormat() -> [String: Any] {
         [
             "type": "json_schema",
-            "name": "web_research_note",
+            "name": name,
             "strict": true,
-            "schema": [
-                "type": "object",
-                "additionalProperties": false,
-                "required": ["title", "summary", "keyPoints", "citations"],
-                "properties": [
-                    "title": [
-                        "type": "string",
-                        "description": "Concise title for the generated research note."
-                    ],
-                    "summary": [
-                        "type": "string",
-                        "description": "Short neutral summary grounded only in the supplied observed content."
-                    ],
-                    "keyPoints": [
-                        "type": "array",
-                        "description": "Important points from the supplied sources.",
-                        "items": ["type": "string"]
-                    ],
-                    "citations": [
-                        "type": "array",
-                        "description": "Short source-backed citation notes or quotes from the supplied sources.",
-                        "items": ["type": "string"]
-                    ]
-                ]
-            ]
+            "schema": schema()
         ]
     }
 }
@@ -141,35 +150,19 @@ public struct WebResearchSynthesisPrompt: Equatable, Sendable {
         self.observedContentTexts = observedContentTexts
     }
 
-    public func requestBody(model: String) -> [String: Any] {
-        let input = [
-            Self.message(role: "system", text: systemText),
-            Self.message(role: "user", text: trustedUserInstructionText)
-        ] + observedContentTexts.map { Self.message(role: "user", text: $0) }
-
-        return [
-            "model": model,
-            "input": input,
-            "reasoning": [
-                "effort": "medium"
-            ],
-            "text": [
-                "verbosity": "low",
-                "format": WebResearchNoteSchema.responseFormat()
-            ]
-        ]
-    }
-
-    private static func message(role: String, text: String) -> [String: Any] {
+    /// §4.2's ordered, role-tagged messages: the system prompt, the trusted user instruction, then
+    /// one message per observed source.
+    ///
+    /// **The order and the wrapping are the whole of row I's boundary and neither may be touched by
+    /// the move.** The trusted instruction and the observed content arrive as separate messages
+    /// carrying their own delimiters, and §4.2 obliges the server to forward the text without
+    /// editing, re-wrapping or re-ordering it — which is what keeps the boundary intact across a
+    /// network hop it did not previously cross.
+    public var messages: [(role: String, text: String)] {
         [
-            "role": role,
-            "content": [
-                [
-                    "type": "input_text",
-                    "text": text
-                ]
-            ]
-        ]
+            (role: "system", text: systemText),
+            (role: "user", text: trustedUserInstructionText)
+        ] + observedContentTexts.map { (role: "user", text: $0) }
     }
 }
 
@@ -351,78 +344,78 @@ public protocol WebResearchSynthesizing {
     func synthesize(prompt: WebResearchSynthesisPrompt) async throws -> WebResearchNote
 }
 
+/// The stand-in for a synthesizer nobody supplied.
+///
+/// **It replaces `EnvironmentWebResearchSynthesizer`, and the replacement is the ticket in
+/// miniature** (SONNY-130). That type existed to construct the real synthesizer lazily, at call
+/// time, so that a key exported after launch would work on the next run — a shape that only made
+/// sense while the credential was the user's own environment variable. There is no environment to
+/// read any more, so the lazy indirection has nothing to be lazy about; the real synthesizer needs a
+/// backend client and this run's task context, and both come from the composition root.
+///
+/// Refusing rather than silently doing nothing, and mirroring `UnavailableWebSearchProvider` beside
+/// it: an executor built with no synthesizer fails the research step loudly instead of returning an
+/// empty note that reads like a model that had nothing to say.
 @MainActor
-public struct EnvironmentWebResearchSynthesizer: WebResearchSynthesizing {
-    private let usageRecorder: any TaskUsageRecording
-
-    public init(usageRecorder: any TaskUsageRecording = NoopTaskUsageRecorder.shared) {
-        self.usageRecorder = usageRecorder
-    }
+public struct UnavailableWebResearchSynthesizer: WebResearchSynthesizing {
+    public init() {}
 
     public func synthesize(prompt: WebResearchSynthesisPrompt) async throws -> WebResearchNote {
-        let synthesizer = try OpenAIWebResearchSynthesizer(usageRecorder: usageRecorder)
-        return try await synthesizer.synthesize(prompt: prompt)
+        throw WebResearchError.searchProviderNotConfigured
     }
 }
 
+/// Web-research synthesis, **through Sonny's backend** (SONNY-130).
+///
+/// The type name is unchanged for the reason `OpenAIPlanner`'s is: the ticket's sixth requirement is
+/// about the model identifier, the vendor endpoint and the choice of provider, all three of which
+/// are gone from here and now live in `server/src/model/`. What remains on the Mac is the prompt —
+/// including the `TRUSTED_USER_INSTRUCTION` and `UNTRUSTED_OBSERVED_CONTENT` wrapping row I depends
+/// on — and the strict decoder that reads the model's answer.
 @MainActor
 public final class OpenAIWebResearchSynthesizer: WebResearchSynthesizing {
-    private let apiKey: String
-    private let model: String
-    private let endpoint: URL
-    private let session: URLSession
+    private let client: SonnyBackendClient
+    private let taskContext: BackendTaskContext
     private let usageRecorder: any TaskUsageRecording
 
     public init(
-        apiKey: String? = ProcessInfo.processInfo.environment["OPENAI_API_KEY"],
-        model: String = ProcessInfo.processInfo.environment["OPENAI_MODEL"] ?? "gpt-5.5",
-        endpoint: URL = URL(string: "https://api.openai.com/v1/responses")!,
-        session: URLSession = .shared,
+        client: SonnyBackendClient,
+        taskContext: BackendTaskContext,
         usageRecorder: any TaskUsageRecording = NoopTaskUsageRecorder.shared
-    ) throws {
-        guard let apiKey, !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw PlannerError.missingAPIKey
-        }
-        self.apiKey = apiKey
-        self.model = model
-        self.endpoint = endpoint
-        self.session = session
+    ) {
+        self.client = client
+        self.taskContext = taskContext
         self.usageRecorder = usageRecorder
     }
 
     public func synthesize(prompt: WebResearchSynthesisPrompt) async throws -> WebResearchNote {
-        let requestBody = prompt.requestBody(model: model)
-        let requestData = try JSONSerialization.data(withJSONObject: requestBody)
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = requestData
+        let body = try SonnyTextRouteBody(
+            context: taskContext,
+            messages: prompt.messages,
+            schemaName: WebResearchNoteSchema.name,
+            schema: WebResearchNoteSchema.schema()
+        ).encoded()
 
-        let (data, response) = try await session.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw PlannerError.badResponse(-1, "No HTTP response.")
-        }
-
-        guard (200..<300).contains(httpResponse.statusCode) else {
-            let body = String(data: data, encoding: .utf8) ?? "<unreadable body>"
-            throw PlannerError.badResponse(httpResponse.statusCode, body)
-        }
-
-        let reportedUsage = try AIUsagePayloadParser.responsesUsage(from: data)
-        let outputTextResult = Result {
-            try OpenAIResponseParser.outputText(from: data)
-        }
-        usageRecorder.record(
-            AIUsageRecord.responses(
-                kind: .webResearchSynthesis,
-                model: model,
-                reportedUsage: reportedUsage,
-                estimatedInputText: String(data: requestData, encoding: .utf8) ?? prompt.systemText,
-                estimatedOutputText: (try? outputTextResult.get()) ?? ""
+        let decoded: SonnyTextRouteResponse
+        do {
+            decoded = try await client.modelRouteResponse(
+                SonnyTextRouteResponse.self,
+                route: .researchSynthesis,
+                body: body
             )
+        } catch let error as SonnyBackendError {
+            throw PlannerError.backend(error)
+        }
+
+        // Recorded before the note is decoded, for the reason `OpenAIPlanner.plan` gives: a note the
+        // model returned malformed still cost what it cost.
+        usageRecorder.record(
+            decoded.usage?.record(kind: .webResearchSynthesis, route: .researchSynthesis)
+                ?? AIUsageRecord(
+                    kind: .webResearchSynthesis,
+                    model: SonnyModelRoute.researchSynthesis.usageModelName
+                )
         )
-        let text = try outputTextResult.get()
-        return try WebResearchNoteDecoder.decodeStrict(from: text)
+        return try WebResearchNoteDecoder.decodeStrict(from: decoded.output_text)
     }
 }

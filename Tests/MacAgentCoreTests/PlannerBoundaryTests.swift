@@ -577,7 +577,7 @@ private let expectedDefaultPlannerDescription = """
 - web_to_markdown: Web page to Markdown
   description: Fetch one public http/https URL, resolve a topic through a configured search provider, or fetch multiple http/https sourceURLs for comparison, synthesize a research note, and save Markdown in a whitelisted output path. Sources that cannot be retrieved are skipped and listed in the note; the step fails only when every source fails.
   required fields: targetURL, sourceURLs, or searchQuery
-  side effects: network request, send fetched public page content to OpenAI, write file
+  side effects: network request, send fetched public page content to Sonny, write file
   dry run: Show source URL(s), search query, and Markdown output path without fetching pages or writing files.
   examples: Summarize https://example.com/article and save as Markdown | Compare these source URLs and save a Markdown note | Research Swift concurrency and save a Markdown note
 - open_app: Open Mac app

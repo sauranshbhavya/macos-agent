@@ -1,31 +1,266 @@
 import Foundation
+import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
 
-@Suite(.serialized)
+/// The planner, **against Sonny's own backend** (SONNY-130).
+///
+/// **Every test in the environment-key version of this file has a successor here**, and the four
+/// that changed shape changed it because the thing they asserted no longer exists rather than
+/// because it stopped being worth asserting:
+///
+/// | before | after |
+/// |---|---|
+/// | `plannerRecordsReportedResponsesUsage` | `plannerRecordsTheUsageTheBackendReported` |
+/// | `plannerEstimatesResponsesUsageWhenUsageIsNull` | `plannerRecordsAnEstimateTheBackendMadeRatherThanMakingItsOwn` |
+/// | `priorTaskContextIsSentAsSeparatePlannerMessage` | same name |
+/// | `prepareFailurePriorTaskContextIsSentAsSeparatePlannerMessage` | same name |
+/// | `plannerSurfacesBadHTTPStatusWithResponseBody` | `plannerSurfacesABackendFailureWithTheAppsOwnWordsAndNeverTheServers` |
+/// | `plannerSurfacesMalformedOutputTextAsItsOwnDecodingError` | same name |
+/// | `plannerSurfacesUnreadableResponseBodyAsMissingOutputText` | `plannerSurfacesAnUnreadableResponseBodyAsABackendFailure` |
+///
+/// The two renamed failure tests are the ones worth reading. There is no HTTP status or response
+/// body in a planner error any more — the shared client turns both into a typed `code`, and §7.1
+/// forbids showing the server's own sentence — so "surfaces the status and the body" became
+/// "surfaces the app's own sentence and none of the server's", which is the property that replaced
+/// it. And `missingOutputText` is unreachable from this path: `output_text` is a required field of
+/// the contract's response, so a body without it fails to decode rather than decoding into nothing.
 @MainActor
 struct OpenAIPlannerTests {
-    @Test
-    func plannerRecordsReportedResponsesUsage() async throws {
-        PlannerFixtureURLProtocol.handler = { request in
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: nil
-            )!
-            return (response, Data(Self.openAppResponseWithUsageJSON.utf8))
-        }
+    // MARK: - What goes on the wire
 
-        let recorder = TaskUsageRecorder()
-        let planner = try OpenAIPlanner(
-            apiKey: "test-key",
-            endpoint: URL(string: "https://api.openai.com/v1/responses")!,
-            session: Self.fixtureSession(),
-            usageRecorder: recorder
+    @Test
+    func plannerSendsTheContractsBodyToThePlanRouteUnderTheUsersOwnSession() async throws {
+        let fixture = SignedInBackendFixture()
+        let recorded = RecordedBackendRequests()
+        fixture.register { request in
+            recorded.append(request)
+            return ModelRouteFixtures.reply(
+                ModelRouteFixtures.textRouteJSON(outputText: openAppPlanJSON)
+            )
+        }
+        defer { fixture.unregister() }
+
+        _ = try await Self.planner(fixture).plan(command: "Open Safari")
+
+        let sent = try recorded.only
+        #expect(sent.method == "POST")
+        #expect(sent.path == "/v1/plan")
+        #expect(sent.contentType == "application/json")
+        // The user's own Sonny session, not a provider credential — the whole point of the move.
+        #expect(sent.authorization == "Bearer test-access-token")
+        // §9.1: every POST carries a key, and it is what makes a retry unable to double-bill.
+        #expect(sent.idempotencyKey?.isEmpty == false)
+
+        let body = sent.json
+        // §2.4: required on every content-bearing request, and never defaulted.
+        #expect(body["task_id"] as? String == "task-fixture-1")
+        #expect(body["retention"] as? String == "standard")
+        #expect(body["response_schema_name"] as? String == "agent_plan")
+        #expect(body["response_schema"] as? [String: Any] != nil)
+        #expect(body["reasoning_effort"] as? String == "medium")
+        #expect(body["verbosity"] as? String == "low")
+    }
+
+    @Test
+    func aRunStartedWithDontSaveThisTaskSendsRetentionNone() async throws {
+        // §10.1: `"none"` is what the app sends for a run started with "Don't save this task" on,
+        // and it is the one thing that produces it. Asserted on the wire because the field is the
+        // whole of the user's privacy answer once the request leaves the Mac.
+        let fixture = SignedInBackendFixture()
+        let recorded = RecordedBackendRequests()
+        fixture.register { request in
+            recorded.append(request)
+            return ModelRouteFixtures.reply(
+                ModelRouteFixtures.textRouteJSON(outputText: openAppPlanJSON)
+            )
+        }
+        defer { fixture.unregister() }
+
+        let planner = OpenAIPlanner(
+            client: fixture.client,
+            taskContext: BackendTaskContext(taskID: "task-private", retention: .notStored)
+        )
+        _ = try await planner.plan(command: "Open Safari")
+
+        #expect(try recorded.only.json["retention"] as? String == "none")
+        #expect(try recorded.only.json["task_id"] as? String == "task-private")
+    }
+
+    @Test
+    func theRequestNamesNoProviderNoModelAndNoVendorEndpoint() async throws {
+        // SONNY-130's sixth requirement, asserted on the bytes rather than argued. This is the
+        // property that turns SONNY-110's move to a paid zero-retention route into a redeploy: if
+        // the client named the model or the vendor, changing either would need an app release.
+        //
+        // **The system prompt is excluded here and asserted separately below**, because it is a
+        // payload the capability registry builds rather than anything this client decides — and one
+        // capability's description still names a provider, for a reason the other test states. The
+        // exclusion is one named message, not a softened pattern.
+        let fixture = SignedInBackendFixture()
+        let recorded = RecordedBackendRequests()
+        fixture.register { request in
+            recorded.append(request)
+            return ModelRouteFixtures.reply(
+                ModelRouteFixtures.textRouteJSON(outputText: openAppPlanJSON)
+            )
+        }
+        defer { fixture.unregister() }
+
+        _ = try await Self.planner(fixture).plan(command: "Open Safari")
+
+        let sent = try recorded.only
+        let body = try #require(
+            JSONSerialization.jsonObject(with: sent.body) as? [String: Any]
+        )
+        var withoutSystemPrompt = body
+        var messages = try #require(body["messages"] as? [[String: Any]])
+        #expect(messages.first?["role"] as? String == "system")
+        messages.removeFirst()
+        withoutSystemPrompt["messages"] = messages
+        let wire = String(
+            data: try JSONSerialization.data(withJSONObject: withoutSystemPrompt),
+            encoding: .utf8
+        )!.lowercased()
+
+        for forbidden in ["openai", "api.openai.com", "gpt-", "anthropic", "claude", "cerebras", "tavily"] {
+            #expect(!wire.contains(forbidden), "request body names \(forbidden)")
+        }
+        #expect(!sent.path.contains("responses"))
+        // And the model identifier is not hiding in a header either.
+        #expect(sent.authorization == "Bearer test-access-token")
+    }
+
+    @Test
+    func theOnlyProviderNameLeftInTheSystemPromptIsTheOneTheDegradationBranchRemoves() throws {
+        // **Recorded as a test rather than left for a reader to discover.** The system prompt folds
+        // in every capability's description and side effects (`ToolRegistry.plannerDescription`), and
+        // one of them still names a provider: `PermissionReadinessCapabilityAdapter` describes a
+        // readiness check that genuinely still reads `OPENAI_API_KEY`, and removing that key check —
+        // with the "export a variable" strings beside it — is `feature/row-12-degradation`'s, which
+        // cannot run until both gateways land. So the sentence is accurate about a thing that has
+        // not moved yet, and this ticket's never-touch list says to leave it.
+        //
+        // `WebResearchMarkdownCapabilityAdapter`'s was the other one and it was **corrected**, not
+        // left: it said fetched page content is sent "to OpenAI", which this branch made false, and
+        // it is a claim a user reads before approving an egress rather than a stale variable name.
+        //
+        // This test fails when either half changes, which is the point: the day the degradation
+        // branch removes the key check, this expectation is what says the count has moved.
+        let prompt = OpenAIPlanner.systemPrompt(toolRegistry: .default).lowercased()
+        #expect(prompt.components(separatedBy: "openai").count - 1 == 1)
+        #expect(prompt.contains("show readiness for openai key"))
+        #expect(!prompt.contains("content to openai"))
+        for forbidden in ["api.openai.com", "gpt-", "anthropic", "cerebras", "tavily"] {
+            #expect(!prompt.contains(forbidden), "the system prompt names \(forbidden)")
+        }
+    }
+
+    @Test
+    func priorTaskContextIsSentAsSeparatePlannerMessage() async throws {
+        let fixture = SignedInBackendFixture()
+        let recorded = RecordedBackendRequests()
+        fixture.register { request in
+            recorded.append(request)
+            return ModelRouteFixtures.reply(
+                ModelRouteFixtures.textRouteJSON(outputText: openAppPlanJSON)
+            )
+        }
+        defer { fixture.unregister() }
+
+        let context = PriorTaskContext(
+            command: "Find the 3 largest files in ~/Desktop/MacAgentDemo and zip them.",
+            plan: Self.largestPlan(),
+            outcome: PriorTaskOutcome(status: .completed, summary: "Created largest.zip."),
+            createdAt: Date(timeIntervalSince1970: 2_000)
+        )
+        _ = try await Self.planner(fixture).plan(
+            command: "use ~/Documents/MacAgentDocs instead",
+            priorTaskContext: context
         )
 
-        _ = try await planner.plan(command: "Open Safari")
+        let messages = try #require(try recorded.only.json["messages"] as? [[String: Any]])
+        #expect(messages.count == 3)
+        #expect(messages.map { $0["role"] as? String } == ["system", "user", "user"])
+        #expect(messages[1]["text"] as? String == context.plannerContextText)
+        #expect((messages[1]["text"] as? String)?.contains("TRUSTED_PRIOR_TASK_CONTEXT_BEGIN") == true)
+        #expect((messages[1]["text"] as? String)?.contains("MacAgentDemo") == true)
+        #expect(messages[2]["text"] as? String == "use ~/Documents/MacAgentDocs instead")
+    }
+
+    @Test
+    func prepareFailurePriorTaskContextIsSentAsSeparatePlannerMessage() async throws {
+        let fixture = SignedInBackendFixture()
+        let recorded = RecordedBackendRequests()
+        fixture.register { request in
+            recorded.append(request)
+            return ModelRouteFixtures.reply(
+                ModelRouteFixtures.textRouteJSON(outputText: openAppPlanJSON)
+            )
+        }
+        defer { fixture.unregister() }
+
+        let context = PriorTaskContext(
+            command: "find the 3 largest files in ~/Desktop/SomeFolder",
+            outcome: PriorTaskOutcome(
+                status: .failed,
+                summary: "The folder ~/Desktop/SomeFolder could not be scanned."
+            ),
+            createdAt: Date(timeIntervalSince1970: 2_000)
+        )
+        _ = try await Self.planner(fixture).plan(
+            command: "use ~/Documents instead",
+            priorTaskContext: context
+        )
+
+        let messages = try #require(try recorded.only.json["messages"] as? [[String: Any]])
+        #expect(messages.count == 3)
+        let contextText = try #require(messages[1]["text"] as? String)
+        #expect(contextText.contains("Previous command: find the 3 largest files in ~/Desktop/SomeFolder"))
+        // Reworded by SONNY-150 to state the fact without a cause — see `PriorTaskContext`.
+        #expect(contextText.contains("Previous plan summary: - not recorded"))
+        #expect(contextText.contains(
+            "Previous outcome: failed - The folder ~/Desktop/SomeFolder could not be scanned."
+        ))
+        #expect(messages[2]["text"] as? String == "use ~/Documents instead")
+    }
+
+    @Test
+    func theSystemPromptIsSentUnchangedAndIsStillTheOneTheRegistryDescribes() async throws {
+        // The prompt stayed on the Mac, which is half of what §1.3's boundary says. §4.2 obliges the
+        // server to forward it without editing, re-wrapping or re-ordering it — so what leaves here
+        // has to be the whole prompt, byte for byte, or the server is being asked to fix it.
+        let fixture = SignedInBackendFixture()
+        let recorded = RecordedBackendRequests()
+        fixture.register { request in
+            recorded.append(request)
+            return ModelRouteFixtures.reply(
+                ModelRouteFixtures.textRouteJSON(outputText: openAppPlanJSON)
+            )
+        }
+        defer { fixture.unregister() }
+
+        _ = try await Self.planner(fixture).plan(command: "Open Safari")
+
+        let messages = try #require(try recorded.only.json["messages"] as? [[String: Any]])
+        #expect(messages.first?["text"] as? String == OpenAIPlanner.systemPrompt(toolRegistry: .default))
+    }
+
+    // MARK: - Usage
+
+    @Test
+    func plannerRecordsTheUsageTheBackendReported() async throws {
+        let fixture = SignedInBackendFixture()
+        fixture.register { _ in
+            ModelRouteFixtures.reply(ModelRouteFixtures.textRouteJSON(
+                outputText: openAppPlanJSON,
+                usage: ModelRouteFixtures.reportedTokenUsage(input: 42, output: 18, total: 60)
+            ))
+        }
+        defer { fixture.unregister() }
+
+        let recorder = TaskUsageRecorder()
+        _ = try await Self.planner(fixture, usageRecorder: recorder).plan(command: "Open Safari")
 
         let summary = recorder.snapshot()
         #expect(summary.requestCount == 1)
@@ -35,212 +270,203 @@ struct OpenAIPlannerTests {
         #expect(summary.estimatedTotalTokens == 0)
         #expect(summary.records.first?.kind == .planner)
         #expect(summary.records.first?.tokenSource == .reported)
+        // §4.2: `AIUsageRecord.model` holds the route's name rather than a model identifier the
+        // client is no longer allowed to know. It is non-optional and it eventually gets rendered.
+        #expect(summary.records.first?.model == "plan")
     }
 
     @Test
-    func plannerEstimatesResponsesUsageWhenUsageIsNull() async throws {
-        PlannerFixtureURLProtocol.handler = { request in
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: nil
-            )!
-            return (response, Data(Self.openAppResponseWithNullUsageJSON.utf8))
+    func plannerRecordsAnEstimateTheBackendMadeRatherThanMakingItsOwn() async throws {
+        // **The estimation moved, and this is the test that says so.** It used to happen here, from
+        // the request and response text, whenever the provider reported nothing. §4.2 puts it on the
+        // server — "the server estimates only when the provider reported nothing, and says which it
+        // did" — because the server is the only side that can see whether the provider answered.
+        // What the client keeps is the distinction, which the local summary renders.
+        let fixture = SignedInBackendFixture()
+        fixture.register { _ in
+            ModelRouteFixtures.reply(ModelRouteFixtures.textRouteJSON(
+                outputText: openAppPlanJSON,
+                usage: ModelRouteFixtures.estimatedTokenUsage(input: 900, output: 30, total: 930)
+            ))
         }
+        defer { fixture.unregister() }
 
         let recorder = TaskUsageRecorder()
-        let planner = try OpenAIPlanner(
-            apiKey: "test-key",
-            endpoint: URL(string: "https://api.openai.com/v1/responses")!,
-            session: Self.fixtureSession(),
-            usageRecorder: recorder
-        )
-
-        _ = try await planner.plan(command: "Open Safari")
+        _ = try await Self.planner(fixture, usageRecorder: recorder).plan(command: "Open Safari")
 
         let summary = recorder.snapshot()
         #expect(summary.requestCount == 1)
         #expect(summary.reportedTotalTokens == 0)
-        #expect(summary.estimatedInputTokens > 0)
-        #expect(summary.estimatedOutputTokens > 0)
-        #expect(summary.estimatedTotalTokens == summary.estimatedInputTokens + summary.estimatedOutputTokens)
+        #expect(summary.estimatedInputTokens == 900)
+        #expect(summary.estimatedOutputTokens == 30)
+        #expect(summary.estimatedTotalTokens == 930)
         #expect(summary.hasEstimatedTokens)
         #expect(summary.records.first?.tokenSource == .estimated)
     }
 
     @Test
-    func priorTaskContextIsSentAsSeparatePlannerMessage() async throws {
-        PlannerFixtureURLProtocol.handler = { request in
-            PlannerFixtureURLProtocol.capturedBody = try request.bodyData()
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: nil
-            )!
-            return (response, Data(Self.openAppResponseJSON.utf8))
+    func theSummaryStillPopulatesWhenTheBackendSendsNoUsageBlockAtAll() async throws {
+        // A response with no `usage` is not a shape the gateway sends today, and it is exactly the
+        // shape an older or a partly-deployed server would. The requirement is that the local
+        // per-task summary must not silently go blank, so a request with no numbers is still a
+        // request the summary counts.
+        let fixture = SignedInBackendFixture()
+        fixture.register { _ in
+            ModelRouteFixtures.reply(ModelRouteFixtures.textRouteJSON(outputText: openAppPlanJSON))
         }
+        defer { fixture.unregister() }
 
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [PlannerFixtureURLProtocol.self]
-        let session = URLSession(configuration: configuration)
-        let planner = try OpenAIPlanner(
-            apiKey: "test-key",
-            endpoint: URL(string: "https://api.openai.com/v1/responses")!,
-            session: session
-        )
-        let context = PriorTaskContext(
-            command: "Find the 3 largest files in ~/Desktop/MacAgentDemo and zip them.",
-            plan: Self.largestPlan(),
-            outcome: PriorTaskOutcome(status: .completed, summary: "Created largest.zip."),
-            createdAt: Date(timeIntervalSince1970: 2_000)
-        )
+        let recorder = TaskUsageRecorder()
+        _ = try await Self.planner(fixture, usageRecorder: recorder).plan(command: "Open Safari")
 
-        _ = try await planner.plan(
-            command: "use ~/Documents/MacAgentDocs instead",
-            priorTaskContext: context
-        )
-
-        let body = try #require(PlannerFixtureURLProtocol.capturedBody)
-        let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
-        let input = try #require(object["input"] as? [[String: Any]])
-        #expect(input.count == 3)
-        #expect(Self.messageText(input[1])?.contains("TRUSTED_PRIOR_TASK_CONTEXT_BEGIN") == true)
-        #expect(Self.messageText(input[1])?.contains("MacAgentDemo") == true)
-        #expect(Self.messageText(input[2]) == "use ~/Documents/MacAgentDocs instead")
+        let summary = recorder.snapshot()
+        #expect(summary.requestCount == 1)
+        #expect(summary.records.first?.kind == .planner)
+        #expect(summary.records.first?.model == "plan")
+        #expect(summary.records.first?.tokenSource == nil)
     }
 
     @Test
-    func prepareFailurePriorTaskContextIsSentAsSeparatePlannerMessage() async throws {
-        PlannerFixtureURLProtocol.handler = { request in
-            PlannerFixtureURLProtocol.capturedBody = try request.bodyData()
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: nil
-            )!
-            return (response, Data(Self.openAppResponseJSON.utf8))
+    func usageIsRecordedEvenWhenTheModelsPlanCannotBeDecoded() async throws {
+        // The order the environment-key version used, kept: a plan the model returned malformed
+        // still cost what it cost, and a summary that omitted exactly the failed runs would
+        // understate the ones a user is most likely to ask about.
+        let fixture = SignedInBackendFixture()
+        fixture.register { _ in
+            ModelRouteFixtures.reply(ModelRouteFixtures.textRouteJSON(
+                outputText: "{not valid json",
+                usage: ModelRouteFixtures.reportedTokenUsage(input: 7, output: 1, total: 8)
+            ))
+        }
+        defer { fixture.unregister() }
+
+        let recorder = TaskUsageRecorder()
+        await #expect(throws: AgentPlanDecodingError.invalidJSON) {
+            _ = try await Self.planner(fixture, usageRecorder: recorder).plan(command: "Open Safari")
         }
 
-        let planner = try OpenAIPlanner(
-            apiKey: "test-key",
-            endpoint: URL(string: "https://api.openai.com/v1/responses")!,
-            session: Self.fixtureSession()
-        )
-        let context = PriorTaskContext(
-            command: "find the 3 largest files in ~/Desktop/SomeFolder",
-            outcome: PriorTaskOutcome(status: .failed, summary: "The folder ~/Desktop/SomeFolder could not be scanned."),
-            createdAt: Date(timeIntervalSince1970: 2_000)
-        )
+        #expect(recorder.snapshot().requestCount == 1)
+        #expect(recorder.snapshot().reportedTotalTokens == 8)
+    }
 
-        _ = try await planner.plan(
-            command: "use ~/Documents instead",
-            priorTaskContext: context
-        )
+    // MARK: - Failure
 
-        let body = try #require(PlannerFixtureURLProtocol.capturedBody)
-        let object = try #require(JSONSerialization.jsonObject(with: body) as? [String: Any])
-        let input = try #require(object["input"] as? [[String: Any]])
-        #expect(input.count == 3)
-        let contextText = try #require(Self.messageText(input[1]))
-        #expect(contextText.contains("Previous command: find the 3 largest files in ~/Desktop/SomeFolder"))
-        // Reworded by SONNY-150 to state the fact without a cause — see `PriorTaskContext`.
-        #expect(contextText.contains("Previous plan summary: - not recorded"))
-        #expect(contextText.contains("Previous outcome: failed - The folder ~/Desktop/SomeFolder could not be scanned."))
-        #expect(Self.messageText(input[2]) == "use ~/Documents instead")
+    @Test
+    func plannerSurfacesABackendFailureWithTheAppsOwnWordsAndNeverTheServers() async throws {
+        // §7.1: "the client never displays `message`". The server's sentence is for logs and the
+        // support lookup, and a sentence authored on the server and rendered in the app is a hole
+        // straight through Sonny's rule that the product does not explain itself.
+        let fixture = SignedInBackendFixture()
+        fixture.register { _ in
+            ModelRouteFixtures.failure(
+                status: 502,
+                code: "provider.rejected",
+                message: "Upstream exploded: prompt contained 'my tax returns folder'"
+            )
+        }
+        defer { fixture.unregister() }
+
+        do {
+            _ = try await Self.planner(fixture).plan(command: "Open Safari")
+            Issue.record("Expected the backend failure to surface as PlannerError.backend.")
+        } catch let error as PlannerError {
+            guard case .backend(let backendError) = error else {
+                Issue.record("Expected .backend, got \(error).")
+                return
+            }
+            guard case .api(let api) = backendError else {
+                Issue.record("Expected an API error, got \(backendError).")
+                return
+            }
+            #expect(api.code == .providerRejected)
+            #expect(api.statusCode == 502)
+            // The typed error carries the server's sentence for logs...
+            #expect(api.message.contains("tax returns"))
+            // ...and what the user is shown carries none of it — and does not invite a retry, which
+            // §9.3 says would fail identically (PR #139, F7).
+            let shown = try #require(error.errorDescription)
+            #expect(shown == "Sonny couldn't do this one.")
+            #expect(!shown.lowercased().contains("try again"))
+            #expect(!shown.contains("tax returns"))
+            #expect(!shown.contains("502"))
+            #expect(!shown.lowercased().contains("provider"))
+        }
     }
 
     @Test
-    func plannerSurfacesBadHTTPStatusWithResponseBody() async throws {
-        PlannerFixtureURLProtocol.handler = { request in
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 500,
-                httpVersion: nil,
-                headerFields: nil
-            )!
-            return (response, Data(#"{"error":{"message":"upstream exploded"}}"#.utf8))
-        }
-
-        let planner = try OpenAIPlanner(
-            apiKey: "test-key",
-            endpoint: URL(string: "https://api.openai.com/v1/responses")!,
-            session: Self.fixtureSession()
+    func plannerTellsAnUnsignedInUserToSignInRatherThanFailingOpaquely() async throws {
+        // §7.2 case 1. Reachable in a way the environment-key version's `missingAPIKey` was not: it
+        // threw at *construction*, before a run existed, so a user with no key never got here at
+        // all. Now the planner constructs fine and the request is what refuses.
+        let client = makeHermeticBackendClient(
+            environment: SonnyBackendEnvironment(
+                baseURL: URL(string: "https://sonny-unreached.invalid")!,
+                source: .debugOverride
+            )
         )
+        let planner = OpenAIPlanner(client: client, taskContext: ModelRouteFixtures.standardContext)
 
         do {
             _ = try await planner.plan(command: "Open Safari")
-            Issue.record("Expected an HTTP 500 to surface as PlannerError.badResponse.")
+            Issue.record("Expected a request with no session to be refused before it was sent.")
         } catch let error as PlannerError {
-            guard case .badResponse(let status, let body) = error else {
-                Issue.record("Expected .badResponse, got \(error).")
-                return
-            }
-            #expect(status == 500)
-            #expect(body.contains("upstream exploded"))
+            #expect(error == .backend(.notSignedIn))
+            #expect(error.errorDescription == "Sign in to Sonny to run this.")
         }
     }
 
     @Test
     func plannerSurfacesMalformedOutputTextAsItsOwnDecodingError() async throws {
-        PlannerFixtureURLProtocol.handler = { request in
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: nil
-            )!
-            return (response, Data(#"{"output_text":"{not valid json"}"#.utf8))
+        let fixture = SignedInBackendFixture()
+        fixture.register { _ in
+            ModelRouteFixtures.reply(
+                ModelRouteFixtures.textRouteJSON(outputText: "{not valid json")
+            )
         }
-
-        let planner = try OpenAIPlanner(
-            apiKey: "test-key",
-            endpoint: URL(string: "https://api.openai.com/v1/responses")!,
-            session: Self.fixtureSession()
-        )
+        defer { fixture.unregister() }
 
         await #expect(throws: AgentPlanDecodingError.invalidJSON) {
-            _ = try await planner.plan(command: "Open Safari")
+            _ = try await Self.planner(fixture).plan(command: "Open Safari")
         }
     }
 
     @Test
-    func plannerSurfacesUnreadableResponseBodyAsMissingOutputText() async throws {
-        PlannerFixtureURLProtocol.handler = { request in
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: nil
-            )!
-            return (response, Data("<html>not json at all</html>".utf8))
+    func plannerSurfacesAnUnreadableResponseBodyAsABackendFailure() async throws {
+        // **The successor to `plannerSurfacesUnreadableResponseBodyAsMissingOutputText`, and the
+        // outcome changed on purpose.** `output_text` is a required field of §4.2's response, so a
+        // 200 carrying something else is a body this client cannot read at all — which is
+        // `undecodableResponse`, not "the model said nothing". `PlannerError.missingOutputText`
+        // still exists and is still thrown, by `OpenAIResponseParser`, which `VisionModelClient` and
+        // `CerebrasPlanner` use and this ticket does not touch.
+        let fixture = SignedInBackendFixture()
+        fixture.register { _ in
+            ModelRouteFixtures.reply(Data("<html>not json at all</html>".utf8))
         }
+        defer { fixture.unregister() }
 
-        let planner = try OpenAIPlanner(
-            apiKey: "test-key",
-            endpoint: URL(string: "https://api.openai.com/v1/responses")!,
-            session: Self.fixtureSession()
+        do {
+            _ = try await Self.planner(fixture).plan(command: "Open Safari")
+            Issue.record("Expected an unreadable body to surface as a backend failure.")
+        } catch let error as PlannerError {
+            guard case .backend(.undecodableResponse) = error else {
+                Issue.record("Expected .backend(.undecodableResponse), got \(error).")
+                return
+            }
+            #expect(error.errorDescription == "Sonny couldn't finish this one. Try again.")
+        }
+    }
+
+    // MARK: - Fixtures
+
+    private static func planner(
+        _ fixture: SignedInBackendFixture,
+        usageRecorder: any TaskUsageRecording = NoopTaskUsageRecorder.shared
+    ) -> OpenAIPlanner {
+        OpenAIPlanner(
+            client: fixture.client,
+            taskContext: ModelRouteFixtures.standardContext,
+            usageRecorder: usageRecorder
         )
-
-        await #expect(throws: PlannerError.missingOutputText) {
-            _ = try await planner.plan(command: "Open Safari")
-        }
-    }
-
-    private static func messageText(_ message: [String: Any]) -> String? {
-        guard let content = message["content"] as? [[String: Any]],
-              let first = content.first else {
-            return nil
-        }
-        return first["text"] as? String
-    }
-
-    private static func fixtureSession() -> URLSession {
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [PlannerFixtureURLProtocol.self]
-        return URLSession(configuration: configuration)
     }
 
     private static func largestPlan() -> AgentPlan {
@@ -266,92 +492,8 @@ struct OpenAIPlannerTests {
             ]
         )
     }
-
-    private static let openAppResponseJSON = #"""
-    {
-      "id": "resp_123",
-      "output_text": "{\"summary\":\"Open Safari.\",\"requiresConfirmation\":false,\"steps\":[{\"id\":\"open\",\"operation\":\"open_app\",\"description\":\"Open Safari.\",\"inputPath\":null,\"outputPath\":null,\"count\":null,\"targetURL\":null,\"appName\":\"Safari\",\"question\":null,\"mediaProvider\":null,\"mediaTitle\":null,\"mediaArtist\":null,\"contextSource\":null,\"routineName\":null,\"routineSteps\":null,\"workspaceName\":null,\"workspaceApps\":null,\"workspaceURLs\":null,\"sourceURLs\":null,\"searchQuery\":null,\"draftTitle\":null,\"draftContent\":null,\"shortcutName\":null,\"shortcutInput\":null}]}"
-    }
-    """#
-
-    private static let openAppResponseWithUsageJSON = #"""
-    {
-      "id": "resp_123",
-      "output_text": "{\"summary\":\"Open Safari.\",\"requiresConfirmation\":false,\"steps\":[{\"id\":\"open\",\"operation\":\"open_app\",\"description\":\"Open Safari.\",\"inputPath\":null,\"outputPath\":null,\"count\":null,\"targetURL\":null,\"appName\":\"Safari\",\"question\":null,\"mediaProvider\":null,\"mediaTitle\":null,\"mediaArtist\":null,\"contextSource\":null,\"routineName\":null,\"routineSteps\":null,\"workspaceName\":null,\"workspaceApps\":null,\"workspaceURLs\":null,\"sourceURLs\":null,\"searchQuery\":null,\"draftTitle\":null,\"draftContent\":null,\"shortcutName\":null,\"shortcutInput\":null}]}",
-      "usage": {
-        "input_tokens": 42,
-        "output_tokens": 18,
-        "total_tokens": 60
-      }
-    }
-    """#
-
-    private static let openAppResponseWithNullUsageJSON = #"""
-    {
-      "id": "resp_123",
-      "output_text": "{\"summary\":\"Open Safari.\",\"requiresConfirmation\":false,\"steps\":[{\"id\":\"open\",\"operation\":\"open_app\",\"description\":\"Open Safari.\",\"inputPath\":null,\"outputPath\":null,\"count\":null,\"targetURL\":null,\"appName\":\"Safari\",\"question\":null,\"mediaProvider\":null,\"mediaTitle\":null,\"mediaArtist\":null,\"contextSource\":null,\"routineName\":null,\"routineSteps\":null,\"workspaceName\":null,\"workspaceApps\":null,\"workspaceURLs\":null,\"sourceURLs\":null,\"searchQuery\":null,\"draftTitle\":null,\"draftContent\":null,\"shortcutName\":null,\"shortcutInput\":null}]}",
-      "usage": null
-    }
-    """#
 }
 
-private final class PlannerFixtureURLProtocol: URLProtocol {
-    nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
-    nonisolated(unsafe) static var capturedBody: Data?
-
-    override class func canInit(with request: URLRequest) -> Bool {
-        true
-    }
-
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
-        request
-    }
-
-    override func startLoading() {
-        guard let handler = Self.handler else {
-            client?.urlProtocol(self, didFailWithError: PlannerError.missingOutputText)
-            return
-        }
-
-        do {
-            let (response, data) = try handler(request)
-            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: data)
-            client?.urlProtocolDidFinishLoading(self)
-        } catch {
-            client?.urlProtocol(self, didFailWithError: error)
-        }
-    }
-
-    override func stopLoading() {}
-}
-
-private extension URLRequest {
-    func bodyData() throws -> Data {
-        if let httpBody {
-            return httpBody
-        }
-
-        guard let stream = httpBodyStream else {
-            Issue.record("Expected JSON body data.")
-            throw PlannerError.missingOutputText
-        }
-
-        stream.open()
-        defer { stream.close() }
-
-        var data = Data()
-        var buffer = [UInt8](repeating: 0, count: 4096)
-        while stream.hasBytesAvailable {
-            let count = stream.read(&buffer, maxLength: buffer.count)
-            if count < 0 {
-                throw stream.streamError ?? PlannerError.missingOutputText
-            }
-            if count == 0 {
-                break
-            }
-            data.append(buffer, count: count)
-        }
-        return data
-    }
-}
+/// The plan the stub answers with. File-level rather than a member, because the suite is
+/// `@MainActor` and the stub handlers are `@Sendable` closures that run on URLSession's threads.
+private let openAppPlanJSON = #"{"summary":"Open Safari.","requiresConfirmation":false,"steps":[{"id":"open","operation":"open_app","description":"Open Safari.","inputPath":null,"outputPath":null,"count":null,"targetURL":null,"appName":"Safari","question":null,"mediaProvider":null,"mediaTitle":null,"mediaArtist":null,"contextSource":null,"routineName":null,"routineSteps":null,"workspaceName":null,"workspaceApps":null,"workspaceURLs":null,"sourceURLs":null,"searchQuery":null,"draftTitle":null,"draftContent":null,"shortcutName":null,"shortcutInput":null}]}"#

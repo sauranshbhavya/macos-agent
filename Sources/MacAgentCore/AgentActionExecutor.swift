@@ -202,9 +202,7 @@ public final class AgentActionExecutor {
         self.webPageLoader = webPageLoader ?? PublicWebPageLoader.live()
         self.webSearchProvider = webSearchProvider ?? UnavailableWebSearchProvider()
         self.usageRecorder = usageRecorder
-        self.webResearchSynthesizer = webResearchSynthesizer ?? EnvironmentWebResearchSynthesizer(
-            usageRecorder: usageRecorder
-        )
+        self.webResearchSynthesizer = webResearchSynthesizer ?? UnavailableWebResearchSynthesizer()
         self.clipboardHistoryStore = clipboardHistoryStore
         self.snippetStore = snippetStore
         self.runningAppSwitcher = runningAppSwitcher

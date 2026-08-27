@@ -12,9 +12,20 @@ public extension Planning {
 }
 
 public enum PlannerError: Error, LocalizedError, Equatable {
+    /// **Unreachable since SONNY-130 and deliberately kept.** Nothing constructs a planner from an
+    /// environment variable any more, so nothing can throw this — but removing the case, and the
+    /// sentence naming the variable, is `feature/row-12-degradation`'s, which cannot run until both
+    /// gateways land. `InstantOnlyFallbackPlanner` still throws it as its "no planner ran" signal.
     case missingAPIKey
+    /// Unreachable for the same reason: no client here reads an HTTP status any more. The gateway's
+    /// typed failures arrive as `backend` below.
     case badResponse(Int, String)
+    /// Still live. `OpenAIResponseParser` throws it, and `VisionModelClient` and `CerebrasPlanner`
+    /// both use that parser — neither of which this ticket touches.
     case missingOutputText
+    /// A call to Sonny's backend failed. The user sees `SonnyBackendCopy`'s sentence for it, never
+    /// the server's own `message` (§7.1).
+    case backend(SonnyBackendError)
 
     public var errorDescription: String? {
         switch self {
@@ -24,106 +35,89 @@ public enum PlannerError: Error, LocalizedError, Equatable {
             return "OpenAI planner request failed with HTTP \(status): \(body)"
         case .missingOutputText:
             return "OpenAI response did not include text output."
+        case .backend(let error):
+            return SonnyBackendCopy.sentence(for: error)
         }
     }
 }
 
+/// The shipped planner, **talking to Sonny's own backend rather than to a provider** (SONNY-130).
+///
+/// The type name is unchanged, and that is deliberate rather than an oversight. `CerebrasPlanner`
+/// — on this ticket's never-touch list — calls `OpenAIPlanner.systemPrompt(toolRegistry:)`, and the
+/// API contract itself cites that symbol as the post-move prompt builder (§4.2). What the ticket's
+/// sixth requirement is actually about is the model identifier, the vendor endpoint and the
+/// provider choice, and all three are gone from here: they now live in `server/src/model/`, which
+/// is what turns SONNY-110's move to a paid zero-retention route into a redeploy.
 @MainActor
 public final class OpenAIPlanner: Planning {
-    private let apiKey: String
-    private let model: String
-    private let endpoint: URL
-    private let session: URLSession
+    private let client: SonnyBackendClient
+    private let taskContext: BackendTaskContext
     private let toolRegistry: ToolRegistry
     private let usageRecorder: any TaskUsageRecording
 
+    /// **`client` and `taskContext` have no defaults**, for the two reasons this repository already
+    /// records for parameters of this kind. A defaulted client would be a second construction of
+    /// the shared one, which would defeat the single-flight refresh guard the whole of PR #133's F1
+    /// depends on — ten concurrent 401s must cause one rotation, and two clients means two. A
+    /// defaulted `taskContext` would be a defaulted `retention`, which §2.4.2 forbids on the wire
+    /// for exactly the reason it should be forbidden here: a privacy field nobody chose.
     public init(
-        apiKey: String? = ProcessInfo.processInfo.environment["OPENAI_API_KEY"],
-        model: String = ProcessInfo.processInfo.environment["OPENAI_MODEL"] ?? "gpt-5.5",
-        endpoint: URL = URL(string: "https://api.openai.com/v1/responses")!,
-        session: URLSession = .shared,
+        client: SonnyBackendClient,
+        taskContext: BackendTaskContext,
         toolRegistry: ToolRegistry = .default,
         usageRecorder: any TaskUsageRecording = NoopTaskUsageRecorder.shared
-    ) throws {
-        guard let apiKey, !apiKey.trimmingCharacters(in: .whitespacesAndNewlines).isEmpty else {
-            throw PlannerError.missingAPIKey
-        }
-        self.apiKey = apiKey
-        self.model = model
-        self.endpoint = endpoint
-        self.session = session
+    ) {
+        self.client = client
+        self.taskContext = taskContext
         self.toolRegistry = toolRegistry
         self.usageRecorder = usageRecorder
     }
 
     public func plan(command: String, priorTaskContext: PriorTaskContext? = nil) async throws -> AgentPlan {
-        let requestBody = requestBody(command: command, priorTaskContext: priorTaskContext)
-        let requestData = try JSONSerialization.data(withJSONObject: requestBody)
-        var request = URLRequest(url: endpoint)
-        request.httpMethod = "POST"
-        request.setValue("Bearer \(apiKey)", forHTTPHeaderField: "Authorization")
-        request.setValue("application/json", forHTTPHeaderField: "Content-Type")
-        request.httpBody = requestData
+        let body = try SonnyTextRouteBody(
+            context: taskContext,
+            messages: messages(command: command, priorTaskContext: priorTaskContext),
+            schemaName: AgentPlanSchema.name,
+            schema: AgentPlanSchema.schema()
+        ).encoded()
 
-        let (data, response) = try await session.data(for: request)
-        guard let httpResponse = response as? HTTPURLResponse else {
-            throw PlannerError.badResponse(-1, "No HTTP response.")
-        }
-
-        guard (200..<300).contains(httpResponse.statusCode) else {
-            let body = String(data: data, encoding: .utf8) ?? "<unreadable body>"
-            throw PlannerError.badResponse(httpResponse.statusCode, body)
-        }
-
-        let reportedUsage = try AIUsagePayloadParser.responsesUsage(from: data)
-        let outputTextResult = Result {
-            try OpenAIResponseParser.outputText(from: data)
-        }
-        usageRecorder.record(
-            AIUsageRecord.responses(
-                kind: .planner,
-                model: model,
-                reportedUsage: reportedUsage,
-                estimatedInputText: String(data: requestData, encoding: .utf8) ?? command,
-                estimatedOutputText: (try? outputTextResult.get()) ?? ""
+        let decoded: SonnyTextRouteResponse
+        do {
+            decoded = try await client.modelRouteResponse(
+                SonnyTextRouteResponse.self,
+                route: .plan,
+                body: body
             )
+        } catch let error as SonnyBackendError {
+            throw PlannerError.backend(error)
+        }
+
+        // **Recorded before the plan is decoded, which is the order the environment-key version
+        // used and the order that is right.** A plan the model returned malformed still cost what
+        // it cost, and a summary that silently omitted exactly the failed runs would understate the
+        // ones a user is most likely to ask about.
+        usageRecorder.record(
+            decoded.usage?.record(kind: .planner, route: .plan)
+                ?? AIUsageRecord(kind: .planner, model: SonnyModelRoute.plan.usageModelName)
         )
-        let text = try outputTextResult.get()
-        return try AgentPlanDecoder.decodeStrict(from: text)
+        return try AgentPlanDecoder.decodeStrict(from: decoded.output_text)
     }
 
-    private func requestBody(command: String, priorTaskContext: PriorTaskContext?) -> [String: Any] {
-        var input = [
-            Self.message(role: "system", text: Self.systemPrompt(toolRegistry: toolRegistry))
+    /// §4.2's ordered, role-tagged messages — the same three the request body has always carried,
+    /// in the same order, with the same text.
+    private func messages(
+        command: String,
+        priorTaskContext: PriorTaskContext?
+    ) -> [(role: String, text: String)] {
+        var messages: [(role: String, text: String)] = [
+            (role: "system", text: Self.systemPrompt(toolRegistry: toolRegistry))
         ]
         if let priorTaskContext {
-            input.append(Self.message(role: "user", text: priorTaskContext.plannerContextText))
+            messages.append((role: "user", text: priorTaskContext.plannerContextText))
         }
-        input.append(Self.message(role: "user", text: command))
-
-        return [
-            "model": model,
-            "input": input,
-            "reasoning": [
-                "effort": "medium"
-            ],
-            "text": [
-                "verbosity": "low",
-                "format": AgentPlanSchema.responseFormat()
-            ]
-        ]
-    }
-
-    private static func message(role: String, text: String) -> [String: Any] {
-        [
-            "role": role,
-            "content": [
-                [
-                    "type": "input_text",
-                    "text": text
-                ]
-            ]
-        ]
+        messages.append((role: "user", text: command))
+        return messages
     }
 
     /// The routine-exclusion sentence's operation list, derived from
@@ -217,16 +211,22 @@ public final class OpenAIPlanner: Planning {
 extension OpenAIPlanner {
     nonisolated public static let providerID = "openai"
 
-    /// Registry descriptor for the shipped default planner (SONNY-85). `construct` is exactly
-    /// the call `AgentViewModel.performStart` used to make directly — every other parameter
-    /// keeps its environment-backed default — so routing through the registry leaves the
-    /// default path byte-identical, including throwing `PlannerError.missingAPIKey` when
-    /// `OPENAI_API_KEY` is unset.
-    nonisolated public static let provider = PlannerProvider(
-        id: providerID,
-        displayName: "OpenAI"
-    ) { usageRecorder in
-        try OpenAIPlanner(usageRecorder: usageRecorder)
+    /// Registry descriptor for the shipped default planner (SONNY-85).
+    ///
+    /// **`construct` now takes the backend client and the task context from the registry's caller**
+    /// (SONNY-130), because neither can be defaulted — the client is shared process-wide and the
+    /// task context carries a retention answer nobody may guess. It no longer throws for a missing
+    /// environment key, because there is no key: a call made with no session signed in fails at the
+    /// request with `notSignedIn`, which is a sentence the user can act on rather than a startup
+    /// failure they never asked about.
+    nonisolated public static func provider(client: SonnyBackendClient) -> PlannerProvider {
+        PlannerProvider(
+            id: providerID,
+            displayName: "OpenAI",
+            throughTheGateway: { taskContext, usageRecorder in
+                OpenAIPlanner(client: client, taskContext: taskContext, usageRecorder: usageRecorder)
+            }
+        )
     }
 }
 

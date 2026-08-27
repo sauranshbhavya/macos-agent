@@ -5,6 +5,10 @@ import { registerAuthGate } from "./auth/gate.js";
 import { classify, errorBody, registerErrorHandlers } from "./errors.js";
 import { registerHealth } from "./routes/health.js";
 import { registerAuth, type AuthDeps } from "./routes/auth.js";
+import fastifyMultipart from "@fastify/multipart";
+import { BODY_LIMIT_BYTES } from "./model/limits.js";
+import { modelProvidersFrom } from "./model/providers.js";
+import { registerModelRoutes } from "./routes/model.js";
 
 /** The API minor version this build serves. `Sonny-Api-Version`, contract §2.3. */
 export const API_VERSION = "1.0";
@@ -153,6 +157,39 @@ export function buildApp(config: Config, auth?: AuthDeps): FastifyInstance {
   );
 
   registerHealth(app, config);
+
+  /**
+   * `POST /v1/transcriptions` is the one route with a `multipart/form-data` body (contract §4.4),
+   * so the parser is registered here, on the root instance, beside the routes that need it.
+   *
+   * **`limits` is not decoration beside the route's `bodyLimit`.** `bodyLimit` bounds the request;
+   * `fileSize` bounds one part, and it is the one that fires while the part is still streaming
+   * rather than after a body has been assembled. `files: 1` and `fields: 1` say what §4.4's body is
+   * — one file part and one JSON field — so a body carrying more is refused rather than partly
+   * ignored, which is the direction a forgotten decision should fail in.
+   */
+  void app.register(fastifyMultipart, {
+    limits: {
+      fileSize: BODY_LIMIT_BYTES.transcriptions,
+      files: 1,
+      fields: 1,
+      parts: 2,
+    },
+  });
+
+  /**
+   * Mounted unconditionally, including where no provider credential is configured (SONNY-130).
+   *
+   * The route table then does not change shape with the environment, which matters because the
+   * alternative is a `404 resource.not_found` — a code the client reads as "no such route", not
+   * retryable — standing in for a deployment that is simply missing a key. A configured route with
+   * no adapter answers `502 provider.unavailable` instead, which is true from the caller's side.
+   * The gate covers all four by not listing them in `PUBLIC_ROUTES`, so on a deployment with no
+   * `auth` — a health-only one, which is what `./scripts/deploy.sh local` starts today — every one
+   * of them refuses with a 401 rather than serving.
+   */
+  registerModelRoutes(app, modelProvidersFrom(config));
+
   if (auth) {
     requireRateLimitSalt(config);
     registerAuth(app, config, auth);

@@ -516,6 +516,75 @@ struct LocalStoreInjectionScanTests {
         }
     }
 
+    /// **`Sources/` builds one `SonnyBackendClient`, and the property is load-bearing rather than
+    /// tidy** (SONNY-130; PR #139's F12).
+    ///
+    /// It belongs in this suite for the reason `SonnyBackendClient.init`'s own doc gives: it is
+    /// SONNY-240's hazard one step worse. A defaulted or duplicated local store writes to the
+    /// developer's `~/Library`; this client holds the **Keychain session every packaged build on
+    /// this Mac shares**, so a second one is a second reader and a second deleter of the founder's
+    /// own sign-in.
+    ///
+    /// **And a second client is a live defect even when both are correct.** The client holds the
+    /// single-flight generation counter that makes ten concurrent `401 auth.token_expired`s cause
+    /// one rotation; the server reads a second rotation presented past its ten-second overlap as
+    /// theft and revokes the whole family (contract §3.3). Two clients means two counters, so the
+    /// guard would be guarding half the callers — and PR #133 recorded that this goes live "the
+    /// moment SONNY-130 and SONNY-131 add a second concurrent authenticated caller", which SONNY-130
+    /// is. `main.swift` therefore builds one and hands the same instance to `SonnyAccountModel` and
+    /// `AgentViewModel`, and neither has a default for it.
+    ///
+    /// **The compiler cannot see this one at all**, which is why it is a scan: both undefaulted
+    /// parameters are satisfied by *a* client, and nothing in the type system says it must be the
+    /// same client. `SignInSurfaceTests.theProductionClientDoesNotRunOnTheSharedSession` counts the
+    /// constructions inside one file; this counts them across `Sources/`, which is where a second
+    /// one would actually appear.
+    @Test
+    func theOnlyBackendClientConstructionInSourcesIsTheRealKeychainFactory() throws {
+        let sources = Self.repositoryRoot.appendingPathComponent("Sources")
+        guard let walker = FileManager.default.enumerator(at: sources, includingPropertiesForKeys: nil) else {
+            Issue.record("could not enumerate Sources/")
+            return
+        }
+
+        var constructionSites: [String: Int] = [:]
+        var declaringFileCode = ""
+        var filesRead = 0
+        for case let url as URL in walker where url.pathExtension == "swift" {
+            filesRead += 1
+            let code = TestSourceTree.codeLines(of: try String(contentsOf: url, encoding: .utf8))
+                .map(\.text)
+                .joined(separator: "\n")
+            let count = Self.constructions(of: "SonnyBackendClient", in: code).count
+            if count > 0 {
+                constructionSites[url.lastPathComponent] = count
+            }
+            if url.lastPathComponent == "SonnyBackendClient.swift" {
+                declaringFileCode = code
+            }
+        }
+
+        #expect(filesRead > 50, "the enumerator saw \(filesRead) sources — too few to be the real tree")
+        let found = constructionSites.sorted { $0.key < $1.key }.map { "\($0.key)×\($0.value)" }
+        #expect(
+            constructionSites == ["SignInView.swift": 1],
+            """
+            Sources/ constructs a SonnyBackendClient in \(found) — it may do so in exactly one             place, SonnyAccountModel.atItsRealKeychainLocation(). A second one is a second token             cache and a second single-flight refresh guard over the same Keychain account, which             the server reads as a stolen refresh token and answers by revoking the whole family.
+            """
+        )
+        // The same door from inside the type, where the name is optional — the shape the view-model
+        // scan above already found worth closing.
+        #expect(!declaringFileCode.isEmpty, "SonnyBackendClient.swift was not read")
+        for spelling in ["Self(", ".init("] {
+            #expect(
+                !declaringFileCode.contains(spelling),
+                """
+                SonnyBackendClient.swift uses `\(spelling)`, which constructs the type without                 naming it, so the count above cannot see it. If this is legitimate, the count needs                 to learn the spelling rather than this check being dropped.
+                """
+            )
+        }
+    }
+
     /// **The one construction really does hand the shipping app the live Finder reveal.**
     ///
     /// Written because a mutant that replaced it with `{ _ in }` was reported killed by exactly one
