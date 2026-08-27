@@ -12,14 +12,31 @@ inferred** (added 2026-08-26, SONNY-288). Three kinds of text live in it and the
   These bind whatever the tree looks like, and every change to one is a dated row in section 14.
 - **A dated snapshot of the client.** Every `file:line` and every measured figure outside section 14
   was read at `6f89a5d` **unless it stamps a SHA of its own**, and says nothing about the tree since.
-  A citation that has moved is a stale reading, not a changed contract. Four SHAs are cited in this
-  document, and **exactly one of them is not on `main`**: `e260575`, in 6.1 and 6.4, a branch head a
-  rebase replaced — which is why 6.1 pairs it with the post-rebase `b07bee8`. It still resolves, so
-  `git show` on it proves nothing; the check that separates the two cases is
-  `git merge-base --is-ancestor <sha> origin/main`, read with nothing between it and `$?`
-  (`for t in d3598a7 6f89a5d b07bee8 e260575; do git merge-base --is-ancestor $t origin/main; echo
-  "$t $?"; done` → `0`, `0`, `0`, `1`, run 2026-08-26). That is this repository's convention working:
-  a branch SHA records *when* a figure was measured, not a tree anyone is expected to fetch.
+  A citation that has moved is a stale reading, not a changed contract. **Five SHAs were cited
+  outside section 14 at `5ad846f`** (`git show 5ad846f:docs/sonny-backend-api-contract.md | sed -n
+  '1,/^## 14\./p' | grep -ohE '\b[0-9a-f]{7,40}\b' | sort -u | wc -l` → 5; `grep -P` answers the same,
+  and the pattern also catches the odd hex-shaped word, so read it as an upper bound), **and 10.2's
+  divergence record makes `5ad846f` itself the sixth** — the same command without the `git show`,
+  over whatever tree you are reading, is what says how many there are now. Of the six, **exactly one
+  is not on `main`**: `e260575`, in 6.1 and 6.4, a branch head a rebase replaced — which is why 6.1
+  pairs it with the post-rebase `b07bee8`. It still resolves, so `git show` on it proves nothing; the
+  check that separates the two cases is `git merge-base --is-ancestor <sha> origin/main`, read with
+  nothing between it and `$?` (`for t in d3598a7 6f89a5d b07bee8 e260575 f65e72e 5ad846f; do git
+  merge-base --is-ancestor $t origin/main; echo "$t $?"; done` → `0`, `0`, `0`, `1`, `0`, `0`, run
+  2026-08-27). **This sentence said four until 2026-08-27, and the miss is worth naming rather than
+  absorbing**: `f65e72e` had been added to 4.4 that morning by SONNY-130's own commit — section 14's
+  preamble names it — without this sentence or its loop moving with it, so the document's account of
+  itself had stopped matching the document, which is the same class of omission section 14 was
+  back-filled for on the same day (SONNY-297). The sixth, `5ad846f`, is not a miss; it is the stamp
+  10.2's divergence record was added under. **This sentence broke its own count once while being
+  written**, by naming that commit here rather than in section 14: a commit citation belongs to that
+  section's kind and not to this one's, and running the command beside the number is what said so.
+  That is this repository's convention working: a branch SHA records *when* a figure was measured,
+  not a tree anyone is expected to fetch.
+- **Section 14 cites more, and they are a different kind of citation.** From the back-fill of
+  2026-08-27 onward every row names the commit the change landed in — where a change happened, not
+  where a figure was read — and those are counted and ancestry-checked in that section's own
+  preamble rather than in the count above.
 - **A live board reading.** Section 13's table, and every sentence in the body that says a question
   is some ticket's to answer. These describe who owes what, so they go stale as tickets close.
   Section 13 carries the date it was last resolved against the board; read any owner named in the
@@ -1198,6 +1215,41 @@ line assigned it both). Consent is captured on the website, so the write path is
 endpoint the website calls, and what was owed was the gate rather than an in-app toggle; that gate is
 SONNY-203's and closed on 2026-08-22. SONNY-134 still makes the snapshot builder honour it.
 
+**Known divergence: the two values above name no column, because the tree stores this as a boolean**
+(recorded 2026-08-27, SONNY-297 — recorded, not reconciled). The column is `training_consent boolean
+NOT NULL DEFAULT false` (`server/src/db/migrations/0002_accounts_and_identities.sql:28` at
+`5ad846f`), so nothing anywhere holds the string `"granted"` or the string `"not_granted"`.
+
+**The guarantee is identical, which is why this is a divergence and not a defect.** `DEFAULT false`
+*is* the `"not_granted"` default, `NOT NULL` *is* the absence of a third state that could be mistaken
+for consent, and the migration's own comment states it in this section's terms rather than the
+database's (`:25-27`). What differs is the spelling, and the spelling has no wire encoding to
+protect, because the field does not cross the boundary — which the paragraph headed *It never
+appears on a request* states, and which is checkable rather than asserted, at `5ad846f`:
+
+- `training_consent` appears in **exactly one** file under `server/src`, the migration that creates
+  it (`grep -rl training_consent server/src | wc -l` → 1), so no route handler reads or writes it;
+- in **no** file under `Sources/` or `Tests/` (`grep -rl 'training_consent\|trainingConsent' Sources
+  Tests | wc -l` → 0), so no client type has a field for it to decode into;
+- and no query can return it implicitly. There is no `SELECT *` anywhere in the server
+  (`grep -rniE 'select +\*' server/src` exits **1** and prints nothing, read with nothing between the
+  command and `$?`), and the six non-migration files that contain the word were enumerated rather
+  than sampled — `revocations.ts`, `auth/identity.ts`, `auth/revocation.ts`, `auth/codes.ts`,
+  `auth/attribution.ts` and `db/migrate.ts` (`grep -rciE 'select' server/src --exclude-dir=migrations
+  | grep -v ':0$'`) — with every statement in them naming its columns.
+
+Its only reader is a database test asserting the default and the NOT NULL
+(`server/test/linking.db.test.ts:773-783`), which reaches the column through Postgres rather than
+through this contract.
+
+**Which side moves is not settled here, and nothing waits on it.** Restating this section as a
+boolean and leaving the tree alone are both available, and changing either side's code was out of
+scope for the ticket that recorded this. Whoever settles it is amending a contract twelve tickets
+were written against and owes section 14 a row. Until then a reader of this section knows both
+shapes and that they mean the same thing, which is what a recorded divergence is for and what a
+silent reconciliation would have destroyed: the string values are what SONNY-127 was written
+against, and rewriting them here would leave nothing to say they had ever been the contract.
+
 **It never appears on a request, and never in a response the app reads.** Both halves matter:
 
 - Not on a request, for the same reason `retention` is enforced server-side — a client-supplied
@@ -1394,16 +1446,83 @@ none.
 
 ## 14. Changes to this document
 
-Append-only, newest last. A change here is a change to what twelve tickets were written against, so
-it carries a date, a reason, and the ticket that prompted it.
+A change here is a change to what twelve tickets were written against, so it carries a date, a
+reason, the ticket that prompted it, and — from the back-fill of 2026-08-27 onward — the commit it
+landed in. Rows sit at their date. **The log was append-only until 2026-08-27**, when four rows dated
+2026-08-21 and 2026-08-22 were written into the middle of it; the paragraphs below are that
+back-fill's record of itself, which is the thing this section was not doing.
 
 The log starts once the document is merged. Iteration inside SONNY-124's own branch — including its
 pre-merge review round — is part of "created" and does not get a row; a changelog that recorded the
 author's own drafting would bury the changes a downstream session actually has to notice.
 
+**The back-fill of 2026-08-27 (SONNY-297).** Between 2026-08-21 and 2026-08-26 this section recorded
+nothing while **seven** commits amended the document, and three of the four rows written from them
+change something a downstream ticket reads — 3.6's new `link_hint` field, 3.6's narrowed disclosure
+of the three sign-in-code errors, and 3.1's verification gate. Every one of the seven dated itself in
+place in the body, which is why nothing looked wrong to anyone reading a paragraph; this section is
+the index a reader consults to find them, and it did not list one. What the back-fill establishes,
+and what it does not, is worth separating, because a log that has been written after the fact invites
+more trust than one that has not:
+
+- **The population was closed when the rows were written, and that is the one completeness claim
+  available here.** Twelve commits had ever touched this file
+  (`git log --format='%h' -- docs/sonny-backend-api-contract.md | wc -l` → 12 at `5ad846f`, the head
+  this branch was cut from; `--follow` answers the same 12, and `--diff-filter=R` over the same path
+  answers 0, so no rename hides an earlier one), and every one is an ancestor of `origin/main`. So no
+  amendment to *this file* escaped the list. The count grows with every later amendment, this one
+  included; what the back-fill rests on is that it was closed at `5ad846f`. Which commit each row
+  covers: **2026-08-17** is `c03eb3b` with its pre-merge review round `4e8c6a4`; **2026-08-21 (the
+  JWT row)** is `1f3e62f`, which wrote that row; the four back-filled rows name their own commits;
+  **2026-08-26** is `58c6202` and **2026-08-27 (SONNY-130)** is `cf9c1ef`. The check on all twelve: `for t in c03eb3b 4e8c6a4
+  1f3e62f 1ea1584 792ea41 5a26871 5080bae 309336b 54a2646 9706c39 58c6202 cf9c1ef; do git merge-base
+  --is-ancestor $t origin/main; printf '%s %s  ' "$t" "$?"; done` → `0` for all twelve, run
+  2026-08-27 at `5ad846f`. **Every SHA this section cites passes it**, not only those twelve — 16
+  distinct tokens (`sed -n '/^## 14\./,$p' docs/sonny-backend-api-contract.md | grep -ohE
+  '\b[0-9a-f]{7,40}\b' | sort -u | wc -l` → 16), the other four being `5ad846f`, `6f89a5d`,
+  `bb7ce39` and `f65e72e`, each `0` under the same loop. Unlike the count in the header, this one
+  covers commit citations, which is why the two are kept apart.
+- **It does not establish that a row's summary is the whole of its diff.** A back-filled row is one
+  session's reading of a commit it did not make. The commit is cited so a reader can go to the diff
+  instead of trusting the reading, and the *reason* in such a row is inferred from that diff and its
+  commit message rather than from the conversation that decided it.
+- **Nor was the wider search run.** A change to what this contract *means* that was settled somewhere
+  else — a ticket, the changelog, a decision document — and never brought into this file would not
+  appear as a commit on this path, and nothing here went looking for one. This section indexes
+  amendments to this file, and that is the whole of what it now claims.
+- **One shape moved in the seven.** No fenced example body was touched by any of them, and exactly
+  one markdown table row was — `5a26871`'s, four added and none removed, which is 3.6's new two-value
+  `link_hint` table rather than an edit to an existing row. Run 2026-08-27 at `5ad846f`:
+
+````
+for s in 1ea1584 792ea41 5a26871 5080bae 309336b 54a2646 9706c39; do
+  d=$(git show $s --format= -- docs/sonny-backend-api-contract.md)
+  printf '%s fence=%s row+=%s row-=%s\n' "$s" \
+    "$(printf '%s\n' "$d" | grep -cE '^[+-]```')" \
+    "$(printf '%s\n' "$d" | grep -cE '^\+\|')" \
+    "$(printf '%s\n' "$d" | grep -cE '^-\|')"
+done
+````
+
+→ `fence=0` for all seven; `row+`/`row-` are `0`/`0` for six and `4`/`0` for `5a26871`.
+
+**One pair of rows is out of date order, and it is left that way rather than moved.** The 2026-08-27
+SONNY-130 row sits above the 2026-08-26 SONNY-288 row. That was not a rebase artifact: SONNY-288's
+row merged at `bb7ce39`, which is an ancestor of `f65e72e`, the commit SONNY-130's branch was cut
+from (`git merge-base --is-ancestor bb7ce39 f65e72e`, read with nothing between it and `$?`, exits
+`0`), so the row it belonged after was already present when `cf9c1ef` inserted above it. Both are
+byte-identical to the versions their own branches merged. Recording the inversion costs a reader one
+sentence; rewriting two merged rows to tidy it would cost more than it buys, and this section is a
+record rather than a tidy list.
+
 | Date | Change | Ticket |
 |---|---|---|
 | 2026-08-17 | Created, at `main` `6f89a5d` | SONNY-124 |
 | 2026-08-21 | **3.1 — the access token is a JWT rather than opaque.** Founder decision of 2026-08-21 to serve auth from Supabase Auth, which issues JWTs. The client's obligation not to decode it or decide anything from it is unchanged and is now carried by this contract rather than by the encoding. Three things this does **not** change, checked against the platform rather than assumed: 3.3's rotation, overlap and reuse detection are exactly what Supabase Auth does (10-second reuse interval; reuse beyond it revokes the whole family), 3.2's response shape is unchanged, and 3.6's three code failures are unchanged — the gateway derives them from its own issuance record because the provider returns one error for all three. | SONNY-127 |
+| 2026-08-21 | **3.3 — the refresh overlap window is the platform's and 10 seconds, not SONNY-127's to set; and 3.1 gains, then reassigns, the note that nothing verifies a presented access token.** Two commits, both PR #87 review findings: `1ea1584`, then `792ea41`. 3.3 had read "the overlap's length is SONNY-127's to set", written before the 2026-08-21 decision to serve auth from Supabase Auth; under that decision the window is the platform's. The 10 seconds is the figure the row above already names, so only the *ownership* was new — which is the half a reader of that row alone would not have. 3.1's note (F2) first said verification was SONNY-128's and was corrected the same day (second round, F5) to SONNY-203, because SONNY-128 is the client half and its never-touch list forbids `server/`, so it could never have supplied it; `792ea41` added the HS256 pin with it. **No shape changed** in either commit: no fenced example body and no table row moved. Back-filled 2026-08-27 (SONNY-297). | SONNY-127 |
+| 2026-08-22 | **3.6 — `link_hint`, a new optional field on the token response** (`5a26871`). The one shape this document gained between 2026-08-21 and 2026-08-26. Present when the server can see a reason to suspect a sign-in belongs with an existing account and cannot prove one; advisory, naming no account and carrying no identifier, because naming one would answer "does this address have an account?" to anyone who can reach the endpoint. Two values, `relay_address_may_belong_to_existing_account` and `verified_email_matches_existing_account`. A client that ignores it is correct and gets two accounts; there is no failure mode in ignoring it, only a worse experience, and neither the field nor the prompt merges anything. **3.2's fenced token-response example does not show the field**, and this row does not change that — it is stated so a reader of 3.2 alone does not conclude the field does not exist. Surfacing it is SONNY-128's and SONNY-129's. It did reach its reader without this section's help: the client decodes it and pins that it changes nothing (`SonnyBackendClient.swift:705` and `SonnyAccountServiceTests.swift:192`, `aTokenResponseCarryingALinkHintStillSignsInNormally`, at `5ad846f`). Back-filled 2026-08-27 (SONNY-297). | SONNY-127 |
+| 2026-08-22 | **3.6 — the three sign-in-code errors, and the per-address rate-limit refusal, are disclosed only to a caller who can be seen to have requested the code.** Two commits: `5080bae`, widened by `309336b` after measurement. The three distinct codes were an account-existence oracle and a working one — one unauthenticated request per address, carrying a code known to be wrong and never calling `email/start`, returned `auth.code_used` for a mailbox whose owner had signed in, `auth.code_expired` for one that had asked and not used, and `auth.code_invalid` for an address with nothing; reproduced against a real database, still reading `auth.code_used` after 400 simulated days, and unbounded across 200 addresses probed from one source. Everyone outside the flow now gets `auth.code_invalid`, gated on the issuance's recorded source matching the caller's and on the issuance being recent; `309336b` put the per-address refusal behind the same gate, because answering `429` to every caller made the attempt *count* readable. **What a client in the flow sees is unchanged**, which is why nothing on SONNY-128 moved; what narrowed is what a caller who never called `email/start` can learn. The residual is stated in place rather than implied: the match is on a salted hash of `request.ip`, so co-tenants behind one public address share a source, and a proxy with `TRUSTED_PROXIES` unset collapses every caller to one. The unconditional fix is a flow token across `email/start` and `email/verify` — two request/response shapes, SONNY-128's, not built. **No fenced example body and no table row moved.** Back-filled 2026-08-27 (SONNY-297). | SONNY-127 |
+| 2026-08-22 | **3.1 — access-token verification exists, the gate is deny-by-default, and a signed-out access token keeps verifying for one hour and thirty seconds.** Two commits: `54a2646`, corrected by `9706c39`. The token is verified as HS256 with the algorithm pinned, checking `iss`, `aud` and `exp` and trusting `sub` as the user id, and that `sub` is then attributed to a live Sonny account, so a cryptographically perfect token naming a closed one is refused. **The gate is deny-by-default**, which makes 4.1's `Auth` column a list of the routes that are *public* while everything else is challenged — so a route added without a thought about authentication refuses everyone rather than serving quietly. **What verification cannot do is un-issue a token**: an access token is self-contained, so signing out revokes the refresh family while the access token keeps verifying until its own `exp` plus 3.5's 30-second skew tolerance. `9706c39` is that correction — the paragraph had said "one hour" where the honest figure is one hour and thirty seconds on Supabase's default lifetime. A closed account is refused immediately on every request; the remaining window is SONNY-237's. **No shape changed**: 4.1's table was not edited, only the meaning its `Auth` column already carried made explicit, and no fenced example body moved. Back-filled 2026-08-27 (SONNY-297). | SONNY-203 |
 | 2026-08-27 | **4.4 — the audio duration cap exists, and 6.1's byte limit is now the backstop it was described as.** The one sentence 4.4 wrote in the present tense about work that had not happened — "there is no maximum duration today ... the duration cap and its user-facing refusal are SONNY-130's" — was true when written and is not now. 180 seconds, enforced on the Mac before a byte is sent, with the refusal's exact wording recorded. **No shape changed**: no endpoint, request body, response body, header, error `code`, size limit or timeout in this document moved, and 6.1's 10 MiB is unchanged. The stale `AudioCommandRecorder.swift:32-38` citation is restamped at `f65e72e`, where the settings block is `:34-39`. | SONNY-130 |
 | 2026-08-26 | **13 — every row resolved against the board and the tree, and nine body statements corrected. No shape changed.** Section 13 was a "what is still open" table with no status column, which a reader takes as current; of its nineteen rows four had been answered outright, three in part, one had acquired an owner, eleven were still open, and one of the four also attributed the refresh overlap window to SONNY-127 where 3.3 already said it is the platform's. The `Open` and `Owner` columns are unchanged; a dated `Status` column was added and marked a board reading rather than a contract term. **The nine**, all one class — a present-tense sentence about work that has since happened: **1**, the host choice is no longer held, it was made on 2026-08-21; **3.5**, the clock skew is set at 30 s and was never SONNY-135's to set, which 3.1 already contradicted; **3.6**, the code lifetime and the four rate limits are set; **3.6**, the claim that an OAuth sign-in lands on the same account as an email sign-in, which the `link_hint` table directly above it contradicted and which is false under the 2026-08-22 rule; **3.6**, `GET /v1/health` is built rather than being SONNY-126's to shape; **4.1**, `/v1/meta`'s owner is SONNY-204, not "nobody yet"; **5.1**, `CompletedTaskRecord.id` exists rather than waiting on SONNY-115; **6.4**, SONNY-146 is complete rather than filed and in Backlog; **10.2**, SONNY-127 built the `training_consent` field and deliberately did not build its write path. Nothing SONNY-128 or SONNY-129 codes against moved: no endpoint, request body, response body, header, error `code`, size limit or timeout in this document was touched, and all sixteen fenced example bodies are byte-identical to their previous versions. The header now states which parts of this document are live contract, which are a dated snapshot at `6f89a5d`, and which are a board reading. | SONNY-288 |
+| 2026-08-27 | **14 — the four rows dated 2026-08-21 and 2026-08-22 are back-filled, and 10.2 records a known divergence.** This section had recorded nothing since 2026-08-21 while seven commits amended the document; the rows were written from those diffs by a session that made none of the changes, and the preamble now states the population they came from, the one completeness claim that population supports, and the two it does not. **No shape changed by this row's own work.** 10.2 gains a divergence record: this document names `training_consent`'s values `"granted"` and `"not_granted"` where the tree has `training_consent boolean NOT NULL DEFAULT false` (`server/src/db/migrations/0002_accounts_and_identities.sql:28` at `5ad846f`). The guarantee is identical, the field crosses no boundary so the two names have no wire encoding to protect, and it is **recorded rather than reconciled** — which side moves is unsettled and owed a row of its own when someone settles it. The header's SHA census is corrected from four to six: `f65e72e` was added to 4.4 on 2026-08-27 by `cf9c1ef` without that sentence or its ancestry loop moving, and `5ad846f` is the stamp on 10.2's new evidence. | SONNY-297 |
