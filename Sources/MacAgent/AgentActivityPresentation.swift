@@ -525,9 +525,11 @@ enum ScreenControlSessionPresentation {
 enum ResumeOfferPresentation {
     /// The affirmative's word. **Its tooltip since SONNY-244, not its visible text** — the founder's
     /// decision of 2026-08-23 made the two controls a tick and a cross. It is not the VoiceOver name;
-    /// that is `continueAccessibilityLabel`, which names the task an icon no longer can. Whether a
-    /// tooltip in the floating widget fires at all is genuinely in doubt — `WidgetResumeOfferPanel`
-    /// carries the finding and what it means for these two words.
+    /// that is `continueAccessibilityLabel`, which names the task an icon no longer can. **Whether a
+    /// tooltip in this widget fires at all was in doubt when this was written, and it does**: the
+    /// founder hovered both controls on 2026-08-26 and reported "yes tooltips appeared" (SONNY-294
+    /// recorded it; SONNY-295 corrected this sentence and `WidgetResumeOfferPanel`'s, which is where
+    /// the arc and the limits of what one pass establishes are written out).
     static let continueLabel = "Continue"
     /// The cross's tooltip, on the same footing as `continueLabel`.
     ///

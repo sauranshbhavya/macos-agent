@@ -302,19 +302,59 @@ struct WidgetSessionApprovalPanelTests {
             #expect(MacAgentSource.count(of: "\"Pause Sonny controlling ", inText: source) == 0, "\(file)")
         }
 
-        // **One hand-written step line survives, and it is a filed defect rather than an exemption**
-        // (SONNY-303, found by this scan). `WidgetCaptureReviewPanel` renders
-        // `"Step \(preview.iteration) of \(preview.appDisplayName)"` — the app's *name* where the
-        // iteration cap belongs, so Safe mode's pre-send review reads "Step 2 of Safari".
-        // `VisionCapturePreview` carries no `maximumIterations`, which is why it is a type change and
-        // a product decision rather than a typo, and why it is not fixed here. Pinned at exactly one
-        // so a second hand-written step line fails this, and so the count drops to zero the moment
-        // SONNY-303 lands rather than sitting here as a permanent allowance.
+        // **No hand-written step line anywhere on either surface, and this used to say "exactly
+        // one".** The one was `WidgetCaptureReviewPanel`'s, which interpolated the app's *name*
+        // where the iteration cap belongs and so read "Step 2 of Safari" in Safe mode's pre-send
+        // review. It was pinned at one rather than exempted precisely so that the count would drop
+        // to zero when the type change landed rather than sitting here as a permanent allowance;
+        // it landed, `VisionCapturePreview` carries `maximumIterations`, and the panel reads the
+        // owner's sentence like its three neighbours. The population is the whole of both files, so
+        // a fourth panel inventing its own step line fails this rather than shipping.
+        for file in ["FloatingWidgetView.swift", "CommandCenterView.swift"] {
+            let source = try MacAgentSource.read(file)
+            #expect(MacAgentSource.count(of: "\"Step \\(", inText: source) == 0, "\(file)")
+        }
+
+        // And the owner really is read at every site that shows one, so "no hand-written copy" is
+        // not satisfied by a panel that dropped the line altogether: the HUD, the widget's approval
+        // panel and the capture review in one file, Command Center's session context row in the
+        // other.
         #expect(
-            MacAgentSource.count(of: "\"Step \\(", inText: try MacAgentSource.read("FloatingWidgetView.swift")) == 1,
-            "the one known hand-written step line is SONNY-303's; a second one is new"
+            MacAgentSource.count(
+                of: "ScreenControlSessionPresentation.stepLine(",
+                inText: try MacAgentSource.read("FloatingWidgetView.swift")
+            ) == 3
         )
-        #expect(MacAgentSource.count(of: "\"Step \\(", inText: try MacAgentSource.read("CommandCenterView.swift")) == 0)
+        #expect(
+            MacAgentSource.count(
+                of: "ScreenControlSessionPresentation.stepLine(",
+                inText: try MacAgentSource.read("CommandCenterView.swift")
+            ) == 1
+        )
+
+        // **And the capture review's two arguments, at the site, in order.** A count of calls cannot
+        // see a swap: `stepLine(iteration: preview.maximumIterations, maximumIterations:
+        // preview.iteration)` would satisfy every expectation above and render "Step 8 of 2".
+        // Nothing in this repository can ask a SwiftUI view what it drew, so the exact call at the
+        // exact site is the pin — the shape `everySessionControlWearsItsOwnAccessibilityLabel` uses
+        // for the same reason.
+        //
+        // **Only two of the four sites are pinned this way, and that is stated rather than implied.**
+        // The widget's approval panel is the other one
+        // (`theApprovalPanelCarriesTheSessionsIdentityLineAndItsStopWhileASessionIsLive` asserts both
+        // of its arguments). The HUD's and Command Center's session context row's are not pinned by
+        // anything, so a swap at either of those two sites is invisible to this suite today. That is
+        // a coverage gap on code SONNY-303 did not touch, filed as SONNY-310 rather than absorbed
+        // here.
+        let captureReview = try MacAgentSource.region(
+            of: MacAgentSource.read("FloatingWidgetView.swift"),
+            from: "private struct WidgetCaptureReviewPanel: View {",
+            to: "private struct WidgetDelegationReviewPanel: View {"
+        )
+        #expect(MacAgentSource.count(of: "iteration: preview.iteration", inText: captureReview) == 1)
+        #expect(
+            MacAgentSource.count(of: "maximumIterations: preview.maximumIterations", inText: captureReview) == 1
+        )
     }
 
     /// **Pause does not travel with the Stop, and that is a decision rather than an omission.**
