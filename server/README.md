@@ -274,8 +274,9 @@ route" — which it does not retry and cannot explain — when the truth is a de
 
 **Two numbers are pinned on both sides and must move together.** `src/model/limits.ts` holds
 contract §6.1's per-route body limits and §12's deadlines; `SonnyBackendTimeouts` in
-`Sources/MacAgentCore/SonnyBackendClient.swift` holds the client timeouts, each fifteen seconds
-above this server's total deadline for the same route. That gap is §12's governing rule — the
+`Sources/MacAgentCore/SonnyBackendClient.swift` holds the client timeouts, each above this server's
+total deadline for the same route — by fifteen seconds on the three long routes and by five on
+`search`, which is §12's table rather than one constant. The *ordering* is the governing rule — the
 client's timeout is always longer than the server's — so a slow route surfaces as this server's
 typed `504 provider.timeout` rather than as the client's opaque transport timeout, which it cannot
 tell apart from a dead network.
@@ -326,16 +327,19 @@ pretend. **The first real remote deploy is owed and is recorded on SONNY-126.**
 
 **The four model routes still answer `401` against that container**, and the reason is the one the
 subsection above names rather than a missing credential: `src/server.ts` supplies no `AuthDeps`, so
-the gate refuses every protected route on a process with no way to authenticate anyone. SONNY-306's
-passthrough forwards the five variables `src/config.ts` decides, and SONNY-307 is what makes them
-matter.
+the gate refuses every protected route on a process with no way to authenticate anyone. SONNY-307 is
+what makes the forwarded credentials matter; until it lands, forwarding more of them changes
+nothing a caller can see.
 
-**When it lands, this passthrough wants four more names for these routes.** `OPENAI_API_KEY` and
-`TAVILY_API_KEY` are the credentials, and `OPENAI_BASE_URL`, `OPENAI_TEXT_MODEL`,
-`OPENAI_TRANSCRIPTION_MODEL` and `SEARCH_BASE_URL` are what let a local run point at a stub instead
-of at a vendor — which is how SONNY-130 demonstrated all four routes end to end with no vendor key
-anywhere. Recorded on SONNY-306 as well as here, because the list tracks `src/config.ts` and this
-ticket grew it.
+**The passthrough carries seven names, and SONNY-130 added two of them** — `OPENAI_API_KEY` and
+`TAVILY_API_KEY`, the credentials the four model routes need. It stops there on purpose, and the
+block above the array in `deploy.sh` carries the same reasoning: `ANTHROPIC_API_KEY`,
+`CEREBRAS_API_KEY` and `VISION_API_KEY` are excluded because no route reads them yet, and
+`OPENAI_BASE_URL`, `OPENAI_TEXT_MODEL`, `OPENAI_TRANSCRIPTION_MODEL` and `SEARCH_BASE_URL` are
+excluded because each has a real default and this list is for values a container cannot invent.
+Pointing a local run at a stub instead of at a vendor — which is how SONNY-130 demonstrated all four
+routes end to end with no vendor key anywhere — is done by editing the array for that run, and both
+the count and the absent-name lines derive from its length, so nothing else needs touching.
 
 ## `GET /v1/health`
 

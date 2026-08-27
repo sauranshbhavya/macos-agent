@@ -32,15 +32,15 @@ export class ProviderTimedOut extends Error {}
  */
 export class ProviderRejected extends Error {}
 
-/** What this gateway will not send upstream at all. Refused before the provider is called. */
-export class UpstreamRequestTooLarge extends Error {
-  constructor(
-    readonly limitBytes: number,
-    readonly actualBytes: number,
-  ) {
-    super(`upstream payload is ${actualBytes} bytes against a limit of ${limitBytes}`);
-  }
-}
+/**
+ * **`UpstreamRequestTooLarge` stood here and is gone** (PR #139, F11). It was thrown by one branch
+ * on `/v1/transcriptions`, checking the audio part against the same number `bodyLimit` already
+ * bounds the whole request by — which a part can never exceed, so the branch could not fire. Every
+ * oversize body on these four routes is refused before a handler runs, and `errors.ts` maps
+ * Fastify's own 413 onto §7.2's `request.too_large`. A route that one day needs a size refusal of
+ * its own — one derived from something other than the body's length — reintroduces a typed error
+ * then, with a call site that can reach it.
+ */
 
 /** Token counts as the contract's §4.2 `usage` block carries them. */
 export interface UpstreamUsage {
@@ -112,10 +112,13 @@ export interface SearchResultItem {
  *
  * One interface rather than three, because a deployment configures one set of adapters and the
  * routes read them by name. `undefined` is how "this deployment has no credential for that
- * provider" arrives: `buildApp` refuses to mount a route whose adapter is absent rather than
- * mounting one that fails on every request, for the same reason `requireSupabaseJwtPolicy` refuses
- * at startup — a gateway that boots and then fails every call looks, from outside, exactly like a
- * gateway whose users are all signed out.
+ * provider" arrives, and **the route is mounted anyway** — it answers `502 provider.unavailable`.
+ *
+ * **This comment said `buildApp` refuses to mount such a route, which is the opposite of what
+ * `app.ts` does** (PR #139, F4). Mounting unconditionally is the deliberate choice and
+ * `model/providers.ts` carries the reasoning: the route table then does not change shape with the
+ * environment, where the alternative is a `404 resource.not_found` — a code the client reads as "no
+ * such route", does not retry, and cannot explain — standing in for a deployment missing a key.
  */
 export interface ModelProviders {
   readonly text: ((request: TextRequest) => Promise<TextResult>) | undefined;

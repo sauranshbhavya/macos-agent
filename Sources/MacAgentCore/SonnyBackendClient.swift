@@ -18,8 +18,12 @@ import Foundation
 /// that goes stale before anything reads it. SONNY-130 added the four it built beside it; the vision
 /// route is still SONNY-131's and is still not here.
 ///
-/// Each of these is fifteen seconds above the server's own total deadline for the same route
-/// (`server/src/model/limits.ts`), which is the arithmetic §12's rule reduces to.
+/// Each of these sits above the server's own total deadline for the same route
+/// (`server/src/model/limits.ts`), which is the whole of §12's governing rule. **The margin is not
+/// a constant, and this comment said it was fifteen seconds until PR #139's F2** — it is fifteen on
+/// the three long routes and **five** on `search` and on the auth row, straight from §12's table.
+/// `ModelRouteNumbersTests` holds both halves of that table as literals, so neither side can move
+/// without the other failing.
 public enum SonnyBackendTimeouts {
     public static let auth: TimeInterval = 20
     public static let plan: TimeInterval = 90

@@ -382,9 +382,11 @@ struct OpenAIPlannerTests {
             #expect(api.statusCode == 502)
             // The typed error carries the server's sentence for logs...
             #expect(api.message.contains("tax returns"))
-            // ...and what the user is shown carries none of it.
+            // ...and what the user is shown carries none of it — and does not invite a retry, which
+            // §9.3 says would fail identically (PR #139, F7).
             let shown = try #require(error.errorDescription)
-            #expect(shown == "Sonny couldn't finish this one. Try again.")
+            #expect(shown == "Sonny couldn't do this one.")
+            #expect(!shown.lowercased().contains("try again"))
             #expect(!shown.contains("tax returns"))
             #expect(!shown.contains("502"))
             #expect(!shown.lowercased().contains("provider"))

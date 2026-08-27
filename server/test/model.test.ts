@@ -4,7 +4,7 @@ import { buildApp } from "../src/app.js";
 import type { AuthProvider, VerifiedSession } from "../src/auth/provider.js";
 import type { Config } from "../src/config.js";
 import type { WithConnection } from "../src/db/connection.js";
-import { BODY_LIMIT_BYTES, MAXIMUM_AUDIO_DURATION_SECONDS } from "../src/model/limits.js";
+import { BODY_LIMIT_BYTES, DEADLINE_MS, MAXIMUM_AUDIO_DURATION_SECONDS } from "../src/model/limits.js";
 import { testConfig } from "./support/config.js";
 import { accessTokenFor } from "./support/tokens.js";
 
@@ -321,6 +321,71 @@ describe("POST /v1/plan and POST /v1/research/synthesize", () => {
     });
 
     expect(response.json()["output_text"]).toBe("{\"summary\":\"from the array\"}");
+    await app.close();
+  });
+
+  it("gives /v1/research/synthesize its own 4 MiB limit, and /v1/plan does not get it", async () => {
+    // **The registration line, not the constant** (PR #139, F3). `BODY_LIMIT_BYTES.synthesize` was
+    // asserted by the numbers test above, but nothing asserted that the *synthesize route* was
+    // registered with it — swapping `BODY_LIMIT_BYTES.synthesize` for `BODY_LIMIT_BYTES.plan` at
+    // the `textRoute(...)` call survived the whole suite. §6.1 gives this route 4 MiB precisely
+    // because it carries the full readable text of every fetched page, so a route silently
+    // inheriting the 1 MiB default would fail exactly the research runs it exists for.
+    //
+    // One body, two routes, one accepted and one refused: that is the pair the constant cannot say.
+    const calls = stubUpstream(() => jsonResponse({ output_text: "{}" }));
+    const app = build();
+    // Comfortably over `plan`'s 1 MiB and comfortably under `synthesize`'s 4 MiB.
+    const big = planBody({ messages: [{ role: "user", text: "x".repeat(2_000_000) }] });
+
+    const accepted = await app.inject({
+      method: "POST",
+      url: "/v1/research/synthesize",
+      headers: { authorization: authorization() },
+      payload: big,
+    });
+    expect(accepted.statusCode).toBe(200);
+
+    const refused = await app.inject({
+      method: "POST",
+      url: "/v1/plan",
+      headers: { authorization: authorization() },
+      payload: big,
+    });
+    expect(refused.statusCode).toBe(413);
+    expect(refused.json()["error"]["code"]).toBe("request.too_large");
+
+    // Only the accepted one reached a provider.
+    expect(calls).toHaveLength(1);
+    await app.close();
+  });
+
+  it("gives /v1/transcriptions its own 10 MiB limit, which /v1/search does not get", async () => {
+    // The same shape for the other route that carries an oversized body, so both routes with a
+    // limit of their own are held by behaviour rather than by a constant.
+    stubUpstream(() => jsonResponse({ results: [] }));
+    const app = build();
+
+    const refused = await app.inject({
+      method: "POST",
+      url: "/v1/search",
+      headers: { authorization: authorization() },
+      payload: { task_id: "t", retention: "standard", query: "x".repeat(2_000_000) },
+    });
+    expect(refused.statusCode).toBe(413);
+    expect(refused.json()["error"]["code"]).toBe("request.too_large");
+
+    // The same number of bytes goes through transcriptions, whose limit is ten times larger.
+    vi.unstubAllGlobals();
+    stubUpstream(() => jsonResponse({ text: "ok" }));
+    const audio = multipartBody({ task_id: "t", retention: "standard" }, Buffer.alloc(2_000_000, 0x41));
+    const accepted = await app.inject({
+      method: "POST",
+      url: "/v1/transcriptions",
+      headers: { authorization: authorization(), "content-type": audio.contentType },
+      payload: audio.payload,
+    });
+    expect(accepted.statusCode).toBe(200);
     await app.close();
   });
 
@@ -911,7 +976,7 @@ describe("the four routes are authenticated", () => {
 });
 
 describe("the numbers this ticket is held to", () => {
-  it("carries contract §6.1's body limits and §12's deadlines", () => {
+  it("carries contract §6.1's body limits", () => {
     // Written as literals rather than derived, so a change to either is a change someone made on
     // purpose — and so this file fails when the contract and the code disagree.
     expect(BODY_LIMIT_BYTES).toEqual({
@@ -920,6 +985,30 @@ describe("the numbers this ticket is held to", () => {
       transcriptions: 10_485_760,
       search: 1_048_576,
     });
+  });
+
+  it("carries §12's deadlines, and the ordering that makes them a rule", () => {
+    // **Four of §12's eight numbers, and the invariant that ties them to the other four** (PR #139,
+    // F2). Nothing read `DEADLINE_MS` before this: a mutant moving any of them survived the whole
+    // suite, because the values reach `withDeadlines` and nothing else looks at them.
+    expect(DEADLINE_MS).toEqual({
+      plan: { upstream: 60_000, total: 75_000 },
+      synthesize: { upstream: 90_000, total: 105_000 },
+      transcriptions: { upstream: 60_000, total: 75_000 },
+      search: { upstream: 20_000, total: 25_000 },
+    });
+    // **The invariant is the ordering, not a fixed gap** — a first draft of this test asserted
+    // fifteen seconds on every row and went red on `search`, whose margin is five. §12's table has
+    // both, and two of this branch's own doc comments claimed the constant until that failure.
+    // What must hold on every row is that the server leaves itself room beyond the upstream call to
+    // answer with a typed failure rather than being cut off mid-request.
+    for (const [route, deadlines] of Object.entries(DEADLINE_MS)) {
+      expect(deadlines.upstream, route).toBeGreaterThan(0);
+      expect(deadlines.total, route).toBeGreaterThan(deadlines.upstream);
+    }
+    // The other four numbers live in `SonnyBackendTimeouts` on the Swift side, each above the
+    // matching `total` here. `ModelRouteNumbersTests` asserts them against these same literals, so
+    // the two halves of §12's table cannot move independently without one of the two failing.
   });
 
   it("caps a recording at three minutes, which is the number the Mac's refusal is built from", () => {
