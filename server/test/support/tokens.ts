@@ -21,11 +21,15 @@ export const TEST_JWT_POLICY: SupabaseJwtPolicy = {
 };
 
 /**
- * Every Supabase-shaped field a `Config` literal in these tests needs.
+ * Every Supabase-shaped field a `Config` in these tests needs, spread by `support/config.ts`'s
+ * `testConfig()` — which is now the only place a `Config` is built, so this is the only place these
+ * five are written.
  *
  * **Renamed from the JWT-only name it carried by SONNY-307**, which added the two API-key fields
  * below: the old name described three of the five and would have described a shrinking fraction of
- * them as more Supabase-shaped fields arrive.
+ * them as more Supabase-shaped fields arrive. That rename touched five files when it was made and
+ * touches one now, because SONNY-130 consolidated the five hand-written fixtures into `testConfig()`
+ * in between — the saving that file's own docstring predicted, collected by the very next ticket.
  *
  * **The two API keys are `undefined` on purpose, and that is the truthful value here.** They are what
  * `auth/supabase.ts` sends to the real project; every app built in this suite is handed a *fake*
