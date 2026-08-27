@@ -7,7 +7,11 @@ import SwiftUI
 final class AppDelegate: NSObject, NSApplicationDelegate {
     private var statusItem: NSStatusItem?
     private let viewModel: AgentViewModel
-    private lazy var windowCoordinator = AppWindowCoordinator(viewModel: viewModel)
+    private let accountModel: SonnyAccountModel
+    private lazy var windowCoordinator = AppWindowCoordinator(
+        viewModel: viewModel,
+        accountModel: accountModel
+    )
     private lazy var widgetController = FloatingWidgetWindowController(viewModel: viewModel)
     private lazy var notificationService = SonnyNotificationService(
         onAllow: { [weak self] in self?.viewModel.start() },
@@ -68,8 +72,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     /// than the one declaring it that mentions it at all —
     /// `LocalStoreInjectionScanTests.onlyMainAsksForTheRealStoreLocations` holds that as a
     /// population, so the door cannot be reopened here or anywhere else under another name.
-    init(viewModel: AgentViewModel) {
+    /// `accountModel` follows the same rule for the same reason, one store further out: its default
+    /// would be the Keychain every packaged build on this Mac shares, and a test writing
+    /// `AppDelegate(viewModel:)` would have read and deleted the founder's own session (SONNY-128).
+    init(viewModel: AgentViewModel, accountModel: SonnyAccountModel) {
         self.viewModel = viewModel
+        self.accountModel = accountModel
         super.init()
     }
 
@@ -109,6 +117,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             viewModel.markVoiceHotKeyUnavailable(error.localizedDescription)
             print("Sonny could not register push-to-talk hotkey: \(error.localizedDescription)")
         }
+
+        // Reads the Keychain and touches no network, so the app comes back signed in on a relaunch
+        // with no connection — including the relaunch macOS forces after a Screen Recording grant,
+        // which is the case SONNY-128 exists for.
+        Task { await accountModel.restore() }
 
         observeNotificationTriggers()
         observeWidgetPresentationRequests()

@@ -1,0 +1,717 @@
+import Foundation
+
+/// The client timeouts of `docs/sonny-backend-api-contract.md` §12.
+///
+/// The governing rule there is one line — "the client's timeout is always longer than the server's
+/// total deadline" — so that a slow route surfaces as the server's own typed `504 provider.timeout`,
+/// which the app can explain, rather than as this client's opaque transport timeout, which it
+/// cannot tell apart from a dead network. The table:
+///
+/// | Route | Server total deadline | Client timeout |
+/// |---|---|---|
+/// | screen/analyze, research/synthesize | 105 s | 120 s |
+/// | plan, transcriptions | 75 s | 90 s |
+/// | search | 25 s | 30 s |
+/// | auth, account, meta, health, delete | 15 s | 20 s |
+///
+/// Only the last row is declared: this ticket builds no other route, and a constant for a route
+/// nobody sends is a number that goes stale before anything reads it. SONNY-130 and SONNY-131 add
+/// theirs beside it.
+public enum SonnyBackendTimeouts {
+    public static let auth: TimeInterval = 20
+}
+
+/// One request, described in the terms the contract's rules are written in.
+///
+/// **`isRetrySafe` is the request's own property and not a consequence of its verb.** §9.3 makes
+/// `POST /v1/auth/email/verify` unsafe to retry — a code is single-use, so a second attempt spends
+/// something the user cannot get back — while `POST /v1/auth/email/start`, `/v1/auth/refresh` and
+/// `/v1/auth/signout` beside it are all safe. Nothing about "POST" says which, so the caller says.
+public struct SonnyBackendRequest: Sendable, Equatable {
+    public enum Authentication: Sendable, Equatable {
+        case none
+        case bearer
+    }
+
+    public let method: String
+    public let path: String
+    public let body: Data?
+    public let authentication: Authentication
+    /// §9.1: one key per logical operation, not one per attempt. A retry reuses the operation's
+    /// key — that is the entire mechanism — so it is minted where the operation begins.
+    public let idempotencyKey: UUID?
+    public let timeout: TimeInterval
+    public let isRetrySafe: Bool
+
+    public init(
+        method: String,
+        path: String,
+        body: Data?,
+        authentication: Authentication,
+        idempotencyKey: UUID?,
+        timeout: TimeInterval,
+        isRetrySafe: Bool
+    ) {
+        self.method = method
+        self.path = path
+        self.body = body
+        self.authentication = authentication
+        self.idempotencyKey = idempotencyKey
+        self.timeout = timeout
+        self.isRetrySafe = isRetrySafe
+    }
+}
+
+public struct SonnyBackendResponse: Sendable, Equatable {
+    public let statusCode: Int
+    public let data: Data
+    public let requestID: String?
+}
+
+/// How long to wait between attempts. Delays only — how *many* attempts an operation gets comes
+/// from what failed (`SonnyBackendErrorCode.maximumAttempts`), and a `Retry-After` the server sent
+/// replaces the computed delay outright, because a server that named a number knows something this
+/// client does not.
+public struct SonnyBackendRetryDelays: Sendable, Equatable {
+    public let initial: TimeInterval
+    public let multiplier: Double
+    public let maximum: TimeInterval
+
+    public static let contractDefault = SonnyBackendRetryDelays(initial: 0.5, multiplier: 2, maximum: 8)
+
+    public init(initial: TimeInterval, multiplier: Double, maximum: TimeInterval) {
+        self.initial = initial
+        self.multiplier = multiplier
+        self.maximum = maximum
+    }
+
+    /// `attempt` is 1-based and names the attempt that just failed.
+    public func delay(afterAttempt attempt: Int, jitterFraction: Double) -> TimeInterval {
+        let exponent = max(attempt - 1, 0)
+        let base = min(initial * pow(multiplier, Double(exponent)), maximum)
+        return base * (1 + max(jitterFraction, 0))
+    }
+}
+
+/// The one HTTP client the Mac app talks to its own backend through.
+///
+/// **An actor, because the single-flight refresh guard is shared mutable state and nothing else in
+/// this codebase owns it.** Ten requests can be in flight from as many tasks; §3.3 requires that
+/// ten concurrent `401 auth.token_expired`s cause one refresh and not ten, and the server's
+/// rotation rule only works if the client honours it — a second refresh presenting a token the
+/// first already rotated away, past the platform's ten-second overlap, is read as theft and revokes
+/// the whole family.
+///
+/// **The guard is a generation counter, not just "is a refresh running".** A flag alone loses the
+/// straggler: request A refreshes, the flag clears, request B's 401 — raised against the *old*
+/// token before A finished — then starts a second refresh. So every caller records the generation
+/// of the token it used, and asks for "a token newer than this one". If the cache has already moved
+/// past it, the caller retries with what is there and no request is made at all.
+///
+/// **Every token write reaches the Keychain before it reaches this actor's cache.** That ordering is
+/// the whole of this ticket's headline requirement: macOS forces an app relaunch after a Screen
+/// Recording grant (`ScreenAccessOnboardingModel.relaunchNow()`), so a session that exists only in
+/// memory is lost at exactly the moment a first-run user meets it. Writing the Keychain first also
+/// means a failed write cannot leave the process believing it is signed in with something no disk
+/// holds — the failure surfaces to whoever asked, and the user is not told they are signed in.
+public actor SonnyBackendClient {
+    private let environment: SonnyBackendEnvironment?
+    private let tokenStore: any SonnyAccountTokenStoring
+    private let session: URLSession
+    private let clientVersion: String
+    private let platform: String
+    private let retryDelays: SonnyBackendRetryDelays
+    private let now: @Sendable () -> Date
+    private let jitterFraction: @Sendable () -> Double
+    private let sleepForRetry: @Sendable (TimeInterval) async throws -> Void
+
+    /// Refresh this far ahead of expiry rather than waiting for a 401 (§3.3, "the client refreshes
+    /// when `expires_in` is most of the way spent").
+    ///
+    /// **180 seconds, derived rather than picked**: it exceeds the longest client timeout in §12's
+    /// table (120 s, the vision and synthesis routes), so a request that is allowed to start can
+    /// never be holding a token that expires while it is still in flight. A margin shorter than the
+    /// longest request is a margin that lets exactly that happen.
+    static let proactiveRefreshMargin: TimeInterval = 180
+
+    private var cachedTokens: SonnyAccountTokens?
+    private var tokenGeneration: UInt64 = 0
+    private var hasReadStore = false
+    private var refreshTask: Task<Void, Error>?
+    /// Server time minus this Mac's time, from the `Date` header every response carries (§3.5).
+    /// All expiry arithmetic runs in server time, because the user can change their own clock.
+    private var serverClockOffset: TimeInterval = 0
+
+    /// `tokenStore` has no default, deliberately.
+    ///
+    /// SONNY-240 removed every defaulted local store from `AgentViewModel.init` because a default
+    /// nobody writes is a default nobody can see, and a fixture that inherited one wrote to the
+    /// developer's own `~/Library`. The Keychain is the same hazard one step worse: every packaged
+    /// build on a Mac shares one Keychain, so a test or a fixture that let this default would read
+    /// and *delete* the founder's real session. `session` keeps the `= .shared` default the six
+    /// provider clients already use, because a URLSession touches nothing shared on disk.
+    public init(
+        environment: SonnyBackendEnvironment?,
+        tokenStore: any SonnyAccountTokenStoring,
+        session: URLSession = .shared,
+        clientVersion: String = SonnyClientIdentity.version,
+        platform: String = SonnyClientIdentity.platform,
+        retryDelays: SonnyBackendRetryDelays = .contractDefault,
+        now: @escaping @Sendable () -> Date = Date.init,
+        jitterFraction: @escaping @Sendable () -> Double = { Double.random(in: 0...0.25) },
+        sleepForRetry: @escaping @Sendable (TimeInterval) async throws -> Void = { seconds in
+            try await Task.sleep(nanoseconds: UInt64(max(seconds, 0) * 1_000_000_000))
+        }
+    ) {
+        self.environment = environment
+        self.tokenStore = tokenStore
+        self.session = session
+        self.clientVersion = clientVersion
+        self.platform = platform
+        self.retryDelays = retryDelays
+        self.now = now
+        self.jitterFraction = jitterFraction
+        self.sleepForRetry = sleepForRetry
+    }
+
+    public var isConfigured: Bool { environment != nil }
+
+    public var backendEnvironment: SonnyBackendEnvironment? { environment }
+
+    // MARK: - Session
+
+    /// Who is signed in on this Mac, reading the Keychain the first time it is asked.
+    ///
+    /// This is the whole of "the app comes back signed in": it needs no network, so a relaunch — or
+    /// a launch with no connection — restores the session from the one place it was written.
+    public func restoredIdentity() throws -> SonnyAccountIdentity? {
+        try loadedSnapshot()?.tokens.identity
+    }
+
+    /// Take a freshly issued session: **Keychain first, cache second**.
+    ///
+    /// Unconditional, because a sign-in is the user asking for exactly this and must always win.
+    /// The refresh path uses `adopt(_:onlyIfGenerationIsStill:)` below instead.
+    public func adopt(_ tokens: SonnyAccountTokens) throws {
+        try adopt(tokens, onlyIfGenerationIsStill: tokenGeneration)
+    }
+
+    /// Take a session **only if nothing has replaced or discarded the one it was issued against.**
+    ///
+    /// This is the guard for PR #133's F1, and the defect it closes was reproduced rather than
+    /// argued: a refresh already in flight when the user pressed Sign out reached `adopt` *after*
+    /// `discardSessionLocally` had cleared the Keychain, wrote the rotated session back, and
+    /// `restore()` signed the user in again at the next launch — `keychain_holds_session_after_
+    /// signout=true`. The UI said signed out and a live credential sat on disk.
+    ///
+    /// **Why a generation rather than a flag, and why the check cannot race.** `performRefresh`
+    /// reads the generation before its network call and hands it back here; sign-out and every
+    /// adoption bump it. The comparison and the write both happen in this method with no `await`
+    /// between them, so on this actor they are one indivisible step — there is no window for a
+    /// sign-out to land between "still current" and "saved".
+    ///
+    /// **That holds because `SonnyAccountTokenStoring` is synchronous**, and it is worth saying out
+    /// loud rather than leaving as a property of today's code. An actor's step is indivisible only
+    /// up to its next suspension point, so the guarantee above is not a fact about the guard — it is
+    /// a fact about `saveTokens` being a `throws` call rather than an `async throws` one. Make that
+    /// protocol asynchronous and this method acquires a suspension point between the check and the
+    /// write, and the window this exists to close is open again. Written down so that change is
+    /// *seen* to reopen it: whoever makes `saveTokens` async has to come back here, rather than
+    /// finding a comment that still reads true and a guard that quietly is not.
+    ///
+    /// Refusing throws `notSignedIn` rather than returning quietly, so the caller learns that the
+    /// session it was refreshing no longer exists instead of reading an empty cache as a bug. The
+    /// rotated token the server issued is discarded on purpose: the user signed out, and the whole
+    /// family is revoked or about to be.
+    func adopt(_ tokens: SonnyAccountTokens, onlyIfGenerationIsStill expected: UInt64) throws {
+        guard tokenGeneration == expected else { throw SonnyBackendError.notSignedIn }
+        try tokenStore.saveTokens(tokens)
+        cachedTokens = tokens
+        hasReadStore = true
+        tokenGeneration &+= 1
+    }
+
+    /// Forget the session on this Mac. Deletes exactly this Keychain account and nothing else —
+    /// `LocalStorageEncryptionKeyManager`'s key lives under a different service and is untouched,
+    /// which is the difference between signing out and resetting the encryption identity.
+    /// **The in-flight refresh is dropped as well, and it is dropped rather than cancelled.**
+    /// Clearing the handle is what stops a *later* caller awaiting a refresh that belongs to a
+    /// session nobody holds any more; the bumped generation is what stops that refresh writing its
+    /// result (`adopt(_:onlyIfGenerationIsStill:)`). Cancelling it would add nothing the guard does
+    /// not already do — a cancel cannot reach a task already past its network call — and it would
+    /// hand the requests riding on that refresh `cancelled`, which the copy layer renders as an
+    /// unexplained failure. Letting it run to its own refusal gives them `notSignedIn`, which is
+    /// both true and the sentence the user needs.
+    public func discardSessionLocally() throws {
+        try tokenStore.clearTokens()
+        cachedTokens = nil
+        hasReadStore = true
+        tokenGeneration &+= 1
+        refreshTask = nil
+    }
+
+    // MARK: - Sending
+
+    public func send(_ request: SonnyBackendRequest) async throws -> SonnyBackendResponse {
+        try await send(request, allowingRefresh: true)
+    }
+
+    private func send(
+        _ request: SonnyBackendRequest,
+        allowingRefresh: Bool
+    ) async throws -> SonnyBackendResponse {
+        guard let environment else { throw SonnyBackendError.backendNotConfigured }
+        var attempt = 1
+        var hasRefreshed = false
+
+        while true {
+            var snapshot: TokenSnapshot?
+            if request.authentication == .bearer {
+                snapshot = allowingRefresh
+                    ? try await authorizedSnapshot()
+                    : try requireSnapshot()
+            }
+
+            do {
+                return try await perform(
+                    request,
+                    accessToken: snapshot?.tokens.accessToken,
+                    baseURL: environment.baseURL
+                )
+            } catch let error as SonnyBackendError {
+                // §3.3: refresh once, retry the original request exactly once. This retry is not an
+                // attempt against the failure's own budget — nothing failed that a wait would fix.
+                if allowingRefresh,
+                   request.authentication == .bearer,
+                   !hasRefreshed,
+                   case .api(let api) = error,
+                   api.code == .authTokenExpired {
+                    hasRefreshed = true
+                    _ = try await refreshedSnapshot(newerThan: snapshot?.generation ?? 0)
+                    continue
+                }
+
+                // §7.2 case 1b: a revoked or reused token means the family is gone. The client's
+                // stated response is to clear the Keychain entry and send the user to sign-in, so
+                // the dead session does not sit on disk pretending to be one.
+                if case .api(let api) = error,
+                   api.code == .authTokenRevoked
+                       || (request.authentication == .bearer && api.code == .authUnauthenticated) {
+                    try? discardSessionLocally()
+                    throw error
+                }
+
+                guard request.isRetrySafe,
+                      let ceiling = attemptCeiling(for: error),
+                      attempt < ceiling,
+                      let delay = retryDelay(for: error, afterAttempt: attempt, request: request) else {
+                    throw error
+                }
+                try await sleep(delay)
+                attempt += 1
+            }
+        }
+    }
+
+    /// The attempt ceiling this failure allows, or `nil` when it must not be retried at all.
+    private func attemptCeiling(for error: SonnyBackendError) -> Int? {
+        switch error {
+        case .offline, .unreachable:
+            // §9.3 lists `client.offline` as retryable. One retry, because a second wait does not
+            // make a missing network more present and the user is waiting on a sign-in screen.
+            return 2
+        case .api(let api):
+            return api.isRetryable ? api.code.maximumAttempts : nil
+        case .timedOut, .cancelled, .backendNotConfigured, .notSignedIn, .undecodableResponse:
+            // A transport timeout has already spent the route's whole budget; retrying it doubles
+            // a wait the user is watching. A 2xx body this client cannot read will not parse on a
+            // second reading either. Cancellation beats every timeout and is never retried (§12).
+            return nil
+        }
+    }
+
+    /// How long to wait before the next attempt, or `nil` for "do not attempt again".
+    ///
+    /// A server-named `Retry-After` replaces the computed backoff, because a server that named a
+    /// number knows something this client does not — **but only up to this request's own timeout,
+    /// and past that the answer is to stop rather than to sleep.** `Retry-After` is data from the
+    /// network with nothing bounding it, and an unbounded sleep sits inside an operation a user is
+    /// watching: a server bug or a hostile one answering `Retry-After: 86400` would park a sign-in
+    /// for a day, which is indistinguishable from a hung app and is the client doing it to itself.
+    ///
+    /// The bound is the route's own timeout rather than a number picked for the purpose. §12 already
+    /// says how long this operation may take; waiting that again between two attempts keeps one
+    /// operation inside twice its own budget, and a server asking for longer than the operation is
+    /// worth is answered by failing with the delay preserved on the typed error, so a surface that
+    /// wants to say "try again in an hour" still can.
+    private func retryDelay(
+        for error: SonnyBackendError,
+        afterAttempt attempt: Int,
+        request: SonnyBackendRequest
+    ) -> TimeInterval? {
+        guard case .api(let api) = error, let retryAfter = api.retryAfter else {
+            return retryDelays.delay(afterAttempt: attempt, jitterFraction: jitterFraction())
+        }
+        guard retryAfter <= request.timeout else { return nil }
+        return retryAfter
+    }
+
+    private func sleep(_ seconds: TimeInterval) async throws {
+        do {
+            try await sleepForRetry(seconds)
+        } catch {
+            throw SonnyBackendError.cancelled
+        }
+    }
+
+    // MARK: - Tokens
+
+    private struct TokenSnapshot {
+        let tokens: SonnyAccountTokens
+        let generation: UInt64
+    }
+
+    private func loadedSnapshot() throws -> TokenSnapshot? {
+        if !hasReadStore {
+            if let stored = try tokenStore.loadTokens() {
+                cachedTokens = stored
+                tokenGeneration &+= 1
+            }
+            hasReadStore = true
+        }
+        guard let cachedTokens else { return nil }
+        return TokenSnapshot(tokens: cachedTokens, generation: tokenGeneration)
+    }
+
+    private func requireSnapshot() throws -> TokenSnapshot {
+        guard let snapshot = try loadedSnapshot() else { throw SonnyBackendError.notSignedIn }
+        return snapshot
+    }
+
+    private func authorizedSnapshot() async throws -> TokenSnapshot {
+        let snapshot = try requireSnapshot()
+        let remaining = snapshot.tokens.accessTokenExpiresAt.timeIntervalSince(serverNow())
+        guard remaining <= Self.proactiveRefreshMargin else { return snapshot }
+        return try await refreshedSnapshot(newerThan: snapshot.generation)
+    }
+
+    /// A token newer than `staleGeneration`, refreshing at most once across every concurrent caller.
+    private func refreshedSnapshot(newerThan staleGeneration: UInt64) async throws -> TokenSnapshot {
+        // Somebody already refreshed past the token this caller used. No request is made: the
+        // caller simply retries with what is now on hand. This is the branch that turns a burst of
+        // stragglers into zero extra refreshes rather than one each.
+        if tokenGeneration > staleGeneration, let tokens = cachedTokens {
+            return TokenSnapshot(tokens: tokens, generation: tokenGeneration)
+        }
+
+        // Everything from here to the assignment below runs without an `await`, so on this actor it
+        // is one indivisible step: two callers cannot both find `refreshTask` empty.
+        if let existing = refreshTask {
+            try await existing.value
+        } else {
+            let task = Task<Void, Error> { [self] in try await performRefresh() }
+            refreshTask = task
+            do {
+                try await task.value
+                refreshTask = nil
+            } catch {
+                refreshTask = nil
+                throw error
+            }
+        }
+
+        guard let tokens = cachedTokens else { throw SonnyBackendError.notSignedIn }
+        return TokenSnapshot(tokens: tokens, generation: tokenGeneration)
+    }
+
+    private func performRefresh() async throws {
+        guard let tokens = cachedTokens else { throw SonnyBackendError.notSignedIn }
+        // Read before the network call, checked after it. Everything between is a suspension point
+        // a sign-out can land in.
+        let generationAtEntry = tokenGeneration
+        let body = try JSONSerialization.data(withJSONObject: ["refresh_token": tokens.refreshToken])
+        let request = SonnyBackendRequest(
+            method: "POST",
+            path: "/v1/auth/refresh",
+            body: body,
+            // §2.2: refresh deliberately sends no Authorization header, so that an expired or
+            // missing access token can never be the reason a refresh fails.
+            authentication: .none,
+            idempotencyKey: UUID(),
+            timeout: SonnyBackendTimeouts.auth,
+            // **Not retry-safe, against §9.3's own table — PR #133's F2, and the exception is
+            // argued rather than assumed.** §9.3 calls refresh safe to retry *with the same key*,
+            // and the key is the whole mechanism: the server returns the stored response instead of
+            // rotating again. That mechanism does not exist — the gateway reads no
+            // `Idempotency-Key` on any route (SONNY-300, 0 hits under `server/`) — so a retry here
+            // is a second POST of the identical refresh token, and §3.3 makes presenting an
+            // already-rotated token past the platform's ten-second overlap the definition of theft,
+            // answered by revoking the whole family. Measured before the fix: a `503` carrying
+            // `Retry-After: 30` produced two identical refresh POSTs 30 s apart.
+            //
+            // **Capping the delay below the overlap was the other option and is not enough**, which
+            // is why this is the fix. The overlap runs from when the server rotated, and the first
+            // attempt's own duration counts against it — this route may sit for its full 20-second
+            // timeout before failing, so the window can already be gone before any delay is
+            // chosen. The elapsed-time bound that would be correct is more machinery than the
+            // alternative deserves, because a failed refresh costs nothing: the next request that
+            // needs a token tries again, and until then the access token in hand keeps working.
+            isRetrySafe: false
+        )
+        do {
+            let response = try await send(request, allowingRefresh: false)
+            let decoded = try SonnyTokenResponse.decode(response.data)
+            try adopt(
+                decoded.tokens(emailAddress: tokens.emailAddress, receivedAt: serverNow()),
+                onlyIfGenerationIsStill: generationAtEntry
+            )
+        } catch let error as SonnyBackendError {
+            if case .api(let api) = error,
+               api.code == .authTokenRevoked || api.code == .authUnauthenticated {
+                try? discardSessionLocally()
+            }
+            throw error
+        }
+    }
+
+    // MARK: - Transport
+
+    private func perform(
+        _ request: SonnyBackendRequest,
+        accessToken: String?,
+        baseURL: URL
+    ) async throws -> SonnyBackendResponse {
+        var urlRequest = URLRequest(url: Self.url(base: baseURL, path: request.path))
+        urlRequest.httpMethod = request.method
+        urlRequest.timeoutInterval = request.timeout
+        if let body = request.body {
+            urlRequest.httpBody = body
+            urlRequest.setValue("application/json", forHTTPHeaderField: "Content-Type")
+        }
+        if let accessToken {
+            urlRequest.setValue("Bearer \(accessToken)", forHTTPHeaderField: "Authorization")
+        }
+        if let key = request.idempotencyKey {
+            urlRequest.setValue(key.uuidString, forHTTPHeaderField: "Idempotency-Key")
+        }
+        urlRequest.setValue(clientVersion, forHTTPHeaderField: "Sonny-Client-Version")
+        urlRequest.setValue(platform, forHTTPHeaderField: "Sonny-Platform")
+        // `Accept-Encoding` is deliberately NOT set here, though §2.2 says every request should
+        // include gzip. URLSession sets it itself and transparently decompresses the reply; setting
+        // it by hand switches that off and hands back compressed bytes for this code to decode.
+
+        let data: Data
+        let response: URLResponse
+        do {
+            (data, response) = try await session.data(for: urlRequest)
+        } catch {
+            throw Self.transportError(error, timeout: request.timeout)
+        }
+
+        guard let http = response as? HTTPURLResponse else {
+            throw SonnyBackendError.undecodableResponse("response was not HTTP")
+        }
+        recordServerClock(from: http)
+
+        let requestID = http.value(forHTTPHeaderField: "Sonny-Request-Id")
+        guard (200..<300).contains(http.statusCode) else {
+            throw SonnyBackendError.api(Self.errorEnvelope(
+                data,
+                statusCode: http.statusCode,
+                headerRequestID: requestID,
+                retryAfterHeader: http.value(forHTTPHeaderField: "Retry-After")
+            ))
+        }
+        return SonnyBackendResponse(statusCode: http.statusCode, data: data, requestID: requestID)
+    }
+
+    static func transportError(_ error: Error, timeout: TimeInterval) -> SonnyBackendError {
+        if error is CancellationError { return .cancelled }
+        guard let urlError = error as? URLError else {
+            return .unreachable(String(describing: type(of: error)))
+        }
+        switch urlError.code {
+        case .timedOut:
+            return .timedOut(after: timeout)
+        case .cancelled:
+            return .cancelled
+        case .notConnectedToInternet, .networkConnectionLost, .dataNotAllowed,
+             .internationalRoamingOff, .callIsActive:
+            // The only branch that means "everything local still works" — §7.2 case 7's whole point.
+            return .offline
+        default:
+            return .unreachable("URLError \(urlError.code.rawValue)")
+        }
+    }
+
+    /// §9.3's one exception to deciding on `code`: a response with no parseable body at all is
+    /// treated as `server.error`, which is retryable. Everything else keeps the server's own code.
+    static func errorEnvelope(
+        _ data: Data,
+        statusCode: Int,
+        headerRequestID: String?,
+        retryAfterHeader: String?
+    ) -> SonnyBackendAPIError {
+        let headerRetryAfter = retryAfterHeader.flatMap(TimeInterval.init)
+        guard let envelope = try? JSONDecoder().decode(WireErrorEnvelope.self, from: data) else {
+            return SonnyBackendAPIError(
+                code: .serverError,
+                statusCode: statusCode,
+                message: "Response body could not be read as the contract's error envelope.",
+                requestID: headerRequestID,
+                retryAfter: headerRetryAfter,
+                envelopeSaysRetryable: true
+            )
+        }
+        return SonnyBackendAPIError(
+            code: SonnyBackendErrorCode(wire: envelope.error.code),
+            statusCode: statusCode,
+            message: envelope.error.message,
+            requestID: envelope.error.request_id ?? headerRequestID,
+            retryAfter: envelope.error.retry_after_seconds ?? headerRetryAfter,
+            envelopeSaysRetryable: envelope.error.retryable ?? false
+        )
+    }
+
+    /// `base` and `path` joined without either end having to agree about slashes.
+    static func url(base: URL, path: String) -> URL {
+        let trimmedBase = base.absoluteString.hasSuffix("/")
+            ? String(base.absoluteString.dropLast())
+            : base.absoluteString
+        let trimmedPath = path.hasPrefix("/") ? String(path.dropFirst()) : path
+        return URL(string: "\(trimmedBase)/\(trimmedPath)") ?? base
+    }
+
+    // MARK: - Clock
+
+    func serverNow() -> Date { now().addingTimeInterval(serverClockOffset) }
+
+    private func recordServerClock(from response: HTTPURLResponse) {
+        guard let header = response.value(forHTTPHeaderField: "Date"),
+              let serverDate = SonnyHTTPDate.parse(header) else { return }
+        serverClockOffset = serverDate.timeIntervalSince(now())
+    }
+}
+
+/// The `URLSession` the app's own backend calls run on.
+///
+/// **`URLSession.shared` is a stock default nobody chose, and it is backed by a disk cache** — 20 MB
+/// of it on this machine, with `requestCachePolicy` at `useProtocolCachePolicy` (PR #133's F11,
+/// measured). That is the same shape §12 calls out for timeouts and that this client already fixed
+/// there. Exposure today is small: the only routes are auth POSTs, which Foundation does not
+/// normally store. It stops being small the moment SONNY-130 and SONNY-134 point authenticated
+/// `GET`s at this same client — `/v1/account/entitlements` and `/v1/tasks/{task_id}` — because a
+/// shared on-disk cache is exactly what stores a `GET` response, and those responses are the user's.
+///
+/// So the configuration is chosen here rather than inherited: ephemeral, whose cookie and credential
+/// stores are its own and in memory rather than the process-wide ones the shared session persists
+/// to; `urlCache` cleared outright, so not even an in-memory response cache survives; and a request
+/// policy that says so at the request level too, because a proxy or a server sending cache headers
+/// should not be able to reintroduce what this removed.
+///
+/// The client's `session` parameter keeps its `= .shared` default, which is the pattern the six
+/// provider clients already use and the one SONNY-128's contract named. This is what the shipping
+/// app passes instead, and `SignInSurfaceTests.theProductionClientDoesNotRunOnTheSharedSession`
+/// holds that it is the only session named at that site.
+public enum SonnyBackendSession {
+    public static func forBackendCalls() -> URLSession {
+        let configuration = URLSessionConfiguration.ephemeral
+        configuration.urlCache = nil
+        configuration.requestCachePolicy = .reloadIgnoringLocalCacheData
+        return URLSession(configuration: configuration)
+    }
+}
+
+/// Version and platform for §2.2's two identifying headers.
+public enum SonnyClientIdentity {
+    /// Marketing version plus build, e.g. `1.0+1`. A bare `swift run` has no bundle and reports
+    /// `0.0+0` rather than inventing a version — the packaged app is the only build with an honest
+    /// answer, and it is the only one a user runs.
+    public static var version: String {
+        let info = Bundle.main.infoDictionary
+        let short = info?["CFBundleShortVersionString"] as? String ?? "0.0"
+        let build = info?["CFBundleVersion"] as? String ?? "0"
+        return "\(short)+\(build)"
+    }
+
+    public static var platform: String {
+        let version = ProcessInfo.processInfo.operatingSystemVersion
+        return "macos/\(version.majorVersion).\(version.minorVersion).\(version.patchVersion)"
+    }
+}
+
+enum SonnyHTTPDate {
+    /// RFC 1123, the form an HTTP `Date` header takes. Fixed locale and zone, or a device set to a
+    /// non-Gregorian calendar parses its own server's clock wrong.
+    static let formatter: DateFormatter = {
+        let formatter = DateFormatter()
+        formatter.locale = Locale(identifier: "en_US_POSIX")
+        formatter.timeZone = TimeZone(identifier: "GMT")
+        formatter.dateFormat = "EEE, dd MMM yyyy HH:mm:ss zzz"
+        return formatter
+    }()
+
+    static func parse(_ value: String) -> Date? { formatter.date(from: value) }
+}
+
+private struct WireErrorEnvelope: Decodable {
+    struct Body: Decodable {
+        let code: String
+        let message: String
+        let retryable: Bool?
+        let retry_after_seconds: TimeInterval?
+        let request_id: String?
+    }
+
+    let error: Body
+}
+
+/// §3.2's token response, returned by `email/verify`, `oauth/{provider}` and `refresh`.
+struct SonnyTokenResponse: Decodable {
+    struct User: Decodable {
+        let id: String
+    }
+
+    let access_token: String
+    let refresh_token: String
+    let expires_in: TimeInterval
+    let refresh_expires_at: String?
+    let user: User
+    /// §3.6, advisory. Decoded so that SONNY-129 does not have to re-derive the field; a client
+    /// that ignores it is correct per the contract and gets two accounts, which is why no prompt
+    /// is built here.
+    let link_hint: String?
+
+    static func decode(_ data: Data) throws -> SonnyTokenResponse {
+        do {
+            return try JSONDecoder().decode(SonnyTokenResponse.self, from: data)
+        } catch {
+            throw SonnyBackendError.undecodableResponse(String(describing: error))
+        }
+    }
+
+    /// **Expiry is scheduled from `expires_in`, not from `expires_at`.** §3.2 says why both are
+    /// sent: `expires_in` is immune to clock skew and is what a client should schedule from, and
+    /// `receivedAt` here is already server time, because the `Date` header on this very response
+    /// updated the offset before the body was read.
+    func tokens(emailAddress: String?, receivedAt: Date) -> SonnyAccountTokens {
+        SonnyAccountTokens(
+            accessToken: access_token,
+            refreshToken: refresh_token,
+            accessTokenExpiresAt: receivedAt.addingTimeInterval(expires_in),
+            refreshTokenExpiresAt: refresh_expires_at.flatMap(SonnyISO8601.parse),
+            userID: user.id,
+            emailAddress: emailAddress
+        )
+    }
+}
+
+enum SonnyISO8601 {
+    static func parse(_ value: String) -> Date? {
+        let formatter = ISO8601DateFormatter()
+        formatter.formatOptions = [.withInternetDateTime]
+        if let date = formatter.date(from: value) { return date }
+        formatter.formatOptions = [.withInternetDateTime, .withFractionalSeconds]
+        return formatter.date(from: value)
+    }
+}
