@@ -116,6 +116,136 @@ struct SonnyLiveGatewayTests {
         }
     }
 
+    /// **The four model routes SONNY-130 moved, driven through their real clients against a real
+    /// gateway.** This is the half a `URLProtocol` stub cannot cover — that the bodies these clients
+    /// build are ones the server parses, and that the server's own envelope maps back — and it is
+    /// what SONNY-192's staging run will exercise with the variable pointed at staging.
+    ///
+    /// **Three outcomes are acceptable and the test prints which it saw.** A deployment with a real
+    /// session and provider credentials answers the route. One without auth configured answers
+    /// `401 auth.unauthenticated`, which is the gate refusing a protected route on a process with no
+    /// way to authenticate anyone — the shape `./scripts/deploy.sh local` produces today. One with
+    /// auth but no credential for that route's provider answers `502 provider.unavailable`. All
+    /// three are the server's own envelope read by this client, which is the property being checked;
+    /// what is *not* acceptable is a transport failure, a 404, or an envelope this client cannot
+    /// read, and each of those fails the test.
+    ///
+    /// The session is a fabricated one in an in-memory Keychain, because `authentication: .bearer`
+    /// refuses before sending when no session is held — without one this would assert nothing about
+    /// the server at all. A real sign-in is a founder's manual item; no agent session can read a
+    /// code out of a mailbox.
+    @Test
+    @MainActor
+    func theFourModelRoutesReachTheRealGatewayAndTheirAnswersMapBack() async throws {
+        // **A fresh client per route, and that is not tidiness.** §7.2 case 1b makes the client
+        // clear its Keychain entry on `auth.unauthenticated`, so the first route's 401 signs this
+        // fabricated session out and every route after it would fail with `notSignedIn` before
+        // sending — proving nothing about the server. The suite found that on its first run.
+        let context = BackendTaskContext(taskID: "live-check-\(UUID().uuidString)", retention: .standard)
+        let acceptable: Set<SonnyBackendErrorCode> = [
+            .authUnauthenticated, .authTokenExpired, .authTokenRevoked, .providerUnavailable,
+        ]
+
+        func check(_ route: String, _ body: () async throws -> Void) async {
+            do {
+                try await body()
+                print("live gateway: \(route) SERVED — this deployment has a session and a credential")
+            } catch let error as SonnyBackendError {
+                record(route, error, acceptable)
+            } catch let error as PlannerError {
+                guard case .backend(let backend) = error else {
+                    Issue.record("\(route): expected a backend failure, got \(error)")
+                    return
+                }
+                record(route, backend, acceptable)
+            } catch let error as TranscriptionError {
+                guard case .backend(let backend) = error else {
+                    Issue.record("\(route): expected a backend failure, got \(error)")
+                    return
+                }
+                record(route, backend, acceptable)
+            } catch let error as TavilySearchError {
+                guard case .backend(let backend) = error else {
+                    Issue.record("\(route): expected a backend failure, got \(error)")
+                    return
+                }
+                record(route, backend, acceptable)
+            } catch {
+                Issue.record("\(route): unexpected error \(error)")
+            }
+        }
+
+        await check("/v1/plan") {
+            _ = try await OpenAIPlanner(client: Self.makeSignedInClient(), taskContext: context)
+                .plan(command: "open Safari")
+        }
+        await check("/v1/research/synthesize") {
+            _ = try await OpenAIWebResearchSynthesizer(
+                client: Self.makeSignedInClient(),
+                taskContext: context
+            )
+                .synthesize(prompt: WebResearchSynthesisPrompt(
+                    trustedPlan: AgentPlan(summary: "Summarize.", requiresConfirmation: false, steps: []),
+                    systemText: "SYSTEM",
+                    trustedUserInstructionText: "Summarize.",
+                    observedContentTexts: ["Observed."]
+                ))
+        }
+        await check("/v1/search") {
+            _ = try await TavilySearchProvider(client: Self.makeSignedInClient(), taskContext: context)
+                .search(query: "swift concurrency", limit: 3)
+        }
+        await check("/v1/transcriptions") {
+            let url = FileManager.default.temporaryDirectory
+                .appendingPathComponent("sonny-live-\(UUID().uuidString).m4a")
+            try Data("fake-audio".utf8).write(to: url)
+            defer { try? FileManager.default.removeItem(at: url) }
+            _ = try await OpenAITranscriber(client: Self.makeSignedInClient(), taskContext: context)
+                .transcribe(audioFileURL: url, recordedDuration: 2)
+        }
+    }
+
+    private func record(
+        _ route: String,
+        _ error: SonnyBackendError,
+        _ acceptable: Set<SonnyBackendErrorCode>
+    ) {
+        guard case .api(let api) = error else {
+            Issue.record("\(route): expected a typed API error from the real server, got \(error)")
+            return
+        }
+        #expect(acceptable.contains(api.code), "\(route): unexpected code \(api.code.wire)")
+        #expect(api.requestID?.isEmpty == false, "\(route): the server sent no request id")
+        print("live gateway: \(route) answered \(api.statusCode) \(api.code.wire)")
+    }
+
+    /// A client holding a session, in an in-memory Keychain this Mac's packaged builds never see.
+    ///
+    /// **`SONNY_LIVE_ACCESS_TOKEN` supplies a real one when there is one.** Without it the token is
+    /// fabricated, the gateway refuses it, and the test asserts the refusal mapped back — which
+    /// proves the transport and the error path and nothing about a served answer. With it, the four
+    /// routes above run for real, which is what the ticket's first acceptance criterion asks for and
+    /// what SONNY-192's staging run will do. It is an environment variable rather than a sign-in
+    /// because no agent session can read a code out of a mailbox, and a founder pointing this at
+    /// staging already has a session in hand.
+    private static func makeSignedInClient() -> SonnyBackendClient {
+        let store = KeychainAccountTokenStore(secretStore: InMemoryKeychainSecretStore())
+        try? store.saveTokens(SonnyAccountTokens(
+            accessToken: ProcessInfo.processInfo.environment["SONNY_LIVE_ACCESS_TOKEN"]
+                ?? "live-check-not-a-real-token",
+            refreshToken: "live-check-not-a-real-refresh-token",
+            accessTokenExpiresAt: Date().addingTimeInterval(3600),
+            refreshTokenExpiresAt: nil,
+            userID: "live-check",
+            emailAddress: nil
+        ))
+        return SonnyBackendClient(
+            environment: SonnyBackendEnvironment(baseURL: baseURL, source: .production),
+            tokenStore: store,
+            session: URLSession(configuration: .ephemeral)
+        )
+    }
+
     private static func makeClient() -> SonnyBackendClient {
         SonnyBackendClient(
             environment: SonnyBackendEnvironment(baseURL: baseURL, source: .production),
