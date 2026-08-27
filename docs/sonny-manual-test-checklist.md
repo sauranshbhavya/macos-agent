@@ -1179,6 +1179,47 @@ provider key anywhere on your Mac.
       app's own estimate, and the one thing that must not have happened is the summary silently
       going blank.
 
+### The gateway honours the idempotency key (new 2026-08-28, SONNY-300)
+
+**What this section is and is not.** All four of contract §9.2's sentences are covered by automated
+tests and were measured against a live container while the ticket was built, so these rows are not
+"check the feature works" — they are the two things no agent can check. The first is that putting a
+hook on *every* `POST` did not disturb ordinary use, which only a real app run shows. The second is
+what a genuinely flaky network does, which no test can stage.
+
+Setup is the sign-in section's setup, plus the container from the section above. Nothing here needs a
+provider key.
+
+- [ ] **(new 2026-08-28, SONNY-300) — the regression row, and the important one.** With the app
+      pointed at a local gateway, sign in and run three or four ordinary commands of different kinds
+      — a typed command, a spoken one, a web-research one. Every `POST` the app makes now passes
+      through a new pair of hooks and a database write, so what this row is looking for is *nothing*:
+      no new delay you can feel, no failure, no repeated work. If a command that used to work now
+      fails, or the app feels slower to start a task, that is this branch.
+- [ ] **(new 2026-08-28, SONNY-300) — what a bad network does.** Start a command, then turn Wi-Fi off
+      mid-run and back on a few seconds later. The app retries with the same key, so the worst it
+      should do is finish or fail with an ordinary human sentence. **What must not happen is the run
+      being charged twice or done twice** — if a research command comes back having fetched
+      everything twice, or a note is written twice, say so.
+- [ ] **(new 2026-08-28, SONNY-300) — Terminal, not the app.** With the container running, send the
+      same request twice with one key and confirm the second is free. Replace `<TOKEN>` with an
+      access token from a signed-in run (the sign-in section says how):
+
+      ```
+      B='{"task_id":"t","retention":"standard","messages":[{"role":"user","text":"hello"}],
+          "response_schema_name":"Plan","response_schema":{"type":"object"}}'
+      for i in 1 2; do
+        curl -s -D- -o /dev/null -X POST http://127.0.0.1:8080/v1/plan \
+          -H "Authorization: Bearer <TOKEN>" -H 'Content-Type: application/json' \
+          -H 'Idempotency-Key: 11111111-2222-4333-8444-555555555555' -d "$B" | grep -i '^HTTP\|^sonny-request-id'
+      done
+      ```
+
+      Both should answer `200`, and **both should carry the same `sonny-request-id`** — that repeated
+      id is the whole guarantee, visible in one line: the second request returned the first one's
+      stored response instead of calling a provider again. Then change one word inside the body and
+      send it a third time with the same key: it must answer `409` with `idempotency.conflict`.
+
 ### Web research — topic/search commands (new 2026-07-30, Tavily provider)
 
 **Superseded by the section above as of 2026-08-27 (SONNY-130).** Search no longer reads
