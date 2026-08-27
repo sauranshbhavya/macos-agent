@@ -199,10 +199,16 @@ public enum ClarifiedCommand {
     /// line breaks cannot expand the prompt.
     ///
     /// **Second implementation of one rule, named rather than left to be discovered.**
-    /// `PriorTaskContext.foldingLineBreaks` does the same job for the planner's prior-task block, and
-    /// its doc comment is where this reasoning was worked out — including why the marker is `\n`
-    /// rather than a separator character that could rebuild a delimiter. The invariant that must not
-    /// drift between them is the character set. SONNY-262 is the ticket to consolidate them.
+    /// `UntrustedContentBoundary.foldingLineBreaks` does the same job for every value interpolated
+    /// into a line of a prompt block, and its doc comment is where this reasoning now lives —
+    /// including why the marker is `\n` rather than a separator character that could rebuild a
+    /// delimiter. It was `PriorTaskContext`'s private copy when this note was written; SONNY-226
+    /// hoisted it to the boundary type and moved that caller onto it, so **this is the one copy
+    /// left** and SONNY-262 is still open for it. The invariant that must not drift is the character
+    /// set. Note the two are not interchangeable as they stand: this one drops a *leading* empty
+    /// piece where the shared one keeps it as a marker, so adopting the shared fold here changes what
+    /// a question beginning with a line break composes to — a behaviour change that needs its own
+    /// decision rather than a mechanical swap.
     private static func foldingLineBreaks(in value: String) -> String {
         guard value.rangeOfCharacter(from: .newlines) != nil else {
             return value

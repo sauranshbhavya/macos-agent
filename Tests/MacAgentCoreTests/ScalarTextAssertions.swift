@@ -76,7 +76,7 @@ func hasScalarPrefix(_ value: String, _ prefix: String) -> Bool {
 /// The line-break **scalars**, which is wider than `\n` on purpose: LF, VT, FF, CR, NEL (U+0085) and
 /// the Unicode line and paragraph separators. A prompt is JSON-serialised UTF-8, so every one of them
 /// survives the wire intact and begins a line where it is rendered — the reasoning
-/// `PriorTaskContext.foldingLineBreaks` already records, applied to the assertions here.
+/// `UntrustedContentBoundary.foldingLineBreaks` already records, applied to the assertions here.
 let lineBreakScalars: Set<Unicode.Scalar> = [
     "\u{000A}", "\u{000B}", "\u{000C}", "\u{000D}", "\u{0085}", "\u{2028}", "\u{2029}"
 ]

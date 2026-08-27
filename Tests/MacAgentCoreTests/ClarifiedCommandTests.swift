@@ -87,7 +87,7 @@ struct ClarifiedCommandTests {
     }
 
     /// **The fold takes `CharacterSet.newlines`, not `\n`** — the same reasoning
-    /// `PriorTaskContext.foldingLineBreaks` gives for the same job. A plan arrives as
+    /// `UntrustedContentBoundary.foldingLineBreaks` gives for the same job. A plan arrives as
     /// JSON-serialised UTF-8, so every one of these survives the wire intact and any of them can
     /// begin a line where the composed command is read back.
     @Test
