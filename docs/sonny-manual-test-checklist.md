@@ -1271,6 +1271,54 @@ answers 401.
       approximate usage per task today, but a full summary isn't built yet."* The record exists and is
       asserted by tests; **the surface is SONNY-133-adjacent work.** The first version of this row
       sent you to Tasks to find something no view draws.
+### Which provider serves a route, and failover (new 2026-08-28, SONNY-132)
+
+**What changed:** which model provider plans a command is now a server setting, not a fact about
+your Mac. `SONNY_PLANNER` is gone, `CerebrasPlanner` is gone, and the app holds no provider name,
+no vendor endpoint and no model identifier. Anthropic ships as a real second provider, so a route
+can fail over when the first provider is having a bad hour.
+
+**Setup.** The same three things the SONNY-130 section above lists, plus: `./scripts/deploy.sh local`
+now forwards `ANTHROPIC_API_KEY` and `CEREBRAS_API_KEY` alongside `OPENAI_API_KEY` and
+`TAVILY_API_KEY`, so exporting a key in the launching shell is all it takes to give the container
+one. **These rows change only what is exported before `./scripts/deploy.sh local`, and never the
+app** — that is the whole thing being checked.
+
+- [ ] **(new 2026-08-28, SONNY-132) — the headline check.** Run the same typed command ("open
+      Safari") twice from an unchanged app: once with the container started with
+      `MODEL_ROUTE_PLAN=openai` exported, and once with `MODEL_ROUTE_PLAN=anthropic`. Both should
+      plan and run normally, and **nothing in the app should look different between the two** — not
+      the plan, not the timing beyond ordinary variation, not the Tasks row. If you can tell which
+      one served from inside the app, that is the finding.
+- [ ] **(new 2026-08-28, SONNY-132)** Do it a third time with `MODEL_ROUTE_PLAN=cerebras` and
+      `CEREBRAS_API_KEY` exported. Same expectation. This is the option that used to need
+      `SONNY_PLANNER=cerebras` and a key on your own Mac.
+- [ ] **(new 2026-08-28, SONNY-132) — failover, invisible.** Export a **deliberately wrong**
+      `OPENAI_API_KEY` (say `sk-not-a-real-key`) together with a **working** `ANTHROPIC_API_KEY`,
+      leave `MODEL_ROUTE_PLAN` unset so the default `openai,anthropic` chain applies, and run a
+      command. **Expected: it works, and the app says nothing about it.** A wrong key is a `401`,
+      which is a refusal rather than an outage, so this actually checks the honest-failure row
+      below; to exercise failover itself, point `OPENAI_BASE_URL` at something that refuses
+      connections (`http://127.0.0.1:9/v1`) instead — an unreachable provider is what failover is
+      for. Either way, the finding is a raw error, a status code, a vendor name, or a strip
+      announcing that a different provider was used.
+- [ ] **(new 2026-08-28, SONNY-132) — failure, honestly.** Now break **both**: unreachable
+      `OPENAI_BASE_URL` and no `ANTHROPIC_API_KEY` at all. The command should fail with a human
+      sentence — *"Sonny couldn't finish this one. Try again."* — and **no provider name, no URL, no
+      status code**. A raw error here is the finding.
+- [ ] **(new 2026-08-28, SONNY-132) — no vendor anywhere.** With everything working, use the app
+      normally for a few minutes and look for any provider name in any surface: the widget, the
+      Tasks list and a task's detail, Insights, Settings → Usage, an error strip, a notification.
+      There should be none. (The usage line names the *route* — "plan" — rather than a model, which
+      is the intended reading, not a finding.)
+- [ ] **(new 2026-08-28, SONNY-132) — the notice strip that should no longer exist.** Nothing you do
+      should produce a dismissible strip in the widget saying which planner was used and why. That
+      strip was SONNY-85's and it is deleted; seeing one means it came back.
+- [ ] **(new 2026-08-28, SONNY-132) — startup line, one look.** Run `docker logs
+      sonny-gateway-local | grep '"msg":"model routing"'` once, and check the chain it prints is the
+      one you exported and that **no key or fragment of a key appears in it**. This is the only row
+      here that looks at the server rather than the app, and it is the one that would catch a
+      credential leaking into a log line.
 
 ### Web research — topic/search commands (new 2026-07-30, Tavily provider)
 
