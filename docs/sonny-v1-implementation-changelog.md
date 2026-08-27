@@ -172,6 +172,55 @@ Next branch: feature/<name> (per roadmap above, or state the reordering and why)
 
 ## Entries
 
+### Branch: fix/mutate-reads-the-issue-lines
+Status: complete
+Date: 2026-08-27
+Tickets: SONNY-305 (`scripts/mutate` reads both of the line shapes that name a failing test, so a kill whose log carries only `recorded an issue` lines is attributed instead of reported as unnamed). Cut from `main` at `f65e72e`.
+Reviewed by: fresh session (per `WORKFLOW.md` step 7) — pending when this entry was written.
+
+Spec sections covered: none — this is repository tooling, not product behavior.
+
+Files changed:
+- `scripts/mutate` — `failing_tests` falls back to the issue lines; `classify_failures` registers a test named only by them; the unnamed-kill message says which shapes it searched; `st_run` stops handing assertions a copy of the fixture; the header's route list, `--help`'s residual-seam paragraph, and three selftest arms.
+- `CLAUDE.md` — the classifier's seam list goes from two to three, with the third recorded as closed and both of its directions stated.
+- `docs/sonny-v1-implementation-changelog.md` — this entry.
+
+Tests: all at **`7c2940f`**, each exit code read with nothing between the command and `$?`.
+- **`scripts/mutate selftest`: 176 checks, all pass, exit 0** (`grep -c PASS` over the run's output). `main`'s copy answers **164** at `f65e72e` — run from a directory with `scripts/mutate-untrusted-failures` beside it, because the script resolves that file relative to itself and a copy without it aborts early and looks like a much shorter selftest.
+- **The flagged Swift command from `CLAUDE.md`: 2245 tests in 155 suites passed, exit 0.** It is owed rather than exempt even though the diff contains no Swift: `Tests/MacAgentCoreTests/UntrustedFailureDeclarationTests.swift:63` opens `scripts/mutate` and parses its `ALWAYS_TRUSTED` literal, so this diff is one the Swift suite can genuinely see. **`swift build`: exit 0.**
+- **An earlier run of that same suite at `c8326fa` went red on 6 issues across 2 tests**, both `VisionSessionRunTests`, both on `timed out after 30s waiting for: the run to finish` — the hang backstop declared at `scripts/mutate-untrusted-failures:61`, whose own reason says it "fires when the machine is oversubscribed as readily as when something is genuinely stuck". It was: a `swift build`, a `scripts/mutate selftest` and a 147-log scan were running beside it. Re-run with nothing else on the machine, the same suite passed in 30.2 s against 40.9 s. Recorded rather than dropped, because a session that sees this once and reruns quietly is how a real failure gets rerun away.
+- **`scripts/warnings` was not run, and that is argued rather than skipped**: it measures a Swift compile, and this diff contains no Swift, so its count would describe a tree this branch did not change — the same reasoning `WORKFLOW.md` step 7 gives for a server-only diff. `server/` is untouched (`git diff --name-only f65e72e..HEAD` names three files, none under `server/`).
+
+Behavior added:
+- **A failing test is found on either line shape swift-testing uses to name one.** The harness read only the per-test summary, `Test <name> failed after …`. A run that records a test's issues and never prints that line named the killing test repeatedly, in `Test <name> recorded an issue …` lines, and the report said `KILLED — the run failed but named no test` with advice to go looking for a crash that had not happened.
+- **A mutant whose only red is a declared failure on that path comes back UNATTRIBUTED instead of KILLED** — see the second direction below.
+- **The unnamed-kill message says what it searched** — "no test is named on either line shape" — so the remaining case, a trapped process, stops sharing a sentence with the one that was misdiagnosed as it.
+- **`ST_OUT` in the selftest is what the report said**, with the echoed stand-in command cut out of it.
+
+Behavior preserved (required, no blanket claims):
+- **Ordinary battery logs parse identically.** Both readers were run pre- and post-fix over all **147** logs from the twenty recorded battery runs under `.build/mutate/` on the main checkout, and every one produced byte-identical output (`bash scan` over `git show f65e72e:scripts/mutate` against the branch's copy; the script is in SONNY-305's closing comment). The change is confined to logs of the seam's shape.
+- **A trapped test process still reports `KILLED — the run failed but named no test`, correctly**, because a dead process prints no issue lines either. The selftest's trap arm passes unchanged and now pins the message's added sentence.
+- **The declaration machinery is untouched.** `scripts/mutate-untrusted-failures` has no diff, `ALWAYS_TRUSTED` is unchanged, and a test that *does* get its summary line is classified by exactly the code that classified it before.
+- **The ten pre-existing selftest name checks that the `st_run` cut de-vacuumed all still pass**, so they were real assertions that happened to also be satisfiable by the echo — not assertions that were only ever passing because of it.
+- **`run_tally` and `suite_started` are unaffected**, enumerated rather than assumed: they read the run-level `Test run with …` line and the `Test run started.` line, both present in the reported case. Those two and the two changed readers are every place the harness reads a suite log.
+
+Architectural decisions / pitfalls discovered (required, write "none" if true):
+
+**The seam had two directions and the ticket reported the milder one.** SONNY-305 measured the same mutant at the same tree twice — unattributed inside an eight-mutant battery, named correctly when run alone with `--only`, five identical `recorded an issue` lines both times — and said, correctly, that the kill verdict was right and only the evidence was lost. **The other direction is a wrong count**, found while fixing the first and reproduced against `main`'s copy of the script rather than argued: when a run's only red is a *declared* failure, the classifier saw nothing at all, so it could not reach `UNATTRIBUTED` and the arm above it counted a kill. A declared hang backstop recorded as an issue with no summary line gives `1 killed, 0 survived, 0 unattributed`, exit 0, on a mutant nothing had caught; the fixed script gives `0 killed, 0 survived, 1 unattributed`, exit 2, names the test from its issue line and prints the signature that disqualified it. **That is the manufactured kill SONNY-224 built the whole declaration mechanism to prevent, reached by a road that mechanism never watched** — and it is why this is numbered beside the other three routes to a false measurement in the script's header rather than filed as a misdiagnosis. It was never observed in the wild, which is stated in the selftest arm so nobody reads the stronger claim into it.
+
+**The obvious fix, applied alone, is worse than the defect.** SONNY-305 proposed that `failing_tests` fall back to the issue-line parse. That function is a *gate*: the caller checks it for a name and then attributes with `classify_failures`, which was still reading the summary line only. So the ticket's fix alone gets past the gate and finds nothing to attribute — the same log reports `UNATTRIBUTED — the suite went red, and on nothing that is evidence` above a blank evidence line, exit **2** instead of **0**, turning a correctly counted kill into a finding. That variant was built and run against the new fixture, not reasoned about. **So the fallback delegates to `classify_failures` rather than adding a second regex**, because two engines reading one line shape can disagree — sed is greedy where the classifier's pattern is not — and the disagreement lands exactly in that gap. One reader, one answer. The arm's `st_absent … UNATTRIBUTED` is what notices if someone puts the second regex back.
+
+**A selftest that echoes its own fixture cannot assert that the report named anything.** `scripts/mutate`'s header prints `test cmd   : $TEST_CMD`, and a selftest stand-in is a multi-line shell script, so the whole fixture lands in the captured output before a single mutant runs; every needle a fixture contains then matches itself. Found the way PR #112's F6 was found — a brand-new arm passing a check it had no business passing yet, here "the test is named" going green against a script that had named nothing. Population measured over `scripts/mutate` at `f65e72e`: **10 of 68** `st_contains … "$ST_OUT"` checks inside an `st_run` arm carried a needle their own stand-in contains, and that set is **every** "the test is named" check in the classifier's arms (at `7c2940f`, with this branch's arms, the same scan answers 13 of 75). Cut once in `st_run` rather than by tightening ten needles, so a future arm gets the safe behavior by default.
+
+**That figure was first written as 11 of 70, and the error is worth keeping.** The first scan ran on a working tree that already carried this branch's own new arm, so it counted that arm's own check among the pre-existing ones — a measurement taken on one tree and stamped with another, which is the failure `CLAUDE.md`'s Claims-and-evidence section already records twice and which arrives here through a session obeying the write-the-command-beside-the-number rule while running the command against the wrong tree. `d1648a2`'s commit message still says 11 of 70 and is left as written; this repository restamps rather than rewriting a commit message, and the correction lives in `scripts/mutate`'s own `st_run` comment and here.
+
+**The root cause of the omitted summary line is not established, and nothing here claims one.** SONNY-305's two runs differed in machine load, which is a correlation from two data points. Sweeping the 147 recorded logs found no second occurrence to reason from. What the fix changes is that the omission stops costing anything — which is the only consequence anyone has identified.
+
+Known limitations / deferred scope: **This does not let the harness name a test it was never told about.** A mutant that traps the test process still names none, and tests sharing a function name across suites still merge — the two seams `CLAUDE.md` records as open, both unchanged here. The `st_run` cut removes only the echoed suite command; it is not a general guarantee that a needle cannot match something other than its assertion's target.
+
+Open questions (required, write "none" if true): none.
+
+Next branch: none — this is an out-of-band tooling fix, not a roadmap row.
 ### Branch: chore/deploy-local-passes-gateway-credentials
 Status: complete, with **acceptance criterion 1 not met and the reason measured** — see Known limitations. The scoped requirements are all delivered; the criterion they were expected to produce rests on server-side wiring that does not exist and that no ticket owned until this branch filed one.
 Date: 2026-08-27
