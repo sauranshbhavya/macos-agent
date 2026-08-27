@@ -976,7 +976,10 @@ struct FloatingWidgetView: View {
 
     /// The pointer arrived on the mic. Shown as a real layout row (see `micHoverHintRow`) rather
     /// than a `.help()` tooltip — `.help()` already proved unreliable in this exact app once before
-    /// (the Insights weekly chart), and was confirmed unreliable here too, not just assumed.
+    /// (the Insights weekly chart), and was confirmed unreliable **for this button** too, not just
+    /// assumed. (Those two words are the scope, added by PR #140's review, F4: it read as a claim
+    /// about the whole widget, and `WidgetResumeOfferPanel` records a `.help` that demonstrably
+    /// fires on its own two controls. Both observations are real and neither generalises.)
     ///
     /// **Called from the arrival itself, not from a change of "the pointer is on the mic"
     /// (SONNY-179).** SONNY-177 shipped this as `.onChange(of:)` over a `@State` boolean the
@@ -1941,7 +1944,7 @@ private struct WidgetResultPanel: View {
 /// at all, and the §3d-bis checklist row that carried the question carries the answer.
 ///
 /// **What that establishes is exactly that, and it is deliberately not generalised.** One pass, two
-/// buttons, one Mac. `micHintPointerEnteredMic` three hundred lines up still records `.help()` as
+/// buttons, one Mac. `micHintPointerEnteredMic`, further up this file, still records `.help()` as
 /// unreliable and that sentence is left standing on purpose: it is about the *mic button*, a
 /// different control in a slot this panel competes with, and a hover that worked here is evidence
 /// about the hover that worked, not about a mechanism. So the two statements do not contradict each
