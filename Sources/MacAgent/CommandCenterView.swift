@@ -834,6 +834,50 @@ private struct CommandCenterStorageNotice: View {
     }
 }
 
+/// "Sonny is controlling <app>" and the step count, on Command Center's approval panel, while a
+/// screen-control session is live (SONNY-255; this surface, PR #132's F1).
+///
+/// **The System A counterpart of `WidgetSessionIdentityLine`, and a separate view by necessity
+/// rather than by preference.** `.claude/rules/macagent-ui-conventions.md` forbids either token
+/// system leaving its own surface, so the widget's glass-and-SF-Pro row cannot be reused here and
+/// this one cannot be reused there. What is *not* duplicated is the sentence: every string comes
+/// from `ScreenControlSessionPresentation`, because one session described two ways on two surfaces
+/// 4,000 lines apart is a divergence neither file could see.
+///
+/// **Extracted from an inline `HStack` because a doc comment had already named it** (PR #132
+/// cycle 2, N1). `ScreenControlSessionPresentation`'s own comment cited `CommandCenterSessionContextRow`
+/// as the proof that the two surfaces need two views — while the type existed nowhere, which is a
+/// fabricated symbol inside the doc comment of the type built to stop shared-words drift. The
+/// options were to weaken the claim or to make it true; this is the second.
+private struct CommandCenterSessionContextRow: View {
+    let progress: VisionSessionProgress
+
+    var body: some View {
+        HStack(spacing: 8) {
+            // Amber, matching the widget's own session glyph: Sonny doing something unusual, not
+            // something going wrong.
+            Image(systemName: "cursorarrow.rays")
+                .font(.system(size: 11))
+                .foregroundStyle(SonnyTheme.warning)
+
+            (Text(ScreenControlSessionPresentation.controllingPrefix).font(SonnyType.micro)
+                + Text(progress.appDisplayName).font(SonnyType.microEmphasis))
+                .foregroundStyle(SonnyTheme.sidebarNavText)
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
+            Text(ScreenControlSessionPresentation.stepLine(
+                iteration: progress.iteration,
+                maximumIterations: progress.maximumIterations
+            ))
+                .font(SonnyType.micro)
+                .foregroundStyle(SonnyTheme.muted)
+                .lineLimit(1)
+        }
+    }
+}
+
 /// Command Center's own permission / clarification / failure surface (System A).
 ///
 /// Until branch 10 these three states rendered *only* in the floating widget, which was fine while
@@ -978,30 +1022,11 @@ private struct CommandCenterAttentionPanel: View {
         }
 
         // **Inside a screen-control session this row is what the widget's identity line is**
-        // (SONNY-255, PR #132 F1). The words come from `ScreenControlSessionPresentation`, shared
-        // with the widget so one session cannot be described two ways; the tokens are System A's,
-        // because this is Command Center and the widget's are not allowed to leave it.
+        // (SONNY-255, PR #132 F1). Its own view rather than an inline `HStack`, so the symmetry
+        // `ScreenControlSessionPresentation`'s doc comment claims is a symmetry a reader can grep
+        // for — that comment named this type before it existed (PR #132 cycle 2, N1).
         if let sessionProgress = viewModel.visionSessionProgress {
-            HStack(spacing: 8) {
-                Image(systemName: "cursorarrow.rays")
-                    .font(.system(size: 11))
-                    .foregroundStyle(SonnyTheme.warning)
-
-                (Text(ScreenControlSessionPresentation.controllingPrefix).font(SonnyType.micro)
-                    + Text(sessionProgress.appDisplayName).font(SonnyType.microEmphasis))
-                    .foregroundStyle(SonnyTheme.sidebarNavText)
-                    .lineLimit(1)
-
-                Spacer(minLength: 8)
-
-                Text(ScreenControlSessionPresentation.stepLine(
-                    iteration: sessionProgress.iteration,
-                    maximumIterations: sessionProgress.maximumIterations
-                ))
-                    .font(SonnyType.micro)
-                    .foregroundStyle(SonnyTheme.muted)
-                    .lineLimit(1)
-            }
+            CommandCenterSessionContextRow(progress: sessionProgress)
         }
 
         HStack(spacing: 8) {
@@ -1022,13 +1047,13 @@ private struct CommandCenterAttentionPanel: View {
             // `.danger` rather than the neutral tone, matching the widget's red: this is the control
             // that ends a session driving the user's screen, and it is the one place on this panel
             // where the destructive reading is the correct one.
-            if viewModel.visionSessionProgress != nil {
+            if let sessionProgress = viewModel.visionSessionProgress {
                 Button(ScreenControlSessionPresentation.stopLabel) {
                     viewModel.emergencyStopVisionSession()
                 }
                 .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
                 .accessibilityLabel(ScreenControlSessionPresentation.stopAccessibilityLabel(
-                    appDisplayName: viewModel.visionSessionProgress?.appDisplayName ?? ""
+                    appDisplayName: sessionProgress.appDisplayName
                 ))
             } else {
                 Button("Deny") {

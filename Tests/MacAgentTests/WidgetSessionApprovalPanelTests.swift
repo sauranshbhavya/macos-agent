@@ -172,8 +172,11 @@ struct WidgetSessionApprovalPanelTests {
             to: "private func clarificationContent(_ question: String) -> some View {"
         )
 
-        // The branch, and one control on each side of it.
-        #expect(MacAgentSource.count(of: "if viewModel.visionSessionProgress != nil {", inText: panel) == 1)
+        // The branch, and one control on each side of it. `if let` rather than a `!= nil` test, so
+        // the Stop's accessibility label reads the bound session rather than re-optional-chaining
+        // into a fallback that can only ever be reached by a race with itself (PR #132 cycle 2's nit).
+        #expect(MacAgentSource.count(of: "if let sessionProgress = viewModel.visionSessionProgress {", inText: panel) == 2)
+        #expect(MacAgentSource.count(of: "?? \"\"", inText: panel) == 0)
         #expect(MacAgentSource.count(of: "Button(ScreenControlSessionPresentation.stopLabel)", inText: panel) == 1)
         #expect(MacAgentSource.count(of: "viewModel.emergencyStopVisionSession()", inText: panel) == 1)
         #expect(MacAgentSource.count(of: "Button(\"Deny\")", inText: panel) == 1)
@@ -188,12 +191,89 @@ struct WidgetSessionApprovalPanelTests {
         #expect(MacAgentSource.count(of: "WidgetType", inText: panel) == 0)
 
         // And the session's context row, so the question is anchored to the session on this surface
-        // too rather than arriving with a Stop and no statement of what it stops.
-        #expect(MacAgentSource.count(of: "if let sessionProgress = viewModel.visionSessionProgress {", inText: panel) == 1)
-        #expect(
-            MacAgentSource.count(of: "Text(ScreenControlSessionPresentation.controllingPrefix)", inText: panel) == 1
+        // too rather than arriving with a Stop and no statement of what it stops. It is its own view
+        // as of PR #132's cycle 2 (N1), so the row's own content is asserted where it now lives.
+        #expect(MacAgentSource.count(of: "CommandCenterSessionContextRow(progress: sessionProgress)", inText: panel) == 1)
+
+        let contextRow = try MacAgentSource.braceBlock(
+            of: MacAgentSource.read("CommandCenterView.swift"),
+            openedBy: "private struct CommandCenterSessionContextRow: View {"
         )
-        #expect(MacAgentSource.count(of: "ScreenControlSessionPresentation.stepLine(", inText: panel) == 1)
+        #expect(
+            MacAgentSource.count(of: "Text(ScreenControlSessionPresentation.controllingPrefix)", inText: contextRow) == 1
+        )
+        #expect(MacAgentSource.count(of: "ScreenControlSessionPresentation.stepLine(", inText: contextRow) == 1)
+        // System A here too — the row exists as its own view *because* the widget's cannot be reused.
+        #expect(MacAgentSource.count(of: "WidgetTheme", inText: contextRow) == 0)
+        #expect(MacAgentSource.count(of: "WidgetType", inText: contextRow) == 0)
+    }
+
+    /// **All three of a session's control labels are VoiceOver names and nothing held any of them**
+    /// (PR #132 cycle 2, N3 — reviewer mutant R5 survived).
+    ///
+    /// Each of these buttons carries a word or a glyph that does not say *what* it acts on: "Stop"
+    /// and "Pause" alone name no app, and during a screen-control session the app being controlled is
+    /// the single most important fact about the control. Blanking or rewiring any of the three was
+    /// invisible to the whole suite. Held in `ResumeOfferPresentationTests`' pattern — the exact call
+    /// at the exact site — because that is the shape this repository already uses for a label a
+    /// runtime assertion cannot reach, and because a looser check passes on a label wired to the
+    /// wrong session's name.
+    ///
+    /// The strings themselves are asserted in
+    /// `bothSurfacesReadTheSessionsWordsFromOneOwnerAndNeitherHandWritesThem`; these three say the
+    /// controls actually wear them.
+    @Test
+    func everySessionControlWearsItsOwnAccessibilityLabel() throws {
+        let widget = try MacAgentSource.read("FloatingWidgetView.swift")
+
+        // The Stop, shared by both widget panels — one component, so one site.
+        let stop = try MacAgentSource.braceBlock(
+            of: widget,
+            openedBy: "private struct WidgetSessionStopButton: View {"
+        )
+        #expect(
+            MacAgentSource.count(
+                of: ".accessibilityLabel(ScreenControlSessionPresentation.stopAccessibilityLabel(appDisplayName: appDisplayName))",
+                inText: stop
+            ) == 1
+        )
+
+        // The HUD's Pause, which lives only on the controlling panel.
+        let hud = try MacAgentSource.region(
+            of: widget,
+            from: "private struct WidgetControllingPanel: View {",
+            to: "private struct WidgetClarificationPanel: View {"
+        )
+        #expect(
+            MacAgentSource.count(
+                of: """
+                .accessibilityLabel(ScreenControlSessionPresentation.pauseAccessibilityLabel(
+                                    appDisplayName: progress.appDisplayName
+                                ))
+                """,
+                inText: hud
+            ) == 1
+        )
+
+        // And Command Center's Stop, whose label is the one the nit above rebound.
+        let commandCenter = try MacAgentSource.region(
+            of: MacAgentSource.read("CommandCenterView.swift"),
+            from: "private func permissionContent(_ request: RiskApprovalRequest) -> some View {",
+            to: "private func clarificationContent(_ question: String) -> some View {"
+        )
+        #expect(MacAgentSource.count(of: ".accessibilityLabel(ScreenControlSessionPresentation.stopAccessibilityLabel(", inText: commandCenter) == 1)
+        #expect(MacAgentSource.count(of: "appDisplayName: sessionProgress.appDisplayName", inText: commandCenter) == 1)
+
+        // And no fourth site anywhere hand-writing one of these two sentences, so a new session
+        // control cannot arrive with a label of its own that drifts from the owner's. Matched on
+        // "Stop Sonny"/"Pause Sonny" rather than on "Stop"/"Pause": Command Center carries an
+        // unrelated `.accessibilityLabel("Paused — needs your attention")` on a routine's badge,
+        // which is not this sentence and must not be swept up by a check for this one.
+        for file in ["FloatingWidgetView.swift", "CommandCenterView.swift"] {
+            let source = try MacAgentSource.read(file)
+            #expect(MacAgentSource.count(of: ".accessibilityLabel(\"Stop Sonny", inText: source) == 0, "\(file)")
+            #expect(MacAgentSource.count(of: ".accessibilityLabel(\"Pause Sonny", inText: source) == 0, "\(file)")
+        }
     }
 
     /// **The words are shared between the surfaces; the views are not, and that is the whole design
