@@ -947,6 +947,61 @@ it feels confusing in practice, not just whether it's "technically correct."
       4 individually disabled — confirm clicking any does nothing (no crash/hang)
 - [x] Both popovers dismiss cleanly on an outside click — no ghost panel left behind
 
+### Sign-in and the account menu (new 2026-08-26, SONNY-128)
+
+**Before these items**, two things have to be true, and neither is a test item — they are the setup
+without which the items cannot be run at all.
+
+1. A gateway has to be answering. There is no staging or production host yet (`./scripts/deploy.sh
+   staging` and `production` are stubs that exit 3, and the first real remote deploy is owed on
+   SONNY-192), so the target is the local one: `cd server && ./scripts/deploy.sh local`, which
+   builds the image, runs it, and verifies `/v1/health` serves that build.
+2. The debug build has to be pointed at it. `defaults write com.sonny.MacAgent SonnyBackendBaseURL
+   http://127.0.0.1:8080` — a `defaults` value rather than an environment variable **because the
+   relaunch in item 2 loses an environment variable**: `/usr/bin/open -n` starts the new process
+   from launchd's environment, not the terminal's. The sign-in dialog prints the host it resolved
+   at the bottom in a debug build, so that line is the confirmation the pointer took. Release
+   builds have no such switch and no such line.
+
+Everything below is in the packaged `.app` (`./scripts/package-app.sh`, then open the bundle) —
+a bare `swift run` has no bundle identity and several of these paths need one. Sign-in is opened
+from the bottom-left account row → **Sign in**.
+
+- [ ] **(new 2026-08-26, SONNY-128)** Sign in with a real address: type it, press **Send code**,
+      read the code out of the mail, type it, press **Sign in**. The dialog's title becomes
+      *Account* and the row shows the address you signed in with. Then **quit Sonny and reopen it**,
+      open the same dialog, and confirm it still says Account with the same address — no code, no
+      second sign-in.
+- [ ] **(new 2026-08-26, SONNY-128) — the headline check.** Sign in. Then, still in the same launch,
+      open Settings → Security & Access → Screen access, press **Request access**, and use the
+      **Relaunch Sonny** button that appears. When the app comes back, open the account row again
+      and confirm you are **still signed in**. This is the one failure the whole ticket exists to
+      prevent: macOS forces that relaunch on a first run, and a session held only in memory would be
+      gone at exactly that moment.
+- [ ] **(new 2026-08-26, SONNY-128)** Press **Sign out**. Confirm the dialog returns to the email
+      field, and that quitting and reopening still shows signed out. Then confirm **your local data
+      survived it** — Routines, Workspaces and Snippets still list what they listed, and clipboard
+      history still has its entries. Sign-out, "delete my local data" and "reset the encryption
+      identity" are three different actions, and this row is the check that this one did only its
+      own job.
+- [ ] **(new 2026-08-26, SONNY-128)** Point the pointer at something that is *not* loopback
+      (`defaults write com.sonny.MacAgent SonnyBackendBaseURL https://sonny-offline-check.invalid`),
+      **turn wifi off**, relaunch, and open sign-in. The message must read as a human sentence
+      naming the real problem — you are offline — and must not be a status code, a URL, or anything
+      about tokens. Loopback is called out because `127.0.0.1` keeps answering with wifi off, so the
+      obvious version of this check silently tests nothing.
+- [ ] **(new 2026-08-26, SONNY-128)** With wifi back on and the pointer still at a host that does
+      not exist, try to send a code. The message must be **different** from the offline one — the
+      network is fine and the backend is not, and those two need different words.
+- [ ] **(new 2026-08-26, SONNY-128)** Get the code wrong on purpose, then let one expire (they last
+      ten minutes) and try it, then use a good one twice. Each of the three should say something
+      different, and none of them should be a raw error or mention spam folders. Also press **Send a
+      new code** and confirm a second mail arrives and the newer code is the one that works.
+- [ ] **(new 2026-08-26, SONNY-128)** Narrow the Command Center window (not fullscreen) with the
+      sign-in dialog open. The email row and the code row must stay readable — the field and its
+      button on one line, or stacked, never character-wrapped. Both are
+      `SettingsAdaptiveControlRow`s, which is the pattern that exists for exactly this.
+
 ### Web research — topic/search commands (new 2026-07-30, Tavily provider)
 
 Needs `TAVILY_API_KEY` exported in the launching shell (GUI `open` won't inherit it). Each search
