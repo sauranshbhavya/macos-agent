@@ -101,10 +101,27 @@ PLATFORM="${DEPLOY_PLATFORM:-linux/arm64}"
 # has on staging and production (`README.md`, "Deploying"), and it is the exposure a credentialed
 # container is *for*. What this script guarantees is narrower and is the part it controls: nothing
 # it reads, logs or leaves behind on the Mac carries a value.
+#
+# **Two names were added by SONNY-307 and the mail paragraph above still stands.** That ticket built
+# the concrete `AuthProvider` and wired `server.ts`, and it grew `config.ts` by exactly two names --
+# `SUPABASE_ANON_KEY` and `SUPABASE_SERVICE_ROLE_KEY`, the credentials for *calling* the project as
+# opposed to verifying its tokens. It grew it by **no mail name**, and that is now measured rather
+# than pending: Supabase's own mailer sends the sign-in code, the gateway neither mints it nor
+# receives it, and the production sending domain is configured as Supabase's custom SMTP inside the
+# Supabase project. So `grep -cE '(RESEND|SMTP|MAIL)[A-Z_]*' src/config.ts` still prints 0, and the
+# sentence above about adding them "when mail names land in config.ts" is now a sentence about
+# something that is not expected to happen.
+#
+# **Setting some of these and not others now refuses to start**, which is a change SONNY-307 made
+# deliberately and is worth knowing before reading the probe below. Four Supabase names are the
+# switch: none set is health-only, all set mounts sign-in, and a partial set exits 78 naming what is
+# missing rather than serving a gateway that answers 404 to every sign-in while looking healthy.
 PASSTHROUGH=(
   SUPABASE_JWT_SECRET
   SUPABASE_JWT_ISSUER
   SUPABASE_JWT_AUDIENCE
+  SUPABASE_ANON_KEY
+  SUPABASE_SERVICE_ROLE_KEY
   DATABASE_URL
   RATE_LIMIT_SALT
   # SONNY-130's two. See the block above for why these two and not the other three.
@@ -178,15 +195,19 @@ collect_passthrough() {
 # container needs a 404 on an auth route to read as this deployment's known state rather than as a
 # defect to report. So it is probed and printed, once, next to the health check that already runs.
 #
-# **Forwarding the credentials above is not on its own enough to change what this prints**, and that
-# is the part worth knowing before setting five variables and expecting a sign-in: `src/server.ts`
-# calls `buildApp(config)` with no `auth` argument, and no concrete `AuthProvider` adapter exists, so
-# no process this repository ships mounts an auth route whatever its environment holds. Measured at
-# `f65e72e` with all five present inside the container -- still `404 resource.not_found`. Recorded on
-# SONNY-306, which owns neither half of the fix.
+# **Forwarding the credentials above is now exactly what changes what this prints, and until
+# SONNY-307 it was not** -- which is the whole reason this probe exists rather than a sentence. As
+# SONNY-306 left it, `src/server.ts` called `buildApp(config)` with no `auth` argument and no
+# concrete `AuthProvider` adapter existed, so no process this repository shipped mounted an auth
+# route whatever its environment held: measured at `f65e72e` with all five names then forwarded
+# present inside the container, still `404 resource.not_found`. SONNY-307 built the adapter
+# (`src/auth/supabase.ts`) and the wiring (`src/auth/deps.ts`), and this probe flipped to the mounted
+# branch on its own, with no edit to the function below -- which is what "probed rather than stated"
+# was for.
 #
-# It is probed rather than stated so this cannot go stale: the day `server.ts` supplies `auth`, the
-# same probe prints the other branch with no edit here.
+# So the two branches now mean what they say: a 404 here is a container that was given none of the
+# four Supabase names, and anything else is a container serving sign-in. A container given SOME of
+# them never reaches this probe at all -- it exits 78 at startup and `verify` fails first.
 #
 # **The body is `{}` deliberately.** Once the route exists, `startBody` rejects that before anything
 # is issued, so this probe can never send anyone a code and never needs a database. It reports and
@@ -197,7 +218,8 @@ probe_auth_mount() {  # probe_auth_mount <base-url>
     -H 'Content-Type: application/json' -d '{}' 2>/dev/null)
   if [[ "$code" == "404" ]]; then
     echo "==> auth routes are NOT mounted — POST /v1/auth/email/start answers 404. Health-only is"
-    echo "    this deployment's honest state, not a defect, and no credential above changes it."
+    echo "    this deployment's honest state, not a defect. Since SONNY-307 this means the four"
+    echo "    SUPABASE_ names were not set in the launching shell; set them to mount sign-in."
   elif [[ -z "$code" ]]; then
     echo "==> auth routes could not be probed — no response from ${url}/v1/auth/email/start"
   else

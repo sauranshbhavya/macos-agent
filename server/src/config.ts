@@ -133,6 +133,29 @@ const schema = z.object({
   OPENAI_TEXT_MODEL: nonEmpty.default("gpt-5.5"),
   OPENAI_TRANSCRIPTION_MODEL: nonEmpty.default("gpt-4o-mini-transcribe"),
   SEARCH_BASE_URL: nonEmpty.default("https://api.tavily.com"),
+  /**
+   * The project's **anon / publishable** key, sent as the `apikey` header on every non-admin call
+   * the sign-in adapter makes (SONNY-307).
+   *
+   * Supabase's edge requires it for any call to the project, so without it the adapter cannot reach
+   * `/otp`, `/verify`, `/token`, `/logout` or `/user` at all. Publishable by design — a client app
+   * would hold one too — which is why it is not on `scripts/check-secrets.sh`'s name-anchored list;
+   * its value shape is a JWT, which that scanner's vendor patterns already catch.
+   *
+   * Optional at load and required at the point of use, like every other auth variable here:
+   * `requireSupabaseAuthCredentials` is what refuses.
+   */
+  SUPABASE_ANON_KEY: nonEmpty.optional(),
+  /**
+   * The project's **service-role** key. Used by exactly one adapter method, `deleteUser`, which is
+   * the `/admin/*` surface.
+   *
+   * **A real secret**: it bypasses every row-level policy in the project and can act as any user, so
+   * it is gateway-only in the same sense `SUPABASE_JWT_SECRET` is, and `npm run check:secrets`
+   * already carries this variable name on its name-anchored list — a service-role key has no vendor
+   * prefix a value pattern could anchor on.
+   */
+  SUPABASE_SERVICE_ROLE_KEY: nonEmpty.optional(),
 });
 
 export interface Config {
@@ -151,6 +174,8 @@ export interface Config {
   readonly openAITextModel: string;
   readonly openAITranscriptionModel: string;
   readonly searchBaseUrl: string;
+  readonly supabaseAnonKey: string | undefined;
+  readonly supabaseServiceRoleKey: string | undefined;
   readonly credentials: readonly ProviderCredentials[];
 }
 
@@ -315,6 +340,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     openAITextModel: value.OPENAI_TEXT_MODEL,
     openAITranscriptionModel: value.OPENAI_TRANSCRIPTION_MODEL,
     searchBaseUrl: value.SEARCH_BASE_URL,
+    supabaseAnonKey: value.SUPABASE_ANON_KEY,
+    supabaseServiceRoleKey: value.SUPABASE_SERVICE_ROLE_KEY,
     credentials: providerCredentials(env),
   };
 }
@@ -413,4 +440,41 @@ export function requireSupabaseJwtPolicy(config: Config): SupabaseJwtPolicy {
     );
   }
   return { secret, issuer, audience: config.supabaseJwtAudience };
+}
+
+/**
+ * The Supabase Auth **API** credentials, or a startup failure naming what is missing (SONNY-307).
+ *
+ * Separate from `requireSupabaseJwtPolicy` because the two answer different questions about the same
+ * project, and a deployment can legitimately want one without the other. That function is about
+ * *verifying* a token this gateway was handed — local, symmetric, no network. This one is about
+ * *calling* the project: minting a code, exchanging it, rotating, signing out. A gateway that only
+ * needs to check tokens needs no API key at all.
+ *
+ * **Same shape and same reason as `requireRateLimitSalt`**: absent at load so a health-only
+ * deployment need invent nothing, refused at the point of use so a deployment that mounts sign-in
+ * cannot start without real values. Every failure is a startup failure — a gateway that boots and
+ * then answers 502 to every sign-in looks, from outside, exactly like a provider outage.
+ *
+ * **The auth base URL is not among these**, deliberately: it is `SUPABASE_JWT_ISSUER`, so the
+ * project this gateway *calls* and the project whose tokens it *accepts* cannot be configured apart.
+ * `auth/supabase.ts`'s `authUrl` docstring has the argument.
+ */
+export function requireSupabaseAuthCredentials(config: Config): {
+  anonKey: string;
+  serviceRoleKey: string;
+} {
+  const missing = [
+    config.supabaseAnonKey ? undefined : "SUPABASE_ANON_KEY",
+    config.supabaseServiceRoleKey ? undefined : "SUPABASE_SERVICE_ROLE_KEY",
+  ].filter((name): name is string => name !== undefined);
+  if (missing.length > 0) {
+    throw new ConfigError(
+      `${missing.join(" and ")} ${missing.length === 1 ? "is" : "are"} required wherever the sign-in ` +
+        "routes are mounted: without them this gateway cannot ask Supabase to send a code or " +
+        "exchange one. Values are omitted deliberately; see server/.env.example for the expected " +
+        "shape.",
+    );
+  }
+  return { anonKey: config.supabaseAnonKey!, serviceRoleKey: config.supabaseServiceRoleKey! };
 }

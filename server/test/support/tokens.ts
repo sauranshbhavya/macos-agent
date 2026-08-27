@@ -20,11 +20,25 @@ export const TEST_JWT_POLICY: SupabaseJwtPolicy = {
   audience: "authenticated",
 };
 
-/** The three configuration fields every app built in these tests needs. */
-export const TEST_JWT_CONFIG = {
+/**
+ * Every Supabase-shaped field a `Config` literal in these tests needs.
+ *
+ * **Renamed from the JWT-only name it carried by SONNY-307**, which added the two API-key fields
+ * below: the old name described three of the five and would have described a shrinking fraction of
+ * them as more Supabase-shaped fields arrive.
+ *
+ * **The two API keys are `undefined` on purpose, and that is the truthful value here.** They are what
+ * `auth/supabase.ts` sends to the real project; every app built in this suite is handed a *fake*
+ * provider instead, so no test in it has a Supabase project to call. A test that wants a real
+ * adapter sets them itself — `supabase-provider.test.ts` builds one directly and never goes through
+ * a `Config` at all.
+ */
+export const TEST_SUPABASE_CONFIG = {
   supabaseJwtSecret: TEST_JWT_POLICY.secret,
   supabaseJwtIssuer: TEST_JWT_POLICY.issuer,
   supabaseJwtAudience: TEST_JWT_POLICY.audience,
+  supabaseAnonKey: undefined,
+  supabaseServiceRoleKey: undefined,
 } as const;
 
 export function base64url(value: string): string {
