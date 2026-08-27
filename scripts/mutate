@@ -82,10 +82,17 @@
 # ...") — and this script read only the first. When a run records the issues and never prints the
 # summary line, the mutant was reported "KILLED — the run failed but named no test", advising a
 # reader to look for a crash that never happened while the log named the killing test five times a
-# few lines up. The count was right and the evidence was gone, which is the reassuring direction
-# again: the whole reason to run a battery is to learn WHICH test holds a behaviour. It is also
-# intermittent — the same mutant at the same tree attributed cleanly when run alone — so the
-# obvious check says "flake" and the gap survives. Both shapes are read now.
+# few lines up. In the case that was reported the count was right and only the evidence was gone,
+# which is bad enough — the whole reason to run a battery is to learn WHICH test holds a behaviour.
+# But the same silence had a second direction that IS a wrong count, and it is why this is numbered
+# beside the other three rather than filed as a misdiagnosis: when the only red was a DECLARED
+# failure, the classifier saw nothing at all and so could not report UNATTRIBUTED, and the mutant
+# was counted KILLED. That is the manufactured kill the third route above built its whole
+# declaration mechanism to prevent, arriving by a road that mechanism never watched. Not observed
+# in the wild — the reported case is the lost-evidence one — but reachable, and reproduced against
+# the previous version of this script rather than argued; `selftest` has an arm on each direction.
+# It is also intermittent — the same mutant at the same tree attributed cleanly when run alone — so
+# the obvious check says "flake" and the gap survives. Both shapes are read now.
 #
 # Exit codes
 #   0  the battery ran and every mutant was killed
@@ -310,7 +317,10 @@ What this does and does not prevent:
       the same mutant run alone. The classifier read only that summary line, so the kill was
       reported as "named no test", pointing at a crash that had not happened; both line shapes are
       read now, and the trap case above still reports exactly that, correctly, because a dead
-      process prints no issue lines either. The two causes no longer share one message.
+      process prints no issue lines either. The two causes no longer share one message. That seam
+      also had a direction that manufactured a kill: a run whose only red was a DECLARED failure
+      left the classifier with nothing to report, so it was counted KILLED rather than
+      UNATTRIBUTED — everything in this bullet, defeated by the absence of one line.
       UntrustedFailureDeclarationTests is exempt from all of it, by name: it is the guard on the
       declarations, so letting the declarations excuse its failure would leave a stale file marking
       itself trustworthy. That happened, and the battery printed a reassuring line while running
@@ -1816,6 +1826,36 @@ printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
   # The shipped fallback delegates instead, so the divergence cannot occur while it stays that way.
   # This check is what notices if someone puts the second regex back.
   st_absent "and not as unattributed either" "$ST_OUT" "UNATTRIBUTED"
+
+  # The same seam's other direction, and the one that was a false MEASUREMENT rather than a lost
+  # diagnosis. Strip the summary line from a log whose only red is a DECLARED backstop and the
+  # classifier saw nothing at all, so it could not report UNATTRIBUTED — the arm above it counted a
+  # kill instead. Measured against `main`'s copy of this script: `1 killed, 0 survived, 0
+  # unattributed`, exit 0, on a mutant nothing had caught. That is the manufactured kill SONNY-224
+  # built the whole declaration mechanism to prevent, reached by a route that mechanism never saw,
+  # and it is the reason this counts as a fourth route to a false measurement rather than only as a
+  # misdiagnosis. Not observed in the wild — SONNY-305's report is the lost-evidence direction —
+  # but reachable, and reproduced here rather than argued.
+  local declared_only_and_no_per_test_line='printf "◇  Test run started.\n"
+if grep -q "hour < 13" sample.swift; then
+  printf "✘  Test aRunThatNeverSettled() recorded an issue at Fixture.swift:10:5: Issue recorded\n"
+  printf "↳  View model did not become idle before timeout.\n"
+  printf "✘  Suite ProductShellTests failed after 0.001 seconds with 1 issue.\n"
+  printf "✘  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
+  exit 1
+fi
+printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+
+  printf '\n==> A declared failure with no summary line is unattributed, not a manufactured kill\n'
+  st_run "$declared_only_and_no_per_test_line" "$root/kill.plan"
+  st_eq "an unattributed mutant exits 2" "$ST_EXIT" "2"
+  st_contains "the outcome is called out" "$ST_OUT" "UNATTRIBUTED"
+  st_contains "the failing test is named from its issue line" "$ST_OUT" "aRunThatNeverSettled()"
+  st_contains "and the signature that disqualified it is shown" "$ST_OUT" \
+              "did not become idle before timeout"
+  st_contains "and the summary counts it as unattributed" "$ST_OUT" \
+              "0 killed, 0 survived, 1 unattributed"
+  st_absent "it is not counted as a kill" "$ST_OUT" "KILLED"
 
   printf '\n==> A real killer beside a declared failure still kills, and the count excludes the other\n'
   st_run "$kill_beside_untrusted" "$root/kill.plan"
