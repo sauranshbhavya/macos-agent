@@ -45,6 +45,7 @@ final class PrimaryWindowActivationManager {
 @MainActor
 final class AppWindowCoordinator: NSObject, NSWindowDelegate {
     let viewModel: AgentViewModel
+    let accountModel: SonnyAccountModel
 
     private let activationManager: PrimaryWindowActivationManager
     private var commandCenterWindowController: NSWindowController?
@@ -53,11 +54,17 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
         commandCenterWindowController?.window
     }
 
+    /// **`accountModel` has no default**, for the reason `AppDelegate.init(viewModel:)` has none:
+    /// a default resolving to the real Keychain is invisible at every call site that predates the
+    /// parameter, which is SONNY-240's argument applied to the one store every packaged build on
+    /// this Mac shares.
     init(
         viewModel: AgentViewModel,
+        accountModel: SonnyAccountModel,
         activationManager: PrimaryWindowActivationManager = PrimaryWindowActivationManager()
     ) {
         self.viewModel = viewModel
+        self.accountModel = accountModel
         self.activationManager = activationManager
         super.init()
     }
@@ -77,7 +84,7 @@ final class AppWindowCoordinator: NSObject, NSWindowDelegate {
 
     private func makeCommandCenterWindowController() -> NSWindowController {
         let hostingController = NSHostingController(
-            rootView: CommandCenterView(viewModel: viewModel)
+            rootView: CommandCenterView(viewModel: viewModel, accountModel: accountModel)
         )
         let window = makeWindow(
             title: "Sonny",

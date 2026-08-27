@@ -34,6 +34,10 @@ enum CommandCenterDestination: String, CaseIterable, Identifiable {
 
 struct CommandCenterView: View {
     @ObservedObject var viewModel: AgentViewModel
+    // Sign-in lives in its own object rather than on `AgentViewModel` (SONNY-128) — see
+    // `SonnyAccountModel` for why. Command Center is where the account row is, so this is where it
+    // is observed.
+    @ObservedObject var accountModel: SonnyAccountModel
     @State private var selection: CommandCenterDestination
     // Settings is no longer a sidebar destination (2026-07-18 direction, following the Claude
     // desktop app's pattern: a bottom-left account row opens a menu, whose one real item today
@@ -51,12 +55,16 @@ struct CommandCenterView: View {
     @State private var isLearnMoreExpanded = false
     // Debounces the open/close of that flyout — see `handleLearnMoreHoverChange`.
     @State private var learnMoreHoverTask: Task<Void, Never>?
+    // Drives the sign-in dialog, opened from the account menu's first row (SONNY-128).
+    @State private var isSignInPresented = false
 
     init(
         viewModel: AgentViewModel,
+        accountModel: SonnyAccountModel,
         initialSelection: CommandCenterDestination = .tasks
     ) {
         self.viewModel = viewModel
+        self.accountModel = accountModel
         _selection = State(initialValue: initialSelection)
     }
 
@@ -87,6 +95,9 @@ struct CommandCenterView: View {
         }
         .sheet(isPresented: $isProfilePresented) {
             ProfileDialogView(isPresented: $isProfilePresented)
+        }
+        .sheet(isPresented: $isSignInPresented) {
+            SignInDialogView(model: accountModel, isPresented: $isSignInPresented)
         }
         // A task-detail request can arrive while any page is showing, so the navigation to Tasks
         // happens *here*, above the page switch, and not inside the page that answers it (PR #67
@@ -223,6 +234,18 @@ struct CommandCenterView: View {
 
     private var accountMenuContent: some View {
         VStack(alignment: .leading, spacing: 2) {
+            // The sign-in entry point (SONNY-128). One row whichever way round it is: signed out it
+            // opens the address step, signed in it opens the account step with Sign out on it. The
+            // row above Profile because signing in is the thing a first-run user needs from this
+            // menu and Profile is still a placeholder.
+            accountMenuRow(
+                title: accountModel.isSignedIn ? "Account" : SignInCopy.signInLabel,
+                systemImage: accountModel.isSignedIn ? "person.crop.circle.badge.checkmark" : "person.crop.circle.badge.plus"
+            ) {
+                isAccountMenuPresented = false
+                isSignInPresented = true
+            }
+
             accountMenuRow(title: "Profile", systemImage: "person.crop.circle") {
                 isAccountMenuPresented = false
                 isProfilePresented = true
@@ -5832,7 +5855,10 @@ private struct SettingsUsagePage: View {
     }
 }
 
-private struct SettingsAdaptiveControlRow<Leading: View, Trailing: View>: View {
+/// Not `private`: `SignInView.swift` uses it too. This ticket's contract says any label-plus-control
+/// row uses this rather than a hand-rolled `HStack`, and a shared component the rest of the target
+/// cannot name is not a shared component.
+struct SettingsAdaptiveControlRow<Leading: View, Trailing: View>: View {
     let leading: Leading
     let trailing: Trailing
 
