@@ -1065,6 +1065,37 @@ sanity checks on end-to-end behaviour, not on the fold.
       deliberately *not* folded, so a note that reads as one run-on line, or that has lost the page's
       paragraphs, is the regression to report.
 
+### Prototype-limitation re-check — the parts the tree cannot answer (new 2026-08-27, SONNY-296)
+
+SONNY-296 re-checked the seven dated prototype-limitation findings in the spec's §4 and §4A.4
+against the tree. Most of them the suite settles. **Three do not, and these rows are exactly those
+three** — not a re-test of things already pinned, and not a request to confirm what a passing test
+already proves.
+
+- [ ] **(SONNY-296, music — the one open finding)** In the packaged app, run **"Play Jimmy Cooks by
+      Drake on Apple Music"**, and then **"Play Bad Habit by Steve Lacy on Spotify"**. Expected, and
+      this is the *correct* behaviour today rather than a bug to report: neither one plays. Each
+      should report that provider playback is unavailable and then open the provider instead —
+      Apple Music should land on the actual track's album page (it resolves the track through the
+      public iTunes Search API first), Spotify on a search for the query. What *would* be a finding:
+      a raw error, a hang, a silent no-op, or a summary claiming playback started. Also try one with
+      the provider app not installed, and one with no network, and report whatever the user sees.
+- [ ] **(SONNY-296, Command Center surfaces)** Open Command Center and confirm all six controls §4's
+      fourth bullet names are actually there and usable, since no test in this repo renders a view:
+      the **account** row at the bottom left; **Settings** opening from it with all five sections
+      (Preferences, Notifications, Usage, Security & Access, Data); task **history** on the Tasks
+      page; **stats** on Insights *and* on Settings → Usage; **privacy** controls on Settings → Data;
+      and the **Safe | Normal | Power** dial at the top of Settings → Security & Access. A control
+      that is present but does nothing, or a page that renders empty where it should have content,
+      is the finding.
+- [ ] **(SONNY-296, web research end-to-end)** Run **"summarize <a real public article URL> and save
+      it as Markdown"** against a page you can read yourself. The suite proves this path with a fake
+      page loader and a fake synthesizer, so what is unverified is the real one: the note should name
+      that URL as a source, carry a generation timestamp, and summarize the page's actual body. A
+      note that summarizes the wrong page, or carries no source link, is the finding. (This overlaps
+      the SONNY-226 row above deliberately — that one asks about paragraph structure after the
+      prompt fold, this one about the source-and-timestamp contract §4A.2 sets.)
+
 ## 8. How to report back
 
 For each real finding, give me:
