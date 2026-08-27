@@ -57,7 +57,13 @@ enum WidgetState {
     /// an explicit press — nothing here clears itself.
     case sessionPaused(VisionSessionPause)
     /// Sonny is controlling an app right now (row I, SONNY-95). The HUD: what it is doing, in which
-    /// app, with Pause and Stop always reachable.
+    /// app, with Stop always reachable and Pause reachable while the loop is advancing.
+    ///
+    /// **"Pause and Stop always reachable" is what this line said, and SONNY-255's own hunks left it
+    /// standing while making half of it false** (PR #132 review, F2 — the same stale-comment class
+    /// this ticket corrected four of elsewhere). Stop is always reachable and now genuinely is on
+    /// both panel shapes; Pause is offered only here, and the paragraph below the `case` and
+    /// `WidgetControllingPanel`'s own Stop comment both say why.
     ///
     /// **Below every question a session can park, all four of them** (SONNY-255 added the fourth).
     /// This describes a loop that is advancing; each of those describes a loop that has stopped and
@@ -1280,7 +1286,10 @@ private struct WidgetPermissionPanel: View {
 
                     Spacer(minLength: 8)
 
-                    Text("Step \(sessionProgress.iteration) of \(sessionProgress.maximumIterations)")
+                    Text(ScreenControlSessionPresentation.stepLine(
+                        iteration: sessionProgress.iteration,
+                        maximumIterations: sessionProgress.maximumIterations
+                    ))
                         .font(WidgetType.captionSmall)
                         .foregroundStyle(WidgetTheme.textMuted)
                         .lineLimit(1)
@@ -1621,7 +1630,7 @@ private struct WidgetSessionIdentityLine: View {
                 .font(.system(size: 12))
                 .foregroundStyle(WidgetTheme.secondaryCircular)
 
-            (Text("Sonny is controlling ").font(WidgetType.caption)
+            (Text(ScreenControlSessionPresentation.controllingPrefix).font(WidgetType.caption)
                 + Text(appDisplayName).font(WidgetType.captionMedium))
                 .foregroundStyle(WidgetTheme.textFull)
                 .lineLimit(1)
@@ -1642,7 +1651,7 @@ private struct WidgetSessionStopButton: View {
 
     var body: some View {
         Button(action: action) {
-            Text("Stop")
+            Text(ScreenControlSessionPresentation.stopLabel)
                 .font(WidgetType.captionMedium)
                 .foregroundStyle(.white)
         }
@@ -1650,16 +1659,21 @@ private struct WidgetSessionStopButton: View {
         .padding(.horizontal, 10)
         .frame(height: 23)
         .widgetCircularBackground(tint: WidgetTheme.errorGlyph)
-        .accessibilityLabel("Stop Sonny controlling \(appDisplayName)")
+        .accessibilityLabel(ScreenControlSessionPresentation.stopAccessibilityLabel(appDisplayName: appDisplayName))
     }
 }
 
 /// **The HUD: power without covertness.**
 ///
 /// While Sonny controls an app it says so, says which app, says what it is doing right now, and puts
-/// Pause and Stop where the user can reach them. That is the whole requirement, and it is a product
+/// Stop where the user can reach it — with Pause beside it while the loop is advancing, which is
+/// whenever this panel is the one on screen. That is the whole requirement, and it is a product
 /// requirement rather than a courtesy: a program moving someone's cursor with no visible statement of
 /// what it is doing is the shape this feature must never take.
+///
+/// **This sentence read "puts Pause and Stop where the user can reach them" and was left standing by
+/// the change that made half of it false** (PR #132 review, F2). Stop reaches both panel shapes;
+/// Pause reaches only this one, deliberately, for the reason stated beside it below.
 ///
 /// **This panel is not the only place that requirement is met** (SONNY-255). Four states outrank it,
 /// each of them a question the session has parked on the user, and while one of those is on screen
@@ -1685,7 +1699,10 @@ private struct WidgetControllingPanel: View {
                 .fixedSize(horizontal: false, vertical: true)
 
             HStack(spacing: 8) {
-                Text("Step \(progress.iteration) of \(progress.maximumIterations)")
+                Text(ScreenControlSessionPresentation.stepLine(
+                    iteration: progress.iteration,
+                    maximumIterations: progress.maximumIterations
+                ))
                     .font(WidgetType.captionSmall)
                     .foregroundStyle(WidgetTheme.textMuted)
                     .lineLimit(1)
@@ -1701,7 +1718,9 @@ private struct WidgetControllingPanel: View {
                 .padding(.horizontal, 10)
                 .frame(height: 23)
                 .widgetCircularBackground()
-                .accessibilityLabel("Pause Sonny controlling \(progress.appDisplayName)")
+                .accessibilityLabel(ScreenControlSessionPresentation.pauseAccessibilityLabel(
+                    appDisplayName: progress.appDisplayName
+                ))
 
                 // **Pause does not travel to the approval panel with the Stop, and that is the one
                 // thing this ticket left behind on purpose** (SONNY-255). `pauseVisionSession` sets

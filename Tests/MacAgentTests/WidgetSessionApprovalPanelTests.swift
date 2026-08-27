@@ -46,17 +46,42 @@ struct WidgetSessionApprovalPanelTests {
         #expect(MacAgentSource.count(of: "WidgetSessionStopButton(", inText: panel) == 1)
         #expect(MacAgentSource.count(of: "action: onStop", inText: panel) == 1)
 
-        // The step count comes off the session rather than being invented, and the action line
-        // deliberately does not come across at all — at the moment an approval is raised it still
-        // holds what the iteration reported when it began, so it would be stale beside an accurate
-        // sentence about the same moment.
+        // The step count comes off the session, through the owner both surfaces read rather than a
+        // sentence of this panel's own (PR #132 review, F1 moved the words there).
+        #expect(MacAgentSource.count(of: "ScreenControlSessionPresentation.stepLine(", inText: panel) == 1)
+        #expect(MacAgentSource.count(of: "iteration: sessionProgress.iteration", inText: panel) == 1)
+        #expect(MacAgentSource.count(of: "maximumIterations: sessionProgress.maximumIterations", inText: panel) == 1)
+
+        // The action line deliberately does not come across at all — at the moment an approval is
+        // raised it still holds what the iteration reported when it began, so it would be stale
+        // beside an accurate sentence about the same moment.
+        #expect(MacAgentSource.count(of: "currentAction", inText: panel) == 0)
+    }
+
+    /// **The ordinary approval keeps its step rows, and the session row replaces them rather than
+    /// joining them** (PR #132 review, F3).
+    ///
+    /// The `else` arm had no assertion in either direction, so a mutant deleting it survived: the
+    /// panel for an ordinary tier-2 approval would have lost its plan rows and every test still
+    /// passed. Both directions are held here because the pair is the decision — one row about the
+    /// session *instead of* rows about a plan whose single step is "control this app", not two rows
+    /// saying the same thing on a 472pt panel.
+    @Test
+    func theOrdinaryApprovalKeepsItsStepRowsAndTheSessionRowReplacesThem() throws {
+        let panel = try permissionPanel()
+
+        // The `else` arm exists and renders the rows, with the plan and statuses it was handed.
         #expect(
             MacAgentSource.count(
-                of: "Step \\(sessionProgress.iteration) of \\(sessionProgress.maximumIterations)",
+                of: "WidgetExistingStepRows(plan: plan, stepStatuses: stepStatuses)",
                 inText: panel
             ) == 1
         )
-        #expect(MacAgentSource.count(of: "currentAction", inText: panel) == 0)
+
+        // And it is only in the `else` arm: the session branch must not render them too.
+        let sessionArm = try MacAgentSource.braceBlock(of: panel, openedBy: "if let sessionProgress {")
+        #expect(MacAgentSource.count(of: "WidgetExistingStepRows", inText: sessionArm) == 0)
+        #expect(MacAgentSource.count(of: "WidgetSessionIdentityLine(", inText: sessionArm) == 1)
     }
 
     /// **One refusal, and it is the one that says what it does.**
@@ -124,6 +149,92 @@ struct WidgetSessionApprovalPanelTests {
         // The HUD still says it, so this is an absence here rather than a deletion there.
         let widget = try MacAgentSource.read("FloatingWidgetView.swift")
         #expect(MacAgentSource.count(of: "stops it from anywhere", inText: widget) == 1)
+    }
+
+    // MARK: - The same argument on Command Center's surface (PR #132 review, F1)
+
+    /// **Command Center's approval panel got the identical treatment, one round later.**
+    ///
+    /// SONNY-255 hid the widget's icon-only cross while a session is live, because `cancelCurrentRun`
+    /// ends the whole session rather than declining a step. `CommandCenterAttentionPanel` kept a
+    /// button *labelled* "Deny" wired to the same call — the same claim in words, and worse for being
+    /// legible. The behaviour is unchanged on both surfaces; what changed is that the label stops
+    /// disagreeing with it.
+    ///
+    /// Counted on both sides, which is what a scan can honestly hold here: the "Deny" button still
+    /// exists for an ordinary approval and the Stop exists only for a session, so a mutant collapsing
+    /// the branch moves a count rather than merely adding a token a comment could have supplied.
+    @Test
+    func commandCentersApprovalPanelOffersStopRatherThanDenyWhileASessionIsLive() throws {
+        let panel = try MacAgentSource.region(
+            of: MacAgentSource.read("CommandCenterView.swift"),
+            from: "private func permissionContent(_ request: RiskApprovalRequest) -> some View {",
+            to: "private func clarificationContent(_ question: String) -> some View {"
+        )
+
+        // The branch, and one control on each side of it.
+        #expect(MacAgentSource.count(of: "if viewModel.visionSessionProgress != nil {", inText: panel) == 1)
+        #expect(MacAgentSource.count(of: "Button(ScreenControlSessionPresentation.stopLabel)", inText: panel) == 1)
+        #expect(MacAgentSource.count(of: "viewModel.emergencyStopVisionSession()", inText: panel) == 1)
+        #expect(MacAgentSource.count(of: "Button(\"Deny\")", inText: panel) == 1)
+        #expect(MacAgentSource.count(of: "viewModel.cancelCurrentRun()", inText: panel) == 1)
+        // Allow is one control in both cases and is outside the branch entirely.
+        #expect(MacAgentSource.count(of: "Button(\"Allow\")", inText: panel) == 1)
+
+        // System A's own destructive treatment, not the widget's red — the two surfaces have
+        // separate token sets and `.claude/rules/macagent-ui-conventions.md` forbids mixing them.
+        #expect(MacAgentSource.count(of: "CommandCenterRowActionStyle(tone: .danger)", inText: panel) == 1)
+        #expect(MacAgentSource.count(of: "WidgetTheme", inText: panel) == 0)
+        #expect(MacAgentSource.count(of: "WidgetType", inText: panel) == 0)
+
+        // And the session's context row, so the question is anchored to the session on this surface
+        // too rather than arriving with a Stop and no statement of what it stops.
+        #expect(MacAgentSource.count(of: "if let sessionProgress = viewModel.visionSessionProgress {", inText: panel) == 1)
+        #expect(
+            MacAgentSource.count(of: "Text(ScreenControlSessionPresentation.controllingPrefix)", inText: panel) == 1
+        )
+        #expect(MacAgentSource.count(of: "ScreenControlSessionPresentation.stepLine(", inText: panel) == 1)
+    }
+
+    /// **The words are shared between the surfaces; the views are not, and that is the whole design
+    /// of `ScreenControlSessionPresentation`.**
+    ///
+    /// A user who reads "Sonny is controlling Safari" in the widget and something else in Command
+    /// Center is looking at one session described two ways, and nothing in either file would catch
+    /// the divergence — the two are 4,000 lines apart in different token systems. So the strings have
+    /// one owner and each surface renders them with its own tokens. Asserted as the population:
+    /// neither file may carry a hand-written copy of any of the three.
+    @Test
+    func bothSurfacesReadTheSessionsWordsFromOneOwnerAndNeitherHandWritesThem() throws {
+        #expect(ScreenControlSessionPresentation.controllingMessage(appDisplayName: "Safari")
+            == "Sonny is controlling Safari")
+        #expect(ScreenControlSessionPresentation.stepLine(iteration: 2, maximumIterations: 4) == "Step 2 of 4")
+        #expect(ScreenControlSessionPresentation.stopLabel == "Stop")
+        #expect(ScreenControlSessionPresentation.stopAccessibilityLabel(appDisplayName: "Safari")
+            == "Stop Sonny controlling Safari")
+        #expect(ScreenControlSessionPresentation.pauseAccessibilityLabel(appDisplayName: "Safari")
+            == "Pause Sonny controlling Safari")
+
+        for file in ["FloatingWidgetView.swift", "CommandCenterView.swift"] {
+            let source = try MacAgentSource.read(file)
+            #expect(MacAgentSource.count(of: "\"Sonny is controlling ", inText: source) == 0, "\(file)")
+            #expect(MacAgentSource.count(of: "\"Stop Sonny controlling ", inText: source) == 0, "\(file)")
+            #expect(MacAgentSource.count(of: "\"Pause Sonny controlling ", inText: source) == 0, "\(file)")
+        }
+
+        // **One hand-written step line survives, and it is a filed defect rather than an exemption**
+        // (SONNY-303, found by this scan). `WidgetCaptureReviewPanel` renders
+        // `"Step \(preview.iteration) of \(preview.appDisplayName)"` — the app's *name* where the
+        // iteration cap belongs, so Safe mode's pre-send review reads "Step 2 of Safari".
+        // `VisionCapturePreview` carries no `maximumIterations`, which is why it is a type change and
+        // a product decision rather than a typo, and why it is not fixed here. Pinned at exactly one
+        // so a second hand-written step line fails this, and so the count drops to zero the moment
+        // SONNY-303 lands rather than sitting here as a permanent allowance.
+        #expect(
+            MacAgentSource.count(of: "\"Step \\(", inText: try MacAgentSource.read("FloatingWidgetView.swift")) == 1,
+            "the one known hand-written step line is SONNY-303's; a second one is new"
+        )
+        #expect(MacAgentSource.count(of: "\"Step \\(", inText: try MacAgentSource.read("CommandCenterView.swift")) == 0)
     }
 
     /// **Pause does not travel with the Stop, and that is a decision rather than an omission.**
