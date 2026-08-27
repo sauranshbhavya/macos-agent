@@ -356,10 +356,7 @@ private func makeRunAgainFixture() throws -> RunAgainFixture {
         backendClient: makeHermeticBackendClient(),
         priorTaskContextStore: PriorTaskContextStore(),
         taskUsageRecorder: TaskUsageRecorder(),
-        plannerProviderRegistry: PlannerProviderRegistry(
-            defaultProvider: PlannerProvider(id: "run-again-stub", displayName: "Run Again Stub") { _ in planner }
-        ),
-        plannerSelection: nil,
+        makePlanner: { _, _ in planner },
         userDefaults: userDefaults,
         whitelist: PathWhitelist(roots: [root])
     )

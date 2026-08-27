@@ -408,12 +408,7 @@ struct VisionSessionRunTests {
             backendClient: makeHermeticBackendClient(),
             priorTaskContextStore: PriorTaskContextStore(),
             taskUsageRecorder: TaskUsageRecorder(),
-            plannerProviderRegistry: PlannerProviderRegistry(
-                defaultProvider: PlannerProvider(id: "unused", displayName: "Unused") { _ in
-                    delegationPlanner ?? UnreachableVisionPlanner()
-                }
-            ),
-            plannerSelection: nil,
+            makePlanner: { _, _ in delegationPlanner ?? UnreachableVisionPlanner() },
             userDefaults: userDefaults,
             whitelist: PathWhitelist(roots: [root])
         )

@@ -379,12 +379,7 @@ private func makeModeFixture() throws -> ModeFixture {
             backendClient: makeHermeticBackendClient(),
             priorTaskContextStore: PriorTaskContextStore(),
             taskUsageRecorder: TaskUsageRecorder(),
-            plannerProviderRegistry: PlannerProviderRegistry(
-                defaultProvider: PlannerProvider(id: "unused-stub", displayName: "Unused Stub") { _ in
-                    UnreachablePlanner()
-                }
-            ),
-            plannerSelection: nil,
+            makePlanner: { _, _ in UnreachablePlanner() },
             userDefaults: userDefaults,
             whitelist: PathWhitelist(roots: [root])
         )
