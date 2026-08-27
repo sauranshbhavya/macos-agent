@@ -4,7 +4,8 @@ import { buildApp } from "../src/app.js";
 import type { Config } from "../src/config.js";
 import { ProviderRejected, type AuthProvider, type VerifiedSession } from "../src/auth/provider.js";
 import { up } from "../src/db/migrate.js";
-import { TEST_JWT_CONFIG, accessTokenFor } from "./support/tokens.js";
+import { accessTokenFor } from "./support/tokens.js";
+import { testConfig } from "./support/config.js";
 
 /**
  * The second half of the gate: attribution (SONNY-203).
@@ -36,11 +37,7 @@ const withConnection = async <T,>(fn: (c: pg.Client) => Promise<T>): Promise<T> 
   }
 };
 
-const config: Config = {
-  environment: "local", port: 0, host: "127.0.0.1", buildId: "t",
-  databaseUrl: url, logLevel: "fatal", trustProxy: false,
-  rateLimitSalt: "test-salt", ...TEST_JWT_CONFIG, credentials: [],
-};
+const config: Config = testConfig({ databaseUrl: url });
 
 /** Enough provider to sign someone in. Everything this file asserts happens after that. */
 class SigningInProvider implements AuthProvider {

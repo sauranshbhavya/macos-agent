@@ -1,20 +1,9 @@
 import { describe, expect, it } from "vitest";
 import { buildApp } from "../src/app.js";
 import type { Config } from "../src/config.js";
-import { TEST_JWT_CONFIG } from "./support/tokens.js";
+import { testConfig } from "./support/config.js";
 
-const config = (overrides: Partial<Config> = {}): Config => ({
-  environment: "local",
-  port: 0,
-  host: "127.0.0.1",
-  buildId: "test-build-1",
-  databaseUrl: undefined,
-  logLevel: "fatal",
-  trustProxy: false,
-  rateLimitSalt: "test-salt", ...TEST_JWT_CONFIG,
-  credentials: [],
-  ...overrides,
-});
+const config = (overrides: Partial<Config> = {}): Config => testConfig(overrides);
 
 describe("GET /v1/health", () => {
   it("answers 200 with the build identifier the config carries", async () => {

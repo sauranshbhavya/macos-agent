@@ -115,6 +115,24 @@ const schema = z.object({
    * rather than a law, and a wrong value is a gateway that refuses every real token — loudly.
    */
   SUPABASE_JWT_AUDIENCE: nonEmpty.default("authenticated"),
+
+  /**
+   * Where the model routes send, and what they ask for (SONNY-130).
+   *
+   * **These four have defaults and the credentials above do not, and the difference is the point.**
+   * A credential with a default is a weakness that works everywhere and is never noticed. An
+   * endpoint and a model identifier are neither secret nor guessable-wrong: the defaults are exactly
+   * what the Mac app compiled in before this gateway existed, so a deployment that sets none of them
+   * behaves as the app used to, and one that sets them moves every user's traffic in a redeploy.
+   *
+   * That second half is SONNY-130's sixth requirement doing its job. The client is not allowed to
+   * name a provider, a model or an endpoint, so all three are here — which is what turns SONNY-110's
+   * move to a paid zero-retention route into a configuration change rather than an app release.
+   */
+  OPENAI_BASE_URL: nonEmpty.default("https://api.openai.com/v1"),
+  OPENAI_TEXT_MODEL: nonEmpty.default("gpt-5.5"),
+  OPENAI_TRANSCRIPTION_MODEL: nonEmpty.default("gpt-4o-mini-transcribe"),
+  SEARCH_BASE_URL: nonEmpty.default("https://api.tavily.com"),
 });
 
 export interface Config {
@@ -129,6 +147,10 @@ export interface Config {
   readonly supabaseJwtSecret: string | undefined;
   readonly supabaseJwtIssuer: string | undefined;
   readonly supabaseJwtAudience: string;
+  readonly openAIBaseUrl: string;
+  readonly openAITextModel: string;
+  readonly openAITranscriptionModel: string;
+  readonly searchBaseUrl: string;
   readonly credentials: readonly ProviderCredentials[];
 }
 
@@ -289,6 +311,10 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     supabaseJwtSecret: value.SUPABASE_JWT_SECRET,
     supabaseJwtIssuer: value.SUPABASE_JWT_ISSUER,
     supabaseJwtAudience: value.SUPABASE_JWT_AUDIENCE,
+    openAIBaseUrl: value.OPENAI_BASE_URL,
+    openAITextModel: value.OPENAI_TEXT_MODEL,
+    openAITranscriptionModel: value.OPENAI_TRANSCRIPTION_MODEL,
+    searchBaseUrl: value.SEARCH_BASE_URL,
     credentials: providerCredentials(env),
   };
 }
