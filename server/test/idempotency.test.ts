@@ -686,6 +686,27 @@ describe("the fingerprint", () => {
     );
   });
 
+  it("cannot be made to collide by a string that spells another kind's hashed form", () => {
+    // **The property the two tests above only half-pin**, and a mutation battery is what showed the
+    // gap: with only the `text` prefix removed the kinds stay disjoint for ordinary values, so
+    // "a string does not collide with the JSON that spells it" still passed. What actually breaks is
+    // a string crafted to *be* the object's hashed input. This is the assertion that fails without
+    // the prefix, and it is the invariant the prefixes exist for: no value of one kind can spell a
+    // value of another.
+    const object = { a: 1 };
+    expect(fingerprintOf(request(`json\n${JSON.stringify(object)}`), "POST /v1/plan")).not.toBe(
+      fingerprintOf(request(object), "POST /v1/plan"),
+    );
+  });
+
+  it("cannot be made to collide by a Buffer that spells a string's hashed form", () => {
+    // The same invariant from the third kind's side, so the `bytes` prefix is pinned too rather
+    // than resting on the other two.
+    expect(fingerprintOf(request(Buffer.from("text\nhello", "utf8")), "POST /v1/plan")).not.toBe(
+      fingerprintOf(request("hello"), "POST /v1/plan"),
+    );
+  });
+
   it("still gives two equal strings the same fingerprint", () => {
     // The prefixes separate the kinds without making a genuine repeat conflict with itself.
     expect(fingerprintOf(request("hello"), "POST /v1/plan")).toBe(
