@@ -45,7 +45,15 @@ public struct WebResearchMarkdownCapabilityAdapter: CapabilityAdapter {
                 name: "Web page to Markdown",
                 description: "Fetch one public http/https URL, resolve a topic through a configured search provider, or fetch multiple http/https sourceURLs for comparison, synthesize a research note, and save Markdown in a whitelisted output path. Sources that cannot be retrieved are skipped and listed in the note; the step fails only when every source fails.",
                 requiredFields: ["targetURL, sourceURLs, or searchQuery"],
-                sideEffects: ["network request", "send fetched public page content to OpenAI", "write file"],
+                // **"to OpenAI" until SONNY-130, and the correction is not cosmetic.** This list is
+                // what a user reads in a dry run before approving a network egress, so it is a claim
+                // about where their fetched page content goes — and after the search and synthesis
+                // routes moved behind Sonny's own gateway, it named the wrong destination. It also
+                // reaches the planner: capability descriptions and side effects are folded into
+                // `ToolRegistry.plannerDescription`, which is the system prompt, which now goes over
+                // the wire. A provider name in the client is what SONNY-130's sixth requirement is
+                // about, and this was one.
+                sideEffects: ["network request", "send fetched public page content to Sonny", "write file"],
                 dryRunBehavior: "Show source URL(s), search query, and Markdown output path without fetching pages or writing files.",
                 examples: [
                     "Summarize https://example.com/article and save as Markdown",

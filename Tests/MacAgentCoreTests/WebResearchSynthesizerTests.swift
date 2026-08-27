@@ -1,4 +1,5 @@
 import Foundation
+import MacAgentTestSupport
 import Testing
 @testable import MacAgentCore
 
@@ -64,28 +65,28 @@ struct WebResearchSynthesizerTests {
         }
     }
 
+    /// The successor to `openAIWebResearchSynthesizerRecordsReportedResponsesUsage` (SONNY-130):
+    /// same assertions, one layer out, against Sonny's own backend rather than a vendor endpoint.
+    /// `model` is the one changed expectation — §4.2 puts the route's name there rather than a model
+    /// identifier the client is no longer allowed to know.
     @Test
     @MainActor
-    func openAIWebResearchSynthesizerRecordsReportedResponsesUsage() async throws {
-        WebResearchFixtureURLProtocol.handler = { request in
-            let response = HTTPURLResponse(
-                url: request.url!,
-                statusCode: 200,
-                httpVersion: nil,
-                headerFields: nil
-            )!
-            return (response, Data(Self.noteResponseWithUsageJSON.utf8))
+    func synthesizerRecordsTheUsageTheBackendReported() async throws {
+        let fixture = SignedInBackendFixture()
+        let recorded = RecordedBackendRequests()
+        fixture.register { request in
+            recorded.append(request)
+            return ModelRouteFixtures.reply(ModelRouteFixtures.textRouteJSON(
+                outputText: Self.noteJSON,
+                usage: ModelRouteFixtures.reportedTokenUsage(input: 80, output: 25, total: 105)
+            ))
         }
+        defer { fixture.unregister() }
 
-        let configuration = URLSessionConfiguration.ephemeral
-        configuration.protocolClasses = [WebResearchFixtureURLProtocol.self]
-        let session = URLSession(configuration: configuration)
         let recorder = TaskUsageRecorder()
-        let synthesizer = try OpenAIWebResearchSynthesizer(
-            apiKey: "test-key",
-            model: "test-model",
-            endpoint: URL(string: "https://api.openai.com/v1/responses")!,
-            session: session,
+        let synthesizer = OpenAIWebResearchSynthesizer(
+            client: fixture.client,
+            taskContext: ModelRouteFixtures.standardContext,
             usageRecorder: recorder
         )
         let prompt = WebResearchSynthesisPrompt(
@@ -115,8 +116,65 @@ struct WebResearchSynthesizerTests {
         #expect(summary.reportedOutputTokens == 25)
         #expect(summary.reportedTotalTokens == 105)
         #expect(summary.records.first?.kind == .webResearchSynthesis)
-        #expect(summary.records.first?.model == "test-model")
+        #expect(summary.records.first?.model == "research.synthesize")
         #expect(summary.records.first?.tokenSource == .reported)
+
+        let sent = try recorded.only
+        #expect(sent.path == "/v1/research/synthesize")
+        #expect(sent.authorization == "Bearer test-access-token")
+        #expect(sent.idempotencyKey?.isEmpty == false)
+        #expect(sent.json["task_id"] as? String == "task-fixture-1")
+        #expect(sent.json["retention"] as? String == "standard")
+        #expect(sent.json["response_schema_name"] as? String == "web_research_note")
+        // SONNY-130's sixth requirement, on the bytes.
+        let wire = sent.text.lowercased()
+        for forbidden in ["openai", "api.openai.com", "gpt-", "test-model"] {
+            #expect(!wire.contains(forbidden), "request body names \(forbidden)")
+        }
+    }
+
+    /// The wrapping row I depends on survives the hop, and it survives it **as separate messages**.
+    ///
+    /// §4.2 obliges the server to forward the text without editing, re-wrapping or re-ordering it;
+    /// this is the client half of that — the trusted instruction and each observed source leave here
+    /// as their own message, with their own delimiters, in order.
+    @Test
+    @MainActor
+    func theTrustedAndObservedMessagesReachTheWireSeparatelyAndInOrder() async throws {
+        let fixture = SignedInBackendFixture()
+        let recorded = RecordedBackendRequests()
+        fixture.register { request in
+            recorded.append(request)
+            return ModelRouteFixtures.reply(ModelRouteFixtures.textRouteJSON(outputText: Self.noteJSON))
+        }
+        defer { fixture.unregister() }
+
+        let prompt = WebResearchSynthesisPrompt(
+            trustedPlan: AgentPlan(summary: "Summarize.", requiresConfirmation: true, steps: []),
+            systemText: "SYSTEM",
+            trustedUserInstructionText:
+                "\(WebResearchPromptBuilder.trustedInstructionBeginDelimiter)\nSummarize.",
+            observedContentTexts: [
+                "\(WebResearchPromptBuilder.observedBeginDelimiter) id=one\nObserved one.",
+                "\(WebResearchPromptBuilder.observedBeginDelimiter) id=two\nObserved two.",
+            ]
+        )
+        _ = try await OpenAIWebResearchSynthesizer(
+            client: fixture.client,
+            taskContext: ModelRouteFixtures.standardContext
+        ).synthesize(prompt: prompt)
+
+        let messages = try #require(try recorded.only.json["messages"] as? [[String: Any]])
+        #expect(messages.count == 4)
+        #expect(messages.map { $0["role"] as? String } == ["system", "user", "user", "user"])
+        #expect(messages[0]["text"] as? String == "SYSTEM")
+        #expect((messages[1]["text"] as? String)?
+            .contains(WebResearchPromptBuilder.trustedInstructionBeginDelimiter) == true)
+        #expect((messages[2]["text"] as? String)?
+            .contains(WebResearchPromptBuilder.observedBeginDelimiter) == true)
+        #expect((messages[3]["text"] as? String)?.contains("Observed two.") == true)
+        // The trusted message carries none of the observed content, which is the boundary itself.
+        #expect((messages[1]["text"] as? String)?.contains("Observed one.") == false)
     }
 
     @Test
@@ -241,16 +299,17 @@ struct WebResearchSynthesizerTests {
         #expect(observedLines.filter { hasScalarPrefix($0, WebResearchPromptBuilder.observedBeginDelimiter) }.count == 1)
         #expect(observedLines.filter { hasScalarPrefix($0, WebResearchPromptBuilder.observedEndDelimiter) }.count == 1)
 
-        let requestBody = prompt.requestBody(model: "test-model")
-        let input = try #require(requestBody["input"] as? [[String: Any]])
-        #expect(input.count == 3)
-        #expect(input[0]["role"] as? String == "system")
-        #expect(input[1]["role"] as? String == "user")
-        #expect(input[2]["role"] as? String == "user")
-        #expect(try messageText(input[1]).contains(WebResearchPromptBuilder.trustedInstructionBeginDelimiter))
-        #expect(try messageText(input[2]).contains(WebResearchPromptBuilder.observedBeginDelimiter))
-        #expect(try messageText(input[1]).contains("/tmp/pwned.md") == false)
-        #expect(try messageText(input[2]).contains("/tmp/pwned.md"))
+        // `prompt.messages` replaced `prompt.requestBody(model:)` (SONNY-130): the provider's own
+        // envelope — the model, the `input` wrapper, the `text.format` block — is the server's to
+        // build now, and what leaves the Mac is the ordered, role-tagged text §4.2 specifies. The
+        // assertions are the same ones, one wrapper thinner.
+        let messages = prompt.messages
+        #expect(messages.count == 3)
+        #expect(messages.map(\.role) == ["system", "user", "user"])
+        #expect(messages[1].text.contains(WebResearchPromptBuilder.trustedInstructionBeginDelimiter))
+        #expect(messages[2].text.contains(WebResearchPromptBuilder.observedBeginDelimiter))
+        #expect(messages[1].text.contains("/tmp/pwned.md") == false)
+        #expect(messages[2].text.contains("/tmp/pwned.md"))
     }
 
     @Test
@@ -280,51 +339,6 @@ struct WebResearchSynthesizerTests {
         """))
     }
 
-    private func messageText(_ message: [String: Any]) throws -> String {
-        let content = try #require(message["content"] as? [[String: Any]])
-        let first = try #require(content.first)
-        return try #require(first["text"] as? String)
-    }
-
-    private static let noteResponseWithUsageJSON = #"""
-    {
-      "id": "resp_web",
-      "output_text": "{\"title\":\"Fixture Note\",\"summary\":\"Short summary.\",\"keyPoints\":[\"One\"],\"citations\":[\"Citation\"]}",
-      "usage": {
-        "input_tokens": 80,
-        "output_tokens": 25,
-        "total_tokens": 105
-      }
-    }
-    """#
-}
-
-private final class WebResearchFixtureURLProtocol: URLProtocol {
-    nonisolated(unsafe) static var handler: ((URLRequest) throws -> (HTTPURLResponse, Data))?
-
-    override class func canInit(with request: URLRequest) -> Bool {
-        true
-    }
-
-    override class func canonicalRequest(for request: URLRequest) -> URLRequest {
-        request
-    }
-
-    override func startLoading() {
-        guard let handler = Self.handler else {
-            client?.urlProtocol(self, didFailWithError: PlannerError.missingOutputText)
-            return
-        }
-
-        do {
-            let (response, data) = try handler(request)
-            client?.urlProtocol(self, didReceive: response, cacheStoragePolicy: .notAllowed)
-            client?.urlProtocol(self, didLoad: data)
-            client?.urlProtocolDidFinishLoading(self)
-        } catch {
-            client?.urlProtocol(self, didFailWithError: error)
-        }
-    }
-
-    override func stopLoading() {}
+    private static let noteJSON =
+        #"{"title":"Fixture Note","summary":"Short summary.","keyPoints":["One"],"citations":["Citation"]}"#
 }

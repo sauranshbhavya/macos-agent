@@ -706,6 +706,11 @@ struct ProductShellTests {
             "localDataDeletionService", "memorySettingsStore", "memoryPolicyProvider",
             "priorTaskContextStore", "taskUsageRecorder", "plannerProviderRegistry",
             "plannerSelection", "userDefaults", "whitelist", "routineScheduleTimer", "wakeObserver",
+            // The one HTTP client the process holds (SONNY-130). A collaborator like the stores
+            // above, and emphatically not local data: the session it holds lives in the Keychain,
+            // which `deleteLocalData` deliberately leaves alone — signing out and wiping local data
+            // are different things, and branch 7's whole argument is that conflating them is a bug.
+            "backendClient",
 
             // 2. Written by `deleteLocalData` itself, immediately after the wipe returns. Clearing
             // them inside the wipe would be undone one line later.
@@ -737,8 +742,14 @@ struct ProductShellTests {
             // "Don't save this task" back off because someone erased their history would discard a
             // choice they deliberately made. It is reset by `finishRecordingPolicyIfSettled()` on
             // every terminal state instead.
+            // `currentTaskID` sits here rather than in the cleared group, and the reason is what
+            // it is for (SONNY-130). It is the key this run's requests are filed under, on the
+            // backend and in `CompletedTaskRecord.id`; the wipe guards on `!isRunning`, so the run
+            // it names has finished and nothing will use it again until `beginNewTaskIdentity()`
+            // mints the next one. Clearing it would mean inventing an "no task" state for a
+            // non-optional field that every run overwrites anyway.
             "command", "lastCommand", "isRunning", "activeTaskOrigin", "lastAssessedScope",
-            "taskRecordingPolicy",
+            "taskRecordingPolicy", "currentTaskID",
             "isPreparingVoiceRecording", "isRecordingVoice", "isTranscribingVoice",
             // `voiceRecordingPurpose` sits beside `voiceRecordingOrigin` for the same reason: both
             // describe the recording in progress, written at its start and read at its end, and
@@ -1540,12 +1551,17 @@ struct ProductShellTests {
 
         // **F4: an answer's transcription resets nothing of the paused task's.** The usage reset and
         // the summary clear are the `.command` arm's alone, inside the completion.
+        // **The reset is spelled `beginNewTaskIdentity()` since SONNY-130**, which also mints the
+        // run's `task_id` — the two have identical lifetimes, so they are one call rather than two
+        // lines that have to be remembered together. The property this asserts is unchanged: the
+        // reset is the `.command` arm's alone, and an answer's transcription resets nothing of the
+        // paused task's.
         let commandArm = try MacAgentSource.region(of: completion, from: "case .command:", to: "case .clarificationAnswer:")
-        #expect(MacAgentSource.count(of: "taskUsageRecorder.reset()", inText: commandArm) == 1)
-        #expect(MacAgentSource.count(of: "taskUsageSummary = .empty", inText: commandArm) == 1)
+        #expect(MacAgentSource.count(of: "beginNewTaskIdentity()", inText: commandArm) == 1)
         #expect(MacAgentSource.count(of: "\"Transcribing voice command\"", inText: commandArm) == 1)
-        #expect(MacAgentSource.count(of: "taskUsageRecorder.reset()", inText: completion) == 1, "no reset outside the command arm")
-        #expect(MacAgentSource.count(of: "taskUsageSummary = .empty", inText: completion) == 1)
+        #expect(MacAgentSource.count(of: "beginNewTaskIdentity()", inText: completion) == 1, "no reset outside the command arm")
+        #expect(MacAgentSource.count(of: "taskUsageRecorder.reset()", inText: completion) == 0, "the reset goes through the one helper")
+        #expect(MacAgentSource.count(of: "taskUsageSummary = .empty", inText: completion) == 0)
         let summaryClear = try MacAgentSource.region(
             of: completion,
             from: "if case .command = voiceRecordingPurpose {",
@@ -3470,6 +3486,10 @@ private func makeProductShellFixture(
             settingsStore: clipboardSettingsStore
         ),
         localDataDeletionService: LocalDataDeletionService(fileURLs: []),
+        // SONNY-130: undefaulted like the stores, and for a worse reason — this client holds the
+        // Keychain session every packaged build on this Mac shares. Hermetic: no environment, so
+        // every request fails before a URL is built, and an in-memory Keychain of its own.
+        backendClient: makeHermeticBackendClient(),
         priorTaskContextStore: PriorTaskContextStore(),
         taskUsageRecorder: TaskUsageRecorder(),
         userDefaults: userDefaults,

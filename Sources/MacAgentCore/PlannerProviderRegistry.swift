@@ -23,8 +23,28 @@ public struct PlannerProvider: Identifiable, Sendable {
     public let id: String
     /// Human-readable name for notices and (later) settings surfaces.
     public let displayName: String
-    private let construct: @MainActor @Sendable (any TaskUsageRecording) throws -> any Planning
+    private let construct: Construct
 
+    /// **Two shapes, because two kinds of planner genuinely exist right now** (SONNY-130).
+    ///
+    /// A planner that runs through Sonny's backend needs the run's `task_id` and `retention` — the
+    /// contract requires both on every content-bearing request and defaults neither (§2.4.2) — and
+    /// those are facts about *this run*, so they arrive at construction rather than at registration.
+    /// A planner that still holds its own provider credential needs neither, because it does not
+    /// talk to Sonny's backend at all.
+    ///
+    /// That second shape is not a legacy allowance kept for convenience: `CerebrasPlanner` is on
+    /// this ticket's never-touch list and reads `CEREBRAS_API_KEY` today, and
+    /// `feature/row-12-provider-router` is the branch that moves it. When it does, this enum
+    /// collapses to one case and both initializers below become one.
+    private enum Construct: Sendable {
+        case local(@MainActor @Sendable (any TaskUsageRecording) throws -> any Planning)
+        case throughTheGateway(
+            @MainActor @Sendable (BackendTaskContext, any TaskUsageRecording) throws -> any Planning
+        )
+    }
+
+    /// A planner that holds its own provider credential and needs nothing from the run.
     public init(
         id: String,
         displayName: String,
@@ -32,12 +52,35 @@ public struct PlannerProvider: Identifiable, Sendable {
     ) {
         self.id = id
         self.displayName = displayName
-        self.construct = construct
+        self.construct = .local(construct)
     }
 
+    /// A planner that runs through Sonny's backend and therefore needs this run's task context.
+    public init(
+        id: String,
+        displayName: String,
+        throughTheGateway: @escaping @MainActor @Sendable (
+            BackendTaskContext, any TaskUsageRecording
+        ) throws -> any Planning
+    ) {
+        self.id = id
+        self.displayName = displayName
+        self.construct = .throughTheGateway(throughTheGateway)
+    }
+
+    /// `taskContext` is handed to every provider and used by the ones that need it. A provider that
+    /// holds its own credential ignores it, rather than the registry having to know which is which.
     @MainActor
-    public func makePlanner(usageRecorder: any TaskUsageRecording) throws -> any Planning {
-        try construct(usageRecorder)
+    public func makePlanner(
+        taskContext: BackendTaskContext,
+        usageRecorder: any TaskUsageRecording
+    ) throws -> any Planning {
+        switch construct {
+        case .local(let make):
+            return try make(usageRecorder)
+        case .throughTheGateway(let make):
+            return try make(taskContext, usageRecorder)
+        }
     }
 }
 
@@ -118,12 +161,16 @@ public struct PlannerProviderRegistry: Sendable {
     @MainActor
     public func makePlanner(
         selection: String?,
+        taskContext: BackendTaskContext,
         usageRecorder: any TaskUsageRecording
     ) throws -> SelectedPlanner {
         let resolution = resolve(selection: selection)
         guard Self.normalize(resolution.provider.id) != Self.normalize(defaultProvider.id) else {
             return SelectedPlanner(
-                planner: try defaultProvider.makePlanner(usageRecorder: usageRecorder),
+                planner: try defaultProvider.makePlanner(
+                    taskContext: taskContext,
+                    usageRecorder: usageRecorder
+                ),
                 provider: defaultProvider,
                 fallbackNotice: resolution.fallbackNotice
             )
@@ -131,13 +178,19 @@ public struct PlannerProviderRegistry: Sendable {
 
         do {
             return SelectedPlanner(
-                planner: try resolution.provider.makePlanner(usageRecorder: usageRecorder),
+                planner: try resolution.provider.makePlanner(
+                    taskContext: taskContext,
+                    usageRecorder: usageRecorder
+                ),
                 provider: resolution.provider,
                 fallbackNotice: nil
             )
         } catch {
             return SelectedPlanner(
-                planner: try defaultProvider.makePlanner(usageRecorder: usageRecorder),
+                planner: try defaultProvider.makePlanner(
+                    taskContext: taskContext,
+                    usageRecorder: usageRecorder
+                ),
                 provider: defaultProvider,
                 fallbackNotice: "The \(resolution.provider.displayName) planner isn't available, "
                     + "so Sonny used \(defaultProvider.displayName) instead. "
@@ -152,12 +205,18 @@ public struct PlannerProviderRegistry: Sendable {
 }
 
 extension PlannerProviderRegistry {
-    /// The shipped registry. OpenAI is the default; the Cerebras-served open-weights planner
-    /// is the explicitly-selectable A/B alternate (SONNY-86). No flip logic exists anywhere —
-    /// changing the default is a founder decision, not a code path.
-    public static let `default`: PlannerProviderRegistry = {
-        var registry = PlannerProviderRegistry(defaultProvider: OpenAIPlanner.provider)
+    /// The shipped registry. The default planner is the one that runs through Sonny's backend; the
+    /// Cerebras-served open-weights planner is the explicitly-selectable A/B alternate (SONNY-86).
+    /// No flip logic exists anywhere — changing the default is a founder decision, not a code path.
+    ///
+    /// **A function of the backend client rather than a `static let`** (SONNY-130): the default
+    /// provider constructs a planner that talks to Sonny's backend, and there is exactly one client
+    /// in the process. Taking it here rather than reaching for a shared instance is the same rule
+    /// `SonnyBackendClient.init` states for its own token store — the shared thing is passed, never
+    /// defaulted, so no call site can acquire it by saying nothing.
+    public static func `default`(client: SonnyBackendClient) -> PlannerProviderRegistry {
+        var registry = PlannerProviderRegistry(defaultProvider: OpenAIPlanner.provider(client: client))
         registry.register(CerebrasPlanner.provider)
         return registry
-    }()
+    }
 }

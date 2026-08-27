@@ -38,7 +38,7 @@ enum VisionTestContext {
             workspaceStore: WorkspaceStore(fileURL: scratchURL("workspaces.json")),
             webPageLoader: .live(),
             webSearchProvider: UnavailableWebSearchProvider(),
-            webResearchSynthesizer: EnvironmentWebResearchSynthesizer(),
+            webResearchSynthesizer: UnavailableWebResearchSynthesizer(),
             clipboardHistoryStore: ClipboardHistoryStore(fileURL: scratchURL("clipboard.json")),
             snippetStore: SnippetStore(fileURL: scratchURL("snippets.json")),
             runningAppSwitcher: WorkspaceRunningAppSwitcher(),
