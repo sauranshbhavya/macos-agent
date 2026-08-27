@@ -274,7 +274,14 @@ final class VisionSessionRunner {
                         pixelWidth: sentImage.pixelWidth,
                         pixelHeight: sentImage.pixelHeight,
                         redactionReport: payload.report,
-                        iteration: iteration
+                        iteration: iteration,
+                        // The same value this iteration's own `visionSessionDidProgress` call
+                        // carries, from the same expression, so the HUD and this panel cannot
+                        // disagree about how long the session is. (Named rather than measured in
+                        // lines: this said "three lines up" of a call eighteen lines up, and a
+                        // distance drifts on the next edit while a symbol does not — PR #140
+                        // review, F3.)
+                        maximumIterations: containment.limits.maximumIterations
                     )
                 )
                 guard allowed else {

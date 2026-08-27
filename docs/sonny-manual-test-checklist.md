@@ -132,8 +132,9 @@ answer instead of the batch marker.** §3d-bis's tooltip row doubted that `.help
 reachable in this widget at all; you hovered the tick and the cross and said "yes tooltips
 appeared". That row keeps the doubt's history rather than being quietly ticked — the
 `confirmed <date>` convention at the top of this file, applied to a doubt resolved rather than to a
-confirmation broken. The source comments that recorded the doubt are outside this file and are
-SONNY-295's to correct.
+confirmation broken. The source comments that recorded the doubt were outside this file;
+**SONNY-295 corrected them on 2026-08-27** — two in `FloatingWidgetView.swift` and a third in
+`AgentActivityPresentation.swift` that the ticket had not named and a sweep by claim found.
 
 **What this pass did not cover, said plainly so the new ticks are not read wider than they are.**
 Forty-eight rows were unchecked before it (`grep -cE '^- \[ \]'
@@ -479,6 +480,52 @@ the approval reached no widget surface at all, so the run looked like it had sta
       control, open Command Center: its panel says **Deny and Allow** again, with no session row
       above it. Deny cancels the run as it always did
 
+### 3c-ter. A screen-control session the widget did not start (new 2026-08-27, SONNY-299)
+
+The HUD used to be gated on the run having been started *from the widget*, so a screen session
+started anywhere else drove the screen with the widget showing nothing at all — no statement of what
+Sonny was controlling, no Pause, no Stop. The emergency hotkey (Ctrl-Opt-Esc) still worked; nothing
+on screen said so. Both rows are about the same panel, reached by the one door that reaches it.
+
+**Two things that are not failures, said first so neither reads as one** (PR #140 review, F5 —
+both rows over-claimed in the direction that manufactures a false failure report):
+
+- **The HUD yields to a question.** While one is parked — an approval, and in Safe mode the capture
+  review or a delegation — the panel on screen is that question and not the HUD, and that is
+  correct: since SONNY-255 those panels carry the session's identity line and its step count
+  themselves, so the session is still named. The HUD returns the moment you answer.
+- **Run again re-asks the planner rather than replaying the first run**, so the second run may
+  resolve to something that is not a screen session at all. If nothing controls anything, that is
+  the planner's answer and not this fix. Retry with a command that is plainly screen-shaped — "in
+  Safari, open the Bookmarks sidebar" — and check the HUD on that one.
+
+- [ ] **(new 2026-08-27, SONNY-299)** Run one screen-control task from the widget and let it finish.
+      Then open **Command Center → Tasks**, open that task's row, and press **Run again**. Whenever
+      the second session is running with nothing parked on it, the widget must show the HUD —
+      **"Sonny is controlling Safari"**, the action line, the step count, **Pause** and **Stop** —
+      exactly as it does for a session you started by typing into the widget. Before this fix the
+      second session showed nothing at all: the ordinary pill, or the collapsed capsule
+- [ ] **(new 2026-08-27, SONNY-299)** During that second session press the HUD's **Pause**. The
+      widget swaps to the **paused panel** — "Sonny paused controlling Safari…", with **Resume** and
+      **End** — which is where Resume lives; the HUD itself carries Pause and Stop only. Press
+      **Resume** and let the session finish. The controls have to actually work from this door, not
+      merely be drawn. Pause takes effect at the top of the next step rather than instantly, so the
+      HUD staying up for a moment before the paused panel appears is the design and not a lag
+
+### 3c-quater. Safe mode's capture review says "Step 1 of 12" (new 2026-08-27, SONNY-303)
+
+`VisionCapturePreview` carried the iteration and no cap, and the panel put the app's *name* where the
+cap belongs — so the pre-send review read "Step 2 of Safari". The founder's decision of 2026-08-27
+was to add the cap to the type rather than drop the "of …" half, so the line now goes through the
+same owner the HUD and both approval panels read. The shipping cap is **12**
+(`VisionSessionLimits.default.maximumIterations`), so that is the number to expect.
+
+- [ ] **(new 2026-08-27, SONNY-303)** Put Sonny in **Safe** mode and start a screen-control task. At
+      the capture review — the panel showing the picture before it is sent — the small line at the
+      bottom left must read **"Step 1 of 12"**, two numbers. Anything with an app name after the
+      "of" is the defect. Press **Send**, answer the action approval, and on the next capture review
+      the same line must read **"Step 2 of 12"** — the left number moves, the right one does not
+
 ### 3d. Clarification (no wireframe — best-effort, extra scrutiny warranted)
 Provoke a follow-up question with an intentionally underspecified command — e.g. "open my
 workspace" when you have 2+ saved workspaces and don't name one, or "zip my files" without saying
@@ -632,11 +679,19 @@ case. Relaunch and open the widget.
       that a tooltip appears on each is what was
       observed; *what* the two say is not a manual finding but the code's own constants,
       `ResumeOfferPresentation.continueLabel` and `declineLabel`, "Continue" and "Don't ask again"
-      (`Sources/MacAgent/AgentActivityPresentation.swift:471` and `:482` at `5339640`). What is now
-      stale is the source's reading rather than this row — `WidgetResumeOfferPanel`'s doc comment
-      still says the tooltip "may simply not fire" and that "the plain reading is that a sighted
-      user loses the words". That file was outside what SONNY-294 could touch; correcting it is
-      SONNY-295
+      (`Sources/MacAgent/AgentActivityPresentation.swift:471` and `:482` at `5339640`). What was
+      stale was the source's reading rather than this row — `WidgetResumeOfferPanel`'s doc comment
+      still said the tooltip "may simply not fire" and that "the plain reading is that a sighted
+      user loses the words". That file was outside what SONNY-294 could touch; **SONNY-295 corrected
+      it on 2026-08-27**, in that panel's doc comment and in `ResumeOfferPresentation.continueLabel`'s,
+      which carried the same doubt in a second file. The mic button's own claim is left standing on
+      purpose: it is a different control, and one hover here says nothing about it
+- [ ] **(new 2026-08-27, SONNY-295)** The two **other** tooltips in the widget have never been
+      hovered by anyone, and one pass answers them: hover the **compact capsule** (the small pill
+      Sonny shrinks to when idle) — it should say **"Open Sonny"** — and, with a follow-up question
+      on screen, hover the clarification panel's **cancel** control. Say for each whether a tooltip
+      appears. These two predate the finding above and were left in place on a "free if it works"
+      footing; nothing depends on them, so this is filling in the record rather than checking a fix
 - [x] **(new 2026-08-25, SONNY-282 — replaces the 2026-08-23 row)** Press the cross **once**, then
       quit and relaunch Sonny **several times**. The offer for that task must **never come back**.
       This is the defect: you pressed it three times across three relaunches on 2026-08-25 and it

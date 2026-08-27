@@ -976,7 +976,10 @@ struct FloatingWidgetView: View {
 
     /// The pointer arrived on the mic. Shown as a real layout row (see `micHoverHintRow`) rather
     /// than a `.help()` tooltip — `.help()` already proved unreliable in this exact app once before
-    /// (the Insights weekly chart), and was confirmed unreliable here too, not just assumed.
+    /// (the Insights weekly chart), and was confirmed unreliable **for this button** too, not just
+    /// assumed. (Those two words are the scope, added by PR #140's review, F4: it read as a claim
+    /// about the whole widget, and `WidgetResumeOfferPanel` records a `.help` that demonstrably
+    /// fires on its own two controls. Both observations are real and neither generalises.)
     ///
     /// **Called from the arrival itself, not from a change of "the pointer is on the mic"
     /// (SONNY-179).** SONNY-177 shipped this as `.onChange(of:)` over a `@State` boolean the
@@ -1465,7 +1468,20 @@ private struct WidgetCaptureReviewPanel: View {
             }
 
             HStack(spacing: 8) {
-                Text("Step \(preview.iteration) of \(preview.appDisplayName)")
+                // **The shared owner's sentence, not a hand-written one** (SONNY-303). This line
+                // interpolated `preview.appDisplayName` where the iteration cap belongs, so Safe
+                // mode's pre-send review read "Step 2 of Safari". The cap was genuinely missing from
+                // `VisionCapturePreview` and appears to have been substituted for rather than
+                // dropped; it is a field on the type now, and this reads it through the same
+                // `ScreenControlSessionPresentation.stepLine` the HUD and both approval panels use,
+                // which is the point — one sentence, one owner. The old text is not quoted here on
+                // purpose: `WidgetSessionApprovalPanelTests` counts that literal across this whole
+                // file and the count is the guard, so a comment carrying a copy of it would be
+                // arguing with the scan about what the file contains.
+                Text(ScreenControlSessionPresentation.stepLine(
+                    iteration: preview.iteration,
+                    maximumIterations: preview.maximumIterations
+                ))
                     .font(WidgetType.captionSmall)
                     .foregroundStyle(WidgetTheme.textMuted)
                     .lineLimit(1)
@@ -1918,22 +1934,40 @@ private struct WidgetResultPanel: View {
 /// anything — a cross there would say something the button does not. So the divergence is stated
 /// rather than propagated.
 ///
-/// **What the words cost, and the honest state of where they went.** `.accessibilityLabel` keeps the
-/// full sentence naming the task, which matters *more* once the button shows no text at all, and
-/// that one is solid. `.help` carries the words — "Continue", "Don't ask again" — on hover, and
-/// **that one may simply not fire**: `micHintPointerEnteredMic` in this same file records `.help()`
-/// as having been "confirmed unreliable here too, not just assumed", which is why the mic's hint is
-/// a real layout row rather than a tooltip. **Two** other `.help` calls in this file predate that
-/// finding and were left in place — the compact capsule's "Open Sonny" and the clarification
-/// panel's cancel — and these two join them on the same footing: free if it works, nothing lost if
-/// it does not. (Two, not the three this said before PR #107's F3. A plain search answers four,
-/// because two of the hits are doc-comment mentions of `.help()` rather than calls; the live count
-/// at the branch point is `git grep -n "help(" -- Sources/MacAgent/FloatingWidgetView.swift` at
-/// `98c50c8` with the comment-prefixed lines dropped, which is 2. SONNY-251 counts 4 for the
-/// current head, being those two plus these two, and the two figures agree.) **So the plain reading is that a sighted user loses the words**, which
-/// is the founder's decision costing what it costs rather than a gap papered over with a mechanism
-/// that might not run. The manual item asks specifically whether the tooltip appears at all; a real
-/// hover row like the mic's is the remedy if it does not, and that is a design change, not a fix.
+/// **What the words cost, and where they went — the doubt this paragraph recorded has been
+/// answered** (SONNY-295; observed by the founder 2026-08-26, recorded by SONNY-294).
+/// `.accessibilityLabel` keeps the full sentence naming the task, which matters *more* once the
+/// button shows no text at all, and that one was never in question. `.help` carries the words —
+/// "Continue", "Don't ask again" — on hover, and **it fires**: the founder hovered the tick and the
+/// cross on the packaged app at `5339640` and reported "yes tooltips appeared". That is the first
+/// direct evidence in this project's record that a `.help` tooltip reaches anything in this widget
+/// at all, and the §3d-bis checklist row that carried the question carries the answer.
+///
+/// **What that establishes is exactly that, and it is deliberately not generalised.** One pass, two
+/// buttons, one Mac. `micHintPointerEnteredMic`, further up this file, still records `.help()` as
+/// unreliable and that sentence is left standing on purpose: it is about the *mic button*, a
+/// different control in a slot this panel competes with, and a hover that worked here is evidence
+/// about the hover that worked, not about a mechanism. So the two statements do not contradict each
+/// other, and neither is written as "`.help()` is reliable in this widget", which is the claim
+/// nothing in the record supports.
+///
+/// **Two** other `.help` calls in this file predate the finding and were left in place — the compact
+/// capsule's "Open Sonny" and the clarification panel's cancel — and those two are still unhovered
+/// by anyone; §3d-bis now asks about them too, since one pass answers it. (Two, not the three this
+/// said before PR #107's F3. That correction's own figures were about `98c50c8`, where a plain
+/// search answered four — two calls plus two doc-comment mentions — and the live count was 2. At
+/// this head the live count is 4, which is those two plus this panel's pair:
+/// `git grep -cE '^[[:space:]]*\.help\(' -- Sources/MacAgent/FloatingWidgetView.swift` → 4 at
+/// `83355ff`. The POSIX class rather than `\s` is not decoration — `git grep`'s ERE engine answers
+/// **0** for the same pattern written with `\s`, exit 1 and no output, which reads exactly like a
+/// file with no `.help` call in it. A plain search over this file answers more than four now and
+/// will keep drifting, because this correction added doc-comment mentions of its own; the call
+/// count is the one worth quoting.)
+///
+/// **So a sighted user does not lose the words.** What stood here concluded the opposite, on the
+/// strength of the doubt, and named a remedy — a real hover row like the mic's, "a design change,
+/// not a fix" — that is not owed. The arc is kept rather than deleted, the way the checklist row
+/// keeps it: doubted 2026-08-23, observed reachable 2026-08-26.
 ///
 /// **The cross means "don't ask again", and the ambiguity the previous paragraph here worried about
 /// was settled by the founder's manual pass — against the design** (SONNY-282, decision 2026-08-25).
