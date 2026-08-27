@@ -254,7 +254,7 @@ struct BackendTaskIdentityTests {
     }
 }
 
-/// Every `BackendTaskContext` the registry handed a planner, in order.
+/// Every `BackendTaskContext` the planner factory was called with, in order.
 private final class CapturedTaskContexts: @unchecked Sendable {
     private let lock = NSLock()
     private var recorded: [BackendTaskContext] = []
@@ -292,17 +292,11 @@ private final class RecordingStubPlanner: Planning {
     }
 }
 
-private func makeRegistry(capturing seen: CapturedTaskContexts) -> PlannerProviderRegistry {
-    PlannerProviderRegistry(
-        defaultProvider: PlannerProvider(
-            id: "primary",
-            displayName: "Primary",
-            throughTheGateway: { taskContext, _ in
-                seen.append(taskContext)
-                return RecordingStubPlanner()
-            }
-        )
-    )
+private func makePlannerCapturing(_ seen: CapturedTaskContexts) -> PlannerFactory {
+    { taskContext, _ in
+        seen.append(taskContext)
+        return RecordingStubPlanner()
+    }
 }
 
 @MainActor
@@ -390,8 +384,7 @@ private func makeViewModel(
         backendClient: backendClient ?? makeHermeticBackendClient(),
         priorTaskContextStore: PriorTaskContextStore(),
         taskUsageRecorder: TaskUsageRecorder(),
-        plannerProviderRegistry: makeRegistry(capturing: seen),
-        plannerSelection: nil,
+        makePlanner: makePlannerCapturing(seen),
         userDefaults: userDefaults,
         // Scoped to this test's own directory, the way five other fixtures in this target do it —
         // so the scheduled test's `web_to_markdown` step resolves an output path that passes

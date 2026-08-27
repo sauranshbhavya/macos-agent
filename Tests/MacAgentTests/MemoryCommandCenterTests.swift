@@ -606,7 +606,7 @@ struct MemoryCommandCenterTests {
                     ) async {
                 """
             ),
-            ("makeDelegationRunner", "func makeDelegationRunner() throws -> AgentRunner {")
+            ("makeDelegationRunner", "func makeDelegationRunner() -> AgentRunner {")
         ]
 
         var runnersSeen = 0

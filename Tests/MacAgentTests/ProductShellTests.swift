@@ -704,8 +704,11 @@ struct ProductShellTests {
             "resumableTaskStore",
             "clipboardHistoryMonitor", "finderRevealer",
             "localDataDeletionService", "memorySettingsStore", "memoryPolicyProvider",
-            "priorTaskContextStore", "taskUsageRecorder", "plannerProviderRegistry",
-            "plannerSelection", "userDefaults", "whitelist", "routineScheduleTimer", "wakeObserver",
+            // `plannerProviderRegistry` and `plannerSelection` stood here and were deleted with the
+            // client-side router (SONNY-132). `makePlanner` replaces them: a closure this view model
+            // holds, no more local data than the stores above it are.
+            "priorTaskContextStore", "taskUsageRecorder", "makePlanner",
+            "userDefaults", "whitelist", "routineScheduleTimer", "wakeObserver",
             // The one HTTP client the process holds (SONNY-130). A collaborator like the stores
             // above, and emphatically not local data: the session it holds lives in the Keychain,
             // which `deleteLocalData` deliberately leaves alone — signing out and wiping local data
@@ -720,8 +723,10 @@ struct ProductShellTests {
             // silently reset the user's preferences would be a different feature.
             "errorIsPersistent", "usePointerCursors", "displayFullNames", "interactionMode",
             "voiceHotKeyStatus", "voiceHotKeyReady", "permissionItems", "clipboardHistoryPollFailure",
+            // `plannerFallbackNotice` stood beside `scheduledRunNotice` and is gone with the widget
+            // strip that rendered it (SONNY-132); `AgentViewModel` enumerates where its four states
+            // went.
             "hasCompletedFirstApproval", "widgetPresentationRequest", "scheduledRunNotice",
-            "plannerFallbackNotice",
             // `memorySettings` sits here for the sharpest version of the group's reason: a wipe
             // that switched memory back on would re-enable recording for the user who reached for
             // the most privacy-minded control in the app. It lives in `UserDefaults`, which the

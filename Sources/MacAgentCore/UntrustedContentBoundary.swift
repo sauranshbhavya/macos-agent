@@ -344,9 +344,13 @@ public enum UntrustedContentBoundary {
     /// Traced properly: every caller of `neutralizingDelimiters` — `escape`, `escapeURLValue`,
     /// `escapeAttribute`, `trustedInstruction`, `observedContent`, and
     /// `PriorTaskContext.escapeForPlanner` — produces prompt text, and every one of those strings
-    /// is handed to a model API and to nothing else (`OpenAIPlanner.requestBody`,
-    /// `CerebrasPlanner.requestBody`, `VisionModelClient.decide`,
-    /// `WebResearchSynthesisPrompt.requestBody`). Nothing persists a prompt and nothing renders
+    /// is handed to a model API and to nothing else (`OpenAIPlanner.messages`,
+    /// `VisionModelClient.decide`,
+    /// `WebResearchSynthesisPrompt.requestBody`). **This named `CerebrasPlanner.requestBody` as a
+    /// fourth site until SONNY-132 deleted that class**, and `OpenAIPlanner.requestBody` as the
+    /// first until SONNY-130 replaced it with `messages`; the enumeration is what makes the negative
+    /// below checkable, so a stale member of it is the one thing here worth keeping current.
+    /// Nothing persists a prompt and nothing renders
     /// one; the single place a request body travels further is `AIUsageRecord.responses`'
     /// `estimatedInputText`, which `AIUsageEstimator.estimateTextTokens` turns into a count
     /// before the record stores anything.

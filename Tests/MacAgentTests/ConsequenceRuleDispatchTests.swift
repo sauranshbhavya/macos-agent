@@ -5,7 +5,7 @@ import MacAgentTestSupport
 @testable import MacAgentCore
 
 /// The consequence rule driven through the REAL dispatch path, end to end — typed command in,
-/// planner (a fake provider registered through the real registry), `performStart`, the real
+/// planner (a stub handed to the real planner-factory seam), `performStart`, the real
 /// assessment, the real gate, the real execution, file on disk out.
 ///
 /// This suite exists because of the 2026-08-13 manual-pass finding: row C's relaxation shipped
@@ -259,7 +259,7 @@ private struct DispatchFixture {
 }
 
 /// The real view model with three substitutions, each named: a fake planner provider registered
-/// through the real registry (so the typed-command branch of `performStart` runs without a network
+/// through the real planner seam (so the typed-command branch of `performStart` runs without a network
 /// key), the fixture root as the whitelist (so the draft is writable hermetically), and the
 /// hermetic side-effect seams every view-model suite injects.
 @MainActor
@@ -275,11 +275,6 @@ private func makeDispatchFixture() throws -> DispatchFixture {
     userDefaults.removePersistentDomain(forName: suiteName)
 
     let workspaceStore = WorkspaceStore(fileURL: root.appendingPathComponent("workspaces.json"))
-    let registry = PlannerProviderRegistry(
-        defaultProvider: PlannerProvider(id: "draft-stub", displayName: "Draft Stub") { _ in
-            DraftPlanner(output: draftOutput)
-        }
-    )
     let viewModel = AgentViewModel(
         routineStore: RoutineStore(fileURL: root.appendingPathComponent("routines.json")),
         workspaceStore: workspaceStore,
@@ -329,8 +324,7 @@ private func makeDispatchFixture() throws -> DispatchFixture {
         backendClient: makeHermeticBackendClient(),
         priorTaskContextStore: PriorTaskContextStore(),
         taskUsageRecorder: TaskUsageRecorder(),
-        plannerProviderRegistry: registry,
-        plannerSelection: nil,
+        makePlanner: { _, _ in DraftPlanner(output: draftOutput) },
         userDefaults: userDefaults,
         whitelist: PathWhitelist(roots: [root])
     )
