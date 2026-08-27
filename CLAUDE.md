@@ -91,9 +91,15 @@ test at all. **The third is closed** (SONNY-305): swift-testing names a failing 
 shapes — the per-test summary `Test <name> failed after …` and every `Test <name> recorded an issue
 …` line — and the classifier read only the first, so a run that recorded a test's issues without
 printing its summary line came back `KILLED — the run failed but named no test`, sending the reader
-after a crash that had not happened while the log named the killing test five times. The count was
-right and the evidence was gone, which is the whole reason to run a battery. It was **intermittent**
-— the same mutant at the same tree, unattributed inside an eight-mutant battery and named correctly
+after a crash that had not happened while the log named the killing test five times. In the case
+that was reported the count was right and only the evidence was gone, which is bad enough — the
+evidence is the whole reason to run a battery. **The same silence had a second direction that is a
+wrong count**, found while fixing the first and reproduced against `main`'s copy of the script
+rather than argued: when the only red was a *declared* failure, the classifier saw nothing at all,
+so it could not report `UNATTRIBUTED` and the mutant was counted `KILLED` — `1 killed, 0 survived,
+0 unattributed`, exit 0, on a mutant nothing had caught. That is the manufactured kill SONNY-224
+built the whole declaration mechanism to prevent, reached by a road it never watched. It was
+**intermittent** — the same mutant at the same tree, unattributed inside an eight-mutant battery and named correctly
 run alone with `--only`, five identical issue lines both times — which is what makes this shape
 survive being investigated: re-running names the test, the reader concludes flake, and the gap
 stays. Both shapes are read now, and the trap case still reports `named no test` correctly, because
