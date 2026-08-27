@@ -210,6 +210,15 @@ public actor SonnyBackendClient {
     /// between them, so on this actor they are one indivisible step — there is no window for a
     /// sign-out to land between "still current" and "saved".
     ///
+    /// **That holds because `SonnyAccountTokenStoring` is synchronous**, and it is worth saying out
+    /// loud rather than leaving as a property of today's code. An actor's step is indivisible only
+    /// up to its next suspension point, so the guarantee above is not a fact about the guard — it is
+    /// a fact about `saveTokens` being a `throws` call rather than an `async throws` one. Make that
+    /// protocol asynchronous and this method acquires a suspension point between the check and the
+    /// write, and the window this exists to close is open again. Written down so that change is
+    /// *seen* to reopen it: whoever makes `saveTokens` async has to come back here, rather than
+    /// finding a comment that still reads true and a guard that quietly is not.
+    ///
     /// Refusing throws `notSignedIn` rather than returning quietly, so the caller learns that the
     /// session it was refreshing no longer exists instead of reading an empty cache as a bug. The
     /// rotated token the server issued is discarded on purpose: the user signed out, and the whole
