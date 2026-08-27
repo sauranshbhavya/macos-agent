@@ -108,9 +108,21 @@ describe("pooledConnections survives an idle client's error", () => {
     // is `ERR_UNHANDLED_ERROR`: the gateway dies, from an event whose correct handling is to log it
     // and let the pool replace the connection.
     //
-    // The mutant is deleting `pool.on("error", …)`. It does not merely fail this test, it takes the
-    // test process down with it — which is a kill, and a loud one, but the assertion below is what
-    // makes the *reason* readable in the log rather than leaving a dead worker to be diagnosed.
+    // The mutant is deleting `pool.on("error", …)`. **How it dies here is not how it would die in
+    // production, and this comment claimed otherwise** (PR #137 review, N3): it said the mutant takes
+    // the test process down with it. Measured, it does not — `FakePool` is a bare `EventEmitter` and
+    // the emit below is synchronous inside the test body, so the throw lands in vitest's own frame
+    // and is reported as `AssertionError: expected [Function] to not throw an error but 'Error:
+    // Connection terminated unexpect…' was thrown`. **2 failed, 237 passed, every file ran, no
+    // `ERR_UNHANDLED_ERROR` and no dead worker.** The `expect(...).not.toThrow()` below is what
+    // converts it into an ordinary red test, and it is the reason this is a clean kill rather than
+    // the evidence-destroying trap `CLAUDE.md` describes.
+    //
+    // The process death is real against a **live** `pg.Pool`, where the emit comes off a socket with
+    // no test frame on the stack: an unhandled `error` on an `EventEmitter` is `ERR_UNHANDLED_ERROR`
+    // and the gateway exits. That is the failure this listener exists to prevent, and it is what the
+    // production consequence would be — but this test does not demonstrate it, and saying it did was
+    // a claim about a mutant's death written inside the test that kills it.
     const stderr = vi.spyOn(process.stderr, "write").mockImplementation(() => true);
     try {
       const { pool } = pooled();

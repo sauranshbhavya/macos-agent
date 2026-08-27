@@ -33,7 +33,7 @@ import { SupabaseAuthProvider } from "./supabase.js";
  * opener one.
  *
  * **A partial environment refuses rather than degrading, and that is the whole point of the middle
- * row.** An operator who sets three of the four names has said what they want; quietly serving
+ * row.** An operator who sets two of the three names has said what they want; quietly serving
  * health-only would answer `404 resource.not_found` to every sign-in, which is indistinguishable
  * from the bug SONNY-307 exists to fix and was measured reading exactly that way. The failure is
  * `ConfigError` → `exit 78` (EX_CONFIG) with the missing names printed, which is `config.ts`'s own
@@ -66,13 +66,17 @@ import { SupabaseAuthProvider } from "./supabase.js";
  * Kept as data rather than as four `if`s so the message below can enumerate what is missing, which
  * is the difference between an operator fixing one variable and an operator guessing at four.
  */
+// **Two counts in this file's prose were left at "four" by the sweep that changed six others**
+// (PR #137 review, N1) — in the file whose entire subject is that count. The list below is the
+// count: `AUTH_INTENT.length` is what the code reads and what a reader should trust, and any
+// sentence naming a number is a copy of it that can go stale independently.
 const AUTH_INTENT: readonly (readonly [name: string, read: (config: Config) => unknown])[] = [
   ["SUPABASE_JWT_SECRET", (config) => config.supabaseJwtSecret],
   ["SUPABASE_JWT_ISSUER", (config) => config.supabaseJwtIssuer],
   ["SUPABASE_ANON_KEY", (config) => config.supabaseAnonKey],
 ];
 
-/** Everything auth needs beyond the four above, in the order an operator would fix them. */
+/** Everything auth needs beyond the three triggers above, in the order an operator would fix them. */
 const AUTH_ALSO_REQUIRED: readonly (readonly [name: string, read: (config: Config) => unknown])[] = [
   ["DATABASE_URL", (config) => config.databaseUrl],
   ["RATE_LIMIT_SALT", (config) => config.rateLimitSalt],
