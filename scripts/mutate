@@ -76,6 +76,24 @@
 # issue a test recorded rather than against its name, and excluded from every kill count. A mutant
 # with nothing else against it comes back UNATTRIBUTED rather than KILLED.
 #
+# The fourth, closed by SONNY-305 after PR #133's review: a kill whose evidence the report threw
+# away. swift-testing names a failing test on two different line shapes — the per-test summary
+# ("Test <name> failed after ...") and each issue it records ("Test <name> recorded an issue at
+# ...") — and this script read only the first. When a run records the issues and never prints the
+# summary line, the mutant was reported "KILLED — the run failed but named no test", advising a
+# reader to look for a crash that never happened while the log named the killing test five times a
+# few lines up. In the case that was reported the count was right and only the evidence was gone,
+# which is bad enough — the whole reason to run a battery is to learn WHICH test holds a behaviour.
+# But the same silence had a second direction that IS a wrong count, and it is why this is numbered
+# beside the other three rather than filed as a misdiagnosis: when the only red was a DECLARED
+# failure, the classifier saw nothing at all and so could not report UNATTRIBUTED, and the mutant
+# was counted KILLED. That is the manufactured kill the third route above built its whole
+# declaration mechanism to prevent, arriving by a road that mechanism never watched. Not observed
+# in the wild — the reported case is the lost-evidence one — but reachable, and reproduced against
+# the previous version of this script rather than argued; `selftest` has an arm on each direction.
+# It is also intermittent — the same mutant at the same tree attributed cleanly when run alone — so
+# the obvious check says "flake" and the gap survives. Both shapes are read now.
+#
 # Exit codes
 #   0  the battery ran and every mutant was killed
 #   2  the battery ran and at least one mutant SURVIVED, or came back UNATTRIBUTED — both are
@@ -293,6 +311,16 @@ What this does and does not prevent:
       print the wrong one of the two names, never the reverse. And a mutant that TRAPS the test
       process names no test at all, so nothing here applies to it — that is the case CLAUDE.md's
       `try #require` gotcha is about.
+      A third seam was found and closed rather than left here (SONNY-305). A suite can run to
+      completion, record every one of a test's issues, and never print the per-test summary line
+      that names it — measured on one mutant at one tree, absent inside a battery and present on
+      the same mutant run alone. The classifier read only that summary line, so the kill was
+      reported as "named no test", pointing at a crash that had not happened; both line shapes are
+      read now, and the trap case above still reports exactly that, correctly, because a dead
+      process prints no issue lines either. The two causes no longer share one message. That seam
+      also had a direction that manufactured a kill: a run whose only red was a DECLARED failure
+      left the classifier with nothing to report, so it was counted KILLED rather than
+      UNATTRIBUTED — everything in this bullet, defeated by the absence of one line.
       UntrustedFailureDeclarationTests is exempt from all of it, by name: it is the guard on the
       declarations, so letting the declarations excuse its failure would leave a stale file marking
       itself trustworthy. That happened, and the battery printed a reassuring line while running
@@ -776,11 +804,38 @@ run_tally() {
 # mutant or why. sed deletes lines and exits 0 on empty input, so the arm is reachable and a trapped
 # run is reported instead of ending the battery mid-sentence (SONNY-224, founder decision after
 # PR #112's review recorded it).
+# When that line is absent for every failing test, the issue lines are read instead — see the
+# comment below (SONNY-305).
 failing_tests() {
-  sed -n 's/^.*[[:space:]]Test \(.*\) failed after .*$/\1/p' "$1" \
+  local named
+  named="$(sed -n 's/^.*[[:space:]]Test \(.*\) failed after .*$/\1/p' "$1" \
     | sed '/^run with /d' \
     | sed 's/ with [0-9][0-9]* test cases$//' \
-    | sort -u
+    | sort -u)"
+  if [[ -n "$named" ]]; then
+    printf '%s\n' "$named"
+    return 0
+  fi
+
+  # Nothing named itself on the summary line. That is two different situations sharing one silence,
+  # and until SONNY-305 this function answered "no tests" to both. A mutant that TRAPS the test
+  # process really does name nothing — a dead process prints no issue lines either. But a suite
+  # that ran to completion can record every one of a test's issues and never print the per-test
+  # summary line that names it, and then the log names the killing test repeatedly, on a line shape
+  # nothing here was reading. Measured on the same mutant at the same tree, once inside a battery
+  # and once alone: five identical `recorded an issue` lines both times, the summary line only the
+  # second time, and only the second run could say which test caught it.
+  #
+  # The fallback delegates to classify_failures rather than adding a second regex here, and that is
+  # not tidiness. Two engines reading one line shape can disagree — sed is greedy and the
+  # classifier's pattern is not — and a disagreement lands in the worst possible place: the caller
+  # gates on THIS function and then attributes with THAT one, so names-here-but-nothing-there turns
+  # a correctly counted kill into an UNATTRIBUTED with an empty evidence list. One reader, one
+  # answer, and the two cannot drift apart.
+  #
+  # classify_failures needs $UNTRUSTED_FILE, which require_untrusted_declarations has already
+  # insisted on by the time any log exists; both call sites are inside battery(), after it.
+  classify_failures "$1" | awk -F'\t' 'NF > 1 { print $2 }' | sort -u
 }
 
 # A battery is only sound while every way the suite can go red is a way the mutant caused, and it
@@ -895,6 +950,12 @@ blocks = {}
 order = []
 failing = {}
 
+# A test that recorded issues and never got the per-test summary line naming it. Kept separately
+# and merged in AFTER the loop, so a log where every failing test does get that line produces the
+# same output, in the same order, as it did before this existed (SONNY-305).
+issue_display = {}
+issue_order = []
+
 current_name = None
 current_text = []
 
@@ -914,6 +975,9 @@ with open(log_path, encoding="utf-8", errors="replace") as handle:
         if match:
             flush()
             current_name = base(match.group(1))
+            if current_name not in issue_display:
+                issue_display[current_name] = match.group(1)
+                issue_order.append(current_name)
             current_text = [match.group(2)]
             continue
         if boundary_re.search(line):
@@ -931,6 +995,18 @@ with open(log_path, encoding="utf-8", errors="replace") as handle:
                 failing[key] = name
                 order.append(key)
 flush()
+
+# The two log shapes are not redundant, and reading only the second is how a kill loses the name of
+# the test that made it. A test whose issues were printed and whose failure line was not is failing
+# — it recorded an issue, which is what failing means — so it joins the list under the name its
+# issue line used. What it is then classified as is decided below exactly as for any other test: if
+# every issue it recorded is declared, it is untrusted, and the mutant comes back UNATTRIBUTED
+# rather than KILLED. That direction matters as much as the naming — before this, such a log
+# reported a kill with no evidence behind it (SONNY-305).
+for key in issue_order:
+    if key not in failing:
+        failing[key] = issue_display[key]
+        order.append(key)
 
 for key in order:
     if key in ALWAYS_TRUSTED:
@@ -1211,7 +1287,8 @@ battery() {
         outcome="KILLED (no named tests)"
         killed=$((killed + 1))
         printf '    KILLED — the run failed but named no test  (%ds)\n' "$elapsed"
-        printf '    Read %s; a crash or a harness error looks like this.\n' "$log"
+        printf '    Read %s; a crash or a harness error looks like this — no test is\n' "$log"
+        printf '    named on either line shape, a failure summary or a recorded issue.\n'
       else
         # Which of those names are evidence. A test that failed on a hang backstop or a wall-clock
         # ceiling fails the same way whether this mutant is here or not, so counting it as the
@@ -1327,11 +1404,43 @@ st_absent() {
 }
 
 # Runs the real script, with a stand-in for the Swift suite so a selftest needs no toolchain.
+#
+# ST_OUT is what the REPORT said, with the echoed suite command cut out of it — the header prints
+# `test cmd   : $TEST_CMD` and a stand-in is a multi-line shell script, so the whole fixture lands
+# in the output before a single mutant runs. Every needle a fixture contains then matches itself,
+# and an assertion that the report NAMED a test passes whether or not the report named anything.
+# Measured rather than reasoned about: of the checks that existed before this cut, **10 of 68**
+# `st_contains … "$ST_OUT"` inside an st_run arm carried a needle that also appears in the stand-in
+# that arm ran, and that set is every "the test is named" check in the classifier's arms (scanned
+# over this file at 6f604d0, the base this branch sits on; the script is in SONNY-305's closing
+# comment, and at c2932b3, with this branch's two new arms, the same scan answers 13 of 75). Both
+# figures were re-measured after the rebase onto 6f604d0 rather than translated across it, and both
+# came back unchanged. **The figure was first written as 11 of 70 and that was wrong** in the way
+# this repository has recorded before: it was taken on a working tree that already carried this
+# branch's own first arm, so it counted that arm's own check among the pre-existing ones and
+# stamped a working-tree reading with a commit that did not contain it. Commit 7b2b9d0's message
+# still says 11 of 70 and is left as written — this repository restamps rather than rewriting a
+# commit message, and the correction lives here and in the changelog. (That commit was d1648a2
+# before the rebase; renaming the citation is right here because a rebase preserves a commit
+# MESSAGE byte for byte, and the message is what is being cited — `git log -1 --format=%B` over
+# the two is identical. A figure measured on the old commit's TREE would have had to be re-measured
+# instead, which is what the two above were.)
+#
+# It is the same shape as PR #112's F6, where a check passed with the summary block deleted
+# outright, and it was found the same way — a new arm passing a check it had no business passing
+# yet.
+#
+# Cut here rather than by tightening 11 needles, so that the safe thing is what a future arm gets
+# by default. The range runs from the `test cmd` line to the `tree` line printed immediately after
+# it, and keeps that one; nothing else in the header spills, and the HEAD line carrying the SHA is
+# above it.
 st_run() {
   local cmd="$1"
   shift
   ST_EXIT=0
   ST_OUT="$(MUTATE_TEST_CMD="$cmd" "$SELF" "$@" 2>&1)" || ST_EXIT=$?
+  ST_OUT="$(printf '%s\n' "$ST_OUT" \
+    | sed '/^    test cmd   : /,/^    tree       : clean$/{ /^    tree       : clean$/!d; }')"
 }
 
 selftest() {
@@ -1570,6 +1679,7 @@ printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
   st_eq "the battery finishes and exits 0" "$ST_EXIT" "0"
   st_contains "the outcome is reported" "$ST_OUT" "KILLED — the run failed but named no test"
   st_contains "and it names the log to read" "$ST_OUT" "a crash or a harness error looks like this"
+  st_contains "and says both line shapes were read before saying so" "$ST_OUT" "on either line shape"
   st_contains "and the summary carries it" "$ST_OUT" "KILLED (no named tests)"
   st_absent "the harness did not die mid-sentence" "$ST_OUT" "not one of its exits"
 
@@ -1688,6 +1798,79 @@ printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
   st_contains "the outcome is called out" "$ST_OUT" "UNATTRIBUTED"
   st_contains "the parameterized test is named" "$ST_OUT" "aRunInEveryMode(mode:)"
   st_absent "it is not reported as a kill" "$ST_OUT" "KILLED"
+
+  # SONNY-305. The third seam, and the ordinary one: a test records every issue it is going to
+  # record, and the per-test summary line that names it — "Test <name> failed after ..." — never
+  # arrives. The two log shapes are not redundant, and this harness used to read only the second.
+  # Measured on the SAME mutant at the SAME tree, twice: inside an eight-mutant battery the log
+  # carried five `recorded an issue` lines naming `theBackendSessionKeepsNothingOnDisk()` and zero
+  # per-test failure lines, and the mutant was reported "KILLED — the run failed but named no
+  # test"; run alone with --only, the same five issue lines arrived with the summary line beside
+  # them and the same mutant was reported "KILLED by 1 test(s)", named. So the seam is intermittent
+  # rather than a property of a mutant, which is what defeats the obvious check: re-running names
+  # the test, the reader concludes flake, and the gap survives. (Root cause of the omitted line is
+  # NOT established; nothing here claims one. What is fixed is that the harness reads both shapes.)
+  #
+  # The fixture keeps the Suite-level failure line, because that one really is emitted and it is
+  # also what `boundary_re` closes an issue block on — a stand-in without it would exercise a
+  # shape no terminal produces, which is the defect PR #112's F3 came from.
+  local issues_but_no_per_test_line='printf "◇  Test run started.\n"
+if grep -q "hour < 13" sample.swift; then
+  printf "✘  Test labelIsMorningBeforeNoon() recorded an issue at Fixture.swift:5:9: Expectation failed: (label) == \"Morning\"\n"
+  printf "✘  Suite PeriodTests failed after 0.001 seconds with 1 issue.\n"
+  printf "✘  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
+  exit 1
+fi
+printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+
+  printf '\n==> A kill named only by its issue lines is attributed, not reported as unnamed\n'
+  st_run "$issues_but_no_per_test_line" "$root/kill.plan"
+  st_eq "the battery exits 0" "$ST_EXIT" "0"
+  st_contains "the kill is counted and attributed" "$ST_OUT" "KILLED by 1 test(s)"
+  st_contains "and the test that caught it is named" "$ST_OUT" "labelIsMorningBeforeNoon()"
+  st_absent "it is not reported as unnamed" "$ST_OUT" "named no test"
+  # The half-fix guard, and the reason the fix has two halves rather than the one the ticket
+  # proposed. Teach only `failing_tests` to read the issue lines — a second regex of its own, which
+  # is what SONNY-305 originally suggested — and it gets past the arm above while
+  # `classify_failures` still finds nothing: `trusted` comes back empty, and this same log reports
+  # `UNATTRIBUTED — the suite went red, and on nothing that is evidence` above a blank evidence
+  # line, with the battery exiting 2 instead of 0. A correctly counted kill turned into a finding,
+  # which is worse than the misdiagnosis it replaced. Built and run, not reasoned about: that
+  # variant against this fixture prints exactly those two lines and that exit.
+  #
+  # The shipped fallback delegates instead, so the divergence cannot occur while it stays that way.
+  # This check is what notices if someone puts the second regex back.
+  st_absent "and not as unattributed either" "$ST_OUT" "UNATTRIBUTED"
+
+  # The same seam's other direction, and the one that was a false MEASUREMENT rather than a lost
+  # diagnosis. Strip the summary line from a log whose only red is a DECLARED backstop and the
+  # classifier saw nothing at all, so it could not report UNATTRIBUTED — the arm above it counted a
+  # kill instead. Measured against `main`'s copy of this script: `1 killed, 0 survived, 0
+  # unattributed`, exit 0, on a mutant nothing had caught. That is the manufactured kill SONNY-224
+  # built the whole declaration mechanism to prevent, reached by a route that mechanism never saw,
+  # and it is the reason this counts as a fourth route to a false measurement rather than only as a
+  # misdiagnosis. Not observed in the wild — SONNY-305's report is the lost-evidence direction —
+  # but reachable, and reproduced here rather than argued.
+  local declared_only_and_no_per_test_line='printf "◇  Test run started.\n"
+if grep -q "hour < 13" sample.swift; then
+  printf "✘  Test aRunThatNeverSettled() recorded an issue at Fixture.swift:10:5: Issue recorded\n"
+  printf "↳  View model did not become idle before timeout.\n"
+  printf "✘  Suite ProductShellTests failed after 0.001 seconds with 1 issue.\n"
+  printf "✘  Test run with 2 tests in 1 suite failed after 0.001 seconds with 1 issue.\n"
+  exit 1
+fi
+printf "✔  Test run with 2 tests in 1 suite passed after 0.001 seconds.\n"'
+
+  printf '\n==> A declared failure with no summary line is unattributed, not a manufactured kill\n'
+  st_run "$declared_only_and_no_per_test_line" "$root/kill.plan"
+  st_eq "an unattributed mutant exits 2" "$ST_EXIT" "2"
+  st_contains "the outcome is called out" "$ST_OUT" "UNATTRIBUTED"
+  st_contains "the failing test is named from its issue line" "$ST_OUT" "aRunThatNeverSettled()"
+  st_contains "and the signature that disqualified it is shown" "$ST_OUT" \
+              "did not become idle before timeout"
+  st_contains "and the summary counts it as unattributed" "$ST_OUT" \
+              "0 killed, 0 survived, 1 unattributed"
+  st_absent "it is not counted as a kill" "$ST_OUT" "KILLED"
 
   printf '\n==> A real killer beside a declared failure still kills, and the count excludes the other\n'
   st_run "$kill_beside_untrusted" "$root/kill.plan"

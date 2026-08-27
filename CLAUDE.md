@@ -84,9 +84,31 @@ what it is missing: a timing-sensitive test whose failure matches no signature r
 exactly as before. `UntrustedFailureDeclarationTests` holds the direction that is checkable, that a
 declaration's `source` still appears under `Tests/` **at the number of sites it declares** — a count,
 because a presence check alone let a reword of one of six copies of a backstop pass unnoticed (F4);
-the other direction is judgment. Two seams stay open in the classifier and are written down where it
-lives rather than fixed: tests sharing a function name across suites merge, since neither log line
-names a suite, and a mutant that *traps* the test process names no test at all.
+the other direction is judgment. **Three seams have been found in the classifier; two stay open and
+are written down where it lives rather than fixed**: tests sharing a function name across suites
+merge, since neither log line names a suite, and a mutant that *traps* the test process names no
+test at all. **The third is closed** (SONNY-305): swift-testing names a failing test on two line
+shapes — the per-test summary `Test <name> failed after …` and every `Test <name> recorded an issue
+…` line — and the classifier read only the first, so a run that recorded a test's issues without
+printing its summary line came back `KILLED — the run failed but named no test`, sending the reader
+after a crash that had not happened while the log named the killing test five times. In the case
+that was reported the count was right and only the evidence was gone, which is bad enough — the
+evidence is the whole reason to run a battery. **The same silence had a second direction that is a
+wrong count**, found while fixing the first and reproduced against `main`'s copy of the script
+rather than argued: when the only red was a *declared* failure, the classifier saw nothing at all,
+so it could not report `UNATTRIBUTED` and the mutant was counted `KILLED` — `1 killed, 0 survived,
+0 unattributed`, exit 0, on a mutant nothing had caught. That is the manufactured kill SONNY-224
+built the whole declaration mechanism to prevent, reached by a road it never watched. It was
+**intermittent** — the same mutant at the same tree, unattributed inside an eight-mutant battery and named correctly
+run alone with `--only`, five identical issue lines both times — which is what makes this shape
+survive being investigated: re-running names the test, the reader concludes flake, and the gap
+stays. Both shapes are read now, and the trap case still reports `named no test` correctly, because
+a dead process prints no issue lines either. **The fix is two halves, and the obvious one alone is
+worse than the defect**: teaching only `failing_tests` to read the issue lines leaves
+`classify_failures` finding nothing, so the same log reports `UNATTRIBUTED` above an empty evidence
+list and the battery exits 2 instead of 0 — a correctly counted kill turned into a finding. Both
+readers changed; the fallback delegates to the classifier so one regex answers for both, and
+`selftest` has an arm on each direction.
 
 `scripts/mutate --help` has the plan format, and a "What this does and does not prevent" section
 stating what is left over; `scripts/mutate selftest` re-proves every one of those refusals still
