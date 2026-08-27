@@ -5,7 +5,7 @@ import Foundation
 /// **The release build has no staging switch, and that is enforced by the compiler rather than
 /// asserted.** SONNY-106 requires that no environment variable be needed for anything in a build a
 /// user runs, so every line that reads an override below sits inside `#if DEBUG` and is not
-/// compiled into a release binary at all. `SonnyBackendEnvironmentScanTests` holds the population —
+/// compiled into a release binary at all. `SignInReleaseSwitchScanTests` holds the population —
 /// the two override key strings appear in this file and nowhere else under `Sources/` — and
 /// `swift build -c release` plus a `strings` sweep of the product demonstrates the other half:
 /// neither key survives into the release binary. A test asserting "release ignores the override"
@@ -57,7 +57,7 @@ public enum SonnyBackendHost {
     // which is a weaker property than the one this ticket asks to be demonstrated: with the
     // constants in here too, a release build has no symbol to name and no literal to find, and
     // `strings` over the release product finds neither key. The compiler is the enforcement; the
-    // scan in `SonnyBackendEnvironmentScanTests` proves the guard is where this comment says, and
+    // scan in `SignInReleaseSwitchScanTests` proves the guard is where this comment says, and
     // a `swift build -c release` plus a `strings` sweep proves the consequence.
     #if DEBUG
     /// The debug-only pointer, as an environment variable.
