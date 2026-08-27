@@ -114,10 +114,21 @@ extension AgentViewModel: VisionSessionInteracting {
 
     /// Take `Ctrl-Opt-Esc` for the duration of the session.
     ///
-    /// A failure here is recorded and swallowed rather than surfaced: the hotkey is one of three
-    /// ways to stop a session (the HUD's Stop and the widget's existing cancel are the others), and
-    /// refusing to run because a convenience shortcut was already taken by another app would be a
-    /// worse product than running without it.
+    /// A failure here is recorded and swallowed rather than surfaced: the hotkey is one of four
+    /// ways to stop a session, and refusing to run because a convenience shortcut was already taken
+    /// by another app would be a worse product than running without it.
+    ///
+    /// **The other three are the Stop controls, enumerated rather than described, because this count
+    /// has been wrong once already** (PR #132 review, F5). It said three ways and named "the HUD's
+    /// Stop and the widget's existing cancel" — a set that stopped being the set when SONNY-255 gave
+    /// the widget's approval panel its own Stop and PR #132's F1 gave Command Center's one, and whose
+    /// second member is now hidden during a session precisely because it ended one while reading as a
+    /// per-step decline. The population is one grep, and it is the whole of it because every door is
+    /// the same call: `git grep -n emergencyStopVisionSession'()' -- Sources | grep -v 'func '` → 4
+    /// lines, of which one is the closure below and three are controls —
+    /// `WidgetControllingPanel`'s Stop and `WidgetPermissionPanel`'s in `FloatingWidgetView`, and
+    /// `CommandCenterAttentionPanel`'s in `CommandCenterView`. Hotkey plus three controls is the
+    /// four. Every one ends in `cancelCurrentRun`, which is the point of the paragraph below.
     func registerEmergencyStopHotKey() {
         guard visionEmergencyStopHotKey == nil else {
             return
@@ -153,7 +164,15 @@ extension AgentViewModel: VisionSessionInteracting {
         visionUserPauseMonitor?.pause()
     }
 
-    /// The emergency stop, from the hotkey or from the HUD.
+    /// The emergency stop, from the hotkey or from any of the three Stop controls that call it.
+    ///
+    /// **Three, and this line named one of them until PR #132's review (F5).** They are the HUD's
+    /// Stop, the widget's approval panel's Stop (SONNY-255, which is the panel that outranks the HUD
+    /// while a question is parked), and Command Center's approval panel's Stop (PR #132's F1). The
+    /// last two exist because on both surfaces the refusal that was there before ended the whole
+    /// session while reading as a per-step decline — an icon-only cross in the widget, a button
+    /// labelled "Deny" in Command Center — and the fix on each was to give the call a word that
+    /// says what it does rather than to change what it does.
     ///
     /// **Deliberately the same call as every other stop.** §13.5's invariant is one implementation
     /// of "control was lost, for any reason", and a bespoke emergency path would be the second stop
@@ -185,9 +204,23 @@ extension AgentViewModel: VisionSessionInteracting {
     /// A mid-loop approval, on the same surface every other approval uses.
     ///
     /// Writes the real `approvalRequest`, so the floating widget's permission card and Command
-    /// Center's attention panel both render it with no special case — which is the point. A vision
-    /// approval that looked different from every other approval would be a second approval surface,
-    /// and the user learns one.
+    /// Center's attention panel both render it. A vision approval that looked different from every
+    /// other approval would be a second approval surface, and the user learns one.
+    ///
+    /// **That sentence was an intention rather than a description until SONNY-255, and the half that
+    /// was false is worth keeping written down.** Command Center rendered it from the start. The
+    /// widget did not, for the whole life of every session: `FloatingWidgetView.state` is an ordered
+    /// chain and `.controlling` sat above `.permission`, while `visionSessionProgress` is written at
+    /// the top of each iteration and cleared only at session end — so from iteration 1 the widget
+    /// showed the HUD, which carries no question, and the run waited on an answer the user could
+    /// give only by finding the other surface. This comment claimed the opposite and was the reason
+    /// nobody re-derived it. `.permission` now outranks `.controlling`.
+    ///
+    /// **"With no special case" is what the fix had to give up, and only in one direction.** The
+    /// request, the method and both answering entry points are still exactly the ordinary ones — no
+    /// surface is taught what a vision approval is. What the widget's panel does read is
+    /// `visionSessionProgress`, so that a question raised inside a session still says which app is
+    /// being controlled and still offers the Stop the HUD it outranks was carrying.
     ///
     /// The cancellation handler mirrors `requestClarification`'s exactly. It is load-bearing rather
     /// than defensive: the guard is what makes a cancellation racing a real answer a no-op instead of

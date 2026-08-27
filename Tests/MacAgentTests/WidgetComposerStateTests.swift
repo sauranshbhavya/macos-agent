@@ -43,8 +43,10 @@ struct WidgetComposerStateTests {
     /// "A question is parked on you and the control is right there" is not the same situation as "a
     /// run is in flight and there is nothing here to type into", and the whole defect was treating
     /// them alike. `waitingOnYou` points at the panel above; `working` does not, and must not — a
-    /// run whose panel is origin-gated may put nothing in the widget at all, and a live
-    /// screen-control session puts a progress HUD there rather than a question.
+    /// run whose panel is origin-gated may put nothing in the widget at all, and a screen-control
+    /// session with nothing parked on it puts a progress HUD there rather than a question. (That
+    /// second clause used to read "a live screen-control session", full stop, which was true of a
+    /// session holding an unanswerable approval and is not true of one since SONNY-255.)
     @Test
     func onlyTheStateWithAControlAboveItPointsUpwards() {
         #expect(ComposerPresentation.prompt(for: .waitingOnYou).localizedCaseInsensitiveContains("above"))
@@ -95,15 +97,22 @@ struct WidgetComposerStateTests {
     /// supposed to give, the answer is read off the branch it actually sits in, and the count
     /// underneath is what forces an eighth into the table rather than past it.
     ///
-    /// **The ordering assertions are new, and they are the part that would have caught F1.** The
-    /// first version of this test was green while the classification it pinned rested on a false
-    /// premise — `isAwaitingApproval` was called `.waitingOnYou` unconditionally, which is wrong
-    /// whenever a live screen-control session outranks the approval in `FloatingWidgetView.state`
-    /// and puts a progress HUD on screen instead of the question. A table alone cannot see that,
+    /// **The ordering assertions are the part that would have caught F1.** The first version of this
+    /// test was green while the classification it pinned rested on a false premise —
+    /// `isAwaitingApproval` was called `.waitingOnYou` unconditionally, which was wrong at the time
+    /// because a live screen-control session outranked the approval in `FloatingWidgetView.state`
+    /// and put a progress HUD on screen instead of the question. A table alone cannot see that,
     /// because the table was *correct about which bucket the token was in*; what was wrong was the
     /// reason the bucket was right. So the branch shape and the relative order are pinned too, and
     /// `theWidgetsOwnPrecedenceIsWhatMakesTheComposersClassificationTrue` pins the fact in `state`
     /// they depend on.
+    ///
+    /// **The premise has since been fixed rather than the classification** (SONNY-255): the approval
+    /// now outranks the session, so `isAwaitingApproval` is `.waitingOnYou` unconditionally after
+    /// all, and this table says so — the bucket that was right for the wrong reason is right for the
+    /// right one, and the ordering assertion below is what carries the difference. That is the point
+    /// of pinning an order rather than a bucket: when the order moved, both this test and the state
+    /// it mirrors had to move, and neither could do it quietly.
     ///
     /// **The second half matters as much as the first.** `isTaskInFlight` is *derived* from
     /// `composerState` rather than computed a second time — so the gate that disables the field and
@@ -115,7 +124,7 @@ struct WidgetComposerStateTests {
         let widget = try MacAgentSource.read("FloatingWidgetView.swift")
         let state = try MacAgentSource.braceBlock(
             of: widget,
-            openedBy: "private var composerState: ComposerPresentation.State {"
+            openedBy: "var composerState: ComposerPresentation.State {"
         )
 
         /// The word after each `return .`, in source order.
@@ -129,10 +138,15 @@ struct WidgetComposerStateTests {
             return results
         }
 
-        // The branch shape itself. Four guarded returns and a fallthrough, in this order — a fifth
-        // guard, or the same four reordered, is a change to the argument above and fails here.
+        // The branch shape itself. Five guarded returns and a fallthrough, in this order — a sixth
+        // guard, or the same five reordered, is a change to the argument above and fails here.
+        //
+        // It was four until SONNY-255 split the approval out of the pair below the session line and
+        // put it above: `["waitingOnYou", "working", "waitingOnYou", "working", "ready"]` was the
+        // shape while `.controlling` outranked `.permission` in `state`.
         #expect(
-            returnedCases(of: state) == ["waitingOnYou", "working", "waitingOnYou", "working", "ready"],
+            returnedCases(of: state)
+                == ["waitingOnYou", "waitingOnYou", "working", "waitingOnYou", "working", "ready"],
             "the branch shape carries the correctness argument — see this test's doc comment"
         )
 
@@ -156,10 +170,12 @@ struct WidgetComposerStateTests {
             ("viewModel.visionCapturePreview != nil", "waitingOnYou", "a Safe-mode capture review is its own panel"),
             ("viewModel.visionDelegationRequest != nil", "waitingOnYou", "a Safe-mode delegation review is its own panel"),
             ("viewModel.visionSessionPause != nil", "waitingOnYou", "a session pause is its own panel"),
-            // The HUD, which outranks the two below it and carries no question.
+            // The fourth question, and since SONNY-255 it outranks the HUD like the three above it.
+            ("viewModel.isAwaitingApproval", "waitingOnYou", "an approval takes the panel, session or no session"),
+            // The HUD, which outranks the one below it and carries no question.
             ("viewModel.visionSessionProgress != nil", "working", "a live session shows a progress HUD, not a question"),
-            // Reachable as questions only once no session is live.
-            ("viewModel.isAwaitingApproval", "waitingOnYou", "with no session live, the approval panel is what renders"),
+            // Reachable as a question only once no session is live — and unreachable *inside* one by
+            // construction, which `state`'s own clarification branch records.
             ("viewModel.clarificationQuestion != nil", "waitingOnYou", "with no session live, the clarification panel is what renders"),
             ("viewModel.isRunning", "working", "an ordinary run in flight, whose panel is origin-gated")
         ]
@@ -171,13 +187,16 @@ struct WidgetComposerStateTests {
             )
         }
 
-        // **The ordering, stated as the dependency it is.** The approval and the clarification may
-        // only be called `.waitingOnYou` after a live session has been ruled out; moving either
-        // above that check reinstates F1 exactly.
+        // **The ordering, stated as the dependency it is — and it points both ways** (SONNY-255).
+        // The clarification may only be called `.waitingOnYou` after a live session has been ruled
+        // out, because the HUD outranks it; moving it above that check reinstates F1 exactly. The
+        // approval must sit on the *other* side, because it now outranks the HUD — leaving it below
+        // would say "Sonny is working" over a panel holding a question, which is F1's mistake in
+        // mirror image.
         let session = try position(of: "viewModel.visionSessionProgress != nil")
         #expect(
-            try session < position(of: "viewModel.isAwaitingApproval"),
-            "a live session must be ruled out before an approval is called a question above the composer"
+            try position(of: "viewModel.isAwaitingApproval") < session,
+            "an approval outranks the HUD in `state`, so it is a question above the composer whether or not a session is live"
         )
         #expect(
             try session < position(of: "viewModel.clarificationQuestion != nil"),
@@ -208,14 +227,21 @@ struct WidgetComposerStateTests {
     /// the test above failing. That is exactly how F1 shipped, so the dependency gets an assertion
     /// rather than a sentence.
     ///
-    /// The three Safe-mode questions must stay *above* `.controlling`, because the composer calls
-    /// them questions unconditionally; the approval and the clarification must stay *below* it,
-    /// because the composer rules a live session out before calling them questions at all.
+    /// The three Safe-mode questions and, since SONNY-255, the approval must stay *above*
+    /// `.controlling`, because the composer calls all four questions unconditionally; the
+    /// clarification must stay *below* it, because the composer rules a live session out before
+    /// calling it a question at all.
+    ///
+    /// **The approval moved sides, which is what this ticket was.** It was below, and the composer
+    /// was right to rule the session out first — the widget really did show the HUD over a pending
+    /// question, for the whole length of every session. Fixing that in `state` and not here would
+    /// leave the composer saying "Sonny is working" above a panel asking something, so the two moved
+    /// together and this assertion is what says so.
     @Test
     func theWidgetsOwnPrecedenceIsWhatMakesTheComposersClassificationTrue() throws {
         let precedence = try MacAgentSource.braceBlock(
             of: MacAgentSource.read("FloatingWidgetView.swift"),
-            openedBy: "private var state: WidgetState {"
+            openedBy: "var state: WidgetState {"
         )
 
         func position(of branch: String) throws -> Int {
@@ -228,7 +254,8 @@ struct WidgetComposerStateTests {
         for outranking in [
             "return .captureReview(preview)",
             "return .delegationReview(delegation)",
-            "return .sessionPaused(pause)"
+            "return .sessionPaused(pause)",
+            "return .permission(approvalRequest)"
         ] {
             #expect(
                 try position(of: outranking) < controlling,
@@ -237,7 +264,6 @@ struct WidgetComposerStateTests {
         }
 
         for outranked in [
-            "return .permission(approvalRequest)",
             "return .clarification(question)"
         ] {
             #expect(

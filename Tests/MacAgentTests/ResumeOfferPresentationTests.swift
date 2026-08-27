@@ -654,7 +654,7 @@ struct ResumeOfferPresentationTests {
     func theOfferIsTheLastBranchOfTheWidgetsPrecedenceBeforeIdle() throws {
         let state = try MacAgentSource.braceBlock(
             of: MacAgentSource.read("FloatingWidgetView.swift"),
-            openedBy: "private var state: WidgetState {"
+            openedBy: "var state: WidgetState {"
         )
 
         let failure = try #require(state.range(of: "return .failure(error)"))

@@ -834,6 +834,50 @@ private struct CommandCenterStorageNotice: View {
     }
 }
 
+/// "Sonny is controlling <app>" and the step count, on Command Center's approval panel, while a
+/// screen-control session is live (SONNY-255; this surface, PR #132's F1).
+///
+/// **The System A counterpart of `WidgetSessionIdentityLine`, and a separate view by necessity
+/// rather than by preference.** `.claude/rules/macagent-ui-conventions.md` forbids either token
+/// system leaving its own surface, so the widget's glass-and-SF-Pro row cannot be reused here and
+/// this one cannot be reused there. What is *not* duplicated is the sentence: every string comes
+/// from `ScreenControlSessionPresentation`, because one session described two ways on two surfaces
+/// 4,000 lines apart is a divergence neither file could see.
+///
+/// **Extracted from an inline `HStack` because a doc comment had already named it** (PR #132
+/// cycle 2, N1). `ScreenControlSessionPresentation`'s own comment cited `CommandCenterSessionContextRow`
+/// as the proof that the two surfaces need two views — while the type existed nowhere, which is a
+/// fabricated symbol inside the doc comment of the type built to stop shared-words drift. The
+/// options were to weaken the claim or to make it true; this is the second.
+private struct CommandCenterSessionContextRow: View {
+    let progress: VisionSessionProgress
+
+    var body: some View {
+        HStack(spacing: 8) {
+            // Amber, matching the widget's own session glyph: Sonny doing something unusual, not
+            // something going wrong.
+            Image(systemName: "cursorarrow.rays")
+                .font(.system(size: 11))
+                .foregroundStyle(SonnyTheme.warning)
+
+            (Text(ScreenControlSessionPresentation.controllingPrefix).font(SonnyType.micro)
+                + Text(progress.appDisplayName).font(SonnyType.microEmphasis))
+                .foregroundStyle(SonnyTheme.sidebarNavText)
+                .lineLimit(1)
+
+            Spacer(minLength: 8)
+
+            Text(ScreenControlSessionPresentation.stepLine(
+                iteration: progress.iteration,
+                maximumIterations: progress.maximumIterations
+            ))
+                .font(SonnyType.micro)
+                .foregroundStyle(SonnyTheme.muted)
+                .lineLimit(1)
+        }
+    }
+}
+
 /// Command Center's own permission / clarification / failure surface (System A).
 ///
 /// Until branch 10 these three states rendered *only* in the floating widget, which was fine while
@@ -868,10 +912,22 @@ private struct CommandCenterStorageNotice: View {
 private struct CommandCenterAttentionPanel: View {
     @ObservedObject var viewModel: AgentViewModel
 
-    /// Mirrors `FloatingWidgetView`'s private `state` precedence exactly (permission >
-    /// clarification > failure, and failure only once the run has actually stopped). Both surfaces
-    /// observe the same view model, so if these two disagreed about which state wins they would
-    /// show contradictory controls for one task.
+    /// Mirrors `FloatingWidgetView`'s `state` precedence exactly (permission > clarification >
+    /// failure, and failure only once the run has actually stopped). Both surfaces observe the same
+    /// view model, so if these two disagreed about which state wins they would show contradictory
+    /// controls for one task.
+    ///
+    /// `state` over there is no longer `private` — SONNY-255 made it internal so a test could read
+    /// which panel the widget resolved to, which is the one thing a source scan of its ordering
+    /// cannot say (PR #132 review, F4 corrected this sentence, which had gone on calling it private).
+    ///
+    /// **The mirroring is of the precedence, not of the panels, and since SONNY-255 that distinction
+    /// is load-bearing.** The widget's chain also carries four screen-control states this enum has
+    /// no counterpart for, and it must not: those are the widget's own HUD and Safe-mode questions,
+    /// and a window that may be closed is not where a session's live controls belong. What the two
+    /// surfaces do share is that a screen-control session changes the *approval* panel on both of
+    /// them — `permissionContent` below reads `visionSessionProgress` exactly as
+    /// `WidgetPermissionPanel` does, for exactly the same reason.
     private enum AttentionState {
         case permission(RiskApprovalRequest)
         case clarification(String)
@@ -965,16 +1021,46 @@ private struct CommandCenterAttentionPanel: View {
                 .fixedSize(horizontal: false, vertical: true)
         }
 
+        // **Inside a screen-control session this row is what the widget's identity line is**
+        // (SONNY-255, PR #132 F1). Its own view rather than an inline `HStack`, so the symmetry
+        // `ScreenControlSessionPresentation`'s doc comment claims is a symmetry a reader can grep
+        // for — that comment named this type before it existed (PR #132 cycle 2, N1).
+        if let sessionProgress = viewModel.visionSessionProgress {
+            CommandCenterSessionContextRow(progress: sessionProgress)
+        }
+
         HStack(spacing: 8) {
             Spacer(minLength: 0)
 
             // Same entry points the widget's own permission panel uses — `start()` routes to the
             // private `approvePendingRun()` through its `isAwaitingApproval` guard, and there is
             // no separate deny method. Calling anything else here would fork the approval path.
-            Button("Deny") {
-                viewModel.cancelCurrentRun()
+            //
+            // **One refusal, and its word says what it does — the same argument the widget's panel
+            // makes, arriving here one review round later** (PR #132 review, F1). SONNY-255 hid the
+            // widget's icon-only cross while a session is live, because `cancelCurrentRun` ends the
+            // whole session rather than declining a step and an unlabelled cross reads as "skip this
+            // step"; this surface kept a button *labelled* "Deny", which is the same claim in words
+            // and is worse for being legible. It is the identical call either way, so nothing about
+            // the behaviour changes — what changes is that the label stops disagreeing with it.
+            //
+            // `.danger` rather than the neutral tone, matching the widget's red: this is the control
+            // that ends a session driving the user's screen, and it is the one place on this panel
+            // where the destructive reading is the correct one.
+            if let sessionProgress = viewModel.visionSessionProgress {
+                Button(ScreenControlSessionPresentation.stopLabel) {
+                    viewModel.emergencyStopVisionSession()
+                }
+                .buttonStyle(CommandCenterRowActionStyle(tone: .danger))
+                .accessibilityLabel(ScreenControlSessionPresentation.stopAccessibilityLabel(
+                    appDisplayName: sessionProgress.appDisplayName
+                ))
+            } else {
+                Button("Deny") {
+                    viewModel.cancelCurrentRun()
+                }
+                .buttonStyle(CommandCenterRowActionStyle())
             }
-            .buttonStyle(CommandCenterRowActionStyle())
 
             Button("Allow") {
                 viewModel.start()

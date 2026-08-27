@@ -438,6 +438,47 @@ Use any tier-2 command from §2's table, submitted from the widget.
       see `docs/sonny-founder-design-decisions.md`'s "Approval panel — first-run moment" section for
       why and what's still open there.
 
+### 3c-bis. An approval raised *during* a screen-control session (new 2026-08-26, SONNY-255)
+
+Start a screen-control session in Normal mode against an app the other rows use (Safari is easiest)
+and steer it at a control it will treat as destructive or as affecting others — a Delete, a Send.
+That raises a real approval mid-loop, which is the state every row here is about. All six rows are
+new behaviour: before this ticket the widget showed the controlling HUD for the whole session and
+the approval reached no widget surface at all, so the run looked like it had stalled.
+
+- [ ] **(new 2026-08-26, SONNY-255)** When the approval is raised, the widget shows the **approval**
+      rather than the HUD — the "Allow access to …" row with its ✓, and above it a single row reading
+      **"Sonny is controlling Safari"**, the step count, and a red **Stop**. The HUD's action line
+      ("Looking at Safari") is deliberately not there: at the moment the question is raised it still
+      describes the start of the step, not the action being asked about
+- [ ] **(new 2026-08-26, SONNY-255)** In that state the main composer at the bottom reads **"Answer
+      above first…"**, not "Sonny is working…" — it now points at a panel that really does hold a
+      question. During the rest of the session, with nothing pending, it still reads "Sonny is
+      working…", which is SONNY-247's own row a few lines below
+- [ ] **(new 2026-08-26, SONNY-255)** Press **✓**. The panel goes straight back to the HUD — app,
+      action line, step count, Pause, Stop — and the session carries on and finishes. It must not sit
+      on the approval panel after the press
+- [ ] **(new 2026-08-26, SONNY-255)** Provoke the approval again and press **Stop** instead. The
+      session ends, the action it was asking about never happens, and the widget shows "Canceled."
+      Nothing should read as though you declined one step and the session continued
+- [ ] **(new 2026-08-26, SONNY-255)** While a session is live there is **no ✗ cross** in the approval
+      panel — Stop is the only refusal, because pressing the cross here ends the whole session and an
+      icon-only cross reads as "skip this step". Then run an ordinary tier-2 command with no screen
+      control: the ✗ is back, and §3c's Deny row above behaves exactly as it always did
+- [ ] **(new 2026-08-26, SONNY-255; rewritten 2026-08-27 after PR #132's review F1 changed what this
+      row is checking)** With the mid-session approval up, open Command Center. Its attention panel
+      shows the same question, and mid-session its buttons are **Stop and Allow** — *not* Deny and
+      Allow, which is what it showed until F1. Above them it names the session the same way the
+      widget does: "Sonny is controlling Safari" and the step count. Answering it **there** clears
+      the widget's panel too — one approval, two surfaces, never two answers
+- [ ] **(new 2026-08-27, PR #132 review F1)** Press **Stop** on Command Center's panel. It must end
+      the session exactly as the widget's Stop does — the action under question never happens, the
+      widget's panel clears, and the task reads "Canceled." The word is the whole of what changed:
+      that button did the identical thing when it said "Deny", which is why it stopped saying it
+- [ ] **(new 2026-08-27, PR #132 review F1)** With an ordinary tier-2 approval and **no** screen
+      control, open Command Center: its panel says **Deny and Allow** again, with no session row
+      above it. Deny cancels the run as it always did
+
 ### 3d. Clarification (no wireframe — best-effort, extra scrutiny warranted)
 Provoke a follow-up question with an intentionally underspecified command — e.g. "open my
 workspace" when you have 2+ saved workspaces and don't name one, or "zip my files" without saying
@@ -457,13 +498,15 @@ which.
 - [ ] **(new 2026-08-23, SONNY-247)** While an ordinary run is in flight (no question), the same
       composer reads "Sonny is working…" — a different sentence, because there is nothing above to
       answer
-- [ ] **(new 2026-08-23, SONNY-247, from PR #107's review)** During a **screen-control** session the
-      composer also reads "Sonny is working…", not "Answer above first…", for the whole session —
-      including if Sonny asks for an approval part-way through it. That is deliberate: the panel
-      above is the controlling HUD (app, step count, Pause, Stop) and it carries no question, so
-      pointing at it would be a lie. **Separately and not fixed here: an approval raised during a
-      screen-control session reaches no widget surface at all** — that is SONNY-255, it predates
-      this work, and if you hit it the run will appear to stall with only Pause and Stop available
+- [ ] **(new 2026-08-23, SONNY-247, from PR #107's review; corrected 2026-08-26 by SONNY-255 — the
+      part about approvals is no longer true and would fail if checked as written)** During a
+      **screen-control** session the composer reads "Sonny is working…", not "Answer above first…",
+      **while nothing is parked on you**. That is deliberate: the panel above is the controlling HUD
+      (app, step count, Pause, Stop) and it carries no question, so pointing at it would be a lie.
+      **The clause this row used to carry — "including if Sonny asks for an approval part-way
+      through it" — was true only because the approval reached no widget surface at all**, which was
+      the defect SONNY-255 fixed. An approval now takes the panel and the composer says "Answer above
+      first…" for as long as it is up; §3c-bis is where that is checked
 - [x] **(new 2026-08-25, SONNY-283)** With a question pending, press **Ctrl-Opt-Space** and let go
       without speaking. The caret should be in the **answer field** — type a letter and it lands
       there. Before this the hotkey did nothing at all in this state

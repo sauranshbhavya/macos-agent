@@ -493,6 +493,14 @@ final class VisionSessionRunner {
         // this renders on the floating widget *and* on `CommandCenterAttentionPanel`, with no
         // surface taught anything about it. That is §2.3's half of the design, kept intact inside
         // §4.3's ordering.
+        //
+        // **True of this gate all along, and false of every other user of that method until
+        // SONNY-255** — which is worth stating here rather than quietly correcting, because the
+        // difference is an accident of position and reads as nothing. This gate runs *before* the
+        // iteration's first `visionSessionDidProgress`, so on the first capture there is no progress
+        // for the widget's precedence to prefer and the question really did render. The per-action
+        // gate below runs *after* it, and there the widget showed the HUD instead — for the whole
+        // session, since the progress is cleared only when the session ends. Both render now.
         // **The `nil` arm is unreachable today, and is kept for the control that will reach it.**
         // The only Deny in the product routes through `cancelCurrentRun`, which resumes this
         // continuation with `nil` *and* cancels the task — and the cancellation check inside
