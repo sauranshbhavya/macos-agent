@@ -322,13 +322,18 @@ deploymind cannot receive a deploy yet, and neither Oracle nor AWS exists. The s
 image, says plainly what did not happen, and lists the four things a real target needs. It does not
 pretend. **The first real remote deploy is owed and is recorded on SONNY-126.**
 
-**`local` runs the container with `SONNY_ENV` and `LOG_LEVEL` and nothing else**, so `buildApp`
-mounts health only and the four model routes above answer `401` to everyone — the gate refusing a
-protected route on a process with no way to authenticate anyone. Exercising them against a local
-container therefore needs the Supabase and provider variables passed in by hand today. **SONNY-306
-is making that one command**, and its passthrough list is read from `src/config.ts`; SONNY-130 added
-`OPENAI_BASE_URL`, `OPENAI_TEXT_MODEL`, `OPENAI_TRANSCRIPTION_MODEL` and `SEARCH_BASE_URL` there, so
-a credentialed local run wants those four alongside the credentials themselves.
+**The four model routes still answer `401` against that container**, and the reason is the one the
+subsection above names rather than a missing credential: `src/server.ts` supplies no `AuthDeps`, so
+the gate refuses every protected route on a process with no way to authenticate anyone. SONNY-306's
+passthrough forwards the five variables `src/config.ts` decides, and SONNY-307 is what makes them
+matter.
+
+**When it lands, this passthrough wants four more names for these routes.** `OPENAI_API_KEY` and
+`TAVILY_API_KEY` are the credentials, and `OPENAI_BASE_URL`, `OPENAI_TEXT_MODEL`,
+`OPENAI_TRANSCRIPTION_MODEL` and `SEARCH_BASE_URL` are what let a local run point at a stub instead
+of at a vendor — which is how SONNY-130 demonstrated all four routes end to end with no vendor key
+anywhere. Recorded on SONNY-306 as well as here, because the list tracks `src/config.ts` and this
+ticket grew it.
 
 ## `GET /v1/health`
 

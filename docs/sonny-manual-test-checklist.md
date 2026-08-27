@@ -822,9 +822,10 @@ it feels confusing in practice, not just whether it's "technically correct."
       ~6+ seconds without touching anything. Confirm the failure banner actually clears itself back to
       idle in one shot (collapse + clear now happen at the same 6s mark — this replaced the earlier
       two-timer version that needed 2+ compacts to fully clear). Separately, trigger a *configuration*
-      error instead (e.g. deny mic permission, or something producing "OPENAI_API_KEY is not set…")
-      and confirm THAT one does **not** auto-clear — it should keep saying so indefinitely until you
-      actually fix it. **This second half (config errors staying put) hasn't been explicitly
+      error instead and confirm THAT one does **not** auto-clear — it should keep saying so
+      indefinitely until you actually fix it. (**The example this row used to give — "something
+      producing `OPENAI_API_KEY is not set…`" — is no longer reachable as of 2026-08-27, SONNY-130**:
+      no client reads a provider key. Denying mic permission still is, and is the example to use.) **This second half (config errors staying put) hasn't been explicitly
       retested — worth a quick check, not just the retryable-failure half.**
 
 ## 6. Menu bar & launch
@@ -1092,10 +1093,12 @@ provider key anywhere on your Mac.
 
 **Setup — three things, and the third is the one that is easy to get wrong.**
 
-1. A gateway has to be answering *with provider credentials*. `./scripts/deploy.sh local` runs the
-   container with `SONNY_ENV` and `LOG_LEVEL` only, so it mounts health alone and every one of these
-   routes answers 401. Until SONNY-306 makes it one command, run the server by hand with the
-   Supabase variables the sign-in section needs plus `OPENAI_API_KEY` and `TAVILY_API_KEY`.
+1. A gateway has to be answering *with provider credentials*, **and none exists yet that can**.
+   `./scripts/deploy.sh local` forwards the gateway's own credentials since SONNY-306, but
+   `src/server.ts` supplies no `AuthDeps`, so the container still mounts health alone and every one
+   of these routes answers 401 whatever is forwarded — SONNY-307 is the ticket for that, and these
+   rows cannot be run until it lands. When it has, the same script wants `OPENAI_API_KEY` and
+   `TAVILY_API_KEY` added to its passthrough alongside the Supabase variables.
 2. The debug build pointed at it, exactly as the sign-in section above describes
    (`defaults write com.sonny.MacAgent SonnyBackendBaseURL http://127.0.0.1:8080`).
 3. **Launch the packaged app from Finder, and do not export any provider key in the shell you
@@ -1134,14 +1137,22 @@ provider key anywhere on your Mac.
 
 ### Web research — topic/search commands (new 2026-07-30, Tavily provider)
 
-Needs `TAVILY_API_KEY` exported in the launching shell (GUI `open` won't inherit it). Each search
-costs real money (~$0.008), so a handful of runs is plenty.
+**Superseded by the section above as of 2026-08-27 (SONNY-130).** Search no longer reads
+`TAVILY_API_KEY` on this Mac at all: the credential is the gateway's, and a search command goes
+through Sonny's backend under your sign-in. The two key-shaped rows below are struck through rather
+than deleted, because what they *tested* — the shape of a good research note, and direct-URL
+summarization being unaffected — is still worth checking, and the section above is where the
+credential half is now checked from. Each search still costs real money, so a handful of runs is
+plenty.
 
-- [ ] Without the key set: a search command ("research three alternatives to Raycast and save a
-      comparison") still fails with the honest "Web search provider not configured." error — not a
-      crash, not a hang
-- [ ] With the key: the same command produces a real Markdown research note — Sources section lists
-      the pages actually fetched (not raw search-result text), and a generation timestamp is present
+- [x] ~~Without the key set: a search command still fails with the honest "Web search provider not
+      configured." error~~ — **no longer reachable.** `TavilySearchProvider` cannot fail to
+      construct, so `AgentViewModel` no longer falls back to `UnavailableWebSearchProvider`, and
+      that sentence is unreachable from the search path. A search made while signed out says "Sign
+      in to Sonny to run this." instead, which is the row in the section above.
+- [ ] ~~With the key:~~ **signed in**, the command ("research three alternatives to Raycast and save
+      a comparison") produces a real Markdown research note — Sources section lists the pages
+      actually fetched (not raw search-result text), and a generation timestamp is present
 - [ ] Direct-URL summarization ("summarize <url> and save it as Markdown") still works exactly as
       before — the provider only affects search/topic commands
 
