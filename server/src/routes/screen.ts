@@ -209,11 +209,15 @@ export function registerScreenRoutes(app: FastifyInstance, vision: VisionProvide
           };
         }
 
-        // §6.3's ceiling on what leaves, measured on the serialized bytes rather than on the model's
-        // text alone — the envelope is part of what the Mac allocates. The adapter has already
-        // bounded what it read from the provider, so reaching this means the reply was under the cap
-        // and the envelope pushed it over, which is a 34-byte margin and effectively unreachable; it
-        // is here so the section's rule is a property of the response rather than of one read.
+        // §6.3's ceiling on what *leaves*, measured on the serialized bytes rather than on the
+        // model's text alone — the envelope is part of what the Mac allocates.
+        //
+        // **This is reachable and a test drives it**, which is worth saying because the first version
+        // of this comment called it "effectively unreachable" from a reading rather than from a
+        // measurement. The adapter bounds what it *reads* at the same cap, so a reply just under it
+        // plus this route's own `request_id` and JSON envelope really does cross the line —
+        // `refuses to send a response over the cap even when the provider's reply was under it` is
+        // that case, and it fails if this branch is removed.
         const serialized = JSON.stringify(body);
         if (Buffer.byteLength(serialized, "utf8") > RESPONSE_LIMIT_BYTES) {
           return sendUpstreamFailure(
