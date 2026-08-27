@@ -197,9 +197,17 @@ Files changed:
 - `Tests/MacAgentCoreTests/VisionModelClientTests.swift` — migrated. `ModelRouteNumbersTests.swift`, `SonnyLiveGatewayTests.swift`, `Tests/MacAgentTestSupport/RecordedBackendRequests.swift`, `Tests/MacAgentTests/VisionSessionRunTests.swift` — extended.
 - `docs/sonny-backend-api-contract.md` (§6.4, §12, §13 and its change log), `docs/sonny-manual-test-checklist.md`.
 
-Tests: all at **`1c26581`**, every exit code read with nothing between it and `$?`.
+Tests: all re-measured at **`7aa28ba`**, every exit code read with nothing between it and `$?`.
 
-**Swift: 2316 tests in 159 suites, exit 0** (the flagged command in `CLAUDE.md`). The run reports two *known* issues, both `HangBackstopTests`' own deliberate `withKnownIssue` arms, which arrived on `main` with PR #138 and are not this branch's. **The baseline was measured rather than read off a neighbouring entry**: a detached worktree at `7f555cd`, the commit this branch was cut from, answers **2301 in 159**, exit 0, with the same two known issues — so this branch is **+15 tests and +0 suites**. **`swift build` exit 0.** **`scripts/warnings`: 0 warnings**, exit 0, its stamp read off the report's own header: **`1c26581 (clean)`**.
+**Every figure below was first taken at `1c26581` and re-taken here rather than carried**, because
+the head moved twice after the entry was written — a restatement and a doc comment. Both are docs
+and comments only, which is checkable rather than asserted: `git diff --stat 1c26581..7aa28ba`
+touches `docs/sonny-v1-implementation-changelog.md`, `server/src/model/limits.ts` and
+`server/test/screen.test.ts`, and filtering that diff to lines that are neither comments nor blank
+leaves nothing outside the changelog. The numbers came back identical, which is what that check
+predicts; had one moved, the figure and not the SHA is what would have changed.
+
+**Swift: 2316 tests in 159 suites, exit 0** (the flagged command in `CLAUDE.md`). The run reports two *known* issues, both `HangBackstopTests`' own deliberate `withKnownIssue` arms, which arrived on `main` with PR #138 and are not this branch's. **The baseline was measured rather than read off a neighbouring entry**: a detached worktree at `7f555cd`, the commit this branch was cut from, answers **2301 in 159**, exit 0, with the same two known issues — so this branch is **+15 tests and +0 suites**. **`swift build` exit 0.** **`scripts/warnings`: 0 warnings**, exit 0, its stamp read off the report's own header: **`7aa28ba (clean)`**.
 
 **Server: `npm run build` exit 0, `npm run typecheck` exit 0, `npm test` exit 0 with 265 passed, 131 skipped (396)** and no `DATABASE_URL`. The same detached worktree at `7f555cd` answers **239 passed, 131 skipped (370)**, so this branch is **+26 tests** — which is exactly `test/screen.test.ts`' own 26, the three edits to `model.test.ts`, `gate.test.ts` and `support/config.ts` having extended existing assertions rather than added tests. **`npm run check:secrets` clean over 459 tracked files**, 12 patterns, 8 baselined fixtures, exit 0; `./scripts/check-secrets-selftest.sh` **43 passed, 0 failed**, exit 0.
 
@@ -209,7 +217,7 @@ Tests: all at **`1c26581`**, every exit code read with nothing between it and `$
 — `com.sonny.account`, `screen.analyze` and `/v1/screen/analyze` — so the method finds strings that
 are there. In the source those five tokens survive at **five occurrences across four lines, every one
 a doc comment describing the move** (`git grep -n -o -E 'OPENCODE_API_KEY|opencode|luna' -- Sources`
-→ 5 lines at `1c26581`; each one's line begins with `//` or `///`).
+→ 5 lines at `7aa28ba`; each one's line begins with `//` or `///`).
 
 **Every file on the never-touch list is untouched, checked per file rather than by one pattern** —
 `git diff --quiet origin/main...HEAD -- <path>` is silent for `LocalRedactionService.swift`,
