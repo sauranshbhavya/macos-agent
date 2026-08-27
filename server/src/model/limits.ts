@@ -43,6 +43,12 @@ export const MAXIMUM_IMAGE_BYTES = 3_000_000;
  * 120 bytes of JSON envelope. 200,000 is far more than that and is where §6.1's "roughly 190,000
  * bytes of headroom" comes from.
  *
+ * **`e260575` is deliberately non-ancestral and is kept verbatim**, which §6.1 already records for
+ * the same figure: it is SONNY-114's pre-rebase head, and a measurement taken on one tree cannot be
+ * restated at another by renaming its SHA. It is a timestamp on a branch, and the number beside it
+ * is true of that branch at that moment. `git merge-base --is-ancestor e260575 origin/main` exits 1
+ * by design, not by neglect.
+ *
  * **Deliberately not generous.** §6.1: "Every byte of headroom above what the client can actually
  * produce is a byte that eliminates hosts for nothing."
  */
