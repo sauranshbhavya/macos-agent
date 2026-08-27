@@ -118,6 +118,30 @@ actually run yet (it wipes exactly that data). Left unchecked rather than assume
 irreversible action in this whole checklist — confirm explicitly, whenever you're ready to lose your
 current test data doing it.
 
+**2026-08-26 — the batch this file gained since `140829b` (PR #116).** You ran the twenty-one rows
+added to this file since that merge — §3d's thirteen SONNY-281 rows and four SONNY-283 ones, and
+§3d-bis's four SONNY-282 ones (`git diff 140829b 5339640 -- docs/sonny-manual-test-checklist.md |
+grep -E '^\+- \[ \]' | grep -oE 'SONNY-28[123]' | sort | uniq -c` → 13, 4 and 4 at `5339640`) — on
+the packaged app at `main` `5339640`, and reported them working. It came back as a batch — "yeah the
+manual checklist works" — not line by line, exactly like the 2026-07-24 sweep above. The rows carry
+**(batch)** beside the date so that reading one row is enough to know it: it means backed by that
+batch confidence, not independently re-verified one at a time.
+
+**One row asked a question rather than pass-or-fail and got its answer explicitly, so it carries the
+answer instead of the batch marker.** §3d-bis's tooltip row doubted that `.help()` tooltips were
+reachable in this widget at all; you hovered the tick and the cross and said "yes tooltips
+appeared". That row keeps the doubt's history rather than being quietly ticked — the
+`confirmed <date>` convention at the top of this file, applied to a doubt resolved rather than to a
+confirmation broken. The source comments that recorded the doubt are outside this file and are
+SONNY-295's to correct.
+
+**What this pass did not cover, said plainly so the new ticks are not read wider than they are.**
+Forty-eight rows were unchecked before it (`grep -cE '^- \[ \]'
+docs/sonny-manual-test-checklist.md` → 48 at `5339640`); twenty-one of those are this batch, so
+twenty-seven are left. Every one of them predates `140829b`, none of them was in front of you on
+2026-08-26, and they are SONNY-293's triage rather than this pass's evidence. An unchecked row here
+still means nobody has said anything about it.
+
 ## 0. Setup & the rebuild loop
 
 ### 0a. One-time setup on this Mac — do this before anything else, once (added 2026-08-17, SONNY-153)
@@ -440,21 +464,23 @@ which.
       pointing at it would be a lie. **Separately and not fixed here: an approval raised during a
       screen-control session reaches no widget surface at all** — that is SONNY-255, it predates
       this work, and if you hit it the run will appear to stall with only Pause and Stop available
-- [ ] **(new 2026-08-25, SONNY-283)** With a question pending, press **Ctrl-Opt-Space** and let go
+- [x] **(new 2026-08-25, SONNY-283)** With a question pending, press **Ctrl-Opt-Space** and let go
       without speaking. The caret should be in the **answer field** — type a letter and it lands
       there. Before this the hotkey did nothing at all in this state
-- [ ] **(new 2026-08-25, SONNY-283)** With a question pending, hold Ctrl-Opt-Space and **speak an
+      — **confirmed 2026-08-26 (batch)**
+- [x] **(new 2026-08-25, SONNY-283)** With a question pending, hold Ctrl-Opt-Space and **speak an
       answer**, then release. The transcript should appear **in the answer field**, not in the main
       composer, and nothing should run until you press Return or the up-arrow — speaking feeds the
       field, it does not send it. Then do the same with the **mic button**, which used to be
       present and inert here; it should now record, and the transcript should land in the same
       field. If the field already has text when you speak, the transcript is appended after a
-      space, the way dictation lands at the caret
-- [ ] **(new 2026-08-25, SONNY-283 — must not regress)** In the same state, the caret still never
+      space, the way dictation lands at the caret — **confirmed 2026-08-26 (batch)**
+- [x] **(new 2026-08-25, SONNY-283 — must not regress)** In the same state, the caret still never
       jumps into the disabled main composer — not on the hotkey, not on the menu-bar "New Task",
       not on re-opening the widget from its collapsed capsule. And typing without clicking still
       lands letters in the answer field, exactly as SONNY-247's row above says
-- [ ] **(new 2026-08-26, SONNY-283, from PR #119's review F1)** With a question pending, type half
+      — **confirmed 2026-08-26 (batch)**
+- [x] **(new 2026-08-26, SONNY-283, from PR #119's review F1)** With a question pending, type half
       an answer, then hold the hotkey and speak the rest — and press **Return while the mic is still
       live, and again during the second or two after you release it** while the transcript is on its
       way. Nothing should happen either time: the question stays, the typed half stays, the widget
@@ -462,70 +488,79 @@ which.
       the main composer stays empty. The up-arrow Send (and Command Center's Send) should be greyed
       out for the whole of that window and come back the moment the transcript lands. Then Return
       sends. Before this fix that Return silently destroyed the question
-- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's body by SONNY-292)** **Control.**
+      — **confirmed 2026-08-26 (batch)**
+- [x] **(new 2026-08-26, SONNY-281, recovered from PR #118's body by SONNY-292)** **Control.**
       Send `2 + 2`. It answers `2 + 2 = 4.`, instantly. This path never reached the planner and
       never broke — it is here so the rows under it have something to be read against
-- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's body by SONNY-292)** Send `2 + 2 =` —
+      — **confirmed 2026-08-26 (batch)**
+- [x] **(new 2026-08-26, SONNY-281, recovered from PR #118's body by SONNY-292)** Send `2 + 2 =` —
       the same sum with the `=` a person types at the end. It answers `2 + 2 = 4.`, **instantly**,
       not "Calculation is unsupported by the registered local tools." after a network round-trip.
       Then the same with `2+2=?`. This is the founder's original report
-- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's body by SONNY-292)** Send `=` alone.
+      — **confirmed 2026-08-26 (batch)**
+- [x] **(new 2026-08-26, SONNY-281, recovered from PR #118's body by SONNY-292)** Send `=` alone.
       Sonny asks "What would you like me to calculate?" — answer `2 + 2` and it answers
       `2 + 2 = 4.` The **running label** and the **Tasks row** both read `= 2 + 2` — the request
       and the answer joined, not `=` on its own and not `2 + 2` on its own
-- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's body by SONNY-292)** On the `= 2 + 2`
+      — **confirmed 2026-08-26 (batch)**
+- [x] **(new 2026-08-26, SONNY-281, recovered from PR #118's body by SONNY-292)** On the `= 2 + 2`
       Tasks row the row above leaves behind, press **Run again**. It answers `2 + 2 = 4.` again and
       asks **no question** — the row carries the completed command, so there is nothing left to
-      clarify. **Retry** after a failure takes the same path
-- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's body by SONNY-292)** Send `calc`
+      clarify. **Retry** after a failure takes the same path — **confirmed 2026-08-26 (batch)**
+- [x] **(new 2026-08-26, SONNY-281, recovered from PR #118's body by SONNY-292)** Send `calc`
       alone, then answer the what-would-you-like-to-calculate question with `calc 5 * 5` — an
       answer that restates the command instead of continuing it. It answers `5 * 5 = 25.`
-- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's body by SONNY-292)** Send
+      — **confirmed 2026-08-26 (batch)**
+- [x] **(new 2026-08-26, SONNY-281, recovered from PR #118's body by SONNY-292)** Send
       `run shortcut Nonexistent` (any name you have no Shortcut for). Sonny asks which Shortcut to
       run — answer with the **real name of a Shortcut you do have**. The planner takes the
       exchange, so expect a round-trip rather than an instant answer. **The failure to catch is
       the same question re-asked instantly**: that would mean the answer had been completed
       locally into `run shortcut Nonexistent <name>`, which resolves to the same question again
-      rather than to a plan
-- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's body by SONNY-292)** Provoke a
+      rather than to a plan — **confirmed 2026-08-26 (batch)**
+- [x] **(new 2026-08-26, SONNY-281, recovered from PR #118's body by SONNY-292)** Provoke a
       **planner**-asked clarification — `zip my three largest files`, answered with the folder, is
       the PR's own example — and check it proceeds on the request plus the answer exactly as
       before. A question the planner asked is never completed locally, even when the answer would
       resolve on its own, so this is the path that must be **unchanged**
-- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's notes by SONNY-292)** Send `calc`
+      — **confirmed 2026-08-26 (batch)**
+- [x] **(new 2026-08-26, SONNY-281, recovered from PR #118's notes by SONNY-292)** Send `calc`
       alone, then answer the what-would-you-like-to-calculate question with `banana`. Sonny's
       **own** calculation error appears **instantly** — "Could not calculate that expression: …",
       the same error `calc banana` typed directly gets — not the planner's "Calculation is
-      unsupported…" refusal after a network round-trip
-- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's notes by SONNY-292)** With **both**
+      unsupported…" refusal after a network round-trip — **confirmed 2026-08-26 (batch)**
+- [x] **(new 2026-08-26, SONNY-281, recovered from PR #118's notes by SONNY-292)** With **both**
       Focus Writer and Writer running, send `focus` and answer the which-app question with the
       **full name** — `Focus Writer`. It switches to **Focus Writer**, not to an app called
       "Writer". Both readings of that answer resolve only when both apps are running, so this is
       the state that tells them apart; the pair the row needs is any app named `Focus <Something>`
-      alongside one named `<Something>`, and Focus Writer/Writer is the fix's own example.
+      alongside one named `<Something>`, and Focus Writer/Writer is the fix's own example —
+      **confirmed 2026-08-26 (batch)**.
       **Known, don't report (R-a, founder decision 2026-08-26, recorded on PR #118):** with
       **only** Writer running, the same exchange still switches to Writer — pinned as a record so
       drift is seen, deliberately not fixed
-- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's notes by SONNY-292)** With **neither**
+- [x] **(new 2026-08-26, SONNY-281, recovered from PR #118's notes by SONNY-292)** With **neither**
       of that pair running — no "Focus Writer" and no "Writer" — send `focus` and answer
       `Focus Writer`. It fails instantly with "No running app matched Focus Writer." and does not
       ask the planner. **Check the precondition before reporting this one:** with Writer alone
       running it switches to Writer, which is R-a in the row above and not a defect
-- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's notes by SONNY-292)** Send `=` alone,
+      — **confirmed 2026-08-26 (batch)**
+- [x] **(new 2026-08-26, SONNY-281, recovered from PR #118's notes by SONNY-292)** Send `=` alone,
       and answer the question with `=2+2` — an answer that itself starts with `=`. The answer is 4,
-      instantly
-- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's notes by SONNY-292)** Send
+      instantly — **confirmed 2026-08-26 (batch)**
+- [x] **(new 2026-08-26, SONNY-281, recovered from PR #118's notes by SONNY-292)** Send
       `snippet save` with nothing after it. The question reads "Use the format ;trigger =
       expansion." Answer with the **body alone** — `;sig = Best, Sonny` — and the snippet saves
-      under `;sig`. **Known, don't report (stated residual on PR #118):** answering by retyping the
+      under `;sig` — **confirmed 2026-08-26 (batch)**.
+      **Known, don't report (stated residual on PR #118):** answering by retyping the
       whole command instead saves a snippet under the junk trigger `snippet save ;sig` — tier 2
       auto-runs under the consequence rule — visible and deletable on the Memory page
-- [ ] **(new 2026-08-26, SONNY-281, recovered from PR #118's notes by SONNY-292)** Quit Sonny
+- [x] **(new 2026-08-26, SONNY-281, recovered from PR #118's notes by SONNY-292)** Quit Sonny
       while it is asking what to calculate (`=` alone raises the question; quit before answering).
       Relaunch, take the widget's partway-through offer with the **tick** (or Continue from
       Command Center → Memory → Unfinished tasks), and answer `2 + 2`. The answer is `2 + 2 = 4.`
       — before the fix's review round this path sent the answer to the planner and it was refused,
-      because Continue replays the paused plan as a resumed task
+      because Continue replays the paused plan as a resumed task — **confirmed 2026-08-26 (batch)**
 
 ### 3d-bis. Unfinished-task offer (row 13, SONNY-210; layout and controls SONNY-244 — no wireframe)
 Start something long and multi-step, then quit Sonny before it finishes — "summarize
@@ -541,29 +576,41 @@ case. Relaunch and open the widget.
       it more than once: it rendered correctly some of the time on the broken build, so a single
       good look proves nothing. Try it both ways — open the widget from the menu-bar icon and from
       the Ctrl-Opt-Space hotkey — and with a short command as well as a long one
-- [ ] **(new 2026-08-23, SONNY-244; words changed 2026-08-25, SONNY-282)** Hover the tick and then
-      the cross and **say whether a tooltip appears at all** — it should read "Continue" and "Don't
-      ask again". This one is genuinely in doubt: `FloatingWidgetView` records `.help()` as
-      confirmed unreliable in this widget, which is why the mic's hint is a real row rather than a
-      tooltip, so these two words may simply not be reachable for a sighted user. If no tooltip
-      appears, the tick and cross carry no words at all and that needs a decision
-- [ ] **(new 2026-08-25, SONNY-282 — replaces the 2026-08-23 row)** Press the cross **once**, then
+- [x] **(new 2026-08-23, SONNY-244; words changed 2026-08-25, SONNY-282; found in doubt 2026-08-23,
+      confirmed reachable 2026-08-26)** Hover the tick and then the cross and **say whether a
+      tooltip appears at all** — it should read "Continue" and "Don't ask again". This one was
+      genuinely in doubt: `FloatingWidgetView` records `.help()` as confirmed unreliable in this
+      widget, which is why the mic's hint is a real row rather than a tooltip, so these two words
+      might simply not have been reachable for a sighted user, and if no tooltip appeared the tick
+      and cross carried no words at all and that needed a decision. **They are reachable.** The
+      founder hovered both on 2026-08-26 and the tooltips appeared ("yes tooltips appeared") — the
+      first direct evidence in this project's record that `.help()` fires anywhere in this widget,
+      so the decision this row was holding open is not owed. **Only that half is the founder's:**
+      that a tooltip appears on each is what was
+      observed; *what* the two say is not a manual finding but the code's own constants,
+      `ResumeOfferPresentation.continueLabel` and `declineLabel`, "Continue" and "Don't ask again"
+      (`Sources/MacAgent/AgentActivityPresentation.swift:471` and `:482` at `5339640`). What is now
+      stale is the source's reading rather than this row — `WidgetResumeOfferPanel`'s doc comment
+      still says the tooltip "may simply not fire" and that "the plain reading is that a sighted
+      user loses the words". That file was outside what SONNY-294 could touch; correcting it is
+      SONNY-295
+- [x] **(new 2026-08-25, SONNY-282 — replaces the 2026-08-23 row)** Press the cross **once**, then
       quit and relaunch Sonny **several times**. The offer for that task must **never come back**.
       This is the defect: you pressed it three times across three relaunches on 2026-08-25 and it
       returned every time, because the cross meant "not now" by design. It now means "don't ask
       again" for that one task. If another unfinished task is waiting, *that* one is offered next —
-      declining one does not silence the rest
-- [ ] **(new 2026-08-25, SONNY-282)** After the cross, open Command Center → Memory → Unfinished
+      declining one does not silence the rest — **confirmed 2026-08-26 (batch)**
+- [x] **(new 2026-08-25, SONNY-282)** After the cross, open Command Center → Memory → Unfinished
       tasks. The task is **still listed** — the cross deletes nothing — with "Declined" on its row
       before the time, and the row now has a **Continue** button beside Delete. Continue from there
       should run only what was left of the task, the same way the widget's tick does, and the row
       goes away when it finishes. A row for a task Sonny must not finish on its own (one whose
       remaining work runs a Shortcut, a routine or a screen session) has no Continue, only Delete —
-      that is deliberate and unchanged from SONNY-210
-- [ ] **(new 2026-08-25, SONNY-282)** Continue a declined task from Memory and make it stop again
+      that is deliberate and unchanged from SONNY-210 — **confirmed 2026-08-26 (batch)**
+- [x] **(new 2026-08-25, SONNY-282)** Continue a declined task from Memory and make it stop again
       (pull the network before it opens its page, or quit mid-run). The widget **offers it again**
       — picking it up from Memory counts as re-engaging with it, so the decline is spent. Press the
-      cross again and it stays gone across relaunches as before
+      cross again and it stays gone across relaunches as before — **confirmed 2026-08-26 (batch)**
 
 ### 3e. Result — `6-FloatingWidgetResultOutput.png`
 Use one command that produces a real file (zip largest files, docx conversion) and one that doesn't
