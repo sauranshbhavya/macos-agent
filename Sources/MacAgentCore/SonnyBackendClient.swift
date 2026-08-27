@@ -15,13 +15,13 @@ import Foundation
 /// | auth, account, meta, health, delete | 15 s | 20 s |
 ///
 /// SONNY-128 declared only the last row, because a constant for a route nobody sends is a number
-/// that goes stale before anything reads it. SONNY-130 added the four it built beside it; the vision
-/// route is still SONNY-131's and is still not here.
+/// that goes stale before anything reads it. SONNY-130 added the four it built beside it, and
+/// SONNY-131 the vision row — so the table is complete and every row is a route something sends.
 ///
 /// Each of these sits above the server's own total deadline for the same route
 /// (`server/src/model/limits.ts`), which is the whole of §12's governing rule. **The margin is not
 /// a constant, and this comment said it was fifteen seconds until PR #139's F2** — it is fifteen on
-/// the three long routes and **five** on `search` and on the auth row, straight from §12's table.
+/// the four long routes and **five** on `search` and on the auth row, straight from §12's table.
 /// `ModelRouteNumbersTests` holds both halves of that table as literals, so neither side can move
 /// without the other failing.
 public enum SonnyBackendTimeouts {
@@ -30,6 +30,15 @@ public enum SonnyBackendTimeouts {
     public static let researchSynthesis: TimeInterval = 120
     public static let transcription: TimeInterval = 90
     public static let search: TimeInterval = 30
+    /// §12's longest client budget, shared with `researchSynthesis` (SONNY-131).
+    ///
+    /// **The one row where the client timeout is doing visible work**, because a vision session
+    /// spends up to twelve of these in sequence: it is what decides whether a slow iteration ends as
+    /// the server's typed `504 provider.timeout` — which `VisionSessionRunner` can explain and which
+    /// `SonnyBackendClient` retries once — or as this client's own transport timeout, which it
+    /// cannot tell apart from a dead network. 120 s against the server's 105 s total is the fifteen
+    /// seconds §12 gives the long routes.
+    public static let screenAnalyze: TimeInterval = 120
 }
 
 /// One request, described in the terms the contract's rules are written in.

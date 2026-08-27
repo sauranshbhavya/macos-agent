@@ -134,6 +134,24 @@ const schema = z.object({
   OPENAI_TRANSCRIPTION_MODEL: nonEmpty.default("gpt-4o-mini-transcribe"),
   SEARCH_BASE_URL: nonEmpty.default("https://api.tavily.com"),
   /**
+   * Where `POST /v1/screen/analyze` sends, and what it asks for (SONNY-131).
+   *
+   * Same rule as the four above, and the same defaults-for-these-and-not-for-credentials split: these
+   * two are exactly what the Mac app compiled in before this gateway existed — `defaultEndpoint` and
+   * `defaultModel` on `OpenCodeVisionModelClient`, plus the `SONNY_VISION_MODEL` override that the
+   * contract's §1.3 says becomes server configuration — so a deployment that sets neither behaves as
+   * the app used to.
+   *
+   * **This pair is the one SONNY-110 moves.** That ticket's requirement widened on 2026-08-16 to no
+   * retention *and* no training rights over our data; making it a redeploy rather than an app release
+   * is the whole reason the Mac's vision client no longer names a provider, a model or an endpoint.
+   *
+   * The credential is `VISION_API_KEY`, read by `providerCredentials` below — `vision` has been in
+   * the `providers` list since SONNY-126, waiting for this route.
+   */
+  VISION_BASE_URL: nonEmpty.default("https://opencode.ai/zen/go/v1"),
+  VISION_MODEL: nonEmpty.default("gpt-5.6-luna"),
+  /**
    * The project's **anon / publishable** key, sent as the `apikey` header on every non-admin call
    * the sign-in adapter makes (SONNY-307).
    *
@@ -174,6 +192,8 @@ export interface Config {
   readonly openAITextModel: string;
   readonly openAITranscriptionModel: string;
   readonly searchBaseUrl: string;
+  readonly visionBaseUrl: string;
+  readonly visionModel: string;
   readonly supabaseAnonKey: string | undefined;
   readonly supabaseServiceRoleKey: string | undefined;
   readonly credentials: readonly ProviderCredentials[];
@@ -340,6 +360,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     openAITextModel: value.OPENAI_TEXT_MODEL,
     openAITranscriptionModel: value.OPENAI_TRANSCRIPTION_MODEL,
     searchBaseUrl: value.SEARCH_BASE_URL,
+    visionBaseUrl: value.VISION_BASE_URL,
+    visionModel: value.VISION_MODEL,
     supabaseAnonKey: value.SUPABASE_ANON_KEY,
     supabaseServiceRoleKey: value.SUPABASE_SERVICE_ROLE_KEY,
     credentials: providerCredentials(env),

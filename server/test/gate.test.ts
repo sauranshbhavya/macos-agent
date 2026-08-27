@@ -123,6 +123,9 @@ describe("which routes the gate challenges", () => {
       // whole of what deny-by-default means — no line in the four routes' own file mentions auth.
       "POST /v1/plan",
       "POST /v1/research/synthesize",
+      // SONNY-131's, and it arrives here the same way — by not being listed in `PUBLIC_ROUTES`.
+      // `routes/screen.ts` mentions auth nowhere either.
+      "POST /v1/screen/analyze",
       "POST /v1/search",
       "POST /v1/transcriptions",
     ]);

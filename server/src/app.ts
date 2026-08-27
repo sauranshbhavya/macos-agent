@@ -11,6 +11,8 @@ import fastifyMultipart from "@fastify/multipart";
 import { BODY_LIMIT_BYTES } from "./model/limits.js";
 import { modelProvidersFrom } from "./model/providers.js";
 import { registerModelRoutes } from "./routes/model.js";
+import { visionProviderFrom } from "./model/vision.js";
+import { registerScreenRoutes } from "./routes/screen.js";
 
 /** The API minor version this build serves. `Sonny-Api-Version`, contract §2.3. */
 export const API_VERSION = "1.0";
@@ -18,12 +20,16 @@ export const API_VERSION = "1.0";
 /**
  * Server-wide request body limit, 1 MiB, matching contract §6.1's "every other route".
  *
- * **This is the floor, not the ceiling.** §6.1 gives four routes a larger limit of their own —
+ * **This is the floor, not the ceiling.** §6.1 gives three routes a larger limit of their own —
  * `/v1/screen/analyze` 4,200,000, `/v1/transcriptions` 10 MiB, `/v1/research/synthesize` 4 MiB —
- * and each sets its own `bodyLimit` on its route definition when the ticket that owns it adds it.
- * A route that forgets to therefore inherits the *smallest* limit and fails loudly at 1 MiB, which
- * is the safe direction: the alternative default would let a route accept far more than its
- * contract allows and discover it in production.
+ * and each sets its own `bodyLimit` on its route definition. A route that forgets to therefore
+ * inherits the *smallest* limit and fails loudly at 1 MiB, which is the safe direction: the
+ * alternative default would let a route accept far more than its contract allows and discover it in
+ * production.
+ *
+ * All three exist now: SONNY-130 added the second and third, SONNY-131 the first. **This said "four
+ * routes" and then listed three**, because §6.1's table has four rows and the fourth is "every other
+ * route" at 1 MiB — which is this constant, not a route with a larger limit of its own.
  *
  * The gateway enforces this itself rather than inheriting a platform's, which is what the
  * 2026-08-21 move to a VM makes possible (`docs/sonny-row-12-host-decision.md` §12.2).
@@ -230,6 +236,16 @@ export function buildApp(
    * of them refuses with a 401 rather than serving.
    */
   registerModelRoutes(app, modelProvidersFrom(config));
+
+  /**
+   * `POST /v1/screen/analyze` (SONNY-131), mounted on the same terms and for the same reasons.
+   *
+   * Its provider comes from `model/vision.ts` rather than from `modelProvidersFrom` above, and that
+   * is a lane boundary rather than a design preference — `model/providers.ts` belongs to SONNY-132's
+   * branch, running in parallel, and the two collapse when that one lands. The route reads no
+   * `ModelProviders` field, so nothing here changes shape when it does.
+   */
+  registerScreenRoutes(app, visionProviderFrom(config));
 
   if (auth) {
     requireRateLimitSalt(config);

@@ -507,20 +507,37 @@ extension AgentViewModel: VisionSessionInteracting {
     /// silent unredacted send — and that is exactly what a stub looks like. Recorded on SONNY-91 by
     /// PR #49's review so row I would be told rather than discover it; this comment is where the
     /// telling lands.
+    /// **It no longer returns `nil`, and the signature says so** (SONNY-131). It used to be
+    /// `Optional` for exactly one reason — `OpenCodeVisionModelClient.init` threw when
+    /// `OPENCODE_API_KEY` was unset, and a build with no key had no vision. There is no key to be
+    /// missing now: the credential is the gateway's, and a session started with no signed-in account
+    /// fails at the *request* with a sentence the user can act on rather than at construction with a
+    /// capability that silently is not there. That is the same collapse SONNY-130 made for
+    /// `TavilySearchProvider`, for the same reason and with the same consequence — `visionUnavailable`
+    /// stops being a state this app can be in, so a user who asks Sonny to control an app always gets
+    /// either a session or a sentence.
+    ///
+    /// **`backendClient` and `taskContext` are parameters with no defaults**, so a call site that has
+    /// not decided cannot compile. A defaulted client would be a second construction of the shared
+    /// one, defeating the single-flight refresh guard §3.3 needs; a defaulted `taskContext` would be
+    /// a defaulted `retention`, which is a privacy answer nobody chose.
     static func makeVisionEnvironment(
         interaction: any VisionSessionInteracting,
-        environment: [String: String] = ProcessInfo.processInfo.environment,
+        backendClient: SonnyBackendClient,
+        taskContext: BackendTaskContext,
+        usageRecorder: any TaskUsageRecording,
         userPauseMonitor: UserPausableAttentionMonitor? = nil,
         journalStore: VisionSessionJournalStore? = nil
-    ) -> VisionSessionEnvironment? {
-        guard let modelClient = try? OpenCodeVisionModelClient(environment: environment) else {
-            return nil
-        }
+    ) -> VisionSessionEnvironment {
         return VisionSessionEnvironment(
             captureService: ScreenCaptureService(),
             redactionService: LocalRedactionService(),
             synthesizer: SystemScreenActionSynthesizer(),
-            modelClient: modelClient,
+            modelClient: SonnyVisionModelClient(
+                client: backendClient,
+                taskContext: taskContext,
+                usageRecorder: usageRecorder
+            ),
             // The real monitor, not the always-attended default. SONNY-94's whole point is that a
             // session stops when the user does, and `AlwaysAttendedMonitor` is correct only for a
             // build with no way to ask the OS — which this is not.

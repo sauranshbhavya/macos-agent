@@ -16,6 +16,11 @@ public struct RecordedBackendRequest: @unchecked Sendable {
     public let authorization: String?
     public let idempotencyKey: String?
     public let contentType: String?
+    /// Every header the request carried **as `URLProtocol` sees it**, which is not every header that
+    /// reaches the wire (SONNY-131). `URLSession` adds `Accept-Encoding` and its own transport
+    /// headers below this layer, so their absence here says nothing about the socket; what this can
+    /// answer is which headers the *client* set.
+    public let headers: [String: String]
     public let body: Data
 
     public var json: [String: Any] { (try? JSONSerialization.jsonObject(with: body)) as? [String: Any] ?? [:] }
@@ -27,6 +32,7 @@ public struct RecordedBackendRequest: @unchecked Sendable {
         authorization = request.value(forHTTPHeaderField: "Authorization")
         idempotencyKey = request.value(forHTTPHeaderField: "Idempotency-Key")
         contentType = request.value(forHTTPHeaderField: "Content-Type")
+        headers = request.allHTTPHeaderFields ?? [:]
         body = BackendStubURLProtocol.body(of: request)
     }
 }

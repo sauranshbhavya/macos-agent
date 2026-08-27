@@ -62,9 +62,13 @@ public struct VisionCaptureEgressPolicy: Equatable, Sendable {
     ///
     /// **Derived, not inherited.** Base64 plus the JSON envelope turns an image of this size into a
     /// request body of `ceil(n/3) * 4` bytes plus the prompt — 4,000,000 + ~4,700 at this value,
-    /// measured against the literal body ``OpenCodeVisionModelClient/decide(prompt:payload:)``
+    /// measured against the literal body ``SonnyVisionModelClient/decide(prompt:payload:session:)``
     /// builds. That is the number row 12's host choice is sized against, and it is what puts the
     /// request under the body limits that a 12 MB request ruled out.
+    ///
+    /// **And it is now the same number on the gateway** (SONNY-131): `MAXIMUM_IMAGE_BYTES` in
+    /// `server/src/model/limits.ts`, from which §6.1's 4,200,000 body limit is derived rather than
+    /// written as a second literal.
     public let maximumImageBytes: Int
 
     /// Tried in order; the first rung whose encoding fits ``maximumImageBytes`` wins.
@@ -243,7 +247,7 @@ enum RedactedCaptureEncoder {
 
         // Past the floor. The smallest the ladder reached goes back rather than a throw, because the
         // refusal belongs to the client that owns the wire limit and its message — this type would
-        // only be guessing at one. See `OpenCodeVisionModelClient.maximumImageBytes`.
+        // only be guessing at one. See `SonnyVisionModelClient.maximumImageBytes`.
         guard let smallest else {
             throw LocalRedactionError.imageRedactionFailed("the redaction policy has no encoding steps")
         }

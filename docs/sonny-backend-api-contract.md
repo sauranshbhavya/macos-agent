@@ -924,6 +924,13 @@ reply cannot become an unbounded client-side allocation.
 The server **must** accept `Content-Encoding: gzip` on requests and must apply size limits to the
 decoded body. It must honour `Accept-Encoding: gzip` on responses.
 
+**None of the three is implemented, and that is owed work rather than a changed obligation** (updated
+2026-08-28, SONNY-131). `grep -rn 'gzip\|Content-Encoding\|compress' server/src/` finds nothing.
+**SONNY-317 owns all three plus the client switch, in one branch**, because the
+end-to-end test needs both sides at once. Nothing is reachable today: no client compresses, so a
+request decompressor built alone would be a code path nothing exercises — which is the shape PR
+#139's own F11 deleted a guard for.
+
 The client still does not compress, and that is now a measured decision rather than an open question
 (updated 2026-08-26, SONNY-288 — this line read "SONNY-146 (filed, Backlog)", and that ticket
 completed on 2026-08-18). SONNY-146 measured 29–35% lossless recovery from deflating the finished
@@ -932,11 +939,24 @@ cannot be restated at another SHA, and not an ancestor of `main` (6.1 carries th
 post-rebase pair `b07bee8`). It then built the encoder and a per-endpoint switch:
 `Sources/MacAgentCore/HTTPBodyCompression.swift`, and `compressesRequestBody` on the vision client,
 defaulting to `false` (`grep -n 'compressesRequestBody: Bool = false'
-Sources/MacAgentCore/VisionModelClient.swift` → `131:` at `d3598a7`). It is off because the route
-the client talks to today answers a gzip-encoded body with a `500`, measured live against it rather
-than assumed. The switch travels with the endpoint, so SONNY-131 flips both in one edit when the
-client is repointed at Sonny's own gateway — which is why this section obliges that gateway to accept
-the encoding before any client sends it. Requiring the server to accept it now means the client can
+Sources/MacAgentCore/VisionModelClient.swift` → `131:` at `d3598a7`). It was off because the route
+the client talked to then answered a gzip-encoded body with a `500`, measured live against it rather
+than assumed.
+
+**That sentence used to end "the switch travels with the endpoint, so SONNY-131 flips both in one
+edit when the client is repointed at Sonny's own gateway", and it was wrong in a way that would have
+cost that ticket a working route** (corrected 2026-08-28, SONNY-131; found by SONNY-130 at PR #139's
+F9). It assumed the gateway accepts the encoding *because this section obliges it to*. It does not,
+and Fastify with no decompressor hands a gzip-encoded body to the JSON parser as bytes, which fails
+as a malformed body — a `400` on every screen-control request, from a change that reads like a
+one-line optimisation. **Flipping it is two edits and the server's is first**, and the half that
+matters is the one the paragraph above names: the size limits apply to the *decoded* body, because a
+limit applied to compressed bytes is not the limit this contract sets.
+
+SONNY-131 repointed the client and left compression off, so the switch itself is gone with the old
+client — `SonnyBackendClient` builds every request now and does not compress. `HTTPBodyCompression`,
+the encoder SONNY-146 built and measured, is unchanged and has no caller; SONNY-317 is where it gets
+one. Requiring the server to accept the encoding before any client sends it means the client can
 adopt it later without touching this contract or its version, which is exactly what section 8's
 additive rule is for.
 
@@ -1448,9 +1468,16 @@ Three rules alongside the table:
   error is typed, `auth.token_expired` is refresh-and-retry-once, `provider.unavailable` and
   `server.error` are retryable, `provider.rejected` is not, and there is no server-side session state
   to resume from. **Which of retry, abort-with-partial-history, or a new typed error the session
-  takes is SONNY-131's**, and it is required to pick and pin it with a test rather than let it
-  emerge. Today there is no retry at all: `VisionSessionRunner.runLoop()` has no `catch`, so a single
-  throw from `decide` (`VisionSessionRunner.swift:261`) ends the session on that iteration.
+  takes was SONNY-131's, and it took the second and third together** (2026-08-28): the session aborts
+  at the failing iteration, keeps every action it has already taken, and reports it as
+  `VisionSessionInterrupted`, which carries how far it got. **It adds no retry of its own**, because
+  the shared client has already spent §9.3's whole per-code attempt budget before the failure reaches
+  the loop — a second loop would multiply those ceilings on the longest route in this table, and
+  would mint a fresh idempotency key per attempt, which §9.1 forbids. The token-expiry case is
+  invisible: the shared client refreshes once and replays, which is §7.2 case 1a working. **The
+  paragraph this replaces described the pre-SONNY-131 tree** — "there is no retry at all:
+  `VisionSessionRunner.runLoop()` has no `catch`" — which was a true reading of `6f89a5d` and is a
+  stale one now; the file-line it cited has moved with the `catch` that ends it.
 
 ---
 
@@ -1481,7 +1508,7 @@ none.
 | Sign-in code lifetime, rate limits, and the refresh overlap window's length | SONNY-127 for the first two; **the platform's** for the third | **Decided, all three.** A code lives 600 s and the four rate limits are set (3.6). The overlap window was never SONNY-127's: under the 2026-08-21 decision to serve auth from Supabase Auth it is the platform's, and it is 10 seconds (3.3, and section 14's 2026-08-21 row). This row still named SONNY-127 for it until 2026-08-26, contradicting 3.3 |
 | Literal user-facing copy for every `code` in section 7 | SONNY-128 (sign-in), SONNY-136 (everything else) | **Open.** SONNY-128 is In Progress; SONNY-136 is in Backlog |
 | The audio duration cap and its refusal | SONNY-130 | **Open.** Backlog |
-| Vision mid-loop failure behaviour: retry, abort, or a new typed error | SONNY-131 | **Open.** Backlog |
+| Vision mid-loop failure behaviour: retry, abort, or a new typed error | SONNY-131 | **Decided and built** (2026-08-28). **Abort at the failing iteration, keeping what the session already did, reported as a new typed error** — `VisionSessionInterrupted`, whose declaration in `VisionSessionRunner.swift` carries the reasoning. No retry at this level, because `SonnyBackendClient` has already spent §9.3's whole per-code attempt budget before the failure reaches the loop and a second loop would multiply those ceilings while minting a fresh idempotency key per attempt, which §9.1 forbids. The token-expiry case §12 names is invisible: the shared client refreshes once and replays |
 | Failover trigger, fallback order, and whether the user is told | SONNY-132 | **Open.** Backlog |
 | Per-provider retention and training configuration values | SONNY-132, with SONNY-110's answer landing in it | **Open.** Both in Backlog |
 | The exact retention window inside 30–90 days | SONNY-134 | **Open.** Backlog |
@@ -1489,7 +1516,7 @@ none.
 | `grace_seconds` and `skew_tolerance_seconds` **as carried in the entitlement claim (5.3)** | SONNY-135 | **Open.** Backlog. **Not the token-expiry clock skew of 3.5**, which is a different value, was SONNY-127's, and is set at 30 s — the two share a name and this row used to be read as covering both |
 | Which capability keys are gated | SONNY-23 (row 18) | **Open.** Backlog |
 | Plans, prices, allowances, credit weights | SONNY-17 planned it; **SONNY-212** implements | **Split: the shape is decided, the numbers are not.** Free plus exactly one paid tier, screen control as the only paid line, auto-top-up opt-in and off by default — founder, 2026-08-16, ratified 2026-08-21, and SONNY-17 closed that day as a planning ticket. The numbers are deliberately unset: they wait on a measured per-session screen-control cost that nothing records today (SONNY-133, Backlog) and on SONNY-162's web-research cost. They land on SONNY-212, Backlog, and the dollar amounts are the founders' own |
-| Whether requests are compressed on the wire | SONNY-146 | **Answered: not today, and the mechanism is built.** SONNY-146 closed 2026-08-18 with the gzip encoder and a per-endpoint switch, defaulted off because the route the client talks to answers a gzip-encoded body with a `500` (6.4). SONNY-131 flips it when the client is repointed at this gateway |
+| Whether requests are compressed on the wire | SONNY-146 built the encoder; **SONNY-317** wires it in | **Answered: not today, and the mechanism is half-built.** SONNY-146 closed 2026-08-18 with the gzip encoder and a per-endpoint switch, defaulted off because the route the client talked to then answered a gzip-encoded body with a `500` (6.4). **This row said SONNY-131 flips it when the client is repointed, and that was the same wrong sentence 6.4 carried**: the gateway implements no decompression, so flipping the client alone is a `400` on every request. SONNY-131 repointed the client and left it off; SONNY-317 owns both sides |
 | Enterprise or team entitlements | SONNY-107 (row 19) | **Open.** Backlog |
 
 ---
