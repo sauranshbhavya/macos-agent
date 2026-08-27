@@ -844,6 +844,90 @@ struct SonnyBackendClientTests {
         #expect(!harness.storedSessionJSON().contains("refresh-0"))
     }
 
+    /// **Why `discardSessionLocally` drops the in-flight handle as well as bumping the generation.**
+    /// The generation stops the dead refresh *writing*; this is the other half — it stops a caller
+    /// on the *next* session waiting on a refresh that belongs to the previous one. The window is
+    /// narrow and real: between the sign-out and the old refresh completing, a fresh sign-in plus a
+    /// 401 would find the stale handle, await it, and receive the `notSignedIn` the old session's
+    /// refusal produces — failing a request that had a perfectly good session behind it.
+    ///
+    /// Ordered rather than raced: the old refresh is held at the stub for the whole test, and the
+    /// new session's refresh is waited for by polling with a backstop the test asserts did not fire.
+    @Test
+    func aRequestOnANewSessionDoesNotWaitOnThePreviousSessionsRefresh() async throws {
+        let harness = try Harness()
+        try await harness.signIn(accessToken: "session-a", refreshToken: "refresh-a", expiresIn: 3600)
+        let counts = StubCounter()
+        let releaseFirstRefresh = StubSignal()
+
+        harness.serve { request in
+            switch request.url?.path {
+            case "/v1/auth/refresh":
+                let arrival = counts.increment("refresh")
+                if arrival == 1 {
+                    releaseFirstRefresh.waitUntilSignalled()
+                    return .reply(
+                        statusCode: 200,
+                        headers: [:],
+                        body: SonnyBackendFixtures.tokenResponseJSON(accessToken: "rotated-a")
+                    )
+                }
+                return .reply(
+                    statusCode: 200,
+                    headers: [:],
+                    body: SonnyBackendFixtures.tokenResponseJSON(accessToken: "rotated-b")
+                )
+            case "/v1/protected-b":
+                let attempt = counts.increment("b")
+                return attempt == 1
+                    ? .reply(
+                        statusCode: 401,
+                        headers: [:],
+                        body: SonnyBackendFixtures.errorEnvelopeJSON(code: "auth.token_expired")
+                    )
+                    : .reply(statusCode: 200, headers: [:], body: Data("{}".utf8))
+            default:
+                counts.increment("a")
+                return .reply(
+                    statusCode: 401,
+                    headers: [:],
+                    body: SonnyBackendFixtures.errorEnvelopeJSON(code: "auth.token_expired")
+                )
+            }
+        }
+
+        let firstRequest = Task { [harness] in
+            _ = try await harness.client.send(harness.bearerRequest())
+        }
+        #expect(await pollUntil { counts.count("refresh") == 1 }, "the first refresh never reached the stub")
+
+        // The user signs out and straight back in, while that refresh is still parked.
+        try await harness.client.discardSessionLocally()
+        try await harness.client.adopt(SonnyBackendFixtures.storedTokens(
+            accessToken: "session-b",
+            refreshToken: "refresh-b",
+            expiresAt: Date().addingTimeInterval(3600)
+        ))
+
+        let secondRequest = Task { [harness] in
+            try await harness.client.send(SonnyBackendRequest(
+                method: "GET", path: "/v1/protected-b", body: nil, authentication: .bearer,
+                idempotencyKey: nil, timeout: SonnyBackendTimeouts.auth, isRetrySafe: true
+            )).statusCode
+        }
+
+        // The new session refreshes on its own rather than waiting on the old one, which is still
+        // held. With the stale handle left in place this poll times out instead.
+        #expect(await pollUntil { counts.count("refresh") == 2 }, "the new session waited on the old session's refresh")
+
+        let status = try await secondRequest.value
+        #expect(status == 200)
+
+        releaseFirstRefresh.signal()
+        await #expect(throws: SonnyBackendError.notSignedIn) { try await firstRequest.value }
+        #expect(counts.count("refresh") == 2)
+    }
+
     // MARK: - The refresh route itself (PR #133, F2 and F3)
 
     /// **§2.2: the refresh request carries no `Authorization` header**, "so that an expired or
