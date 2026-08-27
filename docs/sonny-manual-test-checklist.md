@@ -132,8 +132,9 @@ answer instead of the batch marker.** §3d-bis's tooltip row doubted that `.help
 reachable in this widget at all; you hovered the tick and the cross and said "yes tooltips
 appeared". That row keeps the doubt's history rather than being quietly ticked — the
 `confirmed <date>` convention at the top of this file, applied to a doubt resolved rather than to a
-confirmation broken. The source comments that recorded the doubt are outside this file and are
-SONNY-295's to correct.
+confirmation broken. The source comments that recorded the doubt were outside this file;
+**SONNY-295 corrected them on 2026-08-27** — two in `FloatingWidgetView.swift` and a third in
+`AgentActivityPresentation.swift` that the ticket had not named and a sweep by claim found.
 
 **What this pass did not cover, said plainly so the new ticks are not read wider than they are.**
 Forty-eight rows were unchecked before it (`grep -cE '^- \[ \]'
